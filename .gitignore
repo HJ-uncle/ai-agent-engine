@@ -29,7 +29,3 @@ Thumbs.db
 # Editor
 .vscode/
 .idea/
-
-# Skills root (external, not part of repo)
-skills/
-SKILLs/

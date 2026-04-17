@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "description": "Default skill configuration",
+  "defaults": {
+    "web-search": {
+      "order": 1,
+      "enabled": true
+    },
+    "xlsx": {
+      "order": 2,
+      "enabled": true
+    }
+  }
+}
