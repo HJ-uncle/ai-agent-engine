@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment variables (contains API keys!)
+.env
+.env.local
+.env.*.local
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+data/
+
+# Logs
+*.log
+logs/
+
+# MCP config (may contain sensitive info)
+mcp.config.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Skills root (external, not part of repo)
+skills/
+SKILLs/
