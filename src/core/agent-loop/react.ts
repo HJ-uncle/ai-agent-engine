@@ -3,10 +3,31 @@ import type { AgentContext } from '../agent-context/index.js'
 import type { LLMAdapter, LLMAdapterOptions } from '../llm-adapter/index.js'
 import type { Message } from '../agent-context/index.js'
 
+export interface TokenUsage {
+  /** Tokens in the system prompt (including RAG context) */
+  systemPromptTokens: number
+  /** Tokens used by tool definitions */
+  systemToolsTokens: number
+  /** Tokens from conversation messages (history window) */
+  messagesTokens: number
+  /** Tokens from skills prompt index */
+  skillTokens: number
+  /** Total prompt tokens (sum of above) */
+  promptTokens: number
+  /** Tokens generated in the final answer */
+  completionTokens: number
+  /** Grand total */
+  totalTokens: number
+}
+
 export interface ReActOptions {
   maxIterations?: number
   systemPrompt?: string
   temperature?: number
+  /** Unique ID for this conversation round (one chat request = one conversationId) */
+  conversationId?: string
+  /** Pre-computed token counts for the injected prompts (optional) */
+  promptBreakdown?: Pick<TokenUsage, 'systemPromptTokens' | 'systemToolsTokens' | 'skillTokens'>
 }
 
 export class ReActStrategy implements LoopStrategy {
@@ -19,11 +40,14 @@ export class ReActStrategy implements LoopStrategy {
     const maxIterations = this.options.maxIterations ??
       parseInt(process.env.MAX_ITERATIONS ?? '10', 10)
 
+    const conversationId = this.options.conversationId
+
     // Add user message to history
-    const userMessage: Message = {
+    const userMessage: Message & { conversationId?: string } = {
       role: 'user',
       content: input,
       createdAt: Date.now(),
+      ...(conversationId ? { conversationId } : {}),
     }
     await ctx.history.append(userMessage, ctx)
 
@@ -100,13 +124,14 @@ export class ReActStrategy implements LoopStrategy {
     // Handle tool calls
     if (response.toolCalls && response.toolCalls.length > 0) {
       // Add assistant message with tool calls
-      const assistantMsg: Message = {
+      const assistantMsg: Message & { conversationId?: string } = {
         role: 'assistant',
         content: response.content,
-        toolCall: response.toolCalls[0], // store first tool call reference
-        toolCallId: response.toolCalls[0].id, // ← also store id in toolCallId for DB persistence
+        toolCall: response.toolCalls[0],
+        toolCallId: response.toolCalls[0].id,
         createdAt: Date.now(),
         tokens: response.completionTokens,
+        ...(conversationId ? { conversationId } : {}),
       }
       await ctx.history.append(assistantMsg, ctx)
 
@@ -133,12 +158,13 @@ export class ReActStrategy implements LoopStrategy {
         }
 
         // Add tool result to history
-        const toolMsg: Message = {
+        const toolMsg: Message & { conversationId?: string } = {
           role: 'tool',
           content: toolResult.output,
           toolCallId: toolCall.id,
           toolName: toolCall.name,
           createdAt: Date.now(),
+          ...(conversationId ? { conversationId } : {}),
         }
         await ctx.history.append(toolMsg, ctx)
 
@@ -155,16 +181,33 @@ export class ReActStrategy implements LoopStrategy {
     }
 
       // Final answer (no tool calls)
-      const finalMsg: Message = {
+      const finalMsg: Message & { conversationId?: string } = {
         role: 'assistant',
         content: response.content,
         createdAt: Date.now(),
         tokens: response.completionTokens,
+        ...(conversationId ? { conversationId } : {}),
       }
       await ctx.history.append(finalMsg, ctx)
 
       // Yield the response content
       yield response.content
+
+      // Yield token usage breakdown as a special __usage__ frame (includes conversationId)
+      const bd = this.options.promptBreakdown ?? { systemPromptTokens: 0, systemToolsTokens: 0, skillTokens: 0 }
+      const messagesTokens = historyTokens
+      const promptTokens = bd.systemPromptTokens + bd.systemToolsTokens + messagesTokens + bd.skillTokens
+      const completionTokens = response.completionTokens
+      const usage: TokenUsage = {
+        systemPromptTokens: bd.systemPromptTokens,
+        systemToolsTokens: bd.systemToolsTokens,
+        messagesTokens,
+        skillTokens: bd.skillTokens,
+        promptTokens,
+        completionTokens,
+        totalTokens: promptTokens + completionTokens,
+      }
+      yield `\x00__usage__${JSON.stringify({ ...usage, conversationId: conversationId ?? null })}`
       return
     }
 

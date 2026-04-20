@@ -11,6 +11,17 @@ export async function sseStream(
 
   try {
     for await (const chunk of source) {
+      // Special __usage__ frame — send as a dedicated usage event, not content
+      if (chunk.startsWith('\x00__usage__')) {
+        try {
+          const usageJson = chunk.slice('\x00__usage__'.length)
+          const usage = JSON.parse(usageJson)
+          reply.raw.write(`data: ${JSON.stringify({ usage })}\n\n`)
+        } catch {
+          // ignore malformed usage frame
+        }
+        continue
+      }
       const data = JSON.stringify({ content: chunk })
       reply.raw.write(`data: ${data}\n\n`)
     }

@@ -23,11 +23,37 @@ export interface ChatOptions {
   maxIterations?: number
 }
 
+export interface TokenUsage {
+  systemPromptTokens: number
+  systemToolsTokens: number
+  messagesTokens: number
+  skillTokens: number
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  conversationId: string | null
+}
+
 export interface ChatStreamEvent {
   /** 内容片段 */
   content: string
   /** 是否结束 */
   done: boolean
+}
+
+export interface ChatResult {
+  /** 完整回答内容 */
+  content: string
+  /** Token 消耗明细 */
+  usage: TokenUsage | null
+  /** 本次对话唯一 ID */
+  conversationId: string | null
+}
+
+export interface ConversationDetail {
+  conversationId: string
+  messageCount: number
+  messages: Message[]
 }
 
 export interface MemoryRecallResult {
@@ -257,6 +283,71 @@ export class AgentClient {
     return result
   }
 
+  /**
+   * 发送对话消息，返回完整内容 + Token 用量 + conversationId
+   *
+   * @example
+   * const { content, usage, conversationId } = await client.chatWithUsage({ message: '你好' })
+   * console.log(content)
+   * console.log('Total tokens:', usage?.totalTokens)
+   * console.log('Conversation ID:', conversationId)
+   */
+  async chatWithUsage(options: ChatOptions): Promise<ChatResult> {
+    const url = `${this.baseUrl}/api/v1/chat`
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: this.headers,
+      body: JSON.stringify(options),
+      signal: AbortSignal.timeout(this.timeout),
+    })
+
+    if (!res.ok || !res.body) {
+      const err = await res.text()
+      throw new Error(`Chat error ${res.status}: ${err}`)
+    }
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let buffer = ''
+    let content = ''
+    let usage: TokenUsage | null = null
+    let conversationId: string | null = null
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const data = line.slice(6).trim()
+          if (data === '[DONE]') break
+          try {
+            const parsed = JSON.parse(data) as {
+              content?: string
+              usage?: TokenUsage
+            }
+            if (parsed.content) content += parsed.content
+            if (parsed.usage) {
+              usage = parsed.usage
+              conversationId = parsed.usage.conversationId
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock()
+    }
+
+    return { content, usage, conversationId }
+  }
+
   // ─── 3. 记忆 ─────────────────────────────────────────────────────────────
 
   /**
@@ -300,6 +391,17 @@ export class AgentClient {
    */
   async clearHistory(sessionId: string): Promise<void> {
     await this.fetch('DELETE', '/api/v1/conversation/history', undefined, { sessionId })
+  }
+
+  /**
+   * 通过 conversationId 查询单轮对话的完整消息记录
+   *
+   * @example
+   * const conv = await client.getConversation('uuid-xxx')
+   * console.log(conv.messageCount, conv.messages)
+   */
+  async getConversation(conversationId: string): Promise<ConversationDetail> {
+    return this.fetch('GET', `/api/v1/conversations/${encodeURIComponent(conversationId)}`)
   }
 
   // ─── 5. 工具列表 ─────────────────────────────────────────────────────────

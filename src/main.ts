@@ -21,12 +21,16 @@ try {
 import { buildServer } from './api/http/index.js'
 import { logger } from './observability/index.js'
 import { skillsRegistry } from './skills/index.js'
+import { initDb } from './storage/sqlite/db.js'
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10)
 const HOST = process.env.HOST ?? '0.0.0.0'
 
 async function main() {
   try {
+    // 初始化数据库（建表、补列，幂等）
+    await initDb()
+
     // 启动技能注册表（扫描 + 热监听 SKILLS_ROOT）
     skillsRegistry.start()
 

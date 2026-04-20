@@ -10,7 +10,10 @@
     "test": "vitest",
     "test:coverage": "vitest --coverage",
     "lint": "eslint src/",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:conv": "tsx sdk/test-conversation-id.ts",
+    "test:skills": "tsx sdk/test-skills.ts",
+    "test:knowledge": "tsx sdk/test-knowledge.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.20",

@@ -76,10 +76,26 @@ export async function chatRoutes(fastify: FastifyInstance) {
     }
     const fullSystemPrompt = finalSystemPrompt + ragPrompt
 
+    // Estimate token counts for each injected prompt section (1 token ≈ 4 chars)
+    const estimateTokens = (text: string) => Math.ceil(text.length / 4)
+    const baseSystemPrompt = [systemPrompt ?? '', ragPrompt].filter(Boolean).join('\n\n')
+    const systemPromptTokens = estimateTokens(baseSystemPrompt)
+    const skillTokens = estimateTokens(skillsPrompt)
+    // Tool definitions: estimate from registry
+    const toolDefsText = registry.list()
+      .map((t) => `${t.name}: ${t.description} ${JSON.stringify(t.parameters ?? {})}`)
+      .join('\n')
+    const systemToolsTokens = estimateTokens(toolDefsText)
+
+    // Each chat request gets a unique conversationId for traceability
+    const conversationId = uuidv4()
+
     const llm = createLLMAdapter()
     const strategy = new ReActStrategy(llm, {
       systemPrompt: fullSystemPrompt || undefined,
       maxIterations,
+      conversationId,
+      promptBreakdown: { systemPromptTokens, systemToolsTokens, skillTokens },
     })
     const pipeline = createPipeline([])
 

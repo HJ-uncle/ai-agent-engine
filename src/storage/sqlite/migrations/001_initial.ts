@@ -7,6 +7,7 @@ export async function up(client: Client): Promise<void> {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id TEXT NOT NULL DEFAULT 'default',
       session_id TEXT NOT NULL,
+      conversation_id TEXT,
       role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'tool', 'system')),
       content TEXT NOT NULL,
       tool_call_id TEXT,

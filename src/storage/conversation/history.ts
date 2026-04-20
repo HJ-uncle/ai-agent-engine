@@ -4,7 +4,7 @@ import type { Row } from '@libsql/client'
 
 type Ctx = { tenantId: string; sessionId: string }
 
-function rowToMessage(row: Row): Message {
+function rowToMessage(row: Row): Message & { conversationId?: string } {
   const role = row['role'] as string
   const content = row['content'] as string
   const tool_call_id = row['tool_call_id'] as string | null
@@ -13,12 +13,14 @@ function rowToMessage(row: Row): Message {
   const tool_args = row['tool_args'] as string | null
   const tokens = row['tokens']
   const created_at = row['created_at']
+  const conversation_id = row['conversation_id'] as string | null
 
-  const msg: Message = {
+  const msg: Message & { conversationId?: string } = {
     role: role as Message['role'],
     content,
     tokens: tokens != null ? Number(tokens) : 0,
     createdAt: created_at != null ? Number(created_at) * 1000 : 0,
+    ...(conversation_id ? { conversationId: conversation_id } : {}),
   }
   if (tool_call_id) {
     msg.toolCallId = tool_call_id
@@ -51,19 +53,20 @@ const DEFAULT_HISTORY_MAX_TOKENS = parseInt(process.env.HISTORY_MAX_TOKENS ?? '4
 export class SQLiteConversationHistory implements ConversationHistory {
   constructor(private readonly maxTokens: number = DEFAULT_HISTORY_MAX_TOKENS) {}
 
-  async append(message: Message, ctx: Ctx): Promise<void> {
+  async append(message: Message & { conversationId?: string }, ctx: Ctx): Promise<void> {
     const db = getDb()
     await db.execute({
       sql: `INSERT INTO conversations
-              (tenant_id, session_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              (tenant_id, session_id, conversation_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         ctx.tenantId,
         ctx.sessionId,
+        (message as { conversationId?: string }).conversationId ?? null,
         message.role,
         message.content,
         message.toolCallId ?? null,
-        message.toolCall?.name ?? null,   // ← 新增：assistant 消息的工具调用名称
+        message.toolCall?.name ?? null,
         message.toolName ?? null,
         message.toolCall ? JSON.stringify(message.toolCall.args) : null,
         message.tokens ?? 0,
@@ -74,7 +77,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
   async getHistory(ctx: Ctx): Promise<Message[]> {
     const db = getDb()
     const result = await db.execute({
-      sql: `SELECT role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, created_at
+      sql: `SELECT role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, created_at, conversation_id
             FROM conversations
             WHERE tenant_id = ? AND session_id = ?
             ORDER BY created_at ASC, id ASC`,
@@ -82,6 +85,19 @@ export class SQLiteConversationHistory implements ConversationHistory {
     })
     const allMessages = result.rows.map(rowToMessage)
     return this.applyTokenWindow(allMessages)
+  }
+
+  /** 按 conversationId 查询单轮对话的所有消息 */
+  async getByConversationId(conversationId: string, tenantId: string): Promise<(Message & { conversationId?: string })[]> {
+    const db = getDb()
+    const result = await db.execute({
+      sql: `SELECT role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, created_at, conversation_id
+            FROM conversations
+            WHERE conversation_id = ? AND tenant_id = ?
+            ORDER BY created_at ASC, id ASC`,
+      args: [conversationId, tenantId],
+    })
+    return result.rows.map(rowToMessage)
   }
 
   /**
