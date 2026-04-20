@@ -4,6 +4,13 @@ import { SQLiteConversationHistory } from '../../../storage/conversation/index.j
 export async function conversationRoutes(fastify: FastifyInstance) {
   const history = new SQLiteConversationHistory()
 
+  // GET /conversation/sessions  — 列出该租户下所有有对话记录的 session
+  fastify.get('/conversation/sessions', async (request, reply) => {
+    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const sessions = await history.listSessions(tenantId)
+    return reply.send({ sessions })
+  })
+
   // GET /conversation/history?sessionId=xxx  — 查询 session 的所有历史消息
   fastify.get<{ Querystring: { sessionId: string } }>('/conversation/history', async (request, reply) => {
     const { sessionId } = request.query

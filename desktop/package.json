@@ -1,0 +1,62 @@
+{
+  "name": "agent-desktop",
+  "version": "0.1.0",
+  "description": "AI Agent Engine Desktop Client",
+  "main": "dist-electron/index.js",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "electron": "wait-on http://localhost:5600 && electron .",
+    "dev:full": "concurrently -k \"npm run dev\" \"npm run electron\"",
+    "build": "tsc -p tsconfig.node.json && vite build && electron-builder",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^6.1.1",
+    "@ant-design/x": "^2.5.0",
+    "@ant-design/x-card": "^2.5.0",
+    "@ant-design/x-markdown": "^2.5.0",
+    "@ant-design/x-sdk": "^2.5.0",
+    "antd": "^6.1.1",
+    "highlight.js": "^11.11.1",
+    "marked": "^18.0.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "concurrently": "^8.2.2",
+    "electron": "^30.5.1",
+    "electron-builder": "^24.13.3",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.11",
+    "vite-plugin-electron": "^0.28.7",
+    "vite-plugin-electron-renderer": "^0.14.5",
+    "wait-on": "^7.2.0"
+  },
+  "build": {
+    "appId": "com.agent.desktop",
+    "productName": "Agent Desktop",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "dist-electron/**"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "mac": {
+      "target": "dmg"
+    }
+  }
+}

@@ -123,6 +123,11 @@ export class ReActStrategy implements LoopStrategy {
 
     // Handle tool calls
     if (response.toolCalls && response.toolCalls.length > 0) {
+      // ── 思考过程：如果 AI 有思考文本，先流出 ─────────────────────────
+      if (response.content?.trim()) {
+        yield `\x00__thinking__${response.content}`
+      }
+
       // Add assistant message with tool calls
       const assistantMsg: Message & { conversationId?: string } = {
         role: 'assistant',
@@ -140,6 +145,9 @@ export class ReActStrategy implements LoopStrategy {
       for (const toolCall of response.toolCalls) {
         ctx.logger.info({ toolName: toolCall.name, args: toolCall.args }, 'Executing tool')
 
+        // ── 思考过程：通知前端正在调用哪个工具 ──────────────────────────
+        yield `\x00__tool_start__${JSON.stringify({ name: toolCall.name, args: toolCall.args })}`
+
         let toolResult
         try {
           toolResult = await ctx.tools.execute(toolCall.name, toolCall.args, ctx)
@@ -149,6 +157,13 @@ export class ReActStrategy implements LoopStrategy {
             output: `Tool error: ${err instanceof Error ? err.message : 'unknown error'}`,
           }
         }
+
+        // ── 思考过程：通知前端工具执行完毕 ──────────────────────────────
+        yield `\x00__tool_end__${JSON.stringify({
+          name: toolCall.name,
+          success: toolResult.success,
+          outputPreview: String(toolResult.output).slice(0, 200),
+        })}`
 
         if (!toolResult.success) {
           consecutiveFailures++
@@ -180,24 +195,44 @@ export class ReActStrategy implements LoopStrategy {
       continue
     }
 
-      // Final answer (no tool calls)
+      // ── 最终回答：改用 stream() 实现字符级流式输出 ────────────────────────
+      let streamContent = ''
+      let streamPromptTokens = 0
+      let streamCompletionTokens = 0
+
+      try {
+        for await (const chunk of this.llm.stream(messages, llmOptions)) {
+          if (chunk.content) {
+            streamContent += chunk.content
+            yield chunk.content    // ← 每个字符实时推送给前端
+          }
+          if (chunk.done) {
+            streamPromptTokens    = chunk.promptTokens    ?? 0
+            streamCompletionTokens = chunk.completionTokens ?? 0
+          }
+        }
+      } catch (streamErr) {
+        ctx.logger.error({ streamErr }, 'Stream failed, falling back to complete()')
+        // stream 失败时降级到已有的 response.content
+        streamContent = response.content
+        streamCompletionTokens = response.completionTokens
+        yield response.content
+      }
+
       const finalMsg: Message & { conversationId?: string } = {
         role: 'assistant',
-        content: response.content,
+        content: streamContent || response.content,
         createdAt: Date.now(),
-        tokens: response.completionTokens,
+        tokens: streamCompletionTokens || response.completionTokens,
         ...(conversationId ? { conversationId } : {}),
       }
       await ctx.history.append(finalMsg, ctx)
 
-      // Yield the response content
-      yield response.content
-
       // Yield token usage breakdown as a special __usage__ frame (includes conversationId)
       const bd = this.options.promptBreakdown ?? { systemPromptTokens: 0, systemToolsTokens: 0, skillTokens: 0 }
       const messagesTokens = historyTokens
+      const completionTokens = streamCompletionTokens || response.completionTokens
       const promptTokens = bd.systemPromptTokens + bd.systemToolsTokens + messagesTokens + bd.skillTokens
-      const completionTokens = response.completionTokens
       const usage: TokenUsage = {
         systemPromptTokens: bd.systemPromptTokens,
         systemToolsTokens: bd.systemToolsTokens,

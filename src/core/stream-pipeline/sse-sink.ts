@@ -11,19 +11,38 @@ export async function sseStream(
 
   try {
     for await (const chunk of source) {
-      // Special __usage__ frame — send as a dedicated usage event, not content
+      // ── __usage__ frame ──────────────────────────────────────────────────
       if (chunk.startsWith('\x00__usage__')) {
         try {
-          const usageJson = chunk.slice('\x00__usage__'.length)
-          const usage = JSON.parse(usageJson)
+          const usage = JSON.parse(chunk.slice('\x00__usage__'.length))
           reply.raw.write(`data: ${JSON.stringify({ usage })}\n\n`)
-        } catch {
-          // ignore malformed usage frame
-        }
+        } catch { /* ignore */ }
         continue
       }
-      const data = JSON.stringify({ content: chunk })
-      reply.raw.write(`data: ${data}\n\n`)
+      // ── __thinking__ frame (AI 思考文字，调用工具前) ─────────────────────
+      if (chunk.startsWith('\x00__thinking__')) {
+        const text = chunk.slice('\x00__thinking__'.length)
+        reply.raw.write(`data: ${JSON.stringify({ thinking: text })}\n\n`)
+        continue
+      }
+      // ── __tool_start__ frame ─────────────────────────────────────────────
+      if (chunk.startsWith('\x00__tool_start__')) {
+        try {
+          const tool = JSON.parse(chunk.slice('\x00__tool_start__'.length))
+          reply.raw.write(`data: ${JSON.stringify({ toolStart: tool })}\n\n`)
+        } catch { /* ignore */ }
+        continue
+      }
+      // ── __tool_end__ frame ───────────────────────────────────────────────
+      if (chunk.startsWith('\x00__tool_end__')) {
+        try {
+          const tool = JSON.parse(chunk.slice('\x00__tool_end__'.length))
+          reply.raw.write(`data: ${JSON.stringify({ toolEnd: tool })}\n\n`)
+        } catch { /* ignore */ }
+        continue
+      }
+      // ── 普通内容 ─────────────────────────────────────────────────────────
+      reply.raw.write(`data: ${JSON.stringify({ content: chunk })}\n\n`)
     }
     // Send done event
     reply.raw.write('data: [DONE]\n\n')

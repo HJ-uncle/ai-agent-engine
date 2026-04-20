@@ -1,0 +1,108 @@
+.sidebar {
+  width: 220px;
+  background: #0d1117;
+  border-right: 1px solid #30363d;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 12px 8px;
+  border-bottom: 1px solid #21262d;
+}
+
+.headerTitle {
+  color: #8b949e;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.addBtn {
+  color: #8b949e !important;
+}
+.addBtn:hover {
+  color: #58a6ff !important;
+  background: #21262d !important;
+}
+
+.list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 8px;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-bottom: 2px;
+  transition: background 0.15s;
+  position: relative;
+}
+
+.item:hover {
+  background: #161b22;
+}
+
+.active {
+  background: #1c2128 !important;
+  border: 1px solid #30363d;
+}
+
+.icon {
+  color: #58a6ff;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.info {
+  flex: 1;
+  min-width: 0;
+}
+
+.name {
+  color: #c9d1d9;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preview {
+  color: #6e7681;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+
+.deleteBtn {
+  display: none;
+  background: none;
+  border: none;
+  color: #6e7681;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.item:hover .deleteBtn {
+  display: flex;
+  align-items: center;
+}
+
+.deleteBtn:hover {
+  color: #f85149;
+  background: #21262d;
+}

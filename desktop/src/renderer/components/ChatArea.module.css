@@ -1,0 +1,136 @@
+.container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #0d1117;
+}
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 0;
+  scrollbar-width: thin;
+  scrollbar-color: #30363d transparent;
+}
+
+.messages::-webkit-scrollbar { width: 6px; }
+.messages::-webkit-scrollbar-track { background: transparent; }
+.messages::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+
+/* 欢迎页 */
+.welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 300px;
+  padding: 40px 20px;
+  text-align: center;
+}
+
+.welcomeIcon {
+  font-size: 48px;
+  color: #58a6ff;
+  margin-bottom: 16px;
+}
+
+.welcomeTitle {
+  color: #e6edf3;
+  font-size: 22px;
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+.welcomeSub {
+  color: #8b949e;
+  font-size: 14px;
+  margin: 0 0 28px;
+  max-width: 400px;
+}
+
+.prompts {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.promptBtn {
+  padding: 8px 16px;
+  border-radius: 20px;
+  border: 1px solid #30363d;
+  background: #161b22;
+  color: #c9d1d9;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.promptBtn:hover {
+  border-color: #58a6ff;
+  color: #58a6ff;
+  background: #0d1117;
+}
+
+/* 消息列表 */
+.bubbleList {
+  padding: 0 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.bubbleWrapper {
+  display: flex;
+}
+
+.userWrapper {
+  justify-content: flex-end;
+}
+
+.assistantWrapper {
+  justify-content: flex-start;
+}
+
+.bubbleFooter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding-left: 4px;
+}
+
+.metaTime {
+  font-size: 11px;
+  color: #6e7681;
+}
+
+.metaTokens {
+  font-size: 11px;
+  color: #3fb950;
+  background: rgba(63, 185, 80, 0.1);
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+
+.convIdBadge {
+  font-size: 11px;
+  color: #6e7681;
+  font-family: monospace;
+}
+
+/* 输入区 */
+.senderWrapper {
+  padding: 16px 24px 12px;
+  border-top: 1px solid #21262d;
+  flex-shrink: 0;
+}
+
+.hint {
+  text-align: center;
+  color: #6e7681;
+  font-size: 11px;
+  margin-top: 6px;
+}

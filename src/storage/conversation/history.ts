@@ -138,6 +138,32 @@ export class SQLiteConversationHistory implements ConversationHistory {
     })
   }
 
+  /** 列出该租户下所有有历史消息的 session，按最新消息时间倒序 */
+  async listSessions(tenantId: string): Promise<Array<{ sessionId: string; lastMessage: string; lastAt: number; messageCount: number }>> {
+    const db = getDb()
+    const rs = await db.execute({
+      sql: `SELECT session_id,
+                   COUNT(*) as cnt,
+                   MAX(created_at) as last_at,
+                   (SELECT content FROM conversations c2
+                    WHERE c2.tenant_id = c.tenant_id AND c2.session_id = c.session_id
+                      AND c2.role IN ('user','assistant')
+                    ORDER BY c2.created_at DESC LIMIT 1) as last_msg
+            FROM conversations c
+            WHERE tenant_id = ? AND role IN ('user','assistant')
+            GROUP BY session_id
+            ORDER BY last_at DESC
+            LIMIT 100`,
+      args: [tenantId],
+    })
+    return rs.rows.map((row) => ({
+      sessionId:    String(row['session_id']),
+      lastMessage:  String(row['last_msg'] ?? '').slice(0, 50),
+      lastAt:       Number(row['last_at']) * 1000,
+      messageCount: Number(row['cnt']),
+    }))
+  }
+
   /**
    * Returns the windowed token count — i.e. the sum of tokens for the messages
    * that getHistory() would actually return after the sliding-window cap.
