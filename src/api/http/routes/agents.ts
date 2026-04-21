@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { SQLiteAgentStore, CreateAgentInput, UpdateAgentInput } from '../../../storage/agent/index.js'
+import { success, fail, paginateArray } from '../response.js'
 
 export async function agentRoutes(fastify: FastifyInstance) {
   const store = new SQLiteAgentStore()
@@ -10,7 +11,7 @@ export async function agentRoutes(fastify: FastifyInstance) {
     const input = request.body
 
     if (!input.name) {
-      return reply.code(400).send({ error: 'name is required' })
+      return reply.code(200).send(fail(40001, '参数验证失败：name 不能为空'))
     }
 
     try {
@@ -20,20 +21,21 @@ export async function agentRoutes(fastify: FastifyInstance) {
         mcpServers: input.mcpServers ?? [],
         knowledgeBases: input.knowledgeBases ?? [],
       })
-      return reply.code(201).send(agent)
+      return reply.code(200).send(success(agent))
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message })
+      return reply.code(200).send(fail(50000, err.message))
     }
   })
 
   // 列出所有 Agents
-  fastify.get('/agents', async (request, reply) => {
+  fastify.get<{ Querystring: { current?: number; pageSize?: number } }>('/agents', async (request, reply) => {
     const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const { current, pageSize } = request.query
     try {
       const agents = await store.list(tenantId)
-      return reply.send({ agents })
+      return reply.code(200).send(paginateArray(agents, current, pageSize))
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message })
+      return reply.code(200).send(fail(50000, err.message))
     }
   })
 
@@ -45,11 +47,11 @@ export async function agentRoutes(fastify: FastifyInstance) {
     try {
       const agent = await store.getById(id, tenantId)
       if (!agent) {
-        return reply.code(404).send({ error: 'Agent not found' })
+        return reply.code(200).send(fail(40400, 'Agent not found'))
       }
-      return reply.send(agent)
+      return reply.code(200).send(success(agent))
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message })
+      return reply.code(200).send(fail(50000, err.message))
     }
   })
 
@@ -62,11 +64,11 @@ export async function agentRoutes(fastify: FastifyInstance) {
     try {
       const updated = await store.update(id, tenantId, input)
       if (!updated) {
-        return reply.code(404).send({ error: 'Agent not found' })
+        return reply.code(200).send(fail(40400, 'Agent not found'))
       }
-      return reply.send(updated)
+      return reply.code(200).send(success(updated))
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message })
+      return reply.code(200).send(fail(50000, err.message))
     }
   })
 
@@ -78,11 +80,11 @@ export async function agentRoutes(fastify: FastifyInstance) {
     try {
       const deleted = await store.delete(id, tenantId)
       if (!deleted) {
-        return reply.code(404).send({ error: 'Agent not found' })
+        return reply.code(200).send(fail(40400, 'Agent not found'))
       }
-      return reply.send({ success: true, id })
+      return reply.code(200).send(success({ id }))
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message })
+      return reply.code(200).send(fail(50000, err.message))
     }
   })
 }

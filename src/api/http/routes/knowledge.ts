@@ -7,6 +7,7 @@ import {
   type KBDocument,
   type SearchResult,
 } from '../../../storage/knowledge/kb-repo.js'
+import { success, fail, paginateArray } from '../response.js'
 
 interface UploadJsonBody {
   filename: string
@@ -51,7 +52,7 @@ export async function knowledgeRoutes(fastify: FastifyInstance) {
       // JSON upload
       const body = request.body as UploadJsonBody
       if (!body?.filename || !body?.content) {
-        return reply.code(400).send({ error: 'filename and content are required' })
+        return reply.code(200).send(fail(40001, 'filename and content are required'))
       }
       filename = body.filename
       text = body.content
@@ -59,29 +60,38 @@ export async function knowledgeRoutes(fastify: FastifyInstance) {
     }
 
     if (!text || text.trim().length === 0) {
-      return reply.code(400).send({ error: 'Document content must not be empty' })
+      return reply.code(200).send(fail(40001, 'Document content must not be empty'))
     }
 
-    const doc = await addDocument(tenantId, filename, mimeType, text)
-    return reply.code(201).send(doc)
+    try {
+      const doc = await addDocument(tenantId, filename, mimeType, text)
+      return reply.code(200).send(success(doc))
+    } catch (err: any) {
+      return reply.code(200).send(fail(50000, err.message))
+    }
   })
 
   // ── GET /knowledge/documents ──────────────────────────────────────────────
-  fastify.get('/knowledge/documents', async (request, reply) => {
+  fastify.get<{ Querystring: { current?: number; pageSize?: number } }>('/knowledge/documents', async (request, reply) => {
     const tenantId = getTenantId(request)
+    const { current, pageSize } = request.query
     const docs = await listDocuments(tenantId)
-    return reply.send(docs)
+    return reply.code(200).send(paginateArray(docs, current, pageSize))
   })
 
   // ── DELETE /knowledge/documents/:id ──────────────────────────────────────
   fastify.delete<{ Params: { id: string } }>('/knowledge/documents/:id', async (request, reply) => {
     const tenantId = getTenantId(request)
     const { id } = request.params
-    const deleted = await deleteDocument(tenantId, id)
-    if (!deleted) {
-      return reply.code(404).send({ error: 'Document not found' })
+    try {
+      const deleted = await deleteDocument(tenantId, id)
+      if (!deleted) {
+        return reply.code(200).send(fail(40400, 'Document not found'))
+      }
+      return reply.code(200).send(success({ deleted: true }))
+    } catch (err: any) {
+      return reply.code(200).send(fail(50000, err.message))
     }
-    return reply.code(200).send({ deleted: true })
   })
 
   // ── POST /knowledge/search ────────────────────────────────────────────────
@@ -90,10 +100,14 @@ export async function knowledgeRoutes(fastify: FastifyInstance) {
     const { query, limit = 5 } = request.body ?? {}
 
     if (!query || typeof query !== 'string' || query.trim().length === 0) {
-      return reply.code(400).send({ error: 'query must be a non-empty string' })
+      return reply.code(200).send(fail(40001, 'query must be a non-empty string'))
     }
 
-    const results: SearchResult[] = await searchChunks(tenantId, query, limit)
-    return reply.send(results)
+    try {
+      const results: SearchResult[] = await searchChunks(tenantId, query, limit)
+      return reply.code(200).send(success(results))
+    } catch (err: any) {
+      return reply.code(200).send(fail(50000, err.message))
+    }
   })
 }

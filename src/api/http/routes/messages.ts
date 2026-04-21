@@ -14,6 +14,7 @@ import { createMemoryTools } from '../../../tools/memory/index.js'
 import { registerMCPTools } from '../../../tools/mcp/loader.js'
 import { createSkillTools, runSkillScriptTool } from '../../../tools/skill/index.js'
 import { v4 as uuidv4 } from 'uuid'
+import { success, fail } from '../response.js'
 
 export async function messagesRoutes(fastify: FastifyInstance) {
   const history = new SQLiteConversationHistory()
@@ -25,10 +26,10 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 
     const message = await history.getMessageById(messageId, tenantId)
     if (!message) {
-      return reply.code(404).send({ error: 'Message not found' })
+      return reply.code(200).send(fail(40400, 'Message not found'))
     }
 
-    return reply.send({ messageId, tokens: message.tokens })
+    return reply.code(200).send(success({ messageId, tokens: message.tokens }))
   })
 
   // 查询会话的 token 总和
@@ -37,7 +38,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     const tenantId = (request as any).authContext?.tenantId ?? 'default'
 
     const totalTokens = await history.getRawTokenCount({ tenantId, sessionId })
-    return reply.send({ sessionId, totalTokens })
+    return reply.code(200).send(success({ sessionId, totalTokens }))
   })
 
   // 2. 硬删除消息
@@ -47,11 +48,11 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 
     const message = await history.getMessageById(messageId, tenantId)
     if (!message) {
-      return reply.code(404).send({ error: 'Message not found' })
+      return reply.code(200).send(fail(40400, 'Message not found'))
     }
 
     await history.deleteMessage(messageId, tenantId)
-    return reply.send({ success: true, messageId })
+    return reply.code(200).send(success({ success: true, messageId }))
   })
 
   // 辅助函数：运行 AI pipeline
@@ -139,12 +140,16 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     const { content, systemPrompt, maxIterations } = request.body
     const tenantId = (request as any).authContext?.tenantId ?? 'default'
 
+    if (!content) {
+      return reply.code(200).send(fail(40001, 'content is required'))
+    }
+
     const message = await history.getMessageById(messageId, tenantId)
     if (!message) {
-      return reply.code(404).send({ error: 'Message not found' })
+      return reply.code(200).send(fail(40400, 'Message not found'))
     }
     if (message.role !== 'user') {
-      return reply.code(403).send({ error: 'Only user messages can be edited' })
+      return reply.code(200).send(fail(40000, 'Only user messages can be edited'))
     }
 
     // 获取 session_id
@@ -156,7 +161,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     const sessionId = result.rows[0]?.session_id as string
 
     if (!sessionId) {
-      return reply.code(500).send({ error: 'Session not found for message' })
+      return reply.code(200).send(fail(50000, 'Session not found for message'))
     }
 
     // 更新消息内容，重置 tokens（此处简单估算，或后续被精确更新）
@@ -179,10 +184,10 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 
     const message = await history.getMessageById(messageId, tenantId)
     if (!message) {
-      return reply.code(404).send({ error: 'Message not found' })
+      return reply.code(200).send(fail(40400, 'Message not found'))
     }
     if (message.role !== 'assistant') {
-      return reply.code(403).send({ error: 'Only assistant messages can be regenerated' })
+      return reply.code(200).send(fail(40000, 'Only assistant messages can be regenerated'))
     }
 
     const db = (await import('../../../storage/sqlite/db.js')).getDb()
@@ -193,7 +198,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     const sessionId = result.rows[0]?.session_id as string
 
     if (!sessionId) {
-      return reply.code(500).send({ error: 'Session not found for message' })
+      return reply.code(200).send(fail(50000, 'Session not found for message'))
     }
 
     // 硬删除该 AI 消息及其之后的所有消息

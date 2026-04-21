@@ -12,6 +12,8 @@ import { mcpRoutes } from './routes/mcp.js'
 import { knowledgeRoutes } from './routes/knowledge.js'
 import { messagesRoutes } from './routes/messages.js'
 import { agentRoutes } from './routes/agents.js'
+import { globalRequestMiddleware, WHITELIST_PATHS } from './middleware.js'
+import { fail } from './response.js'
 
 export async function buildServer() {
   const fastify = Fastify({
@@ -21,8 +23,14 @@ export async function buildServer() {
 
   const authMiddleware = createAuthMiddleware()
 
+  // Apply unified request header validation and whitelist
+  fastify.addHook('onRequest', globalRequestMiddleware)
+
   // Request logging and auth hook
   fastify.addHook('onRequest', async (request, reply) => {
+    // skip auth if in whitelist
+    if (WHITELIST_PATHS.includes(request.url)) return
+
     const reqLogger = logger.child({ requestId: request.id })
     reqLogger.info({ method: request.method, url: request.url }, 'Incoming request')
 
@@ -35,7 +43,7 @@ export async function buildServer() {
     } catch (err) {
       // Only reject if auth is enabled
       if (process.env.AUTH_ENABLED !== 'false') {
-        await reply.code(401).send({ error: err instanceof Error ? err.message : 'Unauthorized' })
+        await reply.code(200).send(fail(40100, err instanceof Error ? err.message : 'Unauthorized'))
       }
     }
   })
@@ -43,10 +51,8 @@ export async function buildServer() {
   // Global error handler
   fastify.setErrorHandler((error, request, reply) => {
     logger.error({ err: error, requestId: request.id }, 'Unhandled error')
-    void reply.code(error.statusCode ?? 500).send({
-      error: error.message ?? 'Internal server error',
-      code: error.code,
-    })
+    // All errors should return 200 with standard fail JSON
+    void reply.code(200).send(fail(error.statusCode ?? 50000, error.message ?? 'Internal server error'))
   })
 
   // Register routes under /api/v1

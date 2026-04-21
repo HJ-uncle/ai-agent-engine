@@ -27,11 +27,13 @@ import {
 } from '../../../storage/mcp/mcp-config.js'
 import { HTTPMCPClient } from '../../../tools/mcp/client.js'
 import { logger } from '../../../observability/index.js'
+import { success, fail, paginateArray } from '../response.js'
 
 export async function mcpRoutes(fastify: FastifyInstance) {
   // ── List ────────────────────────────────────────────────────────────────────
-  fastify.get('/mcp/servers', async (_req, reply) => {
-    return reply.send(listServers())
+  fastify.get<{ Querystring: { current?: number; pageSize?: number } }>('/mcp/servers', async (req, reply) => {
+    const { current, pageSize } = req.query
+    return reply.code(200).send(paginateArray(listServers(), current, pageSize))
   })
 
   // ── Create ──────────────────────────────────────────────────────────────────
@@ -39,29 +41,29 @@ export async function mcpRoutes(fastify: FastifyInstance) {
     const { id, name, transportType } = req.body
 
     if (!id || typeof id !== 'string') {
-      return reply.code(400).send({ error: 'id is required' })
+      return reply.code(200).send(fail(40001, 'id is required'))
     }
     if (!/^[a-z0-9][a-z0-9-_]*$/.test(id)) {
-      return reply.code(400).send({ error: 'id must be lowercase alphanumeric with hyphens/underscores' })
+      return reply.code(200).send(fail(40001, 'id must be lowercase alphanumeric with hyphens/underscores'))
     }
     if (!name) {
-      return reply.code(400).send({ error: 'name is required' })
+      return reply.code(200).send(fail(40001, 'name is required'))
     }
     if (!transportType) {
-      return reply.code(400).send({ error: 'transportType is required (stdio|sse|http|streamableHttp)' })
+      return reply.code(200).send(fail(40001, 'transportType is required (stdio|sse|http|streamableHttp)'))
     }
     if (transportType !== 'stdio' && !req.body.url) {
-      return reply.code(400).send({ error: 'url is required for non-stdio transport' })
+      return reply.code(200).send(fail(40001, 'url is required for non-stdio transport'))
     }
     if (transportType === 'stdio' && !req.body.command) {
-      return reply.code(400).send({ error: 'command is required for stdio transport' })
+      return reply.code(200).send(fail(40001, 'command is required for stdio transport'))
     }
 
     try {
       const entry = createServer({ ...req.body, enabled: req.body.enabled ?? true, isBuiltIn: req.body.isBuiltIn ?? false, description: req.body.description ?? '' })
-      return reply.code(201).send(entry)
-    } catch (err) {
-      return reply.code(409).send({ error: err instanceof Error ? err.message : 'Conflict' })
+      return reply.code(200).send(success(entry))
+    } catch (err: any) {
+      return reply.code(200).send(fail(40900, err instanceof Error ? err.message : 'Conflict'))
     }
   })
 
@@ -69,80 +71,77 @@ export async function mcpRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { id: string } }>('/mcp/servers/:id', async (req, reply) => {
     const server = getServer(req.params.id)
     if (!server) {
-      return reply.code(404).send({ error: `MCP server "${req.params.id}" not found` })
+      return reply.code(200).send(fail(40400, `MCP server "${req.params.id}" not found`))
     }
-    return reply.send(server)
+    return reply.code(200).send(success(server))
   })
 
   // ── Full update ─────────────────────────────────────────────────────────────
   fastify.put<{ Params: { id: string }; Body: UpdateMcpServerInput }>('/mcp/servers/:id', async (req, reply) => {
     const updated = updateServer(req.params.id, req.body)
     if (!updated) {
-      return reply.code(404).send({ error: `MCP server "${req.params.id}" not found` })
+      return reply.code(200).send(fail(40400, `MCP server "${req.params.id}" not found`))
     }
-    return reply.send(updated)
+    return reply.code(200).send(success(updated))
   })
 
   // ── Partial update ──────────────────────────────────────────────────────────
   fastify.patch<{ Params: { id: string }; Body: UpdateMcpServerInput }>('/mcp/servers/:id', async (req, reply) => {
     const updated = updateServer(req.params.id, req.body)
     if (!updated) {
-      return reply.code(404).send({ error: `MCP server "${req.params.id}" not found` })
+      return reply.code(200).send(fail(40400, `MCP server "${req.params.id}" not found`))
     }
-    return reply.send(updated)
+    return reply.code(200).send(success(updated))
   })
 
   // ── Delete ───────────────────────────────────────────────────────────────────
   fastify.delete<{ Params: { id: string } }>('/mcp/servers/:id', async (req, reply) => {
     const ok = deleteServer(req.params.id)
     if (!ok) {
-      return reply.code(404).send({ error: `MCP server "${req.params.id}" not found` })
+      return reply.code(200).send(fail(40400, `MCP server "${req.params.id}" not found`))
     }
-    return reply.code(204).send()
+    return reply.code(200).send(success({ deleted: true }))
   })
 
   // ── Enable ───────────────────────────────────────────────────────────────────
   fastify.post<{ Params: { id: string } }>('/mcp/servers/:id/enable', async (req, reply) => {
     const updated = toggleServer(req.params.id, true)
     if (!updated) {
-      return reply.code(404).send({ error: `MCP server "${req.params.id}" not found` })
+      return reply.code(200).send(fail(40400, `MCP server "${req.params.id}" not found`))
     }
-    return reply.send(updated)
+    return reply.code(200).send(success(updated))
   })
 
   // ── Disable ──────────────────────────────────────────────────────────────────
   fastify.post<{ Params: { id: string } }>('/mcp/servers/:id/disable', async (req, reply) => {
     const updated = toggleServer(req.params.id, false)
     if (!updated) {
-      return reply.code(404).send({ error: `MCP server "${req.params.id}" not found` })
+      return reply.code(200).send(fail(40400, `MCP server "${req.params.id}" not found`))
     }
-    return reply.send(updated)
+    return reply.code(200).send(success(updated))
   })
 
   // ── Test connection ───────────────────────────────────────────────────────────
   fastify.post<{ Params: { id: string } }>('/mcp/servers/:id/test', async (req, reply) => {
     const server = getServer(req.params.id)
     if (!server) {
-      return reply.code(404).send({ error: `MCP server "${req.params.id}" not found` })
+      return reply.code(200).send(fail(40400, `MCP server "${req.params.id}" not found`))
     }
 
     try {
       if (!server.url) {
-        return reply.code(400).send({ error: 'Server has no URL configured' })
+        return reply.code(200).send(fail(40001, 'Server has no URL configured'))
       }
       const client = new HTTPMCPClient({ name: server.id, url: server.url, headers: server.headers })
       const tools = await client.toTools()
-      return reply.send({
+      return reply.code(200).send(success({
         success: true,
         toolCount: tools.length,
         tools: tools.map((t) => ({ name: t.name, description: t.description })),
-      })
+      }))
     } catch (err) {
       logger.warn({ id: server.id, err }, 'MCP server test failed')
-      return reply.send({
-        success: false,
-        error: err instanceof Error ? err.message : 'Connection failed',
-      })
+      return reply.code(200).send(fail(50000, err instanceof Error ? err.message : 'Connection failed'))
     }
   })
 }

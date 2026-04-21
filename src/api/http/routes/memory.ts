@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { SQLiteMemoryStore } from '../../../storage/memory-store/index.js'
+import { success, fail, paginateArray } from '../response.js'
 
 export async function memoryRoutes(fastify: FastifyInstance) {
   const store = new SQLiteMemoryStore()
@@ -8,7 +9,7 @@ export async function memoryRoutes(fastify: FastifyInstance) {
     const { key, value, sessionId } = request.body
     const tenantId = (request as any).authContext?.tenantId ?? 'default'
     await store.remember(key, value, { tenantId, sessionId })
-    return reply.send({ success: true })
+    return reply.code(200).send(success({ success: true }))
   })
 
   fastify.get<{ Params: { key: string }; Querystring: { sessionId: string } }>(
@@ -18,14 +19,14 @@ export async function memoryRoutes(fastify: FastifyInstance) {
       const { sessionId } = request.query
       const tenantId = (request as any).authContext?.tenantId ?? 'default'
       const value = await store.recall(key, { tenantId, sessionId })
-      return reply.send({ key, value })
+      return reply.code(200).send(success({ key, value }))
     }
   )
 
-  fastify.get<{ Querystring: { sessionId: string } }>('/memory/list', async (request, reply) => {
-    const { sessionId } = request.query
+  fastify.get<{ Querystring: { sessionId: string; current?: number; pageSize?: number } }>('/memory/list', async (request, reply) => {
+    const { sessionId, current, pageSize } = request.query
     const tenantId = (request as any).authContext?.tenantId ?? 'default'
     const keys = await store.list({ tenantId, sessionId })
-    return reply.send({ keys })
+    return reply.code(200).send(paginateArray(keys, current, pageSize))
   })
 }
