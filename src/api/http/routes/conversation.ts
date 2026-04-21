@@ -27,6 +27,19 @@ export async function conversationRoutes(fastify: FastifyInstance) {
     return reply.send({ success: true })
   })
 
+  // DELETE /sessions/:sessionId  — 删除整个 session (硬删除)
+  fastify.delete<{ Params: { sessionId: string } }>('/sessions/:sessionId', async (request, reply) => {
+    const { sessionId } = request.params
+    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    
+    if (!sessionId) {
+      return reply.code(400).send({ error: 'sessionId is required' })
+    }
+
+    await history.clear({ tenantId, sessionId })
+    return reply.send({ success: true, sessionId })
+  })
+
   // GET /conversations/:conversationId  — 按 conversationId 查询单轮对话消息
   fastify.get<{ Params: { conversationId: string } }>('/conversations/:conversationId', async (request, reply) => {
     const { conversationId } = request.params

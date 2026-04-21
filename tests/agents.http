@@ -1,0 +1,51 @@
+### 创建自定义 Agent
+# 允许绑定模型、MCP、技能(Skills)以及知识库(KnowledgeBases)
+POST http://localhost:3000/api/v1/agents
+Content-Type: application/json
+# Authorization: Bearer your-token
+
+{
+  "name": "Data Analyst Agent",
+  "description": "专业的本地数据分析智能体",
+  "systemPrompt": "你是一个资深的数据分析师，擅长处理结构化数据并给出洞察。",
+  "model": "gpt-4o-mini",
+  "temperature": 0.3,
+  "skills": ["read_file", "write_file", "run_cmd"],
+  "mcpServers": ["sqlite_mcp"],
+  "knowledgeBases": ["data_analysis_docs"]
+}
+
+### 获取所有 Agent 列表
+GET http://localhost:3000/api/v1/agents
+# Authorization: Bearer your-token
+
+### 获取单个 Agent 详情
+# 替换 {{agentId}} 为上一步创建后返回的 id
+GET http://localhost:3000/api/v1/agents/{{agentId}}
+# Authorization: Bearer your-token
+
+### 更新自定义 Agent
+PUT http://localhost:3000/api/v1/agents/{{agentId}}
+Content-Type: application/json
+# Authorization: Bearer your-token
+
+{
+  "name": "Senior Data Analyst Agent",
+  "temperature": 0.5,
+  "skills": ["read_file", "write_file", "run_cmd", "python_repl"]
+}
+
+### 删除自定义 Agent
+DELETE http://localhost:3000/api/v1/agents/{{agentId}}
+# Authorization: Bearer your-token
+
+### 使用指定的 Agent 进行聊天对话
+# 在 payload 中提供 agentId，会话将自动应用该 Agent 的配置（如系统提示词、模型、技能限制和知识库）
+POST http://localhost:3000/api/v1/chat
+Content-Type: application/json
+# Authorization: Bearer your-token
+
+{
+  "message": "请帮我分析一下最近的销售数据",
+  "agentId": "{{agentId}}"
+}

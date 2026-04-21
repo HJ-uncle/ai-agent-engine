@@ -33,9 +33,12 @@ const CREATE_CONVERSATIONS = `
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant_id TEXT NOT NULL DEFAULT 'default',
     session_id TEXT NOT NULL,
+    conversation_id TEXT,
+    message_id TEXT,
     role TEXT NOT NULL,
     content TEXT NOT NULL,
     tool_call_id TEXT,
+    tool_call_name TEXT,
     tool_name TEXT,
     tool_args TEXT,
     tokens INTEGER DEFAULT 0,
@@ -217,17 +220,46 @@ describe('SQLiteConversationHistory', () => {
     expect(messages[4].content).toBe('Message 6')
   })
 
-  // 10. summarize does nothing when <= 4 messages
-  it('summarize is a no-op when 4 or fewer messages exist', async () => {
+  // 11. hard delete and getMessageById
+  it('hard delete removes messages from getHistory and getMessageById', async () => {
     const history = new SQLiteConversationHistory()
     const ctx = makeCtx()
 
-    await history.append({ role: 'user', content: 'A', tokens: 1 }, ctx)
-    await history.append({ role: 'assistant', content: 'B', tokens: 2 }, ctx)
+    const msgId = 'test-msg-123'
+    await history.append({ id: msgId, role: 'user', content: 'Hello', tokens: 10 }, ctx)
+    await history.append({ role: 'assistant', content: 'World', tokens: 25 }, ctx)
 
-    await history.summarize(ctx)
+    let messages = await history.getHistory(ctx)
+    expect(messages).toHaveLength(2)
+
+    await history.deleteMessage(msgId, ctx.tenantId)
+
+    messages = await history.getHistory(ctx)
+    expect(messages).toHaveLength(1)
+    expect(messages[0].role).toBe('assistant')
+
+    const msg = await history.getMessageById(msgId, ctx.tenantId)
+    expect(msg).toBeNull()
+  })
+
+  // 12. deleteMessagesAfterId
+  it('deleteMessagesAfterId hard deletes all subsequent messages', async () => {
+    const history = new SQLiteConversationHistory()
+    const ctx = makeCtx()
+
+    await history.append({ id: 'msg1', role: 'user', content: '1', tokens: 1 }, ctx)
+    await history.append({ id: 'msg2', role: 'assistant', content: '2', tokens: 1 }, ctx)
+    await history.append({ id: 'msg3', role: 'user', content: '3', tokens: 1 }, ctx)
+    
+    const msg2 = await history.getMessageById('msg2', ctx.tenantId)
+    await history.deleteMessagesAfterId(msg2!.dbId, ctx.sessionId, ctx.tenantId)
 
     const messages = await history.getHistory(ctx)
     expect(messages).toHaveLength(2)
+    expect(messages[0].id).toBe('msg1')
+    expect(messages[1].id).toBe('msg2')
+
+    const msg3 = await history.getMessageById('msg3', ctx.tenantId)
+    expect(msg3).toBeNull()
   })
 })

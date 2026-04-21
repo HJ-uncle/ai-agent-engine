@@ -1,0 +1,28 @@
+### 获取单条消息Token使用量
+GET http://localhost:3000/api/v1/messages/{{messageId}}/tokens
+# Authorization: Bearer your-token
+
+### 获取会话总Token
+GET http://localhost:3000/api/v1/sessions/{{sessionId}}/tokens
+
+### 硬删除单条消息 (不再查询和保留Token)
+DELETE http://localhost:3000/api/v1/messages/{{messageId}}
+
+### 删除整个会话 (真实删除所有消息和Token记录)
+DELETE http://localhost:3000/api/v1/sessions/{{sessionId}}
+
+### 编辑用户消息并重新生成响应 (Stream)
+# 会真实删除该消息之后的所有历史记录
+PUT http://localhost:3000/api/v1/messages/{{messageId}}
+Content-Type: application/json
+
+{
+  "content": "我修改了刚才的问题，请重新回答。"
+}
+
+### 重新生成AI响应 (Stream)
+# 会真实删除当前AI响应及之后的所有历史记录
+POST http://localhost:3000/api/v1/messages/{{messageId}}/regenerate
+Content-Type: application/json
+
+{}

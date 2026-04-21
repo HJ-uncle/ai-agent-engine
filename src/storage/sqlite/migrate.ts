@@ -1,5 +1,8 @@
 import { getDb, closeDb } from './db.js'
 import { up } from './migrations/001_initial.js'
+import { up as up002 } from './migrations/002_add_message_id.js'
+import { up as up003 } from './migrations/003_drop_deleted_at.js'
+import { up as up004 } from './migrations/004_add_agents.js'
 
 const BUILTIN_TEMPLATES = [
   {
@@ -31,6 +34,35 @@ async function migrate() {
   try {
     await up(db)
     console.log('✓ Migration 001_initial complete')
+
+    try {
+      await up002(db)
+      console.log('✓ Migration 002_add_message_id complete')
+    } catch (err: any) {
+      if (err.message && err.message.includes('duplicate column name')) {
+        console.log('✓ Migration 002_add_message_id already applied')
+      } else {
+        throw err
+      }
+    }
+
+    try {
+      await up003(db)
+      console.log('✓ Migration 003_drop_deleted_at complete')
+    } catch (err: any) {
+      console.log('✓ Migration 003_drop_deleted_at failed/skipped:', err.message)
+    }
+
+    try {
+      await up004(db)
+      console.log('✓ Migration 004_add_agents complete')
+    } catch (err: any) {
+      if (err.message && err.message.includes('duplicate column name')) {
+        console.log('✓ Migration 004_add_agents already applied')
+      } else {
+        throw err
+      }
+    }
 
     // Seed built-in prompt templates
     for (const tpl of BUILTIN_TEMPLATES) {

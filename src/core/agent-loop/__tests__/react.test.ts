@@ -5,9 +5,16 @@ import type { LLMAdapter, LLMResponse } from '../../llm-adapter/index.js'
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
-async function collectYields(gen: AsyncIterable<string>): Promise<string[]> {
+async function collectYields(iterable: AsyncIterable<string>): Promise<string[]> {
   const results: string[] = []
-  for await (const chunk of gen) results.push(chunk)
+  for await (const chunk of iterable) {
+    if (!chunk.includes('__tool_start__') && 
+        !chunk.includes('__tool_end__') && 
+        !chunk.includes('__thinking__') && 
+        !chunk.includes('__usage__')) {
+      results.push(chunk)
+    }
+  }
   return results
 }
 
@@ -50,6 +57,7 @@ function makeCtx(overrides: Partial<AgentContext> = {}): AgentContext {
       clear: vi.fn().mockResolvedValue(undefined),
       summarize: vi.fn().mockResolvedValue(undefined),
       getTokenCount: vi.fn().mockResolvedValue(0),
+      getRawTokenCount: vi.fn().mockResolvedValue(0),
     },
     tools: {
       register: vi.fn(),
@@ -246,7 +254,9 @@ describe('ReActStrategy', () => {
 
     // getTokenCount returns a value >= tokenBudget
     const ctx = makeCtx({ tokenBudget: 100 })
-    ;(ctx.history.getTokenCount as ReturnType<typeof vi.fn>).mockResolvedValue(200)
+    ;(ctx.history.getHistory as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { role: 'user', content: 'huge input', tokens: 200 }
+    ])
 
     const strategy = new ReActStrategy(llm, { maxIterations: 5 })
     const results = await collectYields(strategy.run('Any input', ctx))

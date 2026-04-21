@@ -10,6 +10,8 @@ import { toolRoutes } from './routes/tools.js'
 import { metricsRoutes } from './routes/metrics.js'
 import { mcpRoutes } from './routes/mcp.js'
 import { knowledgeRoutes } from './routes/knowledge.js'
+import { messagesRoutes } from './routes/messages.js'
+import { agentRoutes } from './routes/agents.js'
 
 export async function buildServer() {
   const fastify = Fastify({
@@ -56,6 +58,8 @@ export async function buildServer() {
     await api.register(toolRoutes)
     await api.register(mcpRoutes)
     await api.register(knowledgeRoutes)
+    await api.register(messagesRoutes)
+    await api.register(agentRoutes)
   }, { prefix: '/api/v1' })
 
   // Health and metrics at root level

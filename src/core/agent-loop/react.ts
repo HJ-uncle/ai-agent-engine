@@ -36,20 +36,22 @@ export class ReActStrategy implements LoopStrategy {
     private readonly options: ReActOptions = {},
   ) {}
 
-  async *run(input: string, ctx: AgentContext): AsyncIterable<string> {
+  async *run(input: string | null, ctx: AgentContext): AsyncIterable<string> {
     const maxIterations = this.options.maxIterations ??
       parseInt(process.env.MAX_ITERATIONS ?? '10', 10)
 
     const conversationId = this.options.conversationId
 
-    // Add user message to history
-    const userMessage: Message & { conversationId?: string } = {
-      role: 'user',
-      content: input,
-      createdAt: Date.now(),
-      ...(conversationId ? { conversationId } : {}),
+    // Add user message to history only if input is provided
+    if (input !== null && input !== '') {
+      const userMessage: Message & { conversationId?: string } = {
+        role: 'user',
+        content: input,
+        createdAt: Date.now(),
+        ...(conversationId ? { conversationId } : {}),
+      }
+      await ctx.history.append(userMessage, ctx)
     }
-    await ctx.history.append(userMessage, ctx)
 
     // Build tool list from registry
     const toolList = ctx.tools.list()

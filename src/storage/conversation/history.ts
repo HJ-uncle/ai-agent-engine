@@ -14,8 +14,10 @@ function rowToMessage(row: Row): Message & { conversationId?: string } {
   const tokens = row['tokens']
   const created_at = row['created_at']
   const conversation_id = row['conversation_id'] as string | null
+  const message_id = row['message_id'] as string | null
 
   const msg: Message & { conversationId?: string } = {
+    ...(message_id ? { id: message_id } : {}),
     role: role as Message['role'],
     content,
     tokens: tokens != null ? Number(tokens) : 0,
@@ -55,14 +57,16 @@ export class SQLiteConversationHistory implements ConversationHistory {
 
   async append(message: Message & { conversationId?: string }, ctx: Ctx): Promise<void> {
     const db = getDb()
+    const messageId = message.id ?? require('uuid').v4()
     await db.execute({
       sql: `INSERT INTO conversations
-              (tenant_id, session_id, conversation_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              (tenant_id, session_id, conversation_id, message_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         ctx.tenantId,
         ctx.sessionId,
         (message as { conversationId?: string }).conversationId ?? null,
+        messageId,
         message.role,
         message.content,
         message.toolCallId ?? null,
@@ -77,7 +81,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
   async getHistory(ctx: Ctx): Promise<Message[]> {
     const db = getDb()
     const result = await db.execute({
-      sql: `SELECT role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, created_at, conversation_id
+      sql: `SELECT message_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, created_at, conversation_id
             FROM conversations
             WHERE tenant_id = ? AND session_id = ?
             ORDER BY created_at ASC, id ASC`,
@@ -91,13 +95,54 @@ export class SQLiteConversationHistory implements ConversationHistory {
   async getByConversationId(conversationId: string, tenantId: string): Promise<(Message & { conversationId?: string })[]> {
     const db = getDb()
     const result = await db.execute({
-      sql: `SELECT role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, created_at, conversation_id
+      sql: `SELECT message_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, created_at, conversation_id
             FROM conversations
             WHERE conversation_id = ? AND tenant_id = ?
             ORDER BY created_at ASC, id ASC`,
       args: [conversationId, tenantId],
     })
     return result.rows.map(rowToMessage)
+  }
+
+  /** 获取单条消息 */
+  async getMessageById(messageId: string, tenantId: string): Promise<(Message & { conversationId?: string; dbId: number }) | null> {
+    const db = getDb()
+    const result = await db.execute({
+      sql: `SELECT id, message_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, created_at, conversation_id
+            FROM conversations
+            WHERE message_id = ? AND tenant_id = ?`,
+      args: [messageId, tenantId],
+    })
+    if (result.rows.length === 0) return null
+    const row = result.rows[0]
+    return { ...rowToMessage(row), dbId: Number(row['id']) }
+  }
+
+  /** 硬删除指定消息 */
+  async deleteMessage(messageId: string, tenantId: string): Promise<void> {
+    const db = getDb()
+    await db.execute({
+      sql: `DELETE FROM conversations WHERE message_id = ? AND tenant_id = ?`,
+      args: [messageId, tenantId],
+    })
+  }
+
+  /** 更新消息内容和 token */
+  async updateMessageContent(messageId: string, tenantId: string, content: string, tokens: number): Promise<void> {
+    const db = getDb()
+    await db.execute({
+      sql: `UPDATE conversations SET content = ?, tokens = ? WHERE message_id = ? AND tenant_id = ?`,
+      args: [content, tokens, messageId, tenantId],
+    })
+  }
+
+  /** 硬删除指定ID之后的消息 */
+  async deleteMessagesAfterId(id: number, sessionId: string, tenantId: string): Promise<void> {
+    const db = getDb()
+    await db.execute({
+      sql: `DELETE FROM conversations WHERE tenant_id = ? AND session_id = ? AND id > ?`,
+      args: [tenantId, sessionId, id],
+    })
   }
 
   /**
@@ -204,7 +249,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
     const db = getDb()
     // Fetch ALL raw messages (no window)
     const result = await db.execute({
-      sql: `SELECT role, content, tool_call_id, tool_name, tool_args, tokens, created_at
+      sql: `SELECT message_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, created_at
             FROM conversations
             WHERE tenant_id = ? AND session_id = ?
             ORDER BY created_at ASC, id ASC`,

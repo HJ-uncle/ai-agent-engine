@@ -23,6 +23,7 @@ export interface ToolCall {
 }
 
 export interface Message {
+  id?: string          // unique message ID
   role: MessageRole
   content: string
   toolCall?: ToolCall

@@ -208,6 +208,7 @@ describe('OpenAIAdapter.countTokens', () => {
     // Construct adapter without triggering real OpenAI client during tests
     // by stubbing the OpenAI constructor via the module mock approach.
     // We verify the pure math of countTokens directly.
+    process.env.OPENAI_API_KEY = 'test-key'
     const adapter = new OpenAIAdapter('gpt-4o-mini')
 
     expect(adapter.countTokens('')).toBe(0)
