@@ -54,6 +54,63 @@ The server starts on `http://localhost:3000` by default.
 
 ---
 
+## Linux 快捷访问指令
+
+### Chat 接口 (SSE 流式响应)
+```bash
+# 标准流式输出 (-N 禁用缓冲)
+curl -N -X POST http://localhost:3000/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "你好，请自我介绍一下",
+    "sessionId": "test-session"
+  }'
+
+# 过滤数据流，只看内容文本 (适合控制台预览)
+# 注意：管道连接时需要通过参数禁用各级程序的缓冲区，否则会“一下子弹出”
+# macOS 用户 (BSD sed):
+curl -N -s -X POST http://localhost:3000/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "讲个笑话", "sessionId": "test-session"}' \
+  | grep --line-buffered "data: " \
+  | sed -l 's/data: //g' \
+  | grep --line-buffered "^{" \
+  | jq -j --unbuffered '.content // empty'
+
+# Linux 用户 (GNU sed):
+# curl -N -s ... | grep --line-buffered "data: " | sed -u 's/data: //g' | jq -j --unbuffered '.content // empty'
+
+# Windows 用户 (PowerShell):
+# 注意：PowerShell 管道处理流式数据较慢，建议使用以下方式或在 Git Bash 中运行
+Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/v1/chat -Headers @{"Content-Type"="application/json"} -Body '{"message":"你好"}'
+```
+
+### Memory 接口 (存储/查询)
+```bash
+# 存储记忆
+curl -X POST http://localhost:3000/api/v1/memory/remember \
+  -H "Content-Type: application/json" \
+  -d '{
+    "key": "user_name",
+    "value": "Alice",
+    "sessionId": "test-session"
+  }'
+
+# 查询记忆
+curl "http://localhost:3000/api/v1/memory/recall/user_name?sessionId=test-session"
+```
+
+### 系统状态
+```bash
+# 健康检查
+curl http://localhost:3000/health
+
+# 指标统计
+curl http://localhost:3000/metrics
+```
+
+---
+
 ## Environment Variables
 
 | Variable | Default | Description |

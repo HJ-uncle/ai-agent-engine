@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "chcp 65001 >nul 2>&1 & tsx watch src/main.ts",
+    "dev": "tsx watch src/main.ts",
     "build": "tsc",
     "start": "node dist/main.js",
     "db:migrate": "tsx src/storage/sqlite/migrate.ts",
