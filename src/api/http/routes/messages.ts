@@ -174,6 +174,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     // Then run AI to generate a response for the updated history
     const requestId = uuidv4()
     await runAIForSession(sessionId, tenantId, requestId, systemPrompt, reply, maxIterations, undefined)
+    return reply
   })
 
   // 4. AI 消息重新生成
@@ -208,5 +209,6 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 
     const requestId = uuidv4()
     await runAIForSession(sessionId, tenantId, requestId, systemPrompt, reply, maxIterations, undefined)
+    return reply
   })
 }

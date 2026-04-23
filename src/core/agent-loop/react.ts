@@ -112,7 +112,9 @@ export class ReActStrategy implements LoopStrategy {
 
     let response
     try {
+      console.log('--- llm.complete started ---')
       response = await this.llm.complete(messages, llmOptions)
+      console.log('--- llm.complete finished ---', response.content?.slice(0, 50))
     } catch (err) {
       ctx.logger.error({ err }, 'LLM call failed')
       yield `\n\n[Error: LLM call failed - ${err instanceof Error ? err.message : 'unknown error'}]`

@@ -11,7 +11,9 @@ export class DefaultAuthMiddleware implements AuthMiddleware {
   }
 
   async authenticate(request: { headers: Record<string, string | string[] | undefined> }): Promise<AuthContext> {
-    const authEnabled = process.env.AUTH_ENABLED !== 'false'
+    // 临时关闭 token 验证
+    // const authEnabled = process.env.AUTH_ENABLED !== 'false'
+    const authEnabled = false
     
     if (!authEnabled) {
       return { tenantId: 'default', method: 'none' }

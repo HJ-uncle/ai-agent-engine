@@ -155,5 +155,6 @@ export async function chatRoutes(fastify: FastifyInstance) {
     reqLogger.info({ message: message.slice(0, 100), agentId }, 'Chat request received')
 
     await sseStream(runAgent(), reply)
+    return reply
   })
 }

@@ -4,6 +4,7 @@ export async function sseStream(
   source: AsyncIterable<string>,
   reply: FastifyReply,
 ): Promise<void> {
+  console.log('--- sseStream started ---')
   reply.raw.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
   reply.raw.setHeader('Cache-Control', 'no-cache')
   reply.raw.setHeader('Connection', 'keep-alive')
@@ -11,6 +12,7 @@ export async function sseStream(
 
   try {
     for await (const chunk of source) {
+      console.log('--- sseStream chunk ---', chunk.slice(0, 50))
       // ── __usage__ frame ──────────────────────────────────────────────────
       if (chunk.startsWith('\x00__usage__')) {
         try {

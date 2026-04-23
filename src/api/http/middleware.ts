@@ -12,9 +12,10 @@ export async function globalRequestMiddleware(request: FastifyRequest, reply: Fa
   }
 
   // 1. Verify required headers
-  const requestId = request.headers['x-request-id']
-  const clientVersion = request.headers['x-client-version']
+  const requestId = request.headers['x-request-id'] || 'default-req-id'
+  const clientVersion = request.headers['x-client-version'] || '1.0.0'
 
+  /* 
   if (!requestId || typeof requestId !== 'string' || requestId.trim() === '') {
     return reply.code(200).send(fail(40001, '参数验证失败：X-Request-ID不能为空'))
   }
@@ -22,6 +23,7 @@ export async function globalRequestMiddleware(request: FastifyRequest, reply: Fa
   if (!clientVersion || typeof clientVersion !== 'string' || clientVersion.trim() === '') {
     return reply.code(200).send(fail(40002, '参数验证失败：X-Client-Version不能为空'))
   }
+  */
 
   // Set them on request context if needed
   ;(request as any).requestId = requestId

@@ -1,6 +1,7 @@
 import type { ConversationHistory, Message, AgentContext } from '../../core/agent-context/index.js'
 import { getDb } from '../sqlite/db.js'
 import type { Row } from '@libsql/client'
+import { v4 as uuidv4 } from 'uuid'
 
 type Ctx = { tenantId: string; sessionId: string }
 
@@ -57,7 +58,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
 
   async append(message: Message & { conversationId?: string }, ctx: Ctx): Promise<void> {
     const db = getDb()
-    const messageId = message.id ?? require('uuid').v4()
+    const messageId = message.id ?? uuidv4()
     await db.execute({
       sql: `INSERT INTO conversations
               (tenant_id, session_id, conversation_id, message_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens)
