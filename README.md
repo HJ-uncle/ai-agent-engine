@@ -130,7 +130,7 @@ curl http://localhost:3000/metrics
 | `AUTH_ENABLED` | `true` | Enable JWT/API-key authentication (`false` for dev) |
 | `JWT_SECRET` | `dev-secret-change-in-production` | JWT signing secret |
 | `TOKEN_BUDGET` | `8000` | Max tokens per agent context |
-| `MAX_ITERATIONS` | `10` | Max ReAct loop iterations |
+| `MAX_ITERATIONS` | `50` | Max ReAct loop iterations |
 
 ---
 
@@ -173,6 +173,7 @@ data: [DONE]
 |--------|------|-------------|
 | `GET` | `/api/v1/conversation/history?sessionId=` | Fetch message history |
 | `DELETE` | `/api/v1/conversation/history?sessionId=` | Clear message history |
+| `DELETE` | `/api/v1/sessions/:sessionId` | Delete entire session completely (optional `?keepWorkspace=true`) |
 
 ### Tasks
 
@@ -187,6 +188,16 @@ data: [DONE]
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/v1/tools` | List all registered tools |
+
+### Workspace
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/workspace/files?sessionId=` | Get workspace files tree |
+| `GET` | `/api/v1/workspace/recent` | Get recently used workspaces |
+| `GET` | `/api/v1/workspace/file/content?sessionId=&path=` | Read file content |
+| `DELETE` | `/api/v1/workspace/recent/:sessionId` | Physically delete workspace directory |
+| `POST` | `/api/v1/workspace/rename` | Rename workspace and its associated sessionId |
 
 ### System
 
@@ -211,6 +222,7 @@ src/
 │       ├── conversation.ts    # History CRUD
 │       ├── tasks.ts           # Task queue
 │       ├── tools.ts           # Tool listing
+│       ├── workspace.ts       # Workspace management
 │       └── metrics.ts         # Health + metrics
 ├── core/
 │   ├── agent-context/         # AgentContext, Tool interfaces
