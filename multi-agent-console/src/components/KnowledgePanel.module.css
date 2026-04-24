@@ -1,0 +1,31 @@
+.container { display:flex; flex-direction:column; height:100%; overflow:hidden; }
+.header { display:flex; align-items:center; justify-content:space-between; padding:8px 12px 6px; flex-shrink:0; }
+.title { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:#bbb; opacity:.7; }
+.headerBtn { color:#c5c5c5!important; opacity:.6; width:22px!important; height:22px!important; padding:0!important; }
+.headerBtn:hover { opacity:1!important; }
+.searchBar { padding:0 8px 6px; flex-shrink:0; }
+.searchInput :global(.ant-input) { background:rgba(255,255,255,.05)!important; border-color:#3c3c3c!important; color:#ccc!important; font-size:12px!important; }
+.list { flex:1; overflow-y:auto; padding:2px 6px; }
+.list::-webkit-scrollbar { width:4px; }
+.list::-webkit-scrollbar-thumb { background:rgba(255,255,255,.1); border-radius:2px; }
+.empty { display:flex; flex-direction:column; align-items:center; gap:8px; padding:32px 16px; color:rgba(255,255,255,.25); font-size:12px; text-align:center; }
+.divider { font-size:11px; color:#484f58; padding:4px 8px; border-top:1px solid #2d2d2d; margin:4px 6px; }
+
+.results { padding:4px 8px; max-height:200px; overflow-y:auto; flex-shrink:0; }
+.results::-webkit-scrollbar { width:4px; }
+.results::-webkit-scrollbar-thumb { background:rgba(255,255,255,.1); border-radius:2px; }
+.resultsTitle { font-size:11px; color:#484f58; margin-bottom:4px; }
+.resultItem { padding:6px 8px; border-radius:4px; background:rgba(255,255,255,.04); border:1px solid #2d2d2d; margin-bottom:4px; }
+.resultMeta { display:flex; align-items:center; gap:5px; margin-bottom:3px; }
+.resultFile { font-size:11px; color:#60a5fa; flex:1; }
+.resultContent { font-size:12px; color:#8b949e; line-height:1.5; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+
+.docItem { display:flex; align-items:center; gap:8px; padding:7px 8px; border-radius:4px; margin-bottom:1px; cursor:default; }
+.docItem:hover { background:rgba(255,255,255,.04); }
+.docIcon { font-size:14px; color:#60a5fa; flex-shrink:0; }
+.docInfo { flex:1; min-width:0; }
+.docName { font-size:13px; color:#d4d4d4; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.docMeta { font-size:11px; color:#484f58; display:flex; gap:8px; margin-top:2px; }
+.deleteBtn { width:22px!important; height:22px!important; padding:0!important; color:#6e7681!important; opacity:0; }
+.docItem:hover .deleteBtn { opacity:1!important; }
+.deleteBtn:hover { color:#f85149!important; }
