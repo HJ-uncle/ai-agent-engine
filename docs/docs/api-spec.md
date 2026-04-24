@@ -87,7 +87,7 @@
 - `GET /api/v1/conversation/history?sessionId=xxx`: 查询指定会话的所有历史消息 (支持分页)
 - `DELETE /api/v1/conversation/history?sessionId=xxx`: 清空指定会话的历史消息记录
 - `GET /api/v1/conversations/:conversationId`: 按 conversationId 查询单轮对话消息 (支持分页)
-- `DELETE /api/v1/sessions/:sessionId`: 硬删除整个会话记录及关联
+- `DELETE /api/v1/sessions/:sessionId`: 硬删除整个会话记录及关联 (可选参数 `?keepWorkspace=true` 仅删除记录保留物理工作区文件)
 
 ### 3. 用户消息管理 Messages (`/api/v1/messages`)
 - `GET /api/v1/messages/:messageId/tokens`: 获取单条消息的 Token 使用量
@@ -117,7 +117,7 @@
 ### 6. 记忆存储 Memory (`/api/v1/memory`)
 - `POST /api/v1/memory/remember`: 保存新的键值对记忆条目
 - `GET /api/v1/memory/recall?sessionId=xxx`: 根据 Key 回忆/读取记忆
-- `GET /api/v1/memory/list?sessionId=xxx`: 获取当前会话下所有的记忆 Key 列表 (支持分页)
+- `GET /api/v1/memory/list`: 获取所有的记忆 Key 列表 (支持可选参数 `?sessionId=xxx` 和分页)
 - `DELETE /api/v1/memory/:id`: 删除指定的记忆条目
 
 ### 7. 任务调度 Tasks (`/api/v1/tasks`)
@@ -130,6 +130,13 @@
 ### 8. 工具与插件 Tools (`/api/v1/tools`)
 - `GET /api/v1/tools`: 获取当前系统加载的所有可用工具和技能列表 (支持分页)
 
-### 9. 监控与健康 Metrics (`/health`, `/metrics`)
+### 9. 工作区 Workspace (`/api/v1/workspace`)
+- `GET /api/v1/workspace/files`: 获取工作区文件和目录树结构 (支持可选参数 `?sessionId=xxx`)
+- `GET /api/v1/workspace/recent`: 获取最近使用的工作区列表 (包含名称、路径和是否活跃状态)
+- `GET /api/v1/workspace/file/content`: 获取工作区文件内容 (需参数 `?sessionId=xxx&path=yyy`)
+- `DELETE /api/v1/workspace/recent/:sessionId`: 物理删除指定的工作区目录
+- `POST /api/v1/workspace/rename`: 重命名工作区目录及关联的 `sessionId` (自动更新对话记录和记忆中的关联)
+
+### 10. 监控与健康 Metrics (`/health`, `/metrics`)
 - `GET /health`: 存活探针检查
 - `GET /metrics`: 获取 Prometheus 格式的监控指标

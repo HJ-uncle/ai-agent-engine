@@ -116,8 +116,8 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
       // Update all relevant tables where session_id is used
       await db.execute({ sql: 'UPDATE conversations SET session_id = ? WHERE tenant_id = ? AND session_id = ?', args: [newName, tenantId, oldName] })
       await db.execute({ sql: 'UPDATE memories SET session_id = ? WHERE tenant_id = ? AND session_id = ?', args: [newName, tenantId, oldName] })
-      await db.execute({ sql: 'UPDATE jobs SET tenant_id = ? WHERE tenant_id = ?', args: [newName, oldName] }) // Actually jobs table doesn't have session_id, only tenant_id, so let's skip jobs or handle it differently if needed. We'll just skip tasks/jobs update since it's not strictly tied to session_id in schema.
-      
+      // await db.execute({ sql: 'UPDATE jobs SET tenant_id = ? WHERE tenant_id = ?', args: [newName, oldName] }) // Actually jobs table doesn't have session_id, only tenant_id, so let's skip jobs or handle it differently if needed. We'll just skip tasks/jobs update since it's not strictly tied to session_id in schema.
+
       return reply.code(200).send(success(true))
     } catch (e: any) {
       return reply.code(200).send(fail(50000, `Failed to rename workspace: ${e.message}`))
