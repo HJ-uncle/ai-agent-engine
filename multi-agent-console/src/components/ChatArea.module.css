@@ -93,7 +93,8 @@
   flex: 1;
   overflow-y: auto;
   padding: 16px 0;
-  scroll-behavior: smooth;
+  /* 移除全局 scroll-behavior: smooth 以免与 JS 频繁调用冲突 */
+  overflow-anchor: none; /* 我们手动控制滚动逻辑，关闭浏览器的自动锚定以免冲突 */
 }
 .messages::-webkit-scrollbar { width: 5px; }
 .messages::-webkit-scrollbar-thumb {
@@ -321,14 +322,40 @@
 .thinkingHeader {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  padding: 5px 10px;
+  padding: 6px 12px;
   background: rgba(255,255,255,0.04);
   cursor: pointer;
   user-select: none;
 }
 .thinkingHeader:hover {
   background: rgba(255,255,255,0.07);
+}
+
+.thinkingHeaderLeft {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.thinkingActiveIcon {
+  color: #3fb950;
+  font-size: 14px;
+}
+
+.thinkingHeaderRight {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #484f58;
+}
+
+.thinkingToggleLabel {
+  font-size: 10px;
 }
 
 .pulseDot {
@@ -346,9 +373,11 @@
 }
 
 .thinkingLabel {
-  flex: 1;
   color: #8b949e;
   font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .thinkingToggle {
@@ -357,61 +386,100 @@
 }
 
 .thinkingBody {
-  padding: 8px 12px;
-  background: rgba(255,255,255,0.02);
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.01);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .thinkStep {
-  margin-bottom: 8px;
-  padding: 7px 10px;
-  background: rgba(139,139,255,0.06);
-  border-left: 3px solid #8b8bff;
-  border-radius: 3px;
+  padding: 8px 12px;
+  background: rgba(139,139,255,0.04);
+  border-left: 2px solid #8b8bff;
+  border-radius: 4px;
 }
 
 .thinkLabel {
   color: #8b8bff;
   font-weight: 600;
   font-size: 11px;
-  display: block;
-  margin-bottom: 3px;
+  display: flex;
+  align-items: center;
+  margin-bottom: 4px;
 }
 
 .thinkText {
-  color: #8b949e;
-  line-height: 1.55;
+  color: #b1bac4;
+  line-height: 1.6;
   white-space: pre-wrap;
   font-size: 12px;
 }
 
+.toolStepWrapper {
+  margin-bottom: 6px;
+}
+
 .toolStep {
   display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  margin-bottom: 5px;
+  align-items: center;
+  gap: 8px;
   font-size: 12px;
+  padding: 1px 0;
+}
+
+.toolIcon {
+  font-size: 13px;
+  color: #d29922;
 }
 
 .toolName {
   color: #d29922;
   font-weight: 600;
+  font-family: var(--vscode-editor-font-family, 'Consolas', monospace);
 }
 
 .toolArgs {
   color: #484f58;
   font-size: 11px;
+  font-family: var(--vscode-editor-font-family, 'Consolas', monospace);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.toolResult {
+.toolResultCompact {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
-  margin-bottom: 8px;
-  padding-left: 18px;
+  padding-left: 21px;
+  margin-top: 1px;
+}
+
+.resultSuccessIcon {
+  color: #3fb950;
+  font-size: 13px;
+}
+
+.resultErrorIcon {
+  color: #f78166;
+  font-size: 13px;
+}
+
+.resultText {
+  line-height: 1.4;
   font-size: 11px;
+  margin-left: 8px;
   color: #8b949e;
-  max-width: 100%;
   word-break: break-all;
+}
+
+.thinkingLoading {
+  display: flex;
+  align-items: center;
+  color: #484f58;
+  font-size: 11px;
+  font-style: italic;
+  padding: 4px 0;
 }
 
 /* ── Message footer ──────────────────────────────────────────────────── */

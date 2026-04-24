@@ -1,0 +1,7 @@
+{
+  "name": "测试工具",
+  "version": "1.0.0",
+  "tools": ["calculate", "get_time", "read_file", "write_file", "list_files", "remember", "recall"],
+  "status": "active",
+  "count": 42
+}

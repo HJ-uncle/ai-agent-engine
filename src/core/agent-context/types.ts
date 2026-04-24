@@ -30,6 +30,7 @@ export interface Message {
   toolCallId?: string  // for tool result messages
   toolName?: string    // for tool result messages
   tokens?: number
+  usage?: Record<string, number> | null
   createdAt?: number
 }
 
@@ -71,6 +72,7 @@ export class ToolNotFoundError extends ToolError {
 
 export interface Tool {
   readonly name: string
+  readonly displayName?: string
   readonly description: string
   readonly parameters: JSONSchema
   execute(args: unknown, ctx: AgentContext): Promise<ToolResult>
@@ -81,7 +83,7 @@ export interface Tool {
 export interface MemoryStore {
   remember(key: string, value: string, ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<void>
   recall(key: string, ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<string | null>
-  list(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<string[]>
+  list(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<any[]>
   forget(key: string, ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<void>
 }
 
@@ -110,7 +112,7 @@ export interface ConversationHistory {
 export interface IToolRegistry {
   register(tool: Tool): void
   unregister(name: string): void
-  list(): Array<{ name: string; description: string; parameters: JSONSchema }>
+  list(): Array<{ name: string; displayName?: string; description: string; parameters: JSONSchema }>
   execute(name: string, args: unknown, ctx: AgentContext): Promise<ToolResult>
   has(name: string): boolean
 }

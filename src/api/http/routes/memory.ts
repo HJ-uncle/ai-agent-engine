@@ -23,10 +23,22 @@ export async function memoryRoutes(fastify: FastifyInstance) {
     }
   )
 
-  fastify.get<{ Querystring: { sessionId: string; current?: number; pageSize?: number } }>('/memory/list', async (request, reply) => {
+  fastify.get<{ Querystring: { sessionId?: string; current?: number; pageSize?: number } }>('/memory/list', async (request, reply) => {
     const { sessionId, current, pageSize } = request.query
     const tenantId = (request as any).authContext?.tenantId ?? 'default'
-    const keys = await store.list({ tenantId, sessionId })
-    return reply.code(200).send(paginateArray(keys, current, pageSize))
+    const items = await store.list({ tenantId, sessionId })
+    return reply.code(200).send(paginateArray(items, current, pageSize))
+  })
+
+  fastify.delete<{ Params: { id: string } }>('/memory/:id', async (request, reply) => {
+    const { id } = request.params
+    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    // since we don't have deleteById on interface, we can just run sql
+    const db = (await import('../../../storage/sqlite/db.js')).getDb()
+    await db.execute({
+      sql: 'DELETE FROM memories WHERE id = ? AND tenant_id = ?',
+      args: [id, tenantId]
+    })
+    return reply.code(200).send(success({ success: true }))
   })
 }

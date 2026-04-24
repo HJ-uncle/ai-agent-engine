@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify'
 import { SQLiteConversationHistory } from '../../../storage/conversation/index.js'
 import { success, fail, paginateArray } from '../response.js'
+import { workspaceManager } from '../../../workspace/index.js'
+import fs from 'node:fs'
 
 export async function conversationRoutes(fastify: FastifyInstance) {
   const history = new SQLiteConversationHistory()
@@ -36,15 +38,30 @@ export async function conversationRoutes(fastify: FastifyInstance) {
   })
 
   // DELETE /sessions/:sessionId  — 删除整个 session (硬删除)
-  fastify.delete<{ Params: { sessionId: string } }>('/sessions/:sessionId', async (request, reply) => {
+  fastify.delete<{ Params: { sessionId: string }, Querystring: { keepWorkspace?: string } }>('/sessions/:sessionId', async (request, reply) => {
     const { sessionId } = request.params
+    const { keepWorkspace } = request.query
     const tenantId = (request as any).authContext?.tenantId ?? 'default'
     
     if (!sessionId) {
       return reply.code(200).send(fail(40001, '参数验证失败：sessionId 不能为空'))
     }
 
+    // 1. Delete DB history
     await history.clear({ tenantId, sessionId })
+    
+    // 2. Delete physical workspace directory if keepWorkspace is not true
+    if (keepWorkspace !== 'true') {
+      try {
+        const dir = workspaceManager.getPath({ tenantId, sessionId })
+        if (fs.existsSync(dir)) {
+          fs.rmSync(dir, { recursive: true, force: true })
+        }
+      } catch (e: any) {
+        request.log.error(`Failed to cleanup workspace for session ${sessionId}: ${e.message}`)
+      }
+    }
+
     return reply.code(200).send(success({ success: true, sessionId }))
   })
 

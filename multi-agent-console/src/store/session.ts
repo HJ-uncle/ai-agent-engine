@@ -5,23 +5,33 @@ import type { Session, Message, TokenUsage } from '../types'
 interface SessionState {
   sessions: Session[]
   activeSessionId: string
+  activeFile: string | null // Current file opened in Explorer
   messageMap: Record<string, Message[]>
   usageMap: Record<string, TokenUsage | null>
+
+  // UI State
+  isSettingsOpen: boolean
+  settingsTab: string
 
   // Actions
   addSession: (agentId?: string) => string
   switchSession: (id: string) => void
   deleteSession: (id: string) => void
+  renameSessionId: (oldId: string, newId: string) => void
   updateSessionTitle: (id: string, title: string) => void
   updateSessionAgent: (id: string, agentId: string | undefined) => void
 
   addMessage: (sessionId: string, message: Message) => void
+  setMessages: (sessionId: string, messages: Message[]) => void
   updateMessage: (sessionId: string, messageId: string, updates: Partial<Message>) => void
   deleteMessage: (messageId: string) => void
   editUserMessage: (messageId: string, newContent: string) => void
   clearMessages: (sessionId: string) => void
 
   updateUsage: (sessionId: string, usage: TokenUsage) => void
+
+  openSettings: (tab?: string) => void
+  closeSettings: () => void
 }
 
 function genId() {
@@ -43,21 +53,25 @@ export const useSessionStore = create<SessionState>()(
     (set) => ({
       sessions: [initial],
       activeSessionId: initial.id,
+      activeFile: null,
       messageMap: { [initial.id]: [] },
       usageMap: { [initial.id]: null },
+      isSettingsOpen: false,
+      settingsTab: 'general',
 
       addSession: (agentId?: string) => {
         const s = { ...defaultSession(), agentId }
         set((state) => ({
           sessions: [s, ...state.sessions],
           activeSessionId: s.id,
+          activeFile: null,
           messageMap: { ...state.messageMap, [s.id]: [] },
           usageMap: { ...state.usageMap, [s.id]: null },
         }))
         return s.id
       },
 
-      switchSession: (id) => set({ activeSessionId: id }),
+      switchSession: (id) => set({ activeSessionId: id, activeFile: null }),
 
       deleteSession: (id) => {
         set((state) => {
@@ -91,6 +105,28 @@ export const useSessionStore = create<SessionState>()(
         })
       },
 
+      renameSessionId: (oldId, newId) => {
+        set((state) => {
+          const sessions = state.sessions.map(s => s.id === oldId ? { ...s, id: newId } : s)
+          const activeSessionId = state.activeSessionId === oldId ? newId : state.activeSessionId
+          const activeFile = state.activeFile
+          
+          const messageMap = { ...state.messageMap }
+          if (messageMap[oldId]) {
+            messageMap[newId] = messageMap[oldId]
+            delete messageMap[oldId]
+          }
+          
+          const usageMap = { ...state.usageMap }
+          if (usageMap[oldId]) {
+            usageMap[newId] = usageMap[oldId]
+            delete usageMap[oldId]
+          }
+          
+          return { sessions, activeSessionId, activeFile, messageMap, usageMap }
+        })
+      },
+
       updateSessionTitle: (id, title) =>
         set((state) => ({
           sessions: state.sessions.map((s) => (s.id === id ? { ...s, title } : s)),
@@ -112,6 +148,14 @@ export const useSessionStore = create<SessionState>()(
               ? { ...s, lastMessage: message.content.slice(0, 60) }
               : s,
           ),
+        })),
+
+      setMessages: (sessionId, messages) =>
+        set((state) => ({
+          messageMap: {
+            ...state.messageMap,
+            [sessionId]: messages,
+          },
         })),
 
       updateMessage: (sessionId, messageId, updates) =>
@@ -164,6 +208,9 @@ export const useSessionStore = create<SessionState>()(
           }
           return { usageMap: { ...state.usageMap, [sessionId]: merged } }
         }),
+
+      openSettings: (tab = 'general') => set({ isSettingsOpen: true, settingsTab: tab }),
+      closeSettings: () => set({ isSettingsOpen: false }),
     }),
     {
       name: 'mac-session-store',

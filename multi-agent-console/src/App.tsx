@@ -3,6 +3,7 @@ import { ConfigProvider, theme, Tooltip, message as antMsg } from 'antd'
 import {
   MessageOutlined, RobotOutlined, SettingOutlined,
   HistoryOutlined, ApiOutlined, DatabaseOutlined,
+  FolderOutlined,
   ThunderboltOutlined, ToolOutlined,
 } from '@ant-design/icons'
 import zhCN from 'antd/locale/zh_CN'
@@ -11,15 +12,21 @@ import ChatArea from './components/ChatArea'
 import AgentPanel from './components/AgentPanel'
 import McpPanel from './components/McpPanel'
 import KnowledgePanel from './components/KnowledgePanel'
+import ExplorerPanel from './components/ExplorerPanel'
+import SettingsModal from './components/SettingsModal'
 import { useSessionStore } from './store/session'
 import { conversationApi, toolsApi, memoryApi, tasksApi } from './api'
 import type { Tool, MemoryEntry, Task } from './types'
 import styles from './App.module.css'
+import 'highlight.js/styles/vs2015.css'
+
+import EditorArea from './components/EditorArea'
 
 // ── Activity bar nav ───────────────────────────────────────────────────────────
-type PanelKey = 'chat' | 'agents' | 'mcp' | 'knowledge' | 'tools' | 'memory' | 'tasks' | 'history'
+type PanelKey = 'chat' | 'agents' | 'mcp' | 'knowledge' | 'tools' | 'memory' | 'tasks' | 'history' | 'explorer'
 
 const ACTIVITIES: { key: PanelKey; icon: React.ReactNode; label: string }[] = [
+  { key: 'explorer',  icon: <FolderOutlined />,     label: '资源管理器' },
   { key: 'chat',      icon: <MessageOutlined />,    label: '对话' },
   { key: 'agents',    icon: <RobotOutlined />,       label: 'Agents' },
   { key: 'mcp',       icon: <ApiOutlined />,         label: 'MCP Servers' },
@@ -83,6 +90,7 @@ function ToolsPanel() {
           <div key={t.name} style={{ padding: '6px 8px', borderRadius: 4, marginBottom: 2, background: 'rgba(255,255,255,.03)', border: '1px solid #2d2d2d' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <span style={{ fontSize: 12, fontWeight: 600, color: '#d4d4d4', fontFamily: 'Consolas,monospace' }}>{t.name}</span>
+              {t.displayName && <span style={{ fontSize: 11, color: '#8b949e', background: 'rgba(255,255,255,.06)', borderRadius: 3, padding: '0 4px' }}>{t.displayName}</span>}
               {t.source && <span style={{ fontSize: 10, color: sourceColor[t.source] ?? '#8b949e', background: 'rgba(255,255,255,.06)', borderRadius: 3, padding: '0 4px' }}>{t.source}</span>}
             </div>
             <div style={{ fontSize: 11, color: '#8b949e', marginTop: 2, lineHeight: 1.4 }}>{t.description}</div>
@@ -204,7 +212,7 @@ function TasksPanel() {
 // ── Main App ───────────────────────────────────────────────────────────────────
 export default function App() {
   const [activePanel, setActivePanel] = useState<PanelKey>('chat')
-  const { addSession } = useSessionStore()
+  const { addSession, openSettings } = useSessionStore()
 
   useEffect(() => {
     ;(async () => {
@@ -213,6 +221,15 @@ export default function App() {
         const remote = result.list ?? []
         if (remote.length === 0) return
         useSessionStore.setState((state) => {
+          const msgMap = { ...state.messageMap }
+          const usageMap = { ...state.usageMap }
+
+          remote.forEach(r => {
+            if (r.totalUsage) {
+              usageMap[r.sessionId] = r.totalUsage as any
+            }
+          })
+
           const existingIds = new Set(state.sessions.map((s) => s.id))
           const newSessions = remote
             .filter((s) => !existingIds.has(s.sessionId))
@@ -222,10 +239,10 @@ export default function App() {
               createdAt: s.lastAt,
               lastMessage: s.lastMessage,
             }))
-          if (!newSessions.length) return state
+          
+          if (!newSessions.length) return { usageMap }
+          
           const merged = [...newSessions, ...state.sessions].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
-          const msgMap = { ...state.messageMap }
-          const usageMap = { ...state.usageMap }
           newSessions.forEach((s) => { if (!msgMap[s.id]) msgMap[s.id] = []; if (!usageMap[s.id]) usageMap[s.id] = null })
           return { sessions: merged, messageMap: msgMap, usageMap }
         })
@@ -235,6 +252,7 @@ export default function App() {
 
   const sidebarPanel = () => {
     switch (activePanel) {
+      case 'explorer':  return <ExplorerPanel />
       case 'chat':      return <SessionList onNewChat={() => { addSession(); setActivePanel('chat') }} />
       case 'agents':    return <AgentPanel />
       case 'mcp':       return <McpPanel />
@@ -290,7 +308,9 @@ export default function App() {
           </div>
           <div className={styles.activityBottom}>
             <Tooltip title="设置" placement="right">
-              <button className={styles.activityBtn}><SettingOutlined /></button>
+              <button className={styles.activityBtn} onClick={() => openSettings('general')}>
+                <SettingOutlined />
+              </button>
             </Tooltip>
           </div>
         </div>
@@ -298,9 +318,12 @@ export default function App() {
         {/* Sidebar */}
         <div className={styles.sidebar}>{sidebarPanel()}</div>
 
-        {/* Main chat */}
-        <div className={styles.main}><ChatArea /></div>
+        {/* Main chat or Editor */}
+        <div className={styles.main}>
+          {useSessionStore(s => s.activeFile) ? <EditorArea /> : <ChatArea />}
+        </div>
       </div>
+      <SettingsModal />
     </ConfigProvider>
   )
 }

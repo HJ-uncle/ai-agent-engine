@@ -2,6 +2,7 @@ import type { LoopStrategy } from './strategy.js'
 import type { AgentContext } from '../agent-context/index.js'
 import type { LLMAdapter, LLMAdapterOptions } from '../llm-adapter/index.js'
 import type { Message } from '../agent-context/index.js'
+import { v4 as uuidv4 } from 'uuid'
 
 export interface TokenUsage {
   /** Tokens in the system prompt (including RAG context) */
@@ -48,6 +49,7 @@ export class ReActStrategy implements LoopStrategy {
         role: 'user',
         content: input,
         createdAt: Date.now(),
+        tokens: this.llm.countTokens(input),
         ...(conversationId ? { conversationId } : {}),
       }
       await ctx.history.append(userMessage, ctx)
@@ -125,6 +127,19 @@ export class ReActStrategy implements LoopStrategy {
     // prompt tokens across iterations (history is already tracked via getTokenCount)
     ctx.tokenBudget -= response.completionTokens
 
+    const bd = this.options.promptBreakdown ?? { systemPromptTokens: 0, systemToolsTokens: 0, skillTokens: 0 }
+    const promptTokens = response.promptTokens || (bd.systemPromptTokens + bd.systemToolsTokens + bd.skillTokens + historyTokens)
+    const completionTokens = response.completionTokens
+    const currentUsage: TokenUsage = {
+      systemPromptTokens: bd.systemPromptTokens,
+      systemToolsTokens: bd.systemToolsTokens,
+      skillTokens: bd.skillTokens,
+      messagesTokens: Math.max(0, promptTokens - bd.systemPromptTokens - bd.systemToolsTokens - bd.skillTokens),
+      promptTokens,
+      completionTokens,
+      totalTokens: promptTokens + completionTokens,
+    }
+
     // Handle tool calls
     if (response.toolCalls && response.toolCalls.length > 0) {
       // ── 思考过程：如果 AI 有思考文本，先流出 ─────────────────────────
@@ -133,16 +148,20 @@ export class ReActStrategy implements LoopStrategy {
       }
 
       // Add assistant message with tool calls
+      const assistantMsgId = uuidv4()
       const assistantMsg: Message & { conversationId?: string } = {
+        id: assistantMsgId,
         role: 'assistant',
         content: response.content,
         toolCall: response.toolCalls[0],
         toolCallId: response.toolCalls[0].id,
         createdAt: Date.now(),
         tokens: response.completionTokens,
+        usage: currentUsage as unknown as Record<string, number>,
         ...(conversationId ? { conversationId } : {}),
       }
       await ctx.history.append(assistantMsg, ctx)
+      yield `\x00__usage__${JSON.stringify({ ...currentUsage, conversationId: assistantMsgId })}`
 
       // Execute each tool call
       let consecutiveFailures = 0
@@ -183,6 +202,7 @@ export class ReActStrategy implements LoopStrategy {
           toolCallId: toolCall.id,
           toolName: toolCall.name,
           createdAt: Date.now(),
+          tokens: this.llm.countTokens(String(toolResult.output)),
           ...(conversationId ? { conversationId } : {}),
         }
         await ctx.history.append(toolMsg, ctx)
@@ -223,30 +243,32 @@ export class ReActStrategy implements LoopStrategy {
         yield response.content
       }
 
+      // Yield token usage breakdown as a special __usage__ frame (includes conversationId)
+      const finalCompletionTokens = streamCompletionTokens || response.completionTokens
+      const finalPromptTokens = response.promptTokens || (bd.systemPromptTokens + bd.systemToolsTokens + bd.skillTokens + historyTokens)
+      const finalUsage: TokenUsage = {
+        systemPromptTokens: bd.systemPromptTokens,
+        systemToolsTokens: bd.systemToolsTokens,
+        messagesTokens: Math.max(0, finalPromptTokens - bd.systemPromptTokens - bd.systemToolsTokens - bd.skillTokens),
+        skillTokens: bd.skillTokens,
+        promptTokens: finalPromptTokens,
+        completionTokens: finalCompletionTokens,
+        totalTokens: finalPromptTokens + finalCompletionTokens,
+      }
+
+      const messageId = uuidv4()
       const finalMsg: Message & { conversationId?: string } = {
+        id: messageId,
         role: 'assistant',
         content: streamContent || response.content,
         createdAt: Date.now(),
-        tokens: streamCompletionTokens || response.completionTokens,
+        tokens: finalCompletionTokens,
+        usage: finalUsage as unknown as Record<string, number>, // Attach usage to the final message so it gets saved in the DB
         ...(conversationId ? { conversationId } : {}),
       }
       await ctx.history.append(finalMsg, ctx)
 
-      // Yield token usage breakdown as a special __usage__ frame (includes conversationId)
-      const bd = this.options.promptBreakdown ?? { systemPromptTokens: 0, systemToolsTokens: 0, skillTokens: 0 }
-      const messagesTokens = historyTokens
-      const completionTokens = streamCompletionTokens || response.completionTokens
-      const promptTokens = bd.systemPromptTokens + bd.systemToolsTokens + messagesTokens + bd.skillTokens
-      const usage: TokenUsage = {
-        systemPromptTokens: bd.systemPromptTokens,
-        systemToolsTokens: bd.systemToolsTokens,
-        messagesTokens,
-        skillTokens: bd.skillTokens,
-        promptTokens,
-        completionTokens,
-        totalTokens: promptTokens + completionTokens,
-      }
-      yield `\x00__usage__${JSON.stringify({ ...usage, conversationId: conversationId ?? null })}`
+      yield `\x00__usage__${JSON.stringify({ ...finalUsage, conversationId: messageId })}`
       return
     }
 

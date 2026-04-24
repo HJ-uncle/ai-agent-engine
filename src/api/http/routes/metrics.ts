@@ -15,10 +15,10 @@ export async function metricsRoutes(fastify: FastifyInstance) {
     return reply.type('text/plain').send(metrics)
   })
 
-  // Serve openapi.json dynamically from tests/docs/openapi.json
+  // Serve openapi.json dynamically from docs/docs/openapi.json
   fastify.get('/openapi.json', async (_request, reply) => {
     try {
-      const docsPath = path.resolve(process.cwd(), 'tests/docs/openapi.json')
+      const docsPath = path.resolve(process.cwd(), 'docs/docs/openapi.json')
       const content = await fs.promises.readFile(docsPath, 'utf-8')
       return reply.type('application/json').send(content)
     } catch (err) {

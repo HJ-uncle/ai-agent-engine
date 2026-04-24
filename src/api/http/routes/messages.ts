@@ -115,20 +115,26 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     const systemToolsTokens = estimateTokens(toolDefsText)
 
     const conversationId = uuidv4()
-    const llm = createLLMAdapter()
-    const strategy = new ReActStrategy(llm, {
-      systemPrompt: fullSystemPrompt || undefined,
-      maxIterations,
-      conversationId,
-      promptBreakdown: { systemPromptTokens, systemToolsTokens, skillTokens },
-    })
-    const pipeline = createPipeline([])
 
     // If newMessageContent is not provided, we pass null to avoid appending a new user message
     const prompt = newMessageContent ?? null
 
     async function* runAgent(): AsyncIterable<string> {
-      yield* pipeline.pipe(strategy.run(prompt, ctx))
+      try {
+        const llm = createLLMAdapter()
+        const strategy = new ReActStrategy(llm, {
+          systemPrompt: fullSystemPrompt || undefined,
+          maxIterations,
+          conversationId,
+          promptBreakdown: { systemPromptTokens, systemToolsTokens, skillTokens },
+        })
+        const pipeline = createPipeline([])
+
+        yield* pipeline.pipe(strategy.run(prompt, ctx))
+      } catch (err: any) {
+        reqLogger.error({ err }, 'Agent execution error')
+        yield `\n\n[System Error: ${err.message || String(err)}]`
+      }
     }
 
     await sseStream(runAgent(), reply)
@@ -202,9 +208,16 @@ export async function messagesRoutes(fastify: FastifyInstance) {
       return reply.code(200).send(fail(50000, 'Session not found for message'))
     }
 
-    // 硬删除该 AI 消息及其之后的所有消息
-    // 注意：这里需要包含该 AI 消息自身
-    await history.deleteMessage(messageId, tenantId)
+    if (message.conversationId) {
+      // 删除该轮对话产生的所有非用户消息（包含中间的 tool calls）
+      await db.execute({
+        sql: `DELETE FROM conversations WHERE tenant_id = ? AND session_id = ? AND conversation_id = ? AND role != 'user'`,
+        args: [tenantId, sessionId, message.conversationId]
+      })
+    } else {
+      await history.deleteMessage(messageId, tenantId)
+    }
+    
     await history.deleteMessagesAfterId(message.dbId, sessionId, tenantId)
 
     const requestId = uuidv4()

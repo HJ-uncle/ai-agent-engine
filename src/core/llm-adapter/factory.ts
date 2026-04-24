@@ -17,9 +17,9 @@ function createBaseAdapter(provider: string, model: string): LLMAdapter {
   }
 }
 
-export function createLLMAdapter(): LLMAdapter {
-  const provider = process.env.LLM_PROVIDER ?? 'openai'
-  const primaryModel = process.env.LLM_PRIMARY_MODEL ?? process.env.LLM_MODEL ?? 'gpt-4o-mini'
+export function createLLMAdapter(overrides?: { provider?: string; model?: string }): LLMAdapter {
+  const provider = overrides?.provider ?? process.env.LLM_PROVIDER ?? 'openai'
+  const primaryModel = overrides?.model ?? process.env.LLM_PRIMARY_MODEL ?? process.env.LLM_MODEL ?? 'gpt-4o-mini'
   const fallbackModel = process.env.LLM_FALLBACK_MODEL
 
   const primary = new RetryingAdapter(createBaseAdapter(provider, primaryModel))

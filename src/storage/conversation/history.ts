@@ -13,6 +13,7 @@ function rowToMessage(row: Row): Message & { conversationId?: string } {
   const tool_name = row['tool_name'] as string | null            // tool 结果消息的工具名（显示用）
   const tool_args = row['tool_args'] as string | null
   const tokens = row['tokens']
+  const token_usage = row['token_usage'] as string | null
   const created_at = row['created_at']
   const conversation_id = row['conversation_id'] as string | null
   const message_id = row['message_id'] as string | null
@@ -24,6 +25,13 @@ function rowToMessage(row: Row): Message & { conversationId?: string } {
     tokens: tokens != null ? Number(tokens) : 0,
     createdAt: created_at != null ? Number(created_at) * 1000 : 0,
     ...(conversation_id ? { conversationId: conversation_id } : {}),
+  }
+  if (token_usage) {
+    try {
+      msg.usage = JSON.parse(token_usage)
+    } catch {
+      /* ignore malformed JSON */
+    }
   }
   if (tool_call_id) {
     msg.toolCallId = tool_call_id
@@ -61,8 +69,8 @@ export class SQLiteConversationHistory implements ConversationHistory {
     const messageId = message.id ?? uuidv4()
     await db.execute({
       sql: `INSERT INTO conversations
-              (tenant_id, session_id, conversation_id, message_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              (tenant_id, session_id, conversation_id, message_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         ctx.tenantId,
         ctx.sessionId,
@@ -75,6 +83,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
         message.toolName ?? null,
         message.toolCall ? JSON.stringify(message.toolCall.args) : null,
         message.tokens ?? 0,
+        message.usage ? JSON.stringify(message.usage) : null,
       ],
     })
   }
@@ -82,7 +91,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
   async getHistory(ctx: Ctx): Promise<Message[]> {
     const db = getDb()
     const result = await db.execute({
-      sql: `SELECT message_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, created_at, conversation_id
+      sql: `SELECT message_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id
             FROM conversations
             WHERE tenant_id = ? AND session_id = ?
             ORDER BY created_at ASC, id ASC`,
@@ -96,7 +105,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
   async getByConversationId(conversationId: string, tenantId: string): Promise<(Message & { conversationId?: string })[]> {
     const db = getDb()
     const result = await db.execute({
-      sql: `SELECT message_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, created_at, conversation_id
+      sql: `SELECT message_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id
             FROM conversations
             WHERE conversation_id = ? AND tenant_id = ?
             ORDER BY created_at ASC, id ASC`,
@@ -109,7 +118,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
   async getMessageById(messageId: string, tenantId: string): Promise<(Message & { conversationId?: string; dbId: number }) | null> {
     const db = getDb()
     const result = await db.execute({
-      sql: `SELECT id, message_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, created_at, conversation_id
+      sql: `SELECT id, message_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id
             FROM conversations
             WHERE message_id = ? AND tenant_id = ?`,
       args: [messageId, tenantId],
@@ -185,7 +194,13 @@ export class SQLiteConversationHistory implements ConversationHistory {
   }
 
   /** 列出该租户下所有有历史消息的 session，按最新消息时间倒序 */
-  async listSessions(tenantId: string): Promise<Array<{ sessionId: string; lastMessage: string; lastAt: number; messageCount: number }>> {
+  async listSessions(tenantId: string): Promise<Array<{ 
+    sessionId: string; 
+    lastMessage: string; 
+    lastAt: number; 
+    messageCount: number;
+    totalUsage?: Record<string, number>;
+  }>> {
     const db = getDb()
     const rs = await db.execute({
       sql: `SELECT session_id,
@@ -194,7 +209,14 @@ export class SQLiteConversationHistory implements ConversationHistory {
                    (SELECT content FROM conversations c2
                     WHERE c2.tenant_id = c.tenant_id AND c2.session_id = c.session_id
                       AND c2.role IN ('user','assistant')
-                    ORDER BY c2.created_at DESC LIMIT 1) as last_msg
+                    ORDER BY c2.created_at DESC LIMIT 1) as last_msg,
+                   SUM(CAST(json_extract(token_usage, '$.systemPromptTokens') AS INTEGER)) as system_prompt_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.systemToolsTokens') AS INTEGER)) as system_tools_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.messagesTokens') AS INTEGER)) as messages_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.skillTokens') AS INTEGER)) as skill_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.promptTokens') AS INTEGER)) as prompt_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.completionTokens') AS INTEGER)) as completion_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.totalTokens') AS INTEGER)) as total_tokens
             FROM conversations c
             WHERE tenant_id = ? AND role IN ('user','assistant')
             GROUP BY session_id
@@ -207,6 +229,15 @@ export class SQLiteConversationHistory implements ConversationHistory {
       lastMessage:  String(row['last_msg'] ?? '').slice(0, 50),
       lastAt:       Number(row['last_at']) * 1000,
       messageCount: Number(row['cnt']),
+      totalUsage: {
+        systemPromptTokens: Number(row['system_prompt_tokens'] ?? 0),
+        systemToolsTokens: Number(row['system_tools_tokens'] ?? 0),
+        messagesTokens: Number(row['messages_tokens'] ?? 0),
+        skillTokens: Number(row['skill_tokens'] ?? 0),
+        promptTokens: Number(row['prompt_tokens'] ?? 0),
+        completionTokens: Number(row['completion_tokens'] ?? 0),
+        totalTokens: Number(row['total_tokens'] ?? 0),
+      }
     }))
   }
 
@@ -250,7 +281,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
     const db = getDb()
     // Fetch ALL raw messages (no window)
     const result = await db.execute({
-      sql: `SELECT message_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, created_at
+      sql: `SELECT message_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at
             FROM conversations
             WHERE tenant_id = ? AND session_id = ?
             ORDER BY created_at ASC, id ASC`,

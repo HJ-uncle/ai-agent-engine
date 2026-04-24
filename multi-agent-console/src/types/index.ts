@@ -192,8 +192,9 @@ export interface CreateTaskInput {
 // ── Tool 类型 ─────────────────────────────────────────────────────────────────
 export interface Tool {
   name: string
-  description: string
+  displayName?: string
+  description?: string
   parameters?: Record<string, any>
   category?: string
-  source?: 'builtin' | 'skill' | 'mcp'
+  source?: 'builtin' | 'mcp' | 'skill'
 }

@@ -1,0 +1,89 @@
+.vscodeTree {
+  background: transparent !important;
+  color: #cccccc !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+  font-size: 13px !important;
+}
+
+.vscodeTree :global(.ant-tree-treenode) {
+  width: 100%;
+  padding: 0 !important;
+  margin: 0 !important;
+  display: flex;
+  align-items: center;
+}
+
+.vscodeTree :global(.ant-tree-node-content-wrapper) {
+  display: flex !important;
+  align-items: center !important;
+  height: 22px !important;
+  line-height: 22px !important;
+  width: 100%;
+  padding: 0 4px !important;
+  border-radius: 0 !important;
+  transition: none !important;
+}
+
+.vscodeTree :global(.ant-tree-node-content-wrapper:hover) {
+  background-color: #2a2d2e !important;
+}
+
+.vscodeTree :global(.ant-tree-node-selected) {
+  background-color: #37373d !important;
+  color: #ffffff !important;
+}
+
+.vscodeTree :global(.ant-tree-title) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vscodeTree :global(.ant-tree-switcher) {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 22px !important;
+  height: 22px !important;
+  line-height: 22px !important;
+  color: #cccccc !important;
+}
+
+.vscodeTree :global(.ant-tree-switcher:hover) {
+  color: #ffffff !important;
+}
+
+.vscodeTree :global(.ant-tree-indent-unit) {
+  width: 14px !important;
+}
+
+/* Hide the default vertical guide lines if any */
+.vscodeTree :global(.ant-tree-indent-unit::before) {
+  display: none !important;
+}
+
+.vscodeTree :global(.ant-tree-iconEle) {
+  width: 16px !important;
+  height: 16px !important;
+  line-height: 16px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  margin-right: 4px !important;
+}
+
+/* Disable antd's default rotation for switcher icons to use our custom icons correctly */
+.vscodeTree :global(.ant-tree-switcher .anticon),
+.vscodeTree :global(.ant-tree-switcher-icon),
+.vscodeTree :global(.ant-tree-switcher_close .ant-tree-switcher-icon),
+.vscodeTree :global(.ant-tree-switcher_open .ant-tree-switcher-icon) {
+  transform: none !important;
+  transition: none !important;
+}
+
+.vscodeTree :global(.ant-tree-switcher-icon svg) {
+  transform: none !important;
+}

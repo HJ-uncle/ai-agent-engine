@@ -12,6 +12,7 @@ import { mcpRoutes } from './routes/mcp.js'
 import { knowledgeRoutes } from './routes/knowledge.js'
 import { messagesRoutes } from './routes/messages.js'
 import { agentRoutes } from './routes/agents.js'
+import { workspaceRoutes } from './routes/workspace.js'
 import { globalRequestMiddleware, WHITELIST_PATHS } from './middleware.js'
 import { fail } from './response.js'
 
@@ -66,6 +67,7 @@ export async function buildServer() {
     await api.register(knowledgeRoutes)
     await api.register(messagesRoutes)
     await api.register(agentRoutes)
+    await api.register(workspaceRoutes)
   }, { prefix: '/api/v1' })
 
   // Health and metrics at root level

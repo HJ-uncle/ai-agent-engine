@@ -17,7 +17,13 @@ export async function toolRoutes(fastify: FastifyInstance) {
     createMemoryTools(new SQLiteMemoryStore()).forEach((t) => registry.register(t))
     // 加载 MCP 工具（与 chat 路由保持一致）
     await registerMCPTools(registry)
-    const toolsList = registry.list()
+    const toolsList = registry.list().map(t => ({
+      name: t.name,
+      displayName: (t as any).displayName,
+      description: t.description,
+      parameters: t.parameters,
+      source: 'builtin'
+    }))
     const { current, pageSize } = request.query
     return reply.code(200).send(paginateArray(toolsList, current, pageSize))
   })

@@ -40,6 +40,7 @@ export async function initDb(): Promise<void> {
   // 兼容旧数据库：补充新列（ALTER TABLE 不支持 IF NOT EXISTS，用 catch 静默跳过）
   await db.execute('ALTER TABLE conversations ADD COLUMN tool_call_name TEXT').catch(() => {})
   await db.execute('ALTER TABLE conversations ADD COLUMN conversation_id TEXT').catch(() => {})
+  await db.execute('ALTER TABLE conversations ADD COLUMN token_usage TEXT').catch(() => {})
 
   // 在列补充完成后再建索引（避免旧库 CREATE TABLE IF NOT EXISTS 跳过时列还不存在）
   await db.execute(

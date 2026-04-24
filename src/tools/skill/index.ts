@@ -18,7 +18,8 @@ export { runSkillScriptTool } from './run-skill-script.js'
 export function createSkillTools(skills: ExternalSkill[]): Tool[] {
   const listSkills: Tool = {
     name: 'list_skills',
-    description: 'List all available skills with their names and descriptions.',
+    displayName: '可用技能列表',
+    description: '列出所有可用技能的名称和简短描述。',
     parameters: {
       type: 'object',
       properties: {},
@@ -37,15 +38,15 @@ export function createSkillTools(skills: ExternalSkill[]): Tool[] {
 
   const getSkill: Tool = {
     name: 'get_skill',
+    displayName: '获取技能说明',
     description:
-      'Get the full instructions (SKILL.md content) for a specific skill by name. ' +
-      'Call this before executing any skill to understand its exact usage.',
+      '根据技能名称获取特定技能的完整使用说明（SKILL.md 内容）。在执行任何技能脚本之前调用此工具，以了解其确切用法。',
     parameters: {
       type: 'object',
       properties: {
         name: {
           type: 'string',
-          description: 'The exact name of the skill (as shown in list_skills).',
+          description: '想要查看的技能名称（须与 list_skills 中列出的名称一致）',
         },
       },
       required: ['name'],

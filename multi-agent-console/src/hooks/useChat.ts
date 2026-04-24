@@ -1,5 +1,5 @@
 import { useCallback, useRef } from 'react'
-import { chatStream, regenerateStream, editMessageStream } from '../api'
+import { chatStream, regenerateStream, editMessageStream, conversationApi } from '../api'
 import { useSessionStore } from '../store/session'
 import type { Message, ThinkingStep, TokenUsage } from '../types'
 
@@ -31,10 +31,23 @@ function driveAiMessage(
       thinkingSteps.push({ type: 'tool_start', toolName: event.toolName, toolArgs: event.toolArgs })
       updateMessage(sid, aiMsgId, { thinkingSteps: [...thinkingSteps] })
     } else if (event.type === 'tool_end') {
-      thinkingSteps.push({
-        type: 'tool_end', success: event.success,
-        outputPreview: (event.output ?? '').slice(0, 200),
-      })
+      // 尝试合并到最近的一个正在运行的 tool_start 步骤中
+      const lastToolIdx = [...thinkingSteps].reverse().findIndex(s => s.type === 'tool_start' && s.success === undefined)
+      if (lastToolIdx !== -1) {
+        const idx = thinkingSteps.length - 1 - lastToolIdx
+        thinkingSteps[idx] = {
+          ...thinkingSteps[idx],
+          success: event.success,
+          outputPreview: (event.output ?? '').slice(0, 200),
+        }
+      } else {
+        // Fallback: 如果没找到对应的 start，才作为独立步骤（兼容性）
+        thinkingSteps.push({
+          type: 'tool_end',
+          success: event.success,
+          outputPreview: (event.output ?? '').slice(0, 200),
+        })
+      }
       updateMessage(sid, aiMsgId, { thinkingSteps: [...thinkingSteps] })
     } else if (event.type === 'usage' || event.type === 'token_usage') {
       if (event.usage) {
@@ -85,12 +98,112 @@ export function useChat() {
   const {
     activeSessionId,
     addMessage,
+    setMessages,
     updateMessage,
     updateUsage,
     updateSessionTitle,
   } = useSessionStore()
 
   const abortRef = useRef<AbortController | null>(null)
+
+  /** 获取历史消息 */
+  const fetchHistory = useCallback(
+    async (sessionId?: string) => {
+      const sid = sessionId ?? activeSessionId
+      if (!sid) return
+      try {
+        const { list } = await conversationApi.getHistory(sid)
+        const msgs: Message[] = []
+        let currentThinkingSteps: ThinkingStep[] = []
+
+        for (const m of list) {
+          if (m.role === 'user') {
+            msgs.push({
+              id: m.id || `hist-u-${m.createdAt}-${Math.random()}`,
+              role: 'user',
+              content: m.content,
+              status: 'done',
+              createdAt: m.createdAt || Date.now(),
+              conversationId: m.id, // Backend message_id for regenerate/edit
+            })
+            currentThinkingSteps = []
+          } else if (m.role === 'assistant') {
+            if (m.toolCall) {
+              if (m.content?.trim()) {
+                currentThinkingSteps.push({ type: 'thinking', text: m.content })
+              }
+              currentThinkingSteps.push({
+                type: 'tool_start',
+                toolName: m.toolCall.name,
+                toolArgs: m.toolCall.args,
+              })
+            } else {
+              msgs.push({
+                id: m.id || `hist-a-${m.createdAt}-${Math.random()}`,
+                role: 'assistant',
+                content: m.content,
+                status: 'done',
+                createdAt: m.createdAt || Date.now(),
+                conversationId: m.id, // Backend message_id for regenerate/edit
+                usage: m.usage || null,
+                thinkingSteps: [...currentThinkingSteps],
+              })
+              currentThinkingSteps = []
+            }
+          } else if (m.role === 'tool') {
+            const isError = typeof m.content === 'string' && m.content.startsWith('Tool error:')
+            currentThinkingSteps.push({
+              type: 'tool_end',
+              success: !isError,
+              outputPreview: String(m.content).slice(0, 200),
+            })
+          }
+        }
+
+        if (currentThinkingSteps.length > 0) {
+          msgs.push({
+            id: `hist-a-${Date.now()}-${Math.random()}`,
+            role: 'assistant',
+            content: '',
+            status: 'done',
+            createdAt: Date.now(),
+            thinkingSteps: currentThinkingSteps,
+          })
+        }
+
+        const totalUsage: TokenUsage = {
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+          systemPromptTokens: 0,
+          messagesTokens: 0,
+          skillTokens: 0,
+          systemToolsTokens: 0,
+        }
+        
+        // Sum usage from the raw backend list so we include intermediate tool calls
+        for (const m of list) {
+          if (m.usage) {
+            totalUsage.promptTokens! += m.usage.promptTokens || 0
+            totalUsage.completionTokens! += m.usage.completionTokens || 0
+            totalUsage.totalTokens += m.usage.totalTokens || 0
+            totalUsage.systemPromptTokens! += m.usage.systemPromptTokens || 0
+            totalUsage.messagesTokens! += m.usage.messagesTokens || 0
+            totalUsage.skillTokens! += m.usage.skillTokens || 0
+            totalUsage.systemToolsTokens! += m.usage.systemToolsTokens || 0
+          }
+        }
+
+        setMessages(sid, msgs)
+        useSessionStore.setState((state) => ({
+          usageMap: { ...state.usageMap, [sid]: totalUsage }
+        }))
+      } catch (err) {
+        console.error('Fetch history failed:', err)
+      }
+    },
+    [activeSessionId, setMessages],
+  )
 
   /** 新消息发送 */
   const send = useCallback(
@@ -264,5 +377,5 @@ export function useChat() {
     abortRef.current = null
   }, [])
 
-  return { send, regenerate, editAndResend, cancel }
+  return { send, regenerate, editAndResend, fetchHistory, cancel }
 }

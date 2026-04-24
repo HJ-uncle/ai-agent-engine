@@ -7,11 +7,12 @@ const MAX_FILE_SIZE = parseInt(process.env.MAX_FILE_SIZE_BYTES ?? '10485760', 10
 
 export const readFileTool: Tool = {
   name: 'read_file',
-  description: 'Read the contents of a file in the workspace',
+  displayName: '读取文件',
+  description: '读取工作区中指定文件的内容',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'File path relative to workspace root' },
+      path: { type: 'string', description: '文件相对工作区根目录的路径' },
     },
     required: ['path'],
   },
@@ -33,12 +34,13 @@ export const readFileTool: Tool = {
 
 export const writeFileTool: Tool = {
   name: 'write_file',
-  description: 'Write content to a file in the workspace (creates or overwrites)',
+  displayName: '写入文件',
+  description: '向工作区中的文件写入内容（会创建新文件或覆盖已有文件）',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'File path relative to workspace root' },
-      content: { type: 'string', description: 'Content to write' },
+      path: { type: 'string', description: '文件相对工作区根目录的路径' },
+      content: { type: 'string', description: '要写入的文本内容' },
     },
     required: ['path', 'content'],
   },
@@ -57,12 +59,13 @@ export const writeFileTool: Tool = {
 
 export const listFilesTool: Tool = {
   name: 'list_files',
-  description: 'List files and directories in the workspace',
+  displayName: '列出文件',
+  description: '列出工作区中指定目录下的文件和子目录',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Directory path relative to workspace root (default: root)', default: '.' },
-      recursive: { type: 'boolean', description: 'List files recursively', default: false },
+      path: { type: 'string', description: '相对工作区根目录的路径 (默认: 根目录)', default: '.' },
+      recursive: { type: 'boolean', description: '是否递归列出所有子目录下的文件', default: false },
     },
     required: [],
   },
@@ -111,11 +114,12 @@ function listRecursive(baseDir: string, currentDir: string): string[] {
 
 export const deleteFileTool: Tool = {
   name: 'delete_file',
-  description: 'Delete a file from the workspace',
+  displayName: '删除文件',
+  description: '从工作区中删除指定的文件',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'File path relative to workspace root' },
+      path: { type: 'string', description: '文件相对工作区根目录的路径' },
     },
     required: ['path'],
   },
@@ -133,11 +137,12 @@ export const deleteFileTool: Tool = {
 
 export const createDirTool: Tool = {
   name: 'create_dir',
-  description: 'Create a directory in the workspace',
+  displayName: '创建目录',
+  description: '在工作区中创建一个新的目录',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Directory path relative to workspace root' },
+      path: { type: 'string', description: '相对工作区根目录的目录路径' },
     },
     required: ['path'],
   },

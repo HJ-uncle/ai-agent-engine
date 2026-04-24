@@ -130,26 +130,23 @@ export async function chatRoutes(fastify: FastifyInstance) {
     // Each chat request gets a unique conversationId for traceability
     const conversationId = uuidv4()
 
-    const llm = createLLMAdapter()
-    if (effectiveModel) {
-      (llm as any).model = effectiveModel
-    }
-    const strategy = new ReActStrategy(llm, {
-      systemPrompt: fullSystemPrompt || undefined,
-      temperature: effectiveTemperature,
-      maxIterations,
-      conversationId,
-      promptBreakdown: { systemPromptTokens, systemToolsTokens, skillTokens },
-    })
-    const pipeline = createPipeline([])
-
-    // Update history append to include agentId
-    // Because strategy.run handles appending the user message, we might need to attach agentId there.
-    // However, our conversation table now supports agent_id, but the `Message` type does not explicitly carry it yet unless we add it to the Context or Message.
-    // For now, the migration added `agent_id` to conversations. We should update types to pass it, but to keep it simple we can just append it via context if needed, or rely on session tracking.
-
     async function* runAgent(): AsyncIterable<string> {
-      yield* pipeline.pipe(strategy.run(message, ctx))
+      try {
+        const llm = createLLMAdapter({ model: effectiveModel })
+        const strategy = new ReActStrategy(llm, {
+          systemPrompt: fullSystemPrompt || undefined,
+          temperature: effectiveTemperature,
+          maxIterations,
+          conversationId,
+          promptBreakdown: { systemPromptTokens, systemToolsTokens, skillTokens },
+        })
+        const pipeline = createPipeline([])
+
+        yield* pipeline.pipe(strategy.run(message, ctx))
+      } catch (err: any) {
+        reqLogger.error({ err, agentId }, 'Agent execution error')
+        yield `\n\n[System Error: ${err.message || String(err)}]`
+      }
     }
 
     reqLogger.info({ message: message.slice(0, 100), agentId }, 'Chat request received')

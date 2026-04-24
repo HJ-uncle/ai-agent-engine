@@ -4,12 +4,13 @@ import type { MemoryStore } from '../../core/agent-context/index.js'
 export function createMemoryTools(memory: MemoryStore): Tool[] {
   const rememberTool: Tool = {
     name: 'remember',
-    description: 'Store a key-value pair in memory for later recall',
+    displayName: '记忆存储',
+    description: '在记忆中存储一个键值对，以便后续召回',
     parameters: {
       type: 'object',
       properties: {
-        key: { type: 'string', description: 'The memory key' },
-        value: { type: 'string', description: 'The value to remember' },
+        key: { type: 'string', description: '记忆键' },
+        value: { type: 'string', description: '要记住的值' },
       },
       required: ['key', 'value'],
     },
@@ -22,11 +23,12 @@ export function createMemoryTools(memory: MemoryStore): Tool[] {
 
   const recallTool: Tool = {
     name: 'recall',
-    description: 'Retrieve a previously stored memory by key',
+    displayName: '记忆召回',
+    description: '通过键检索之前存储的记忆',
     parameters: {
       type: 'object',
       properties: {
-        key: { type: 'string', description: 'The memory key to retrieve' },
+        key: { type: 'string', description: '要检索的记忆键' },
       },
       required: ['key'],
     },
@@ -42,28 +44,30 @@ export function createMemoryTools(memory: MemoryStore): Tool[] {
 
   const listMemoriesTool: Tool = {
     name: 'list_memories',
-    description: 'List all memory keys stored in the current session',
+    displayName: '记忆列表',
+    description: '列出当前会话中存储的所有记忆键',
     parameters: {
       type: 'object',
       properties: {},
       required: [],
     },
     async execute(_args: unknown, ctx: AgentContext): Promise<ToolResult> {
-      const keys = await memory.list(ctx)
-      if (keys.length === 0) {
+      const items = await memory.list(ctx)
+      if (items.length === 0) {
         return { success: true, output: 'No memories stored yet.' }
       }
-      return { success: true, output: `Memory keys: ${keys.join(', ')}` }
+      return { success: true, output: `Memory keys: ${items.map((i: any) => i.key).join(', ')}` }
     },
   }
 
   const forgetTool: Tool = {
     name: 'forget',
-    description: 'Delete a specific memory by key',
+    displayName: '删除记忆',
+    description: '删除指定的记忆键',
     parameters: {
       type: 'object',
       properties: {
-        key: { type: 'string', description: 'The memory key to delete' },
+        key: { type: 'string', description: '要删除的记忆键' },
       },
       required: ['key'],
     },

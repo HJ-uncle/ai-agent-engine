@@ -15,6 +15,7 @@ export async function up(client: Client): Promise<void> {
       tool_name TEXT,
       tool_args TEXT,
       tokens INTEGER DEFAULT 0,
+      token_usage TEXT,
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
     `CREATE INDEX IF NOT EXISTS idx_conversations_session

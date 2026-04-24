@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback, useState } from 'react'
+import React, { useEffect, useRef, useCallback, useState, useLayoutEffect } from 'react'
 import {
   Button, Tooltip, Popconfirm, Input, Select,
 } from 'antd'
@@ -7,7 +7,10 @@ import {
   DeleteOutlined, CopyOutlined, CheckOutlined,
   EditOutlined, RobotOutlined, UserOutlined,
   ClockCircleOutlined, ThunderboltOutlined,
-  ClearOutlined,
+  ClearOutlined, LoadingOutlined, CheckCircleFilled,
+  WarningFilled, BulbOutlined, ToolOutlined,
+  CheckCircleOutlined, CloseCircleOutlined,
+  UpOutlined, DownOutlined,
 } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -21,6 +24,7 @@ import { useAgentStore } from '../store/agents'
 import { useChat } from '../hooks/useChat'
 import type { Message, TokenUsage, ThinkingStep } from '../types'
 import styles from './ChatArea.module.css'
+import dayjs from 'dayjs'
 
 // ── Copy button ───────────────────────────────────────────────────────────────
 function CopyBtn({ text }: { text: string }) {
@@ -43,11 +47,11 @@ function CopyBtn({ text }: { text: string }) {
 
 // ── Token meta ─────────────────────────────────────────────────────────────────
 const TOKEN_META = [
-  { key: 'systemPromptTokens' as keyof TokenUsage, color: '#818cf8', label: 'System Prompt' },
-  { key: 'messagesTokens' as keyof TokenUsage, color: '#38bdf8', label: 'Messages' },
-  { key: 'skillTokens' as keyof TokenUsage, color: '#c084fc', label: 'Skills' },
-  { key: 'systemToolsTokens' as keyof TokenUsage, color: '#fbbf24', label: 'System Tools' },
-  { key: 'completionTokens' as keyof TokenUsage, color: '#fb7185', label: 'Completion' },
+  { key: 'systemPromptTokens' as keyof TokenUsage, color: '#818cf8', label: '系统提示词' },
+  { key: 'messagesTokens' as keyof TokenUsage, color: '#38bdf8', label: '历史消息' },
+  { key: 'skillTokens' as keyof TokenUsage, color: '#c084fc', label: '技能/工具' },
+  { key: 'systemToolsTokens' as keyof TokenUsage, color: '#fbbf24', label: '系统工具' },
+  { key: 'completionTokens' as keyof TokenUsage, color: '#fb7185', label: '生成内容' },
 ]
 
 function fmtToken(n: number) {
@@ -55,46 +59,51 @@ function fmtToken(n: number) {
 }
 
 // ── Token badge ────────────────────────────────────────────────────────────────
+function TokenDetailsContent({ usage, durationMs, title = 'Token 详情' }: { usage: TokenUsage; durationMs?: number; title?: string }) {
+  return (
+    <div style={{ width: 200, fontSize: 12 }}>
+      <div style={{ fontWeight: 700, marginBottom: 8, color: '#e6edf3' }}>
+        ⚡ {title} {durationMs != null && (
+          <span style={{ fontSize: 11, color: '#3fb950', marginLeft: 8 }}>
+            {(durationMs / 1000).toFixed(1)}s
+          </span>
+        )}
+      </div>
+      {/* Bar */}
+      <div style={{ height: 5, display: 'flex', gap: 1, borderRadius: 3, overflow: 'hidden', background: '#0d1117', marginBottom: 10 }}>
+        {TOKEN_META.map((m) => {
+          const v = (usage[m.key] as number) ?? 0
+          const total = usage.totalTokens || 1
+          return v > 0 ? (
+            <div key={m.key} style={{ width: `${(v / total) * 100}%`, background: m.color }} />
+          ) : null
+        })}
+      </div>
+      {TOKEN_META.map((m) => {
+        const v = (usage[m.key] as number) ?? 0
+        return (
+          <div key={m.key} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 11 }}>
+            <span style={{ color: '#8b949e', display: 'flex', alignItems: 'center', gap: 5 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: m.color, display: 'inline-block' }} />
+              {m.label}
+            </span>
+            <span style={{ color: '#e6edf3', fontWeight: 600 }}>{fmtToken(v)}</span>
+          </div>
+        )
+      })}
+      <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 8, borderTop: '1px solid #21262d', fontWeight: 700, fontSize: 12 }}>
+        <span style={{ color: '#8b949e' }}>总计</span>
+        <span style={{ color: '#3fb950' }}>{fmtToken(usage.totalTokens)}</span>
+      </div>
+    </div>
+  )
+}
+
 function TokenBadge({ usage, durationMs }: { usage: TokenUsage; durationMs?: number }) {
   return (
     <Tooltip
-      title={
-        <div style={{ width: 260, fontSize: 12 }}>
-          <div style={{ fontWeight: 700, marginBottom: 8, color: '#e6edf3' }}>
-            ⚡ Token 详情 {durationMs != null && (
-              <span style={{ fontSize: 11, color: '#3fb950', marginLeft: 8 }}>
-                {(durationMs / 1000).toFixed(1)}s
-              </span>
-            )}
-          </div>
-          {/* Bar */}
-          <div style={{ height: 5, display: 'flex', gap: 1, borderRadius: 3, overflow: 'hidden', background: '#0d1117', marginBottom: 10 }}>
-            {TOKEN_META.map((m) => {
-              const v = (usage[m.key] as number) ?? 0
-              const total = usage.totalTokens || 1
-              return v > 0 ? (
-                <div key={m.key} style={{ width: `${(v / total) * 100}%`, background: m.color }} />
-              ) : null
-            })}
-          </div>
-          {TOKEN_META.map((m) => {
-            const v = (usage[m.key] as number) ?? 0
-            return (
-              <div key={m.key} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 11 }}>
-                <span style={{ color: '#8b949e', display: 'flex', alignItems: 'center', gap: 5 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: 2, background: m.color, display: 'inline-block' }} />
-                  {m.label}
-                </span>
-                <span style={{ color: '#e6edf3', fontWeight: 600 }}>{fmtToken(v)}</span>
-              </div>
-            )
-          })}
-          <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 8, borderTop: '1px solid #21262d', fontWeight: 700, fontSize: 12 }}>
-            <span style={{ color: '#8b949e' }}>Total</span>
-            <span style={{ color: '#3fb950' }}>{fmtToken(usage.totalTokens)}</span>
-          </div>
-        </div>
-      }
+      style={{ width: 260 }}
+      title={<TokenDetailsContent usage={usage} durationMs={durationMs} />}
       overlayInnerStyle={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 8, padding: '10px 14px' }}
       arrow={false}
     >
@@ -108,7 +117,13 @@ function TokenBadge({ usage, durationMs }: { usage: TokenUsage; durationMs?: num
 
 // ── Thinking steps ─────────────────────────────────────────────────────────────
 function ThinkingPanel({ steps, isActive }: { steps: ThinkingStep[]; isActive?: boolean }) {
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(isActive ?? false)
+
+  // 当会话进入活动状态（正在思考/处理）时，默认展开；完成后自动收起
+  useEffect(() => {
+    setExpanded(isActive ?? false)
+  }, [isActive])
+
   const toolCount = steps.filter((s) => s.type === 'tool_start').length
   const toolNames = Array.from(new Set(steps.filter((s) => s.type === 'tool_start').map((s) => s.toolName)))
   const hasFailure = steps.some((s) => s.type === 'tool_end' && s.success === false)
@@ -121,21 +136,26 @@ function ThinkingPanel({ steps, isActive }: { steps: ThinkingStep[]; isActive?: 
         className={styles.thinkingHeader}
         onClick={() => setExpanded(!expanded)}
       >
-        {isActive ? (
-          <span className={styles.pulseDot} />
-        ) : hasFailure ? (
-          <span style={{ color: '#f78166' }}>⚠</span>
-        ) : (
-          <span style={{ color: '#3fb950' }}>✓</span>
-        )}
-        <span className={styles.thinkingLabel}>
-          {isActive
-            ? '正在思考...'
-            : toolCount > 0
-            ? `调用了 ${toolCount} 个工具：${toolNames.join('、')}`
-            : '推理完成'}
-        </span>
-        <span className={styles.thinkingToggle}>{expanded ? '收起 ▲' : '展开 ▼'}</span>
+        <div className={styles.thinkingHeaderLeft}>
+          {isActive ? (
+            <LoadingOutlined className={styles.thinkingActiveIcon} />
+          ) : hasFailure ? (
+            <WarningFilled style={{ color: '#f78166' }} />
+          ) : (
+            <CheckCircleFilled style={{ color: '#3fb950' }} />
+          )}
+          <span className={styles.thinkingLabel}>
+            {isActive
+              ? '正在思考...'
+              : toolCount > 0
+              ? `调用了 ${toolCount} 个工具：${toolNames.join('、')}`
+              : '推理完成'}
+          </span>
+        </div>
+        <div className={styles.thinkingHeaderRight}>
+          <span className={styles.thinkingToggleLabel}>{expanded ? '收起' : '展开'}</span>
+          {expanded ? <UpOutlined /> : <DownOutlined />}
+        </div>
       </div>
       {expanded && (
         <div className={styles.thinkingBody}>
@@ -143,33 +163,56 @@ function ThinkingPanel({ steps, isActive }: { steps: ThinkingStep[]; isActive?: 
             if (step.type === 'thinking')
               return (
                 <div key={i} className={styles.thinkStep}>
-                  <span className={styles.thinkLabel}>💭 思考</span>
+                  <span className={styles.thinkLabel}>
+                    <BulbOutlined style={{ marginRight: 6 }} />
+                    思考
+                  </span>
                   <div className={styles.thinkText}>{step.text}</div>
                 </div>
               )
             if (step.type === 'tool_start')
               return (
-                <div key={i} className={styles.toolStep}>
-                  🔧 <span className={styles.toolName}>{step.toolName}</span>
-                  {step.toolArgs && (
-                    <span className={styles.toolArgs}>
-                      {JSON.stringify(step.toolArgs).slice(0, 120)}
-                    </span>
+                <div key={i} className={styles.toolStepWrapper}>
+                  <div className={styles.toolStep}>
+                    {step.success === true && <CheckCircleOutlined className={styles.resultSuccessIcon} style={{ marginTop: 0 }} />}
+                    {step.success === false && <CloseCircleOutlined className={styles.resultErrorIcon} style={{ marginTop: 0}} />}
+                    {step.success === undefined && <ToolOutlined className={styles.toolIcon} />}
+                    
+                    <span className={styles.toolName}>{step.toolName}</span>
+                    {step.toolArgs && (
+                      <span className={styles.toolArgs}>
+                        {JSON.stringify(step.toolArgs).slice(0, 120)}
+                      </span>
+                    )}
+                  </div>
+                  {step.outputPreview && (
+                    <div className={styles.toolResultCompact}>
+                      <span className={styles.resultText}>{step.outputPreview}</span>
+                    </div>
                   )}
                 </div>
               )
             if (step.type === 'tool_end')
               return (
                 <div key={i} className={styles.toolResult}>
-                  {step.success ? '✅' : '❌'}
-                  <span style={{ color: step.success ? '#8b949e' : '#f78166' }}>
+                  {step.success ? (
+                    <CheckCircleOutlined className={styles.resultSuccessIcon} />
+                  ) : (
+                    <CloseCircleOutlined className={styles.resultErrorIcon} />
+                  )}
+                  <span className={styles.resultText} style={{ color: step.success ? '#8b949e' : '#f78166' }}>
                     {step.outputPreview}
                   </span>
                 </div>
               )
             return null
           })}
-          {isActive && <div style={{ color: '#484f58', fontSize: 11, fontStyle: 'italic' }}>Agent 正在处理...</div>}
+          {isActive && (
+            <div className={styles.thinkingLoading}>
+              <LoadingOutlined style={{ marginRight: 6 }} />
+              Agent 正在处理...
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -223,9 +266,7 @@ function MessageItem({
   const isUser = msg.role === 'user'
   const isStreaming = msg.status === 'streaming'
 
-  const timeStr = new Date(msg.createdAt).toLocaleTimeString('zh-CN', {
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-  })
+  const timeStr = dayjs(msg.createdAt).format('YYYY-MM-DD HH:mm:ss')
 
   const startEdit = () => { setDraft(msg.content); setEditing(true) }
   const cancelEdit = () => setEditing(false)
@@ -269,7 +310,7 @@ function MessageItem({
               <Button type="primary" size="small" onClick={confirmEdit}>保存并重发</Button>
             </div>
           </div>
-        ) : (
+        ) : (msg.content || isUser) ? (
           <div className={`${styles.content} ${isUser ? styles.userContent : styles.aiContent}`}>
             {isUser ? (
               <span style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</span>
@@ -300,7 +341,7 @@ function MessageItem({
               </ReactMarkdown>
             )}
           </div>
-        )}
+        ) : null}
 
         {/* Footer */}
         {!editing && (
@@ -351,7 +392,7 @@ export default function ChatArea() {
     updateSessionAgent,
   } = useSessionStore()
   const { agents } = useAgentStore()
-  const { send, regenerate, editAndResend, cancel } = useChat()
+  const { send, regenerate, editAndResend, fetchHistory, cancel } = useChat()
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const messages = React.useMemo(() => messageMap[activeSessionId] ?? [], [messageMap, activeSessionId])
@@ -362,13 +403,23 @@ export default function ChatArea() {
   const [inputValue, setInputValue] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
   const atBottomRef = useRef(true)
+
+  // Fetch history on session change
+  useEffect(() => {
+    if (activeSessionId) {
+      fetchHistory(activeSessionId)
+    }
+  }, [activeSessionId, fetchHistory])
 
   // Scroll logic
   const scrollToBottom = useCallback((smooth = false) => {
-    const el = scrollRef.current
-    if (!el) return
-    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
+    if (smooth) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    } else {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+    }
   }, [])
 
   useEffect(() => {
@@ -376,19 +427,25 @@ export default function ChatArea() {
     if (!el) return
     const onScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = el
-      atBottomRef.current = scrollHeight - scrollTop - clientHeight < 80
+      // 增加容错范围
+      atBottomRef.current = scrollHeight - scrollTop - clientHeight < 100
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
   }, [])
 
-  useEffect(() => {
-    if (isStreaming && atBottomRef.current) scrollToBottom()
+  // 使用 useLayoutEffect 确保在 DOM 更新后、重绘前同步滚动位置
+  // 流式输出时使用 auto 滚动，因为高频更新下 smooth 会导致动画冲突和“跳动”
+  useLayoutEffect(() => {
+    if (isStreaming && atBottomRef.current) {
+      scrollToBottom(false)
+    }
   }, [messages, isStreaming, scrollToBottom])
 
+  // 切换会话时可以使用平滑滚动
   useEffect(() => {
     atBottomRef.current = true
-    scrollToBottom()
+    scrollToBottom(true)
   }, [activeSessionId, scrollToBottom])
 
   const sendMessage = useCallback(async (content: string) => {
@@ -467,7 +524,11 @@ export default function ChatArea() {
 
           {/* Token summary */}
           {sessionUsage && (
-            <Tooltip title={`本会话累计 Token: ${fmtToken(sessionUsage.totalTokens)}`}>
+            <Tooltip
+              title={<TokenDetailsContent usage={sessionUsage} title="会话累计 Token" />}
+              overlayInnerStyle={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 8, padding: '10px 14px' }}
+              arrow={false}
+            >
               <span className={styles.sessionToken}>
                 <ThunderboltOutlined style={{ fontSize: 11 }} />
                 {fmtToken(sessionUsage.totalTokens)}
@@ -499,10 +560,11 @@ export default function ChatArea() {
               <MessageItem
                 key={msg.id}
                 msg={msg}
-              onRegenerate={msg.role === 'assistant' ? handleRegenerate : undefined}
-              onEdit={msg.role === 'user' ? (content) => handleEditAndResend(msg.id, content) : undefined}
+                onRegenerate={idx === messages.length - 1 ? handleRegenerate : undefined}
+                onEdit={msg.role === 'user' ? (newContent) => handleEditAndResend(msg.id, newContent) : undefined}
               />
             ))}
+            <div ref={messagesEndRef} style={{ height: 1, clear: 'both' }} />
           </>
         )}
       </div>

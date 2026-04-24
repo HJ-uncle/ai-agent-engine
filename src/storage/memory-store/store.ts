@@ -25,13 +25,21 @@ export class SQLiteMemoryStore implements MemoryStore {
     return row ? (row['value'] as string) : null
   }
 
-  async list(ctx: Ctx): Promise<string[]> {
+  async list(ctx: { tenantId: string; sessionId?: string }): Promise<any[]> {
     const db = getDb()
-    const result = await db.execute({
-      sql: 'SELECT key FROM memories WHERE tenant_id = ? AND session_id = ? ORDER BY updated_at DESC',
-      args: [ctx.tenantId, ctx.sessionId],
-    })
-    return result.rows.map((r) => r['key'] as string)
+    if (ctx.sessionId) {
+      const result = await db.execute({
+        sql: 'SELECT id, key, value FROM memories WHERE tenant_id = ? AND session_id = ? ORDER BY updated_at DESC',
+        args: [ctx.tenantId, ctx.sessionId],
+      })
+      return result.rows.map((r) => ({ id: r['id'], key: r['key'], value: r['value'] }))
+    } else {
+      const result = await db.execute({
+        sql: 'SELECT id, key, value FROM memories WHERE tenant_id = ? ORDER BY updated_at DESC',
+        args: [ctx.tenantId],
+      })
+      return result.rows.map((r) => ({ id: r['id'], key: r['key'], value: r['value'] }))
+    }
   }
 
   async forget(key: string, ctx: Ctx): Promise<void> {

@@ -29,9 +29,15 @@ export interface StandardResponse<T = any> {
 
 // ── 通用请求 ──────────────────────────────────────────────────────────────────
 async function request<T>(path: string, options?: RequestInit): Promise<StandardResponse<T>> {
+  const defaultHeaders: Record<string, string> = {}
+  // Only set Content-Type to application/json if there is a body, otherwise Fastify will complain on empty bodies (e.g. DELETE)
+  if (options?.body) {
+    defaultHeaders['Content-Type'] = 'application/json'
+  }
+
   const res = await fetch(`${API_PREFIX}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers: { ...defaultHeaders, ...options?.headers },
   })
   const json: StandardResponse<T> = await res.json()
   if (json.code !== 200 && json.code !== 0) {
@@ -86,14 +92,14 @@ export const agentApi = {
 
 // ── Conversation API ──────────────────────────────────────────────────────────
 export const conversationApi = {
-  // GET /conversation/sessions → data: Array<{ sessionId, lastMessage, lastAt }>
+  // GET /conversation/sessions → data: Array<{ sessionId, lastMessage, lastAt, totalUsage? }>
   listSessions: async (params?: { current?: number; pageSize?: number }) => {
     const qs = params ? `?${new URLSearchParams(params as any).toString()}` : ''
-    const res = await request<Array<{ sessionId: string; lastMessage: string; lastAt: number }>>(
+    const res = await request<Array<{ sessionId: string; lastMessage: string; lastAt: number; totalUsage?: Record<string, number> }>>(
       `/conversation/sessions${qs}`
     )
     return {
-      list: (res.data ?? []) as Array<{ sessionId: string; lastMessage: string; lastAt: number }>,
+      list: (res.data ?? []) as Array<{ sessionId: string; lastMessage: string; lastAt: number; totalUsage?: Record<string, number> }>,
       total: res.pagination?.total ?? (res.data as any[])?.length ?? 0,
     }
   },
@@ -102,11 +108,9 @@ export const conversationApi = {
   getHistory: async (sessionId: string, params?: { current?: number; pageSize?: number }) => {
     const base = `/conversation/history?sessionId=${encodeURIComponent(sessionId)}`
     const qs = params ? `&${new URLSearchParams(params as any).toString()}` : ''
-    const res = await request<Array<{ role: string; content: string; createdAt?: number }>>(
-      `${base}${qs}`
-    )
+    const res = await request<any[]>(`${base}${qs}`)
     return {
-      list: (res.data ?? []) as Array<{ role: string; content: string; createdAt?: number }>,
+      list: (res.data ?? []) as any[],
       total: res.pagination?.total ?? (res.data as any[])?.length ?? 0,
     }
   },
@@ -121,9 +125,9 @@ export const conversationApi = {
   },
 
   // DELETE /sessions/:sessionId
-  deleteSession: async (sessionId: string) => {
+  deleteSession: async (sessionId: string, keepWorkspace?: boolean) => {
     const res = await request<{ success: boolean; sessionId: string }>(
-      `/sessions/${encodeURIComponent(sessionId)}`,
+      `/sessions/${encodeURIComponent(sessionId)}?keepWorkspace=${keepWorkspace ? 'true' : 'false'}`,
       { method: 'DELETE' }
     )
     return res.data
@@ -580,6 +584,39 @@ export const toolsApi = {
       pagination: res.pagination,
     }
   },
+}
+
+// ── Workspace API ────────────────────────────────────────────────────────────────
+export const workspaceApi = {
+  // GET /workspace/files
+  listFiles: async (sessionId?: string) => {
+    const qs = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''
+    const res = await request<any>(`/workspace/files${qs}`)
+    return res.data
+  },
+  // GET /workspace/recent
+  listRecent: async () => {
+    const res = await request<Array<{ name: string; path: string; hasSession?: boolean }>>(`/workspace/recent`)
+    return res.data ?? []
+  },
+  // GET /workspace/file/content
+  getFileContent: async (sessionId: string, path: string) => {
+    const qs = `?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`
+    const res = await request<{ content: string }>(`/workspace/file/content${qs}`)
+    return res.data?.content ?? ''
+  },
+  // DELETE /workspace/recent/:sessionId
+  deleteRecent: async (sessionId: string) => {
+    const res = await request<{ success: boolean }>(`/workspace/recent/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
+    return res.data
+  },
+  rename: async (oldName: string, newName: string) => {
+    const res = await request<{ success: boolean }>('/workspace/rename', {
+      method: 'POST',
+      body: JSON.stringify({ oldName, newName })
+    })
+    return res.data
+  }
 }
 
 // ── Health API ────────────────────────────────────────────────────────────────

@@ -68,6 +68,15 @@ export class SQLiteTaskQueue implements TaskQueue {
     return row ? rowToRecord(row) : null
   }
 
+  async list(tenantId: string): Promise<JobRecord[]> {
+    const db = getDb()
+    const result = await db.execute({
+      sql: 'SELECT * FROM jobs WHERE tenant_id = ? ORDER BY created_at DESC',
+      args: [tenantId],
+    })
+    return result.rows.map(rowToRecord)
+  }
+
   async cancel(jobId: string): Promise<boolean> {
     const db = getDb()
     const result = await db.execute({

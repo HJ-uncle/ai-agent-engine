@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Button, Tooltip, Popconfirm, Input, Tag } from 'antd'
+import { Button, Tooltip, Popconfirm, Input, Tag, message, Modal, Checkbox } from 'antd'
 import {
   PlusOutlined,
   DeleteOutlined,
@@ -11,6 +11,7 @@ import {
 } from '@ant-design/icons'
 import { useSessionStore } from '../store/session'
 import { useAgentStore } from '../store/agents'
+import { conversationApi } from '../api'
 import type { Session } from '../types'
 import styles from './SessionList.module.css'
 
@@ -25,6 +26,10 @@ export default function SessionList({ onNewChat }: Props) {
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
+  
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+  const [keepWorkspace, setKeepWorkspace] = useState(true)
 
   const startEdit = (s: Session) => {
     setEditingId(s.id)
@@ -40,6 +45,18 @@ export default function SessionList({ onNewChat }: Props) {
 
   const getAgent = (agentId?: string) =>
     agentId ? agents.find((a) => a.id === agentId) : undefined
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return
+    try {
+      await conversationApi.deleteSession(deleteTarget, keepWorkspace)
+      deleteSession(deleteTarget)
+      setDeleteModalOpen(false)
+      setDeleteTarget(null)
+    } catch (e: any) {
+      message.error(e.message ?? '删除失败')
+    }
+  }
 
   return (
     <div className={styles.container}>
@@ -145,20 +162,18 @@ export default function SessionList({ onNewChat }: Props) {
                       className={styles.actionBtn}
                       onClick={() => startEdit(session)}
                     />
-                    <Popconfirm
-                      title="删除这个对话？"
-                      onConfirm={() => deleteSession(session.id)}
-                      okText="删除"
-                      cancelText="取消"
-                      okButtonProps={{ danger: true }}
-                    >
-                      <Button
-                        type="text"
-                        size="small"
-                        icon={<DeleteOutlined />}
-                        className={`${styles.actionBtn} ${styles.deleteBtn}`}
-                      />
-                    </Popconfirm>
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<DeleteOutlined />}
+                      className={`${styles.actionBtn} ${styles.deleteBtn}`}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setDeleteTarget(session.id)
+                        setKeepWorkspace(true)
+                        setDeleteModalOpen(true)
+                      }}
+                    />
                   </>
                 )}
               </div>
@@ -166,6 +181,20 @@ export default function SessionList({ onNewChat }: Props) {
           )
         })}
       </div>
+      <Modal
+        title="删除对话"
+        open={deleteModalOpen}
+        onOk={confirmDelete}
+        onCancel={() => setDeleteModalOpen(false)}
+        okText="删除"
+        okButtonProps={{ danger: true }}
+        cancelText="取消"
+      >
+        <p style={{ marginBottom: 16 }}>确定要删除这个对话记录吗？</p>
+        <Checkbox checked={keepWorkspace} onChange={e => setKeepWorkspace(e.target.checked)}>
+          同时保留工作区文件 (不删除本地沙盒目录)
+        </Checkbox>
+      </Modal>
     </div>
   )
 }

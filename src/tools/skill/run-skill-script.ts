@@ -21,23 +21,23 @@ const DEFAULT_TIMEOUT_MS = 60_000  // 技能脚本可能需要较长时间（如
 
 export const runSkillScriptTool: Tool = {
   name: 'run_skill_script',
+  displayName: '运行技能脚本',
   description:
-    'Execute a skill script (bash/shell command) from the skills directory. ' +
-    'Use this tool when a skill\'s SKILL.md instructs you to run a bash command ' +
-    'like `bash "$SKILLS_ROOT/web-search/scripts/search.sh" "query"`. ' +
-    'The SKILLS_ROOT environment variable is automatically injected.',
+    '执行技能目录中的 bash/shell 脚本。' +
+    '当 SKILL.md 指示运行 bash 命令（如 `bash "$SKILLS_ROOT/web-search/scripts/search.sh" "query"`）时使用。' +
+    '工具会自动注入 SKILLS_ROOT 环境变量。',
   parameters: {
     type: 'object',
     properties: {
       command: {
         type: 'string',
         description:
-          'The full shell command to execute, exactly as shown in SKILL.md. ' +
-          'Example: `bash "$SKILLS_ROOT/web-search/scripts/search.sh" "TypeScript 5 features" 10`',
+          '要执行的完整 Shell 命令，必须与 SKILL.md 中展示的格式完全一致。' +
+          '示例：`bash "$SKILLS_ROOT/web-search/scripts/search.sh" "TypeScript 5 features" 10`',
       },
       timeoutMs: {
         type: 'number',
-        description: 'Timeout in milliseconds (default 60000). Increase for browser-based skills.',
+        description: '执行超时时间（毫秒，默认 60000）。对于基于浏览器的长时任务可以调大此值。',
       },
     },
     required: ['command'],
