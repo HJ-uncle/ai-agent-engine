@@ -3,6 +3,7 @@ import { ToolRegistry } from '../../../core/tool-registry/index.js'
 import { registerBuiltinSkills } from '../../../skills/index.js'
 import { fileTools } from '../../../tools/file/index.js'
 import { cmdTool } from '../../../tools/cmd/index.js'
+import { askUserTool } from '../../../tools/ask-user/index.js'
 import { createMemoryTools } from '../../../tools/memory/index.js'
 import { SQLiteMemoryStore } from '../../../storage/memory-store/index.js'
 import { registerMCPTools } from '../../../tools/mcp/loader.js'
@@ -14,6 +15,7 @@ export async function toolRoutes(fastify: FastifyInstance) {
     registerBuiltinSkills(registry)
     fileTools.forEach((t) => registry.register(t))
     registry.register(cmdTool)
+    registry.register(askUserTool)
     createMemoryTools(new SQLiteMemoryStore()).forEach((t) => registry.register(t))
     // 加载 MCP 工具（与 chat 路由保持一致）
     await registerMCPTools(registry)

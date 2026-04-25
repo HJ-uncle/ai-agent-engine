@@ -10,8 +10,8 @@ export class OllamaAdapter implements LLMAdapter {
   readonly provider = 'ollama'
   private baseUrl: string
 
-  constructor(readonly model: string = 'llama3.2') {
-    this.baseUrl = process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434'
+  constructor(readonly model: string = 'llama3.2', baseUrl?: string) {
+    this.baseUrl = baseUrl || process.env.OLLAMA_BASE_URL || 'http://localhost:11434'
   }
 
   private toOllamaMessages(messages: Message[], systemPrompt?: string): OllamaMessage[] {
@@ -32,18 +32,24 @@ export class OllamaAdapter implements LLMAdapter {
   async complete(messages: Message[], options?: LLMAdapterOptions): Promise<LLMResponse> {
     const ollamaMessages = this.toOllamaMessages(messages, options?.systemPrompt)
 
+    const requestBody: any = {
+      model: options?.model ?? this.model,
+      messages: ollamaMessages,
+      stream: false,
+      options: {
+        temperature: options?.temperature,
+        num_predict: options?.maxTokens,
+      },
+    }
+
+    if (options?.thinkingConfig) {
+      Object.assign(requestBody, options.thinkingConfig)
+    }
+
     const response = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: options?.model ?? this.model,
-        messages: ollamaMessages,
-        stream: false,
-        options: {
-          temperature: options?.temperature,
-          num_predict: options?.maxTokens,
-        },
-      }),
+      body: JSON.stringify(requestBody),
     })
 
     if (!response.ok) {
@@ -67,18 +73,24 @@ export class OllamaAdapter implements LLMAdapter {
   async *stream(messages: Message[], options?: LLMAdapterOptions): AsyncIterable<LLMStreamChunk> {
     const ollamaMessages = this.toOllamaMessages(messages, options?.systemPrompt)
 
+    const requestBody: any = {
+      model: options?.model ?? this.model,
+      messages: ollamaMessages,
+      stream: true,
+      options: {
+        temperature: options?.temperature,
+        num_predict: options?.maxTokens,
+      },
+    }
+
+    if (options?.thinkingConfig) {
+      Object.assign(requestBody, options.thinkingConfig)
+    }
+
     const response = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: options?.model ?? this.model,
-        messages: ollamaMessages,
-        stream: true,
-        options: {
-          temperature: options?.temperature,
-          num_predict: options?.maxTokens,
-        },
-      }),
+      body: JSON.stringify(requestBody),
     })
 
     if (!response.ok || !response.body) {

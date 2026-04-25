@@ -1,91 +1,206 @@
 import React from 'react'
-import { Modal, Tabs, Input, Button, Form, message } from 'antd'
+import { Modal, Tabs, ConfigProvider, theme } from 'antd'
+import { 
+  SettingOutlined, 
+  SafetyCertificateOutlined, 
+  FolderOpenOutlined, 
+  CloudServerOutlined,
+  UserOutlined,
+  ThunderboltOutlined,
+  RobotOutlined,
+  ApiOutlined,
+  MessageOutlined,
+  CodeOutlined,
+  BulbOutlined,
+  InfoCircleOutlined,
+  DatabaseOutlined
+} from '@ant-design/icons'
 import { useSessionStore } from '../store/session'
+import GeneralSettings from './settings/GeneralSettings'
+import WhitelistManager from './settings/WhitelistManager'
+import WorkspaceSettings from './settings/WorkspaceSettings'
+import RemoteSettings from './settings/RemoteSettings'
+import ModelSettings from './settings/ModelSettings'
+import AgentSettings from './settings/AgentSettings'
+import ChatFlowSettings from './settings/ChatFlowSettings'
+import SkillSettings from './settings/SkillSettings'
+import SystemSettings from './settings/SystemSettings'
+import styles from './settings/SettingsLayout.module.css'
 
 export default function SettingsModal() {
   const { isSettingsOpen, settingsTab, closeSettings, openSettings } = useSessionStore()
 
-  const handleFinish = () => {
-    message.success('设置已保存')
-    closeSettings()
-  }
-
   const items = [
     {
-      key: 'general',
-      label: '常规设置',
-      children: (
-        <div style={{ paddingTop: 16, color: '#ccc' }}>
-          <Form layout="vertical">
-            <Form.Item label="显示语言">
-              <Input value="中文 (简体)" disabled style={{ color: '#888' }} />
-            </Form.Item>
-            <Form.Item label="主题">
-              <Input value="VS Code Dark+" disabled style={{ color: '#888' }} />
-            </Form.Item>
-          </Form>
-        </div>
+      key: 'account',
+      label: (
+        <span>
+          <UserOutlined />
+          <span style={{ marginLeft: 8 }}>账号</span>
+        </span>
       ),
+      children: <div className={styles.settingsContainer}><div className={styles.sectionTitle}>账号设置 (即将推出)</div></div>,
+    },
+    {
+      key: 'general',
+      label: (
+        <span>
+          <SettingOutlined />
+          <span style={{ marginLeft: 8 }}>通用</span>
+        </span>
+      ),
+      children: <GeneralSettings />,
+    },
+    {
+      key: 'model',
+      label: (
+        <span>
+          <BulbOutlined />
+          <span style={{ marginLeft: 8 }}>模型</span>
+        </span>
+      ),
+      children: <ModelSettings />,
     },
     {
       key: 'workspace',
-      label: '工作区',
-      children: (
-        <div style={{ paddingTop: 16 }}>
-          <Form layout="vertical" onFinish={handleFinish}>
-            <Form.Item label="打开本地文件夹" extra="请输入本地机器上的绝对路径，Agent 将挂载此目录作为工作区">
-              <Input placeholder="/Users/username/my-project" />
-            </Form.Item>
-            <Button type="primary" htmlType="submit" style={{ marginTop: 8 }}>
-              打开并重新加载
-            </Button>
-          </Form>
-        </div>
+      label: (
+        <span>
+          <FolderOpenOutlined />
+          <span style={{ marginLeft: 8 }}>开发环境</span>
+        </span>
       ),
+      children: <WorkspaceSettings />,
+    },
+    {
+      key: 'agent',
+      label: (
+        <span>
+          <RobotOutlined />
+          <span style={{ marginLeft: 8 }}>智能体</span>
+        </span>
+      ),
+      children: <AgentSettings />,
+    },
+    {
+      key: 'skills',
+      label: (
+        <span>
+          <CodeOutlined />
+          <span style={{ marginLeft: 8 }}>技能</span>
+        </span>
+      ),
+      children: <SkillSettings />,
+    },
+    {
+      key: 'system',
+      label: (
+        <span>
+          <DatabaseOutlined />
+          <span style={{ marginLeft: 8 }}>系统</span>
+        </span>
+      ),
+      children: <SystemSettings />,
+    },
+    {
+      key: 'mcp',
+      label: (
+        <span>
+          <ApiOutlined />
+          <span style={{ marginLeft: 8 }}>MCP</span>
+        </span>
+      ),
+      children: <div className={styles.settingsContainer}><div className={styles.sectionTitle}>MCP 设置 (即将推出)</div></div>,
+    },
+    {
+      key: 'chatflow',
+      label: (
+        <span>
+          <MessageOutlined />
+          <span style={{ marginLeft: 8 }}>对话流</span>
+        </span>
+      ),
+      children: <ChatFlowSettings />,
+    },
+    {
+      key: 'whitelist',
+      label: (
+        <span>
+          <SafetyCertificateOutlined />
+          <span style={{ marginLeft: 8 }}>命令白名单</span>
+        </span>
+      ),
+      children: <WhitelistManager />,
     },
     {
       key: 'remote',
-      label: '远程主机',
-      children: (
-        <div style={{ paddingTop: 16 }}>
-          <Form layout="vertical" onFinish={handleFinish}>
-            <Form.Item label="SSH 主机" required>
-              <Input placeholder="例如: 192.168.1.100" />
-            </Form.Item>
-            <Form.Item label="端口">
-              <Input placeholder="22" defaultValue="22" />
-            </Form.Item>
-            <Form.Item label="用户名">
-              <Input placeholder="root" />
-            </Form.Item>
-            <Form.Item label="私钥路径或密码">
-              <Input.Password placeholder="~/.ssh/id_rsa" />
-            </Form.Item>
-            <Button type="primary" htmlType="submit" style={{ marginTop: 8 }}>
-              测试连接并挂载
-            </Button>
-          </Form>
-        </div>
+      label: (
+        <span>
+          <CloudServerOutlined />
+          <span style={{ marginLeft: 8 }}>远程主机</span>
+        </span>
       ),
-    }
+      children: <RemoteSettings />,
+    },
+    {
+      key: 'beta',
+      label: (
+        <span>
+          <ThunderboltOutlined />
+          <span style={{ marginLeft: 8 }}>Beta</span>
+        </span>
+      ),
+      children: <div className={styles.settingsContainer}><div className={styles.sectionTitle}>Beta 功能 (即将推出)</div></div>,
+    },
+    {
+      key: 'about',
+      label: (
+        <span>
+          <InfoCircleOutlined />
+          <span style={{ marginLeft: 8 }}>关于 Agent Console</span>
+        </span>
+      ),
+      children: <div className={styles.settingsContainer}><div className={styles.sectionTitle}>版本信息: v1.0.0</div></div>,
+    },
   ]
 
   return (
-    <Modal
-      title="设置"
-      open={isSettingsOpen}
-      onCancel={closeSettings}
-      footer={null}
-      width={600}
-      bodyStyle={{ minHeight: 300 }}
+    <ConfigProvider
+      theme={{
+        algorithm: theme.darkAlgorithm,
+        token: {
+          colorPrimary: '#007acc',
+          borderRadius: 6,
+          colorBgContainer: '#1e1e1e',
+          colorBgElevated: '#252526',
+        },
+      }}
     >
-      <Tabs 
-        activeKey={settingsTab} 
-        onChange={(k) => openSettings(k)} 
-        items={items} 
-        tabPosition="left"
-        style={{ marginTop: 16 }}
-      />
-    </Modal>
+      <Modal
+        title={null}
+        open={isSettingsOpen}
+        onCancel={closeSettings}
+        footer={null}
+        width={1000}
+        styles={{ 
+          body: { padding: 0, height: '70vh', overflow: 'hidden' },
+          mask: { backdropFilter: 'blur(4px)' }
+        }}
+        centered
+        destroyOnHidden
+      >
+        <div style={{ display: 'flex', height: '100%' }}>
+          <div style={{ flex: 1, height: '100%', overflow: 'hidden' }}>
+            <Tabs 
+              activeKey={settingsTab || 'general'} 
+              onChange={(k) => openSettings(k)} 
+              items={items} 
+              {...({ tabPlacement: 'left' } as any)}
+              className={`${styles.settingsTabs} settings-modal-tabs`}
+              style={{ height: '100%' }}
+            />
+          </div>
+        </div>
+      </Modal>
+    </ConfigProvider>
   )
 }

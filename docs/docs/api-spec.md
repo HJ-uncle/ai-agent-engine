@@ -53,6 +53,7 @@
 | `40001` | 缺少必填参数或参数格式错误 |
 | `40002` | 请求头校验失败（如 `X-Client-Version`） |
 | `40100` | 未授权或 Token 无效 |
+| `40300` | 权限不足（如非管理员操作） |
 | `40400` | 资源不存在 |
 | `40900` | 资源冲突（例如重复创建） |
 | `50000` | 服务器内部错误 / 数据库异常 |
@@ -94,7 +95,27 @@
 - `GET /api/v1/sessions/:sessionId/tokens`: 获取指定会话的总 Token 消耗 (包含已删除消息)
 - `DELETE /api/v1/messages/:messageId`: 硬删除单条消息 (不影响全局 Token 统计)
 - `PUT /api/v1/messages/:messageId`: 编辑用户消息内容并触发重新生成响应 (Stream)
+
+  **请求体：**
+  ```json
+  {
+    "content": "修改后的消息内容",
+    "systemPrompt": "可选，自定义系统提示词",
+    "maxAskUserCount": 5,
+    "thinkingMode": false
+  }
+  ```
+
 - `POST /api/v1/messages/:messageId/regenerate`: 对指定 AI 响应进行重新生成 (Stream)
+
+  **请求体：**
+  ```json
+  {
+    "systemPrompt": "可选，自定义系统提示词",
+    "maxAskUserCount": 5,
+    "thinkingMode": false
+  }
+  ```
 
 ### 4. 知识库 Knowledge (`/api/v1/knowledge`)
 - `POST /api/v1/knowledge/documents`: 上传并解析知识库文档内容
@@ -137,6 +158,66 @@
 - `DELETE /api/v1/workspace/recent/:sessionId`: 物理删除指定的工作区目录
 - `POST /api/v1/workspace/rename`: 重命名工作区目录及关联的 `sessionId` (自动更新对话记录和记忆中的关联)
 
-### 10. 监控与健康 Metrics (`/health`, `/metrics`)
+### 10. 模型管理 Models (`/api/v1/models`)
+- `GET /api/v1/models/whitelist`: 获取模型白名单列表（包含思考模式配置）
+- `GET /api/v1/models`: 获取当前租户已配置的模型列表（API Key 脱敏显示）
+- `POST /api/v1/models`: 添加新的模型配置（需要 admin 角色）
+
+  **请求体：**
+  ```json
+  {
+    "provider": "openai",
+    "modelId": "gpt-4o",
+    "apiKey": "sk-xxxxxxxxxxxxxxxx",
+    "baseUrl": "https://api.openai.com/v1",
+    "displayName": "GPT-4o",
+    "version": "2024-08-06"
+  }
+  ```
+
+- `PUT /api/v1/models/:id`: 更新指定模型配置（需要 admin 角色）
+- `DELETE /api/v1/models/:id`: 删除指定模型配置（需要 admin 角色）
+- `POST /api/v1/models/:id/test`: 测试模型连接（支持传入临时参数测试未保存的配置）
+
+### 11. 系统设置 Settings (`/api/v1/settings`)
+- `GET /api/v1/settings`: 获取当前系统环境变量配置
+- `PUT /api/v1/settings`: 更新系统环境变量配置（写入 `.env` 文件）
+
+### 12. 监控与健康 Metrics (`/health`, `/metrics`)
 - `GET /health`: 存活探针检查
 - `GET /metrics`: 获取 Prometheus 格式的监控指标
+
+---
+
+## Chat 接口详细说明
+
+### POST `/api/v1/chat` — 发送消息（SSE 流式响应）
+
+**请求体：**
+```json
+{
+  "message": "你好，请自我介绍一下",
+  "sessionId": "可选，不传则自动生成",
+  "agentId": "可选，指定使用的 Agent",
+  "systemPrompt": "可选，自定义系统提示词",
+  "maxAskUserCount": 5,
+  "thinkingMode": false,
+  "toolResponse": {
+    "toolCallId": "工具调用 ID",
+    "name": "工具名称",
+    "output": "用户选择/输入的内容"
+  }
+}
+```
+
+**SSE 事件类型：**
+
+| 事件字段 | 类型 | 说明 |
+|---------|------|------|
+| `{ "content": "..." }` | text_delta | 普通文本内容块 |
+| `{ "thinking": "..." }` | thinking | 模型思考过程（DeepSeek R1 / Claude 3.7 Sonnet） |
+| `{ "toolStart": { "name": "...", "args": {...}, "toolCallId": "..." } }` | tool_start | 工具调用开始 |
+| `{ "toolEnd": { "name": "...", "toolCallId": "...", "success": true, "outputPreview": "..." } }` | tool_end | 工具调用结束 |
+| `{ "usage": { "systemPromptTokens": ..., "completionTokens": ..., "totalTokens": ... } }` | usage | Token 使用量统计 |
+| `{ "ask_user": { "question": "...", "options": [...], "toolCallId": "..." } }` | ask_user | 向用户提问卡片 |
+| `[DONE]` | done | 流式响应结束 |

@@ -95,8 +95,7 @@ describe('ReActStrategy', () => {
 
     const results = await collectYields(strategy.run('What is the answer?', ctx))
 
-    expect(results).toHaveLength(1)
-    expect(results[0]).toBe('The answer is 42.')
+    expect(results.join('')).toBe('The answer is 42.')
     expect(llm.complete).toHaveBeenCalledTimes(1)
   })
 
@@ -157,8 +156,7 @@ describe('ReActStrategy', () => {
     const strategy = new ReActStrategy(llm, { maxIterations: 5 })
     const results = await collectYields(strategy.run('What is 2+2?', ctx))
 
-    expect(results).toHaveLength(1)
-    expect(results[0]).toBe('The result is 4.')
+    expect(results.join('')).toBe('The result is 4.')
     expect(llm.complete).toHaveBeenCalledTimes(2)
     expect(ctx.tools.execute).toHaveBeenCalledWith(
       'calculator',
@@ -319,7 +317,7 @@ describe('ReActStrategy', () => {
     const results = await collectYields(strategy.run('Use broken tool', ctx))
 
     // Should still complete (second LLM call returns final answer)
-    expect(results[0]).toBe('I encountered an error.')
+    expect(results.join('')).toBe('I encountered an error.')
 
     // Tool message should contain the error text
     const appendCalls = (ctx.history.append as ReturnType<typeof vi.fn>).mock.calls

@@ -43,6 +43,14 @@ export async function sseStream(
         } catch { /* ignore */ }
         continue
       }
+      // ── __ask_user__ frame ─────────────────────────────────────────────
+      if (chunk.startsWith('\x00__ask_user__')) {
+        try {
+          const data = JSON.parse(chunk.slice('\x00__ask_user__'.length))
+          reply.raw.write(`data: ${JSON.stringify({ ask_user: data })}\n\n`)
+        } catch { /* ignore */ }
+        continue
+      }
       // ── 普通内容 ─────────────────────────────────────────────────────────
       reply.raw.write(`data: ${JSON.stringify({ content: chunk })}\n\n`)
     }

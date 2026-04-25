@@ -35,7 +35,7 @@ export const readFileTool: Tool = {
 export const writeFileTool: Tool = {
   name: 'write_file',
   displayName: '写入文件',
-  description: '向工作区中的文件写入内容（会创建新文件或覆盖已有文件）',
+  description: '向工作区中的文件写入内容（会创建新文件或覆盖已有文件）。注意：如果用户请求创建文件但未指定文件名，请根据上下文或内容自动生成一个合理的文件名和路径，不要再询问用户。',
   parameters: {
     type: 'object',
     properties: {

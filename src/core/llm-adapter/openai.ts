@@ -12,7 +12,10 @@ function messagesToOpenAI(
   messages: Message[],
 ): OpenAI.Chat.ChatCompletionMessageParam[] {
   // First pass: collect all valid tool_call IDs (with non-empty id & name)
+  // AND collect all tool result IDs from tool messages
   const validToolCallIds = new Set<string>()
+  const validToolResultIds = new Set<string>()
+
   for (const msg of messages) {
     if (msg.role === 'assistant' && msg.toolCall) {
       const id = msg.toolCall.id || ''
@@ -21,9 +24,12 @@ function messagesToOpenAI(
         validToolCallIds.add(id)
       }
     }
+    if (msg.role === 'tool' && msg.toolCallId) {
+      validToolResultIds.add(msg.toolCallId)
+    }
   }
 
-  // Second pass: convert, dropping orphaned tool results
+  // Second pass: convert, dropping orphaned tool results AND orphaned tool calls
   const result: OpenAI.Chat.ChatCompletionMessageParam[] = []
   for (const msg of messages) {
     if (msg.role === 'tool') {
@@ -42,17 +48,27 @@ function messagesToOpenAI(
     if (msg.role === 'assistant' && msg.toolCall) {
       const id = msg.toolCall.id || ''
       const name = msg.toolCall.name || ''
-      if (!id || !name) {
-        // Broken tool_call record — emit as plain assistant text
+      
+      // If the tool call is broken OR it has no matching tool result,
+      // emit it as plain assistant text to avoid OpenAI 400 error.
+      if (!id || !name || !validToolResultIds.has(id)) {
+        let fallbackContent = msg.content || ''
+        // Optionally append the tool call intent to content so context isn't fully lost
+        if (name && !fallbackContent.includes(name)) {
+           const argsStr = JSON.stringify(msg.toolCall.args || {})
+           fallbackContent += `\n[Intended to call tool: ${name} with args: ${argsStr}, but was interrupted]`
+        }
         result.push({
           role: 'assistant',
-          content: msg.content || '(no content)',
+          content: fallbackContent || '(no content)',
+          ...((msg as any).reasoningContent ? { reasoning_content: (msg as any).reasoningContent } : {})
         })
         continue
       }
       result.push({
         role: 'assistant',
         content: msg.content ?? null,
+        ...((msg as any).reasoningContent ? { reasoning_content: (msg as any).reasoningContent } : {}),
         tool_calls: [{
           id,
           type: 'function',
@@ -67,6 +83,7 @@ function messagesToOpenAI(
     result.push({
       role: msg.role as 'user' | 'assistant' | 'system',
       content: msg.content,
+      ...((msg.role === 'assistant' && (msg as any).reasoningContent) ? { reasoning_content: (msg as any).reasoningContent } : {})
     })
   }
   return result
@@ -169,10 +186,10 @@ export class OpenAIAdapter implements LLMAdapter {
   readonly provider = 'openai'
   private client: OpenAI
 
-  constructor(readonly model: string = 'gpt-4o-mini') {
+  constructor(readonly model: string = 'gpt-4o-mini', apiKey?: string, baseURL?: string) {
     this.client = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-      baseURL: process.env.OPENAI_BASE_URL, // supports custom OpenAI-compatible endpoints
+      apiKey: apiKey || process.env.OPENAI_API_KEY,
+      baseURL: baseURL || process.env.OPENAI_BASE_URL, // supports custom OpenAI-compatible endpoints
     })
   }
 
@@ -182,19 +199,24 @@ export class OpenAIAdapter implements LLMAdapter {
       oaiMessages.unshift({ role: 'system', content: options.systemPrompt })
     }
 
-    const params: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming = {
+    const params: any = {
       model: options?.model ?? this.model,
       messages: oaiMessages,
       max_tokens: options?.maxTokens,
       temperature: options?.temperature,
     }
 
+    if (options?.thinkingConfig) {
+      Object.assign(params, options.thinkingConfig)
+    }
+
     if (options?.tools && options.tools.length > 0) {
       params.tools = options.tools.map(toolToOpenAI)
       params.tool_choice = 'auto'
     }
-
-    const response = await this.client.chat.completions.create(params)
+    const response = await this.client.chat.completions.create(params, {
+      signal: options?.signal,
+    })
     const choice = response.choices[0]
     const message = choice.message
 
@@ -219,8 +241,13 @@ export class OpenAIAdapter implements LLMAdapter {
       ? stripToolCallBlocks(rawContent)
       : rawContent
 
+    const reasoningContent = options?.responseThinkingField 
+      ? (message as any)[options.responseThinkingField] 
+      : (message as any).reasoning_content
+
     return {
       content: cleanContent,
+      reasoningContent,
       toolCalls,
       promptTokens: response.usage?.prompt_tokens ?? 0,
       completionTokens: response.usage?.completion_tokens ?? 0,
@@ -236,12 +263,16 @@ export class OpenAIAdapter implements LLMAdapter {
       oaiMessages.unshift({ role: 'system', content: options.systemPrompt })
     }
 
-    const params: OpenAI.Chat.ChatCompletionCreateParamsStreaming = {
+    const params: any = {
       model: options?.model ?? this.model,
       messages: oaiMessages,
       stream: true,
       max_tokens: options?.maxTokens,
       temperature: options?.temperature,
+    }
+
+    if (options?.thinkingConfig) {
+      Object.assign(params, options.thinkingConfig)
     }
 
     if (options?.tools && options.tools.length > 0) {
@@ -258,8 +289,14 @@ export class OpenAIAdapter implements LLMAdapter {
       const delta = (chunk as any).choices?.[0]?.delta
       if (!delta) continue
 
-      if (delta.content) {
-        yield { content: delta.content as string, done: false }
+      if (delta.content || (options?.responseThinkingField ? (delta as any)[options.responseThinkingField] : (delta as any).reasoning_content)) {
+        yield { 
+          content: delta.content as string, 
+          reasoningContent: options?.responseThinkingField 
+            ? (delta as any)[options.responseThinkingField] as string 
+            : (delta as any).reasoning_content as string,
+          done: false 
+        }
       }
     }
 

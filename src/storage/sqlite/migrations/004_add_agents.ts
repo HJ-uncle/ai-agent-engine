@@ -35,14 +35,23 @@ export async function up(client: Client): Promise<void> {
       agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
       knowledge_id TEXT NOT NULL,
       PRIMARY KEY(agent_id, knowledge_id)
-    )`,
-
-    // Add agent_id to conversations to bind a session to an agent
-    `ALTER TABLE conversations ADD COLUMN agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL`,
-    `CREATE INDEX IF NOT EXISTS idx_conversations_agent_id ON conversations(agent_id)`
+    )`
   ]
 
   await client.batch(statements.map((sql) => ({ sql })), 'write')
+
+  // Handle ALTER TABLE separately
+  try {
+    await client.execute(`ALTER TABLE conversations ADD COLUMN agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL`)
+  } catch (err: any) {
+    if (!err.message?.includes('duplicate column name')) {
+      throw err
+    }
+  }
+
+  try {
+    await client.execute(`CREATE INDEX IF NOT EXISTS idx_conversations_agent_id ON conversations(agent_id)`)
+  } catch (err: any) {}
 }
 
 export async function down(client: Client): Promise<void> {

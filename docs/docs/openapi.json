@@ -86,6 +86,43 @@
     }
   },
   "paths": {
+    "/chat": {
+      "post": {
+        "summary": "发送消息（SSE 流式响应）",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "message": { "type": "string" },
+                  "sessionId": { "type": "string" },
+                  "agentId": { "type": "string" },
+                  "systemPrompt": { "type": "string" },
+                  "maxAskUserCount": { "type": "integer" },
+                  "thinkingMode": { "type": "boolean" },
+                  "toolResponse": {
+                    "type": "object",
+                    "properties": {
+                      "toolCallId": { "type": "string" },
+                      "name": { "type": "string" },
+                      "output": { "type": "string" }
+                    }
+                  }
+                },
+                "required": ["message"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SSE 流式响应（text/event-stream）"
+          }
+        }
+      }
+    },
     "/agents": {
       "get": {
         "summary": "获取智能体列表",
@@ -872,6 +909,168 @@
                   "oldName",
                   "newName"
                 ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/models/whitelist": {
+      "get": {
+        "summary": "获取模型白名单列表",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/models": {
+      "get": {
+        "summary": "获取已配置模型列表",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "添加模型配置",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "provider": { "type": "string" },
+                  "modelId": { "type": "string" },
+                  "apiKey": { "type": "string" },
+                  "baseUrl": { "type": "string" },
+                  "displayName": { "type": "string" },
+                  "version": { "type": "string" }
+                },
+                "required": ["provider", "modelId", "apiKey"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/models/{id}": {
+      "put": {
+        "summary": "更新模型配置",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除模型配置",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/models/{id}/test": {
+      "post": {
+        "summary": "测试模型连接",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/settings": {
+      "get": {
+        "summary": "获取系统设置",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "更新系统设置",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
               }
             }
           }

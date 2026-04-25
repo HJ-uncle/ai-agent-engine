@@ -30,6 +30,12 @@ A production-ready AI Agent Engine built with Node.js + TypeScript ESM. Supports
 | 20 | Built-in skills (math, time) |
 | 21 | SQLite migration runner |
 | 22 | Docker Compose deployment |
+| 23 | **Thinking Mode** — DeepSeek R1 / Claude 3.7 Sonnet reasoning support |
+| 24 | **Model Management** — Multi-model configuration with encrypted API key storage |
+| 25 | **Ask User** — Interactive tool that pauses agent loop for user input |
+| 26 | **AbortSignal** — Client disconnect cancels LLM requests gracefully |
+| 27 | **i18n** — Multi-language UI (Chinese / English) |
+| 28 | **Settings API** — Runtime environment variable management |
 
 ---
 
@@ -67,7 +73,7 @@ curl -N -X POST http://localhost:3000/api/v1/chat \
   }'
 
 # 过滤数据流，只看内容文本 (适合控制台预览)
-# 注意：管道连接时需要通过参数禁用各级程序的缓冲区，否则会“一下子弹出”
+# 注意：管道连接时需要通过参数禁用各级程序的缓冲区，否则会"一下子弹出"
 # macOS 用户 (BSD sed):
 curl -N -s -X POST http://localhost:3000/api/v1/chat \
   -H "Content-Type: application/json" \
@@ -131,6 +137,7 @@ curl http://localhost:3000/metrics
 | `JWT_SECRET` | `dev-secret-change-in-production` | JWT signing secret |
 | `TOKEN_BUDGET` | `8000` | Max tokens per agent context |
 | `MAX_ITERATIONS` | `50` | Max ReAct loop iterations |
+| `ENCRYPTION_KEY` | _(auto-generated)_ | AES-256-GCM key for API key encryption (32 hex chars) |
 
 ---
 
@@ -147,15 +154,25 @@ curl http://localhost:3000/metrics
 {
   "message": "What is 2 + 2?",
   "sessionId": "optional-uuid",
+  "agentId": "optional-agent-id",
   "systemPrompt": "You are a helpful assistant.",
-  "maxIterations": 10 
+  "maxIterations": 10,
+  "thinkingMode": false,
+  "toolResponse": {
+    "toolCallId": "call_xxx",
+    "name": "ask_user",
+    "output": "user input"
+  }
 }
 ```
 
 **Response:** `text/event-stream`
 ```
 data: {"content":"The answer is 4."}
-
+data: {"thinking":"Let me think about this..."}
+data: {"toolStart":{"name":"calculator","args":{"expr":"2+2"},"toolCallId":"call_1"}}
+data: {"toolEnd":{"name":"calculator","toolCallId":"call_1","success":true,"outputPreview":"4"}}
+data: {"usage":{"systemPromptTokens":50,"completionTokens":10,"totalTokens":60}}
 data: [DONE]
 ```
 
@@ -166,21 +183,36 @@ data: [DONE]
 | `POST` | `/api/v1/memory/remember` | Store a key-value pair |
 | `GET` | `/api/v1/memory/recall/:key?sessionId=` | Retrieve a value by key |
 | `GET` | `/api/v1/memory/list?sessionId=` | List all stored keys |
+| `DELETE` | `/api/v1/memory/:id` | Delete a memory entry |
 
 ### Conversation History
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET` | `/api/v1/conversation/sessions` | List all sessions with conversations |
 | `GET` | `/api/v1/conversation/history?sessionId=` | Fetch message history |
 | `DELETE` | `/api/v1/conversation/history?sessionId=` | Clear message history |
+| `GET` | `/api/v1/conversations/:conversationId` | Get single conversation messages |
 | `DELETE` | `/api/v1/sessions/:sessionId` | Delete entire session completely (optional `?keepWorkspace=true`) |
+
+### Messages
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/messages/:messageId/tokens` | Get token usage for a message |
+| `GET` | `/api/v1/sessions/:sessionId/tokens` | Get total token usage for a session |
+| `DELETE` | `/api/v1/messages/:messageId` | Delete a single message |
+| `PUT` | `/api/v1/messages/:messageId` | Edit message and trigger regeneration (Stream) |
+| `POST` | `/api/v1/messages/:messageId/regenerate` | Regenerate AI response (Stream) |
 
 ### Tasks
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/api/v1/tasks` | Enqueue a background job |
+| `GET` | `/api/v1/tasks` | List all tasks |
 | `GET` | `/api/v1/tasks/:jobId` | Check job status |
+| `PUT` | `/api/v1/tasks/:jobId` | Update task |
 | `DELETE` | `/api/v1/tasks/:jobId` | Cancel a pending job |
 
 ### Tools
@@ -198,6 +230,24 @@ data: [DONE]
 | `GET` | `/api/v1/workspace/file/content?sessionId=&path=` | Read file content |
 | `DELETE` | `/api/v1/workspace/recent/:sessionId` | Physically delete workspace directory |
 | `POST` | `/api/v1/workspace/rename` | Rename workspace and its associated sessionId |
+
+### Models
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/models/whitelist` | Get model whitelist with thinking config |
+| `GET` | `/api/v1/models` | Get configured models (API keys masked) |
+| `POST` | `/api/v1/models` | Add a new model configuration |
+| `PUT` | `/api/v1/models/:id` | Update model configuration |
+| `DELETE` | `/api/v1/models/:id` | Delete model configuration |
+| `POST` | `/api/v1/models/:id/test` | Test model connection |
+
+### Settings
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/settings` | Get system environment settings |
+| `PUT` | `/api/v1/settings` | Update system settings (writes to `.env`) |
 
 ### System
 
@@ -223,6 +273,10 @@ src/
 │       ├── tasks.ts           # Task queue
 │       ├── tools.ts           # Tool listing
 │       ├── workspace.ts       # Workspace management
+│       ├── messages.ts        # Message edit/regenerate/tokens
+│       ├── agents.ts          # Agent CRUD
+│       ├── models.ts          # Model management
+│       ├── settings.ts        # System settings
 │       └── metrics.ts         # Health + metrics
 ├── core/
 │   ├── agent-context/         # AgentContext, Tool interfaces
@@ -240,13 +294,15 @@ src/
 │   ├── file/                  # File read/write/list/delete
 │   ├── cmd/                   # Shell command execution
 │   ├── memory/                # remember/recall/forget tools
+│   ├── ask-user/              # Interactive ask_user tool
 │   └── mcp/                   # HTTP MCP client
 ├── skills/                    # Built-in skills (math, time)
 ├── auth/                      # JWT + API key middleware
 ├── observability/             # Logger + metrics
 ├── prompt-template/           # Template store
 ├── workspace/                 # Workspace manager
-└── security/                  # Command whitelist
+├── security/                  # Command whitelist
+└── utils/                     # Encryption utilities
 ```
 
 **Key design decisions:**
@@ -254,6 +310,8 @@ src/
 - **Unified `Tool` interface** — file tools, shell tools, memory tools, MCP tools all share the same interface
 - **Multi-tenant isolation** — tenantId + sessionId scope all storage reads/writes
 - **Auth optional** — set `AUTH_ENABLED=false` during development
+- **Thinking Mode** — reasoning content extracted from model-specific fields (`reasoning_content`, `thinking` blocks)
+- **Encrypted API keys** — model API keys encrypted with AES-256-GCM before storage
 
 ---
 

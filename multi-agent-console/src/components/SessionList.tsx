@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Button, Tooltip, Popconfirm, Input, Tag, message, Modal, Checkbox } from 'antd'
+import { Button, Tooltip, Popconfirm, Input, Tag, App, Modal, Checkbox } from 'antd'
 import {
   PlusOutlined,
   DeleteOutlined,
@@ -20,6 +20,7 @@ interface Props {
 }
 
 export default function SessionList({ onNewChat }: Props) {
+  const { message } = App.useApp()
   const { sessions, activeSessionId, switchSession, deleteSession, updateSessionTitle } =
     useSessionStore()
   const { agents } = useAgentStore()

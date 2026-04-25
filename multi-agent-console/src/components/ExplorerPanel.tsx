@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react'
-import { Tree, Dropdown, MenuProps, Tooltip, Input, Modal, message, Popconfirm } from 'antd'
+import { Tree, Dropdown, MenuProps, Tooltip, Input, Modal, App, Popconfirm } from 'antd'
 import {
   FolderOpenOutlined,
   FolderOutlined,
@@ -18,10 +18,12 @@ import { useSessionStore } from '../store/session'
 import styles from './ExplorerPanel.module.css'
 
 export default function ExplorerPanel() {
+  const { message } = App.useApp()
   const activeSessionId = useSessionStore(s => s.activeSessionId)
   const sessions = useSessionStore(s => s.sessions)
   const switchSession = useSessionStore(s => s.switchSession)
   const openSettings = useSessionStore(s => s.openSettings)
+  const setFiles = useSessionStore(s => s.setFiles)
   const [treeData, setTreeData] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [recentWorkspaces, setRecentWorkspaces] = useState<any[]>([])
@@ -47,9 +49,16 @@ export default function ExplorerPanel() {
     setLoading(true)
     try {
       const data = await workspaceApi.listFiles(activeSessionId)
+      const allFilePaths: string[] = []
+
       // Transform data to antd Tree format
       const transform = (node: any, keyPrefix = '0'): any => {
         const isDir = node.type === 'dir'
+        const path = node.path
+        if (!isDir && path) {
+          allFilePaths.push(path)
+        }
+
         return {
           title: node.name,
           key: node.path || `${keyPrefix}-${node.name}`,
@@ -61,8 +70,10 @@ export default function ExplorerPanel() {
       }
       if (data && data.children) {
         setTreeData(data.children.map((c: any, i: number) => transform(c, `0-${i}`)))
+        setFiles(allFilePaths)
       } else {
         setTreeData([])
+        setFiles([])
       }
     } catch (e) {
       console.error(e)
@@ -202,7 +213,7 @@ export default function ExplorerPanel() {
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* Workspace Header Dropdown */}
-      <Dropdown menu={workspaceMenu} trigger={['click']} overlayStyle={{ minWidth: 260 }}>
+      <Dropdown menu={workspaceMenu} trigger={['click']} styles={{ root: { minWidth: 260 } }}>
         <div style={{ 
           padding: '10px 14px', 
           cursor: 'pointer', 

@@ -17,11 +17,13 @@ function rowToMessage(row: Row): Message & { conversationId?: string } {
   const created_at = row['created_at']
   const conversation_id = row['conversation_id'] as string | null
   const message_id = row['message_id'] as string | null
+  const reasoning_content = row['reasoning_content'] as string | null
 
   const msg: Message & { conversationId?: string } = {
     ...(message_id ? { id: message_id } : {}),
     role: role as Message['role'],
     content,
+    ...(reasoning_content ? { reasoningContent: reasoning_content } : {}),
     tokens: tokens != null ? Number(tokens) : 0,
     createdAt: created_at != null ? Number(created_at) * 1000 : 0,
     ...(conversation_id ? { conversationId: conversation_id } : {}),
@@ -69,8 +71,8 @@ export class SQLiteConversationHistory implements ConversationHistory {
     const messageId = message.id ?? uuidv4()
     await db.execute({
       sql: `INSERT INTO conversations
-              (tenant_id, session_id, conversation_id, message_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              (tenant_id, session_id, conversation_id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         ctx.tenantId,
         ctx.sessionId,
@@ -78,6 +80,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
         messageId,
         message.role,
         message.content,
+        message.reasoningContent ?? null,
         message.toolCallId ?? null,
         message.toolCall?.name ?? null,
         message.toolName ?? null,
@@ -91,7 +94,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
   async getHistory(ctx: Ctx): Promise<Message[]> {
     const db = getDb()
     const result = await db.execute({
-      sql: `SELECT message_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id
+      sql: `SELECT message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id
             FROM conversations
             WHERE tenant_id = ? AND session_id = ?
             ORDER BY created_at ASC, id ASC`,
@@ -105,7 +108,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
   async getByConversationId(conversationId: string, tenantId: string): Promise<(Message & { conversationId?: string })[]> {
     const db = getDb()
     const result = await db.execute({
-      sql: `SELECT message_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id
+      sql: `SELECT message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id
             FROM conversations
             WHERE conversation_id = ? AND tenant_id = ?
             ORDER BY created_at ASC, id ASC`,
@@ -118,7 +121,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
   async getMessageById(messageId: string, tenantId: string): Promise<(Message & { conversationId?: string; dbId: number }) | null> {
     const db = getDb()
     const result = await db.execute({
-      sql: `SELECT id, message_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id
+      sql: `SELECT id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id
             FROM conversations
             WHERE message_id = ? AND tenant_id = ?`,
       args: [messageId, tenantId],

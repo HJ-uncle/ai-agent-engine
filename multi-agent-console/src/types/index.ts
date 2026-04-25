@@ -61,6 +61,7 @@ export interface ThinkingStep {
   type: 'thinking' | 'tool_start' | 'tool_end'
   text?: string
   toolName?: string
+  toolCallId?: string
   toolArgs?: Record<string, unknown>
   outputPreview?: string
   success?: boolean
@@ -76,6 +77,10 @@ export interface Message {
   usage?: TokenUsage | null
   durationMs?: number
   thinkingSteps?: ThinkingStep[]
+  reasoningContent?: string
+  toolCall?: { id: string; name: string; args: any }
+  toolCallId?: string
+  toolName?: string
 }
 
 // ── 会话类型 ──────────────────────────────────────────────────────────────────
@@ -97,6 +102,7 @@ export type SseEventType =
   | 'error'
   | 'done'
   | 'token_usage'
+  | 'ask_user'
 
 export interface SseEvent {
   type: SseEventType
@@ -104,11 +110,13 @@ export interface SseEvent {
   text?: string
   toolName?: string
   toolArgs?: Record<string, unknown>
+  toolCallId?: string
   output?: string
+  outputPreview?: string
   success?: boolean
   usage?: TokenUsage
-  durationMs?: number
-  conversationId?: string
+  error?: string
+  data?: any
 }
 
 // ── Knowledge 类型 ────────────────────────────────────────────────────────────

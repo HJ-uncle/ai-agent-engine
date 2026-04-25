@@ -1,16 +1,30 @@
 import type { Client } from '@libsql/client'
 
 export async function up(client: Client): Promise<void> {
-  const statements = [
-    // Add message_id to conversations
-    `ALTER TABLE conversations ADD COLUMN message_id TEXT`,
-    // Add deleted_at to conversations
-    `ALTER TABLE conversations ADD COLUMN deleted_at INTEGER`,
-    // Create an index for faster lookup by message_id
-    `CREATE INDEX IF NOT EXISTS idx_conversations_message_id ON conversations(message_id)`
-  ]
+  // Use try-catch for ALTER TABLE to handle duplicate column errors gracefully
+  // Since SQLite does not support ALTER TABLE ADD COLUMN IF NOT EXISTS
+  
+  try {
+    await client.execute(`ALTER TABLE conversations ADD COLUMN message_id TEXT`)
+  } catch (err: any) {
+    if (!err.message?.includes('duplicate column name')) {
+      throw err
+    }
+  }
 
-  await client.batch(statements.map((sql) => ({ sql })), 'write')
+  try {
+    await client.execute(`ALTER TABLE conversations ADD COLUMN deleted_at INTEGER`)
+  } catch (err: any) {
+    if (!err.message?.includes('duplicate column name')) {
+      throw err
+    }
+  }
+
+  try {
+    await client.execute(`CREATE INDEX IF NOT EXISTS idx_conversations_message_id ON conversations(message_id)`)
+  } catch (err: any) {
+    // Ignore index creation errors if they occur
+  }
 }
 
 export async function down(client: Client): Promise<void> {

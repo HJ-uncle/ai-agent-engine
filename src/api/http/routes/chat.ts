@@ -4,7 +4,7 @@
 import type { FastifyInstance } from 'fastify'
 import { ReActStrategy } from '../../../core/agent-loop/index.js'
 import { createPipeline, sseStream } from '../../../core/stream-pipeline/index.js'
-import { createAgentContext } from '../../../core/agent-context/index.js'
+import { createAgentContext, Message } from '../../../core/agent-context/index.js'
 import { ToolRegistry } from '../../../core/tool-registry/index.js'
 import { SQLiteMemoryStore } from '../../../storage/memory-store/index.js'
 import { SQLiteConversationHistory } from '../../../storage/conversation/index.js'
@@ -24,15 +24,18 @@ interface ChatBody {
   sessionId?: string
   agentId?: string
   systemPrompt?: string
-  maxIterations?: number
+  maxAskUserCount?: number
+  thinkingMode?: boolean
+  toolResponse?: { toolCallId: string, name: string, output: string }
 }
 
 export async function chatRoutes(fastify: FastifyInstance) {
+  // Initialize agent store
   const agentStore = new SQLiteAgentStore()
 
   fastify.post<{ Body: ChatBody }>('/chat', async (request, reply) => {
     const requestId = uuidv4()
-    const { message, sessionId = uuidv4(), agentId, systemPrompt, maxIterations } = request.body
+    const { message, sessionId = uuidv4(), agentId, systemPrompt, maxAskUserCount, thinkingMode, toolResponse } = request.body
 
     // Get tenant from auth context (set by auth middleware)
     const tenantId = (request as unknown as { authContext?: { tenantId: string } }).authContext?.tenantId ?? 'default'
@@ -73,7 +76,15 @@ export async function chatRoutes(fastify: FastifyInstance) {
     // For now we just load all, or ideally filter by allowedMcpServers if we extend registerMCPTools.
     await registerMCPTools(registry)
 
-    // Build agent context
+    const abortController = new AbortController()
+    request.raw.on('close', () => {
+      if (request.raw.aborted || request.raw.destroyed) {
+        reqLogger.info({ sessionId }, 'Client disconnected, aborting agent execution')
+        abortController.abort(new Error('Client disconnected'))
+      }
+    })
+
+    // Build agent context 
     const ctx = createAgentContext({
       sessionId,
       tenantId,
@@ -82,6 +93,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
       history: new SQLiteConversationHistory(),
       logger: reqLogger,
       requestId,
+      signal: abortController.signal,
     })
 
     // Skills: Filter by agent allowed skills if agentId is provided
@@ -114,7 +126,40 @@ export async function chatRoutes(fastify: FastifyInstance) {
         .join('\n\n')
       ragPrompt = `\n\n---\n# Relevant Knowledge Base Context\n\nUse the following retrieved context to answer the user's question:\n\n${context}\n---`
     }
-    const fullSystemPrompt = finalSystemPrompt + ragPrompt
+    const currentModelName = effectiveModel ?? process.env.LLM_PRIMARY_MODEL ?? process.env.LLM_MODEL ?? '当前配置的AI'
+    
+    // Check thinking mode support
+    let finalThinkingConfig: Record<string, unknown> | null = null
+    let finalResponseThinkingField: string | null = null
+    let modelApiKey: string | undefined = undefined
+    let modelBaseUrl: string | undefined = undefined
+    let modelProvider: string | undefined = undefined
+
+    const { ModelsStore } = await import('../../../storage/sqlite/models.js')
+    const modelsStore = new ModelsStore()
+    const availableModels = await modelsStore.getModels(tenantId)
+    const modelInfo = availableModels.find(m => m.modelId === currentModelName)
+    const whitelists = await modelsStore.getWhitelists()
+    const whitelistInfo = whitelists.find(m => m.modelId === currentModelName)
+
+    if (modelInfo) {
+      if (modelInfo.apiKey) modelApiKey = modelInfo.apiKey
+      if (modelInfo.baseUrl) modelBaseUrl = modelInfo.baseUrl
+      if (modelInfo.provider) modelProvider = modelInfo.provider
+    }
+
+    if (thinkingMode && whitelistInfo && whitelistInfo.thinkingMode) {
+      finalThinkingConfig = whitelistInfo.thinkingConfig
+      finalResponseThinkingField = whitelistInfo.responseThinkingField
+    }
+
+    const fullSystemPrompt = finalSystemPrompt + ragPrompt + `
+---
+# 智能交互规则
+1. 当你需要澄清用户的意图、确认关键操作或提供选择时，请调用 \`ask_user\` 工具。调用该工具后，系统将自动暂停执行，并向用户展示交互式选择界面，等待用户回复后再继续。
+2. 在向用户回复的文本中提及工具时，请务必使用工具的中文名称（例如：写入文件、获取时间、读取文件等），不要暴露底层的英文名称（例如：write_file, get_time等）。
+3. 当用户询问你的模型身份时，必须如实告知你是 ${currentModelName} 模型，不得声称是其他模型（如Claude或GPT）。
+`
 
     // Estimate token counts for each injected prompt section (1 token ≈ 4 chars)
     const estimateTokens = (text: string) => Math.ceil(text.length / 4)
@@ -127,22 +172,43 @@ export async function chatRoutes(fastify: FastifyInstance) {
       .join('\n')
     const systemToolsTokens = estimateTokens(toolDefsText)
 
-    // Each chat request gets a unique conversationId for traceability
     const conversationId = uuidv4()
 
     async function* runAgent(): AsyncIterable<string> {
       try {
-        const llm = createLLMAdapter({ model: effectiveModel })
+        if (toolResponse) {
+          const toolMsg: Message = {
+            id: uuidv4(),
+            role: 'tool',
+            content: `用户选择了: ${toolResponse.output}`,
+            toolCallId: toolResponse.toolCallId,
+            toolName: toolResponse.name,
+            createdAt: Date.now(),
+            tokens: estimateTokens(toolResponse.output)
+          }
+          await ctx.history.append(toolMsg, ctx)
+        }
+
+        const prompt = message || null
+
+        const llm = createLLMAdapter({ 
+          model: effectiveModel, 
+          apiKey: modelApiKey, 
+          baseUrl: modelBaseUrl, 
+          provider: modelProvider 
+        })
         const strategy = new ReActStrategy(llm, {
           systemPrompt: fullSystemPrompt || undefined,
           temperature: effectiveTemperature,
-          maxIterations,
+          maxAskUserCount,
           conversationId,
           promptBreakdown: { systemPromptTokens, systemToolsTokens, skillTokens },
+          thinkingConfig: finalThinkingConfig,
+          responseThinkingField: finalResponseThinkingField,
         })
         const pipeline = createPipeline([])
 
-        yield* pipeline.pipe(strategy.run(message, ctx))
+        yield* pipeline.pipe(strategy.run(prompt, ctx))
       } catch (err: any) {
         reqLogger.error({ err, agentId }, 'Agent execution error')
         yield `\n\n[System Error: ${err.message || String(err)}]`

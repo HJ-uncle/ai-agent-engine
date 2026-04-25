@@ -2,6 +2,7 @@ import type { Message, Tool } from '../agent-context/index.js'
 
 export interface LLMResponse {
   content: string
+  reasoningContent?: string
   toolCalls?: Array<{
     id: string
     name: string
@@ -14,6 +15,7 @@ export interface LLMResponse {
 
 export interface LLMStreamChunk {
   content?: string
+  reasoningContent?: string
   toolCalls?: Array<{
     id: string
     name: string
@@ -30,6 +32,9 @@ export interface LLMAdapterOptions {
   temperature?: number
   systemPrompt?: string
   tools?: Tool[]
+  thinkingConfig?: Record<string, unknown> | null
+  responseThinkingField?: string | null
+  signal?: AbortSignal
 }
 
 export interface LLMAdapter {

@@ -6,14 +6,19 @@ interface SessionState {
   sessions: Session[]
   activeSessionId: string
   activeFile: string | null // Current file opened in Explorer
+  files: string[] // List of all file paths in current workspace
   messageMap: Record<string, Message[]>
   usageMap: Record<string, TokenUsage | null>
 
   // UI State
   isSettingsOpen: boolean
   settingsTab: string
+  maxAskUserCount: number
+  thinkingMode: boolean
 
   // Actions
+  setMaxAskUserCount: (max: number) => void
+  setThinkingMode: (enabled: boolean) => void
   addSession: (agentId?: string) => string
   switchSession: (id: string) => void
   deleteSession: (id: string) => void
@@ -32,6 +37,8 @@ interface SessionState {
 
   openSettings: (tab?: string) => void
   closeSettings: () => void
+  setFiles: (files: string[]) => void
+  setActiveFile: (file: string | null) => void
 }
 
 function genId() {
@@ -54,24 +61,32 @@ export const useSessionStore = create<SessionState>()(
       sessions: [initial],
       activeSessionId: initial.id,
       activeFile: null,
+      files: [],
       messageMap: { [initial.id]: [] },
       usageMap: { [initial.id]: null },
       isSettingsOpen: false,
       settingsTab: 'general',
+      maxAskUserCount: 5,
+      thinkingMode: false,
 
+      setMaxAskUserCount: (max) => set({ maxAskUserCount: max }),
+      setThinkingMode: (enabled) => set({ thinkingMode: enabled }),
+      setFiles: (files) => set({ files }),
+      setActiveFile: (file) => set({ activeFile: file }),
       addSession: (agentId?: string) => {
         const s = { ...defaultSession(), agentId }
         set((state) => ({
           sessions: [s, ...state.sessions],
           activeSessionId: s.id,
           activeFile: null,
+          files: [],
           messageMap: { ...state.messageMap, [s.id]: [] },
           usageMap: { ...state.usageMap, [s.id]: null },
         }))
         return s.id
       },
 
-      switchSession: (id) => set({ activeSessionId: id, activeFile: null }),
+      switchSession: (id) => set({ activeSessionId: id, activeFile: null, files: [] }),
 
       deleteSession: (id) => {
         set((state) => {
@@ -219,6 +234,8 @@ export const useSessionStore = create<SessionState>()(
         activeSessionId: state.activeSessionId,
         messageMap: state.messageMap,
         usageMap: state.usageMap,
+        maxAskUserCount: state.maxAskUserCount,
+        thinkingMode: state.thinkingMode,
       }),
     },
   ),

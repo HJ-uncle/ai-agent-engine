@@ -7,22 +7,11 @@ import {
   PlusOutlined, EditOutlined, DeleteOutlined,
   RobotOutlined, ReloadOutlined, ThunderboltOutlined,
 } from '@ant-design/icons'
-import { agentApi } from '../api'
+import { agentApi, modelsApi, toolsApi, mcpApi, knowledgeApi } from '../api'
 import { useAgentStore } from '../store/agents'
 import { useSessionStore } from '../store/session'
 import type { Agent, CreateAgentInput } from '../types'
 import styles from './AgentPanel.module.css'
-
-const MODEL_OPTIONS = [
-  { value: 'gpt-4o', label: 'GPT-4o' },
-  { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
-  { value: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
-  { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
-  { value: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet' },
-  { value: 'claude-3-haiku-20240307', label: 'Claude 3 Haiku' },
-  { value: 'deepseek-chat', label: 'DeepSeek Chat' },
-  { value: 'deepseek-reasoner', label: 'DeepSeek Reasoner' },
-]
 
 // ── Agent Card ─────────────────────────────────────────────────────────────────
 function AgentCard({
@@ -108,9 +97,54 @@ interface AgentFormModalProps {
 function AgentFormModal({ open, editing, onClose, onSaved }: AgentFormModalProps) {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
+  const [modelOptions, setModelOptions] = useState<{ value: string, label: string }[]>([])
+  const [skillOptions, setSkillOptions] = useState<{ value: string, label: string }[]>([])
+  const [mcpOptions, setMcpOptions] = useState<{ value: string, label: string }[]>([])
+  const [knowledgeOptions, setKnowledgeOptions] = useState<{ value: string, label: string }[]>([])
 
   useEffect(() => {
     if (open) {
+      // Load models dynamically when modal opens
+      modelsApi.listModels().then(data => {
+        setModelOptions(data.map((m: any) => ({
+          value: m.modelId,
+          label: m.displayName || m.modelId
+        })))
+      }).catch(err => {
+        console.error('Failed to load models:', err)
+        antMsg.error(err.message || '加载模型列表失败')
+      })
+
+      // Load tools/skills
+      toolsApi.list().then(data => {
+        setSkillOptions(data.list.map((t: any) => ({
+          value: t.name,
+          label: t.displayName || t.name
+        })))
+      }).catch(err => {
+        console.error('Failed to load tools:', err)
+      })
+
+      // Load MCP servers
+      mcpApi.list().then(data => {
+        setMcpOptions(data.list.map((s: any) => ({
+          value: s.id,
+          label: s.name || s.id
+        })))
+      }).catch(err => {
+        console.error('Failed to load mcp servers:', err)
+      })
+
+      // Load Knowledge Bases
+      knowledgeApi.listDocuments().then(data => {
+        setKnowledgeOptions(data.list.map((d: any) => ({
+          value: d.id,
+          label: d.filename || d.id
+        })))
+      }).catch(err => {
+        console.error('Failed to load knowledge bases:', err)
+      })
+
       if (editing) {
         form.setFieldsValue({
           name: editing.name,
@@ -172,7 +206,7 @@ function AgentFormModal({ open, editing, onClose, onSaved }: AgentFormModalProps
         <Form.Item name="model" label="模型">
           <Select
             placeholder="默认使用系统配置的模型"
-            options={MODEL_OPTIONS}
+            options={modelOptions}
             allowClear
             showSearch
           />
@@ -190,15 +224,33 @@ function AgentFormModal({ open, editing, onClose, onSaved }: AgentFormModalProps
         </Form.Item>
 
         <Form.Item name="skills" label="技能 (Skills)">
-          <Select mode="tags" placeholder="输入技能名称后回车" />
+          <Select
+            mode="multiple"
+            placeholder="请选择技能"
+            options={skillOptions}
+            allowClear
+            showSearch
+          />
         </Form.Item>
 
         <Form.Item name="mcpServers" label="MCP Servers">
-          <Select mode="tags" placeholder="输入 MCP Server 名称后回车" />
+          <Select
+            mode="multiple"
+            placeholder="请选择 MCP Server"
+            options={mcpOptions}
+            allowClear
+            showSearch
+          />
         </Form.Item>
 
         <Form.Item name="knowledgeBases" label="知识库 (Knowledge Bases)">
-          <Select mode="tags" placeholder="输入知识库 ID 后回车" />
+          <Select
+            mode="multiple"
+            placeholder="请选择知识库"
+            options={knowledgeOptions}
+            allowClear
+            showSearch
+          />
         </Form.Item>
       </Form>
     </Modal>

@@ -14,11 +14,13 @@ function driveAiMessage(
   updateMessage: (sid: string, id: string, updates: Partial<Message>) => void,
   updateUsage: (sid: string, usage: TokenUsage) => void,
   startTime: number,
+  initialContent: string = '',
+  initialSteps: ThinkingStep[] = [],
   onDone?: () => void,
   onError?: (err: Error) => void
 ) {
-  let finalContent = ''
-  const thinkingSteps: ThinkingStep[] = []
+  let finalContent = initialContent
+  const thinkingSteps: ThinkingStep[] = [...initialSteps]
 
   const onEvent = (event: any) => {
     if (event.type === 'text_delta') {
@@ -28,24 +30,30 @@ function driveAiMessage(
       thinkingSteps.push({ type: 'thinking', text: event.text ?? '' })
       updateMessage(sid, aiMsgId, { thinkingSteps: [...thinkingSteps] })
     } else if (event.type === 'tool_start') {
-      thinkingSteps.push({ type: 'tool_start', toolName: event.toolName, toolArgs: event.toolArgs })
+      thinkingSteps.push({
+        type: 'tool_start',
+        toolName: event.toolName || event.name,
+        toolArgs: event.toolArgs || event.args,
+        toolCallId: event.toolCallId,
+      })
       updateMessage(sid, aiMsgId, { thinkingSteps: [...thinkingSteps] })
     } else if (event.type === 'tool_end') {
       // 尝试合并到最近的一个正在运行的 tool_start 步骤中
-      const lastToolIdx = [...thinkingSteps].reverse().findIndex(s => s.type === 'tool_start' && s.success === undefined)
+      const lastToolIdx = [...thinkingSteps].reverse().findIndex(s => s.type === 'tool_start' && s.success === undefined && (event.toolCallId ? s.toolCallId === event.toolCallId : true))
       if (lastToolIdx !== -1) {
         const idx = thinkingSteps.length - 1 - lastToolIdx
         thinkingSteps[idx] = {
           ...thinkingSteps[idx],
           success: event.success,
-          outputPreview: (event.output ?? '').slice(0, 200),
+          outputPreview: event.outputPreview ?? (event.output ?? '').slice(0, 500),
         }
       } else {
         // Fallback: 如果没找到对应的 start，才作为独立步骤（兼容性）
         thinkingSteps.push({
           type: 'tool_end',
+          toolCallId: event.toolCallId,
           success: event.success,
-          outputPreview: (event.output ?? '').slice(0, 200),
+          outputPreview: event.outputPreview ?? (event.output ?? '').slice(0, 500),
         })
       }
       updateMessage(sid, aiMsgId, { thinkingSteps: [...thinkingSteps] })
@@ -128,14 +136,20 @@ export function useChat() {
             })
             currentThinkingSteps = []
           } else if (m.role === 'assistant') {
+            if (m.reasoningContent?.trim()) {
+              currentThinkingSteps.push({ type: 'thinking', text: m.reasoningContent })
+            }
             if (m.toolCall) {
-              if (m.content?.trim()) {
+              // 只有在没有 reasoningContent 的情况下，才把 content 当作旧模型的思考过程
+              // 如果已经有 reasoningContent，那么 content 只是工具调用前的一些闲聊文本，不应作为思考过程展示
+              if (m.content?.trim() && !m.reasoningContent?.trim()) {
                 currentThinkingSteps.push({ type: 'thinking', text: m.content })
               }
               currentThinkingSteps.push({
                 type: 'tool_start',
                 toolName: m.toolCall.name,
                 toolArgs: m.toolCall.args,
+                toolCallId: m.toolCallId,
               })
             } else {
               msgs.push({
@@ -151,12 +165,37 @@ export function useChat() {
               currentThinkingSteps = []
             }
           } else if (m.role === 'tool') {
-            const isError = typeof m.content === 'string' && m.content.startsWith('Tool error:')
-            currentThinkingSteps.push({
-              type: 'tool_end',
-              success: !isError,
-              outputPreview: String(m.content).slice(0, 200),
-            })
+            const contentStr = String(m.content || '')
+            const isError = contentStr.startsWith('Tool error:') ||
+                        contentStr.startsWith('Command timed out') ||
+                        contentStr.startsWith('Failed to execute command') ||
+                        (contentStr.includes('exited with code') && !contentStr.includes('exited with code 0'))
+        
+            const lastToolIdx = [...currentThinkingSteps].reverse().findIndex(s => s.type === 'tool_start' && s.success === undefined && (m.toolCallId ? s.toolCallId === m.toolCallId : true))
+            if (lastToolIdx !== -1) {
+              const idx = currentThinkingSteps.length - 1 - lastToolIdx
+              currentThinkingSteps[idx] = {
+                ...currentThinkingSteps[idx],
+                success: !isError,
+                outputPreview: contentStr.slice(0, 500),
+              }
+            } else {
+              // If we can't find a matching start, check if it's the ask_user tool response
+              if (m.toolName === 'ask_user') {
+                const askUserStepIdx = currentThinkingSteps.findIndex(s => s.type === 'tool_start' && s.toolName === 'ask_user' && s.success === undefined)
+                if (askUserStepIdx !== -1) {
+                  currentThinkingSteps[askUserStepIdx].success = true
+                  currentThinkingSteps[askUserStepIdx].outputPreview = contentStr.slice(0, 500)
+                }
+              } else {
+                currentThinkingSteps.push({
+                  type: 'tool_end',
+                  toolCallId: m.toolCallId,
+                  success: !isError,
+                  outputPreview: contentStr.slice(0, 500),
+                })
+              }
+            }
           }
         }
 
@@ -211,6 +250,8 @@ export function useChat() {
       const sid = sessionId ?? activeSessionId
       const session = useSessionStore.getState().sessions.find((s) => s.id === sid)
       const agentId = session?.agentId
+      const maxAskUserCount = useSessionStore.getState().maxAskUserCount
+      const thinkingMode = useSessionStore.getState().thinkingMode
 
       // 1. 添加用户消息（前端本地，仅用于显示）
       const userMsg: Message = {
@@ -246,18 +287,20 @@ export function useChat() {
       const startTime = Date.now()
 
       const { onEvent, handleDone, handleError } = driveAiMessage(
-        sid, aiMsgId, updateMessage, updateUsage, startTime
+        sid, aiMsgId, updateMessage, updateUsage, startTime, '', []
       )
 
       await chatStream({
-        message: content,
-        sessionId: sid,
-        agentId,
-        signal: ctrl.signal,
-        onEvent,
-        onDone: handleDone,
-        onError: handleError,
-      })
+          message: content,
+          sessionId: sid,
+          agentId,
+          maxAskUserCount,
+          thinkingMode,
+          signal: ctrl.signal,
+          onEvent,
+          onDone: handleDone,
+          onError: handleError,
+        })
     },
     [activeSessionId, addMessage, updateMessage, updateUsage, updateSessionTitle],
   )
@@ -299,12 +342,15 @@ export function useChat() {
       abortRef.current = ctrl
       const startTime = Date.now()
 
+      const thinkingMode = useSessionStore.getState().thinkingMode
+
       const { onEvent, handleDone, handleError } = driveAiMessage(
-        sid, aiMsgId, updateMessage, updateUsage, startTime
+        sid, aiMsgId, updateMessage, updateUsage, startTime, '', []
       )
 
       await regenerateStream({
         messageId: lastAi.conversationId!,
+        thinkingMode,
         signal: ctrl.signal,
         onEvent,
         onDone: handleDone,
@@ -355,14 +401,16 @@ export function useChat() {
       const ctrl = new AbortController()
       abortRef.current = ctrl
       const startTime = Date.now()
+      const thinkingMode = useSessionStore.getState().thinkingMode
 
       const { onEvent, handleDone, handleError } = driveAiMessage(
-        sid, aiMsgId, updateMessage, updateUsage, startTime
+        sid, aiMsgId, updateMessage, updateUsage, startTime, '', []
       )
 
       await editMessageStream({
         messageId: msg.conversationId!,
         content: newContent,
+        thinkingMode,
         signal: ctrl.signal,
         onEvent,
         onDone: handleDone,
@@ -372,10 +420,62 @@ export function useChat() {
     [activeSessionId, addMessage, updateMessage, updateUsage, send],
   )
 
+  /** 工具栏交互提交：无需创建新的用户消息，而是直接继续当前会话的流式生成 */
+  const sendToolResponse = useCallback(
+    async (msgId: string, toolCallId: string, toolName: string, output: string, sessionId?: string) => {
+      const sid = sessionId ?? activeSessionId
+      const session = useSessionStore.getState().sessions.find((s) => s.id === sid)
+      const agentId = session?.agentId
+      const maxAskUserCount = useSessionStore.getState().maxAskUserCount
+      const thinkingMode = useSessionStore.getState().thinkingMode
+      const msgs = useSessionStore.getState().messageMap[sid] ?? []
+      const aiMsg = msgs.find((m) => m.id === msgId)
+      if (!aiMsg) return
+
+      const updatedSteps = [...(aiMsg.thinkingSteps || [])]
+      const lastToolIdx = [...updatedSteps].reverse().findIndex(s => s.type === 'tool_start' && s.success === undefined && s.toolName === toolName && (s.toolCallId ? s.toolCallId === toolCallId : true))
+      if (lastToolIdx !== -1) {
+        const idx = updatedSteps.length - 1 - lastToolIdx
+        updatedSteps[idx] = {
+          ...updatedSteps[idx],
+          success: true,
+          outputPreview: output.slice(0, 500)
+        }
+      }
+
+      updateMessage(sid, msgId, {
+        status: 'streaming',
+        thinkingSteps: updatedSteps,
+      })
+
+      const ctrl = new AbortController()
+      abortRef.current = ctrl
+      const startTime = Date.now() - (aiMsg.durationMs ?? 0)
+
+      const { onEvent, handleDone, handleError } = driveAiMessage(
+        sid, msgId, updateMessage, updateUsage, startTime, aiMsg.content, updatedSteps
+      )
+
+      await chatStream({
+        message: '',
+        sessionId: sid,
+        agentId,
+        maxAskUserCount,
+        thinkingMode,
+        toolResponse: { toolCallId, name: toolName, output },
+        signal: ctrl.signal,
+        onEvent,
+        onDone: handleDone,
+        onError: handleError,
+      })
+    },
+    [activeSessionId, updateMessage, updateUsage]
+  )
+
   const cancel = useCallback(() => {
     abortRef.current?.abort()
     abortRef.current = null
   }, [])
 
-  return { send, regenerate, editAndResend, fetchHistory, cancel }
+  return { send, regenerate, editAndResend, fetchHistory, cancel, sendToolResponse }
 }

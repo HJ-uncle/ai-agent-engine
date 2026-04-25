@@ -10,11 +10,18 @@ import { createRequestLogger } from '../../../observability/index.js'
 import { registerBuiltinSkills, buildSkillsSystemPrompt, skillsRegistry } from '../../../skills/index.js'
 import { fileTools } from '../../../tools/file/index.js'
 import { cmdTool } from '../../../tools/cmd/index.js'
+import { askUserTool } from '../../../tools/ask-user/index.js'
 import { createMemoryTools } from '../../../tools/memory/index.js'
 import { registerMCPTools } from '../../../tools/mcp/loader.js'
 import { createSkillTools, runSkillScriptTool } from '../../../tools/skill/index.js'
 import { v4 as uuidv4 } from 'uuid'
 import { success, fail } from '../response.js'
+
+interface RegenerateBody {
+  messageId: string
+  systemPrompt?: string
+  maxIterations?: number
+}
 
 export async function messagesRoutes(fastify: FastifyInstance) {
   const history = new SQLiteConversationHistory()
@@ -62,8 +69,10 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     requestId: string,
     systemPrompt: string | undefined,
     reply: any,
-    maxIterations: number | undefined,
-    newMessageContent?: string
+    maxAskUserCount: number | undefined,
+    newMessageContent?: string,
+    thinkingMode?: boolean,
+    effectiveModel?: string
   ) {
     const reqLogger = createRequestLogger(requestId, tenantId, sessionId)
     const registry = new ToolRegistry()
@@ -71,6 +80,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     registerBuiltinSkills(registry)
     fileTools.forEach((t) => registry.register(t))
     registry.register(cmdTool)
+    registry.register(askUserTool)
     createMemoryTools(memory).forEach((t) => registry.register(t))
     await registerMCPTools(registry)
 
@@ -103,7 +113,38 @@ export async function messagesRoutes(fastify: FastifyInstance) {
         ragPrompt = `\n\n---\n# Relevant Knowledge Base Context\n\nUse the following retrieved context to answer the user's question:\n\n${context}\n---`
       }
     }
-    const fullSystemPrompt = finalSystemPrompt + ragPrompt
+    const currentModelName = effectiveModel ?? process.env.LLM_PRIMARY_MODEL ?? process.env.LLM_MODEL ?? '当前配置的AI'
+    const fullSystemPrompt = finalSystemPrompt + ragPrompt + `
+---
+# 智能交互规则
+1. 当你需要澄清用户的意图、确认关键操作或提供选择时，请调用 \`ask_user\` 工具。调用该工具后，系统将自动暂停执行，并向用户展示交互式选择界面，等待用户回复后再继续。
+2. 在向用户回复的文本中提及工具时，请务必使用工具的中文名称（例如：写入文件、获取时间、读取文件等），不要暴露底层的英文名称（例如：write_file, get_time等）。
+3. 当用户询问你的模型身份时，必须如实告知你是 ${currentModelName} 模型，不得声称是其他模型（如Claude或GPT）。
+`
+
+    let finalThinkingConfig: Record<string, unknown> | null = null
+    let finalResponseThinkingField: string | null = null
+    let modelApiKey: string | undefined = undefined
+    let modelBaseUrl: string | undefined = undefined
+    let modelProvider: string | undefined = undefined
+
+    const { ModelsStore } = await import('../../../storage/sqlite/models.js')
+    const modelsStore = new ModelsStore()
+    const availableModels = await modelsStore.getModels(tenantId)
+    const modelInfo = availableModels.find(m => m.modelId === currentModelName)
+    const whitelists = await modelsStore.getWhitelists()
+    const whitelistInfo = whitelists.find(m => m.modelId === currentModelName)
+
+    if (modelInfo) {
+      if (modelInfo.apiKey) modelApiKey = modelInfo.apiKey
+      if (modelInfo.baseUrl) modelBaseUrl = modelInfo.baseUrl
+      if (modelInfo.provider) modelProvider = modelInfo.provider
+    }
+
+    if (thinkingMode && whitelistInfo && whitelistInfo.thinkingMode) {
+      finalThinkingConfig = whitelistInfo.thinkingConfig
+      finalResponseThinkingField = whitelistInfo.responseThinkingField
+    }
 
     const estimateTokens = (text: string) => Math.ceil(text.length / 4)
     const baseSystemPrompt = [systemPrompt ?? '', ragPrompt].filter(Boolean).join('\n\n')
@@ -121,12 +162,19 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 
     async function* runAgent(): AsyncIterable<string> {
       try {
-        const llm = createLLMAdapter()
+        const llm = createLLMAdapter({
+          model: effectiveModel,
+          apiKey: modelApiKey,
+          baseUrl: modelBaseUrl,
+          provider: modelProvider
+        })
         const strategy = new ReActStrategy(llm, {
           systemPrompt: fullSystemPrompt || undefined,
-          maxIterations,
+          maxAskUserCount,
           conversationId,
           promptBreakdown: { systemPromptTokens, systemToolsTokens, skillTokens },
+          thinkingConfig: finalThinkingConfig,
+          responseThinkingField: finalResponseThinkingField,
         })
         const pipeline = createPipeline([])
 
@@ -141,9 +189,9 @@ export async function messagesRoutes(fastify: FastifyInstance) {
   }
 
   // 3. 编辑用户消息并重新生成响应
-  fastify.put<{ Params: { messageId: string }; Body: { content: string; systemPrompt?: string; maxIterations?: number } }>('/messages/:messageId', async (request, reply) => {
+  fastify.put<{ Params: { messageId: string }; Body: { content: string; systemPrompt?: string; maxAskUserCount?: number; thinkingMode?: boolean } }>('/messages/:messageId', async (request, reply) => {
     const { messageId } = request.params
-    const { content, systemPrompt, maxIterations } = request.body
+    const { content, systemPrompt, maxAskUserCount, thinkingMode } = request.body
     const tenantId = (request as any).authContext?.tenantId ?? 'default'
 
     if (!content) {
@@ -179,14 +227,13 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 
     // Then run AI to generate a response for the updated history
     const requestId = uuidv4()
-    await runAIForSession(sessionId, tenantId, requestId, systemPrompt, reply, maxIterations, undefined)
-    return reply
+    await runAIForSession(sessionId, tenantId, requestId, systemPrompt, reply, maxAskUserCount, content, thinkingMode)
   })
 
-  // 4. AI 消息重新生成
-  fastify.post<{ Params: { messageId: string }; Body: { systemPrompt?: string; maxIterations?: number } }>('/messages/:messageId/regenerate', async (request, reply) => {
+  // 4. 重新生成最后一条 AI 回复
+  fastify.post<{ Params: { messageId: string }; Body: { systemPrompt?: string; maxAskUserCount?: number; thinkingMode?: boolean } }>('/messages/:messageId/regenerate', async (request, reply) => {
     const { messageId } = request.params
-    const { systemPrompt, maxIterations } = request.body
+    const { systemPrompt, maxAskUserCount, thinkingMode } = request.body
     const tenantId = (request as any).authContext?.tenantId ?? 'default'
 
     const message = await history.getMessageById(messageId, tenantId)
@@ -221,7 +268,8 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     await history.deleteMessagesAfterId(message.dbId, sessionId, tenantId)
 
     const requestId = uuidv4()
-    await runAIForSession(sessionId, tenantId, requestId, systemPrompt, reply, maxIterations, undefined)
+    
+    await runAIForSession(sessionId, tenantId, requestId, systemPrompt, reply, maxAskUserCount, undefined, thinkingMode)
     return reply
   })
 }

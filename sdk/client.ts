@@ -17,10 +17,16 @@ export interface ChatOptions {
   message: string
   /** 会话 ID，不传则自动生成 */
   sessionId?: string
+  agentId?: string
   /** 系统提示词 */
   systemPrompt?: string
   /** 最大迭代次数 */
   maxIterations?: number
+  toolResponse?: {
+    toolCallId: string
+    name: string
+    output: string
+  }
 }
 
 export interface TokenUsage {

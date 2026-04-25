@@ -49,6 +49,7 @@ interface AnthropicMessageParam {
 function messageToAnthropic(
   msg: Message,
   validToolUseIds?: Set<string>,
+  validToolResultIds?: Set<string>
 ): AnthropicMessageParam | null {
   // ── tool result → Anthropic user/tool_result ─────────────────────────────
   if (msg.role === 'tool') {
@@ -72,20 +73,31 @@ function messageToAnthropic(
     const name = msg.toolCall.name
 
     const blocks: AnthropicContentBlock[] = []
-    if (msg.content) {
-      blocks.push({ type: 'text', text: msg.content })
-    }
+    let fallbackContent = msg.content || ''
 
     // Guard: skip tool_use block if id or name is missing (old DB records)
-    if (id && name) {
+    // Also skip if it has no corresponding tool_result (orphaned tool_call)
+    if (id && name && validToolResultIds && validToolResultIds.has(id)) {
+      if (msg.content) {
+        blocks.push({ type: 'text', text: msg.content })
+      }
       blocks.push({ type: 'tool_use', id, name, input: msg.toolCall.args })
       // Register this id so downstream tool_result blocks are not dropped
       validToolUseIds?.add(id)
+    } else {
+      // If orphaned, append the intended tool call to the content so context isn't lost
+      if (name && !fallbackContent.includes(name)) {
+        const argsStr = JSON.stringify(msg.toolCall.args || {})
+        fallbackContent += `\n[Intended to call tool: ${name} with args: ${argsStr}, but was interrupted]`
+      }
+      if (fallbackContent) {
+        blocks.push({ type: 'text', text: fallbackContent })
+      }
     }
 
     // If no blocks at all, return a plain text assistant message
     if (blocks.length === 0) {
-      return { role: 'assistant', content: msg.content || '(no content)' }
+      return { role: 'assistant', content: '(no content)' }
     }
     return { role: 'assistant', content: blocks }
   }
@@ -139,26 +151,31 @@ export class AnthropicAdapter implements LLMAdapter {
   readonly provider = 'anthropic'
   private client: Anthropic
 
-  constructor(readonly model: string = 'claude-3-5-sonnet-20241022') {
+  constructor(readonly model: string = 'claude-3-5-sonnet-20241022', apiKey?: string, baseURL?: string) {
     this.client = new Anthropic({
-      apiKey: process.env.ANTHROPIC_API_KEY,
+      apiKey: apiKey || process.env.ANTHROPIC_API_KEY,
+      baseURL: baseURL || process.env.ANTHROPIC_BASE_URL,
     })
   }
 
   async complete(messages: Message[], options?: LLMAdapterOptions): Promise<LLMResponse> {
     // Two-pass orphan filtering:
     // Pass 1 — collect all valid tool_use ids from assistant messages
-    // Pass 2 — convert messages, dropping tool_result blocks with unknown ids
+    // and collect all valid tool_result ids from tool messages
     const validToolUseIds = new Set<string>()
+    const validToolResultIds = new Set<string>()
     for (const msg of messages) {
       if (msg.role === 'assistant' && msg.toolCall?.id && msg.toolCall?.name) {
-        validToolUseIds.add(msg.toolCall.id)
+        // We defer adding to validToolUseIds to messageToAnthropic
+      }
+      if (msg.role === 'tool' && msg.toolCallId) {
+        validToolResultIds.add(msg.toolCallId)
       }
     }
 
     const anthropicMessages = mergeAdjacentRoles(
       messages
-        .map((m) => messageToAnthropic(m, validToolUseIds))
+        .map((m) => messageToAnthropic(m, validToolUseIds, validToolResultIds))
         .filter((m): m is AnthropicMessageParam => m !== null),
     )
 
@@ -174,6 +191,10 @@ export class AnthropicAdapter implements LLMAdapter {
       system: options?.systemPrompt,
     }
 
+    if (options?.thinkingConfig) {
+      Object.assign(params, options.thinkingConfig)
+    }
+
     if (options?.tools && options.tools.length > 0) {
       params['tools'] = options.tools.map(toolToAnthropic)
     }
@@ -186,6 +207,7 @@ export class AnthropicAdapter implements LLMAdapter {
     const response = await (this.client.messages.create as unknown as CreateFn)(params)
 
     let content = ''
+    let reasoningContent = ''
     const toolCalls: LLMResponse['toolCalls'] = []
 
     for (const block of response.content) {
@@ -197,11 +219,14 @@ export class AnthropicAdapter implements LLMAdapter {
           name: block.name ?? '',
           args: block.input as Record<string, unknown>,
         })
+      } else if (block.type === 'thinking' || (options?.responseThinkingField && block.type === options.responseThinkingField)) {
+        reasoningContent += (block as any)[options?.responseThinkingField || 'thinking']
       }
     }
 
     return {
       content,
+      reasoningContent: reasoningContent || undefined,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       promptTokens: response.usage.input_tokens,
       completionTokens: response.usage.output_tokens,
@@ -230,6 +255,11 @@ export class AnthropicAdapter implements LLMAdapter {
       messages: anthropicMessages,
       system: options?.systemPrompt,
     }
+
+    if (options?.thinkingConfig) {
+      Object.assign(streamParams, options.thinkingConfig)
+    }
+
     if (options?.tools && options.tools.length > 0) {
       streamParams['tools'] = options.tools.map(toolToAnthropic)
     }
@@ -247,9 +277,13 @@ export class AnthropicAdapter implements LLMAdapter {
       }
     }).stream(streamParams)
 
-    for await (const event of stream) {
-      if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta' && event.delta.text) {
-        yield { content: event.delta.text, done: false }
+    for await (const event of stream as any) {
+      if (event.type === 'content_block_delta') {
+        if (event.delta?.type === 'text_delta' && event.delta.text) {
+          yield { content: event.delta.text, done: false }
+        } else if ((event.delta?.type === 'thinking_delta' || event.delta?.type === options?.responseThinkingField) && (event.delta.thinking || event.delta[options?.responseThinkingField || 'thinking'])) {
+          yield { reasoningContent: event.delta.thinking || event.delta[options?.responseThinkingField || 'thinking'], done: false }
+        }
       }
     }
 

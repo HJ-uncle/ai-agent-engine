@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { ConfigProvider, theme, Tooltip, message as antMsg } from 'antd'
+import { ConfigProvider, theme, Tooltip, App as AntdApp, message as antMsg } from 'antd'
 import {
   MessageOutlined, RobotOutlined, SettingOutlined,
   HistoryOutlined, ApiOutlined, DatabaseOutlined,
@@ -291,39 +291,41 @@ export default function App() {
         },
       }}
     >
-      <div className={styles.app}>
-        {/* Activity Bar */}
-        <div className={styles.activityBar}>
-          <div className={styles.activityTop}>
-            {ACTIVITIES.map((item) => (
-              <Tooltip key={item.key} title={item.label} placement="right">
-                <button
-                  className={`${styles.activityBtn} ${activePanel === item.key ? styles.activityActive : ''}`}
-                  onClick={() => setActivePanel(item.key)}
-                >
-                  {item.icon}
+      <AntdApp>
+        <div className={styles.app}>
+          {/* Activity Bar */}
+          <div className={styles.activityBar}>
+            <div className={styles.activityTop}>
+              {ACTIVITIES.map((item) => (
+                <Tooltip key={item.key} title={item.label} placement="right">
+                  <button
+                    className={`${styles.activityBtn} ${activePanel === item.key ? styles.activityActive : ''}`}
+                    onClick={() => setActivePanel(item.key)}
+                  >
+                    {item.icon}
+                  </button>
+                </Tooltip>
+              ))}
+            </div>
+            <div className={styles.activityBottom}>
+              <Tooltip title="设置" placement="right">
+                <button className={styles.activityBtn} onClick={() => openSettings('general')}>
+                  <SettingOutlined />
                 </button>
               </Tooltip>
-            ))}
+            </div>
           </div>
-          <div className={styles.activityBottom}>
-            <Tooltip title="设置" placement="right">
-              <button className={styles.activityBtn} onClick={() => openSettings('general')}>
-                <SettingOutlined />
-              </button>
-            </Tooltip>
+
+          {/* Sidebar */}
+          <div className={styles.sidebar}>{sidebarPanel()}</div>
+
+          {/* Main chat or Editor */}
+          <div className={styles.main}>
+            {useSessionStore(s => s.activeFile) ? <EditorArea /> : <ChatArea />}
           </div>
         </div>
-
-        {/* Sidebar */}
-        <div className={styles.sidebar}>{sidebarPanel()}</div>
-
-        {/* Main chat or Editor */}
-        <div className={styles.main}>
-          {useSessionStore(s => s.activeFile) ? <EditorArea /> : <ChatArea />}
-        </div>
-      </div>
-      <SettingsModal />
+        <SettingsModal />
+      </AntdApp>
     </ConfigProvider>
   )
 }

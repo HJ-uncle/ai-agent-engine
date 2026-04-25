@@ -13,6 +13,8 @@ import { knowledgeRoutes } from './routes/knowledge.js'
 import { messagesRoutes } from './routes/messages.js'
 import { agentRoutes } from './routes/agents.js'
 import { workspaceRoutes } from './routes/workspace.js'
+import { settingsRoutes } from './routes/settings.js'
+import { modelsRoutes } from './routes/models.js'
 import { globalRequestMiddleware, WHITELIST_PATHS } from './middleware.js'
 import { fail } from './response.js'
 
@@ -68,10 +70,12 @@ export async function buildServer() {
     await api.register(messagesRoutes)
     await api.register(agentRoutes)
     await api.register(workspaceRoutes)
+    await api.register(settingsRoutes)
   }, { prefix: '/api/v1' })
 
   // Health and metrics at root level
   await fastify.register(metricsRoutes)
+  await fastify.register(modelsRoutes)
 
   return fastify
 }

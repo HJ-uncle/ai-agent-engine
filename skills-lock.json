@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "web-search": {
+      "source": "modelscope.cn",
+      "sourceType": "well-known",
+      "computedHash": "03f2bbcc8d5784554863233281235f0453506771515ad3baed942ccaf972939b"
+    }
+  }
+}

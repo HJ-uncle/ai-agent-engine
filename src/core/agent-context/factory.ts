@@ -22,5 +22,6 @@ export function createAgentContext(options: CreateAgentContextOptions): AgentCon
     logger: options.logger.child({ tenantId, sessionId: options.sessionId }),
     tokenBudget: options.tokenBudget ?? parseInt(process.env.TOKEN_BUDGET ?? '60000', 10),
     requestId: options.requestId,
+    signal: options.signal,
   }
 }

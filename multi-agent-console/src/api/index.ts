@@ -41,7 +41,14 @@ async function request<T>(path: string, options?: RequestInit): Promise<Standard
   })
   const json: StandardResponse<T> = await res.json()
   if (json.code !== 200 && json.code !== 0) {
-    throw new Error(json.message ?? `Request failed (${json.code})`)
+    let errorMessage = json.message ?? `Request failed (${json.code})`
+    
+    // Check for specific encryption error from backend
+    if (errorMessage.includes('Unsupported state or unable to authenticate data')) {
+      errorMessage = '解密失败：环境变量 ENCRYPTION_KEY 不匹配或未设置。请在 .env 文件中设置固定的 ENCRYPTION_KEY。'
+    }
+    
+    throw new Error(errorMessage)
   }
   return json
 }
@@ -168,16 +175,22 @@ export interface ChatOptions {
   sessionId: string
   agentId?: string
   systemPrompt?: string
-  maxIterations?: number
+  maxAskUserCount?: number
+  thinkingMode?: boolean
+  toolResponse?: {
+    toolCallId: string
+    name: string
+    output: string
+  }
   signal?: AbortSignal
-  onEvent: (event: SseEvent) => void
+  onEvent?: (event: SseEvent) => void
   onDone?: () => void
-  onError?: (err: Error) => void
+  onError?: (error: Error) => void
 }
 
 export async function chatStream(options: ChatOptions): Promise<void> {
   const {
-    message, sessionId, agentId, systemPrompt, maxIterations,
+    message, sessionId, agentId, systemPrompt, maxAskUserCount, thinkingMode, toolResponse,
     signal, onEvent, onDone, onError,
   } = options
 
@@ -185,7 +198,9 @@ export async function chatStream(options: ChatOptions): Promise<void> {
     const body: Record<string, any> = { message, sessionId }
     if (agentId) body.agentId = agentId
     if (systemPrompt) body.systemPrompt = systemPrompt
-    if (maxIterations != null) body.maxIterations = maxIterations
+    if (maxAskUserCount != null) body.maxAskUserCount = maxAskUserCount
+    if (thinkingMode != null) body.thinkingMode = thinkingMode
+    if (toolResponse) body.toolResponse = toolResponse
 
     const res = await fetch(`${API_PREFIX}/chat`, {
       method: 'POST',
@@ -198,7 +213,7 @@ export async function chatStream(options: ChatOptions): Promise<void> {
       throw new Error(`HTTP error: ${res.status}`)
     }
 
-    await parseSseStream(res.body, onEvent, onDone)
+    await parseSseStream(res.body, onEvent || (() => {}), onDone)
   } catch (err: unknown) {
     if (err instanceof Error && err.name === 'AbortError') return
     onError?.(err instanceof Error ? err : new Error(String(err)))
@@ -210,6 +225,7 @@ export interface RegenerateOptions {
   messageId: string
   systemPrompt?: string
   maxIterations?: number
+  thinkingMode?: boolean
   signal?: AbortSignal
   onEvent: (event: SseEvent) => void
   onDone?: () => void
@@ -217,11 +233,12 @@ export interface RegenerateOptions {
 }
 
 export async function regenerateStream(options: RegenerateOptions): Promise<void> {
-  const { messageId, systemPrompt, maxIterations, signal, onEvent, onDone, onError } = options
+  const { messageId, systemPrompt, maxIterations, thinkingMode, signal, onEvent, onDone, onError } = options
   try {
     const body: Record<string, any> = {}
     if (systemPrompt) body.systemPrompt = systemPrompt
     if (maxIterations != null) body.maxIterations = maxIterations
+    if (thinkingMode != null) body.thinkingMode = thinkingMode
 
     const res = await fetch(`${API_PREFIX}/messages/${messageId}/regenerate`, {
       method: 'POST',
@@ -246,6 +263,7 @@ export interface EditMessageOptions {
   content: string
   systemPrompt?: string
   maxIterations?: number
+  thinkingMode?: boolean
   signal?: AbortSignal
   onEvent: (event: SseEvent) => void
   onDone?: () => void
@@ -253,11 +271,12 @@ export interface EditMessageOptions {
 }
 
 export async function editMessageStream(options: EditMessageOptions): Promise<void> {
-  const { messageId, content, systemPrompt, maxIterations, signal, onEvent, onDone, onError } = options
+  const { messageId, content, systemPrompt, maxIterations, thinkingMode, signal, onEvent, onDone, onError } = options
   try {
     const body: Record<string, any> = { content }
     if (systemPrompt) body.systemPrompt = systemPrompt
     if (maxIterations != null) body.maxIterations = maxIterations
+    if (thinkingMode != null) body.thinkingMode = thinkingMode
 
     const res = await fetch(`${API_PREFIX}/messages/${messageId}`, {
       method: 'PUT',
@@ -333,23 +352,29 @@ async function parseSseStream(
           event = { type: 'thinking', text: parsed.thinking }
         } else if (parsed.toolStart !== undefined) {
           // 工具调用开始
-          const ts = parsed.toolStart as { name?: string; toolName?: string; args?: Record<string, unknown>; toolArgs?: Record<string, unknown> }
+          const ts = parsed.toolStart as { name?: string; toolName?: string; args?: Record<string, unknown>; toolArgs?: Record<string, unknown>; toolCallId?: string }
           event = {
             type: 'tool_start',
             toolName: ts.name ?? ts.toolName ?? 'unknown',
             toolArgs: ts.args ?? ts.toolArgs ?? {},
+            toolCallId: ts.toolCallId,
           }
         } else if (parsed.toolEnd !== undefined) {
           // 工具调用结束
-          const te = parsed.toolEnd as { name?: string; output?: string; success?: boolean; error?: string }
+          const te = parsed.toolEnd as { name?: string; output?: string; success?: boolean; error?: string; toolCallId?: string; outputPreview?: string }
           event = {
             type: 'tool_end',
             success: te.success ?? !te.error,
             output: te.output ?? te.error ?? '',
+            outputPreview: te.outputPreview,
+            toolCallId: te.toolCallId,
           }
         } else if (parsed.usage !== undefined) {
           // Token 用量
           event = { type: 'usage', usage: parsed.usage }
+        } else if (parsed.ask_user !== undefined) {
+          // 提问卡片
+          event = { type: 'ask_user', data: parsed.ask_user }
         } else if (parsed.type !== undefined) {
           // 后端已经是标准格式（兼容）
           event = parsed as SseEvent
@@ -624,5 +649,65 @@ export const healthApi = {
   check: async () => {
     const res = await fetch(`${BASE_URL}/health`)
     return res.ok
+  },
+}
+
+// ── Models API ────────────────────────────────────────────────────────────────
+export const modelsApi = {
+  // GET /models/whitelist
+  getWhitelist: async () => {
+    const res = await request<any[]>('/models/whitelist')
+    return res.data ?? []
+  },
+  // GET /models
+  listModels: async () => {
+    const res = await request<any[]>('/models')
+    return res.data ?? []
+  },
+  // POST /models
+  createModel: async (data: any) => {
+    const res = await request<any>('/models', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+    return res.data
+  },
+  // PUT /models/:id
+  updateModel: async (id: string, data: any) => {
+    const res = await request<any>(`/models/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    })
+    return res.data
+  },
+  // DELETE /models/:id
+  deleteModel: async (id: string) => {
+    const res = await request<{ success: boolean }>(`/models/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    })
+    return res.data
+  },
+  // POST /models/:id/test
+  testModel: async (id: string, data: any) => {
+    const res = await request<any>(`/models/${encodeURIComponent(id)}/test`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+    return res.data
+  },
+}
+
+// ── Settings API ───────────────────────────────────────────────────────────────
+export const settingsApi = {
+  get: async () => {
+    const res = await request<Record<string, any>>('/settings')
+    return res.data || {}
+  },
+  update: async (updates: Record<string, any>) => {
+    const res = await request<{ updated: boolean }>('/settings', {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    })
+    return res.data
   },
 }

@@ -26,6 +26,7 @@ export interface Message {
   id?: string          // unique message ID
   role: MessageRole
   content: string
+  reasoningContent?: string // for Deepseek R1 thinking mode
   toolCall?: ToolCall
   toolCallId?: string  // for tool result messages
   toolName?: string    // for tool result messages
@@ -129,6 +130,7 @@ export interface AgentContext {
   logger: Logger
   tokenBudget: number
   requestId?: string
+  signal?: AbortSignal
 }
 
 // ─── AgentContext Factory Options ─────────────────────────────────────────────
@@ -142,4 +144,5 @@ export interface CreateAgentContextOptions {
   logger: Logger
   tokenBudget?: number
   requestId?: string
+  signal?: AbortSignal
 }
