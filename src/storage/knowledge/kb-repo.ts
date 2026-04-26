@@ -1,5 +1,6 @@
 import { getDb } from '../sqlite/db.js'
 import { v4 as uuidv4 } from 'uuid'
+import { estimateTokens } from '../../core/utils/tokens.js'
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -111,7 +112,7 @@ export async function addDocument(
   for (let i = 0; i < chunks.length; i++) {
     const chunkId = uuidv4()
     const content = chunks[i]
-    const tokenCount = Math.ceil(content.length / 4)
+    const tokenCount = estimateTokens(content)
 
     await db.execute({
       sql: `INSERT INTO document_chunks (id, document_id, tenant_id, chunk_index, content, token_count, created_at)
@@ -143,14 +144,15 @@ export async function addDocument(
  */
 export async function searchChunks(
   tenantId: string,
-  query: string,
+  query: any,
   limit = 5,
 ): Promise<SearchResult[]> {
-  if (!query || query.trim().length === 0) return []
+  const queryStr = typeof query === 'string' ? query : ''
+  if (!queryStr || queryStr.trim().length === 0) return []
 
   const db = await getDb()
 
-  const terms = query.trim().split(/\s+/).filter(Boolean)
+  const terms = queryStr.trim().split(/\s+/).filter(Boolean)
 
   // Separate ASCII-safe terms (→ FTS5) from CJK/other terms (→ LIKE)
   const asciiTerms = terms.filter((t) => /^[\x00-\x7F]+$/.test(t))

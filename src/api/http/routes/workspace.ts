@@ -5,6 +5,16 @@ import { getDb } from '../../../storage/sqlite/db.js'
 import fs from 'node:fs'
 import path from 'node:path'
 
+interface FileInfo {
+  name: string
+  path: string
+  size: number
+  type: string
+  mtime: number
+  isImage: boolean
+  workspacePath: string
+}
+
 export async function workspaceRoutes(fastify: FastifyInstance) {
   // GET /workspace/files
   // Returns a tree of files and directories in the current workspace
@@ -65,6 +75,39 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
     }
   })
 
+  // GET /workspace/file/info
+  // 获取文件元数据（不返回内容）
+  fastify.get<{ Querystring: { sessionId?: string; path: string } }>('/workspace/file/info', async (request, reply) => {
+    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const sessionId = request.query.sessionId || 'default'
+    const reqPath = request.query.path
+    if (!reqPath) return reply.code(200).send(fail(40001, 'path is required'))
+
+    try {
+      const safePath = workspaceManager.resolveSafePath({ tenantId, sessionId }, reqPath)
+      if (!fs.existsSync(safePath)) return reply.code(200).send(fail(40400, 'File not found'))
+      
+      const stat = fs.statSync(safePath)
+      const ext = path.extname(safePath).toLowerCase()
+      const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.svg'].includes(ext)
+      const extWithoutDot = ext.slice(1) || 'file'
+      
+      const fileInfo: FileInfo = {
+        name: path.basename(safePath),
+        path: reqPath,
+        size: stat.size,
+        type: extWithoutDot.toUpperCase(),
+        mtime: stat.mtimeMs,
+        isImage,
+        workspacePath: safePath
+      }
+      
+      return reply.code(200).send(success(fileInfo))
+    } catch (e: any) {
+      return reply.code(200).send(fail(50000, `Failed to get file info: ${e.message}`))
+    }
+  })
+
   // GET /workspace/file/content
   fastify.get<{ Querystring: { sessionId?: string; path: string } }>('/workspace/file/content', async (request, reply) => {
     const tenantId = (request as any).authContext?.tenantId ?? 'default'
@@ -75,8 +118,34 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
     try {
       const safePath = workspaceManager.resolveSafePath({ tenantId, sessionId }, reqPath)
       if (!fs.existsSync(safePath)) return reply.code(200).send(fail(40400, 'File not found'))
-      const content = fs.readFileSync(safePath, 'utf-8')
-      return reply.code(200).send(success({ content }))
+      
+      const stat = fs.statSync(safePath)
+      const ext = path.extname(safePath).toLowerCase()
+      const isBinary = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.pdf', '.zip', '.tar', '.gz'].includes(ext)
+      
+      if (isBinary) {
+        // 二进制文件直接返回，大小已经在之前 FileCard 里有显示
+        const content = fs.readFileSync(safePath, 'base64')
+        return reply.code(200).send(success({ content, isBinary, totalSize: stat.size }))
+      } else {
+        // 文本文件只返回前200行或10KB，避免直接输出全部内容
+        let content = fs.readFileSync(safePath, 'utf-8')
+        const originalLength = content.length
+        const originalSize = stat.size
+        
+        // 先限制行数
+        const lines = content.split('\n')
+        if (lines.length > 200) {
+          content = lines.slice(0, 200).join('\n') + '\n\n... (截断，完整内容共 ' + lines.length + ' 行)'
+        }
+        
+        // 再限制大小
+        if (content.length > 10 * 1024) {
+          content = content.slice(0, 10 * 1024) + '\n\n... (截断，完整大小: ' + originalSize + ' 字节)'
+        }
+        
+        return reply.code(200).send(success({ content, isBinary, totalSize: stat.size, originalLength }))
+      }
     } catch (e: any) {
       return reply.code(200).send(fail(50000, `Failed to read file: ${e.message}`))
     }
@@ -121,6 +190,31 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
       return reply.code(200).send(success(true))
     } catch (e: any) {
       return reply.code(200).send(fail(50000, `Failed to rename workspace: ${e.message}`))
+    }
+  })
+
+  // POST /workspace/file
+  // Upload or update a file in the workspace
+  fastify.post<{ Body: { sessionId: string; path: string; content: string; encoding?: 'utf-8' | 'base64' } }>('/workspace/file', async (request, reply) => {
+    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const { sessionId, path: filePath, content, encoding = 'utf-8' } = request.body
+    if (!sessionId || !filePath || content === undefined) {
+      return reply.code(200).send(fail(40001, 'sessionId, path, and content are required'))
+    }
+
+    try {
+      const safePath = workspaceManager.resolveSafePath({ tenantId, sessionId }, filePath)
+      const dir = path.dirname(safePath)
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true })
+      }
+      
+      const buffer = encoding === 'base64' ? Buffer.from(content, 'base64') : content
+      fs.writeFileSync(safePath, buffer)
+      
+      return reply.code(200).send(success({ path: filePath, size: buffer.length }))
+    } catch (e: any) {
+      return reply.code(200).send(fail(50000, `Failed to write file: ${e.message}`))
     }
   })
 }

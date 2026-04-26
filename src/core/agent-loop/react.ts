@@ -2,6 +2,7 @@ import type { LoopStrategy } from './strategy.js'
 import type { AgentContext } from '../agent-context/index.js'
 import type { LLMAdapter, LLMAdapterOptions } from '../llm-adapter/index.js'
 import type { Message } from '../agent-context/index.js'
+import { estimateTokens } from '../utils/tokens.js'
 import { v4 as uuidv4 } from 'uuid'
 
 export interface TokenUsage {
@@ -40,7 +41,7 @@ export class ReActStrategy implements LoopStrategy {
     private readonly options: ReActOptions = {},
   ) {}
 
-  async *run(input: string | null, ctx: AgentContext): AsyncIterable<string> {
+  async *run(input: string | any[] | null, ctx: AgentContext): AsyncIterable<string> {
     const maxIterations = this.options.maxIterations ??
       parseInt(process.env.MAX_ITERATIONS ?? '50', 10)
 
@@ -53,7 +54,7 @@ export class ReActStrategy implements LoopStrategy {
         role: 'user',
         content: input,
         createdAt: Date.now(),
-        tokens: this.llm.countTokens(input),
+        tokens: estimateTokens(input),
         ...(conversationId ? { conversationId } : {}),
       }
       await ctx.history.append(userMessage, ctx)
@@ -83,8 +84,7 @@ export class ReActStrategy implements LoopStrategy {
       const messages = await ctx.history.getHistory(ctx)
 
       // Compute token count from the WINDOWED messages (not raw DB total) — fixes budget check bug
-      const estimateTokens = (m: Message) => m.tokens ?? Math.ceil(m.content.length / 4)
-      const historyTokens = messages.reduce((sum, m) => sum + estimateTokens(m), 0)
+      const historyTokens = messages.reduce((sum, m) => sum + (m.tokens ?? estimateTokens(m.content)), 0)
 
       // Auto-compress when the raw (unwindowed) history crosses 75% of the token budget.
       // This keeps the DB lean and avoids the sliding window silently discarding context.
@@ -94,7 +94,7 @@ export class ReActStrategy implements LoopStrategy {
         ctx.logger.info({ rawTokens, threshold: compressThreshold }, 'Compressing conversation history')
         await ctx.history.compress(ctx, async (msgs) => {
           const content = msgs
-            .map((m) => `${m.role}: ${m.content.slice(0, 200)}`)
+            .map((m) => `${m.role}: ${typeof m.content === 'string' ? m.content.slice(0, 200) : '[Multimodal]'}`)
             .join('\n')
           const resp = await this.llm.complete(
             [
@@ -173,7 +173,7 @@ export class ReActStrategy implements LoopStrategy {
       systemPromptTokens: bd.systemPromptTokens,
       systemToolsTokens: bd.systemToolsTokens,
       skillTokens: bd.skillTokens,
-      messagesTokens: Math.max(0, promptTokens - bd.systemPromptTokens - bd.systemToolsTokens - bd.skillTokens),
+      messagesTokens: historyTokens,
       promptTokens,
       completionTokens,
       totalTokens: promptTokens + completionTokens,
@@ -205,7 +205,7 @@ export class ReActStrategy implements LoopStrategy {
           id: assistantMsgId,
           role: 'assistant',
           content: i === 0 ? response.content || '' : '',
-          reasoningContent: i === 0 ? response.reasoningContent : undefined,
+          reasoningContent: response.reasoningContent != null ? (i === 0 ? response.reasoningContent : '') : undefined,
           toolCall: toolCall,
           toolCallId: toolCall.id,
           createdAt: Date.now(),
@@ -269,7 +269,7 @@ export class ReActStrategy implements LoopStrategy {
           toolCallId: toolCall.id,
           toolName: toolCall.name,
           createdAt: Date.now(),
-          tokens: this.llm.countTokens(String(toolResult.output)),
+          tokens: estimateTokens(toolResult.output),
           ...(conversationId ? { conversationId } : {}),
         }
         await ctx.history.append(toolMsg, ctx)
@@ -308,7 +308,7 @@ export class ReActStrategy implements LoopStrategy {
       const finalUsage: TokenUsage = {
         systemPromptTokens: bd.systemPromptTokens,
         systemToolsTokens: bd.systemToolsTokens,
-        messagesTokens: Math.max(0, finalPromptTokens - bd.systemPromptTokens - bd.systemToolsTokens - bd.skillTokens),
+        messagesTokens: historyTokens,
         skillTokens: bd.skillTokens,
         promptTokens: finalPromptTokens,
         completionTokens: finalCompletionTokens,

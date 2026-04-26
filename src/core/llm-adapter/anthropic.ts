@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { LLMAdapter, LLMResponse, LLMAdapterOptions, LLMStreamChunk } from './types.js'
 import type { Message, Tool } from '../agent-context/index.js'
+import { estimateTokens } from '../utils/tokens.js'
 
 // Anthropic SDK v0.20 does not expose Tool types directly; we use a minimal inline type.
 interface AnthropicTool {
@@ -57,13 +58,58 @@ function messageToAnthropic(
     if (validToolUseIds && msg.toolCallId && !validToolUseIds.has(msg.toolCallId)) {
       return null
     }
-    return {
-      role: 'user',
-      content: [{
+    
+    let toolContent: any
+    if (Array.isArray(msg.content)) {
+      // 如果已经是多模态数组，直接使用
+      toolContent = msg.content
+    } else {
+      // 尝试解析 JSON 查看是否是图片数据
+      let parsed: any = null
+      try {
+        parsed = JSON.parse(String(msg.content))
+        if (parsed.dataUrl) {
+          // 如果是 read_image 的 JSON 结果，转换成多模态格式
+          toolContent = [
+            { type: 'text', text: `图片文件 ${parsed.filename} 已读取：` },
+            { 
+              type: 'image', 
+              source: { 
+                type: 'base64', 
+                media_type: parsed.mimeType || 'image/png', 
+                data: parsed.dataUrl.replace(/^data:.*;base64,/, '') 
+              } 
+            }
+          ]
+        } else {
+          toolContent = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
+        }
+      } catch {
+        // 不是 JSON，直接使用原内容
+        toolContent = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
+      }
+    }
+    
+    // 如果是多模态数组，需要把它包装在 tool_result 中
+    let finalContent: AnthropicContentBlock[]
+    if (Array.isArray(toolContent)) {
+      // 对于多模态内容，Anthropic 的 tool_result 接受数组
+      finalContent = [{
         type: 'tool_result',
         tool_use_id: msg.toolCallId ?? '',
-        content: msg.content,
-      }],
+        content: toolContent as any,
+      }]
+    } else {
+      finalContent = [{
+        type: 'tool_result',
+        tool_use_id: msg.toolCallId ?? '',
+        content: toolContent,
+      }]
+    }
+    
+    return {
+      role: 'user',
+      content: finalContent,
     }
   }
 
@@ -79,7 +125,7 @@ function messageToAnthropic(
     // Also skip if it has no corresponding tool_result (orphaned tool_call)
     if (id && name && validToolResultIds && validToolResultIds.has(id)) {
       if (msg.content) {
-        blocks.push({ type: 'text', text: msg.content })
+        blocks.push({ type: 'text', text: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content) })
       }
       blocks.push({ type: 'tool_use', id, name, input: msg.toolCall.args })
       // Register this id so downstream tool_result blocks are not dropped
@@ -91,7 +137,7 @@ function messageToAnthropic(
         fallbackContent += `\n[Intended to call tool: ${name} with args: ${argsStr}, but was interrupted]`
       }
       if (fallbackContent) {
-        blocks.push({ type: 'text', text: fallbackContent })
+        blocks.push({ type: 'text', text: typeof fallbackContent === 'string' ? fallbackContent : JSON.stringify(fallbackContent) })
       }
     }
 
@@ -295,7 +341,7 @@ export class AnthropicAdapter implements LLMAdapter {
     }
   }
 
-  countTokens(text: string): number {
-    return Math.ceil(text.length / 4)
+  countTokens(content: string | any[]): number {
+    return estimateTokens(content)
   }
 }

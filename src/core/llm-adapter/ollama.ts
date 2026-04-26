@@ -1,5 +1,6 @@
 import type { LLMAdapter, LLMResponse, LLMAdapterOptions, LLMStreamChunk } from './types.js'
 import type { Message } from '../agent-context/index.js'
+import { estimateTokens } from '../utils/tokens.js'
 
 interface OllamaMessage {
   role: string
@@ -23,7 +24,8 @@ export class OllamaAdapter implements LLMAdapter {
       if (msg.role === 'tool') {
         result.push({ role: 'user', content: `Tool result: ${msg.content}` })
       } else if (msg.role !== 'system') {
-        result.push({ role: msg.role, content: msg.content })
+        const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
+        result.push({ role: msg.role, content })
       }
     }
     return result
@@ -134,7 +136,7 @@ export class OllamaAdapter implements LLMAdapter {
     }
   }
 
-  countTokens(text: string): number {
-    return Math.ceil(text.length / 4)
+  countTokens(content: string | any[]): number {
+    return estimateTokens(content)
   }
 }

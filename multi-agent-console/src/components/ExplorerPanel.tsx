@@ -24,6 +24,7 @@ export default function ExplorerPanel() {
   const switchSession = useSessionStore(s => s.switchSession)
   const openSettings = useSessionStore(s => s.openSettings)
   const setFiles = useSessionStore(s => s.setFiles)
+  const lastFilesUpdate = useSessionStore(s => s.lastFilesUpdate)
   const [treeData, setTreeData] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [recentWorkspaces, setRecentWorkspaces] = useState<any[]>([])
@@ -94,7 +95,7 @@ export default function ExplorerPanel() {
   useEffect(() => {
     fetchFiles()
     fetchRecent()
-  }, [activeSessionId])
+  }, [activeSessionId, lastFilesUpdate])
 
   const handleDeleteWorkspace = async (e: any, name: string) => {
     e.stopPropagation()

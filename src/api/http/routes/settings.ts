@@ -79,6 +79,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       MAX_ITERATIONS: parseInt(env.MAX_ITERATIONS || process.env.MAX_ITERATIONS || '50', 10),
       TOKEN_BUDGET: parseInt(env.TOKEN_BUDGET || process.env.TOKEN_BUDGET || '80000', 10),
       SKILLS_ROOT: env.SKILLS_ROOT || process.env.SKILLS_ROOT || './skills',
+      QA_LOG_ENABLED: env.QA_LOG_ENABLED === 'true' || process.env.QA_LOG_ENABLED === 'true',
     }
 
     return reply.code(200).send(success(settings))

@@ -16,6 +16,7 @@ export function createAgentContext(options: CreateAgentContextOptions): AgentCon
     tenantId,
     sessionId: options.sessionId,
     workspaceDir,
+    workspacePaths: options.workspacePaths,
     tools: options.tools,
     memory: options.memory,
     history: options.history,
@@ -23,5 +24,6 @@ export function createAgentContext(options: CreateAgentContextOptions): AgentCon
     tokenBudget: options.tokenBudget ?? parseInt(process.env.TOKEN_BUDGET ?? '60000', 10),
     requestId: options.requestId,
     signal: options.signal,
+    inheritContext: options.inheritContext,
   }
 }

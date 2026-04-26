@@ -81,12 +81,82 @@ export async function conversationRoutes(fastify: FastifyInstance) {
       return reply.code(200).send(fail(40400, `Conversation "${conversationId}" not found`))
     }
 
-    // if paginated, the data wrapper is the array, but here we want to return the whole object maybe?
-    // According to requirements: list + pagination is standard. So we can just paginate messages.
-    // Or we can just return success({ conversationId, messageCount: messages.length, messages }) if not paginated.
-    // Let's just return paginateArray(messages, current, pageSize) for standard list response.
-    // Or we can construct a custom paginated response. But standard says data is array for list.
-    // To preserve the payload structure, we can just return the messages array.
     return reply.code(200).send(paginateArray(messages, current, pageSize))
+  })
+
+  // POST /conversation/compress  — 压缩当前会话历史
+  fastify.post<{ Querystring: { sessionId: string } }>('/conversation/compress', async (request, reply) => {
+    const { sessionId } = request.query
+    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+
+    if (!sessionId) {
+      return reply.code(200).send(fail(40001, '参数验证失败：sessionId 不能为空'))
+    }
+
+    const messages = await history.getHistory({ tenantId, sessionId })
+    if (messages.length <= 1) {
+      return reply.code(200).send(success({ success: true, message: '消息数量过少，无需压缩' }))
+    }
+
+    const originalTokens = messages.reduce((sum, m) => sum + (m.tokens || 0) + (m.usage?.totalTokens || 0), 0)
+
+    // 动态导入 createLLMAdapter 避免循环依赖
+    const { createLLMAdapter } = await import('../../../core/llm-adapter/factory.js')
+    const llm = createLLMAdapter()
+
+    const prompt = `请你将以下对话历史进行智能压缩和提炼，提取出核心上下文、已确认的结论、关键事实、未完成的任务等关键信息，形成一份精简的上下文摘要。这会作为后续对话的唯一背景信息，因此请务必保证信息准确。
+以下是对话历史：
+${messages.map((m) => `[${m.role}]: ${m.content}`).join('\n\n')}`
+
+    try {
+      const response = await llm.complete([{ role: 'user', content: prompt, tokens: 0, createdAt: Date.now() }], {
+        model: llm.model,
+        systemPrompt: '你是一个专业的上下文压缩和摘要助手，擅长在保留核心语义和关键信息的前提下极大地缩减文本长度。',
+      })
+
+      // 覆盖历史
+      await history.clear({ tenantId, sessionId })
+      const summaryMsg = {
+        role: 'system' as const,
+        content: `【历史上下文摘要】\n${response.content}`,
+        tokens: response.completionTokens,
+        usage: {
+          promptTokens: response.promptTokens,
+          completionTokens: response.completionTokens,
+          totalTokens: response.promptTokens + response.completionTokens,
+        }
+      }
+      await history.append(summaryMsg, { tenantId, sessionId })
+      
+      // 增加一条 assistant 消息作为反馈
+      await history.append({
+        role: 'assistant' as const,
+        content: '我已经为您完成了上下文压缩，并保留了核心摘要信息。您可以继续与我对话。',
+        reasoningContent: '',
+        tokens: 20
+      }, { tenantId, sessionId })
+
+      return reply.code(200).send(success({ 
+        success: true, 
+        message: '压缩成功',
+        stats: {
+          originalTokens,
+          compressedTokens: response.completionTokens,
+          ratio: originalTokens > 0 ? (response.completionTokens / originalTokens * 100).toFixed(1) + '%' : '0%'
+        },
+        usage: {
+          promptTokens: response.promptTokens,
+          completionTokens: response.completionTokens,
+          totalTokens: response.promptTokens + response.completionTokens,
+          systemPromptTokens: 0,
+          messagesTokens: 0,
+          skillTokens: 0,
+          systemToolsTokens: 0,
+        }
+      }))
+    } catch (e: any) {
+      request.log.error(`压缩会话 ${sessionId} 失败: ${e.message}`)
+      return reply.code(200).send(fail(50000, `压缩失败: ${e.message}`))
+    }
   })
 }

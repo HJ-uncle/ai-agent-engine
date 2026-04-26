@@ -177,11 +177,14 @@ export interface ChatOptions {
   systemPrompt?: string
   maxAskUserCount?: number
   thinkingMode?: boolean
+  inheritContext?: boolean
+  workspacePaths?: string[]
   toolResponse?: {
     toolCallId: string
     name: string
     output: string
   }
+  attachments?: Array<{ name: string; content: string; type: string; encoding?: 'utf-8' | 'base64' }>
   signal?: AbortSignal
   onEvent?: (event: SseEvent) => void
   onDone?: () => void
@@ -190,7 +193,7 @@ export interface ChatOptions {
 
 export async function chatStream(options: ChatOptions): Promise<void> {
   const {
-    message, sessionId, agentId, systemPrompt, maxAskUserCount, thinkingMode, toolResponse,
+    message, sessionId, agentId, systemPrompt, maxAskUserCount, thinkingMode, inheritContext, workspacePaths, toolResponse, attachments,
     signal, onEvent, onDone, onError,
   } = options
 
@@ -200,7 +203,10 @@ export async function chatStream(options: ChatOptions): Promise<void> {
     if (systemPrompt) body.systemPrompt = systemPrompt
     if (maxAskUserCount != null) body.maxAskUserCount = maxAskUserCount
     if (thinkingMode != null) body.thinkingMode = thinkingMode
+    if (inheritContext != null) body.inheritContext = inheritContext
+    if (workspacePaths) body.workspacePaths = workspacePaths
     if (toolResponse) body.toolResponse = toolResponse
+    if (attachments) body.attachments = attachments
 
     const res = await fetch(`${API_PREFIX}/chat`, {
       method: 'POST',
@@ -624,11 +630,17 @@ export const workspaceApi = {
     const res = await request<Array<{ name: string; path: string; hasSession?: boolean }>>(`/workspace/recent`)
     return res.data ?? []
   },
+  // GET /workspace/file/info
+  getFileInfo: async (sessionId: string, path: string) => {
+    const qs = `?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`
+    const res = await request<{ name: string; path: string; size: number; type: string; mtime: number; isImage: boolean; workspacePath: string }>(`/workspace/file/info${qs}`)
+    return res.data
+  },
   // GET /workspace/file/content
   getFileContent: async (sessionId: string, path: string) => {
     const qs = `?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`
-    const res = await request<{ content: string }>(`/workspace/file/content${qs}`)
-    return res.data?.content ?? ''
+    const res = await request<{ content: string; isBinary?: boolean }>(`/workspace/file/content${qs}`)
+    return res.data
   },
   // DELETE /workspace/recent/:sessionId
   deleteRecent: async (sessionId: string) => {
@@ -639,6 +651,13 @@ export const workspaceApi = {
     const res = await request<{ success: boolean }>('/workspace/rename', {
       method: 'POST',
       body: JSON.stringify({ oldName, newName })
+    })
+    return res.data
+  },
+  uploadFile: async (sessionId: string, path: string, content: string, encoding: 'utf-8' | 'base64' = 'utf-8') => {
+    const res = await request<{ path: string; size: number }>('/workspace/file', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId, path, content, encoding })
     })
     return res.data
   }

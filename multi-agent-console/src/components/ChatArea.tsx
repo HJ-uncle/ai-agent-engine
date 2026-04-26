@@ -5,10 +5,9 @@ import React, {
   useState,
   useLayoutEffect,
 } from "react";
-import { Button, Tooltip, Popconfirm, Input, Select, theme, Switch } from "antd";
+import { Button, Tooltip, Popconfirm, Input, Select, Switch, message, Modal } from "antd";
 import {
   SendOutlined,
-  StopOutlined,
   ReloadOutlined,
   DeleteOutlined,
   CopyOutlined,
@@ -24,10 +23,18 @@ import {
   WarningFilled,
   BulbOutlined,
   ToolOutlined,
-  CheckCircleOutlined,
   CloseCircleOutlined,
   UpOutlined,
   DownOutlined,
+  PaperClipOutlined,
+  FileOutlined,
+  FileImageOutlined,
+  CloseOutlined,
+  FileTextOutlined,
+  DownloadOutlined,
+  SettingOutlined,
+  PlusOutlined,
+  LinkOutlined,
 } from "@ant-design/icons";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -39,7 +46,7 @@ import "highlight.js/styles/github-dark.css";
 import { useSessionStore } from "../store/session";
 import { useAgentStore } from "../store/agents";
 import { useChat } from "../hooks/useChat";
-import { modelsApi, settingsApi } from "../api";
+import { modelsApi, settingsApi, workspaceApi } from "../api";
 import type { Message, TokenUsage, ThinkingStep } from "../types";
 import styles from "./ChatArea.module.css";
 import dayjs from "dayjs";
@@ -246,6 +253,226 @@ function fmtToken(n: number) {
   return n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n ?? 0);
 }
 
+// ── File Card Component ──────────────────────────────────────────────────────
+function FileCard({ file, onCopyPath }: { file: any, onCopyPath: (path: string) => void }) {
+  const { activeSessionId } = useSessionStore();
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [fileInfo, setFileInfo] = useState<any>(null);
+  const [isLoadingInfo, setIsLoadingInfo] = useState(false);
+
+  // 获取文件元数据
+  useEffect(() => {
+    const loadFileInfo = async () => {
+      try {
+        setIsLoadingInfo(true);
+        const info = await workspaceApi.getFileInfo(activeSessionId, file.name);
+        setFileInfo(info);
+      } catch (err) {
+        // 静默失败，继续使用默认显示
+        console.error('Failed to load file info:', err);
+      } finally {
+        setIsLoadingInfo(false);
+      }
+    };
+
+    loadFileInfo();
+  }, [file.name, activeSessionId]);
+
+  // 格式化文件大小
+  const formatFileSize = (bytes: number): string => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
+  };
+
+  // 格式化时间
+  const formatTime = (timestamp: number): string => {
+    return new Date(timestamp).toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  // 获取文件图标
+  const getFileIcon = (ext?: string, isImage?: boolean) => {
+    if (isImage) return <FileImageOutlined style={{ fontSize: 24, color: '#a855f7' }} />;
+    return <FileTextOutlined style={{ fontSize: 24, color: '#0e639c' }} />;
+  };
+
+  const handleDownload = async () => {
+    setIsDownloading(true);
+    try {
+      const data = await workspaceApi.getFileContent(activeSessionId, file.name);
+      if (!data) throw new Error('未获取到文件内容');
+      
+      const { content, isBinary } = data;
+      let blob;
+      
+      if (isBinary) {
+        const byteCharacters = atob(content);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        blob = new Blob([byteArray], { type: file.type || 'application/octet-stream' });
+      } else {
+        blob = new Blob([content], { type: file.type || 'text/plain' });
+      }
+
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = file.name;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      
+      message.success(`已开始下载：${file.name}`);
+    } catch (err: any) {
+      message.error(`下载失败：${err.message}`);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
+  // 处理图片链接点击
+  const handleImageLinkClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (fileInfo?.workspacePath) {
+      // 尝试用 file:// 协议打开
+      window.open(`file://${fileInfo.workspacePath}`, '_blank');
+    }
+  };
+
+  const displayInfo = fileInfo || {
+    name: file.name,
+    type: file.type || '文件',
+    size: file.size || 0,
+    isImage: false,
+    mtime: Date.now()
+  };
+
+  return (
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8,
+      padding: '12px 14px',
+      background: '#161b22',
+      border: '1px solid #30363d',
+      borderRadius: 8,
+      marginTop: 8,
+      maxWidth: 420,
+      transition: 'border-color 0.2s, box-shadow 0.2s'
+    }} onMouseEnter={(e) => {
+      e.currentTarget.style.borderColor = '#58a6ff';
+      e.currentTarget.style.boxShadow = '0 0 0 1px rgba(88, 166, 255, 0.15)';
+    }} onMouseLeave={(e) => {
+      e.currentTarget.style.borderColor = '#30363d';
+      e.currentTarget.style.boxShadow = 'none';
+    }}>
+      {/* 上半部分：文件名和图标 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        {isLoadingInfo ? (
+          <div style={{ width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <LoadingOutlined style={{ fontSize: 16, color: '#8b949e' }} />
+          </div>
+        ) : (
+          getFileIcon(displayInfo.type, displayInfo.isImage)
+        )}
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <div style={{ 
+            fontSize: 14, 
+            fontWeight: 600, 
+            color: '#e6edf3',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis'
+          }}>
+            {displayInfo.name}
+          </div>
+          <div style={{ fontSize: 11, color: '#8b949e' }}>
+            {displayInfo.type}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 2 }}>
+          <Tooltip title="下载">
+            <Button 
+              type="text" 
+              size="small" 
+              loading={isDownloading}
+              icon={<DownloadOutlined />} 
+              onClick={handleDownload}
+              style={{ color: '#8b949e' }}
+            />
+          </Tooltip>
+          <Tooltip title="复制文件名">
+            <Button 
+              type="text" 
+              size="small" 
+              icon={<CopyOutlined />} 
+              onClick={() => onCopyPath(file.name)}
+              style={{ color: '#8b949e' }}
+            />
+          </Tooltip>
+        </div>
+      </div>
+
+      {/* 下半部分：元数据 */}
+      {!isLoadingInfo && (
+        <div style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 12,
+          paddingTop: 4,
+          borderTop: '1px solid #21262d'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#8b949e' }}>
+            <FileTextOutlined style={{ fontSize: 12 }} />
+            <span>{formatFileSize(displayInfo.size)}</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#8b949e' }}>
+            <ClockCircleOutlined style={{ fontSize: 12 }} />
+            <span>{formatTime(displayInfo.mtime)}</span>
+          </div>
+
+          {/* 图片文件特殊处理：显示工作区地址链接 */}
+          {displayInfo.isImage && displayInfo.workspacePath && (
+            <div style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: 4, 
+              fontSize: 11, 
+              color: '#58a6ff',
+              cursor: 'pointer',
+              flex: 1,
+              minWidth: 0,
+              overflow: 'hidden'
+            }} onClick={handleImageLinkClick}>
+              <LinkOutlined style={{ fontSize: 12 }} />
+              <span style={{ 
+                whiteSpace: 'nowrap', 
+                overflow: 'hidden', 
+                textOverflow: 'ellipsis',
+                textDecoration: 'underline'
+              }}>
+                {displayInfo.workspacePath}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Token badge ────────────────────────────────────────────────────────────────
 function TokenDetailsContent({
   usage,
@@ -331,7 +558,34 @@ function TokenDetailsContent({
           display: "flex",
           justifyContent: "space-between",
           paddingTop: 8,
+          marginTop: 4,
           borderTop: "1px solid #21262d",
+          fontSize: 11,
+        }}
+      >
+        <span style={{ color: "#8b949e" }}>输入 (Prompt)</span>
+        <span style={{ color: "#e6edf3", fontWeight: 600 }}>
+          {fmtToken(usage.promptTokens ?? 0)}
+        </span>
+      </div>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          paddingTop: 4,
+          fontSize: 11,
+        }}
+      >
+        <span style={{ color: "#8b949e" }}>输出 (Completion)</span>
+        <span style={{ color: "#e6edf3", fontWeight: 600 }}>
+          {fmtToken(usage.completionTokens ?? 0)}
+        </span>
+      </div>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          paddingTop: 4,
           fontWeight: 700,
           fontSize: 12,
         }}
@@ -727,8 +981,13 @@ function WelcomeScreen({
         {agentName ? `你好，我是 ${agentName}` : "你好，有什么可以帮你？"}
       </h2>
       <p className={styles.welcomeSub}>
-        基于 Agent Engine 驱动，支持工具调用、知识库检索
+        基于 Agent Engine 驱动，支持工具调用、知识库检索、多工作区绑定及附件处理
       </p>
+      <div style={{ fontSize: 12, color: "#8b949e", marginBottom: 24, display: "flex", gap: 16, justifyContent: "center" }}>
+        <span>📎 支持所有文件格式上传</span>
+        <span>🖱️ 支持拖拽或粘贴附件</span>
+        <span>📂 支持绑定多个本地工作区</span>
+      </div>
       <div className={styles.promptGrid}>
         {WELCOME_PROMPTS.map((p) => (
           <div
@@ -752,24 +1011,25 @@ function MessageItem({
   isLast,
   onRegenerate,
   onEdit,
-  onReply,
   onToolReply,
-  nextMessage,
 }: {
   msg: Message;
   isLast?: boolean;
   onRegenerate?: () => void;
   onEdit?: (newContent: string) => void;
-  onReply?: (content: string) => void;
   onToolReply?: (
     msgId: string,
     toolCallId: string,
     toolName: string,
     content: string,
   ) => void;
-  nextMessage?: Message;
 }) {
-  const { deleteMessage, files, setActiveFile } = useSessionStore();
+  const {
+    activeSessionId,
+    deleteMessage,
+    files,
+    setActiveFile,
+  } = useSessionStore();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const isUser = msg.role === "user";
@@ -777,14 +1037,180 @@ function MessageItem({
 
   const timeStr = dayjs(msg.createdAt).format("YYYY-MM-DD HH:mm:ss");
 
+  const getMessageText = (content: string | any[]): string => {
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      return content
+        .filter((item) => item.type === "text")
+        .map((item) => item.text)
+        .join("\n");
+    }
+    return "";
+  };
+
   const startEdit = () => {
-    setDraft(msg.content);
+    setDraft(getMessageText(msg.content));
     setEditing(true);
   };
   const cancelEdit = () => setEditing(false);
   const confirmEdit = () => {
-    if (draft.trim() && draft !== msg.content) onEdit?.(draft.trim());
+    const text = getMessageText(msg.content);
+    if (draft.trim() && draft !== text) onEdit?.(draft.trim());
     setEditing(false);
+  };
+
+  const handleCopyPath = (fileName: string) => {
+    navigator.clipboard.writeText(fileName);
+    message.success("路径已复制到剪贴板");
+  };
+
+  const renderContent = () => {
+    if (typeof msg.content === "string") {
+      return isUser ? (
+        <span style={{ whiteSpace: "pre-wrap" }}>{msg.content}</span>
+      ) : (
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm, remarkMath]}
+          rehypePlugins={[rehypeKatex, rehypeHighlight]}
+          components={markdownComponents}
+        >
+          {msg.content || (isStreaming ? "▌" : "")}
+        </ReactMarkdown>
+      );
+    }
+
+    if (Array.isArray(msg.content)) {
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {msg.content.map((item, i) => {
+            if (item.type === "text") {
+              return isUser ? (
+                <span key={i} style={{ whiteSpace: "pre-wrap" }}>
+                  {item.text}
+                </span>
+              ) : (
+                <ReactMarkdown
+                  key={i}
+                  remarkPlugins={[remarkGfm, remarkMath]}
+                  rehypePlugins={[rehypeKatex, rehypeHighlight]}
+                  components={markdownComponents}
+                >
+                  {item.text}
+                </ReactMarkdown>
+              );
+            }
+            if (item.type === "image_url") {
+              return (
+                <div key={i} style={{ marginTop: 4 }}>
+                  <img
+                    src={item.image_url.url}
+                    alt="attachment"
+                    style={{
+                      maxWidth: "100%",
+                      maxHeight: 400,
+                      borderRadius: 4,
+                      border: "1px solid #30363d",
+                      cursor: "zoom-in",
+                    }}
+                    onClick={() => window.open(item.image_url.url, "_blank")}
+                  />
+                  {item.metadata?.name && (
+                    <div style={{ fontSize: 11, color: '#8b949e', marginTop: 4 }}>
+                      {item.metadata.name}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+            if (item.type === "file") {
+              return (
+                <FileCard 
+                  key={i} 
+                  file={item.file} 
+                  onCopyPath={handleCopyPath} 
+                />
+              );
+            }
+            return null;
+          })}
+          {!isUser && isStreaming && <span>▌</span>}
+        </div>
+      );
+    }
+
+    return null;
+  };
+
+  const markdownComponents = {
+    code({ node, className, children, ...props }: any) {
+      const isBlock = className?.includes("language-");
+      const content = String(children).trim();
+      const isFilePath =
+        !isBlock &&
+        files.some((f) => f === content || f.endsWith("/" + content));
+
+      if (isBlock) {
+        return (
+          <div className={styles.codeBlock}>
+            <div className={styles.codeHeader}>
+              <span className={styles.codeLang}>
+                {className?.replace("language-", "") ?? "code"}
+              </span>
+              <CopyBtn text={String(children)} />
+            </div>
+            <code className={className} {...props}>
+              {children}
+            </code>
+          </div>
+        );
+      }
+
+      return (
+        <code
+          className={
+            isFilePath
+              ? `${styles.inlineCode} ${styles.fileLink}`
+              : styles.inlineCode
+          }
+          onClick={() => {
+            if (isFilePath) {
+              const fullPath = files.find(
+                (f) => f === content || f.endsWith("/" + content),
+              );
+              if (fullPath) setActiveFile(fullPath);
+            }
+          }}
+          {...props}
+        >
+          {children}
+        </code>
+      );
+    },
+    td({ node, children, ...props }: any) {
+      const content = String(children).trim();
+      const isFilePath = files.some(
+        (f) => f === content || f.endsWith("/" + content),
+      );
+
+      if (isFilePath) {
+        return (
+          <td {...props}>
+            <span
+              className={styles.fileLink}
+              onClick={() => {
+                const fullPath = files.find(
+                  (f) => f === content || f.endsWith("/" + content),
+                );
+                if (fullPath) setActiveFile(fullPath);
+              }}
+            >
+              {children}
+            </span>
+          </td>
+        );
+      }
+      return <td {...props}>{children}</td>;
+    },
   };
 
   return (
@@ -850,95 +1276,9 @@ function MessageItem({
           <div
             className={`${styles.content} ${isUser ? styles.userContent : styles.aiContent}`}
           >
-            {isUser ? (
-              <span style={{ whiteSpace: "pre-wrap" }}>{msg.content}</span>
-            ) : (
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkMath]}
-                rehypePlugins={[rehypeKatex, rehypeHighlight]}
-                components={{
-                  code({ node, className, children, ...props }: any) {
-                    const isBlock = className?.includes("language-");
-                    const content = String(children).trim();
-                    const isFilePath =
-                      !isBlock &&
-                      files.some(
-                        (f) => f === content || f.endsWith("/" + content),
-                      );
-
-                    if (isBlock) {
-                      return (
-                        <div className={styles.codeBlock}>
-                          <div className={styles.codeHeader}>
-                            <span className={styles.codeLang}>
-                              {className?.replace("language-", "") ?? "code"}
-                            </span>
-                            <CopyBtn text={String(children)} />
-                          </div>
-                          <code className={className} {...props}>
-                            {children}
-                          </code>
-                        </div>
-                      );
-                    }
-
-                    return (
-                      <code
-                        className={
-                          isFilePath
-                            ? `${styles.inlineCode} ${styles.fileLink}`
-                            : styles.inlineCode
-                        }
-                        onClick={() => {
-                          if (isFilePath) {
-                            const fullPath = files.find(
-                              (f) => f === content || f.endsWith("/" + content),
-                            );
-                            if (fullPath) setActiveFile(fullPath);
-                          }
-                        }}
-                        {...props}
-                      >
-                        {children}
-                      </code>
-                    );
-                  },
-                  td({ node, children, ...props }: any) {
-                    const content = String(children).trim();
-                    const isFilePath = files.some(
-                      (f) => f === content || f.endsWith("/" + content),
-                    );
-
-                    if (isFilePath) {
-                      return (
-                        <td {...props}>
-                          <span
-                            className={styles.fileLink}
-                            onClick={() => {
-                              const fullPath = files.find(
-                                (f) =>
-                                  f === content || f.endsWith("/" + content),
-                              );
-                              if (fullPath) setActiveFile(fullPath);
-                            }}
-                          >
-                            {children}
-                          </span>
-                        </td>
-                      );
-                    }
-                    return <td {...props}>{children}</td>;
-                  },
-                }}
-              >
-                {msg.content || (isStreaming ? "▌" : "")}
-              </ReactMarkdown>
-            )}
+            {renderContent()}
           </div>
         ) : null}
-
-        {/* Interactive Card if ask_user was called */}
-        {/* We no longer render it here, it's rendered inside the ThinkingPanel! */}
 
         {/* Footer */}
         {!editing && (
@@ -959,7 +1299,7 @@ function MessageItem({
             )}
 
             <div className={styles.actions}>
-              <CopyBtn text={msg.content} />
+              <CopyBtn text={getMessageText(msg.content)} />
               {!isUser && onRegenerate && (
                 <Tooltip title="重新生成">
                   <Button
@@ -984,7 +1324,7 @@ function MessageItem({
               )}
               <Popconfirm
                 title="删除这条消息？"
-                onConfirm={() => deleteMessage(msg.id)}
+                onConfirm={() => deleteMessage(activeSessionId, msg.id)}
                 okText="删除"
                 cancelText="取消"
                 okButtonProps={{ danger: true }}
@@ -1015,8 +1355,11 @@ export default function ChatArea() {
     usageMap,
     clearMessages,
     updateSessionAgent,
+    setInheritContext,
+    updateSession,
     thinkingMode,
     setThinkingMode,
+    triggerFilesRefresh,
   } = useSessionStore();
   const { agents } = useAgentStore();
   const {
@@ -1060,10 +1403,138 @@ export default function ChatArea() {
   const isThinkingSupported = supportedModels.includes(activeModelId);
 
   const [inputValue, setInputValue] = useState("");
+  const [attachments, setAttachments] = useState<File[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isCompressing, setIsCompressing] = useState(false);
+  const compressStats = session?.compressStats || null;
   const scrollRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const atBottomRef = useRef(true);
+  const lastActionRef = useRef<number>(0);
+
+  const BASE_URL = (import.meta as any).env?.VITE_API_URL ?? "";
+
+  const debounceCheck = useCallback((): boolean => {
+    const now = Date.now();
+    if (now - lastActionRef.current < 200) return false;
+    lastActionRef.current = now;
+    return true;
+  }, []);
+
+  const logOperation = useCallback((op: string, details: Record<string, unknown>) => {
+    console.log(`[SessionOp] ${op}`, { sessionId: activeSessionId, timestamp: new Date().toISOString(), ...details });
+  }, [activeSessionId]);
+
+  const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
+
+  const addFiles = useCallback((files: File[]) => {
+    const validFiles = files.filter(file => {
+      if (file.size > MAX_FILE_SIZE) {
+        message.error(`文件 ${file.name} 超过 100MB 限制`);
+        return false;
+      }
+      return true;
+    });
+    setAttachments(prev => [...prev, ...validFiles]);
+  }, []);
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      addFiles(Array.from(e.target.files));
+      e.target.value = '';
+    }
+  };
+
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (items) {
+      const files: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].kind === 'file') {
+          const file = items[i].getAsFile();
+          if (file) files.push(file);
+        }
+      }
+      if (files.length > 0) {
+        addFiles(files);
+      }
+    }
+  }, [addFiles]);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) {
+      addFiles(files);
+    }
+  }, [addFiles]);
+
+  const removeAttachment = (index: number) => {
+    setAttachments(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const [isWorkspaceModalOpen, setIsWorkspaceModalOpen] = useState(false);
+  const [newWorkspacePath, setNewWorkspacePath] = useState("");
+
+  const handleAddWorkspace = () => {
+    if (!newWorkspacePath.trim()) return;
+    const currentPaths = session?.workspacePaths || [];
+    if (currentPaths.includes(newWorkspacePath.trim())) {
+      message.warning("该路径已存在");
+      return;
+    }
+    updateSession(activeSessionId, {
+      workspacePaths: [...currentPaths, newWorkspacePath.trim()],
+    });
+    setNewWorkspacePath("");
+    message.success("工作区路径已添加");
+  };
+
+  const handleRemoveWorkspace = (pathToRemove: string) => {
+    const currentPaths = session?.workspacePaths || [];
+    updateSession(activeSessionId, {
+      workspacePaths: currentPaths.filter((p) => p !== pathToRemove),
+    });
+    message.success("工作区路径已移除");
+  };
+
+  const handleCompress = async () => {
+    if (messages.length <= 1 || isCompressing || isStreaming) return;
+    setIsCompressing(true);
+    const hide = message.loading("正在用 AI 压缩上下文...", 0);
+    try {
+      const res = await fetch(
+        `${BASE_URL}/api/v1/conversation/compress?sessionId=${encodeURIComponent(
+          activeSessionId,
+        )}`,
+        {
+          method: "POST",
+        },
+      );
+      const resData = await res.json();
+      if (resData.code === 200 && resData.data?.success) {
+        if (resData.data.stats) {
+          updateSession(activeSessionId, { compressStats: resData.data.stats });
+          message.success(`压缩成功！从 ${resData.data.stats.originalTokens} 压缩到 ${resData.data.stats.compressedTokens} Tokens (比例 ${resData.data.stats.ratio})`);
+        } else {
+          message.success("上下文压缩成功！");
+        }
+        await fetchHistory(activeSessionId);
+        // Update usageMap with compression usage if available
+        if (resData.data.usage) {
+          useSessionStore.getState().updateUsage(activeSessionId, resData.data.usage);
+        }
+      } else {
+        message.error(`压缩失败: ${resData.message || "未知错误"}`);
+      }
+    } catch (err: any) {
+      message.error(`压缩失败: ${err.message}`);
+    } finally {
+      hide();
+      setIsCompressing(false);
+    }
+  };
 
   // 检查是否正在等待用户在 ask_user 卡片中回复
   const isWaitingForUser = React.useMemo(() => {
@@ -1132,44 +1603,136 @@ export default function ChatArea() {
     scrollToBottom(true);
   }, [activeSessionId, scrollToBottom]);
 
+  const readFileAsBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        const base64 = result.split(",")[1];
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const readFileAsText = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsText(file);
+    });
+  };
+
   const sendMessage = useCallback(
     async (content: string) => {
-      if (!content.trim() || isInputDisabled) return;
+      if ((!content.trim() && attachments.length === 0) || isInputDisabled) return;
       setInputValue("");
+      const currentAttachments = [...attachments];
+      setAttachments([]);
       setIsStreaming(true);
       atBottomRef.current = true;
       scrollToBottom();
+      
       try {
-        await send(content, activeSessionId);
+        const userContentParts: any[] = [];
+        if (content.trim()) {
+          userContentParts.push({ type: "text", text: content });
+        }
+
+        const attachmentData: Array<{ name: string; content: string; type: string; encoding?: 'utf-8' | 'base64' }> = [];
+        
+        if (currentAttachments.length > 0) {
+          const hide = message.loading("正在处理附件...", 0);
+          try {
+            const uploadedFiles = [];
+            for (const file of currentAttachments) {
+              const isImage = file.type.startsWith("image/");
+              const fileContent = isImage ? await readFileAsBase64(file) : await readFileAsText(file);
+              
+              // 1. Upload to workspace
+              await workspaceApi.uploadFile(activeSessionId, file.name, fileContent, isImage ? "base64" : "utf-8");
+              uploadedFiles.push(file.name);
+              
+              // 2. Prepare for AI
+              attachmentData.push({
+                name: file.name,
+                content: fileContent,
+                type: file.type,
+                encoding: isImage ? "base64" : "utf-8"
+              });
+
+              if (isImage) {
+                userContentParts.push({
+                  type: "image_url",
+                  image_url: { url: `data:${file.type};base64,${fileContent}` },
+                  metadata: { name: file.name, size: file.size }
+                });
+              } else {
+                userContentParts.push({
+                  type: "file",
+                  file: { name: file.name, type: file.type, content: fileContent }
+                });
+                // Also add as text for non-multimodal models
+                userContentParts.push({ 
+                  type: "text", 
+                  text: `\n\n--- 文件: ${file.name} ---\n${fileContent}\n--- 结束 ---` 
+                });
+              }
+            }
+            triggerFilesRefresh();
+            hide();
+          } catch (err: any) {
+            hide();
+            message.error(`处理附件失败: ${err.message}`);
+          }
+        }
+
+        // If it's only text, send as string to maintain compatibility, 
+        // otherwise send as array of parts.
+        const finalContent = userContentParts.length === 1 && userContentParts[0].type === "text" 
+          ? userContentParts[0].text 
+          : userContentParts;
+
+        await send(finalContent, activeSessionId, attachmentData);
       } finally {
         setIsStreaming(false);
         setTimeout(() => scrollToBottom(true), 100);
       }
     },
-    [activeSessionId, isInputDisabled, send, scrollToBottom],
+    [activeSessionId, isInputDisabled, send, scrollToBottom, attachments],
   );
 
   const handleRegenerate = useCallback(() => {
-    if (isStreaming) return;
+    if (isStreaming || !debounceCheck()) return;
+    logOperation('regenerate', { action: 'start' });
     setIsStreaming(true);
     atBottomRef.current = true;
-    regenerate(activeSessionId).finally(() => {
-      setIsStreaming(false);
-      setTimeout(() => scrollToBottom(true), 100);
-    });
-  }, [activeSessionId, isStreaming, regenerate, scrollToBottom]);
-
-  const handleEditAndResend = useCallback(
-    (msgId: string, newContent: string) => {
-      if (isStreaming) return;
-      setIsStreaming(true);
-      atBottomRef.current = true;
-      editAndResend(msgId, newContent, activeSessionId).finally(() => {
+    regenerate(activeSessionId)
+      .then(() => logOperation('regenerate', { action: 'done' }))
+      .catch((err) => logOperation('regenerate', { action: 'error', error: err.message }))
+      .finally(() => {
         setIsStreaming(false);
         setTimeout(() => scrollToBottom(true), 100);
       });
+  }, [activeSessionId, isStreaming, regenerate, scrollToBottom, debounceCheck, logOperation]);
+
+  const handleEditAndResend = useCallback(
+    (msgId: string, newContent: string) => {
+      if (isStreaming || !debounceCheck()) return;
+      logOperation('editAndResend', { action: 'start', msgId });
+      setIsStreaming(true);
+      atBottomRef.current = true;
+      editAndResend(msgId, newContent, activeSessionId)
+        .then(() => logOperation('editAndResend', { action: 'done', msgId }))
+        .catch((err) => logOperation('editAndResend', { action: 'error', msgId, error: err.message }))
+        .finally(() => {
+          setIsStreaming(false);
+          setTimeout(() => scrollToBottom(true), 100);
+        });
     },
-    [activeSessionId, isStreaming, editAndResend, scrollToBottom],
+    [activeSessionId, isStreaming, editAndResend, scrollToBottom, debounceCheck, logOperation],
   );
 
   const handleToolReply = useCallback(
@@ -1246,14 +1809,70 @@ export default function ChatArea() {
             styles={{ popup: { root: { minWidth: 180 } } }}
           />
 
+          <Tooltip title="工作区管理">
+            <Button
+              type="text"
+              size="small"
+              icon={<SettingOutlined />}
+              onClick={() => setIsWorkspaceModalOpen(true)}
+              style={{ color: "#8b949e" }}
+            />
+          </Tooltip>
+
+
+
           {/* Token summary */}
           {sessionUsage && (
             <Tooltip
               title={
-                <TokenDetailsContent
-                  usage={sessionUsage}
-                  title="会话累计 Token"
-                />
+                <div>
+                  <TokenDetailsContent
+                    usage={sessionUsage}
+                    title="会话累计 Token"
+                  />
+                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #30363d' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                      <span style={{ color: '#8b949e', fontSize: 12 }}>关闭记忆</span>
+                      <Tooltip title={session?.inheritContext === false ? '已开启：本次对话AI不会记住之前的内容' : '已关闭：AI 会记住之前的对话，上下文会连贯'}>
+                        <Switch
+                          size="small"
+                          checked={session?.inheritContext === false}
+                          onChange={(checked) => setInheritContext(activeSessionId, !checked)}
+                          disabled={messages.length > 0}
+                        />
+                      </Tooltip>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                      <span style={{ color: '#8b949e', fontSize: 12 }}>上下文使用率</span>
+                      <span style={{ color: '#e6edf3', fontSize: 12, fontWeight: 600 }}>
+                        {Math.round((sessionUsage.totalTokens / 100000) * 100)}% of 100K
+                      </span>
+                    </div>
+                    {compressStats && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, fontSize: 12 }}>
+                        <span style={{ color: '#8b949e' }}>最近一次压缩比例</span>
+                        <span style={{ color: '#3fb950', fontWeight: 600 }}>
+                          {compressStats.ratio} ({compressStats.originalTokens} → {compressStats.compressedTokens})
+                        </span>
+                      </div>
+                    )}
+                    <Button
+                      block
+                      size="small"
+                      onClick={() => handleCompress()}
+                      disabled={messages.length <= 1 || isStreaming || isCompressing}
+                      loading={isCompressing}
+                      style={{
+                        background: '#21262d',
+                        borderColor: '#30363d',
+                        color: '#c9d1d9',
+                        fontSize: 12
+                      }}
+                    >
+                      压缩
+                    </Button>
+                  </div>
+                </div>
               }
               styles={{
                 container: {
@@ -1264,10 +1883,23 @@ export default function ChatArea() {
                 },
               }}
               arrow={false}
+              placement="bottomRight"
+              trigger="click"
             >
-              <span className={styles.sessionToken}>
-                <ThunderboltOutlined style={{ fontSize: 11 }} />
-                {fmtToken(sessionUsage.totalTokens)}
+              <span className={styles.sessionToken} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ 
+                  display: 'inline-flex', 
+                  alignItems: 'center', 
+                  justifyContent: 'center',
+                  width: 14, 
+                  height: 14, 
+                  borderRadius: '50%', 
+                  border: '2px solid #8b949e',
+                  borderTopColor: '#3fb950',
+                  borderRightColor: '#3fb950',
+                  transform: `rotate(${Math.round((sessionUsage.totalTokens / 100000) * 360) - 45}deg)`
+                }} />
+                {Math.round((sessionUsage.totalTokens / 100000) * 100)}%
               </span>
             </Tooltip>
           )}
@@ -1305,8 +1937,6 @@ export default function ChatArea() {
                 key={msg.id}
                 msg={msg}
                 isLast={idx === messages.length - 1}
-                nextMessage={messages[idx + 1]}
-                onReply={sendMessage}
                 onRegenerate={
                   idx === messages.length - 1 ? handleRegenerate : undefined
                 }
@@ -1324,14 +1954,33 @@ export default function ChatArea() {
       </div>
 
       {/* Input area */}
-      <div className={styles.inputArea}>
+      <div className={styles.inputArea} onDrop={handleDrop} onDragOver={(e) => e.preventDefault()}>
         <div
           className={styles.inputWrapper}
           style={{ flexDirection: "column", alignItems: "stretch" }}
         >
+          {attachments.length > 0 && (
+            <div className={styles.attachmentPreview}>
+              {attachments.map((file, index) => (
+                <div key={index} className={styles.attachmentItem}>
+                  {file.type.startsWith("image/") ? (
+                    <FileImageOutlined style={{ color: "#a855f7" }} />
+                  ) : (
+                    <FileOutlined style={{ color: "#0e639c" }} />
+                  )}
+                  <span className={styles.attachmentName}>{file.name}</span>
+                  <CloseOutlined
+                    onClick={() => removeAttachment(index)}
+                    className={styles.removeAttachment}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
           <Input.TextArea
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
+            onPaste={handlePaste}
             placeholder={placeholder}
             autoSize={{ minRows: 1, maxRows: 8 }}
             disabled={isInputDisabled}
@@ -1340,7 +1989,7 @@ export default function ChatArea() {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 // Do not send if it's disabled or empty
-                if (!isInputDisabled && inputValue.trim()) {
+                if (!isInputDisabled && (inputValue.trim() || attachments.length > 0)) {
                   sendMessage(inputValue);
                 }
               }
@@ -1401,29 +2050,22 @@ export default function ChatArea() {
                 </Tooltip>
               )}
 
-              <Tooltip title="添加附件">
+              <Tooltip title="添加附件 (支持所有文件格式；可拖拽或粘贴)">
                 <Button
                   type="text"
-                  icon={
-                    <svg
-                      width="16"
-                      height="16"
-                      viewBox="0 0 16 16"
-                      fill="none"
-                      xmlns="http://www.w3.org/2000/svg"
-                    >
-                      <path
-                        fillRule="evenodd"
-                        clipRule="evenodd"
-                        d="M3.5 2C2.67157 2 2 2.67157 2 3.5V12.5C2 13.3284 2.67157 14 3.5 14H12.5C13.3284 14 14 13.3284 14 12.5V3.5C14 2.67157 13.3284 2 12.5 2H3.5ZM3.5 3H12.5C12.7761 3 13 3.22386 13 3.5V12.5C13 12.7761 12.7761 13 12.5 13H3.5C3.22386 13 3 12.7761 3 12.5V3.5C3 3.22386 3.22386 3 3.5 3ZM8.5 4.5C8.5 4.22386 8.27614 4 8 4C7.72386 4 7.5 4.22386 7.5 4.5V7.5H4.5C4.22386 7.5 4 7.72386 4 8C4 8.27614 4.22386 8.5 4.5 8.5H7.5V11.5C7.5 11.7761 7.72386 12 8 12C8.27614 12 8.5 11.7761 8.5 11.5V8.5H11.5C11.7761 8.5 12 8.27614 12 8C12 7.72386 11.7761 7.5 11.5 7.5H8.5V4.5Z"
-                        fill="currentColor"
-                      />
-                    </svg>
-                  }
+                  icon={<PaperClipOutlined />}
+                  onClick={() => fileInputRef.current?.click()}
                   className={styles.actionBtn}
                   style={{ color: "var(--vscode-icon-foreground)" }}
                 />
               </Tooltip>
+              <input
+                type="file"
+                ref={fileInputRef}
+                style={{ display: "none" }}
+                multiple
+                onChange={handleFileSelect}
+              />
             </div>
             <div>
               {isStreaming ? (
@@ -1454,15 +2096,15 @@ export default function ChatArea() {
                     type="primary"
                     icon={<SendOutlined />}
                     className={styles.sendBtn}
-                    disabled={!inputValue.trim() || isInputDisabled}
+                    disabled={(!inputValue.trim() && attachments.length === 0) || isInputDisabled}
                     onClick={() => sendMessage(inputValue)}
                     style={{
                       background:
-                        inputValue.trim() && !isInputDisabled
+                        (inputValue.trim() || attachments.length > 0) && !isInputDisabled
                           ? "#0e639c"
                           : "var(--vscode-button-secondaryBackground)",
                       color:
-                        inputValue.trim() && !isInputDisabled
+                        (inputValue.trim() || attachments.length > 0) && !isInputDisabled
                           ? "#fff"
                           : "var(--vscode-button-secondaryForeground)",
                     }}
@@ -1473,6 +2115,89 @@ export default function ChatArea() {
           </div>
         </div>
       </div>
+
+      {/* Workspace Management Modal */}
+      <Modal
+        title="工作区管理"
+        open={isWorkspaceModalOpen}
+        onCancel={() => setIsWorkspaceModalOpen(false)}
+        footer={null}
+        width={600}
+        styles={{
+          mask: { backdropFilter: "blur(4px)" },
+          body: {
+            background: "#1e1e1e",
+            color: "#cccccc",
+          },
+        }}
+      >
+        <div style={{ padding: "10px 0" }}>
+          <p style={{ fontSize: 13, color: "#8b949e", marginBottom: 16 }}>
+            您可以为当前会话绑定多个额外的工作区路径。Agent 将能够访问这些路径下的文件。
+          </p>
+          
+          <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+            <Input
+              placeholder="输入工作区绝对路径 (例如: /Users/work/project)"
+              value={newWorkspacePath}
+              onChange={(e) => setNewWorkspacePath(e.target.value)}
+              onPressEnter={handleAddWorkspace}
+              style={{ background: "#2d2d2d", color: "#cccccc", border: "1px solid #3e3e3e" }}
+            />
+            <Button 
+              type="primary" 
+              icon={<PlusOutlined />} 
+              onClick={handleAddWorkspace}
+            >
+              添加
+            </Button>
+          </div>
+
+          <div style={{ 
+            maxHeight: 300, 
+            overflowY: "auto", 
+            border: "1px solid #333333", 
+            borderRadius: 4,
+            padding: 8,
+            background: "#161616"
+          }}>
+            <div style={{ marginBottom: 8, fontWeight: 600, fontSize: 12, color: "#8b949e" }}>
+              当前绑定的路径:
+            </div>
+            {(!session?.workspacePaths || session.workspacePaths.length === 0) ? (
+              <div style={{ padding: "20px 0", textAlign: "center", color: "#666" }}>
+                暂无自定义工作区 (默认使用会话专属工作区)
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: "100%" }}>
+                {session.workspacePaths.map((path: string) => (
+                  <div 
+                    key={path} 
+                    style={{ 
+                      display: "flex", 
+                      justifyContent: "space-between", 
+                      alignItems: "center",
+                      padding: "8px 12px",
+                      background: "#252526",
+                      borderRadius: 4,
+                      border: "1px solid #333"
+                    }}
+                  >
+                    <span style={{ fontSize: 13, color: "#cccccc", wordBreak: "break-all" }}>{path}</span>
+                    <Button 
+                      type="text" 
+                      danger 
+                      size="small" 
+                      icon={<CloseOutlined />} 
+                      onClick={() => handleRemoveWorkspace(path)}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

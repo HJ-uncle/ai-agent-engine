@@ -7,6 +7,7 @@ interface SessionState {
   activeSessionId: string
   activeFile: string | null // Current file opened in Explorer
   files: string[] // List of all file paths in current workspace
+  lastFilesUpdate: number // Timestamp to trigger file list refresh
   messageMap: Record<string, Message[]>
   usageMap: Record<string, TokenUsage | null>
 
@@ -25,12 +26,15 @@ interface SessionState {
   renameSessionId: (oldId: string, newId: string) => void
   updateSessionTitle: (id: string, title: string) => void
   updateSessionAgent: (id: string, agentId: string | undefined) => void
+  setInheritContext: (id: string, enabled: boolean) => void
+  updateSession: (id: string, updates: Partial<Session>) => void
 
   addMessage: (sessionId: string, message: Message) => void
   setMessages: (sessionId: string, messages: Message[]) => void
   updateMessage: (sessionId: string, messageId: string, updates: Partial<Message>) => void
-  deleteMessage: (messageId: string) => void
-  editUserMessage: (messageId: string, newContent: string) => void
+  deleteMessage: (sessionId: string, messageId: string) => void
+  editUserMessage: (sessionId: string, messageId: string, newContent: string) => void
+  deleteMessagesAfter: (sessionId: string, messageId: string) => void
   clearMessages: (sessionId: string) => void
 
   updateUsage: (sessionId: string, usage: TokenUsage) => void
@@ -39,6 +43,7 @@ interface SessionState {
   closeSettings: () => void
   setFiles: (files: string[]) => void
   setActiveFile: (file: string | null) => void
+  triggerFilesRefresh: () => void
 }
 
 function genId() {
@@ -50,7 +55,19 @@ function defaultSession(): Session {
     id: genId(),
     title: '新对话',
     createdAt: Date.now(),
+    inheritContext: true, // 默认开启继承上下文（独立对话为 false）
   }
+}
+
+function getMessageText(content: string | any[]): string {
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    return content
+      .filter((item) => item.type === 'text')
+      .map((item) => item.text)
+      .join('\n')
+  }
+  return ''
 }
 
 const initial = defaultSession()
@@ -62,6 +79,7 @@ export const useSessionStore = create<SessionState>()(
       activeSessionId: initial.id,
       activeFile: null,
       files: [],
+      lastFilesUpdate: 0,
       messageMap: { [initial.id]: [] },
       usageMap: { [initial.id]: null },
       isSettingsOpen: false,
@@ -73,6 +91,7 @@ export const useSessionStore = create<SessionState>()(
       setThinkingMode: (enabled) => set({ thinkingMode: enabled }),
       setFiles: (files) => set({ files }),
       setActiveFile: (file) => set({ activeFile: file }),
+      triggerFilesRefresh: () => set({ lastFilesUpdate: Date.now() }),
       addSession: (agentId?: string) => {
         const s = { ...defaultSession(), agentId }
         set((state) => ({
@@ -152,6 +171,16 @@ export const useSessionStore = create<SessionState>()(
           sessions: state.sessions.map((s) => (s.id === id ? { ...s, agentId } : s)),
         })),
 
+      setInheritContext: (id, enabled) =>
+        set((state) => ({
+          sessions: state.sessions.map((s) => (s.id === id ? { ...s, inheritContext: enabled } : s)),
+        })),
+
+      updateSession: (id, updates) =>
+        set((state) => ({
+          sessions: state.sessions.map((s) => (s.id === id ? { ...s, ...updates } : s)),
+        })),
+
       addMessage: (sessionId, message) =>
         set((state) => ({
           messageMap: {
@@ -160,7 +189,7 @@ export const useSessionStore = create<SessionState>()(
           },
           sessions: state.sessions.map((s) =>
             s.id === sessionId
-              ? { ...s, lastMessage: message.content.slice(0, 60) }
+              ? { ...s, lastMessage: getMessageText(message.content).slice(0, 60) }
               : s,
           ),
         })),
@@ -183,24 +212,27 @@ export const useSessionStore = create<SessionState>()(
           },
         })),
 
-      deleteMessage: (messageId) =>
+      deleteMessage: (sessionId, messageId) =>
         set((state) => {
-          const newMap = { ...state.messageMap }
-          for (const sid of Object.keys(newMap)) {
-            newMap[sid] = (newMap[sid] ?? []).filter((m) => m.id !== messageId)
-          }
-          return { messageMap: newMap }
+          const msgs = (state.messageMap[sessionId] ?? []).filter((m) => m.id !== messageId)
+          return { messageMap: { ...state.messageMap, [sessionId]: msgs } }
         }),
 
-      editUserMessage: (messageId, newContent) =>
+      editUserMessage: (sessionId, messageId, newContent) =>
         set((state) => {
-          const newMap = { ...state.messageMap }
-          for (const sid of Object.keys(newMap)) {
-            newMap[sid] = (newMap[sid] ?? []).map((m) =>
-              m.id === messageId ? { ...m, content: newContent } : m,
-            )
-          }
-          return { messageMap: newMap }
+          const msgs = (state.messageMap[sessionId] ?? []).map((m) =>
+            m.id === messageId && m.role === 'user' ? { ...m, content: newContent } : m,
+          )
+          return { messageMap: { ...state.messageMap, [sessionId]: msgs } }
+        }),
+
+      deleteMessagesAfter: (sessionId, messageId) =>
+        set((state) => {
+          const msgs = state.messageMap[sessionId] ?? []
+          const idx = msgs.findIndex((m) => m.id === messageId)
+          if (idx < 0) return { messageMap: state.messageMap }
+          const kept = msgs.slice(0, idx + 1)
+          return { messageMap: { ...state.messageMap, [sessionId]: kept } }
         }),
 
       clearMessages: (sessionId) =>

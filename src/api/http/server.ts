@@ -22,6 +22,7 @@ export async function buildServer() {
   const fastify = Fastify({
     logger: false, // Use pino directly
     genReqId: () => uuidv4(),
+    bodyLimit: 100 * 1024 * 1024, // 100MB，支持大文件上传
   })
 
   const authMiddleware = createAuthMiddleware()

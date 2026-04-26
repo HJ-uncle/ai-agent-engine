@@ -70,10 +70,10 @@ export interface ThinkingStep {
 export interface Message {
   id: string
   role: MessageRole
-  content: string
+  content: string | any[]
   status: MessageStatus
   createdAt: number
-  conversationId?: string | null
+  backendMessageId?: string | null
   usage?: TokenUsage | null
   durationMs?: number
   thinkingSteps?: ThinkingStep[]
@@ -81,6 +81,7 @@ export interface Message {
   toolCall?: { id: string; name: string; args: any }
   toolCallId?: string
   toolName?: string
+  conversationId?: string | null
 }
 
 // ── 会话类型 ──────────────────────────────────────────────────────────────────
@@ -90,6 +91,13 @@ export interface Session {
   createdAt: number
   lastMessage?: string
   agentId?: string
+  inheritContext?: boolean
+  workspacePaths?: string[] // 自定义工作区路径列表
+  compressStats?: {
+    originalTokens: number
+    compressedTokens: number
+    ratio: string
+  } | null
 }
 
 // ── SSE 事件类型（对齐后端 sse-sink.ts 映射后的格式）──────────────────────────

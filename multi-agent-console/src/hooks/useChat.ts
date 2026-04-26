@@ -63,7 +63,7 @@ function driveAiMessage(
         updateMessage(sid, aiMsgId, {
           usage: event.usage,
           durationMs,
-          conversationId: event.conversationId ?? null,
+          backendMessageId: event.conversationId ?? null,
         })
         updateUsage(sid, event.usage as TokenUsage)
       }
@@ -119,6 +119,7 @@ export function useChat() {
     async (sessionId?: string) => {
       const sid = sessionId ?? activeSessionId
       if (!sid) return
+      
       try {
         const { list } = await conversationApi.getHistory(sid)
         const msgs: Message[] = []
@@ -132,7 +133,7 @@ export function useChat() {
               content: m.content,
               status: 'done',
               createdAt: m.createdAt || Date.now(),
-              conversationId: m.id, // Backend message_id for regenerate/edit
+              backendMessageId: m.id, // Backend message_id for regenerate/edit
             })
             currentThinkingSteps = []
           } else if (m.role === 'assistant') {
@@ -158,7 +159,7 @@ export function useChat() {
                 content: m.content,
                 status: 'done',
                 createdAt: m.createdAt || Date.now(),
-                conversationId: m.id, // Backend message_id for regenerate/edit
+                backendMessageId: m.id, // Backend message_id for regenerate/edit
                 usage: m.usage || null,
                 thinkingSteps: [...currentThinkingSteps],
               })
@@ -231,7 +232,21 @@ export function useChat() {
             totalUsage.skillTokens! += m.usage.skillTokens || 0
             totalUsage.systemToolsTokens! += m.usage.systemToolsTokens || 0
           }
+          if (m.role === 'system') {
+            msgs.push({
+              id: m.id || `hist-s-${m.createdAt}-${Math.random()}`,
+              role: 'system',
+              content: m.content,
+              status: 'done',
+              createdAt: m.createdAt || Date.now(),
+              backendMessageId: m.id,
+              usage: m.usage || null,
+            })
+          }
         }
+
+        // Add sorting by createdAt to ensure correct order
+        msgs.sort((a, b) => a.createdAt - b.createdAt)
 
         setMessages(sid, msgs)
         useSessionStore.setState((state) => ({
@@ -246,12 +261,14 @@ export function useChat() {
 
   /** 新消息发送 */
   const send = useCallback(
-    async (content: string, sessionId?: string) => {
+    async (content: string, sessionId?: string, attachments?: Array<{ name: string; content: string; type: string; encoding?: 'utf-8' | 'base64' }>) => {
       const sid = sessionId ?? activeSessionId
       const session = useSessionStore.getState().sessions.find((s) => s.id === sid)
       const agentId = session?.agentId
       const maxAskUserCount = useSessionStore.getState().maxAskUserCount
       const thinkingMode = useSessionStore.getState().thinkingMode
+      const inheritContext = session?.inheritContext ?? false
+      const workspacePaths = session?.workspacePaths
 
       // 1. 添加用户消息（前端本地，仅用于显示）
       const userMsg: Message = {
@@ -263,11 +280,24 @@ export function useChat() {
       }
       addMessage(sid, userMsg)
 
+      // 获取文本内容（处理多模态数组情况）
+      const getTextForTitle = (c: any): string => {
+        if (typeof c === 'string') return c
+        if (Array.isArray(c)) {
+          return c
+            .filter((item) => item.type === 'text')
+            .map((item) => item.text)
+            .join('')
+        }
+        return String(c)
+      }
+      
       // 自动标题（仅第一条消息）
       const currentMsgs = useSessionStore.getState().messageMap[sid] ?? []
       const userMsgs = currentMsgs.filter((m) => m.role === 'user')
       if (userMsgs.length <= 1) {
-        updateSessionTitle(sid, content.slice(0, 30) + (content.length > 30 ? '...' : ''))
+        const titleText = getTextForTitle(content)
+        updateSessionTitle(sid, titleText.slice(0, 30) + (titleText.length > 30 ? '...' : ''))
       }
 
       // 2. 添加占位 AI 消息
@@ -296,6 +326,9 @@ export function useChat() {
           agentId,
           maxAskUserCount,
           thinkingMode,
+          inheritContext,
+          workspacePaths,
+          attachments,
           signal: ctrl.signal,
           onEvent,
           onDone: handleDone,
@@ -310,22 +343,25 @@ export function useChat() {
     async (sessionId?: string) => {
       const sid = sessionId ?? activeSessionId
       const msgs = useSessionStore.getState().messageMap[sid] ?? []
-      // 找最后一条 assistant 消息（有后端 conversationId 的）
       const lastAi = [...msgs].reverse().find((m) => m.role === 'assistant' && m.conversationId)
 
       if (!lastAi?.conversationId) {
-        // 如果没有持久化的 messageId，fallback 到前端本地重发逻辑
         const lastUser = [...msgs].reverse().find((m) => m.role === 'user')
         if (lastUser) {
-          // 删除最后一条 AI 消息并重新 send
-          useSessionStore.getState().deleteMessage(lastAi?.id ?? '')
-          await send(lastUser.content, sid)
+          useSessionStore.getState().deleteMessage(sid, lastAi?.id ?? '')
+          useSessionStore.getState().deleteMessagesAfter(sid, lastUser.id)
+          const content = typeof lastUser.content === 'string' ? lastUser.content : JSON.stringify(lastUser.content)
+          await send(content, sid)
         }
         return
       }
 
-      // 有 conversationId - 先删前端显示的 AI 消息，再调接口
-      useSessionStore.getState().deleteMessage(lastAi.id)
+      const aiIdx = msgs.findIndex((m) => m.id === lastAi.id)
+      if (aiIdx >= 0) {
+        const msgsAfterAi = msgs.slice(aiIdx + 1)
+        msgsAfterAi.forEach((m) => useSessionStore.getState().deleteMessage(sid, m.id))
+      }
+      useSessionStore.getState().deleteMessage(sid, lastAi.id)
 
       const aiMsgId = genId()
       const placeholder: Message = {
@@ -368,25 +404,15 @@ export function useChat() {
       const msg = msgs.find((m) => m.id === msgId)
 
       if (!msg?.conversationId) {
-        // fallback：前端本地编辑重发
-        useSessionStore.getState().editUserMessage(msgId, newContent)
-        const idx = msgs.findIndex((m) => m.id === msgId)
-        if (idx >= 0) {
-          msgs.slice(idx + 1).forEach((m) => useSessionStore.getState().deleteMessage(m.id))
-        }
+        useSessionStore.getState().editUserMessage(sid, msgId, newContent)
+        useSessionStore.getState().deleteMessagesAfter(sid, msgId)
         await send(newContent, sid)
         return
       }
 
-      // 更新前端显示的用户消息
-      useSessionStore.getState().editUserMessage(msgId, newContent)
-      // 删除该消息之后的所有前端消息
-      const idx = msgs.findIndex((m) => m.id === msgId)
-      if (idx >= 0) {
-        msgs.slice(idx + 1).forEach((m) => useSessionStore.getState().deleteMessage(m.id))
-      }
+      useSessionStore.getState().editUserMessage(sid, msgId, newContent)
+      useSessionStore.getState().deleteMessagesAfter(sid, msgId)
 
-      // 添加占位 AI 消息
       const aiMsgId = genId()
       const placeholder: Message = {
         id: aiMsgId,
@@ -453,7 +479,7 @@ export function useChat() {
       const startTime = Date.now() - (aiMsg.durationMs ?? 0)
 
       const { onEvent, handleDone, handleError } = driveAiMessage(
-        sid, msgId, updateMessage, updateUsage, startTime, aiMsg.content, updatedSteps
+        sid, msgId, updateMessage, updateUsage, startTime, typeof aiMsg.content === 'string' ? aiMsg.content : '', updatedSteps
       )
 
       await chatStream({

@@ -20,6 +20,10 @@ export default function EditorArea() {
     workspaceApi.getFileContent(activeSessionId, activeFile)
       .then(res => {
         if (isMounted) {
+          if (!res) {
+            setContent('')
+            return
+          }
           // Detect language from extension
           const ext = activeFile.split('.').pop() || 'txt'
           const langMap: Record<string, string> = {
@@ -29,10 +33,10 @@ export default function EditorArea() {
           const lang = langMap[ext] || 'plaintext'
           
           try {
-            const highlighted = hljs.highlight(res, { language: lang }).value
+            const highlighted = hljs.highlight(res.content, { language: lang }).value
             setContent(highlighted)
           } catch (e) {
-            setContent(hljs.highlightAuto(res).value)
+            setContent(hljs.highlightAuto(res.content).value)
           }
         }
       })

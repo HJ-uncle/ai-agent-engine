@@ -25,7 +25,7 @@ export interface ToolCall {
 export interface Message {
   id?: string          // unique message ID
   role: MessageRole
-  content: string
+  content: string | any[]
   reasoningContent?: string // for Deepseek R1 thinking mode
   toolCall?: ToolCall
   toolCallId?: string  // for tool result messages
@@ -90,7 +90,7 @@ export interface MemoryStore {
 
 export interface ConversationHistory {
   append(message: Message, ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<void>
-  getHistory(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<Message[]>
+  getHistory(ctx: Pick<AgentContext, 'tenantId' | 'sessionId' | 'inheritContext'>): Promise<Message[]>
   clear(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<void>
   summarize(ctx: AgentContext): Promise<void>
   /** Returns the windowed token count (tokens in the messages returned by getHistory). */
@@ -124,6 +124,7 @@ export interface AgentContext {
   tenantId: string
   sessionId: string
   workspaceDir: string
+  workspacePaths?: string[] // 自定义工作区路径列表
   tools: IToolRegistry
   memory: MemoryStore
   history: ConversationHistory
@@ -131,6 +132,7 @@ export interface AgentContext {
   tokenBudget: number
   requestId?: string
   signal?: AbortSignal
+  inheritContext?: boolean
 }
 
 // ─── AgentContext Factory Options ─────────────────────────────────────────────
@@ -138,6 +140,7 @@ export interface AgentContext {
 export interface CreateAgentContextOptions {
   sessionId: string
   tenantId?: string
+  workspacePaths?: string[] // 自定义工作区路径列表
   tools: IToolRegistry
   memory: MemoryStore
   history: ConversationHistory
@@ -145,4 +148,5 @@ export interface CreateAgentContextOptions {
   tokenBudget?: number
   requestId?: string
   signal?: AbortSignal
+  inheritContext?: boolean
 }

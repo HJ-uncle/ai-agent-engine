@@ -1,6 +1,7 @@
 import OpenAI from 'openai'
 import type { LLMAdapter, LLMResponse, LLMAdapterOptions, LLMStreamChunk } from './types.js'
 import type { Message, Tool } from '../agent-context/index.js'
+import { estimateTokens } from '../utils/tokens.js'
 
 /**
  * Convert Message[] to OpenAI format with orphan-filtering:
@@ -31,6 +32,22 @@ function messagesToOpenAI(
 
   // Second pass: convert, dropping orphaned tool results AND orphaned tool calls
   const result: OpenAI.Chat.ChatCompletionMessageParam[] = []
+  // 对于不支持多模态数组格式的模型（比如 Deepseek），将数组转换为纯文本
+  function contentToString(content: any): string {
+    if (typeof content === 'string') return content
+    if (Array.isArray(content)) {
+      return content
+        .filter(part => part.type !== 'file')
+        .map(part => {
+          if (part.type === 'text') return part.text
+          if (part.type === 'image_url') return '[Image]'
+          return String(part)
+        })
+        .join('\n')
+    }
+    return String(content ?? '')
+  }
+  
   for (const msg of messages) {
     if (msg.role === 'tool') {
       const tcId = msg.toolCallId ?? ''
@@ -38,10 +55,12 @@ function messagesToOpenAI(
       if (tcId && !validToolCallIds.has(tcId)) {
         continue
       }
+      // 为了兼容性，对所有模型都使用纯文本格式
+      const toolContent = contentToString(msg.content)
       result.push({
         role: 'tool',
         tool_call_id: tcId,
-        content: msg.content,
+        content: toolContent,
       })
       continue
     }
@@ -52,7 +71,7 @@ function messagesToOpenAI(
       // If the tool call is broken OR it has no matching tool result,
       // emit it as plain assistant text to avoid OpenAI 400 error.
       if (!id || !name || !validToolResultIds.has(id)) {
-        let fallbackContent = msg.content || ''
+        let fallbackContent = contentToString(msg.content || '')
         // Optionally append the tool call intent to content so context isn't fully lost
         if (name && !fallbackContent.includes(name)) {
            const argsStr = JSON.stringify(msg.toolCall.args || {})
@@ -61,14 +80,14 @@ function messagesToOpenAI(
         result.push({
           role: 'assistant',
           content: fallbackContent || '(no content)',
-          ...((msg as any).reasoningContent ? { reasoning_content: (msg as any).reasoningContent } : {})
+          ...((msg as any).reasoningContent != null ? { reasoning_content: (msg as any).reasoningContent } : {})
         })
         continue
       }
       result.push({
         role: 'assistant',
-        content: msg.content ?? null,
-        ...((msg as any).reasoningContent ? { reasoning_content: (msg as any).reasoningContent } : {}),
+        content: contentToString(msg.content ?? null),
+        ...((msg as any).reasoningContent != null ? { reasoning_content: (msg as any).reasoningContent } : {}),
         tool_calls: [{
           id,
           type: 'function',
@@ -80,10 +99,13 @@ function messagesToOpenAI(
       })
       continue
     }
+
+    // 对于所有消息，都使用纯文本格式以保证最大兼容性
+    const finalContent = contentToString(msg.content)
     result.push({
       role: msg.role as 'user' | 'assistant' | 'system',
-      content: msg.content,
-      ...((msg.role === 'assistant' && (msg as any).reasoningContent) ? { reasoning_content: (msg as any).reasoningContent } : {})
+      content: finalContent,
+      ...((msg.role === 'assistant' && (msg as any).reasoningContent != null) ? { reasoning_content: (msg as any).reasoningContent } : {})
     })
   }
   return result
@@ -116,6 +138,7 @@ const PARAM_TO_TOOL_HEURISTICS: Array<{ keys: string[]; tool: string }> = [
   { keys: ['key'],                  tool: 'recall' },
   { keys: ['path', 'content'],      tool: 'write_file' },
   { keys: ['path'],                 tool: 'read_file' },
+  { keys: ['path'],                 tool: 'read_image' }, // 优先级较低，放在 read_file 后面
   { keys: ['query'],                tool: 'search_memory' },
   { keys: ['name'],                 tool: 'get_skill' },
 ]
@@ -309,7 +332,7 @@ export class OpenAIAdapter implements LLMAdapter {
     }
   }
 
-  countTokens(text: string): number {
-    return Math.ceil(text.length / 4)
+  countTokens(text: string | any[]): number {
+    return estimateTokens(text)
   }
 }

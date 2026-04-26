@@ -14,6 +14,7 @@ import { askUserTool } from '../../../tools/ask-user/index.js'
 import { createMemoryTools } from '../../../tools/memory/index.js'
 import { registerMCPTools } from '../../../tools/mcp/loader.js'
 import { createSkillTools, runSkillScriptTool } from '../../../tools/skill/index.js'
+import { estimateTokens } from '../../../core/utils/tokens.js'
 import { v4 as uuidv4 } from 'uuid'
 import { success, fail } from '../response.js'
 
@@ -146,9 +147,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
       finalResponseThinkingField = whitelistInfo.responseThinkingField
     }
 
-    const estimateTokens = (text: string) => Math.ceil(text.length / 4)
-    const baseSystemPrompt = [systemPrompt ?? '', ragPrompt].filter(Boolean).join('\n\n')
-    const systemPromptTokens = estimateTokens(baseSystemPrompt)
+    const systemPromptTokens = estimateTokens(fullSystemPrompt)
     const skillTokens = estimateTokens(skillsPrompt)
     const toolDefsText = registry.list()
       .map((t) => `${t.name}: ${t.description} ${JSON.stringify(t.parameters ?? {})}`)
@@ -219,7 +218,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     }
 
     // 更新消息内容，重置 tokens（此处简单估算，或后续被精确更新）
-    const estimatedTokens = Math.ceil(content.length / 4)
+    const estimatedTokens = estimateTokens(content)
     await history.updateMessageContent(messageId, tenantId, content, estimatedTokens)
 
     // 硬删除该消息之后的所有消息

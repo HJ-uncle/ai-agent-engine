@@ -2,12 +2,20 @@ import type { ConversationHistory, Message, AgentContext } from '../../core/agen
 import { getDb } from '../sqlite/db.js'
 import type { Row } from '@libsql/client'
 import { v4 as uuidv4 } from 'uuid'
+import { estimateTokens } from '../../core/utils/tokens.js'
 
 type Ctx = { tenantId: string; sessionId: string }
 
 function rowToMessage(row: Row): Message & { conversationId?: string } {
   const role = row['role'] as string
-  const content = row['content'] as string
+  let content = row['content'] as string
+  try {
+    if (content.startsWith('[') || content.startsWith('{')) {
+      content = JSON.parse(content)
+    }
+  } catch {
+    /* ignore if not JSON */
+  }
   const tool_call_id = row['tool_call_id'] as string | null
   const tool_call_name = row['tool_call_name'] as string | null  // assistant 发起调用的工具名
   const tool_name = row['tool_name'] as string | null            // tool 结果消息的工具名（显示用）
@@ -23,7 +31,7 @@ function rowToMessage(row: Row): Message & { conversationId?: string } {
     ...(message_id ? { id: message_id } : {}),
     role: role as Message['role'],
     content,
-    ...(reasoning_content ? { reasoningContent: reasoning_content } : {}),
+    ...(reasoning_content != null ? { reasoningContent: reasoning_content } : {}),
     tokens: tokens != null ? Number(tokens) : 0,
     createdAt: created_at != null ? Number(created_at) * 1000 : 0,
     ...(conversation_id ? { conversationId: conversation_id } : {}),
@@ -79,7 +87,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
         (message as { conversationId?: string }).conversationId ?? null,
         messageId,
         message.role,
-        message.content,
+        typeof message.content === 'string' ? message.content : JSON.stringify(message.content),
         message.reasoningContent ?? null,
         message.toolCallId ?? null,
         message.toolCall?.name ?? null,
@@ -91,7 +99,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
     })
   }
 
-  async getHistory(ctx: Ctx): Promise<Message[]> {
+  async getHistory(ctx: Ctx & { inheritContext?: boolean }): Promise<Message[]> {
     const db = getDb()
     const result = await db.execute({
       sql: `SELECT message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id
@@ -101,6 +109,19 @@ export class SQLiteConversationHistory implements ConversationHistory {
       args: [ctx.tenantId, ctx.sessionId],
     })
     const allMessages = result.rows.map(rowToMessage)
+    
+    // If inheritContext is false, only return the most recent user message (current new message)
+    // This ensures the AI doesn't see previous conversation history
+    if (ctx.inheritContext === false) {
+      // Find the last user message (the current new message)
+      for (let i = allMessages.length - 1; i >= 0; i--) {
+        if (allMessages[i].role === 'user') {
+          return [allMessages[i]]
+        }
+      }
+      return []
+    }
+    
     return this.applyTokenWindow(allMessages)
   }
 
@@ -164,12 +185,11 @@ export class SQLiteConversationHistory implements ConversationHistory {
    * system 消息（摘要）始终保留在开头。
    */
   private applyTokenWindow(messages: Message[]): Message[] {
-    // 统计所有消息的 token 数
-    const estimateTokens = (m: Message) => m.tokens ?? Math.ceil(m.content.length / 4)
-    const total = messages.reduce((sum, m) => sum + estimateTokens(m), 0)
+    // 1. 统计所有消息的 token 数
+    const total = messages.reduce((sum, m) => sum + (m.tokens ?? estimateTokens(m.content)), 0)
     if (total <= this.maxTokens) return messages
 
-    // 分离开头的 system 消息（摘要），对剩余消息做截断
+    // 2. 分离开头的 system 消息（摘要），对剩余消息做截断
     let systemPrefix: Message[] = []
     let rest = messages
     if (messages.length > 0 && messages[0].role === 'system') {
@@ -177,11 +197,11 @@ export class SQLiteConversationHistory implements ConversationHistory {
       rest = messages.slice(1)
     }
 
-    // 从最旧的消息开始丢弃，直到 token 数满足限制
-    let windowTokens = total - systemPrefix.reduce((s, m) => s + estimateTokens(m), 0)
+    // 3. 从最旧的消息开始丢弃，直到 token 数满足限制
+    let windowTokens = total - systemPrefix.reduce((s, m) => s + (m.tokens ?? estimateTokens(m.content)), 0)
     let startIdx = 0
     while (startIdx < rest.length - 2 && windowTokens > this.maxTokens) {
-      windowTokens -= estimateTokens(rest[startIdx])
+      windowTokens -= (rest[startIdx].tokens ?? estimateTokens(rest[startIdx].content))
       startIdx++
     }
 
@@ -251,8 +271,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
    */
   async getTokenCount(ctx: Ctx): Promise<number> {
     const windowed = await this.getHistory(ctx)
-    const estimateTokens = (m: Message) => m.tokens ?? Math.ceil(m.content.length / 4)
-    return windowed.reduce((sum, m) => sum + estimateTokens(m), 0)
+    return windowed.reduce((sum, m) => sum + (m.tokens ?? estimateTokens(m.content)), 0)
   }
 
   /**
@@ -297,12 +316,11 @@ export class SQLiteConversationHistory implements ConversationHistory {
     const olderMessages = allMessages.slice(0, allMessages.length - keepRecent)
     const recentMessages = allMessages.slice(allMessages.length - keepRecent)
 
-    const estimateTokens = (m: Message) => m.tokens ?? Math.ceil(m.content.length / 4)
-    const tokensBefore = allMessages.reduce((s, m) => s + estimateTokens(m), 0)
+    const tokensBefore = allMessages.reduce((s, m) => s + (m.tokens ?? estimateTokens(m.content)), 0)
 
     // Build summary via the provided LLM function
     const summaryContent = await summarizeFn(olderMessages)
-    const summaryTokens = Math.ceil(summaryContent.length / 4)
+    const summaryTokens = estimateTokens(summaryContent)
 
     // Replace DB contents: clear → summary system msg → recent msgs
     await this.clear(ctx)
@@ -316,7 +334,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
       await this.append(msg, ctx)
     }
 
-    const tokensAfter = summaryTokens + recentMessages.reduce((s, m) => s + estimateTokens(m), 0)
+    const tokensAfter = summaryTokens + recentMessages.reduce((s, m) => s + (m.tokens ?? estimateTokens(m.content)), 0)
     const freed = tokensBefore - tokensAfter
     // Caller (react.ts) owns the logger; log a simple console message here.
     console.log(`[history] compress: ${tokensBefore} → ${tokensAfter} tokens (freed ${freed})`)
@@ -339,7 +357,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
     await this.append({
       role: 'system',
       content: summaryContent,
-      tokens: Math.ceil(summaryContent.length / 4),
+      tokens: estimateTokens(summaryContent),
     }, ctx)
 
     for (const msg of toKeep) {

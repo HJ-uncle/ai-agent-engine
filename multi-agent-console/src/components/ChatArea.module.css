@@ -717,6 +717,49 @@
   ) !important;
 }
 
+.attachmentPreview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--vscode-sideBar-background, #252526);
+  border-bottom: 1px solid var(--vscode-panel-border, #2d2d2d);
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.attachmentItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--vscode-editor-background, #1e1e1e);
+  border: 1px solid var(--vscode-panel-border, #2d2d2d);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--vscode-editor-foreground, #d4d4d4);
+  max-width: 200px;
+}
+
+.attachmentName {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.removeAttachment {
+  cursor: pointer;
+  font-size: 10px;
+  opacity: 0.6;
+  transition: opacity 0.2s;
+}
+
+.removeAttachment:hover {
+  opacity: 1;
+  color: var(--vscode-errorForeground, #f14c4c);
+}
+
 .sendBtn {
   width: 28px !important;
   height: 28px !important;

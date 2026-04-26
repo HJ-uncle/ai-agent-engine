@@ -158,10 +158,67 @@ export const createDirTool: Tool = {
   },
 }
 
+// 图片文件扩展名映射到 MIME 类型
+const IMAGE_MIME_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.tiff': 'image/tiff',
+  '.svg': 'image/svg+xml',
+}
+
+export const readImageTool: Tool = {
+  name: 'read_image',
+  displayName: '读取图片',
+  description: '读取工作区中的图片文件，将其转换为 base64 格式返回，便于 AI 进行图像识别',
+  parameters: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: '图片文件相对工作区根目录的路径' },
+    },
+    required: ['path'],
+  },
+  async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
+    const { path: filePath } = rawArgs as { path: string }
+    try {
+      const safePath = workspaceManager.resolveSafePath(ctx, filePath)
+      const stat = fs.statSync(safePath)
+      
+      if (stat.size > MAX_FILE_SIZE) {
+        return { success: false, output: `Image file too large (${stat.size} bytes, max ${MAX_FILE_SIZE} bytes)` }
+      }
+
+      const ext = path.extname(safePath).toLowerCase()
+      const mimeType = IMAGE_MIME_TYPES[ext] || 'application/octet-stream'
+
+      const buffer = fs.readFileSync(safePath)
+      const base64 = buffer.toString('base64')
+      const dataUrl = `data:${mimeType};base64,${base64}`
+
+      return { 
+        success: true, 
+        output: JSON.stringify({
+          success: true,
+          filename: path.basename(safePath),
+          mimeType,
+          size: stat.size,
+          dataUrl
+        })
+      }
+    } catch (err) {
+      return { success: false, output: err instanceof Error ? err.message : 'Unknown error' }
+    }
+  },
+}
+
 export const fileTools: Tool[] = [
   readFileTool,
   writeFileTool,
   listFilesTool,
   deleteFileTool,
   createDirTool,
+  readImageTool,
 ]
