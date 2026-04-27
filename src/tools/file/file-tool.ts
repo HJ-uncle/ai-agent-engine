@@ -60,11 +60,11 @@ export const writeFileTool: Tool = {
 export const listFilesTool: Tool = {
   name: 'list_files',
   displayName: '列出文件',
-  description: '列出工作区中指定目录下的文件和子目录',
+  description: '列出工作区中指定目录下的文件和子目录。默认列出所有绑定工作区（包括自定义路径）的根目录内容。',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: '相对工作区根目录的路径 (默认: 根目录)', default: '.' },
+      path: { type: 'string', description: '文件相对路径或绝对路径 (默认: 列出所有绑定工作区根目录)', default: '.' },
       recursive: { type: 'boolean', description: '是否递归列出所有子目录下的文件', default: false },
     },
     required: [],
@@ -72,8 +72,30 @@ export const listFilesTool: Tool = {
   async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
     const { path: dirPath = '.', recursive = false } = rawArgs as { path?: string; recursive?: boolean }
     try {
-      const safePath = workspaceManager.resolveSafePath(ctx, dirPath)
+      // 如果是默认根目录，且有多个工作区路径，则列出所有工作区的内容
+      const allPaths = workspaceManager.getPaths(ctx)
+      const isListingRoot = dirPath === '.' || dirPath === ''
 
+      if (isListingRoot && allPaths.length > 1) {
+        // 多工作区：分别列出每个工作区，标注来源
+        const sections: string[] = []
+        for (const basePath of allPaths) {
+          if (!fs.existsSync(basePath)) continue
+          const label = basePath === allPaths[0] ? '主工作区' : `自定义工作区 (${basePath})`
+          const entries = recursive
+            ? listRecursive(basePath, basePath)
+            : fs.readdirSync(basePath).map((name) => {
+                const fullPath = path.join(basePath, name)
+                const stat = fs.statSync(fullPath)
+                return stat.isDirectory() ? `${name}/` : name
+              })
+          sections.push(`${label}:\n${entries.length === 0 ? '  (空)' : entries.map(e => `  ${e}`).join('\n')}`)
+        }
+        return { success: true, output: sections.join('\n\n') || 'No workspace directories found' }
+      }
+
+      // 单路径或指定具体路径：使用 resolveSafePath 解析
+      const safePath = workspaceManager.resolveSafePath(ctx, dirPath)
       if (!fs.existsSync(safePath)) {
         return { success: false, output: `Directory not found: ${dirPath}` }
       }

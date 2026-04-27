@@ -183,6 +183,13 @@ export async function chatRoutes(fastify: FastifyInstance) {
       }
     }
 
+    // 注入工作区路径信息，让 AI 知道所有绑定的工作区
+    const { workspaceManager } = await import('../../../workspace/index.js')
+    const allWorkspacePaths = workspaceManager.getPaths({ tenantId, sessionId, workspacePaths })
+    const workspaceInfo = allWorkspacePaths.length > 1
+      ? `\n\n当前会话绑定了以下工作区路径：\n${allWorkspacePaths.map((p, i) => `  ${i === 0 ? '主工作区' : '自定义工作区'}: ${p}`).join('\n')}\n调用 \`list_files\` 工具（不传参数）可查看所有工作区内容。`
+      : `\n\n当前工作区路径：${allWorkspacePaths[0]}`
+
     const fullSystemPrompt = baseSystemPrompt + ragPrompt + `
 ---
 # 智能交互规则
@@ -190,6 +197,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
 2. 在向用户回复的文本中提及工具时，请务必使用工具的中文名称（例如：写入文件、获取时间、读取文件等），不要暴露底层的英文名称（例如：write_file, get_time等）。
 3. 当用户询问你的模型身份时，必须如实告知你是 ${currentModelName} 模型，不得声称是其他模型（如Claude或GPT）。
 4. 当需要读取图片文件（如 .png, .jpg, .jpeg, .gif, .webp, .bmp 等）时，请使用 \`read_image\` 工具而不是 \`read_file\`。该工具会返回图片的 base64 数据，方便你进行视觉识别或分析。
+${workspaceInfo}
 `
 
     // Estimate token counts for each injected prompt section
