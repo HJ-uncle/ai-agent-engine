@@ -48,6 +48,12 @@ A production-ready AI Agent Engine built with Node.js + TypeScript ESM. Supports
 | 38 | **Glob Search** — File pattern matching tool (`glob_search`) with wildcard support (`**`, `*`, `?`) |
 | 39 | **Grep Search** — Full-text / regex search tool (`grep_search`); uses ripgrep when available, falls back to Node.js |
 | 40 | **Task Control** — Agent tools to list, cancel and inspect background queue jobs (`task_list/cancel/status`) |
+| 41 | **Web Fetch** — `web_fetch` tool with security domain filtering via `config/security.json` |
+| 42 | **HTTP Request** — `http_request` tool for external API calls |
+| 43 | **Agent Tools** — `agent` / `subagent` tools for sub-agent creation and management |
+| 44 | **Get Context** — `get_context` tool for runtime context inspection |
+| 45 | **Install Package** — `install_package` tool for npm package installation |
+| 46 | **Fine-grained Tool Control** — Per-agent `allowedTools` configuration via `agent_allowed_tools` table |
 
 ---
 
@@ -255,7 +261,9 @@ data: {"usage":{"systemPromptTokens":50,"completionTokens":10,"totalTokens":60}}
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/v1/tools` | List all registered tools |
+| `GET` | `/api/v1/tools` | List all registered tools (builtin + skill) |
+| `GET` | `/api/v1/tools/system-tools` | List all system builtin tools (excluding skills) |
+| `GET` | `/api/v1/tools/external-skills` | List all custom skills from SKILLs directory |
 
 ### Agents
 
@@ -331,8 +339,8 @@ The scheduler fires a loopback `POST /api/v1/chat` request at the matched minute
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/v1/settings` | Get system environment settings |
-| `PUT` | `/api/v1/settings` | Update system settings (writes to `.env`) |
+| `GET` | `/api/v1/settings` | Get system environment settings (includes `webFetch` security config) |
+| `PUT` | `/api/v1/settings` | Update system settings (writes to `.env`; supports `webFetch` config) |
 
 ### System
 
@@ -404,6 +412,11 @@ src/
 │   ├── todo/                  # todo_list / todo_create / todo_update / todo_delete
 │   ├── cron/                  # cron_list / cron_create / cron_update / cron_delete
 │   ├── task/                  # task_list / task_cancel / task_status
+│   ├── web-fetch/             # web_fetch tool with domain security filtering
+│   ├── http-request/          # http_request tool for external API calls
+│   ├── agent/                 # agent / subagent tools for sub-agent management
+│   ├── get-context/           # get_context tool for runtime context inspection
+│   ├── install-package/       # install_package tool for npm package installation
 │   └── registry-factory.ts   # ★ Unified tool registry factory (single source of truth)
 ├── skills/                    # Built-in skills (math, time) + external skill loader
 ├── auth/                      # JWT + API key middleware
@@ -417,11 +430,13 @@ src/
 **Key design decisions:**
 - **SQLite for everything** — no Redis, no external services required
 - **Unified `Tool` interface** — file tools, shell tools, memory tools, MCP tools all share the same interface
-- **`registry-factory.ts`** — single place to add/remove tools; all routes (chat / messages / tools) call `createToolRegistry()` for a consistent, complete toolset
+- **`registry-factory.ts`** — single place to add/remove tools; all routes (chat / messages / tools) call `createToolRegistry()` for a consistent, complete toolset; supports `allowedTools` parameter for per-agent tool restrictions
+- **Fine-grained tool control** — each agent can have an `agent_allowed_tools` entry in SQLite restricting which tools it can use; `createToolRegistry({ allowedTools: [...] })` filters at registration time
 - **Multi-tenant isolation** — tenantId + sessionId scope all storage reads/writes
 - **Auth optional** — set `AUTH_ENABLED=false` during development
 - **Thinking Mode** — reasoning content extracted from model-specific fields (`reasoning_content` for Qwen/DeepSeek, `thinking` blocks for Claude; auto-detected by model name)
 - **Encrypted API keys** — model API keys encrypted with AES-256-GCM before storage
+- **Vision auto-detection** — LLM adapter automatically detects non-vision models (DeepSeek, Ollama, Qwen, Moonshot, Zhipu) and gracefully falls back to text-only mode or OCR
 - **Multi-modal via workspace reference** — images/files uploaded to workspace; AI receives text instruction to call `read_image` / `read_file`; base64 is never stored in chat history, preventing token budget explosion
 - **Sliding window history** — conversation history capped at `TOKEN_BUDGET` tokens; oldest messages dropped first; tool results kept intact (no mid-content truncation)
 - **Context compression** — optional extractive/keyword summarization for long histories
