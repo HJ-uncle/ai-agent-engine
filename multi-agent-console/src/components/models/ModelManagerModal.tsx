@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Modal, Form, Input, Button, Radio, Typography, message, Row, Col, Divider, Space } from 'antd'
+import { Modal, Form, Input, Button, Radio, Typography, message, Row, Col } from 'antd'
 import { useForm, Controller } from 'react-hook-form'
 import { yupResolver } from '@hookform/resolvers/yup'
 import * as yup from 'yup'
@@ -13,6 +13,13 @@ interface ModelManagerModalProps {
   open: boolean
   onClose: () => void
   onSuccess: () => void
+  editModel?: {
+    id: string
+    provider: 'openai' | 'anthropic' | 'custom'
+    modelId: string
+    displayName?: string
+    baseUrl?: string
+  } | null
 }
 
 interface FormData {
@@ -23,17 +30,20 @@ interface FormData {
   displayName?: string
 }
 
-export default function ModelManagerModal({ open, onClose, onSuccess }: ModelManagerModalProps) {
+export default function ModelManagerModal({ open, onClose, onSuccess, editModel }: ModelManagerModalProps) {
   const { t, i18n } = useTranslation()
-  const [whitelist, setWhitelist] = useState<any[]>([])
   const [testing, setTesting] = useState(false)
   const [testOk, setTestOk] = useState(false)
   const [saving, setSaving] = useState(false)
+  const isEdit = !!editModel
 
   const schema = yup.object({
     provider: yup.mixed<'openai' | 'anthropic' | 'custom'>().oneOf(['openai', 'anthropic', 'custom']).required(),
     modelId: yup.string().required(t('modelIdRequired')),
-    apiKey: yup.string().min(16, t('keyLengthError')).required(),
+    // 编辑模式下 apiKey 可为空（保留原有），新增时必须填写且至少 16 位
+    apiKey: isEdit
+      ? yup.string().optional().test('key-length', t('keyLengthError'), (val) => !val || val.length === 0 || val.length >= 16)
+      : yup.string().min(16, t('keyLengthError')).required(),
     baseUrl: yup.string().url(t('urlFormatError')).matches(/^https?:\/\/.+/, t('urlFormatError')).required(),
     displayName: yup.string().optional()
   })
@@ -50,7 +60,6 @@ export default function ModelManagerModal({ open, onClose, onSuccess }: ModelMan
     mode: 'onChange'
   })
 
-  const currentProvider = watch('provider')
   const watchedValues = watch()
 
   useEffect(() => {
@@ -59,11 +68,23 @@ export default function ModelManagerModal({ open, onClose, onSuccess }: ModelMan
 
   useEffect(() => {
     if (open) {
-      reset()
-      setTestOk(false)
-      modelsApi.getWhitelist().then(setWhitelist).catch(console.error)
+      if (editModel) {
+        // 编辑模式：回填已有数据，apiKey 留空让用户重新输入
+        reset({
+          provider: editModel.provider,
+          modelId: editModel.modelId,
+          displayName: editModel.displayName || editModel.modelId,
+          baseUrl: editModel.baseUrl || '',
+          apiKey: '',
+        })
+        // 编辑模式下允许不重新测试直接保存（apiKey 可能未变）
+        setTestOk(false)
+      } else {
+        reset()
+        setTestOk(false)
+      }
     }
-  }, [open, reset])
+  }, [open, editModel, reset])
 
   const onProviderChange = (e: any) => {
     const provider = e.target.value
@@ -107,22 +128,34 @@ export default function ModelManagerModal({ open, onClose, onSuccess }: ModelMan
   }
 
   const onSubmit = async (data: FormData) => {
-    if (!testOk) {
+    if (!testOk && !isEdit) {
       message.warning('请先通过连接测试')
       return
     }
 
     setSaving(true)
     try {
-      await modelsApi.createModel({
-        provider: data.provider,
-        modelId: data.modelId,
-        apiKey: data.apiKey,
-        baseUrl: data.baseUrl,
-        displayName: data.displayName || data.modelId,
-        isEnabled: false
-      })
-      message.success(t('saveSuccess'))
+      if (isEdit && editModel) {
+        // 编辑模式：调 updateModel，apiKey 为空时不更新（保留原有）
+        await modelsApi.updateModel(editModel.id, {
+          provider: data.provider,
+          modelId: data.modelId,
+          apiKey: data.apiKey || undefined,  // 空则不更新
+          baseUrl: data.baseUrl,
+          displayName: data.displayName || data.modelId,
+        })
+        message.success('模型更新成功')
+      } else {
+        await modelsApi.createModel({
+          provider: data.provider,
+          modelId: data.modelId,
+          apiKey: data.apiKey,
+          baseUrl: data.baseUrl,
+          displayName: data.displayName || data.modelId,
+          isEnabled: false
+        })
+        message.success(t('saveSuccess'))
+      }
       onSuccess()
       onClose()
     } catch (err: any) {
@@ -136,7 +169,7 @@ export default function ModelManagerModal({ open, onClose, onSuccess }: ModelMan
     <Modal
       title={
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>模型配置</span>
+          <span>{isEdit ? '编辑模型' : '添加模型'}</span>
           <Button size="small" onClick={() => i18n.changeLanguage(i18n.language === 'zh' ? 'en' : 'zh')}>
             {i18n.language === 'zh' ? 'EN' : '中文'}
           </Button>
@@ -152,7 +185,7 @@ export default function ModelManagerModal({ open, onClose, onSuccess }: ModelMan
         <Button key="test" type="dashed" onClick={handleTest} loading={testing}>
           {t('testConnection')}
         </Button>,
-        <Button key="submit" type="primary" onClick={handleSubmit(onSubmit)} loading={saving} disabled={!testOk}>
+        <Button key="submit" type="primary" onClick={handleSubmit(onSubmit)} loading={saving} disabled={!testOk && !isEdit}>
           {t('save')}
         </Button>
       ]}
@@ -190,14 +223,18 @@ export default function ModelManagerModal({ open, onClose, onSuccess }: ModelMan
               />
             </Form.Item>
 
-            <Form.Item label={t('apiKey')} required>
+            <Form.Item
+              label={t('apiKey')}
+              required={!isEdit}
+              extra={isEdit ? <Text type="secondary" style={{ fontSize: 12 }}>留空则保留原有 API Key</Text> : undefined}
+            >
               <Controller
                 name="apiKey"
                 control={control}
                 render={({ field, fieldState }) => (
                   <>
-                    <Input.Password {...field} placeholder="sk-..." status={fieldState.error ? 'error' : ''} />
-                    {fieldState.error && <Text type="danger">{fieldState.error.message}</Text>}
+                    <Input.Password {...field} placeholder={isEdit ? '留空保留原有 Key，或输入新 Key' : 'sk-...'} status={fieldState.error ? 'error' : ''} />
+                    {fieldState.error && !isEdit && <Text type="danger">{fieldState.error.message}</Text>}
                   </>
                 )}
               />

@@ -13,29 +13,36 @@ A production-ready AI Agent Engine built with Node.js + TypeScript ESM. Supports
 | 3 | Automatic LLM retry with exponential backoff |
 | 4 | SSE streaming responses |
 | 5 | Tool registry with unified `Tool` interface |
-| 6 | Built-in file tools (read, write, list, delete) |
-| 7 | Shell command tool with whitelist security |
-| 8 | Memory tools (remember / recall / forget / list) |
-| 9 | HTTP MCP client — import tools from any MCP server |
-| 10 | Persistent SQLite memory store (multi-tenant) |
-| 11 | Persistent SQLite conversation history |
-| 12 | Persistent SQLite task queue with background polling |
-| 13 | SQLite result cache store |
-| 14 | Prompt template store with variable interpolation |
-| 15 | Workspace isolation per tenant/session |
-| 16 | JWT + API-key authentication middleware |
-| 17 | Observability: structured pino logging + metrics |
-| 18 | Tool execution instrumentation (duration, success rate) |
-| 19 | Fastify HTTP API (chat, memory, conversation, tasks, tools) |
-| 20 | Built-in skills (math, time) |
-| 21 | SQLite migration runner |
-| 22 | Docker Compose deployment |
-| 23 | **Thinking Mode** — DeepSeek R1 / Claude 3.7 Sonnet reasoning support |
-| 24 | **Model Management** — Multi-model configuration with encrypted API key storage |
-| 25 | **Ask User** — Interactive tool that pauses agent loop for user input |
-| 26 | **AbortSignal** — Client disconnect cancels LLM requests gracefully |
-| 27 | **i18n** — Multi-language UI (Chinese / English) |
-| 28 | **Settings API** — Runtime environment variable management |
+| 6 | Built-in file tools (read, write, list, delete, create_dir) |
+| 7 | **Image reading tool** (`read_image`) — Vision-capable base64 injection |
+| 8 | Shell command tool with whitelist security |
+| 9 | Memory tools (remember / recall / forget / list) |
+| 10 | HTTP MCP client — import tools from any MCP server |
+| 11 | Persistent SQLite memory store (multi-tenant) |
+| 12 | Persistent SQLite conversation history |
+| 13 | Persistent SQLite task queue with background polling |
+| 14 | SQLite result cache store |
+| 15 | Prompt template store with variable interpolation |
+| 16 | Workspace isolation per tenant/session |
+| 17 | JWT + API-key authentication middleware |
+| 18 | Observability: structured pino logging + metrics |
+| 19 | Tool execution instrumentation (duration, success rate) |
+| 20 | Fastify HTTP API (chat, memory, conversation, tasks, tools) |
+| 21 | Built-in skills (math, time) |
+| 22 | SQLite migration runner |
+| 23 | Docker Compose deployment |
+| 24 | **Thinking Mode** — DeepSeek R1 / Claude 3.7 Sonnet / Qwen3 reasoning support |
+| 25 | **Model Management** — Multi-model configuration with encrypted API key storage |
+| 26 | **Ask User** — Interactive tool that pauses agent loop for user input |
+| 27 | **AbortSignal** — Client disconnect cancels LLM requests gracefully |
+| 28 | **i18n** — Multi-language UI (Chinese / English) |
+| 29 | **Settings API** — Runtime environment variable management |
+| 30 | **Multi-modal Input** — Image & file attachments via workspace reference (no base64 in history) |
+| 31 | **Context Compression** — Extractive + keyword compression with accuracy validation |
+| 32 | **Unified Tool Registry Factory** — Single source of truth for all tool registration |
+| 33 | **QA Logger** — Structured Q&A audit log for every conversation turn |
+| 34 | **Workspace File Upload** — Upload images/files up to 100 MB directly to session workspace |
+| 35 | **Context Memory Switch** — Per-session toggle for conversation history injection |
 
 ---
 
@@ -56,7 +63,7 @@ npm run db:migrate
 npm run dev
 ```
 
-The server starts on `http://localhost:3000` by default.
+The server starts on `http://localhost:12323` by default.
 
 ---
 
@@ -65,17 +72,25 @@ The server starts on `http://localhost:3000` by default.
 ### Chat 接口 (SSE 流式响应)
 ```bash
 # 标准流式输出 (-N 禁用缓冲)
-curl -N -X POST http://localhost:3000/api/v1/chat \
+curl -N -X POST http://localhost:12323/api/v1/chat \
   -H "Content-Type: application/json" \
   -d '{
     "message": "你好，请自我介绍一下",
     "sessionId": "test-session"
   }'
 
+# 带附件（上传文件后按文件名引用，AI 自动调用 read_file/read_image 读取）
+curl -N -X POST http://localhost:12323/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "分析这张图",
+    "sessionId": "test-session",
+    "attachments": [{ "name": "screenshot.png", "content": "", "type": "image/png" }]
+  }'
+
 # 过滤数据流，只看内容文本 (适合控制台预览)
-# 注意：管道连接时需要通过参数禁用各级程序的缓冲区，否则会"一下子弹出"
 # macOS 用户 (BSD sed):
-curl -N -s -X POST http://localhost:3000/api/v1/chat \
+curl -N -s -X POST http://localhost:12323/api/v1/chat \
   -H "Content-Type: application/json" \
   -d '{"message": "讲个笑话", "sessionId": "test-session"}' \
   | grep --line-buffered "data: " \
@@ -87,14 +102,13 @@ curl -N -s -X POST http://localhost:3000/api/v1/chat \
 # curl -N -s ... | grep --line-buffered "data: " | sed -u 's/data: //g' | jq -j --unbuffered '.content // empty'
 
 # Windows 用户 (PowerShell):
-# 注意：PowerShell 管道处理流式数据较慢，建议使用以下方式或在 Git Bash 中运行
-Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/v1/chat -Headers @{"Content-Type"="application/json"} -Body '{"message":"你好"}'
+Invoke-RestMethod -Method Post -Uri http://localhost:12323/api/v1/chat -Headers @{"Content-Type"="application/json"} -Body '{"message":"你好"}'
 ```
 
 ### Memory 接口 (存储/查询)
 ```bash
 # 存储记忆
-curl -X POST http://localhost:3000/api/v1/memory/remember \
+curl -X POST http://localhost:12323/api/v1/memory/remember \
   -H "Content-Type: application/json" \
   -d '{
     "key": "user_name",
@@ -103,16 +117,16 @@ curl -X POST http://localhost:3000/api/v1/memory/remember \
   }'
 
 # 查询记忆
-curl "http://localhost:3000/api/v1/memory/recall/user_name?sessionId=test-session"
+curl "http://localhost:12323/api/v1/memory/recall/user_name?sessionId=test-session"
 ```
 
 ### 系统状态
 ```bash
 # 健康检查
-curl http://localhost:3000/health
+curl http://localhost:12323/health
 
 # 指标统计
-curl http://localhost:3000/metrics
+curl http://localhost:12323/metrics
 ```
 
 ---
@@ -121,7 +135,7 @@ curl http://localhost:3000/metrics
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `3000` | HTTP server port |
+| `PORT` | `12323` | HTTP server port |
 | `HOST` | `0.0.0.0` | HTTP server bind address |
 | `NODE_ENV` | `development` | Environment (`development` / `production`) |
 | `LOG_LEVEL` | `info` | Pino log level (`debug`, `info`, `warn`, `error`) |
@@ -129,13 +143,14 @@ curl http://localhost:3000/metrics
 | `LLM_PRIMARY_MODEL` | `gpt-4o-mini` | Primary model name |
 | `LLM_FALLBACK_MODEL` | _(none)_ | Fallback model name |
 | `OPENAI_API_KEY` | _(required for OpenAI)_ | OpenAI API key |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL |
 | `ANTHROPIC_API_KEY` | _(required for Anthropic)_ | Anthropic API key |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama base URL |
 | `DB_PATH` | `./agent.db` | SQLite database file path |
 | `WORKSPACE_ROOT` | `./workspace` | Root directory for per-tenant workspaces |
 | `AUTH_ENABLED` | `true` | Enable JWT/API-key authentication (`false` for dev) |
 | `JWT_SECRET` | `dev-secret-change-in-production` | JWT signing secret |
-| `TOKEN_BUDGET` | `8000` | Max tokens per agent context |
+| `TOKEN_BUDGET` | `8000` | Max tokens per agent context window |
 | `MAX_ITERATIONS` | `50` | Max ReAct loop iterations |
 | `ENCRYPTION_KEY` | _(auto-generated)_ | AES-256-GCM key for API key encryption (32 hex chars) |
 
@@ -156,8 +171,13 @@ curl http://localhost:3000/metrics
   "sessionId": "optional-uuid",
   "agentId": "optional-agent-id",
   "systemPrompt": "You are a helpful assistant.",
-  "maxIterations": 10,
+  "maxAskUserCount": 5,
   "thinkingMode": false,
+  "inheritContext": true,
+  "workspacePaths": [],
+  "attachments": [
+    { "name": "image.png", "content": "", "type": "image/png", "encoding": "base64" }
+  ],
   "toolResponse": {
     "toolCallId": "call_xxx",
     "name": "ask_user",
@@ -172,9 +192,20 @@ data: {"content":"The answer is 4."}
 data: {"thinking":"Let me think about this..."}
 data: {"toolStart":{"name":"calculator","args":{"expr":"2+2"},"toolCallId":"call_1"}}
 data: {"toolEnd":{"name":"calculator","toolCallId":"call_1","success":true,"outputPreview":"4"}}
+data: {"ask_user":{"question":"...","options":["A","B"],"toolCallId":"call_2"}}
 data: {"usage":{"systemPromptTokens":50,"completionTokens":10,"totalTokens":60}}
-data: [DONE]
-```
+
+### Workspace
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/workspace/files?sessionId=` | Get workspace files tree |
+| `GET` | `/api/v1/workspace/recent` | Get recently used workspaces |
+| `GET` | `/api/v1/workspace/file/content?sessionId=&path=` | Read file content |
+| `GET` | `/api/v1/workspace/image?sessionId=&path=` | Get image as data URL (for UI preview) |
+| `POST` | `/api/v1/workspace/file` | Upload a file to session workspace (multipart, max 100 MB) |
+| `DELETE` | `/api/v1/workspace/recent/:sessionId` | Physically delete workspace directory |
+| `POST` | `/api/v1/workspace/rename` | Rename workspace and its associated sessionId |
 
 ### Memory
 
@@ -193,7 +224,7 @@ data: [DONE]
 | `GET` | `/api/v1/conversation/history?sessionId=` | Fetch message history |
 | `DELETE` | `/api/v1/conversation/history?sessionId=` | Clear message history |
 | `GET` | `/api/v1/conversations/:conversationId` | Get single conversation messages |
-| `DELETE` | `/api/v1/sessions/:sessionId` | Delete entire session completely (optional `?keepWorkspace=true`) |
+| `DELETE` | `/api/v1/sessions/:sessionId` | Delete entire session (optional `?keepWorkspace=true`) |
 
 ### Messages
 
@@ -221,15 +252,15 @@ data: [DONE]
 |--------|------|-------------|
 | `GET` | `/api/v1/tools` | List all registered tools |
 
-### Workspace
+### Agents
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/v1/workspace/files?sessionId=` | Get workspace files tree |
-| `GET` | `/api/v1/workspace/recent` | Get recently used workspaces |
-| `GET` | `/api/v1/workspace/file/content?sessionId=&path=` | Read file content |
-| `DELETE` | `/api/v1/workspace/recent/:sessionId` | Physically delete workspace directory |
-| `POST` | `/api/v1/workspace/rename` | Rename workspace and its associated sessionId |
+| `POST` | `/api/v1/agents` | Create a new agent |
+| `GET` | `/api/v1/agents` | List agents |
+| `GET` | `/api/v1/agents/:id` | Get agent detail |
+| `PUT` | `/api/v1/agents/:id` | Update agent |
+| `DELETE` | `/api/v1/agents/:id` | Delete agent |
 
 ### Models
 
@@ -272,7 +303,7 @@ src/
 │       ├── conversation.ts    # History CRUD
 │       ├── tasks.ts           # Task queue
 │       ├── tools.ts           # Tool listing
-│       ├── workspace.ts       # Workspace management
+│       ├── workspace.ts       # Workspace management + file upload
 │       ├── messages.ts        # Message edit/regenerate/tokens
 │       ├── agents.ts          # Agent CRUD
 │       ├── models.ts          # Model management
@@ -281,26 +312,32 @@ src/
 ├── core/
 │   ├── agent-context/         # AgentContext, Tool interfaces
 │   ├── agent-loop/            # ReActStrategy
-│   ├── llm-adapter/           # OpenAI / Anthropic / Ollama
+│   ├── compression/           # Context compression (extractive + keyword)
+│   ├── llm-adapter/           # OpenAI / Anthropic / Ollama (multi-modal)
 │   ├── stream-pipeline/       # Async pipeline + SSE sink
-│   └── tool-registry/         # ToolRegistry
+│   ├── tool-registry/         # ToolRegistry
+│   └── utils/                 # Token estimation utilities
 ├── storage/
 │   ├── sqlite/                # DB connection + migrations
 │   ├── memory-store/          # SQLiteMemoryStore
-│   ├── conversation/          # SQLiteConversationHistory
+│   ├── conversation/          # SQLiteConversationHistory (sliding window)
 │   ├── task-queue/            # SQLiteTaskQueue
-│   └── cache-store/           # SQLiteCacheStore
+│   ├── cache-store/           # SQLiteCacheStore
+│   ├── agent/                 # SQLiteAgentStore
+│   └── knowledge/             # Knowledge base + RAG
 ├── tools/
-│   ├── file/                  # File read/write/list/delete
+│   ├── file/                  # read_file / write_file / list_files / delete_file / create_dir / read_image
 │   ├── cmd/                   # Shell command execution
-│   ├── memory/                # remember/recall/forget tools
+│   ├── memory/                # remember / recall / forget tools
 │   ├── ask-user/              # Interactive ask_user tool
-│   └── mcp/                   # HTTP MCP client
-├── skills/                    # Built-in skills (math, time)
+│   ├── skill/                 # External skill runner
+│   ├── mcp/                   # HTTP MCP client
+│   └── registry-factory.ts   # ★ Unified tool registry factory (single source of truth)
+├── skills/                    # Built-in skills (math, time) + external skill loader
 ├── auth/                      # JWT + API key middleware
-├── observability/             # Logger + metrics
+├── observability/             # Logger + metrics + QA logger
 ├── prompt-template/           # Template store
-├── workspace/                 # Workspace manager
+├── workspace/                 # Workspace manager (multi-path support)
 ├── security/                  # Command whitelist
 └── utils/                     # Encryption utilities
 ```
@@ -308,10 +345,38 @@ src/
 **Key design decisions:**
 - **SQLite for everything** — no Redis, no external services required
 - **Unified `Tool` interface** — file tools, shell tools, memory tools, MCP tools all share the same interface
+- **`registry-factory.ts`** — single place to add/remove tools; all routes (chat / messages / tools) call `createToolRegistry()` for a consistent, complete toolset
 - **Multi-tenant isolation** — tenantId + sessionId scope all storage reads/writes
 - **Auth optional** — set `AUTH_ENABLED=false` during development
-- **Thinking Mode** — reasoning content extracted from model-specific fields (`reasoning_content`, `thinking` blocks)
+- **Thinking Mode** — reasoning content extracted from model-specific fields (`reasoning_content` for Qwen/DeepSeek, `thinking` blocks for Claude; auto-detected by model name)
 - **Encrypted API keys** — model API keys encrypted with AES-256-GCM before storage
+- **Multi-modal via workspace reference** — images/files uploaded to workspace; AI receives text instruction to call `read_image` / `read_file`; base64 is never stored in chat history, preventing token budget explosion
+- **Sliding window history** — conversation history capped at `TOKEN_BUDGET` tokens; oldest messages dropped first; tool results kept intact (no mid-content truncation)
+- **Context compression** — optional extractive/keyword summarization for long histories
+
+---
+
+## Multi-modal Usage
+
+When uploading images or files, the workflow is:
+
+1. **Upload** the file via `POST /api/v1/workspace/file` (multipart form)
+2. **Send chat** with `attachments` referencing the uploaded filename (no base64 in body)
+3. **AI calls `read_image` / `read_file`** tool automatically
+4. **LLM adapter** intercepts the `read_image` result and injects a vision-capable `user` message with the actual image data — enabling true OCR and image analysis
+
+```json
+// Chat request with attachment
+{
+  "message": "请分析这张截图",
+  "sessionId": "my-session",
+  "attachments": [
+    { "name": "screenshot.png", "content": "", "type": "image/png" }
+  ]
+}
+```
+
+The user message UI shows a **file card** (name + size + date), not raw binary content.
 
 ---
 
@@ -351,6 +416,13 @@ const myTool: Tool = {
     return { success: true, output: `Processed: ${input}` }
   },
 }
+```
+
+Then register it in `src/tools/registry-factory.ts`:
+
+```typescript
+// registry-factory.ts — 唯一需要修改的地方
+registry.register(myTool)
 ```
 
 ### Using the MCP Client

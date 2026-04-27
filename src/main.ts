@@ -1,3 +1,11 @@
+// Fix Windows console UTF-8 encoding (prevent garbled Chinese/emoji output)
+if (process.platform === 'win32') {
+  process.stdout.setEncoding('utf8')
+  process.stderr.setEncoding('utf8')
+  // Attempt to set console code page to UTF-8 via env hint (works with newer Node)
+  process.env.PYTHONIOENCODING = 'utf-8'
+}
+
 // Load .env file manually (no dotenv dependency required)
 import { readFileSync } from 'node:fs'
 
@@ -23,7 +31,7 @@ import { logger } from './observability/index.js'
 import { skillsRegistry } from './skills/index.js'
 import { initDb } from './storage/sqlite/db.js'
 
-const PORT = parseInt(process.env.PORT ?? '3000', 10)
+const PORT = parseInt(process.env.PORT ?? '12323', 10)
 const HOST = process.env.HOST ?? '0.0.0.0'
 
 async function main() {

@@ -53,10 +53,11 @@ export async function buildServer() {
   })
 
   // Global error handler
-  fastify.setErrorHandler((error, request, reply) => {
-    logger.error({ err: error, requestId: request.id }, 'Unhandled error')
+  fastify.setErrorHandler(async (error, request, reply) => {
+    const err = error as Error & { statusCode?: number }
+    logger.error({ err, requestId: request.id }, 'Unhandled error')
     // All errors should return 200 with standard fail JSON
-    void reply.code(200).send(fail(error.statusCode ?? 50000, error.message ?? 'Internal server error'))
+    return reply.code(200).send(fail(err.statusCode ?? 50000, err.message ?? 'Internal server error'))
   })
 
   // Register routes under /api/v1

@@ -27,12 +27,20 @@ export interface ModelWhitelist {
 }
 
 function mapModelRow(row: Row): ModelConfig {
+  let apiKey = ''
+  try {
+    apiKey = decrypt(row['api_key'] as string)
+  } catch {
+    // Decryption failed - likely due to ENCRYPTION_KEY change.
+    // Return empty string; user must re-enter the API key.
+    apiKey = ''
+  }
   return {
     id: row['id'] as string,
     tenantId: row['tenant_id'] as string,
     provider: row['provider'] as string,
     modelId: row['model_id'] as string,
-    apiKey: decrypt(row['api_key'] as string),
+    apiKey,
     baseUrl: row['base_url'] as string,
     displayName: row['display_name'] as string | undefined,
     isEnabled: Boolean(row['is_enabled']),

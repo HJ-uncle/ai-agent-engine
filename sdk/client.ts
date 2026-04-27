@@ -4,7 +4,7 @@
  */
 
 export interface AgentClientOptions {
-  /** 服务地址，默认 http://localhost:3000 */
+  /** 服务地址，默认 http://localhost:12323 */
   baseUrl?: string
   /** API Key（AUTH_ENABLED=true 时需要） */
   apiKey?: string
@@ -174,7 +174,7 @@ export class AgentClient {
   private timeout: number
 
   constructor(options: AgentClientOptions = {}) {
-    this.baseUrl = (options.baseUrl ?? 'http://localhost:3000').replace(/\/$/, '')
+    this.baseUrl = (options.baseUrl ?? 'http://localhost:12323').replace(/\/$/, '')
     this.timeout = options.timeout ?? 60000
     this.headers = {
       'Content-Type': 'application/json',

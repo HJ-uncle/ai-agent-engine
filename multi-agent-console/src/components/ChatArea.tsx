@@ -1122,12 +1122,42 @@ function MessageItem({
                 </div>
               );
             }
+            if (item.type === "workspace_image") {
+              return (
+                <div key={i} style={{ marginTop: 4 }}>
+                  <img
+                    src={item.url}
+                    alt={item.name}
+                    style={{
+                      maxWidth: "100%",
+                      maxHeight: 400,
+                      borderRadius: 4,
+                      border: "1px solid #30363d",
+                      cursor: "zoom-in",
+                    }}
+                    onClick={() => window.open(item.url, "_blank")}
+                  />
+                  <div style={{ fontSize: 11, color: '#8b949e', marginTop: 4 }}>
+                    {item.name}
+                  </div>
+                </div>
+              );
+            }
             if (item.type === "file") {
               return (
                 <FileCard 
                   key={i} 
                   file={item.file} 
                   onCopyPath={handleCopyPath} 
+                />
+              );
+            }
+            if (item.type === "workspace_file") {
+              return (
+                <FileCard
+                  key={i}
+                  file={{ name: item.name, type: item.fileType || "文件" }}
+                  onCopyPath={handleCopyPath}
                 />
               );
             }
@@ -1437,6 +1467,7 @@ export default function ChatArea() {
       return true;
     });
     setAttachments(prev => [...prev, ...validFiles]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1656,28 +1687,32 @@ export default function ChatArea() {
               uploadedFiles.push(file.name);
               
               // 2. Prepare for AI
+              // 图片已上传到 workspace，只传文件名给后端，让 AI 用 read_image 工具读取
+              // 不传 base64 content，避免消息体过大
+              // 文件已上传到 workspace，content 不传内容，让 AI 用 read_file/read_image 工具读取
               attachmentData.push({
                 name: file.name,
-                content: fileContent,
+                content: '',  // 不传内容，避免消息体过大
                 type: file.type,
                 encoding: isImage ? "base64" : "utf-8"
               });
 
               if (isImage) {
+                // 图片已上传到 workspace，用 workspace URL 而非 base64，避免消息体过大
                 userContentParts.push({
-                  type: "image_url",
-                  image_url: { url: `data:${file.type};base64,${fileContent}` },
-                  metadata: { name: file.name, size: file.size }
+                  type: "workspace_image",
+                  name: file.name,
+                  sessionId: activeSessionId,
+                  url: `/api/v1/workspace/image?sessionId=${encodeURIComponent(activeSessionId)}&path=${encodeURIComponent(file.name)}`,
                 });
               } else {
+                // 文档只存文件名引用（不内嵌内容），和图片一样只显示卡片
+                // AI 通过 read_file 工具读取文件内容
                 userContentParts.push({
-                  type: "file",
-                  file: { name: file.name, type: file.type, content: fileContent }
-                });
-                // Also add as text for non-multimodal models
-                userContentParts.push({ 
-                  type: "text", 
-                  text: `\n\n--- 文件: ${file.name} ---\n${fileContent}\n--- 结束 ---` 
+                  type: "workspace_file",
+                  name: file.name,
+                  fileType: file.type,
+                  sessionId: activeSessionId,
                 });
               }
             }
@@ -1701,6 +1736,7 @@ export default function ChatArea() {
         setTimeout(() => scrollToBottom(true), 100);
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [activeSessionId, isInputDisabled, send, scrollToBottom, attachments],
   );
 
@@ -1832,12 +1868,12 @@ export default function ChatArea() {
                   />
                   <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #30363d' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                      <span style={{ color: '#8b949e', fontSize: 12 }}>关闭记忆</span>
-                      <Tooltip title={session?.inheritContext === false ? '已开启：本次对话AI不会记住之前的内容' : '已关闭：AI 会记住之前的对话，上下文会连贯'}>
+                      <span style={{ color: '#8b949e', fontSize: 12 }}>上下文记忆</span>
+                      <Tooltip title={session?.inheritContext === false ? '已关闭：AI 不会记住之前的对话内容，每次独立回答' : '已开启：AI 会记住之前的对话，上下文连贯'}>
                         <Switch
                           size="small"
-                          checked={session?.inheritContext === false}
-                          onChange={(checked) => setInheritContext(activeSessionId, !checked)}
+                          checked={session?.inheritContext !== false}
+                          onChange={(checked) => setInheritContext(activeSessionId, checked)}
                           disabled={messages.length > 0}
                         />
                       </Tooltip>

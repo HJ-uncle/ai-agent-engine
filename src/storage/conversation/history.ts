@@ -8,13 +8,19 @@ type Ctx = { tenantId: string; sessionId: string }
 
 function rowToMessage(row: Row): Message & { conversationId?: string } {
   const role = row['role'] as string
-  let content = row['content'] as string
-  try {
-    if (content.startsWith('[') || content.startsWith('{')) {
-      content = JSON.parse(content)
+  let content: any = row['content'] as string
+  // tool 消息的 content 是工具输出字符串，永远保持原始字符串，不自动 JSON.parse
+  // （read_file 返回 JSON 文本、read_image 返回 JSON 包装都需要保持字符串形式，
+  //   由 openai.ts 等 adapter 自行解析处理）
+  // 只对 user / assistant 消息做 JSON.parse（它们可能存储了 multipart array）
+  if (role !== 'tool') {
+    try {
+      if (content.startsWith('[') || content.startsWith('{')) {
+        content = JSON.parse(content)
+      }
+    } catch {
+      /* ignore if not JSON */
     }
-  } catch {
-    /* ignore if not JSON */
   }
   const tool_call_id = row['tool_call_id'] as string | null
   const tool_call_name = row['tool_call_name'] as string | null  // assistant 发起调用的工具名
@@ -183,13 +189,14 @@ export class SQLiteConversationHistory implements ConversationHistory {
    * 滑动窗口裁剪：当历史 tokens 超过 maxTokens 时，
    * 从最旧的消息开始丢弃（保留最近的对话上下文）。
    * system 消息（摘要）始终保留在开头。
+   * 所有消息内容保持原文，不做截断（工具输出等大内容靠丢弃旧消息来控制总量）。
    */
   private applyTokenWindow(messages: Message[]): Message[] {
     // 1. 统计所有消息的 token 数
     const total = messages.reduce((sum, m) => sum + (m.tokens ?? estimateTokens(m.content)), 0)
     if (total <= this.maxTokens) return messages
 
-    // 2. 分离开头的 system 消息（摘要），对剩余消息做截断
+    // 2. 分离开头的 system 消息（摘要），对剩余消息做滑动窗口
     let systemPrefix: Message[] = []
     let rest = messages
     if (messages.length > 0 && messages[0].role === 'system') {
@@ -197,7 +204,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
       rest = messages.slice(1)
     }
 
-    // 3. 从最旧的消息开始丢弃，直到 token 数满足限制
+    // 3. 从最旧的消息开始丢弃，直到 token 数满足限制（至少保留最后 2 条）
     let windowTokens = total - systemPrefix.reduce((s, m) => s + (m.tokens ?? estimateTokens(m.content)), 0)
     let startIdx = 0
     while (startIdx < rest.length - 2 && windowTokens > this.maxTokens) {

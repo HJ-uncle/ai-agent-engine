@@ -2,13 +2,11 @@ import React, { useEffect, useState, useMemo } from 'react'
 import { Tree, Dropdown, MenuProps, Tooltip, Input, Modal, App, Popconfirm } from 'antd'
 import {
   FolderOpenOutlined,
-  FolderOutlined,
   DesktopOutlined,
   DownOutlined,
   RightOutlined,
   SearchOutlined,
   SyncOutlined,
-  CloseOutlined,
   EditOutlined,
   DeleteOutlined
 } from '@ant-design/icons'
@@ -95,21 +93,8 @@ export default function ExplorerPanel() {
   useEffect(() => {
     fetchFiles()
     fetchRecent()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId, lastFilesUpdate])
-
-  const handleDeleteWorkspace = async (e: any, name: string) => {
-    e.stopPropagation()
-    if (recentWorkspaces.length <= 1) {
-      // Must keep at least one
-      return
-    }
-    try {
-      await workspaceApi.deleteRecent(name)
-      await fetchRecent()
-    } catch (err) {
-      console.error(err)
-    }
-  }
 
   const handleRename = (oldName: string) => {
     setRenameTarget(oldName)

@@ -33,6 +33,11 @@ export interface ReActOptions {
   promptBreakdown?: Pick<TokenUsage, 'systemPromptTokens' | 'systemToolsTokens' | 'skillTokens'>
   thinkingConfig?: Record<string, unknown> | null
   responseThinkingField?: string | null
+  /**
+   * 原始用户消息内容（含 workspace_image 等前端格式），用于存入历史 DB（UI 展示用）。
+   * 与 input（LLM prompt）分离：LLM 看到文本化的 prompt，DB/UI 保留原始格式。
+   */
+  displayContent?: string | any[] | null
 }
 
 export class ReActStrategy implements LoopStrategy {
@@ -49,12 +54,15 @@ export class ReActStrategy implements LoopStrategy {
     const conversationId = this.options.conversationId
 
     // Add user message to history only if input is provided
+    // 优先使用 displayContent（原始前端格式，含 workspace_image）存入 DB，用于 UI 展示
+    // LLM 收到的是处理后的 input（文本化的 prompt），两者分离
+    const historyContent = this.options.displayContent ?? input
     if (input !== null && input !== '') {
       const userMessage: Message & { conversationId?: string } = {
         role: 'user',
-        content: input,
+        content: historyContent,
         createdAt: Date.now(),
-        tokens: estimateTokens(input),
+        tokens: estimateTokens(historyContent),
         ...(conversationId ? { conversationId } : {}),
       }
       await ctx.history.append(userMessage, ctx)
@@ -80,27 +88,27 @@ export class ReActStrategy implements LoopStrategy {
     }
 
     for (let iteration = 0; iteration < maxIterations; iteration++) {
-      // Get windowed messages first
-      const messages = await ctx.history.getHistory(ctx)
-
-      // Compute token count from the WINDOWED messages (not raw DB total) — fixes budget check bug
-      const historyTokens = messages.reduce((sum, m) => sum + (m.tokens ?? estimateTokens(m.content)), 0)
-
-      // Auto-compress when the raw (unwindowed) history crosses 75% of the token budget.
-      // This keeps the DB lean and avoids the sliding window silently discarding context.
+      // 1. 先检查是否需要压缩（用 raw token count，不受 window 限制）
       const compressThreshold = Math.floor(ctx.tokenBudget * 0.75)
       const rawTokens = await ctx.history.getRawTokenCount(ctx)
       if (rawTokens > compressThreshold) {
         ctx.logger.info({ rawTokens, threshold: compressThreshold }, 'Compressing conversation history')
         await ctx.history.compress(ctx, async (msgs) => {
+          // 超大消息（base64 图片等）压缩时只取前 200 字符作为摘要输入
           const content = msgs
-            .map((m) => `${m.role}: ${typeof m.content === 'string' ? m.content.slice(0, 200) : '[Multimodal]'}`)
+            .map((m) => {
+              const tokens = m.tokens ?? estimateTokens(m.content)
+              const text = typeof m.content === 'string'
+                ? (tokens > 1000 ? m.content.slice(0, 200) + `...[truncated, ~${tokens} tokens]` : m.content)
+                : '[Multimodal content]'
+              return `${m.role}: ${text}`
+            })
             .join('\n')
           const resp = await this.llm.complete(
             [
               {
                 role: 'user',
-                content: `Summarize this conversation concisely (max 300 words), preserving key context, decisions and facts:\n\n${content}`,
+                content: `Summarize this conversation concisely (max 500 words), preserving key context, decisions and facts:\n\n${content}`,
                 createdAt: Date.now(),
               },
             ],
@@ -110,7 +118,12 @@ export class ReActStrategy implements LoopStrategy {
         })
       }
 
-      // Guard: windowed tokens must not exceed the budget
+      // 2. 压缩后重新取 windowed messages（applyTokenWindow 会截断超大消息）
+      const messages = await ctx.history.getHistory(ctx)
+
+      // 3. 计算 windowed token count，检查是否超 budget
+      const historyTokens = messages.reduce((sum, m) => sum + (m.tokens ?? estimateTokens(m.content)), 0)
+
       if (historyTokens >= ctx.tokenBudget) {
         ctx.logger.warn({ historyTokens, tokenBudget: ctx.tokenBudget }, 'Token budget exhausted')
         yield '\n\n[Response truncated: token budget exceeded]'
@@ -252,7 +265,7 @@ export class ReActStrategy implements LoopStrategy {
           name: toolCall.name,
           toolCallId: toolCall.id,
           success: toolResult.success,
-          outputPreview: String(toolResult.output).slice(0, 500),
+          outputPreview: String(toolResult.output),
         })}`
 
         if (!toolResult.success) {

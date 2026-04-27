@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import {
   Button, Input, Tag, Tooltip, Popconfirm, Modal, Form, Switch,
-  Spin, Badge, message as antMsg, Select,
+  Spin, message as antMsg,
 } from 'antd'
 import {
   PlusOutlined, ReloadOutlined, DeleteOutlined,
-  EditOutlined, PlayCircleOutlined, StopOutlined,
+  EditOutlined, StopOutlined,
   CheckCircleOutlined, CloseCircleOutlined, SyncOutlined,
   ApiOutlined, ThunderboltOutlined,
 } from '@ant-design/icons'

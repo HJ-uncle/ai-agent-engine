@@ -21,6 +21,7 @@ function driveAiMessage(
 ) {
   let finalContent = initialContent
   const thinkingSteps: ThinkingStep[] = [...initialSteps]
+  let accumulatedUsage: TokenUsage | null = null
 
   const onEvent = (event: any) => {
     if (event.type === 'text_delta') {
@@ -60,12 +61,27 @@ function driveAiMessage(
     } else if (event.type === 'usage' || event.type === 'token_usage') {
       if (event.usage) {
         const durationMs = Date.now() - startTime
+        const u = event.usage as TokenUsage
+        // Accumulate usage across multiple rounds (e.g. tool-call loops)
+        if (!accumulatedUsage) {
+          accumulatedUsage = { ...u }
+        } else {
+          accumulatedUsage = {
+            promptTokens: (accumulatedUsage.promptTokens ?? 0) + (u.promptTokens ?? 0),
+            completionTokens: (accumulatedUsage.completionTokens ?? 0) + (u.completionTokens ?? 0),
+            totalTokens: (accumulatedUsage.totalTokens ?? 0) + (u.totalTokens ?? 0),
+            systemPromptTokens: (accumulatedUsage.systemPromptTokens ?? 0) + (u.systemPromptTokens ?? 0),
+            messagesTokens: (accumulatedUsage.messagesTokens ?? 0) + (u.messagesTokens ?? 0),
+            skillTokens: (accumulatedUsage.skillTokens ?? 0) + (u.skillTokens ?? 0),
+            systemToolsTokens: (accumulatedUsage.systemToolsTokens ?? 0) + (u.systemToolsTokens ?? 0),
+          }
+        }
         updateMessage(sid, aiMsgId, {
-          usage: event.usage,
+          usage: accumulatedUsage,
           durationMs,
           backendMessageId: event.conversationId ?? null,
         })
-        updateUsage(sid, event.usage as TokenUsage)
+        updateUsage(sid, u)
       }
     } else if (event.type === 'done') {
       const durationMs = Date.now() - startTime
@@ -74,11 +90,17 @@ function driveAiMessage(
         content: finalContent,
         thinkingSteps: [...thinkingSteps],
         durationMs,
+        // 保留已累积的 usage，不能丢失
+        ...(accumulatedUsage ? { usage: accumulatedUsage } : {}),
       })
     } else if (event.type === 'error') {
+      const durationMs = Date.now() - startTime
       updateMessage(sid, aiMsgId, {
         status: 'error',
         content: `❌ ${event.content ?? 'An error occurred'}`,
+        durationMs,
+        // 即使报错也保留已累积的 usage
+        ...(accumulatedUsage ? { usage: accumulatedUsage } : {}),
       })
     }
   }
@@ -90,12 +112,21 @@ function driveAiMessage(
       content: finalContent,
       thinkingSteps: [...thinkingSteps],
       durationMs,
+      // 保留已累积的 usage
+      ...(accumulatedUsage ? { usage: accumulatedUsage } : {}),
     })
     onDone?.()
   }
 
   const handleError = (err: Error) => {
-    updateMessage(sid, aiMsgId, { status: 'error', content: `❌ ${err.message}` })
+    const durationMs = Date.now() - startTime
+    updateMessage(sid, aiMsgId, {
+      status: 'error',
+      content: `❌ ${err.message}`,
+      durationMs,
+      // 即使报错也保留已累积的 usage
+      ...(accumulatedUsage ? { usage: accumulatedUsage } : {}),
+    })
     onError?.(err)
   }
 
@@ -124,6 +155,23 @@ export function useChat() {
         const { list } = await conversationApi.getHistory(sid)
         const msgs: Message[] = []
         let currentThinkingSteps: ThinkingStep[] = []
+        // Accumulate usage across tool-call rounds for a single assistant turn
+        let currentRoundUsage: TokenUsage | null = null
+
+        const accumulateUsage = (usage: TokenUsage | undefined | null) => {
+          if (!usage) return
+          if (!currentRoundUsage) {
+            currentRoundUsage = { ...usage }
+          } else {
+            currentRoundUsage.promptTokens = (currentRoundUsage.promptTokens ?? 0) + (usage.promptTokens ?? 0)
+            currentRoundUsage.completionTokens = (currentRoundUsage.completionTokens ?? 0) + (usage.completionTokens ?? 0)
+            currentRoundUsage.totalTokens = (currentRoundUsage.totalTokens ?? 0) + (usage.totalTokens ?? 0)
+            currentRoundUsage.systemPromptTokens = (currentRoundUsage.systemPromptTokens ?? 0) + (usage.systemPromptTokens ?? 0)
+            currentRoundUsage.messagesTokens = (currentRoundUsage.messagesTokens ?? 0) + (usage.messagesTokens ?? 0)
+            currentRoundUsage.skillTokens = (currentRoundUsage.skillTokens ?? 0) + (usage.skillTokens ?? 0)
+            currentRoundUsage.systemToolsTokens = (currentRoundUsage.systemToolsTokens ?? 0) + (usage.systemToolsTokens ?? 0)
+          }
+        }
 
         for (const m of list) {
           if (m.role === 'user') {
@@ -136,7 +184,10 @@ export function useChat() {
               backendMessageId: m.id, // Backend message_id for regenerate/edit
             })
             currentThinkingSteps = []
+            currentRoundUsage = null
           } else if (m.role === 'assistant') {
+            // Accumulate usage from every assistant message in this round (including tool-call intermediates)
+            accumulateUsage(m.usage)
             if (m.reasoningContent?.trim()) {
               currentThinkingSteps.push({ type: 'thinking', text: m.reasoningContent })
             }
@@ -160,10 +211,11 @@ export function useChat() {
                 status: 'done',
                 createdAt: m.createdAt || Date.now(),
                 backendMessageId: m.id, // Backend message_id for regenerate/edit
-                usage: m.usage || null,
+                usage: currentRoundUsage || m.usage || null,
                 thinkingSteps: [...currentThinkingSteps],
               })
               currentThinkingSteps = []
+              currentRoundUsage = null
             }
           } else if (m.role === 'tool') {
             const contentStr = String(m.content || '')
@@ -208,7 +260,9 @@ export function useChat() {
             status: 'done',
             createdAt: Date.now(),
             thinkingSteps: currentThinkingSteps,
+            usage: currentRoundUsage || null,
           })
+          currentRoundUsage = null
         }
 
         const totalUsage: TokenUsage = {
@@ -261,13 +315,13 @@ export function useChat() {
 
   /** 新消息发送 */
   const send = useCallback(
-    async (content: string, sessionId?: string, attachments?: Array<{ name: string; content: string; type: string; encoding?: 'utf-8' | 'base64' }>) => {
+    async (content: string | any[], sessionId?: string, attachments?: Array<{ name: string; content: string; type: string; encoding?: 'utf-8' | 'base64' }>) => {
       const sid = sessionId ?? activeSessionId
       const session = useSessionStore.getState().sessions.find((s) => s.id === sid)
       const agentId = session?.agentId
       const maxAskUserCount = useSessionStore.getState().maxAskUserCount
       const thinkingMode = useSessionStore.getState().thinkingMode
-      const inheritContext = session?.inheritContext ?? false
+      const inheritContext = session?.inheritContext ?? true
       const workspacePaths = session?.workspacePaths
 
       // 1. 添加用户消息（前端本地，仅用于显示）
@@ -348,10 +402,11 @@ export function useChat() {
       if (!lastAi?.conversationId) {
         const lastUser = [...msgs].reverse().find((m) => m.role === 'user')
         if (lastUser) {
-          useSessionStore.getState().deleteMessage(sid, lastAi?.id ?? '')
+          // 删除 lastUser 及其之后的所有消息（包括 AI 消息），再由 send() 重新添加 user 消息
           useSessionStore.getState().deleteMessagesAfter(sid, lastUser.id)
-          const content = typeof lastUser.content === 'string' ? lastUser.content : JSON.stringify(lastUser.content)
-          await send(content, sid)
+          useSessionStore.getState().deleteMessage(sid, lastUser.id)
+          // 直接传原始 content（string 或 array），不能 JSON.stringify，否则数组会变成 JSON 文本
+          await send(lastUser.content as string | any[], sid)
         }
         return
       }
@@ -404,8 +459,9 @@ export function useChat() {
       const msg = msgs.find((m) => m.id === msgId)
 
       if (!msg?.conversationId) {
-        useSessionStore.getState().editUserMessage(sid, msgId, newContent)
+        // 删除原始 user 消息及其后续，send() 会重新添加新的 user 消息
         useSessionStore.getState().deleteMessagesAfter(sid, msgId)
+        useSessionStore.getState().deleteMessage(sid, msgId)
         await send(newContent, sid)
         return
       }

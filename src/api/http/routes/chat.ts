@@ -6,17 +6,11 @@ import { v4 as uuidv4 } from 'uuid'
 import { ReActStrategy } from '../../../core/agent-loop/index.js'
 import { createPipeline, sseStream } from '../../../core/stream-pipeline/index.js'
 import { createAgentContext, Message } from '../../../core/agent-context/index.js'
-import { ToolRegistry } from '../../../core/tool-registry/index.js'
-import { SQLiteMemoryStore } from '../../../storage/memory-store/index.js'
 import { SQLiteConversationHistory } from '../../../storage/conversation/index.js'
 import { createLLMAdapter } from '../../../core/llm-adapter/index.js'
 import { createRequestLogger, QALogger, type QALogEntry } from '../../../observability/index.js'
-import { registerBuiltinSkills, buildSkillsSystemPrompt, skillsRegistry } from '../../../skills/index.js'
-import { fileTools } from '../../../tools/file/index.js'
-import { cmdTool } from '../../../tools/cmd/index.js'
-import { createMemoryTools } from '../../../tools/memory/index.js'
-import { registerMCPTools } from '../../../tools/mcp/loader.js'
-import { createSkillTools, runSkillScriptTool } from '../../../tools/skill/index.js'
+import { buildSkillsSystemPrompt } from '../../../skills/index.js'
+import { createToolRegistry } from '../../../tools/registry-factory.js'
 import { SQLiteAgentStore } from '../../../storage/agent/index.js'
 import { estimateTokens } from '../../../core/utils/tokens.js'
 import { searchChunks } from '../../../storage/knowledge/kb-repo.js'
@@ -70,28 +64,18 @@ export async function chatRoutes(fastify: FastifyInstance) {
       }
     }
 
-    // Build tool registry
-    const registry = new ToolRegistry()
-    const memory = new SQLiteMemoryStore()
-    registerBuiltinSkills(registry)
-    fileTools.forEach((t) => registry.register(t))
-    registry.register(cmdTool)
-    createMemoryTools(memory).forEach((t) => registry.register(t))
-    
-    // MCP Servers
-    // If agent is bound, we could theoretically filter MCP servers, but registerMCPTools currently loads all.
-    // For now we just load all, or ideally filter by allowedMcpServers if we extend registerMCPTools.
-    await registerMCPTools(registry)
+    // Build tool registry（统一工厂，含所有内置工具 + MCP + Skills）
+    const { registry, memory, externalSkills } = await createToolRegistry({ allowedSkills })
 
     const abortController = new AbortController()
     request.raw.on('close', () => {
-      if (request.raw.aborted || request.raw.destroyed) {
+      if (request.raw.destroyed) {
         reqLogger.info({ sessionId }, 'Client disconnected, aborting agent execution')
         abortController.abort(new Error('Client disconnected'))
       }
     })
 
-    // Build agent context 
+    // Build agent context
     const ctx = createAgentContext({
       sessionId,
       tenantId,
@@ -104,14 +88,6 @@ export async function chatRoutes(fastify: FastifyInstance) {
       signal: abortController.signal,
       inheritContext,
     })
-
-    // Skills: Filter by agent allowed skills if agentId is provided
-    let externalSkills = skillsRegistry.getSkills()
-    if (allowedSkills && allowedSkills.length > 0) {
-      externalSkills = externalSkills.filter(s => allowedSkills!.includes(s.name))
-    }
-    createSkillTools(externalSkills).forEach((t) => registry.register(t))
-    registry.register(runSkillScriptTool)
 
     const skillsPrompt = buildSkillsSystemPrompt(externalSkills)
     const baseSystemPrompt = [effectiveSystemPrompt, skillsPrompt].filter(Boolean).join('\n\n')
@@ -153,6 +129,8 @@ export async function chatRoutes(fastify: FastifyInstance) {
     let modelApiKey: string | undefined = undefined
     let modelBaseUrl: string | undefined = undefined
     let modelProvider: string | undefined = undefined
+    // 实际传给 LLM adapter 的 model 名（当 DB 配置不可用时，回退到 env 的 primaryModel）
+    let resolvedModel: string | undefined = effectiveModel
 
     const modelsStore = new ModelsStore()
     const availableModels = await modelsStore.getModels(tenantId)
@@ -161,14 +139,48 @@ export async function chatRoutes(fastify: FastifyInstance) {
     const whitelistInfo = whitelists.find(m => m.modelId === currentModelName)
 
     if (modelInfo) {
-      if (modelInfo.apiKey) modelApiKey = modelInfo.apiKey
-      if (modelInfo.baseUrl) modelBaseUrl = modelInfo.baseUrl
-      if (modelInfo.provider) modelProvider = modelInfo.provider
+      if (modelInfo.apiKey) {
+        // apiKey 正常 → 使用 DB 完整配置（agent model 优先级最高）
+        modelApiKey = modelInfo.apiKey
+        if (modelInfo.baseUrl) modelBaseUrl = modelInfo.baseUrl
+        if (modelInfo.provider) modelProvider = modelInfo.provider
+        reqLogger.info({ model: currentModelName, provider: modelInfo.provider, hasApiKey: true, baseUrl: modelInfo.baseUrl }, 'Using model config from DB (agent model takes priority)')
+      } else {
+        // apiKey 解密失败 → DB 配置不可用，model 名也一起回退到 env primaryModel
+        // 避免 agent model 名 + env endpoint 不匹配（如 qwen3.5-plus 发到 fp8 endpoint → 404）
+        const envPrimaryModel = process.env.LLM_PRIMARY_MODEL ?? process.env.LLM_MODEL
+        resolvedModel = envPrimaryModel  // 回退到 env 的 model 名
+        reqLogger.warn(
+          { agentModel: currentModelName, fallbackModel: envPrimaryModel, baseUrl: modelInfo.baseUrl },
+          'Model found in DB but apiKey is empty (decryption failed or key not set). Falling back to env model+config. Please re-enter the API Key in Models management page.'
+        )
+      }
+    } else {
+      reqLogger.warn(
+        { model: currentModelName, fallbackBaseUrl: process.env.OPENAI_BASE_URL ? 'env:OPENAI_BASE_URL' : 'none' },
+        'Model not found in DB, falling back to env variables. If 401 errors occur, please add the model config in the Models management page.'
+      )
     }
 
-    if (thinkingMode && whitelistInfo && whitelistInfo.thinkingMode) {
-      finalThinkingConfig = whitelistInfo.thinkingConfig
-      finalResponseThinkingField = whitelistInfo.responseThinkingField
+    // 判断是否是 Qwen 系列模型（通过模型名或 baseUrl 识别）
+    const effectiveBaseUrl = modelBaseUrl || process.env.OPENAI_BASE_URL || ''
+    const isQwenModel =
+      /qwen|qwq/i.test(currentModelName) ||
+      /qwen|qwq/i.test(effectiveBaseUrl)
+
+    if (thinkingMode) {
+      if (isQwenModel) {
+        // Qwen 系列使用专用 thinking 参数
+        finalThinkingConfig = { enable_thinking: true }
+        finalResponseThinkingField = 'reasoning_content'
+        reqLogger.info({ model: currentModelName, baseUrl: effectiveBaseUrl }, 'Qwen model detected, using enable_thinking API')
+      } else if (whitelistInfo && whitelistInfo.thinkingMode) {
+        finalThinkingConfig = whitelistInfo.thinkingConfig
+        finalResponseThinkingField = whitelistInfo.responseThinkingField
+        reqLogger.info({ model: currentModelName, thinkingConfig: finalThinkingConfig }, 'Thinking mode enabled via whitelist')
+      } else {
+        reqLogger.warn({ model: currentModelName }, 'Thinking mode requested but model not found in whitelist and not Qwen, thinking disabled')
+      }
     }
 
     const fullSystemPrompt = baseSystemPrompt + ragPrompt + `
@@ -210,32 +222,33 @@ export async function chatRoutes(fastify: FastifyInstance) {
           await ctx.history.append(toolMsg, ctx)
         }
 
-        let prompt: string | any[] | null = message || null
+        // 提取消息中的纯文本部分（message 可能是数组格式）
+        const messageText = extractPlainText(message)
+
+        let prompt: string | any[] | null = messageText || null
         if (!toolResponse && attachments && attachments.length > 0) {
-          const parts: any[] = [{ type: 'text', text: message }]
-          for (const attach of attachments) {
-            if (attach.type.startsWith('image/')) {
-              parts.push({
-                type: 'image_url',
-                image_url: { url: `data:${attach.type};base64,${attach.content}` },
-                metadata: { name: attach.name, size: attach.content.length }
-              })
-            } else {
-              // Also include non-image files in parts for UI rendering as cards
-              parts.push({
-                type: 'file',
-                file: { 
-                  name: attach.name, 
-                  type: attach.type,
-                }
-              })
-            }
+          const imageAttachments = attachments.filter(a => a.type.startsWith('image/'))
+          const otherAttachments = attachments.filter(a => !a.type.startsWith('image/'))
+
+          let promptText = messageText
+
+          // 图片：已上传到 workspace，提示 AI 用 read_image 工具读取（不传 base64，避免消息体过大）
+          if (imageAttachments.length > 0) {
+            const imageList = imageAttachments.map(a => `- ${a.name}`).join('\n')
+            promptText = `${messageText}\n\n[用户上传了以下图片到工作区，请使用 read_image 工具读取后回答：]\n${imageList}`
           }
-          prompt = parts
+
+          // 非图片文件：已上传到 workspace，提示 AI 用 read_file 工具读取（不内嵌内容，避免消息体过大）
+          if (otherAttachments.length > 0) {
+            const fileList = otherAttachments.map(a => `- ${a.name}`).join('\n')
+            promptText = `${promptText}\n\n[用户上传了以下文件到工作区，请使用 read_file 工具读取后回答：]\n${fileList}`
+          }
+
+          prompt = promptText
         }
 
         const llm = createLLMAdapter({ 
-          model: effectiveModel, 
+          model: resolvedModel,   // agent model 优先；DB 配置不可用时回退 env primaryModel
           apiKey: modelApiKey, 
           baseUrl: modelBaseUrl, 
           provider: modelProvider 
@@ -248,6 +261,9 @@ export async function chatRoutes(fastify: FastifyInstance) {
           promptBreakdown: { systemPromptTokens, systemToolsTokens, skillTokens },
           thinkingConfig: finalThinkingConfig,
           responseThinkingField: finalResponseThinkingField,
+          // 原始前端消息格式（含 workspace_image），存入 DB 供刷新后正确渲染
+          // LLM 用 prompt（文本化），DB/UI 用 displayContent（原始格式）
+          displayContent: message || null,
         })
         const pipeline = createPipeline([])
 
@@ -291,8 +307,8 @@ export async function chatRoutes(fastify: FastifyInstance) {
             toolCalls.push({
               name: msg.toolCall.name,
               arguments: msg.toolCall.args,
-              output: resultMsg?.content || '',
-              success: !resultMsg?.content.includes('[Error:') // Basic success check
+              output: typeof resultMsg?.content === 'string' ? resultMsg.content : JSON.stringify(resultMsg?.content ?? ''),
+              success: !(typeof resultMsg?.content === 'string' ? resultMsg.content : JSON.stringify(resultMsg?.content ?? '')).includes('[Error:')
             })
           }
         }

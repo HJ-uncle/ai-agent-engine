@@ -5,7 +5,7 @@ import type {
   MemoryEntry, Task, CreateTaskInput, Tool,
 } from '../types'
 
-// 开发环境：proxy 配置代理到 localhost:3000，BASE_URL 留空即可走相对路径
+// 开发环境：proxy 配置代理到 localhost:12323，BASE_URL 留空即可走相对路径
 // 生产环境：设置 REACT_APP_API_URL 环境变量（如 https://your-api.example.com）
 const BASE_URL = process.env.REACT_APP_API_URL ?? ''
 const API_PREFIX = `${BASE_URL}/api/v1`
@@ -171,7 +171,7 @@ export const messagesApi = {
 
 // ── Chat SSE ──────────────────────────────────────────────────────────────────
 export interface ChatOptions {
-  message: string
+  message: string | any[]
   sessionId: string
   agentId?: string
   systemPrompt?: string

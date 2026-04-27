@@ -540,6 +540,8 @@
   padding: 6px 10px;
   border-radius: 6px;
   border: 1px solid var(--vscode-panel-border, #30363d);
+  max-height: 400px;
+  overflow-y: auto;
 }
 
 .resultSuccessIcon {

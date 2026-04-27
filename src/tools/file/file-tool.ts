@@ -198,17 +198,19 @@ export const readImageTool: Tool = {
       const base64 = buffer.toString('base64')
       const dataUrl = `data:${mimeType};base64,${base64}`
 
-      return { 
-        success: true, 
-        output: JSON.stringify({
-          success: true,
-          filename: path.basename(safePath),
-          mimeType,
-          size: stat.size,
-          dataUrl
-        })
-      }
+      const result = JSON.stringify({
+        success: true,
+        filename: path.basename(safePath),
+        mimeType,
+        size: stat.size,
+        dataUrl
+      })
+
+      console.log(`[read_image] ✅ file="${path.basename(safePath)}" mimeType=${mimeType} fileSize=${stat.size} base64Len=${base64.length} dataUrlLen=${dataUrl.length} outputLen=${result.length}`)
+
+      return { success: true, output: result }
     } catch (err) {
+      console.log(`[read_image] ❌ error:`, err instanceof Error ? err.message : err)
       return { success: false, output: err instanceof Error ? err.message : 'Unknown error' }
     }
   },

@@ -5,7 +5,7 @@
 import AgentClient from './client.js'
 
 const client = new AgentClient({
-  baseUrl: 'http://localhost:3000',
+  baseUrl: 'http://localhost:12323',
   // apiKey: 'your-key',  // AUTH_ENABLED=true 时启用
 })
 

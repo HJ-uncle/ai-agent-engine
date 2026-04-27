@@ -17,5 +17,5 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package.json .
 RUN mkdir -p /app/workspace /app/data
 VOLUME ["/app/workspace", "/app/data"]
-EXPOSE 3000
+EXPOSE 12323
 CMD ["node", "dist/main.js"]

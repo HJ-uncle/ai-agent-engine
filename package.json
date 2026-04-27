@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/main.ts",
+    "dev": "chcp 65001 && tsx watch src/main.ts",
     "build": "tsc",
-    "start": "node dist/main.js",
+    "start": "chcp 65001 && node dist/main.js",
     "db:migrate": "tsx src/storage/sqlite/migrate.ts",
     "test": "vitest",
     "test:coverage": "vitest --coverage",
@@ -17,11 +17,11 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.20",
-    "@fastify/cors": "^8",
-    "@fastify/swagger": "^8",
-    "@fastify/swagger-ui": "^3",
+    "@fastify/cors": "^9",
+    "@fastify/swagger": "^9",
+    "@fastify/swagger-ui": "^4",
     "@libsql/client": "^0.17.2",
-    "fastify": "^4",
+    "fastify": "^5",
     "jose": "^5",
     "openai": "^4",
     "pino": "^8",
@@ -33,12 +33,12 @@
   "devDependencies": {
     "@types/node": "^20",
     "@types/uuid": "^10.0.0",
-    "@typescript-eslint/eslint-plugin": "^6",
-    "@typescript-eslint/parser": "^6",
-    "@vitest/coverage-v8": "^1",
+    "@typescript-eslint/eslint-plugin": "7.6",
+    "@typescript-eslint/parser": "7.6",
+    "@vitest/coverage-v8": "^2.1.9",
     "eslint": "^8",
     "tsx": "^4",
     "typescript": "^5",
-    "vitest": "^1"
+    "vitest": "^2.1.9"
   }
 }

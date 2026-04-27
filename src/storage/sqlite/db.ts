@@ -46,7 +46,6 @@ export async function initDb(): Promise<void> {
   await up4(db)
   await up5(db)
   await up6(db)
-
   // 兼容旧数据库：补充新列（ALTER TABLE 不支持 IF NOT EXISTS，用 catch 静默跳过）
   await db.execute('ALTER TABLE conversations ADD COLUMN tool_call_name TEXT').catch(() => {})
   await db.execute('ALTER TABLE conversations ADD COLUMN conversation_id TEXT').catch(() => {})

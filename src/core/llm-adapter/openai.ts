@@ -4,6 +4,31 @@ import type { Message, Tool } from '../agent-context/index.js'
 import { estimateTokens } from '../utils/tokens.js'
 
 /**
+ * Normalize a base URL for use with the OpenAI SDK.
+ * The OpenAI SDK appends `/chat/completions` to the baseURL, so the URL
+ * must end with `/v1` (or a versioned path). If the user omits `/v1`,
+ * we append it automatically — unless the URL already contains a version
+ * segment or ends with a path that looks intentional (e.g. `/v2`, `/api`).
+ *
+ * Examples:
+ *   https://api.example.com          → https://api.example.com/v1
+ *   https://api.example.com/         → https://api.example.com/v1
+ *   https://api.example.com/v1       → https://api.example.com/v1  (unchanged)
+ *   https://api.example.com/v1/      → https://api.example.com/v1  (trailing slash removed)
+ *   https://api.example.com/v2       → https://api.example.com/v2  (unchanged)
+ *   https://api.example.com/api/v1   → https://api.example.com/api/v1 (unchanged)
+ */
+function normalizeBaseURL(url: string | undefined): string | undefined {
+  if (!url) return url
+  // Remove trailing slash
+  const trimmed = url.replace(/\/+$/, '')
+  // If already ends with a version segment like /v1, /v2, /v3 … leave it as-is
+  if (/\/v\d+$/.test(trimmed)) return trimmed
+  // Otherwise append /v1
+  return `${trimmed}/v1`
+}
+
+/**
  * Convert Message[] to OpenAI format with orphan-filtering:
  * - Collect all valid tool_call IDs emitted by assistant messages
  * - Drop any tool-result messages whose tool_call_id has no matching assistant tool_call
@@ -32,20 +57,76 @@ function messagesToOpenAI(
 
   // Second pass: convert, dropping orphaned tool results AND orphaned tool calls
   const result: OpenAI.Chat.ChatCompletionMessageParam[] = []
-  // 对于不支持多模态数组格式的模型（比如 Deepseek），将数组转换为纯文本
+  // 将消息内容转换为纯文本（不支持多模态的模型）
   function contentToString(content: any): string {
     if (typeof content === 'string') return content
     if (Array.isArray(content)) {
-      return content
-        .filter(part => part.type !== 'file')
-        .map(part => {
-          if (part.type === 'text') return part.text
-          if (part.type === 'image_url') return '[Image]'
-          return String(part)
-        })
-        .join('\n')
+      const texts: string[] = []
+      const imageNames: string[] = []
+      const fileNames: string[] = []
+      for (const part of content) {
+        if (part.type === 'text') texts.push(part.text ?? '')
+        else if (part.type === 'image_url') texts.push('[Image]')
+        else if (part.type === 'workspace_image') imageNames.push(part.name ?? '')
+        else if (part.type === 'workspace_file') fileNames.push(part.name ?? '')
+        // 'file' type (legacy): skip
+      }
+      if (imageNames.length > 0) {
+        texts.push(`[用户上传了以下图片到工作区，请调用 read_image 工具读取后再回答，文件名如下：]\n${imageNames.map(n => `- ${n}`).join('\n')}`)
+      }
+      if (fileNames.length > 0) {
+        texts.push(`[用户上传了以下文件到工作区，请调用 read_file 工具读取后再回答，文件名如下：]\n${fileNames.map(n => `- ${n}`).join('\n')}`)
+      }
+      return texts.filter(Boolean).join('\n')
     }
     return String(content ?? '')
+  }
+
+  // 将消息内容转换为 OpenAI 多模态数组（支持 image_url / workspace_image / workspace_file）
+  function contentToMultimodal(content: any): string | OpenAI.Chat.ChatCompletionContentPart[] {
+    if (typeof content === 'string') return content
+    if (!Array.isArray(content)) return String(content ?? '')
+    const parts: OpenAI.Chat.ChatCompletionContentPart[] = []
+    const imageNames: string[] = []
+    const fileNames: string[] = []
+
+    for (const part of content) {
+      if (part.type === 'text') {
+        parts.push({ type: 'text', text: part.text ?? '' })
+      } else if (part.type === 'image_url') {
+        parts.push({ type: 'image_url', image_url: { url: part.image_url?.url ?? '' } })
+      } else if (part.type === 'workspace_image') {
+        // workspace_image：收集文件名，统一在末尾生成 read_image 指令
+        imageNames.push(part.name ?? '')
+      } else if (part.type === 'workspace_file') {
+        // workspace_file：收集文件名，统一在末尾生成 read_file 指令
+        fileNames.push(part.name ?? '')
+      }
+      // 'file' type (legacy with full content): skip，避免 base64/大文本污染上下文
+    }
+
+    // 为 workspace_image 生成明确的 read_image 指令，避免 LLM 读取错误文件
+    if (imageNames.length > 0) {
+      const imageList = imageNames.map(n => `- ${n}`).join('\n')
+      parts.push({
+        type: 'text',
+        text: `[用户上传了以下图片到工作区，请调用 read_image 工具读取后再回答，文件名如下：]\n${imageList}`,
+      })
+    }
+
+    // 为 workspace_file 生成明确的 read_file 指令，避免 LLM 读取错误文件
+    if (fileNames.length > 0) {
+      const fileList = fileNames.map(n => `- ${n}`).join('\n')
+      parts.push({
+        type: 'text',
+        text: `[用户上传了以下文件到工作区，请调用 read_file 工具读取后再回答，文件名如下：]\n${fileList}`,
+      })
+    }
+
+    if (parts.length === 0) return ''
+    return parts.length === 1 && parts[0].type === 'text'
+      ? (parts[0] as OpenAI.Chat.ChatCompletionContentPartText).text
+      : parts
   }
   
   for (const msg of messages) {
@@ -55,13 +136,53 @@ function messagesToOpenAI(
       if (tcId && !validToolCallIds.has(tcId)) {
         continue
       }
-      // 为了兼容性，对所有模型都使用纯文本格式
-      const toolContent = contentToString(msg.content)
-      result.push({
-        role: 'tool',
-        tool_call_id: tcId,
-        content: toolContent,
-      })
+
+      // 特殊处理 read_image 工具结果：提取 dataUrl，以 image_url 形式注入 user 消息
+      // （OpenAI 不支持在 tool message 里直接传图片，需要用 user 消息包装）
+      const rawToolContent = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
+      let imageInjected = false
+      try {
+        const parsed = JSON.parse(rawToolContent)
+        console.log(`[openai.ts] read_image tool result parse attempt:`, {
+          hasDataUrl: !!parsed?.dataUrl,
+          dataUrlPrefix: parsed?.dataUrl ? String(parsed.dataUrl).slice(0, 30) : null,
+          filename: parsed?.filename,
+          mimeType: parsed?.mimeType,
+          size: parsed?.size,
+          rawLength: rawToolContent.length,
+        })
+        if (parsed?.dataUrl && typeof parsed.dataUrl === 'string' && parsed.dataUrl.startsWith('data:image/')) {
+          // 先正常返回 tool result（不含 base64，太大）
+          result.push({
+            role: 'tool',
+            tool_call_id: tcId,
+            content: `Image "${parsed.filename ?? 'image'}" (${parsed.mimeType ?? ''}, ${parsed.size ?? 0} bytes) loaded successfully.`,
+          })
+          // 再注入 user 消息让 AI 真正看到图片（视觉理解）
+          // 明确标注文件名，避免多图场景下 LLM 混淆
+          const injectedMsg = {
+            role: 'user' as const,
+            content: [
+              { type: 'text', text: `Here is the image file "${parsed.filename ?? 'image'}" you just read:` },
+              { type: 'image_url', image_url: { url: parsed.dataUrl } },
+            ] as OpenAI.Chat.ChatCompletionContentPart[],
+          }
+          result.push(injectedMsg)
+          console.log(`[openai.ts] ✅ Image injected as user message for "${parsed.filename}", dataUrl length: ${parsed.dataUrl.length}, parts: ${injectedMsg.content.length}`)
+          imageInjected = true
+        } else {
+          console.log(`[openai.ts] ⚠️ tool result is NOT a read_image dataUrl, treating as plain text. keys:`, Object.keys(parsed ?? {}))
+        }
+      } catch (e) {
+        console.log(`[openai.ts] ⚠️ tool result JSON parse failed:`, (e as Error).message, 'raw prefix:', rawToolContent.slice(0, 100))
+      }
+      if (!imageInjected) {
+        result.push({
+          role: 'tool',
+          tool_call_id: tcId,
+          content: contentToString(msg.content),
+        })
+      }
       continue
     }
     if (msg.role === 'assistant' && msg.toolCall) {
@@ -100,14 +221,28 @@ function messagesToOpenAI(
       continue
     }
 
-    // 对于所有消息，都使用纯文本格式以保证最大兼容性
-    const finalContent = contentToString(msg.content)
+    // user/assistant/system 消息：支持多模态数组（image_url / workspace_image）
+    const finalContent = contentToMultimodal(msg.content)
     result.push({
       role: msg.role as 'user' | 'assistant' | 'system',
-      content: finalContent,
+      content: finalContent as string,
       ...((msg.role === 'assistant' && (msg as any).reasoningContent != null) ? { reasoning_content: (msg as any).reasoningContent } : {})
     })
   }
+  // 最终消息列表摘要日志
+  const msgSummary = result.map((m, i) => {
+    const role = m.role
+    const content = m.content
+    if (Array.isArray(content)) {
+      const types = content.map((p: any) => p.type).join('+')
+      const hasImage = content.some((p: any) => p.type === 'image_url')
+      return `[${i}] ${role}: [${types}]${hasImage ? ' ← IMAGE ✅' : ''}`
+    }
+    const preview = typeof content === 'string' ? content.slice(0, 60).replace(/\n/g, '\\n') : String(content).slice(0, 60)
+    return `[${i}] ${role}: "${preview}"`
+  })
+  console.log(`[openai.ts] messagesToOpenAI result (${result.length} messages):\n` + msgSummary.join('\n'))
+
   return result
 }
 
@@ -210,9 +345,10 @@ export class OpenAIAdapter implements LLMAdapter {
   private client: OpenAI
 
   constructor(readonly model: string = 'gpt-4o-mini', apiKey?: string, baseURL?: string) {
+    const rawBaseURL = baseURL || process.env.OPENAI_BASE_URL
     this.client = new OpenAI({
       apiKey: apiKey || process.env.OPENAI_API_KEY,
-      baseURL: baseURL || process.env.OPENAI_BASE_URL, // supports custom OpenAI-compatible endpoints
+      baseURL: normalizeBaseURL(rawBaseURL), // supports custom OpenAI-compatible endpoints
     })
   }
 

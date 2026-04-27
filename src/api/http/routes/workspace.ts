@@ -151,6 +151,30 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
     }
   })
 
+  // GET /workspace/image - 直接返回图片二进制流，用于 <img src="..."> 展示
+  fastify.get<{ Querystring: { sessionId?: string; path: string } }>('/workspace/image', async (request, reply) => {
+    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const sessionId = request.query.sessionId || 'default'
+    const reqPath = request.query.path
+    if (!reqPath) return reply.code(400).send('path is required')
+
+    try {
+      const safePath = workspaceManager.resolveSafePath({ tenantId, sessionId }, reqPath)
+      if (!fs.existsSync(safePath)) return reply.code(404).send('File not found')
+
+      const ext = path.extname(safePath).toLowerCase()
+      const mimeMap: Record<string, string> = {
+        '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml',
+      }
+      const mime = mimeMap[ext] ?? 'application/octet-stream'
+      const buffer = fs.readFileSync(safePath)
+      return reply.code(200).header('Content-Type', mime).header('Cache-Control', 'max-age=3600').send(buffer)
+    } catch (e: any) {
+      return reply.code(500).send(`Failed to read image: ${e.message}`)
+    }
+  })
+
   // DELETE /workspace/recent/:sessionId
   fastify.delete<{ Params: { sessionId: string } }>('/workspace/recent/:sessionId', async (request, reply) => {
     const tenantId = (request as any).authContext?.tenantId ?? 'default'
@@ -194,7 +218,6 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
   })
 
   // POST /workspace/file
-  // Upload or update a file in the workspace
   fastify.post<{ Body: { sessionId: string; path: string; content: string; encoding?: 'utf-8' | 'base64' } }>('/workspace/file', async (request, reply) => {
     const tenantId = (request as any).authContext?.tenantId ?? 'default'
     const { sessionId, path: filePath, content, encoding = 'utf-8' } = request.body

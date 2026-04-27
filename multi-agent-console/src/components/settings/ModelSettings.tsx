@@ -14,6 +14,7 @@ export default function ModelSettings() {
   const [models, setModels] = useState<any[]>([])
   const [loadingModels, setLoadingModels] = useState(false)
   const [isModalOpen, setIsModalOpen] = useState(false)
+  const [editingModel, setEditingModel] = useState<any | null>(null)
 
   const loadSettings = () => {
     settingsApi.get().then((data) => setSettings(data))
@@ -34,6 +35,7 @@ export default function ModelSettings() {
   useEffect(() => {
     loadSettings()
     loadModels()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleChange = (key: string, value: any) => {
@@ -55,6 +57,11 @@ export default function ModelSettings() {
       message.error('保存失败')
     }
     setLoading(false)
+  }
+
+  const handleEditModel = (record: any) => {
+    setEditingModel(record)
+    setIsModalOpen(true)
   }
 
   const handleDeleteModel = async (id: string) => {
@@ -89,7 +96,13 @@ export default function ModelSettings() {
       title: '操作',
       key: 'action',
       render: (_: any, record: any) => (
-        <Space size="middle">
+        <Space size="small">
+          <Button
+            type="text"
+            icon={<EditOutlined />}
+            size="small"
+            onClick={() => handleEditModel(record)}
+          />
           <Popconfirm
             title="确定要删除这个模型吗？"
             onConfirm={() => handleDeleteModel(record.id)}
@@ -222,9 +235,14 @@ export default function ModelSettings() {
 
       <ModelManagerModal
         open={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
+        editModel={editingModel}
+        onClose={() => {
+          setIsModalOpen(false)
+          setEditingModel(null)
+        }}
         onSuccess={() => {
           setIsModalOpen(false)
+          setEditingModel(null)
           loadModels()
         }}
       />

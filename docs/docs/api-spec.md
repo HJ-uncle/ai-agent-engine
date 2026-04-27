@@ -155,6 +155,8 @@
 - `GET /api/v1/workspace/files`: 获取工作区文件和目录树结构 (支持可选参数 `?sessionId=xxx`)
 - `GET /api/v1/workspace/recent`: 获取最近使用的工作区列表 (包含名称、路径和是否活跃状态)
 - `GET /api/v1/workspace/file/content`: 获取工作区文件内容 (需参数 `?sessionId=xxx&path=yyy`)
+- `GET /api/v1/workspace/image`: 获取工作区图片并以 data URL 格式返回，供前端预览 (需参数 `?sessionId=xxx&path=yyy`)
+- `POST /api/v1/workspace/file`: 上传文件到指定 session 的工作区 (multipart/form-data，支持最大 100MB，字段名 `file` + `sessionId`)
 - `DELETE /api/v1/workspace/recent/:sessionId`: 物理删除指定的工作区目录
 - `POST /api/v1/workspace/rename`: 重命名工作区目录及关联的 `sessionId` (自动更新对话记录和记忆中的关联)
 

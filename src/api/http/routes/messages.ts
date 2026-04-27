@@ -3,17 +3,10 @@ import { SQLiteConversationHistory } from '../../../storage/conversation/index.j
 import { ReActStrategy } from '../../../core/agent-loop/index.js'
 import { createPipeline, sseStream } from '../../../core/stream-pipeline/index.js'
 import { createAgentContext } from '../../../core/agent-context/index.js'
-import { ToolRegistry } from '../../../core/tool-registry/index.js'
-import { SQLiteMemoryStore } from '../../../storage/memory-store/index.js'
 import { createLLMAdapter } from '../../../core/llm-adapter/index.js'
 import { createRequestLogger } from '../../../observability/index.js'
-import { registerBuiltinSkills, buildSkillsSystemPrompt, skillsRegistry } from '../../../skills/index.js'
-import { fileTools } from '../../../tools/file/index.js'
-import { cmdTool } from '../../../tools/cmd/index.js'
-import { askUserTool } from '../../../tools/ask-user/index.js'
-import { createMemoryTools } from '../../../tools/memory/index.js'
-import { registerMCPTools } from '../../../tools/mcp/loader.js'
-import { createSkillTools, runSkillScriptTool } from '../../../tools/skill/index.js'
+import { buildSkillsSystemPrompt } from '../../../skills/index.js'
+import { createToolRegistry } from '../../../tools/registry-factory.js'
 import { estimateTokens } from '../../../core/utils/tokens.js'
 import { v4 as uuidv4 } from 'uuid'
 import { success, fail } from '../response.js'
@@ -76,14 +69,9 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     effectiveModel?: string
   ) {
     const reqLogger = createRequestLogger(requestId, tenantId, sessionId)
-    const registry = new ToolRegistry()
-    const memory = new SQLiteMemoryStore()
-    registerBuiltinSkills(registry)
-    fileTools.forEach((t) => registry.register(t))
-    registry.register(cmdTool)
-    registry.register(askUserTool)
-    createMemoryTools(memory).forEach((t) => registry.register(t))
-    await registerMCPTools(registry)
+
+    // Build tool registry（统一工厂，含所有内置工具 + MCP + Skills）
+    const { registry, memory, externalSkills } = await createToolRegistry()
 
     const ctx = createAgentContext({
       sessionId,
@@ -94,10 +82,6 @@ export async function messagesRoutes(fastify: FastifyInstance) {
       logger: reqLogger,
       requestId,
     })
-
-    const externalSkills = skillsRegistry.getSkills()
-    createSkillTools(externalSkills).forEach((t) => registry.register(t))
-    registry.register(runSkillScriptTool)
 
     const skillsPrompt = buildSkillsSystemPrompt(externalSkills)
     const finalSystemPrompt = [systemPrompt, skillsPrompt].filter(Boolean).join('\n\n')

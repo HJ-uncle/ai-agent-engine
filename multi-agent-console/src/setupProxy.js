@@ -4,7 +4,7 @@ module.exports = function(app) {
   app.use(
     createProxyMiddleware({
       pathFilter: '/api',
-      target: 'http://localhost:3000',
+      target: 'http://localhost:12323',
       changeOrigin: true,
       onProxyReq: (proxyReq, req, res) => {
         // Disable proxy buffering for Nginx/other reverse proxies
