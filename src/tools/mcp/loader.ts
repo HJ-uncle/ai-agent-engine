@@ -8,7 +8,10 @@ import { listServers } from '../../storage/mcp/mcp-config.js'
  * 连接并将其工具注册到 registry。
  * 连接失败的服务器会被跳过（不影响其他工具）。
  */
-export async function registerMCPTools(registry: IToolRegistry): Promise<void> {
+export async function registerMCPTools(
+  registry: IToolRegistry,
+  toolFilter?: (name: string) => boolean
+): Promise<void> {
   const servers = listServers()
   if (servers.length === 0) return
 
@@ -38,6 +41,7 @@ export async function registerMCPTools(registry: IToolRegistry): Promise<void> {
       try {
         const tools = await client.toTools()
         tools.forEach((t) => {
+          if (toolFilter && !toolFilter(t.name)) return
           try { registry.register(t) } catch { /* 工具名冲突时跳过 */ }
         })
         logger.info({ id: server.id, toolCount: tools.length }, 'MCP server registered')

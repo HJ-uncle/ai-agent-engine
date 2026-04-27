@@ -23,13 +23,14 @@ function safeMath(expression: string): number {
 
 export const mathSkill: Tool = {
   name: 'calculate',
-  description: 'Evaluate a mathematical expression. Supports +, -, *, /, (), %, ^ (power). Example: "2 + 3 * 4", "(10 / 2) ^ 2"',
+  displayName: '计算器',
+  description: '计算一个数学表达式',
   parameters: {
     type: 'object',
     properties: {
       expression: {
         type: 'string',
-        description: 'The mathematical expression to evaluate',
+        description: '要计算的数学表达式',
       },
     },
     required: ['expression'],

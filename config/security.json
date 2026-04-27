@@ -1,0 +1,20 @@
+{
+  "webFetch": {
+    "enabled": true,
+    "blockListEnabled": true,
+    "allowListEnabled": false,
+    "maxContentLength": 50000,
+    "blockList": [
+      "localhost",
+      "192.168.",
+      "10."
+    ],
+    "allowList": [
+      "api.github.com"
+    ],
+    "allowedProtocols": [
+      "https:",
+      "http:"
+    ]
+  }
+}

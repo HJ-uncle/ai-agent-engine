@@ -2,19 +2,20 @@ import type { Tool, AgentContext, ToolResult } from '../core/agent-context/index
 
 export const timeSkill: Tool = {
   name: 'get_time',
-  description: 'Get the current date and time, optionally in a specific timezone',
+  displayName: '获取时间',
+  description: '获取当前时间，可指定时区和输出格式',
   parameters: {
     type: 'object',
     properties: {
       timezone: {
         type: 'string',
-        description: 'IANA timezone name (e.g., "America/New_York", "Asia/Shanghai", "UTC"). Defaults to UTC.',
+        description: 'IANA 时区名称，例如 "America/New_York"、"Asia/Shanghai"、"UTC"。默认值为 UTC',
         default: 'UTC',
       },
       format: {
         type: 'string',
         enum: ['iso', 'locale', 'unix'],
-        description: 'Output format: iso (ISO 8601), locale (human-readable), unix (timestamp). Defaults to iso.',
+        description: '输出格式：iso（ISO 8601 格式）、locale（人类读取）、unix（时间戳）。默认值为 iso',
         default: 'iso',
       },
     },

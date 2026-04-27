@@ -150,6 +150,8 @@
 
 ### 8. 工具与插件 Tools (`/api/v1/tools`)
 - `GET /api/v1/tools`: 获取当前系统加载的所有可用工具和技能列表 (支持分页)
+- `GET /api/v1/tools/system-tools`: 获取所有系统内置工具列表（排除技能工具，支持分页）
+- `GET /api/v1/tools/external-skills`: 获取所有自定义技能（SKILLs 目录）列表（支持分页）
 
 ### 9. 工作区 Workspace (`/api/v1/workspace`)
 - `GET /api/v1/workspace/files`: 获取工作区文件和目录树结构 (支持可选参数 `?sessionId=xxx`)
@@ -182,8 +184,24 @@
 - `POST /api/v1/models/:id/test`: 测试模型连接（支持传入临时参数测试未保存的配置）
 
 ### 11. 系统设置 Settings (`/api/v1/settings`)
-- `GET /api/v1/settings`: 获取当前系统环境变量配置
+- `GET /api/v1/settings`: 获取当前系统环境变量配置（含 `webFetch` 安全配置）
 - `PUT /api/v1/settings`: 更新系统环境变量配置（写入 `.env` 文件）
+
+  **webFetch 安全配置说明**
+
+  通过 `webFetch` 字段可配置 Web 获取工具的安全策略：
+
+  ```json
+  {
+    "settings": {
+      "webFetch": {
+        "enabled": true,
+        "allowedDomains": ["example.com", "*.trusted.org"],
+        "blockedDomains": ["malicious.com"]
+      }
+    }
+  }
+  ```
 
 ### 12. 监控与健康 Metrics (`/health`, `/metrics`)
 - `GET /health`: 存活探针检查

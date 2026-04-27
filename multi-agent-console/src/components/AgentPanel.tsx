@@ -101,6 +101,7 @@ function AgentFormModal({ open, editing, onClose, onSaved }: AgentFormModalProps
   const [skillOptions, setSkillOptions] = useState<{ value: string, label: string }[]>([])
   const [mcpOptions, setMcpOptions] = useState<{ value: string, label: string }[]>([])
   const [knowledgeOptions, setKnowledgeOptions] = useState<{ value: string, label: string }[]>([])
+  const [systemToolOptions, setSystemToolOptions] = useState<{ value: string, label: string }[]>([])
 
   useEffect(() => {
     if (open) {
@@ -115,14 +116,16 @@ function AgentFormModal({ open, editing, onClose, onSaved }: AgentFormModalProps
         antMsg.error(err.message || '加载模型列表失败')
       })
 
-      // Load tools/skills
-      toolsApi.list().then(data => {
-        setSkillOptions(data.list.map((t: any) => ({
-          value: t.name,
-          label: t.displayName || t.name
-        })))
+      // Load external skills (from SKILLs directory)
+      toolsApi.listExternalSkills().then(data => {
+        const skills = data.list.filter((s: any) => s.enabled).map((s: any) => ({
+          value: s.name,
+          label: s.description ? `${s.name} - ${s.description}` : s.name,
+        }))
+        setSkillOptions(skills)
       }).catch(err => {
-        console.error('Failed to load tools:', err)
+        console.error('Failed to load external skills:', err)
+        setSkillOptions([])
       })
 
       // Load MCP servers
@@ -145,6 +148,20 @@ function AgentFormModal({ open, editing, onClose, onSaved }: AgentFormModalProps
         console.error('Failed to load knowledge bases:', err)
       })
 
+      // Load system tools options from API
+      toolsApi.listSystemTools().then(data => {
+        setSystemToolOptions(data.list.map((t: any) => {
+          const label = t.displayName || t.name
+          const description = t.description || ''
+          return {
+            value: t.name,
+            label: description ? `${label} - ${description}` : label,
+          }
+        }))
+      }).catch(err => {
+        console.error('Failed to load system tools:', err)
+      })
+
       if (editing) {
         form.setFieldsValue({
           name: editing.name,
@@ -155,6 +172,7 @@ function AgentFormModal({ open, editing, onClose, onSaved }: AgentFormModalProps
           skills: editing.skills ?? [],
           mcpServers: editing.mcpServers ?? [],
           knowledgeBases: editing.knowledgeBases ?? [],
+          allowedTools: editing.allowedTools ?? [],
         })
       } else {
         form.resetFields()
@@ -162,6 +180,8 @@ function AgentFormModal({ open, editing, onClose, onSaved }: AgentFormModalProps
       }
     }
   }, [open, editing, form])
+
+  
 
   const handleSubmit = async () => {
     try {
@@ -248,6 +268,16 @@ function AgentFormModal({ open, editing, onClose, onSaved }: AgentFormModalProps
             mode="multiple"
             placeholder="请选择知识库"
             options={knowledgeOptions}
+            allowClear
+            showSearch
+          />
+        </Form.Item>
+
+        <Form.Item name="allowedTools" label="允许的系统工具 (System Tools)">
+          <Select
+            mode="multiple"
+            placeholder="请选择允许的系统工具（留空表示使用全部工具）"
+            options={systemToolOptions}
             allowClear
             showSearch
           />

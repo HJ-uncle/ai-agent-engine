@@ -80,6 +80,10 @@
   background: var(--vscode-list-activeSelectionBackground, rgba(14,99,156,0.4));
 }
 
+.item.selected {
+  background: var(--vscode-list-inactiveSelectionBackground, rgba(14,99,156,0.2));
+}
+
 .agentDot {
   font-size: 13px;
   color: var(--vscode-icon-foreground, #ccc);

@@ -1894,15 +1894,27 @@ export default function ChatArea() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                       <span style={{ color: '#8b949e', fontSize: 12 }}>上下文使用率</span>
                       <span style={{ color: '#e6edf3', fontSize: 12, fontWeight: 600 }}>
-                        {Math.round((sessionUsage.totalTokens / 100000) * 100)}% of 100K
+                        {Math.round((sessionUsage.totalTokens / 1000000) * 100)}% of 1000K
                       </span>
                     </div>
                     {compressStats && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, fontSize: 12 }}>
-                        <span style={{ color: '#8b949e' }}>最近一次压缩比例</span>
-                        <span style={{ color: '#3fb950', fontWeight: 600 }}>
-                          {compressStats.ratio} ({compressStats.originalTokens} → {compressStats.compressedTokens})
-                        </span>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, fontSize: 11 }}>
+                        <span style={{ color: '#8b949e', flexShrink: 0 }}>最近一次压缩比例</span>
+                        <Tooltip title={`${compressStats.ratio} (${compressStats.originalTokens} → ${compressStats.compressedTokens})`}>
+                          <span style={{ 
+                            color: '#3fb950', 
+                            fontWeight: 600, 
+                            whiteSpace: 'nowrap', 
+                            marginLeft: 8, 
+                            overflow: 'hidden', 
+                            textOverflow: 'ellipsis', 
+                            maxWidth: '180px',
+                            display: 'inline-block',
+                            direction: 'ltr'
+                          }}>
+                            {compressStats.ratio} ({compressStats.originalTokens} → {compressStats.compressedTokens})
+                          </span>
+                        </Tooltip>
                       </div>
                     )}
                     <Button
@@ -1946,9 +1958,9 @@ export default function ChatArea() {
                   border: '2px solid #8b949e',
                   borderTopColor: '#3fb950',
                   borderRightColor: '#3fb950',
-                  transform: `rotate(${Math.round((sessionUsage.totalTokens / 100000) * 360) - 45}deg)`
+                  transform: `rotate(${Math.round((sessionUsage.totalTokens / 1000000) * 360) - 45}deg)`
                 }} />
-                {Math.round((sessionUsage.totalTokens / 100000) * 100)}%
+                {Math.round((sessionUsage.totalTokens / 1000000) * 100)}%
               </span>
             </Tooltip>
           )}

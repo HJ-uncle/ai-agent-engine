@@ -19,13 +19,14 @@ import type { Tool, ToolResult } from '../../core/agent-context/index.js'
 
 const DEFAULT_TIMEOUT_MS = 60_000  // 技能脚本可能需要较长时间（如浏览器操作）
 
-export const runSkillScriptTool: Tool = {
+export const runSkillScriptTool: Tool & { source: string } = {
   name: 'run_skill_script',
   displayName: '运行技能脚本',
   description:
     '执行技能目录中的 bash/shell 脚本。' +
     '当 SKILL.md 指示运行 bash 命令（如 `bash "$SKILLS_ROOT/web-search/scripts/search.sh" "query"`）时使用。' +
     '工具会自动注入 SKILLS_ROOT 环境变量。',
+  source: 'skill',
   parameters: {
     type: 'object',
     properties: {

@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify'
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import { success } from '../response.js'
+import { loadSecurityConfig, saveSecurityConfig, WebFetchConfig } from '../../../tools/web-fetch/security-config.js'
 
 const ENV_PATH = path.resolve(process.cwd(), '.env')
 
@@ -45,7 +46,6 @@ async function writeEnvFile(updates: Record<string, string>): Promise<void> {
       if (trimmedKey && updates[trimmedKey] !== undefined) {
         newLines.push(`${trimmedKey}=${updates[trimmedKey]}`)
         updatedKeys.add(trimmedKey)
-        // Also update process.env for immediate effect where possible
         process.env[trimmedKey] = updates[trimmedKey]
         continue
       }
@@ -53,7 +53,6 @@ async function writeEnvFile(updates: Record<string, string>): Promise<void> {
     newLines.push(line)
   }
 
-  // Append new keys
   for (const [key, value] of Object.entries(updates)) {
     if (!updatedKeys.has(key)) {
       newLines.push(`${key}=${value}`)
@@ -67,8 +66,8 @@ async function writeEnvFile(updates: Record<string, string>): Promise<void> {
 export async function settingsRoutes(fastify: FastifyInstance) {
   fastify.get('/settings', async (request, reply) => {
     const env = await readEnvFile()
+    const securityConfig = loadSecurityConfig()
     
-    // Only return the requested settings to the frontend
     const settings = {
       LLM_PROVIDER: env.LLM_PROVIDER || process.env.LLM_PROVIDER || 'openai',
       LLM_PRIMARY_MODEL: env.LLM_PRIMARY_MODEL || process.env.LLM_PRIMARY_MODEL || 'deepseek-chat',
@@ -80,21 +79,30 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       TOKEN_BUDGET: parseInt(env.TOKEN_BUDGET || process.env.TOKEN_BUDGET || '80000', 10),
       SKILLS_ROOT: env.SKILLS_ROOT || process.env.SKILLS_ROOT || './skills',
       QA_LOG_ENABLED: env.QA_LOG_ENABLED === 'true' || process.env.QA_LOG_ENABLED === 'true',
+      webFetch: securityConfig.webFetch,
     }
 
     return reply.code(200).send(success(settings))
   })
 
-  fastify.put<{ Body: Record<string, string | number> }>('/settings', async (request, reply) => {
+  fastify.put<{ Body: Record<string, string | number | WebFetchConfig> }>('/settings', async (request, reply) => {
     const updates = request.body
     
-    // Convert all values to strings for .env
+    if (updates.webFetch) {
+      const securityConfig = loadSecurityConfig()
+      securityConfig.webFetch = updates.webFetch as WebFetchConfig
+      saveSecurityConfig(securityConfig)
+      delete updates.webFetch
+    }
+
     const stringUpdates: Record<string, string> = {}
     for (const [k, v] of Object.entries(updates)) {
       stringUpdates[k] = String(v)
     }
 
-    await writeEnvFile(stringUpdates)
+    if (Object.keys(stringUpdates).length > 0) {
+      await writeEnvFile(stringUpdates)
+    }
 
     return reply.code(200).send(success({ updated: true }))
   })

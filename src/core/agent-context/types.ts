@@ -42,6 +42,13 @@ export interface ToolResult {
   output: string
   error?: string
   durationMs?: number
+  needsConfirmation?: boolean
+  pendingAction?: PendingAction
+}
+
+export interface PendingAction {
+  type: string
+  [key: string]: unknown
 }
 
 export class ToolError extends Error {

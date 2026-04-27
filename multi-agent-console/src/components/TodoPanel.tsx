@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { todoApi, type Todo } from '../api/index'
+import { useSessionStore } from '../store/session'
 import styles from './TodoPanel.module.css'
 
 interface TodoPanelProps {
@@ -30,6 +31,8 @@ export const TodoPanel: React.FC<TodoPanelProps> = ({ sessionId, visible, onClos
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
 
+  const lastTodosUpdate = useSessionStore(state => state.lastTodosUpdate)
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
@@ -42,7 +45,7 @@ export const TodoPanel: React.FC<TodoPanelProps> = ({ sessionId, visible, onClos
 
   useEffect(() => {
     if (visible) load()
-  }, [visible, load])
+  }, [visible, load, lastTodosUpdate])
 
   const handleAdd = async () => {
     const title = addTitle.trim()
@@ -83,7 +86,7 @@ export const TodoPanel: React.FC<TodoPanelProps> = ({ sessionId, visible, onClos
   return (
     <div className={styles.panel}>
       <div className={styles.header}>
-        <span className={styles.title}>📋 待办任务</span>
+        <span className={styles.title}>待办任务</span>
         <button className={styles.closeBtn} onClick={onClose}>×</button>
       </div>
 

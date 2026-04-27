@@ -36,6 +36,7 @@ function normalizeBaseURL(url: string | undefined): string | undefined {
  */
 function messagesToOpenAI(
   messages: Message[],
+  supportsVision: boolean = true,
 ): OpenAI.Chat.ChatCompletionMessageParam[] {
   // First pass: collect all valid tool_call IDs (with non-empty id & name)
   // AND collect all tool result IDs from tool messages
@@ -83,7 +84,7 @@ function messagesToOpenAI(
   }
 
   // 将消息内容转换为 OpenAI 多模态数组（支持 image_url / workspace_image / workspace_file）
-  function contentToMultimodal(content: any): string | OpenAI.Chat.ChatCompletionContentPart[] {
+  function contentToMultimodal(content: any, supportsVision: boolean = true): string | OpenAI.Chat.ChatCompletionContentPart[] {
     if (typeof content === 'string') return content
     if (!Array.isArray(content)) return String(content ?? '')
     const parts: OpenAI.Chat.ChatCompletionContentPart[] = []
@@ -94,7 +95,12 @@ function messagesToOpenAI(
       if (part.type === 'text') {
         parts.push({ type: 'text', text: part.text ?? '' })
       } else if (part.type === 'image_url') {
-        parts.push({ type: 'image_url', image_url: { url: part.image_url?.url ?? '' } })
+        // 只有支持视觉的模型才保留 image_url，否则转换为文本描述
+        if (supportsVision) {
+          parts.push({ type: 'image_url', image_url: { url: part.image_url?.url ?? '' } })
+        } else {
+          parts.push({ type: 'text', text: '[Image]' })
+        }
       } else if (part.type === 'workspace_image') {
         // workspace_image：收集文件名，统一在末尾生成 read_image 指令
         imageNames.push(part.name ?? '')
@@ -160,15 +166,20 @@ function messagesToOpenAI(
           })
           // 再注入 user 消息让 AI 真正看到图片（视觉理解）
           // 明确标注文件名，避免多图场景下 LLM 混淆
-          const injectedMsg = {
-            role: 'user' as const,
-            content: [
-              { type: 'text', text: `Here is the image file "${parsed.filename ?? 'image'}" you just read:` },
-              { type: 'image_url', image_url: { url: parsed.dataUrl } },
-            ] as OpenAI.Chat.ChatCompletionContentPart[],
+          // 只有支持视觉的模型才注入 image_url，否则用纯文本描述
+          if (supportsVision) {
+            const injectedMsg = {
+              role: 'user' as const,
+              content: [
+                { type: 'text', text: `Here is the image file "${parsed.filename ?? 'image'}" you just read:` },
+                { type: 'image_url', image_url: { url: parsed.dataUrl } },
+              ] as OpenAI.Chat.ChatCompletionContentPart[],
+            }
+            result.push(injectedMsg)
+            console.log(`[openai.ts] ✅ Image injected as user message for "${parsed.filename}", dataUrl length: ${parsed.dataUrl.length}, parts: ${injectedMsg.content.length}`)
+          } else {
+            console.log(`[openai.ts] ⚠️ Model does not support vision, skipping image_url injection`)
           }
-          result.push(injectedMsg)
-          console.log(`[openai.ts] ✅ Image injected as user message for "${parsed.filename}", dataUrl length: ${parsed.dataUrl.length}, parts: ${injectedMsg.content.length}`)
           imageInjected = true
         } else {
           console.log(`[openai.ts] ⚠️ tool result is NOT a read_image dataUrl, treating as plain text. keys:`, Object.keys(parsed ?? {}))
@@ -222,10 +233,10 @@ function messagesToOpenAI(
     }
 
     // user/assistant/system 消息：支持多模态数组（image_url / workspace_image）
-    const finalContent = contentToMultimodal(msg.content)
+    const finalContent = contentToMultimodal(msg.content, supportsVision)
     result.push({
       role: msg.role as 'user' | 'assistant' | 'system',
-      content: finalContent as string,
+      content: finalContent as string | OpenAI.Chat.ChatCompletionContentPart[],
       ...((msg.role === 'assistant' && (msg as any).reasoningContent != null) ? { reasoning_content: (msg as any).reasoningContent } : {})
     })
   }
@@ -342,6 +353,7 @@ function stripToolCallBlocks(content: string): string {
 
 export class OpenAIAdapter implements LLMAdapter {
   readonly provider = 'openai'
+  readonly supportsVision: boolean
   private client: OpenAI
 
   constructor(readonly model: string = 'gpt-4o-mini', apiKey?: string, baseURL?: string) {
@@ -350,10 +362,24 @@ export class OpenAIAdapter implements LLMAdapter {
       apiKey: apiKey || process.env.OPENAI_API_KEY,
       baseURL: normalizeBaseURL(rawBaseURL), // supports custom OpenAI-compatible endpoints
     })
+    this.supportsVision = this.detectVisionSupport(rawBaseURL)
+  }
+
+  private detectVisionSupport(baseURL?: string): boolean {
+    const url = (baseURL || process.env.OPENAI_BASE_URL || '').toLowerCase()
+    const modelLower = this.model.toLowerCase()
+    if (url.includes('anthropic')) return false
+    if (url.includes('ollama')) return false
+    if (url.includes('qwen')) return false
+    if (url.includes('moonshot')) return false
+    if (url.includes('zhipu')) return false
+    if (url.includes('deepseek')) return false
+    if (modelLower.includes('deepseek')) return false
+    return true
   }
 
   async complete(messages: Message[], options?: LLMAdapterOptions): Promise<LLMResponse> {
-    const oaiMessages = messagesToOpenAI(messages)
+    const oaiMessages = messagesToOpenAI(messages, this.supportsVision)
     if (options?.systemPrompt) {
       oaiMessages.unshift({ role: 'system', content: options.systemPrompt })
     }
@@ -417,7 +443,7 @@ export class OpenAIAdapter implements LLMAdapter {
   }
 
   async *stream(messages: Message[], options?: LLMAdapterOptions): AsyncIterable<LLMStreamChunk> {
-    const oaiMessages = messagesToOpenAI(messages)
+    const oaiMessages = messagesToOpenAI(messages, this.supportsVision)
     if (options?.systemPrompt) {
       oaiMessages.unshift({ role: 'system', content: options.systemPrompt })
     }

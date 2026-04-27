@@ -49,6 +49,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     let allowedSkills: string[] | null = null
     let allowedMcpServers: string[] | null = null
     let boundKnowledgeBases: string[] | null = null
+    let allowedTools: string[] | null = null
 
     if (agentId) {
       const agent = await agentStore.getById(agentId, tenantId)
@@ -59,13 +60,14 @@ export async function chatRoutes(fastify: FastifyInstance) {
         allowedSkills = agent.skills
         allowedMcpServers = agent.mcpServers
         boundKnowledgeBases = agent.knowledgeBases
+        allowedTools = agent.allowedTools.length > 0 ? agent.allowedTools : null
       } else {
         reqLogger.warn({ agentId }, 'Agent not found, falling back to defaults')
       }
     }
 
     // Build tool registry（统一工厂，含所有内置工具 + MCP + Skills）
-    const { registry, memory, externalSkills } = await createToolRegistry({ allowedSkills })
+    const { registry, memory, externalSkills } = await createToolRegistry({ allowedSkills, allowedTools })
 
     const abortController = new AbortController()
     request.raw.on('close', () => {

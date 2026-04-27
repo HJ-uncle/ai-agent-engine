@@ -25,6 +25,7 @@ export interface Agent {
   skills: string[]
   mcpServers: string[]
   knowledgeBases: string[]
+  allowedTools: string[]
   tenantId: string
   createdAt: number
   updatedAt: number
@@ -39,6 +40,7 @@ export interface CreateAgentInput {
   skills?: string[]
   mcpServers?: string[]
   knowledgeBases?: string[]
+  allowedTools?: string[]
 }
 
 export interface UpdateAgentInput extends Partial<CreateAgentInput> {}

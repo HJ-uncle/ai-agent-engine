@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import Tesseract from 'tesseract.js'
 import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
 import { workspaceManager } from '../../workspace/index.js'
 
@@ -195,16 +196,27 @@ const IMAGE_MIME_TYPES: Record<string, string> = {
 export const readImageTool: Tool = {
   name: 'read_image',
   displayName: '读取图片',
-  description: '读取工作区中的图片文件，将其转换为 base64 格式返回，便于 AI 进行图像识别',
+  description: '读取工作区中的图片文件，支持多模态模型和 OCR 文本提取。如果是多模态模型（GPT-4V, Claude 3, Gemini Pro Vision），返回 base64 格式图片；否则使用 OCR 提取文本内容。',
   parameters: {
     type: 'object',
     properties: {
       path: { type: 'string', description: '图片文件相对工作区根目录的路径' },
+      mode: { 
+        type: 'string', 
+        description: '处理模式："auto"（自动检测）、"vision"（强制返回图片）、"ocr"（强制 OCR 提取）',
+        enum: ['auto', 'vision', 'ocr'],
+        default: 'auto'
+      },
+      language: {
+        type: 'string',
+        description: 'OCR 识别语言，默认 "eng+chi_sim"（英文+简体中文），支持多种语言组合如 "eng", "chi_sim", "jpn", "kor" 等'
+      }
     },
     required: ['path'],
   },
   async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
-    const { path: filePath } = rawArgs as { path: string }
+    const { path: filePath, mode = 'auto', language = 'eng+chi_sim' } = rawArgs as { path: string; mode?: string; language?: string }
+    
     try {
       const safePath = workspaceManager.resolveSafePath(ctx, filePath)
       const stat = fs.statSync(safePath)
@@ -216,26 +228,117 @@ export const readImageTool: Tool = {
       const ext = path.extname(safePath).toLowerCase()
       const mimeType = IMAGE_MIME_TYPES[ext] || 'application/octet-stream'
 
-      const buffer = fs.readFileSync(safePath)
-      const base64 = buffer.toString('base64')
-      const dataUrl = `data:${mimeType};base64,${base64}`
+      // 判断是否为多模态模型
+      const isVisionModel = isVisionModelAvailable(ctx)
+      let useOcr = false
 
-      const result = JSON.stringify({
-        success: true,
-        filename: path.basename(safePath),
-        mimeType,
-        size: stat.size,
-        dataUrl
-      })
+      if (mode === 'auto') {
+        useOcr = !isVisionModel
+      } else if (mode === 'ocr') {
+        useOcr = true
+      } else if (mode === 'vision') {
+        useOcr = false
+      }
 
-      console.log(`[read_image] ✅ file="${path.basename(safePath)}" mimeType=${mimeType} fileSize=${stat.size} base64Len=${base64.length} dataUrlLen=${dataUrl.length} outputLen=${result.length}`)
+      if (useOcr) {
+        // 使用 OCR 提取文本
+        return await extractTextWithOCR(safePath, language, ctx)
+      } else {
+        // 返回 base64 格式图片
+        const buffer = fs.readFileSync(safePath)
+        const base64 = buffer.toString('base64')
+        const dataUrl = `data:${mimeType};base64,${base64}`
 
-      return { success: true, output: result }
+        const result = JSON.stringify({
+          success: true,
+          filename: path.basename(safePath),
+          mimeType,
+          size: stat.size,
+          dataUrl,
+          hasDataUrl: true
+        })
+
+        ctx.logger.info(`[read_image] ✅ file="${path.basename(safePath)}" mimeType=${mimeType} fileSize=${stat.size} dataUrlLen=${dataUrl.length}`)
+
+        return { success: true, output: result }
+      }
     } catch (err) {
-      console.log(`[read_image] ❌ error:`, err instanceof Error ? err.message : err)
+      ctx.logger.error(`[read_image] ❌ error:`, err instanceof Error ? err.message : err)
       return { success: false, output: err instanceof Error ? err.message : 'Unknown error' }
     }
   },
+}
+
+function isVisionModelAvailable(ctx: AgentContext): boolean {
+  const modelName = (ctx as any).modelName || process.env.MODEL_NAME || ''
+  const visionModels = [
+    'gpt-4v', 'gpt-4-vision', 'gpt-4-turbo', 'gpt-4o',
+    'claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku',
+    'gemini-pro-vision', 'gemini-1.5-pro', 'gemini-1.5-flash',
+    'llava', 'bakllava', 'qwen-vl', 'qwen2-vl'
+  ]
+  
+  const lowerModel = modelName.toLowerCase()
+  return visionModels.some(vm => lowerModel.includes(vm.toLowerCase()))
+}
+
+async function extractTextWithOCR(imagePath: string, language: string, ctx: AgentContext): Promise<ToolResult> {
+  try {
+    if (!Tesseract) {
+      return {
+        success: false,
+        output: `❌ OCR 功能不可用：未安装 tesseract.js\n\n请先安装依赖：\nnpm install tesseract.js`
+      }
+    }
+
+    if (typeof Tesseract.recognize !== 'function') {
+      ctx.logger.error(`[read_image] Tesseract.recognize is not a function, Tesseract keys: ${Object.keys(Tesseract)}`)
+      return {
+        success: false,
+        output: `❌ OCR 功能异常：Tesseract.recognize 不可用\n\n可能是 tesseract.js 版本问题，请尝试重新安装：\nnpm install tesseract.js@5`
+      }
+    }
+
+    ctx.logger.info(`[read_image] Running OCR on ${imagePath} with language: ${language}`)
+
+    const { data: { text, confidence } } = await Tesseract.recognize(
+      imagePath,
+      language,
+      {
+        logger: (m: any) => ctx.logger.debug(`[Tesseract] ${m.status}: ${m.progress}`)
+      }
+    )
+
+    if (!text || text.trim().length === 0) {
+      return {
+        success: true,
+        output: `📷 **图片 OCR 结果**\n\n**文件名**: ${path.basename(imagePath)}\n**语言**: ${language}\n**置信度**: ${(confidence * 100).toFixed(1)}%\n\n**提取的文本**: \n*未检测到可识别的文本内容*`
+      }
+    }
+
+    const result = [
+      `📷 **图片 OCR 结果**`,
+      ``,
+      `**文件名**: ${path.basename(imagePath)}`,
+      `**语言**: ${language}`,
+      `**置信度**: ${(confidence * 100).toFixed(1)}%`,
+      ``,
+      `**提取的文本**:`,
+      `\`\`\``,
+      text,
+      `\`\`\``,
+    ].join('\n')
+
+    ctx.logger.info(`[read_image] OCR completed, extracted ${text.length} characters`)
+
+    return { success: true, output: result }
+  } catch (err: any) {
+    ctx.logger.error(`[read_image] OCR failed: ${err.message}`)
+    return {
+      success: false,
+      output: `❌ OCR 识别失败: ${err.message}\n\n如果是语言包问题，请确保安装了对应的语言数据。\n建议的语言代码：\n- 英文: eng\n- 简体中文: chi_sim\n- 繁体中文: chi_tra\n- 日语: jpn\n- 韩语: kor\n- 多语言: eng+chi_sim`
+    }
+  }
 }
 
 export const fileTools: Tool[] = [

@@ -12,14 +12,17 @@ import { getSkillContent } from '../../skills/external-loader.js'
 
 export { runSkillScriptTool } from './run-skill-script.js'
 
+export type SkillTool = Tool & { source: 'skill' }
+
 /**
  * 创建技能相关工具，注入已加载的 skills 列表
  */
-export function createSkillTools(skills: ExternalSkill[]): Tool[] {
-  const listSkills: Tool = {
+export function createSkillTools(skills: ExternalSkill[]): SkillTool[] {
+  const listSkills: SkillTool = {
     name: 'list_skills',
     displayName: '可用技能列表',
     description: '列出所有可用技能的名称和简短描述。',
+    source: 'skill',
     parameters: {
       type: 'object',
       properties: {},
@@ -36,11 +39,12 @@ export function createSkillTools(skills: ExternalSkill[]): Tool[] {
     },
   }
 
-  const getSkill: Tool = {
+  const getSkill: SkillTool = {
     name: 'get_skill',
     displayName: '获取技能说明',
     description:
       '根据技能名称获取特定技能的完整使用说明（SKILL.md 内容）。在执行任何技能脚本之前调用此工具，以了解其确切用法。',
+    source: 'skill',
     parameters: {
       type: 'object',
       properties: {

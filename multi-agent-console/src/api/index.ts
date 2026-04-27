@@ -615,6 +615,26 @@ export const toolsApi = {
       pagination: res.pagination,
     }
   },
+  // GET /system-tools
+  listSystemTools: async (params?: { current?: number; pageSize?: number }) => {
+    const qs = params ? `?${new URLSearchParams(params as any).toString()}` : ''
+    const res = await request<Tool[]>(`/system-tools${qs}`)
+    return {
+      list: (res.data ?? []) as Tool[],
+      total: res.pagination?.total ?? (res.data as any[])?.length ?? 0,
+      pagination: res.pagination,
+    }
+  },
+  // GET /external-skills
+  listExternalSkills: async (params?: { current?: number; pageSize?: number }) => {
+    const qs = params ? `?${new URLSearchParams(params as any).toString()}` : ''
+    const res = await request<any[]>(`/external-skills${qs}`)
+    return {
+      list: (res.data ?? []) as any[],
+      total: res.pagination?.total ?? (res.data as any[])?.length ?? 0,
+      pagination: res.pagination,
+    }
+  },
 }
 
 // ── Workspace API ────────────────────────────────────────────────────────────────

@@ -21,6 +21,26 @@ Agent Engine 内置一套**系统级工具**，让 AI Agent 具备任务管理�
 | `task_status` | Task | 查看指定任务详情 |
 | `glob_search` | Search | 用 glob 模式匹配文件路径 |
 | `grep_search` | Search | 在文件内容中搜索文本/正则 |
+| `web_fetch` | Web | 获取网页内容（支持安全域名过滤） |
+| `http_request` | Web | 发起 HTTP 请求 |
+| `get_context` | Context | 获取当前 Agent 上下文信息 |
+| `agent` | Agent | 创建和管理子 Agent |
+| `subagent` | Agent | 调用子 Agent 执行任务 |
+| `install_package` | Package | 安装 npm 包到工作区 |
+| `read_file` | File | 读取文件内容 |
+| `write_file` | File | 写入文件内容 |
+| `list_files` | File | 列出目录文件 |
+| `delete_file` | File | 删除文件或目录 |
+| `create_dir` | File | 创建目录 |
+| `read_image` | File | 读取并解析图片 |
+| `remember` | Memory | 存储记忆条目 |
+| `recall` | Memory | 根据 Key 回忆记忆 |
+| `search_memory` | Memory | 搜索记忆内容 |
+| `run_command` | System | 执行 Shell 命令 |
+| `ask_user` | Interaction | 向用户提问 |
+| `list_skills` | Skill | 列出可用技能 |
+| `get_skill` | Skill | 获取技能详情 |
+| `run_skill_script` | Skill | 运行技能脚本 |
 
 ---
 
@@ -272,6 +292,170 @@ src/tools/search/grep-tool.ts:14:async function hasRipgrep(): Promise<boolean> {
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `id` | string | ✅ | 任务 ID（支持前8位短码） |
+
+---
+
+## Web 工具
+
+### `web_fetch`
+
+获取网页内容，支持 HTML 转 Markdown 和安全域名过滤。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `url` | string | ✅ | 要获取的网页 URL |
+| `format` | string | 否 | 返回格式：`markdown`（默认）/ `html` / `text` |
+
+**安全配置**
+
+通过系统设置的 `webFetch` 字段配置域名策略：
+- `enabled`: 是否启用 Web 获取
+- `allowedDomains`: 允许的域名列表（支持通配符 `*`）
+- `blockedDomains`: 阻止的域名列表
+
+**示例**
+
+```
+帮我获取这个页面的内容：https://example.com/article
+→ 调用 web_fetch({ url: "https://example.com/article", format: "markdown" })
+```
+
+---
+
+### `http_request`
+
+发起 HTTP 请求，可用于调用外部 API。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `url` | string | ✅ | 请求 URL |
+| `method` | string | 否 | HTTP 方法：`GET`（默认）/ `POST` / `PUT` / `DELETE` 等 |
+| `headers` | object | 否 | 请求头 |
+| `body` | string / object | 否 | 请求体 |
+| `timeout` | number | 否 | 超时毫秒数，默认 30000 |
+
+**示例**
+
+```
+调用天气 API 获取北京天气
+→ 调用 http_request({
+    url: "https://api.weather.com/v3/weather?city=beijing",
+    headers: { "X-API-Key": "your-key" }
+  })
+```
+
+---
+
+## Agent 工具
+
+### `get_context`
+
+获取当前 Agent 的运行时上下文信息，包括系统提示词、工具列表等。
+
+**参数**
+
+无
+
+**返回字段**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `systemPrompt` | string | 当前系统提示词 |
+| `tools` | array | 可用工具列表 |
+| `allowedTools` | array | 允许的工具名称 |
+| `skills` | array | 已加载的技能 |
+| `sessionId` | string | 当前会话 ID |
+| `agentId` | string | 当前 Agent ID |
+
+**示例**
+
+```
+查看当前 Agent 有哪些可用工具
+→ 调用 get_context({})
+```
+
+---
+
+### `agent`
+
+创建和管理子 Agent，支持在当前对话中发起子任务。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `action` | string | ✅ | 操作：`create` / `list` / `info` / `terminate` |
+| `name` | string | 否 | 子 Agent 名称（create 时必填） |
+| `model` | string | 否 | 使用的模型（默认继承父 Agent） |
+| `systemPrompt` | string | 否 | 子 Agent 系统提示词 |
+| `message` | string | 否 | 发送给子 Agent 的消息（create 时必填） |
+| `agentId` | string | 否 | 子 Agent ID（info/terminate 时必填） |
+| `maxTurns` | number | 否 | 最大对话轮次，默认 10 |
+
+**示例**
+
+```
+创建一个子 Agent 帮我分析这段代码
+→ 调用 agent({
+    action: "create",
+    name: "code-analyzer",
+    message: "请分析这段代码的性能瓶颈"
+  })
+```
+
+---
+
+### `subagent`
+
+调用已存在的子 Agent 执行特定任务。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `agentId` | string | ✅ | 子 Agent ID |
+| `message` | string | ✅ | 发送给子 Agent 的消息 |
+| `timeout` | number | 否 | 超时毫秒数，默认 60000 |
+
+**示例**
+
+```
+让代码分析 Agent 帮我审查 PR
+→ 调用 subagent({
+    agentId: "agent_xxxx",
+    message: "请审查 PR #42 的代码变更"
+  })
+```
+
+---
+
+## Package 工具
+
+### `install_package`
+
+在工作区中安装 npm 包。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `packageName` | string | ✅ | 包名，可指定版本如 `lodash@4.17.21` |
+| `saveDev` | boolean | 否 | 是否作为 devDependencies，默认 `false` |
+| `workspace` | string | 否 | 工作区路径，默认当前工作区 |
+
+**示例**
+
+```
+安装 lodash 到当前项目
+→ 调用 install_package({ packageName: "lodash" })
+
+安装 typescript 作为开发依赖
+→ 调用 install_package({ packageName: "typescript", saveDev: true })
+```
 
 ---
 

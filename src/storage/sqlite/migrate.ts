@@ -5,6 +5,7 @@ import { up as up003 } from './migrations/003_drop_deleted_at.js'
 import { up as up004 } from './migrations/004_add_agents.js'
 import { up as up005 } from './migrations/005_add_token_usage.js'
 import { up as up006 } from './migrations/006_add_todos_cron.js'
+import { up as up007 } from './migrations/007_add_models_management.js'
 
 const BUILTIN_TEMPLATES = [
   {
@@ -86,6 +87,13 @@ async function migrate() {
       } else {
         throw err
       }
+    }
+
+    try {
+      await up007(db)
+      console.log('✓ Migration 007_add_models_management complete')
+    } catch (err: any) {
+      console.log('✓ Migration 007_add_models_management skipped:', err.message)
     }
 
     // Seed built-in prompt templates

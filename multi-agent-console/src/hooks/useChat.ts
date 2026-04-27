@@ -116,6 +116,8 @@ function driveAiMessage(
       ...(accumulatedUsage ? { usage: accumulatedUsage } : {}),
     })
     onDone?.()
+    // 触发待办任务刷新（AI 操作完成后可能创建/修改了待办）
+    useSessionStore.getState().triggerTodosRefresh()
   }
 
   const handleError = (err: Error) => {

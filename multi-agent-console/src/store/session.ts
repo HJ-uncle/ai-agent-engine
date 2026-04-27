@@ -8,6 +8,7 @@ interface SessionState {
   activeFile: string | null // Current file opened in Explorer
   files: string[] // List of all file paths in current workspace
   lastFilesUpdate: number // Timestamp to trigger file list refresh
+  lastTodosUpdate: number // Timestamp to trigger todo list refresh
   messageMap: Record<string, Message[]>
   usageMap: Record<string, TokenUsage | null>
 
@@ -44,6 +45,7 @@ interface SessionState {
   setFiles: (files: string[]) => void
   setActiveFile: (file: string | null) => void
   triggerFilesRefresh: () => void
+  triggerTodosRefresh: () => void
 }
 
 function genId() {
@@ -80,6 +82,7 @@ export const useSessionStore = create<SessionState>()(
       activeFile: null,
       files: [],
       lastFilesUpdate: 0,
+      lastTodosUpdate: 0,
       messageMap: { [initial.id]: [] },
       usageMap: { [initial.id]: null },
       isSettingsOpen: false,
@@ -92,6 +95,7 @@ export const useSessionStore = create<SessionState>()(
       setFiles: (files) => set({ files }),
       setActiveFile: (file) => set({ activeFile: file }),
       triggerFilesRefresh: () => set({ lastFilesUpdate: Date.now() }),
+      triggerTodosRefresh: () => set({ lastTodosUpdate: Date.now() }),
       addSession: (agentId?: string) => {
         const s = { ...defaultSession(), agentId }
         set((state) => ({

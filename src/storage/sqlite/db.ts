@@ -7,7 +7,9 @@ import { up as up2 } from './migrations/002_add_message_id.js'
 import { up as up3 } from './migrations/003_drop_deleted_at.js'
 import { up as up4 } from './migrations/004_add_agents.js'
 import { up as up5 } from './migrations/005_add_token_usage.js'
-import { up as up6 } from './migrations/006_add_models_management.js'
+import { up as up6 } from './migrations/006_add_todos_cron.js'
+import { up as up7 } from './migrations/007_add_models_management.js'
+import { up as up8 } from './migrations/008_add_agent_allowed_tools.js'
 
 let client: Client | null = null
 let initialized = false
@@ -46,6 +48,8 @@ export async function initDb(): Promise<void> {
   await up4(db)
   await up5(db)
   await up6(db)
+  await up7(db)
+  await up8(db)
   // 兼容旧数据库：补充新列（ALTER TABLE 不支持 IF NOT EXISTS，用 catch 静默跳过）
   await db.execute('ALTER TABLE conversations ADD COLUMN tool_call_name TEXT').catch(() => {})
   await db.execute('ALTER TABLE conversations ADD COLUMN conversation_id TEXT').catch(() => {})

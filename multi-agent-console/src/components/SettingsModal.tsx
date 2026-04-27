@@ -18,6 +18,7 @@ import {
 import { useSessionStore } from '../store/session'
 import GeneralSettings from './settings/GeneralSettings'
 import WhitelistManager from './settings/WhitelistManager'
+import WebFetchSettings from './settings/WebFetchSettings'
 import WorkspaceSettings from './settings/WorkspaceSettings'
 import RemoteSettings from './settings/RemoteSettings'
 import ModelSettings from './settings/ModelSettings'
@@ -130,6 +131,16 @@ export default function SettingsModal() {
         </span>
       ),
       children: <WhitelistManager />,
+    },
+    {
+      key: 'webfetch',
+      label: (
+        <span>
+          <CloudServerOutlined />
+          <span style={{ marginLeft: 8 }}>Web Fetch</span>
+        </span>
+      ),
+      children: <WebFetchSettings />,
     },
     {
       key: 'remote',

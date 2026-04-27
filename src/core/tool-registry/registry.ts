@@ -19,12 +19,13 @@ export class ToolRegistry implements IToolRegistry {
     return this.tools.has(name)
   }
 
-  list(): Array<{ name: string; displayName?: string; description: string; parameters: JSONSchema }> {
+  list(): Array<{ name: string; displayName?: string; description: string; parameters: JSONSchema; source?: string }> {
     return Array.from(this.tools.values()).map((tool) => ({
       name: tool.name,
       displayName: tool.displayName,
       description: tool.description,
       parameters: tool.parameters,
+      source: (tool as any).source,
     }))
   }
 

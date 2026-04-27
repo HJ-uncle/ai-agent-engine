@@ -794,6 +794,40 @@
         }
       }
     },
+    "/tools/system-tools": {
+      "get": {
+        "summary": "获取系统内置工具列表（排除技能工具）",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tools/external-skills": {
+      "get": {
+        "summary": "获取自定义技能列表（SKILLs 目录）",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/workspace/files": {
       "get": {
         "summary": "获取工作区文件列表",
@@ -1068,6 +1102,16 @@
             "application/json": {
               "schema": {
                 "type": "object",
+                "properties": {
+                  "webFetch": {
+                    "type": "object",
+                    "properties": {
+                      "enabled": { "type": "boolean" },
+                      "allowedDomains": { "type": "array", "items": { "type": "string" } },
+                      "blockedDomains": { "type": "array", "items": { "type": "string" } }
+                    }
+                  }
+                },
                 "additionalProperties": {
                   "type": "string"
                 }

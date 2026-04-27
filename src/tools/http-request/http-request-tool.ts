@@ -1,0 +1,276 @@
+import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
+
+export interface AuthConfig {
+  type: 'basic' | 'bearer' | 'apikey' | 'digest' | 'oauth2' | 'custom'
+  username?: string
+  password?: string
+  token?: string
+  apiKey?: string
+  apiKeyHeader?: string
+  oauth2TokenUrl?: string
+  oauth2ClientId?: string
+  oauth2ClientSecret?: string
+  oauth2Scope?: string
+  customHeaders?: Record<string, string>
+}
+
+/**
+ * HTTP Request 工具
+ *
+ * 发起 HTTP 请求，支持多种认证方式
+ */
+export const httpRequestTool: Tool = {
+  name: 'http_request',
+  displayName: 'HTTP 请求',
+  description: '发起 HTTP 请求，支持 GET、POST、PUT、DELETE 等方法，支持多种认证方式',
+  parameters: {
+    type: 'object',
+    properties: {
+      url: {
+        type: 'string',
+        description: '请求的 URL（必填）'
+      },
+      method: {
+        type: 'string',
+        description: 'HTTP 方法，默认 GET',
+        enum: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']
+      },
+      headers: {
+        type: 'object',
+        description: '请求头，如 { "Content-Type": "application/json" }'
+      },
+      body: {
+        type: 'string',
+        description: '请求体内容（可选）'
+      },
+      timeout: {
+        type: 'integer',
+        description: '请求超时时间（毫秒），默认 30000'
+      },
+      auth: {
+        type: 'object',
+        description: '认证配置',
+        properties: {
+          type: {
+            type: 'string',
+            description: '认证类型',
+            enum: ['basic', 'bearer', 'apikey', 'custom']
+          },
+          username: {
+            type: 'string',
+            description: 'Basic 认证的用户名'
+          },
+          password: {
+            type: 'string',
+            description: 'Basic 认证的密码'
+          },
+          token: {
+            type: 'string',
+            description: 'Bearer Token'
+          },
+          apiKey: {
+            type: 'string',
+            description: 'API Key 值'
+          },
+          apiKeyHeader: {
+            type: 'string',
+            description: 'API Key 的请求头名称，默认 "Authorization"'
+          },
+          apiKeyPrefix: {
+            type: 'string',
+            description: 'API Key 的前缀，如 "Bearer"、"Api-Key"，默认无'
+          },
+          customHeaders: {
+            type: 'object',
+            description: '自定义认证请求头'
+          }
+        }
+      },
+      followRedirects: {
+        type: 'boolean',
+        description: '是否跟随重定向，默认 true'
+      },
+      responseType: {
+        type: 'string',
+        description: '响应类型，默认 auto',
+        enum: ['auto', 'json', 'text', 'binary']
+      }
+    },
+    required: ['url']
+  },
+  async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
+    const { 
+      url, 
+      method = 'GET', 
+      headers = {}, 
+      body, 
+      timeout = 30000,
+      auth,
+      followRedirects = true,
+      responseType = 'auto'
+    } = rawArgs as any
+
+    try {
+      let parsedUrl: URL
+      try {
+        parsedUrl = new URL(url)
+      } catch {
+        return { success: false, output: `❌ 无效的 URL 格式: ${url}` }
+      }
+
+      if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+        return { success: false, output: `❌ 只支持 http 和 https 协议的 URL` }
+      }
+
+      ctx.logger.info(`[http_request] ${method} ${url}`)
+
+      // 构建请求头（包含认证）
+      const requestHeaders = await buildHeaders(headers, auth, ctx)
+
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), timeout)
+
+      try {
+        const response = await fetch(url, {
+          method,
+          headers: requestHeaders,
+          body: body && ['POST', 'PUT', 'PATCH'].includes(method) ? body : undefined,
+          signal: controller.signal,
+          redirect: followRedirects ? 'follow' : 'manual'
+        })
+
+        clearTimeout(timeoutId)
+
+        const statusText = response.statusText || ''
+        const responseHeaders: Record<string, string> = {}
+        response.headers.forEach((value, key) => {
+          responseHeaders[key.toLowerCase()] = value
+        })
+
+        const contentType = response.headers.get('content-type') || ''
+        let responseBody = ''
+
+        if (responseType === 'binary') {
+          const buffer = await response.arrayBuffer()
+          responseBody = `[Binary data: ${buffer.byteLength} bytes]`
+        } else {
+          responseBody = await response.text()
+        }
+
+        let parsedBody: any = null
+        if ((responseType === 'auto' || responseType === 'json') && contentType.includes('application/json')) {
+          try {
+            parsedBody = JSON.parse(responseBody)
+            responseBody = JSON.stringify(parsedBody, null, 2)
+          } catch {
+            // JSON 解析失败，保持原始文本
+          }
+        }
+
+        const maxLength = 50000
+        if (responseBody.length > maxLength) {
+          responseBody = responseBody.slice(0, maxLength) + `\n\n... [响应已截断，原长度: ${responseBody.length} 字符]`
+        }
+
+        const result = [
+          `✅ HTTP 请求成功`,
+          ``,
+          `**请求信息**`,
+          `- URL: ${url}`,
+          `- 方法: ${method}`,
+          `- 认证方式: ${auth?.type || '无'}`,
+          `- 请求头: ${JSON.stringify(headers, null, 2)}`,
+          body ? `- 请求体: ${body.slice(0, 200)}${body.length > 200 ? '...' : ''}` : '',
+          ``,
+          `**响应信息**`,
+          `- 状态码: ${response.status} ${statusText}`,
+          `- Content-Type: ${contentType}`,
+          ``,
+          `**响应头**`,
+          `\`\`\`json`,
+          JSON.stringify(responseHeaders, null, 2),
+          `\`\`\``,
+          ``,
+          `**响应体**`,
+          contentType.includes('application/json') ? '```json' : '```',
+          responseBody,
+          '```',
+        ].filter(Boolean).join('\n')
+
+        ctx.logger.info(`[http_request] ${method} ${url} -> ${response.status}`)
+
+        return { success: true, output: result }
+      } catch (fetchErr: any) {
+        clearTimeout(timeoutId)
+        throw fetchErr
+      }
+    } catch (err: any) {
+      ctx.logger.error(`[http_request] ${method} ${url} failed: ${err.message}`)
+
+      if (err.name === 'AbortError') {
+        return {
+          success: false,
+          output: `❌ HTTP 请求超时（${timeout}ms）\nURL: ${url}\n方法: ${method}`
+        }
+      }
+
+      return {
+        success: false,
+        output: `❌ HTTP 请求失败: ${err.message}\nURL: ${url}\n方法: ${method}`
+      }
+    }
+  }
+}
+
+async function buildHeaders(headers: Record<string, string>, auth: AuthConfig | undefined, ctx: AgentContext): Promise<Record<string, string>> {
+  const result: Record<string, string> = {
+    'User-Agent': 'AI-Agent-Engine/1.0',
+    ...headers
+  }
+
+  if (!auth) {
+    return result
+  }
+
+  switch (auth.type) {
+    case 'basic': {
+      if (auth.username !== undefined && auth.password !== undefined) {
+        const credentials = btoa(`${auth.username}:${auth.password}`)
+        result['Authorization'] = `Basic ${credentials}`
+        ctx.logger.info('[http_request] Using Basic authentication')
+      }
+      break
+    }
+
+    case 'bearer': {
+      if (auth.token) {
+        result['Authorization'] = `Bearer ${auth.token}`
+        ctx.logger.info('[http_request] Using Bearer authentication')
+      }
+      break
+    }
+
+    case 'apikey': {
+      if (auth.apiKey) {
+        const headerName = auth.apiKeyHeader || 'Authorization'
+        const prefix = auth.apiKeyPrefix ? `${auth.apiKeyPrefix} ` : ''
+        result[headerName] = `${prefix}${auth.apiKey}`
+        ctx.logger.info(`[http_request] Using API Key authentication (header: ${headerName})`)
+      }
+      break
+    }
+
+    case 'custom': {
+      if (auth.customHeaders) {
+        Object.assign(result, auth.customHeaders)
+        ctx.logger.info('[http_request] Using custom authentication headers')
+      }
+      break
+    }
+
+    default:
+      ctx.logger.warn(`[http_request] Unknown auth type: ${auth.type}`)
+  }
+
+  return result
+}

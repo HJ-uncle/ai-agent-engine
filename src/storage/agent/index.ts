@@ -12,6 +12,7 @@ export interface Agent {
   skills: string[]
   mcpServers: string[]
   knowledgeBases: string[]
+  allowedTools: string[]
   createdAt: number
   updatedAt: number
 }
@@ -38,7 +39,7 @@ export class SQLiteAgentStore {
       ]
     })
 
-    await this.updateRelations(id, input.skills, input.mcpServers, input.knowledgeBases)
+    await this.updateRelations(id, input.skills, input.mcpServers, input.knowledgeBases, input.allowedTools)
     
     return this.getById(id, tenantId) as Promise<Agent>
   }
@@ -57,6 +58,7 @@ export class SQLiteAgentStore {
     const skills = await db.execute({ sql: `SELECT skill_name FROM agent_skills WHERE agent_id = ?`, args: [id] })
     const mcpServers = await db.execute({ sql: `SELECT mcp_server_name FROM agent_mcp WHERE agent_id = ?`, args: [id] })
     const knowledgeBases = await db.execute({ sql: `SELECT knowledge_id FROM agent_knowledge WHERE agent_id = ?`, args: [id] })
+    const allowedTools = await db.execute({ sql: `SELECT tool_name FROM agent_allowed_tools WHERE agent_id = ?`, args: [id] })
 
     return {
       id: String(row['id']),
@@ -69,6 +71,7 @@ export class SQLiteAgentStore {
       skills: skills.rows.map(r => String(r['skill_name'])),
       mcpServers: mcpServers.rows.map(r => String(r['mcp_server_name'])),
       knowledgeBases: knowledgeBases.rows.map(r => String(r['knowledge_id'])),
+      allowedTools: allowedTools.rows.map(r => String(r['tool_name'])),
       createdAt: Number(row['created_at']) * 1000,
       updatedAt: Number(row['updated_at']) * 1000,
     }
@@ -118,7 +121,8 @@ export class SQLiteAgentStore {
       id, 
       input.skills ?? current.skills,
       input.mcpServers ?? current.mcpServers,
-      input.knowledgeBases ?? current.knowledgeBases
+      input.knowledgeBases ?? current.knowledgeBases,
+      input.allowedTools ?? current.allowedTools
     )
 
     return this.getById(id, tenantId)
@@ -133,7 +137,7 @@ export class SQLiteAgentStore {
     return result.rowsAffected > 0
   }
 
-  private async updateRelations(id: string, skills: string[], mcpServers: string[], knowledgeBases: string[]) {
+  private async updateRelations(id: string, skills: string[], mcpServers: string[], knowledgeBases: string[], allowedTools: string[]) {
     const db = getDb()
     
     // Replace skills
@@ -152,6 +156,12 @@ export class SQLiteAgentStore {
     await db.execute({ sql: `DELETE FROM agent_knowledge WHERE agent_id = ?`, args: [id] })
     for (const kb of knowledgeBases) {
       await db.execute({ sql: `INSERT INTO agent_knowledge (agent_id, knowledge_id) VALUES (?, ?)`, args: [id, kb] })
+    }
+
+    // Replace allowedTools
+    await db.execute({ sql: `DELETE FROM agent_allowed_tools WHERE agent_id = ?`, args: [id] })
+    for (const tool of allowedTools) {
+      await db.execute({ sql: `INSERT INTO agent_allowed_tools (agent_id, tool_name) VALUES (?, ?)`, args: [id, tool] })
     }
   }
 }
