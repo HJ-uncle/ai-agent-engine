@@ -4,6 +4,7 @@ import { up as up002 } from './migrations/002_add_message_id.js'
 import { up as up003 } from './migrations/003_drop_deleted_at.js'
 import { up as up004 } from './migrations/004_add_agents.js'
 import { up as up005 } from './migrations/005_add_token_usage.js'
+import { up as up006 } from './migrations/006_add_todos_cron.js'
 
 const BUILTIN_TEMPLATES = [
   {
@@ -71,6 +72,17 @@ async function migrate() {
     } catch (err: any) {
       if (err.message && err.message.includes('duplicate column name')) {
         console.log('✓ Migration 005_add_token_usage already applied')
+      } else {
+        throw err
+      }
+    }
+
+    try {
+      await up006(db)
+      console.log('✓ Migration 006_add_todos_cron complete')
+    } catch (err: any) {
+      if (err.message && err.message.includes('already exists')) {
+        console.log('✓ Migration 006_add_todos_cron already applied')
       } else {
         throw err
       }

@@ -56,7 +56,7 @@ export class ReActStrategy implements LoopStrategy {
     // Add user message to history only if input is provided
     // 优先使用 displayContent（原始前端格式，含 workspace_image）存入 DB，用于 UI 展示
     // LLM 收到的是处理后的 input（文本化的 prompt），两者分离
-    const historyContent = this.options.displayContent ?? input
+    const historyContent = (this.options.displayContent ?? input) as string | any[]
     if (input !== null && input !== '') {
       const userMessage: Message & { conversationId?: string } = {
         role: 'user',

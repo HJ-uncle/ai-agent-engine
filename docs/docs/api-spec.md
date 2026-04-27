@@ -189,6 +189,52 @@
 - `GET /health`: 存活探针检查
 - `GET /metrics`: 获取 Prometheus 格式的监控指标
 
+### 13. 待办任务 Todos (`/api/v1/todos`)
+- `POST /api/v1/todos`: 创建新的待办任务
+
+  **请求体：**
+  ```json
+  {
+    "title": "Review PR #42",
+    "description": "可选描述",
+    "priority": "high",
+    "dueAt": "2026-05-01T18:00:00",
+    "sessionId": "my-session"
+  }
+  ```
+
+- `GET /api/v1/todos?sessionId=&status=&current=&pageSize=`: 获取待办列表，支持按 sessionId、status 过滤和分页
+- `PUT /api/v1/todos/:id`: 更新待办任务（title、description、priority、status、dueAt 均可选）
+- `DELETE /api/v1/todos/:id`: 删除待办任务
+
+  **枚举值**
+  - `status`: `pending` · `in_progress` · `done` · `cancelled`
+  - `priority`: `low` · `medium` · `high`
+
+### 14. 定时任务 Cron (`/api/v1/cron`)
+- `POST /api/v1/cron`: 创建定时任务
+
+  **请求体：**
+  ```json
+  {
+    "name": "每日日报",
+    "cronExpr": "0 9 * * 1-5",
+    "message": "请总结昨日工作进展，列出今日计划",
+    "sessionId": "my-session",
+    "agentId": "可选",
+    "description": "工作日每天9点提醒",
+    "enabled": true
+  }
+  ```
+
+- `GET /api/v1/cron?current=&pageSize=`: 获取定时任务列表（支持分页）
+- `PUT /api/v1/cron/:id`: 更新定时任务（name、cronExpr、message、description、enabled 均可选）
+- `DELETE /api/v1/cron/:id`: 删除定时任务
+- `POST /api/v1/cron/:id/enable`: 启用定时任务
+- `POST /api/v1/cron/:id/disable`: 禁用定时任务
+
+  > `CronScheduler` 每分钟整点轮询，匹配到表达式后通过 loopback HTTP `POST /api/v1/chat` 触发完整 ReAct 循环，并更新 `lastRunAt` 字段。
+
 ---
 
 ## Chat 接口详细说明

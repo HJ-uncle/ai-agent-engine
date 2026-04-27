@@ -5,6 +5,7 @@ import React, {
   useState,
   useLayoutEffect,
 } from "react";
+import { TodoPanel } from './TodoPanel';
 import { Button, Tooltip, Popconfirm, Input, Select, Switch, message, Modal } from "antd";
 import {
   SendOutlined,
@@ -1434,6 +1435,7 @@ export default function ChatArea() {
 
   const [inputValue, setInputValue] = useState("");
   const [attachments, setAttachments] = useState<File[]>([]);
+  const [showTodoPanel, setShowTodoPanel] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isCompressing, setIsCompressing] = useState(false);
   const compressStats = session?.compressStats || null;
@@ -1855,6 +1857,17 @@ export default function ChatArea() {
             />
           </Tooltip>
 
+          <Tooltip title="待办任务">
+            <Button
+              type="text"
+              size="small"
+              onClick={() => setShowTodoPanel(v => !v)}
+              style={{ color: showTodoPanel ? "#58a6ff" : "#8b949e", fontSize: 15 }}
+            >
+              📋
+            </Button>
+          </Tooltip>
+
 
 
           {/* Token summary */}
@@ -1988,6 +2001,15 @@ export default function ChatArea() {
           </>
         )}
       </div>
+
+      {/* Todo Panel — 在输入框上方展示 */}
+      {showTodoPanel && (
+        <TodoPanel
+          sessionId={activeSessionId}
+          visible={showTodoPanel}
+          onClose={() => setShowTodoPanel(false)}
+        />
+      )}
 
       {/* Input area */}
       <div className={styles.inputArea} onDrop={handleDrop} onDragOver={(e) => e.preventDefault()}>

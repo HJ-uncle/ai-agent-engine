@@ -716,6 +716,39 @@ export const modelsApi = {
   },
 }
 
+// ── Todo API ───────────────────────────────────────────────────────────────────
+export interface Todo {
+  id: string
+  tenantId: string
+  sessionId?: string
+  title: string
+  description?: string
+  status: 'pending' | 'in_progress' | 'done' | 'cancelled'
+  priority: 'low' | 'medium' | 'high'
+  dueAt?: number
+  createdAt: number
+  updatedAt: number
+}
+
+export const todoApi = {
+  list: async (params?: { sessionId?: string; status?: string }) => {
+    const qs = params ? `?${new URLSearchParams(params as any).toString()}` : ''
+    const res = await request<Todo[]>(`/todos${qs}`)
+    return (res.data ?? []) as Todo[]
+  },
+  create: async (input: { title: string; description?: string; priority?: string; dueAt?: string; sessionId?: string }) => {
+    const res = await request<Todo>('/todos', { method: 'POST', body: JSON.stringify(input) })
+    return res.data as Todo
+  },
+  update: async (id: string, input: Partial<{ title: string; description: string; status: string; priority: string; dueAt: string }>) => {
+    const res = await request<Todo>(`/todos/${id}`, { method: 'PUT', body: JSON.stringify(input) })
+    return res.data as Todo
+  },
+  delete: async (id: string) => {
+    await request(`/todos/${id}`, { method: 'DELETE' })
+  },
+}
+
 // ── Settings API ───────────────────────────────────────────────────────────────
 export const settingsApi = {
   get: async () => {

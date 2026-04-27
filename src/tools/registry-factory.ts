@@ -13,6 +13,11 @@ import { askUserTool } from './ask-user/index.js'
 import { createMemoryTools } from './memory/index.js'
 import { registerMCPTools } from './mcp/loader.js'
 import { createSkillTools, runSkillScriptTool } from './skill/index.js'
+import { globTool } from './search/glob-tool.js'
+import { grepTool } from './search/grep-tool.js'
+import { todoTools } from './todo/todo-tool.js'
+import { cronTools } from './cron/cron-tool.js'
+import { taskControlTools } from './task/task-tool.js'
 import type { ExternalSkill } from '../skills/external-loader.js'
 
 export interface RegistryFactoryOptions {
@@ -55,7 +60,20 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   createSkillTools(externalSkills).forEach((t) => registry.register(t))
   registry.register(runSkillScriptTool)
 
-  // 7. MCP 工具（动态加载，顺序在最后）
+  // 7. 搜索工具（glob / grep）
+  registry.register(globTool)
+  registry.register(grepTool)
+
+  // 8. 待办任务工具（todo_list / todo_create / todo_update / todo_delete）
+  todoTools.forEach((t) => registry.register(t))
+
+  // 9. 定时任务工具（cron_list / cron_create / cron_update / cron_delete）
+  cronTools.forEach((t) => registry.register(t))
+
+  // 10. 后台任务控制工具（task_list / task_cancel / task_status）
+  taskControlTools.forEach((t) => registry.register(t))
+
+  // 11. MCP 工具（动态加载，顺序在最后）
   await registerMCPTools(registry)
 
   return { registry, memory, externalSkills }

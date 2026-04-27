@@ -43,6 +43,11 @@ A production-ready AI Agent Engine built with Node.js + TypeScript ESM. Supports
 | 33 | **QA Logger** — Structured Q&A audit log for every conversation turn |
 | 34 | **Workspace File Upload** — Upload images/files up to 100 MB directly to session workspace |
 | 35 | **Context Memory Switch** — Per-session toggle for conversation history injection |
+| 36 | **Todo Management** — Task CRUD with REST API + AI tools (`todo_list/create/update/delete`) + UI panel |
+| 37 | **Cron Jobs** — Scheduled AI actions via standard 5-field cron expressions; loopback triggers full ReAct loop |
+| 38 | **Glob Search** — File pattern matching tool (`glob_search`) with wildcard support (`**`, `*`, `?`) |
+| 39 | **Grep Search** — Full-text / regex search tool (`grep_search`); uses ripgrep when available, falls back to Node.js |
+| 40 | **Task Control** — Agent tools to list, cancel and inspect background queue jobs (`task_list/cancel/status`) |
 
 ---
 
@@ -273,6 +278,55 @@ data: {"usage":{"systemPromptTokens":50,"completionTokens":10,"totalTokens":60}}
 | `DELETE` | `/api/v1/models/:id` | Delete model configuration |
 | `POST` | `/api/v1/models/:id/test` | Test model connection |
 
+### Todos
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/todos` | Create a todo item |
+| `GET` | `/api/v1/todos?sessionId=&status=` | List todos (filterable by session / status) |
+| `PUT` | `/api/v1/todos/:id` | Update title, description, priority, status or due date |
+| `DELETE` | `/api/v1/todos/:id` | Delete a todo item |
+
+**Todo status values:** `pending` · `in_progress` · `done` · `cancelled`  
+**Priority values:** `low` · `medium` · `high`
+
+**Create body:**
+```json
+{
+  "title": "Review PR #42",
+  "description": "optional details",
+  "priority": "high",
+  "dueAt": "2026-05-01T18:00:00",
+  "sessionId": "my-session"
+}
+```
+
+### Cron Jobs
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/cron` | Create a cron job |
+| `GET` | `/api/v1/cron` | List all cron jobs |
+| `PUT` | `/api/v1/cron/:id` | Update cron job |
+| `DELETE` | `/api/v1/cron/:id` | Delete cron job |
+| `POST` | `/api/v1/cron/:id/enable` | Enable a cron job |
+| `POST` | `/api/v1/cron/:id/disable` | Disable a cron job |
+
+**Create body:**
+```json
+{
+  "name": "Daily standup reminder",
+  "cronExpr": "0 9 * * 1-5",
+  "message": "请总结今日工作进展并列出明日计划",
+  "sessionId": "my-session",
+  "agentId": "optional-agent-id",
+  "description": "Weekday 9 AM standup",
+  "enabled": true
+}
+```
+
+The scheduler fires a loopback `POST /api/v1/chat` request at the matched minute, triggering the full ReAct agent loop.
+
 ### Settings
 
 | Method | Path | Description |
@@ -308,6 +362,8 @@ src/
 │       ├── agents.ts          # Agent CRUD
 │       ├── models.ts          # Model management
 │       ├── settings.ts        # System settings
+│       ├── todos.ts           # Todo CRUD
+│       ├── cron.ts            # Cron Job CRUD + enable/disable
 │       └── metrics.ts         # Health + metrics
 ├── core/
 │   ├── agent-context/         # AgentContext, Tool interfaces
@@ -325,6 +381,18 @@ src/
 │   ├── cache-store/           # SQLiteCacheStore
 │   ├── agent/                 # SQLiteAgentStore
 │   └── knowledge/             # Knowledge base + RAG
+├── scheduler/
+│   └── cron-scheduler.ts      # ★ Minute-level cron ticker; loopback triggers full ReAct loop
+├── storage/
+│   ├── sqlite/                # DB connection + migrations (006: todos + cron_jobs)
+│   ├── memory-store/          # SQLiteMemoryStore
+│   ├── conversation/          # SQLiteConversationHistory (sliding window)
+│   ├── task-queue/            # SQLiteTaskQueue
+│   ├── cache-store/           # SQLiteCacheStore
+│   ├── agent/                 # SQLiteAgentStore
+│   ├── todo/                  # TodoStore (CRUD, status/priority filters)
+│   ├── cron/                  # CronStore (CRUD, enable/disable, lastRunAt)
+│   └── knowledge/             # Knowledge base + RAG
 ├── tools/
 │   ├── file/                  # read_file / write_file / list_files / delete_file / create_dir / read_image
 │   ├── cmd/                   # Shell command execution
@@ -332,6 +400,10 @@ src/
 │   ├── ask-user/              # Interactive ask_user tool
 │   ├── skill/                 # External skill runner
 │   ├── mcp/                   # HTTP MCP client
+│   ├── search/                # glob_search (glob) + grep_search (ripgrep / Node.js fallback)
+│   ├── todo/                  # todo_list / todo_create / todo_update / todo_delete
+│   ├── cron/                  # cron_list / cron_create / cron_update / cron_delete
+│   ├── task/                  # task_list / task_cancel / task_status
 │   └── registry-factory.ts   # ★ Unified tool registry factory (single source of truth)
 ├── skills/                    # Built-in skills (math, time) + external skill loader
 ├── auth/                      # JWT + API key middleware
@@ -353,6 +425,10 @@ src/
 - **Multi-modal via workspace reference** — images/files uploaded to workspace; AI receives text instruction to call `read_image` / `read_file`; base64 is never stored in chat history, preventing token budget explosion
 - **Sliding window history** — conversation history capped at `TOKEN_BUDGET` tokens; oldest messages dropped first; tool results kept intact (no mid-content truncation)
 - **Context compression** — optional extractive/keyword summarization for long histories
+- **Cron loopback** — `CronScheduler` runs a minute-level ticker aligned to clock boundaries; on match it calls `POST /api/v1/chat` (loopback HTTP) so cron jobs go through the full ReAct loop including tool use; no external cron daemon required
+- **Todo + Cron as first-class tools** — agents can create, read, update and delete todos/cron jobs via `todo_*` / `cron_*` tools, enabling self-scheduling autonomous workflows
+- **grep_search ripgrep fallback** — `grep_search` detects `rg` at startup; if absent it falls back to a recursive Node.js `fs` traversal so the tool works on every machine without extra dependencies
+- **TodoPanel UI** — a React side panel above the chat input renders live todo items; the agent can drive it by calling `todo_create` / `todo_update` and the UI reacts in real-time
 
 ---
 
