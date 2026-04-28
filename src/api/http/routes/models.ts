@@ -34,14 +34,14 @@ function requireAdmin(authContext: any): boolean {
 export async function modelsRoutes(fastify: FastifyInstance) {
   const store = new ModelsStore()
 
-  // 1. GET /api/v1/models/whitelist
-  fastify.get('/api/v1/models/whitelist', async (request, reply) => {
+  // 1. GET /models/whitelist
+  fastify.get('/models/whitelist', async (request, reply) => {
     const whitelists = await store.getWhitelists()
     return reply.code(200).send(success(whitelists))
   })
 
-  // 2. GET /api/v1/models
-  fastify.get('/api/v1/models', async (request, reply) => {
+  // 2. GET /models
+  fastify.get('/models', async (request, reply) => {
     const tenantId = (request as any).authContext?.tenantId ?? 'default'
     const models = await store.getModels(tenantId)
     // Mask API keys
@@ -52,9 +52,9 @@ export async function modelsRoutes(fastify: FastifyInstance) {
     return reply.code(200).send(success(safeModels))
   })
 
-  // 3. POST /api/v1/models
+  // 3. POST /models
   fastify.post<{ Body: { provider: string; modelId: string; apiKey: string; baseUrl: string; displayName?: string; version?: string } }>(
-    '/api/v1/models',
+    '/models',
     async (request, reply) => {
       const authContext = (request as any).authContext
       if (!requireAdmin(authContext)) {
@@ -106,9 +106,9 @@ export async function modelsRoutes(fastify: FastifyInstance) {
     }
   )
 
-  // 4. PUT /api/v1/models/{id}
+  // 4. PUT /models/{id}
   fastify.put<{ Params: { id: string }, Body: { apiKey?: string; baseUrl?: string; displayName?: string; isEnabled?: boolean; version?: string } }>(
-    '/api/v1/models/:id',
+    '/models/:id',
     async (request, reply) => {
       const authContext = (request as any).authContext
       if (!requireAdmin(authContext)) {
@@ -142,8 +142,8 @@ export async function modelsRoutes(fastify: FastifyInstance) {
     }
   )
 
-  // 5. DELETE /api/v1/models/{id}
-  fastify.delete<{ Params: { id: string } }>('/api/v1/models/:id', async (request, reply) => {
+  // 5. DELETE /models/{id}
+  fastify.delete<{ Params: { id: string } }>('/models/:id', async (request, reply) => {
     const authContext = (request as any).authContext
     if (!requireAdmin(authContext)) {
       return reply.code(403).send(fail(40300, 'Forbidden: Admin role required'))
@@ -154,8 +154,8 @@ export async function modelsRoutes(fastify: FastifyInstance) {
     return reply.code(200).send(success({ id }))
   })
 
-  // 6. POST /api/v1/models/{id}/test
-  fastify.post<{ Params: { id: string }, Body?: { provider?: string, modelId?: string, apiKey?: string, baseUrl?: string } }>('/api/v1/models/:id/test', async (request, reply) => {
+  // 6. POST /models/{id}/test
+  fastify.post<{ Params: { id: string }, Body?: { provider?: string, modelId?: string, apiKey?: string, baseUrl?: string } }>('/models/:id/test', async (request, reply) => {
     const tenantId = (request as any).authContext?.tenantId ?? 'default'
     const { id } = request.params
     

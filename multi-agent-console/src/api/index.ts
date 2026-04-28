@@ -27,12 +27,36 @@ export interface StandardResponse<T = any> {
   timestamp: number
 }
 
+// ── 从localStorage获取token ──────────────────────────────────────────────────
+function getAccessToken(): string | null {
+  try {
+    const stored = localStorage.getItem('mac-auth-store')
+    if (stored) {
+      const parsed = JSON.parse(stored)
+      // Zustand persist 中间件把数据包装在 state 字段里
+      const authData = parsed.state || parsed
+          if (authData.accessToken && authData.expiresAt && Date.now() < authData.expiresAt) {
+        return authData.accessToken
+      }
+    }
+  } catch (e) {
+    console.error('getAccessToken error:', e)
+  }
+  return null
+}
+
 // ── 通用请求 ──────────────────────────────────────────────────────────────────
 async function request<T>(path: string, options?: RequestInit): Promise<StandardResponse<T>> {
   const defaultHeaders: Record<string, string> = {}
   // Only set Content-Type to application/json if there is a body, otherwise Fastify will complain on empty bodies (e.g. DELETE)
   if (options?.body) {
     defaultHeaders['Content-Type'] = 'application/json'
+  }
+
+  // 添加 Authorization header
+  const token = getAccessToken()
+  if (token) {
+    defaultHeaders['Authorization'] = `Bearer ${token}`
   }
 
   const res = await fetch(`${API_PREFIX}${path}`, {
@@ -48,11 +72,17 @@ async function request<T>(path: string, options?: RequestInit): Promise<Standard
       errorMessage = '解密失败：环境变量 ENCRYPTION_KEY 不匹配或未设置。请在 .env 文件中设置固定的 ENCRYPTION_KEY。'
     }
     
+    // Handle authentication errors - only clear localStorage if it's truly invalid token
+    if (json.code === 40100 || errorMessage.includes('Authentication') || errorMessage.includes('Unauthorized')) {
+      // Only clear storage if token is actually invalid (not temporary issues)
+      // For now, just throw without clearing - user can manually logout if needed
+      throw new Error('Authentication failed')
+    }
+    
     throw new Error(errorMessage)
   }
   return json
 }
-
 // ── Agent API ─────────────────────────────────────────────────────────────────
 export const agentApi = {
   // GET /agents → data: Agent[], pagination: {...}
@@ -208,9 +238,15 @@ export async function chatStream(options: ChatOptions): Promise<void> {
     if (toolResponse) body.toolResponse = toolResponse
     if (attachments) body.attachments = attachments
 
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    const token = getAccessToken()
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+
     const res = await fetch(`${API_PREFIX}/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       signal,
       body: JSON.stringify(body),
     })
@@ -246,9 +282,15 @@ export async function regenerateStream(options: RegenerateOptions): Promise<void
     if (maxIterations != null) body.maxIterations = maxIterations
     if (thinkingMode != null) body.thinkingMode = thinkingMode
 
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    const token = getAccessToken()
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+
     const res = await fetch(`${API_PREFIX}/messages/${messageId}/regenerate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       signal,
       body: JSON.stringify(body),
     })
@@ -284,9 +326,15 @@ export async function editMessageStream(options: EditMessageOptions): Promise<vo
     if (maxIterations != null) body.maxIterations = maxIterations
     if (thinkingMode != null) body.thinkingMode = thinkingMode
 
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    const token = getAccessToken()
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+
     const res = await fetch(`${API_PREFIX}/messages/${messageId}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       signal,
       body: JSON.stringify(body),
     })
@@ -802,3 +850,4 @@ export const settingsApi = {
     return res.data
   },
 }
+

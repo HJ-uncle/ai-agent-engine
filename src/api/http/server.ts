@@ -52,6 +52,7 @@ export async function buildServer() {
       // Only reject if auth is enabled
       if (process.env.AUTH_ENABLED !== 'false') {
         await reply.code(200).send(fail(40100, err instanceof Error ? err.message : 'Unauthorized'))
+        return reply
       }
     }
   })
@@ -80,11 +81,11 @@ export async function buildServer() {
     await api.register(todoRoutes)
     await api.register(cronRoutes)
     await api.register(sessionRoutes)
+    await api.register(modelsRoutes)
   }, { prefix: '/api/v1' })
 
   // Health and metrics at root level
   await fastify.register(metricsRoutes)
-  await fastify.register(modelsRoutes)
 
   // 启动定时任务调度器
   cronScheduler.start()

@@ -62,14 +62,46 @@
 
 ## 接口访问策略与白名单
 
-所有接口（除白名单外）在请求 Header 中必须携带以下字段：
+### 认证方式
+
+支持两种认证方式：
+1. **OIDC JWT Token**（推荐）: 通过 `OIDC_ISSUER_URL` 配置的认证服务获取 Token，通过 JWKS 验证签名
+2. **对称密钥 JWT**（向后兼容）: 使用 `JWT_SECRET` 签名验证
+3. **API Key**: 用于服务间调用
+
+所有接口（除白名单外）在请求 Header 中必须携带 `Authorization` 字段：
+```
+Authorization: Bearer <token>
+```
+
+同时需携带以下字段：
 - `X-Request-ID`: 请求唯一追踪标识
 - `X-Client-Version`: 客户端版本号
 
-**白名单接口**（无需以上校验）：
+**白名单接口**（无需认证）：
 - `/health`
 - `/openapi.json`
 - `/metrics`
+
+### OIDC 认证配置
+
+在环境变量中设置 `OIDC_ISSUER_URL` 启用 OIDC 认证：
+```bash
+OIDC_ISSUER_URL=http://localhost:3000
+```
+
+认证中间件会自动从 `${OIDC_ISSUER_URL}/.well-known/openid-configuration` 发现端点，并从 `${OIDC_ISSUER_URL}/jwks.json` 获取公钥进行签名验证。
+
+### Token 验证流程
+
+1. 从 `Authorization` Header 提取 Bearer Token
+2. 解码 Token Header 获取 `kid`（密钥 ID）
+3. 如果配置了 `OIDC_ISSUER_URL`:
+   - 从 JWKS 缓存获取公钥（缓存 1 小时）
+   - 使用公钥验证 JWT 签名
+4. 如果未配置 OIDC:
+   - 回退到使用 `JWT_SECRET` 进行对称验证
+5. 从 Token Payload 提取用户信息（`sub` 作为 tenantId）
 
 ---
 

@@ -24,40 +24,41 @@ A production-ready AI Agent Engine built with Node.js + TypeScript ESM. Supports
 | 14 | SQLite result cache store |
 | 15 | Prompt template store with variable interpolation |
 | 16 | Workspace isolation per tenant/session |
-| 17 | JWT + API-key authentication middleware |
-| 18 | Observability: structured pino logging + metrics |
-| 19 | Tool execution instrumentation (duration, success rate) |
-| 20 | Fastify HTTP API (chat, memory, conversation, tasks, tools) |
-| 21 | Built-in skills (math, time) |
-| 22 | SQLite migration runner |
-| 23 | Docker Compose deployment |
-| 24 | **Thinking Mode** — DeepSeek R1 / Claude 3.7 Sonnet / Qwen3 reasoning support |
-| 25 | **Model Management** — Multi-model configuration with encrypted API key storage |
-| 26 | **Ask User** — Interactive tool that pauses agent loop for user input |
-| 27 | **AbortSignal** — Client disconnect cancels LLM requests gracefully |
-| 28 | **i18n** — Multi-language UI (Chinese / English) |
-| 29 | **Settings API** — Runtime environment variable management |
-| 30 | **Multi-modal Input** — Image & file attachments via workspace reference (no base64 in history) |
-| 31 | **Context Compression** — Extractive + keyword compression with accuracy validation |
-| 32 | **Unified Tool Registry Factory** — Single source of truth for all tool registration |
-| 33 | **QA Logger** — Structured Q&A audit log for every conversation turn |
-| 34 | **Workspace File Upload** — Upload images/files up to 100 MB directly to session workspace |
-| 35 | **Context Memory Switch** — Per-session toggle for conversation history injection |
-| 36 | **Todo Management** — Task CRUD with REST API + AI tools (`todo_list/create/update/delete`) + UI panel |
-| 37 | **Cron Jobs** — Scheduled AI actions via standard 5-field cron expressions; loopback triggers full ReAct loop |
-| 38 | **Glob Search** — File pattern matching tool (`glob_search`) with wildcard support (`**`, `*`, `?`) |
-| 39 | **Grep Search** — Full-text / regex search tool (`grep_search`); uses ripgrep when available, falls back to Node.js |
-| 40 | **Task Control** — Agent tools to list, cancel and inspect background queue jobs (`task_list/cancel/status`) |
-| 41 | **Web Fetch** — `web_fetch` tool with security domain filtering via `config/security.json` |
-| 42 | **HTTP Request** — `http_request` tool for external API calls |
-| 43 | **Agent Tools** — `agent` / `subagent` tools for sub-agent creation and management |
-| 44 | **Get Context** — `get_context` tool for runtime context inspection |
-| 45 | **Install Package** — `install_package` tool for npm package installation |
-| 46 | **Fine-grained Tool Control** — Per-agent `allowedTools` configuration via `agent_allowed_tools` table |
-| 47 | **Session Agent Lock** — Once a session starts, the Agent is locked and cannot be switched mid-session; cleared on history delete |
-| 48 | **Granular Token Breakdown** — 8-category Token usage: system prompt, RAG, skill prompt, builtin tools, MCP tools, history messages, tool results, completion |
-| 49 | **Tool Output Truncation** — Oversized tool outputs auto-truncated (head + tail) to prevent token budget explosion |
-| 50 | **OpenAI Base URL Auto-fix** — Automatically strips `/chat/completions` or other endpoint suffixes from `OPENAI_BASE_URL` |
+| 17 | **OIDC Authentication** — Email OTP + PKCE 授权码流程，支持 JWKS 验证 |
+| 18 | JWT + API-key authentication middleware |
+| 19 | Observability: structured pino logging + metrics |
+| 20 | Tool execution instrumentation (duration, success rate) |
+| 21 | Fastify HTTP API (chat, memory, conversation, tasks, tools) |
+| 22 | Built-in skills (math, time) |
+| 23 | SQLite migration runner |
+| 24 | Docker Compose deployment |
+| 25 | **Thinking Mode** — DeepSeek R1 / Claude 3.7 Sonnet / Qwen3 reasoning support |
+| 26 | **Model Management** — Multi-model configuration with encrypted API key storage |
+| 27 | **Ask User** — Interactive tool that pauses agent loop for user input |
+| 28 | **AbortSignal** — Client disconnect cancels LLM requests gracefully |
+| 29 | **i18n** — Multi-language UI (Chinese / English) |
+| 30 | **Settings API** — Runtime environment variable management |
+| 31 | **Multi-modal Input** — Image & file attachments via workspace reference (no base64 in history) |
+| 32 | **Context Compression** — Extractive + keyword compression with accuracy validation |
+| 33 | **Unified Tool Registry Factory** — Single source of truth for all tool registration |
+| 34 | **QA Logger** — Structured Q&A audit log for every conversation turn |
+| 35 | **Workspace File Upload** — Upload images/files up to 100 MB directly to session workspace |
+| 36 | **Context Memory Switch** — Per-session toggle for conversation history injection |
+| 37 | **Todo Management** — Task CRUD with REST API + AI tools (`todo_list/create/update/delete`) + UI panel |
+| 38 | **Cron Jobs** — Scheduled AI actions via standard 5-field cron expressions; loopback triggers full ReAct loop |
+| 39 | **Glob Search** — File pattern matching tool (`glob_search`) with wildcard support (`**`, `*`, `?`) |
+| 40 | **Grep Search** — Full-text / regex search tool (`grep_search`); uses ripgrep when available, falls back to Node.js |
+| 41 | **Task Control** — Agent tools to list, cancel and inspect background queue jobs (`task_list/cancel/status`) |
+| 42 | **Web Fetch** — `web_fetch` tool with security domain filtering via `config/security.json` |
+| 43 | **HTTP Request** — `http_request` tool for external API calls |
+| 44 | **Agent Tools** — `agent` / `subagent` tools for sub-agent creation and management |
+| 45 | **Get Context** — `get_context` tool for runtime context inspection |
+| 46 | **Install Package** — `install_package` tool for npm package installation |
+| 47 | **Fine-grained Tool Control** — Per-agent `allowedTools` configuration via `agent_allowed_tools` table |
+| 48 | **Session Agent Lock** — Once a session starts, the Agent is locked and cannot be switched mid-session; cleared on history delete |
+| 49 | **Granular Token Breakdown** — 8-category Token usage: system prompt, RAG, skill prompt, builtin tools, MCP tools, history messages, tool results, completion |
+| 50 | **Tool Output Truncation** — Oversized tool outputs auto-truncated (head + tail) to prevent token budget explosion |
+| 51 | **OpenAI Base URL Auto-fix** — Automatically strips `/chat/completions` or other endpoint suffixes from `OPENAI_BASE_URL` |
 
 ---
 
@@ -79,6 +80,58 @@ npm run dev
 ```
 
 The server starts on `http://localhost:12323` by default.
+
+---
+
+## OIDC 认证系统
+
+本项目包含一个完整的 OIDC (OpenID Connect) 认证系统，支持邮箱验证码登录。
+
+### 架构概览
+
+```
+├── email-otp-oidc-auth-portal/    # OIDC 认证服务提供商
+│   └── 提供邮箱 OTP 登录 + PKCE 授权码流程
+├── multi-agent-console/            # 前端控制台（已集成 OIDC 登录）
+└── 主引擎/                          # 后端 API（支持 JWKS 验证）
+```
+
+### 快速启动完整系统
+
+```bash
+# 1. 安装所有依赖
+npm install
+cd email-otp-oidc-auth-portal && npm install && cd ../multi-agent-console && npm install && cd ..
+
+# 2. 配置环境变量
+cp .env.example .env
+cd email-otp-oidc-auth-portal && cp .env.example .env && cd ..
+# 编辑各 .env 文件配置相关参数
+
+# 3. 启动 OIDC 认证服务（终端 1）
+cd email-otp-oidc-auth-portal && npm run dev
+
+# 4. 注册 OIDC 客户端（终端 2）
+cd .. && bash scripts/register-oidc-client.sh
+
+# 5. 启动后端引擎（终端 2）
+npm run dev
+
+# 6. 启动前端控制台（终端 3）
+cd multi-agent-console && npm start
+```
+
+访问 `http://localhost:3001` 即可使用 OIDC 登录。
+
+### OIDC 认证流程
+
+1. **用户访问前端** → 跳转到 OIDC 授权页面
+2. **输入邮箱** → 发送验证码
+3. **输入验证码** → 验证成功，重定向回前端
+4. **前端获取授权码** → 交换 Access Token + ID Token
+5. **后端验证 Token** → 通过 JWKS 验证 JWT 签名
+
+详细文档请参考 `email-otp-oidc-auth-portal/README.md`。
 
 ---
 
@@ -164,7 +217,8 @@ curl http://localhost:12323/metrics
 | `DB_PATH` | `./agent.db` | SQLite database file path |
 | `WORKSPACE_ROOT` | `./workspace` | Root directory for per-tenant workspaces |
 | `AUTH_ENABLED` | `true` | Enable JWT/API-key authentication (`false` for dev) |
-| `JWT_SECRET` | `dev-secret-change-in-production` | JWT signing secret |
+| `JWT_SECRET` | `dev-secret-change-in-production` | JWT signing secret (向后兼容，启用 OIDC 时不需要) |
+| `OIDC_ISSUER_URL` | _(none)_ | OIDC 认证服务的 Issuer URL（例如 `http://localhost:3000`），启用后通过 JWKS 验证 Token |
 | `TOKEN_BUDGET` | `100000` | Max tokens per agent context window |
 | `MAX_ITERATIONS` | `100` | Max ReAct loop iterations |
 | `HISTORY_MAX_TOKENS` | `20000` | Max tokens kept in conversation history window (older messages dropped first) |

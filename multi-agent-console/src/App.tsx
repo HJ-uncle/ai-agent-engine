@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react'
-import { ConfigProvider, theme, Tooltip, App as AntdApp, message as antMsg } from 'antd'
+import { ConfigProvider, theme, Tooltip, App as AntdApp, message as antMsg, Spin } from 'antd'
 import {
   MessageOutlined, RobotOutlined, SettingOutlined,
   HistoryOutlined, ApiOutlined, DatabaseOutlined,
   FolderOutlined,
   ThunderboltOutlined, ToolOutlined,
+  LogoutOutlined, UserOutlined,
 } from '@ant-design/icons'
 import zhCN from 'antd/locale/zh_CN'
 import SessionList from './components/SessionList'
@@ -14,7 +15,9 @@ import McpPanel from './components/McpPanel'
 import KnowledgePanel from './components/KnowledgePanel'
 import ExplorerPanel from './components/ExplorerPanel'
 import SettingsModal from './components/SettingsModal'
+import LoginPage from './components/LoginPage'
 import { useSessionStore } from './store/session'
+import { useAuthStore } from './store/auth'
 import { conversationApi, toolsApi, memoryApi, tasksApi } from './api'
 import type { Tool, MemoryEntry, Task } from './types'
 import styles from './App.module.css'
@@ -213,6 +216,45 @@ function TasksPanel() {
 export default function App() {
   const [activePanel, setActivePanel] = useState<PanelKey>('chat')
   const { addSession, openSettings } = useSessionStore()
+  const { isLoggedIn, logout, email, loginWithCode } = useAuthStore()
+  const activeFile = useSessionStore(s => s.activeFile)
+  const [processingCallback, setProcessingCallback] = useState(false)
+
+  // Handle OIDC callback
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search)
+    const code = urlParams.get('code')
+    const state = urlParams.get('state')
+    
+    if (code && !isLoggedIn && !processingCallback) {
+      setProcessingCallback(true)
+      loginWithCode(code as string, state as string).then(() => {
+        window.history.replaceState({}, document.title, window.location.pathname)
+      }).catch((err) => {
+        antMsg.error('登录失败: ' + err.message)
+      }).finally(() => {
+        setProcessingCallback(false)
+      })
+    }
+  }, [isLoggedIn, loginWithCode, processingCallback])
+
+  // Check if token is expired
+  useEffect(() => {
+    if (isLoggedIn) {
+      const stored = localStorage.getItem('mac-auth-store')
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored)
+          if (parsed.expiresAt && Date.now() >= parsed.expiresAt) {
+            logout()
+            antMsg.info('登录已过期，请重新登录')
+          }
+        } catch {
+          logout()
+        }
+      }
+    }
+  }, [isLoggedIn, logout])
 
   useEffect(() => {
     ;(async () => {
@@ -249,6 +291,18 @@ export default function App() {
       } catch { /* offline */ }
     })()
   }, [])
+
+  // If not logged in, show login page or processing callback
+  if (!isLoggedIn) {
+    if (processingCallback) {
+      return (
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#1e1e1e' }}>
+          <Spin size="large" description="登录中..." />
+        </div>
+      )
+    }
+    return <LoginPage />
+  }
 
   const sidebarPanel = () => {
     switch (activePanel) {
@@ -308,9 +362,19 @@ export default function App() {
               ))}
             </div>
             <div className={styles.activityBottom}>
+              <Tooltip title={`当前用户: ${email || '未知'}`} placement="right">
+                <button className={styles.activityBtn} style={{ opacity: 0.7 }}>
+                  <UserOutlined />
+                </button>
+              </Tooltip>
               <Tooltip title="设置" placement="right">
                 <button className={styles.activityBtn} onClick={() => openSettings('general')}>
                   <SettingOutlined />
+                </button>
+              </Tooltip>
+              <Tooltip title="退出登录" placement="right">
+                <button className={styles.activityBtn} onClick={() => { logout(); antMsg.info('已退出登录') }}>
+                  <LogoutOutlined />
                 </button>
               </Tooltip>
             </div>
@@ -321,7 +385,7 @@ export default function App() {
 
           {/* Main chat or Editor */}
           <div className={styles.main}>
-            {useSessionStore(s => s.activeFile) ? <EditorArea /> : <ChatArea />}
+            {activeFile ? <EditorArea /> : <ChatArea />}
           </div>
         </div>
         <SettingsModal />
