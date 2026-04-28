@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { Button, Tooltip, Input, Tag, App, Modal, Checkbox } from 'antd'
 import {
   PlusOutlined,
@@ -8,6 +8,9 @@ import {
   CloseOutlined,
   RobotOutlined,
   MessageOutlined,
+  LoadingOutlined,
+  CheckCircleOutlined,
+  ExclamationCircleOutlined,
 } from '@ant-design/icons'
 import { useSessionStore } from '../store/session'
 import { useAgentStore } from '../store/agents'
@@ -24,6 +27,52 @@ export default function SessionList({ onNewChat }: Props) {
   const { sessions, activeSessionId, switchSession, deleteSession, updateSessionTitle } =
     useSessionStore()
   const { agents } = useAgentStore()
+  const messageMap = useSessionStore((s) => s.messageMap)
+
+  // 检测会话状态：running / done / error / idle
+  type SessionStatus = 'running' | 'done' | 'error' | 'idle'
+
+  const getSessionStatus = (sessionId: string): SessionStatus => {
+    const msgs = messageMap[sessionId] ?? []
+    if (msgs.length === 0) return 'idle'
+    // 有正在 streaming 或 sending 的消息 → running
+    if (msgs.some((m) => m.status === 'streaming' || m.status === 'sending')) return 'running'
+    // 最后一条 assistant 消息的状态
+    const lastAi = [...msgs].reverse().find((m) => m.role === 'assistant')
+    if (lastAi?.status === 'error') return 'error'
+    if (lastAi?.status === 'done') return 'done'
+    return 'idle'
+  }
+
+  // 追踪刚完成/出错的会话，短暂展示状态后淡出
+  const [flashStatus, setFlashStatus] = useState<Record<string, 'done' | 'error'>>({})
+  const prevStatusRef = useRef<Record<string, SessionStatus>>({})
+
+  useEffect(() => {
+    const newFlash: Record<string, 'done' | 'error'> = {}
+    sessions.forEach((s) => {
+      const current = getSessionStatus(s.id)
+      const prev = prevStatusRef.current[s.id]
+      // 从 running 变为 done/error → 触发闪现
+      if (prev === 'running' && (current === 'done' || current === 'error')) {
+        newFlash[s.id] = current
+      }
+      prevStatusRef.current[s.id] = current
+    })
+    if (Object.keys(newFlash).length > 0) {
+      setFlashStatus((old) => ({ ...old, ...newFlash }))
+      // 3 秒后清除闪现状态
+      const timer = setTimeout(() => {
+        setFlashStatus((old) => {
+          const next = { ...old }
+          Object.keys(newFlash).forEach((id) => delete next[id])
+          return next
+        })
+      }, 3000)
+      return () => clearTimeout(timer)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messageMap, sessions])
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
@@ -130,10 +179,16 @@ export default function SessionList({ onNewChat }: Props) {
           const isEditing = editingId === session.id
           const isSelected = selectedSessions.has(session.id)
 
+          const status = getSessionStatus(session.id)
+          const flash = flashStatus[session.id]
+          const running = status === 'running'
+          const showDone = flash === 'done'
+          const showError = status === 'error' || flash === 'error'
+
           return (
             <div
               key={session.id}
-              className={`${styles.item} ${isActive ? styles.active : ''} ${isSelected ? styles.selected : ''}`}
+              className={`${styles.item} ${isActive ? styles.active : ''} ${isSelected ? styles.selected : ''} ${running ? styles.running : ''} ${showDone ? styles.done : ''} ${showError ? styles.error : ''}`}
               onClick={(e) => {
                 if (isBatchMode) {
                   e.stopPropagation()
@@ -159,7 +214,19 @@ export default function SessionList({ onNewChat }: Props) {
               )}
               
               {/* Agent indicator */}
-              {agent ? (
+              {running ? (
+                <span className={styles.agentDot}>
+                  <LoadingOutlined className={styles.runningIcon} />
+                </span>
+              ) : showError ? (
+                <span className={styles.agentDot}>
+                  <ExclamationCircleOutlined className={styles.errorIcon} />
+                </span>
+              ) : showDone ? (
+                <span className={styles.agentDot}>
+                  <CheckCircleOutlined className={styles.doneIcon} />
+                </span>
+              ) : agent ? (
                 <Tooltip title={`Agent: ${agent.name}`}>
                   <span className={styles.agentDot}>
                     <RobotOutlined />

@@ -84,6 +84,119 @@
   background: var(--vscode-list-inactiveSelectionBackground, rgba(14,99,156,0.2));
 }
 
+/* ── 运行中状态 ── */
+.item.running {
+  position: relative;
+}
+
+.item.running::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 60%;
+  border-radius: 1px;
+  background: linear-gradient(180deg, #1890ff, #52c41a);
+  animation: runningPulse 1.5s ease-in-out infinite;
+}
+
+.runningIcon {
+  color: #1890ff !important;
+  font-size: 13px;
+  animation: runningIconSpin 1s linear infinite;
+}
+
+@keyframes runningPulse {
+  0%, 100% {
+    opacity: 0.4;
+    height: 40%;
+  }
+  50% {
+    opacity: 1;
+    height: 70%;
+  }
+}
+
+@keyframes runningIconSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ── 已完成状态 ── */
+.item.done {
+  position: relative;
+}
+
+.item.done::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 60%;
+  border-radius: 1px;
+  background: #52c41a;
+  animation: doneFadeOut 3s ease-out forwards;
+}
+
+.doneIcon {
+  color: #52c41a !important;
+  font-size: 13px;
+  animation: donePopIn 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+@keyframes doneFadeOut {
+  0% { opacity: 1; }
+  70% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@keyframes donePopIn {
+  0% { transform: scale(0.3); opacity: 0; }
+  60% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* ── 错误状态 ── */
+.item.error {
+  position: relative;
+}
+
+.item.error::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 60%;
+  border-radius: 1px;
+  background: #f5222d;
+  animation: errorFlash 0.6s ease-in-out 2;
+}
+
+.errorIcon {
+  color: #f5222d !important;
+  font-size: 13px;
+  animation: errorShake 0.5s ease-in-out;
+}
+
+@keyframes errorFlash {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@keyframes errorShake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-2px); }
+  40% { transform: translateX(2px); }
+  60% { transform: translateX(-1px); }
+  80% { transform: translateX(1px); }
+}
+
 .agentDot {
   font-size: 13px;
   color: var(--vscode-icon-foreground, #ccc);
