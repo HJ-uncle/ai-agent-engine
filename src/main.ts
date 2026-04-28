@@ -30,6 +30,7 @@ import { buildServer } from './api/http/index.js'
 import { logger } from './observability/index.js'
 import { skillsRegistry } from './skills/index.js'
 import { initDb } from './storage/sqlite/db.js'
+import { networkInterfaces } from 'node:os'
 
 const PORT = parseInt(process.env.PORT ?? '12323', 10)
 const HOST = process.env.HOST ?? '0.0.0.0'
@@ -44,7 +45,34 @@ async function main() {
 
     const server = await buildServer()
     await server.listen({ port: PORT, host: HOST })
-    logger.info({ port: PORT, host: HOST }, 'AI Agent Engine started')
+    
+    // 获取局域网IP地址
+    const lanIps: string[] = []
+    const nets = networkInterfaces()
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name]!) {
+        if (net.family === 'IPv4' && !net.internal) {
+          lanIps.push(net.address)
+        }
+      }
+    }
+    
+    const localUrl = `http://localhost:${PORT}`
+    const lanUrls = lanIps.map(ip => `http://${ip}:${PORT}`).join(', ')
+    
+    logger.info({ 
+      port: PORT, 
+      host: HOST,
+      localUrl,
+      lanUrls 
+    }, 'AI Agent Engine started')
+    
+    console.log(`\n🚀 AI Agent Engine 已启动`)
+    console.log(`   本地访问: ${localUrl}`)
+    if (lanUrls) {
+      console.log(`   局域网访问: ${lanUrls}`)
+    }
+    console.log()
 
     // 优雅关闭：停止文件监听
     const shutdown = async (signal: string) => {

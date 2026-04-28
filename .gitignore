@@ -19,6 +19,12 @@ data/
 *.log
 logs/
 
+# Service PID files
+*.pid
+.proxy.pid
+.backend.pid
+.frontend.pid
+
 # MCP config (may contain sensitive info)
 mcp.config.json
 
