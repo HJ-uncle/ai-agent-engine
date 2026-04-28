@@ -38,6 +38,11 @@ export interface TokenUsage {
   completionTokens: number
   totalTokens: number
   conversationId: string | null
+  // Granular breakdown
+  ragTokens?: number
+  builtinToolsTokens?: number
+  mcpToolsTokens?: number
+  toolResultsTokens?: number
 }
 
 export interface ChatStreamEvent {

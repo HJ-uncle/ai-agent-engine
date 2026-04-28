@@ -11,9 +11,10 @@ import { listServers } from '../../storage/mcp/mcp-config.js'
 export async function registerMCPTools(
   registry: IToolRegistry,
   toolFilter?: (name: string) => boolean
-): Promise<void> {
+): Promise<string[]> {
+  const registeredNames: string[] = []
   const servers = listServers()
-  if (servers.length === 0) return
+  if (servers.length === 0) return registeredNames
 
   await Promise.allSettled(
     servers.map(async (server) => {
@@ -42,7 +43,10 @@ export async function registerMCPTools(
         const tools = await client.toTools()
         tools.forEach((t) => {
           if (toolFilter && !toolFilter(t.name)) return
-          try { registry.register(t) } catch { /* 工具名冲突时跳过 */ }
+          try {
+            registry.register(t)
+            registeredNames.push(t.name)
+          } catch { /* 工具名冲突时跳过 */ }
         })
         logger.info({ id: server.id, toolCount: tools.length }, 'MCP server registered')
       } catch (err) {
@@ -50,4 +54,6 @@ export async function registerMCPTools(
       }
     }),
   )
+
+  return registeredNames
 }

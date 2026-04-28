@@ -9,11 +9,11 @@ const MAX_FILE_SIZE = parseInt(process.env.MAX_FILE_SIZE_BYTES ?? '10485760', 10
 export const readFileTool: Tool = {
   name: 'read_file',
   displayName: '读取文件',
-  description: '读取工作区中指定文件的内容',
+  description: '读取工作区文件内容',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: '文件相对工作区根目录的路径' },
+      path: { type: 'string' },
     },
     required: ['path'],
   },
@@ -36,12 +36,12 @@ export const readFileTool: Tool = {
 export const writeFileTool: Tool = {
   name: 'write_file',
   displayName: '写入文件',
-  description: '向工作区中的文件写入内容（会创建新文件或覆盖已有文件）。注意：如果用户请求创建文件但未指定文件名，请根据上下文或内容自动生成一个合理的文件名和路径，不要再询问用户。',
+  description: '写入文件（创建或覆盖），自动生成文件名',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: '文件相对工作区根目录的路径' },
-      content: { type: 'string', description: '要写入的文本内容' },
+      path: { type: 'string' },
+      content: { type: 'string' },
     },
     required: ['path', 'content'],
   },
@@ -61,12 +61,12 @@ export const writeFileTool: Tool = {
 export const listFilesTool: Tool = {
   name: 'list_files',
   displayName: '列出文件',
-  description: '列出工作区中指定目录下的文件和子目录。默认列出所有绑定工作区（包括自定义路径）的根目录内容。',
+  description: '列出目录文件，默认列出所有绑定工作区',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: '文件相对路径或绝对路径 (默认: 列出所有绑定工作区根目录)', default: '.' },
-      recursive: { type: 'boolean', description: '是否递归列出所有子目录下的文件', default: false },
+      path: { type: 'string' },
+      recursive: { type: 'boolean' },
     },
     required: [],
   },
@@ -138,11 +138,11 @@ function listRecursive(baseDir: string, currentDir: string): string[] {
 export const deleteFileTool: Tool = {
   name: 'delete_file',
   displayName: '删除文件',
-  description: '从工作区中删除指定的文件',
+  description: '删除文件',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: '文件相对工作区根目录的路径' },
+      path: { type: 'string' },
     },
     required: ['path'],
   },
@@ -161,11 +161,11 @@ export const deleteFileTool: Tool = {
 export const createDirTool: Tool = {
   name: 'create_dir',
   displayName: '创建目录',
-  description: '在工作区中创建一个新的目录',
+  description: '创建目录',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: '相对工作区根目录的目录路径' },
+      path: { type: 'string' },
     },
     required: ['path'],
   },
@@ -196,21 +196,13 @@ const IMAGE_MIME_TYPES: Record<string, string> = {
 export const readImageTool: Tool = {
   name: 'read_image',
   displayName: '读取图片',
-  description: '读取工作区中的图片文件，支持多模态模型和 OCR 文本提取。如果是多模态模型（GPT-4V, Claude 3, Gemini Pro Vision），返回 base64 格式图片；否则使用 OCR 提取文本内容。',
+  description: '读取图片文件，多模态模型返回 base64，否则 OCR 提取文本',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: '图片文件相对工作区根目录的路径' },
-      mode: { 
-        type: 'string', 
-        description: '处理模式："auto"（自动检测）、"vision"（强制返回图片）、"ocr"（强制 OCR 提取）',
-        enum: ['auto', 'vision', 'ocr'],
-        default: 'auto'
-      },
-      language: {
-        type: 'string',
-        description: 'OCR 识别语言，默认 "eng+chi_sim"（英文+简体中文），支持多种语言组合如 "eng", "chi_sim", "jpn", "kor" 等'
-      }
+      path: { type: 'string' },
+      mode: { type: 'string', description: 'auto=自动检测, vision=返回图片, ocr=提取文本', enum: ['auto', 'vision', 'ocr'] },
+      language: { type: 'string', description: 'OCR语言，默认eng+chi_sim' }
     },
     required: ['path'],
   },
@@ -226,7 +218,16 @@ export const readImageTool: Tool = {
       }
 
       const ext = path.extname(safePath).toLowerCase()
-      const mimeType = IMAGE_MIME_TYPES[ext] || 'application/octet-stream'
+      const mimeType = IMAGE_MIME_TYPES[ext]
+
+      // 检查是否为支持的图片格式
+      if (!mimeType) {
+        const supportedExts = Object.keys(IMAGE_MIME_TYPES).join(', ')
+        return {
+          success: false,
+          output: `❌ 不支持的文件格式："${ext || '(无扩展名)'}"\n\n支持的图片格式：${supportedExts}\n\n如需读取文本文件，请使用 read_file 工具。`
+        }
+      }
 
       // 判断是否为多模态模型
       const isVisionModel = isVisionModelAvailable(ctx)
@@ -282,6 +283,32 @@ function isVisionModelAvailable(ctx: AgentContext): boolean {
   return visionModels.some(vm => lowerModel.includes(vm.toLowerCase()))
 }
 
+// 常见图片格式的 magic bytes 签名
+const IMAGE_MAGIC_BYTES: { ext: string; signature: number[] }[] = [
+  { ext: 'png',  signature: [0x89, 0x50, 0x4E, 0x47] },          // \x89PNG
+  { ext: 'jpg',  signature: [0xFF, 0xD8, 0xFF] },                 // JPEG SOI
+  { ext: 'gif',  signature: [0x47, 0x49, 0x46] },                 // GIF
+  { ext: 'bmp',  signature: [0x42, 0x4D] },                       // BM
+  { ext: 'webp', signature: [0x52, 0x49, 0x46, 0x46] },           // RIFF (WebP)
+  { ext: 'tiff', signature: [0x49, 0x49, 0x2A, 0x00] },           // TIFF LE
+  { ext: 'tiff', signature: [0x4D, 0x4D, 0x00, 0x2A] },           // TIFF BE
+]
+
+function isValidImageFile(filePath: string): boolean {
+  try {
+    const fd = fs.openSync(filePath, 'r')
+    const buf = Buffer.alloc(12)
+    fs.readSync(fd, buf, 0, 12, 0)
+    fs.closeSync(fd)
+
+    return IMAGE_MAGIC_BYTES.some(({ signature }) =>
+      signature.every((byte, i) => buf[i] === byte)
+    )
+  } catch {
+    return false
+  }
+}
+
 async function extractTextWithOCR(imagePath: string, language: string, ctx: AgentContext): Promise<ToolResult> {
   try {
     if (!Tesseract) {
@@ -299,15 +326,42 @@ async function extractTextWithOCR(imagePath: string, language: string, ctx: Agen
       }
     }
 
+    // 在调用 Tesseract 之前，通过 magic bytes 检查文件是否为有效图片
+    if (!isValidImageFile(imagePath)) {
+      ctx.logger.error(`[read_image] File is not a valid image (magic bytes check failed): ${imagePath}`)
+      return {
+        success: false,
+        output: `❌ 文件内容不是有效的图片格式：${path.basename(imagePath)}\n\n文件扩展名可能与实际内容不匹配。请确保文件是真正的图片文件。\n如需读取文本文件，请使用 read_file 工具。`
+      }
+    }
+
     ctx.logger.info(`[read_image] Running OCR on ${imagePath} with language: ${language}`)
 
-    const { data: { text, confidence } } = await Tesseract.recognize(
-      imagePath,
-      language,
-      {
-        logger: (m: any) => ctx.logger.debug(`[Tesseract] ${m.status}: ${m.progress}`)
+    // 使用 Promise 包装 Tesseract.recognize，捕获 worker 内部异步错误
+    let ocrResult: Tesseract.RecognizeResult
+    const uncaughtHandler = (err: Error) => {
+      if (err.message?.includes('Error attempting to read image') || err.message?.includes('Unknown format')) {
+        ctx.logger.error(`[read_image] Caught uncaught Tesseract error (suppressed): ${err.message}`)
+        // 吞掉这个错误，防止进程崩溃；Promise 的 reject 会处理
+      } else {
+        throw err  // 不是我们的错误，重新抛出
       }
-    )
+    }
+    process.on('uncaughtException', uncaughtHandler)
+
+    try {
+      ocrResult = await Tesseract.recognize(
+        imagePath,
+        language,
+        {
+          logger: (m: any) => ctx.logger.debug(`[Tesseract] ${m.status}: ${m.progress}`)
+        }
+      )
+    } finally {
+      process.removeListener('uncaughtException', uncaughtHandler)
+    }
+
+    const { data: { text, confidence } } = ocrResult
 
     if (!text || text.trim().length === 0) {
       return {

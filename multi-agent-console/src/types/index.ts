@@ -57,6 +57,11 @@ export interface TokenUsage {
   messagesTokens?: number
   skillTokens?: number
   systemToolsTokens?: number
+  // Granular breakdown
+  ragTokens?: number
+  builtinToolsTokens?: number
+  mcpToolsTokens?: number
+  toolResultsTokens?: number
 }
 
 export interface ThinkingStep {

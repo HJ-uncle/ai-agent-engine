@@ -10,24 +10,13 @@ import { workspaceManager } from '../../workspace/index.js'
 export const globTool: Tool = {
   name: 'glob_search',
   displayName: 'Glob 文件搜索',
-  description: '用 glob 模式在工作区中搜索匹配的文件路径。支持 *, **, ? 等通配符。例如：**/*.ts 匹配所有 TypeScript 文件。',
+  description: 'Glob 模式搜索文件路径，如 **/*.ts',
   parameters: {
     type: 'object',
     properties: {
-      pattern: {
-        type: 'string',
-        description: 'Glob 匹配模式，如 "**/*.json"、"src/**/*.ts"',
-      },
-      cwd: {
-        type: 'string',
-        description: '搜索基准目录（相对工作区根目录，默认为根目录）',
-        default: '.',
-      },
-      limit: {
-        type: 'number',
-        description: '最多返回结果数量，默认 100',
-        default: 100,
-      },
+      pattern: { type: 'string' },
+      cwd: { type: 'string' },
+      limit: { type: 'number' },
     },
     required: ['pattern'],
   },

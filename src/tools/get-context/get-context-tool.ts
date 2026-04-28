@@ -8,23 +8,17 @@ import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/in
 export const getCurrentContextTool: Tool = {
   name: 'get_current_context',
   displayName: '获取当前上下文',
-  description: '获取当前 Agent 的上下文信息，包括会话 ID、工作区路径、已注册工具列表、token 预算等',
+  description: '获取当前会话上下文（会话ID、工作区、记忆、系统状态）。可选返回工具列表和历史摘要。',
   parameters: {
     type: 'object',
     properties: {
-      includeTools: {
-        type: 'boolean',
-        description: '是否包含已注册工具列表，默认 false（避免输出过长）'
-      },
-      includeHistory: {
-        type: 'boolean',
-        description: '是否包含最近对话历史摘要，默认 false'
-      }
+      includeTools: { type: 'boolean', description: '是否包含工具列表，默认 true' },
+      includeHistory: { type: 'boolean', description: '是否包含对话历史，默认 false' }
     },
     required: []
   },
   async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
-    const { includeTools = false, includeHistory = false } = rawArgs as any
+    const { includeTools = true, includeHistory = false } = rawArgs as any
 
     try {
       const contextInfo: string[] = [
@@ -59,7 +53,7 @@ export const getCurrentContextTool: Tool = {
         contextInfo.push(``)
         contextInfo.push(`### 对话历史摘要`)
         try {
-          const history = await ctx.history.list(ctx.tenantId, ctx.sessionId, 10)
+          const history = await ctx.history.getHistory(ctx)
           contextInfo.push(`**最近 ${history.length} 条消息**\n`)
           for (const msg of history.slice(-10)) {
             const role = msg.role.padEnd(10)

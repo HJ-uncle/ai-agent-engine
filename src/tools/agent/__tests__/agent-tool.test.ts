@@ -116,7 +116,7 @@ describe('Agent Tools', () => {
       expect(result.output).toContain('Agent 创建预览')
       expect(result.pendingAction).toBeDefined()
       expect(result.pendingAction!.type).toBe('agent_create')
-      expect(result.pendingAction!.input.name).toBe('Test Agent')
+      expect((result as any).pendingAction!.input.name).toBe('Test Agent')
     })
 
     it('should return error when name is empty', async () => {

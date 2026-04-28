@@ -12,6 +12,7 @@ import { createRequestLogger, QALogger, type QALogEntry } from '../../../observa
 import { buildSkillsSystemPrompt } from '../../../skills/index.js'
 import { createToolRegistry } from '../../../tools/registry-factory.js'
 import { SQLiteAgentStore } from '../../../storage/agent/index.js'
+import { SessionStore } from '../../../storage/session/index.js'
 import { estimateTokens } from '../../../core/utils/tokens.js'
 import { searchChunks } from '../../../storage/knowledge/kb-repo.js'
 import { ModelsStore } from '../../../storage/sqlite/models.js'
@@ -42,6 +43,28 @@ export async function chatRoutes(fastify: FastifyInstance) {
     const tenantId = (request as unknown as { authContext?: { tenantId: string } }).authContext?.tenantId ?? 'default'
     const reqLogger = createRequestLogger(requestId, tenantId, sessionId)
 
+    // ── 会话 Agent 锁定校验 ────────────────────────────────────────────────────
+    // 会话一旦发送过第一条消息，就锁定绑定的 agentId，后续不允许切换。
+    const sessionStore = new SessionStore()
+    const boundAgentId = await sessionStore.getBoundAgentId(sessionId, tenantId)
+
+    let effectiveAgentId = agentId ?? null
+
+    if (boundAgentId === undefined) {
+      // 首次请求：绑定当前 agentId（可为 null）
+      await sessionStore.bindAgent(sessionId, tenantId, effectiveAgentId)
+      reqLogger.info({ sessionId, agentId: effectiveAgentId }, 'Session agent binding created')
+    } else {
+      // 已有绑定记录：强制使用绑定的 agentId，忽略请求中的 agentId
+      if (boundAgentId !== effectiveAgentId) {
+        reqLogger.warn(
+          { sessionId, requestedAgentId: effectiveAgentId, boundAgentId },
+          'Agent switch rejected: session already bound to an agent. Using bound agentId.'
+        )
+      }
+      effectiveAgentId = boundAgentId
+    }
+
     // Apply agent configuration if provided
     let effectiveSystemPrompt = systemPrompt
     let effectiveModel: string | undefined = undefined
@@ -51,8 +74,8 @@ export async function chatRoutes(fastify: FastifyInstance) {
     let boundKnowledgeBases: string[] | null = null
     let allowedTools: string[] | null = null
 
-    if (agentId) {
-      const agent = await agentStore.getById(agentId, tenantId)
+    if (effectiveAgentId) {
+      const agent = await agentStore.getById(effectiveAgentId, tenantId)
       if (agent) {
         effectiveSystemPrompt = systemPrompt ?? agent.systemPrompt
         effectiveModel = agent.model
@@ -60,14 +83,18 @@ export async function chatRoutes(fastify: FastifyInstance) {
         allowedSkills = agent.skills
         allowedMcpServers = agent.mcpServers
         boundKnowledgeBases = agent.knowledgeBases
-        allowedTools = agent.allowedTools.length > 0 ? agent.allowedTools : null
+        // allowedTools 语义：
+        //   undefined / null = 未配置 Agent，加载全部工具
+        //   []              = Agent 明确未选择任何工具，禁用全部
+        //   ['tool_a', ...] = 只允许指定工具
+        allowedTools = agent.allowedTools
       } else {
         reqLogger.warn({ agentId }, 'Agent not found, falling back to defaults')
       }
     }
 
     // Build tool registry（统一工厂，含所有内置工具 + MCP + Skills）
-    const { registry, memory, externalSkills } = await createToolRegistry({ allowedSkills, allowedTools })
+    const { registry, memory, externalSkills, toolCategories } = await createToolRegistry({ allowedSkills, allowedTools })
 
     const abortController = new AbortController()
     request.raw.on('close', () => {
@@ -194,22 +221,42 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
     const fullSystemPrompt = baseSystemPrompt + ragPrompt + `
 ---
-# 智能交互规则
-1. 当你需要澄清用户的意图、确认关键操作或提供选择时，请调用 \`ask_user\` 工具。调用该工具后，系统将自动暂停执行，并向用户展示交互式选择界面，等待用户回复后再继续。
-2. 在向用户回复的文本中提及工具时，请务必使用工具的中文名称（例如：写入文件、获取时间、读取文件等），不要暴露底层的英文名称（例如：write_file, get_time等）。
-3. 当用户询问你的模型身份时，必须如实告知你是 ${currentModelName} 模型，不得声称是其他模型（如Claude或GPT）。
-4. 当需要读取图片文件（如 .png, .jpg, .jpeg, .gif, .webp, .bmp 等）时，请使用 \`read_image\` 工具而不是 \`read_file\`。该工具会返回图片的 base64 数据，方便你进行视觉识别或分析。
+# Rules
+1. Use \`ask_user\` to clarify intent or confirm actions.
+2. Use Chinese tool names in replies (e.g. 写入文件, not write_file).
+3. You are ${currentModelName}.
+4. Use \`read_image\` for image files (.png/.jpg/.gif/.webp).
 ${workspaceInfo}
 `
 
-    // Estimate token counts for each injected prompt section
-    const systemPromptTokens = estimateTokens(fullSystemPrompt)
+    // ── Estimate token counts for each injected prompt section ──────────
+    // systemPromptTokens: pure system prompt (excluding RAG context)
+    const pureSystemPrompt = baseSystemPrompt + `
+---
+# Rules
+1. Use \`ask_user\` to clarify intent or confirm actions.
+2. Use Chinese tool names in replies (e.g. 写入文件, not write_file).
+3. You are ${currentModelName}.
+4. Use \`read_image\` for image files (.png/.jpg/.gif/.webp).
+${workspaceInfo}
+`
+    const systemPromptTokens = estimateTokens(pureSystemPrompt)
+    const ragTokens = estimateTokens(ragPrompt)
     const skillTokens = estimateTokens(skillsPrompt)
-    // Tool definitions: estimate from registry
-    const toolDefsText = registry.list()
-      .map((t) => `${t.name}: ${t.description} ${JSON.stringify(t.parameters ?? {})}`)
+
+    // Tool definitions: estimate separately for builtin vs MCP
+    const allToolsList = registry.list()
+    const builtinToolNames = new Set(toolCategories.builtinTools)
+    const mcpToolNames = new Set(toolCategories.mcpTools)
+    const builtinToolDefsText = allToolsList.filter(t => builtinToolNames.has(t.name))
+      .map(t => `${t.name}: ${t.description} ${JSON.stringify(t.parameters ?? {})}`)
       .join('\n')
-    const systemToolsTokens = estimateTokens(toolDefsText)
+    const mcpToolDefsText = allToolsList.filter(t => mcpToolNames.has(t.name))
+      .map(t => `${t.name}: ${t.description} ${JSON.stringify(t.parameters ?? {})}`)
+      .join('\n')
+    const builtinToolsTokens = estimateTokens(builtinToolDefsText)
+    const mcpToolsTokens = estimateTokens(mcpToolDefsText)
+    const systemToolsTokens = builtinToolsTokens + mcpToolsTokens
 
     const conversationId = uuidv4()
     let assistantResponse = ''
@@ -268,7 +315,7 @@ ${workspaceInfo}
           temperature: effectiveTemperature,
           maxAskUserCount,
           conversationId,
-          promptBreakdown: { systemPromptTokens, systemToolsTokens, skillTokens },
+          promptBreakdown: { systemPromptTokens, systemToolsTokens, skillTokens, ragTokens, builtinToolsTokens, mcpToolsTokens },
           thinkingConfig: finalThinkingConfig,
           responseThinkingField: finalResponseThinkingField,
           // 原始前端消息格式（含 workspace_image），存入 DB 供刷新后正确渲染

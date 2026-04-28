@@ -71,7 +71,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     const reqLogger = createRequestLogger(requestId, tenantId, sessionId)
 
     // Build tool registry（统一工厂，含所有内置工具 + MCP + Skills）
-    const { registry, memory, externalSkills } = await createToolRegistry()
+    const { registry, memory, externalSkills, toolCategories } = await createToolRegistry()
 
     const ctx = createAgentContext({
       sessionId,
@@ -131,12 +131,31 @@ export async function messagesRoutes(fastify: FastifyInstance) {
       finalResponseThinkingField = whitelistInfo.responseThinkingField
     }
 
-    const systemPromptTokens = estimateTokens(fullSystemPrompt)
+    // systemPromptTokens: pure system prompt (excluding RAG)
+    const pureSystemPromptForMessages = finalSystemPrompt + `
+---
+# 智能交互规则
+1. 当你需要澄清用户的意图、确认关键操作或提供选择时，请调用 \`ask_user\` 工具。调用该工具后，系统将自动暂停执行，并向用户展示交互式选择界面，等待用户回复后再继续。
+2. 在向用户回复的文本中提及工具时，请务必使用工具的中文名称（例如：写入文件、获取时间、读取文件等），不要暴露底层的英文名称（例如：write_file, get_time等）。
+3. 当用户询问你的模型身份时，必须如实告知你是 ${currentModelName} 模型，不得声称是其他模型（如Claude或GPT）。
+`
+    const systemPromptTokens = estimateTokens(pureSystemPromptForMessages)
+    const ragTokens = estimateTokens(ragPrompt)
     const skillTokens = estimateTokens(skillsPrompt)
-    const toolDefsText = registry.list()
-      .map((t) => `${t.name}: ${t.description} ${JSON.stringify(t.parameters ?? {})}`)
+
+    // Tool definitions: estimate separately for builtin vs MCP
+    const allToolsList = registry.list()
+    const builtinToolNamesSet = new Set(toolCategories.builtinTools)
+    const mcpToolNamesSet = new Set(toolCategories.mcpTools)
+    const builtinToolDefsText = allToolsList.filter(t => builtinToolNamesSet.has(t.name))
+      .map(t => `${t.name}: ${t.description} ${JSON.stringify(t.parameters ?? {})}`)
       .join('\n')
-    const systemToolsTokens = estimateTokens(toolDefsText)
+    const mcpToolDefsText = allToolsList.filter(t => mcpToolNamesSet.has(t.name))
+      .map(t => `${t.name}: ${t.description} ${JSON.stringify(t.parameters ?? {})}`)
+      .join('\n')
+    const builtinToolsTokens = estimateTokens(builtinToolDefsText)
+    const mcpToolsTokens = estimateTokens(mcpToolDefsText)
+    const systemToolsTokens = builtinToolsTokens + mcpToolsTokens
 
     const conversationId = uuidv4()
 
@@ -155,7 +174,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
           systemPrompt: fullSystemPrompt || undefined,
           maxAskUserCount,
           conversationId,
-          promptBreakdown: { systemPromptTokens, systemToolsTokens, skillTokens },
+          promptBreakdown: { systemPromptTokens, systemToolsTokens, skillTokens, ragTokens, builtinToolsTokens, mcpToolsTokens },
           thinkingConfig: finalThinkingConfig,
           responseThinkingField: finalResponseThinkingField,
         })

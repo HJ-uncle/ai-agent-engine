@@ -5,12 +5,12 @@ export function createMemoryTools(memory: MemoryStore): Tool[] {
   const rememberTool: Tool = {
     name: 'remember',
     displayName: '记忆存储',
-    description: '在记忆中存储一个键值对，以便后续召回',
+    description: '存储键值对到记忆',
     parameters: {
       type: 'object',
       properties: {
-        key: { type: 'string', description: '记忆键' },
-        value: { type: 'string', description: '要记住的值' },
+        key: { type: 'string' },
+        value: { type: 'string' },
       },
       required: ['key', 'value'],
     },
@@ -24,11 +24,11 @@ export function createMemoryTools(memory: MemoryStore): Tool[] {
   const recallTool: Tool = {
     name: 'recall',
     displayName: '记忆召回',
-    description: '通过键检索之前存储的记忆',
+    description: '按键检索记忆',
     parameters: {
       type: 'object',
       properties: {
-        key: { type: 'string', description: '要检索的记忆键' },
+        key: { type: 'string' },
       },
       required: ['key'],
     },
@@ -45,7 +45,7 @@ export function createMemoryTools(memory: MemoryStore): Tool[] {
   const listMemoriesTool: Tool = {
     name: 'list_memories',
     displayName: '记忆列表',
-    description: '列出当前会话中存储的所有记忆键',
+    description: '列出所有记忆键',
     parameters: {
       type: 'object',
       properties: {},
@@ -63,11 +63,11 @@ export function createMemoryTools(memory: MemoryStore): Tool[] {
   const forgetTool: Tool = {
     name: 'forget',
     displayName: '删除记忆',
-    description: '删除指定的记忆键',
+    description: '删除记忆',
     parameters: {
       type: 'object',
       properties: {
-        key: { type: 'string', description: '要删除的记忆键' },
+        key: { type: 'string' },
       },
       required: ['key'],
     },

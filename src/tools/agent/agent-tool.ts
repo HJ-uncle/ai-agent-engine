@@ -4,15 +4,28 @@ import type { CreateAgentInput } from '../../storage/agent/index.js'
 
 const store = new SQLiteAgentStore()
 
+// ── 共享参数定义（避免重复声明，节省 tool schema tokens）──────────────────────
+const AGENT_CONFIG_PROPS = {
+  name: { type: 'string' as const },
+  description: { type: 'string' as const },
+  model: { type: 'string' as const },
+  temperature: { type: 'number' as const },
+  systemPrompt: { type: 'string' as const },
+  skills: { type: 'array' as const, items: { type: 'string' as const } },
+  mcpServers: { type: 'array' as const, items: { type: 'string' as const } },
+  knowledgeBases: { type: 'array' as const, items: { type: 'string' as const } },
+  allowedTools: { type: 'array' as const, items: { type: 'string' as const } },
+}
+
 export const agentTools: Tool[] = [
   {
     name: 'agent_list',
     displayName: '列出 Agent',
-    description: '列出当前租户下的所有 Agent，支持按名称搜索过滤',
+    description: '列出所有 Agent',
     parameters: {
       type: 'object',
       properties: {
-        search: { type: 'string', description: '按名称搜索过滤（可选）' },
+        search: { type: 'string' },
       },
       required: [],
     },
@@ -41,11 +54,11 @@ export const agentTools: Tool[] = [
   {
     name: 'agent_get',
     displayName: '查看 Agent 详情',
-    description: '查看单个 Agent 的完整配置信息',
+    description: '查看 Agent 配置',
     parameters: {
       type: 'object',
       properties: {
-        id: { type: 'string', description: 'Agent ID（可用前8位匹配）' },
+        id: { type: 'string' },
       },
       required: ['id'],
     },
@@ -79,20 +92,10 @@ export const agentTools: Tool[] = [
   {
     name: 'agent_create',
     displayName: '创建 Agent',
-    description: '创建新 Agent。调用此工具后需要使用 ask_user 工具请求用户确认配置，请提供确认选项（确认/修改/取消）。',
+    description: '创建 Agent 并预览，需 ask_user 确认后调 agent_do_create',
     parameters: {
       type: 'object',
-      properties: {
-        name: { type: 'string', description: 'Agent 名称（必填）' },
-        description: { type: 'string', description: '简短描述 Agent 的用途' },
-        model: { type: 'string', description: '使用的模型，如 gpt-4o' },
-        temperature: { type: 'number', description: 'Temperature 值，0-2 之间，默认 0.7' },
-        systemPrompt: { type: 'string', description: 'System Prompt 定义 Agent 行为' },
-        skills: { type: 'array', items: { type: 'string' }, description: '技能列表，如 calculate, get_time' },
-        mcpServers: { type: 'array', items: { type: 'string' }, description: 'MCP Server 列表' },
-        knowledgeBases: { type: 'array', items: { type: 'string' }, description: '知识库 ID 列表' },
-        allowedTools: { type: 'array', items: { type: 'string' }, description: '允许使用的系统工具列表，如 read_file, write_file, glob, grep 等。留空表示使用全部工具。' },
-      },
+      properties: AGENT_CONFIG_PROPS,
       required: ['name'],
     },
     async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
@@ -128,20 +131,12 @@ export const agentTools: Tool[] = [
   {
     name: 'agent_do_create',
     displayName: '执行创建 Agent',
-    description: '在用户确认后执行实际的 Agent 创建操作。内部使用，请勿直接调用。',
+    description: '用户确认后执行创建，参数同 agent_create 加 confirmed',
     parameters: {
       type: 'object',
       properties: {
-        confirmed: { type: 'boolean', description: '是否已确认' },
-        name: { type: 'string', description: 'Agent 名称' },
-        description: { type: 'string', description: '描述' },
-        model: { type: 'string', description: '模型' },
-        temperature: { type: 'number', description: 'Temperature' },
-        systemPrompt: { type: 'string', description: 'System Prompt' },
-        skills: { type: 'array', items: { type: 'string' }, description: '技能列表' },
-        mcpServers: { type: 'array', items: { type: 'string' }, description: 'MCP Server 列表' },
-        knowledgeBases: { type: 'array', items: { type: 'string' }, description: '知识库 ID 列表' },
-        allowedTools: { type: 'array', items: { type: 'string' }, description: '允许的系统工具列表' },
+        confirmed: { type: 'boolean' },
+        ...AGENT_CONFIG_PROPS,
       },
       required: ['confirmed', 'name'],
     },
@@ -181,20 +176,12 @@ export const agentTools: Tool[] = [
   {
     name: 'agent_update',
     displayName: '更新 Agent',
-    description: '更新已有 Agent 的配置。调用此工具后需要使用 ask_user 工具请求用户确认变更。',
+    description: '更新 Agent 配置，需 ask_user 确认后调 agent_do_update',
     parameters: {
       type: 'object',
       properties: {
-        id: { type: 'string', description: 'Agent ID（必填，可用前8位匹配）' },
-        name: { type: 'string', description: '新的 Agent 名称' },
-        description: { type: 'string', description: '新的描述' },
-        model: { type: 'string', description: '新的模型' },
-        temperature: { type: 'number', description: '新的 Temperature 值' },
-        systemPrompt: { type: 'string', description: '新的 System Prompt' },
-        skills: { type: 'array', items: { type: 'string' }, description: '新的技能列表' },
-        mcpServers: { type: 'array', items: { type: 'string' }, description: '新的 MCP Server 列表' },
-        knowledgeBases: { type: 'array', items: { type: 'string' }, description: '新的知识库 ID 列表' },
-        allowedTools: { type: 'array', items: { type: 'string' }, description: '新的允许系统工具列表' },
+        id: { type: 'string' },
+        ...AGENT_CONFIG_PROPS,
       },
       required: ['id'],
     },
@@ -227,21 +214,13 @@ export const agentTools: Tool[] = [
   {
     name: 'agent_do_update',
     displayName: '执行更新 Agent',
-    description: '在用户确认后执行实际的 Agent 更新操作。内部使用，请勿直接调用。',
+    description: '用户确认后执行更新，参数同 agent_update 加 confirmed',
     parameters: {
       type: 'object',
       properties: {
-        confirmed: { type: 'boolean', description: '是否已确认' },
-        id: { type: 'string', description: 'Agent ID' },
-        name: { type: 'string', description: '新的名称' },
-        description: { type: 'string', description: '新的描述' },
-        model: { type: 'string', description: '新的模型' },
-        temperature: { type: 'number', description: '新的 Temperature' },
-        systemPrompt: { type: 'string', description: '新的 System Prompt' },
-        skills: { type: 'array', items: { type: 'string' }, description: '新的技能列表' },
-        mcpServers: { type: 'array', items: { type: 'string' }, description: '新的 MCP Server 列表' },
-        knowledgeBases: { type: 'array', items: { type: 'string' }, description: '新的知识库 ID 列表' },
-        allowedTools: { type: 'array', items: { type: 'string' }, description: '新的允许系统工具列表' },
+        confirmed: { type: 'boolean' },
+        id: { type: 'string' },
+        ...AGENT_CONFIG_PROPS,
       },
       required: ['confirmed', 'id'],
     },
@@ -274,11 +253,11 @@ export const agentTools: Tool[] = [
   {
     name: 'agent_delete',
     displayName: '删除 Agent',
-    description: '删除指定的 Agent，此操作不可恢复。调用此工具后需要使用 ask_user 工具请求用户确认。',
+    description: '删除 Agent（不可恢复），需 ask_user 确认后调 agent_do_delete',
     parameters: {
       type: 'object',
       properties: {
-        id: { type: 'string', description: 'Agent ID（必填，可用前8位匹配）' },
+        id: { type: 'string' },
       },
       required: ['id'],
     },
@@ -310,13 +289,13 @@ export const agentTools: Tool[] = [
   {
     name: 'agent_do_delete',
     displayName: '执行删除 Agent',
-    description: '在用户确认后执行实际的 Agent 删除操作。内部使用，请勿直接调用。',
+    description: '用户确认后执行删除',
     parameters: {
       type: 'object',
       properties: {
-        confirmed: { type: 'boolean', description: '是否已确认' },
-        id: { type: 'string', description: 'Agent ID' },
-        agentName: { type: 'string', description: 'Agent 名称（用于日志）' },
+        confirmed: { type: 'boolean' },
+        id: { type: 'string' },
+        agentName: { type: 'string' },
       },
       required: ['confirmed', 'id'],
     },

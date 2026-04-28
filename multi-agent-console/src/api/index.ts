@@ -637,6 +637,25 @@ export const toolsApi = {
   },
 }
 
+// ── Sessions API ─────────────────────────────────────────────────────────────
+export interface SessionBinding {
+  started: boolean
+  agentId: string | null
+  agent: { id: string; name: string; description: string } | null
+}
+
+export const sessionsApi = {
+  // GET /sessions/:sessionId/binding → 查询会话 Agent 绑定状态
+  getBinding: async (sessionId: string): Promise<SessionBinding> => {
+    const res = await request<SessionBinding>(`/sessions/${sessionId}/binding`)
+    return res.data as SessionBinding
+  },
+  // DELETE /sessions/:sessionId/binding → 手动清除绑定
+  clearBinding: async (sessionId: string): Promise<void> => {
+    await request<{ success: boolean }>(`/sessions/${sessionId}/binding`, { method: 'DELETE' })
+  },
+}
+
 // ── Workspace API ────────────────────────────────────────────────────────────────
 export const workspaceApi = {
   // GET /workspace/files

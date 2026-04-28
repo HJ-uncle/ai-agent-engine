@@ -17,11 +17,16 @@ function driveAiMessage(
   initialContent: string = '',
   initialSteps: ThinkingStep[] = [],
   onDone?: () => void,
-  onError?: (err: Error) => void
+  onError?: (err: Error) => void,
+  /** 之前已经累积的 usage（ask_user 恢复时从消息中传入） */
+  previousUsage?: TokenUsage | null
 ) {
   let finalContent = initialContent
   const thinkingSteps: ThinkingStep[] = [...initialSteps]
-  let accumulatedUsage: TokenUsage | null = null
+  // 恢复之前的累积值（ask_user 恢复场景）
+  let accumulatedUsage: TokenUsage | null = previousUsage ? { ...previousUsage } : null
+  /** 跟踪上一次提交给 store 的累积值，用于计算增量 */
+  let lastReportedUsage: TokenUsage | null = previousUsage ? { ...previousUsage } : null
 
   const onEvent = (event: any) => {
     if (event.type === 'text_delta') {
@@ -74,6 +79,10 @@ function driveAiMessage(
             messagesTokens: (accumulatedUsage.messagesTokens ?? 0) + (u.messagesTokens ?? 0),
             skillTokens: (accumulatedUsage.skillTokens ?? 0) + (u.skillTokens ?? 0),
             systemToolsTokens: (accumulatedUsage.systemToolsTokens ?? 0) + (u.systemToolsTokens ?? 0),
+            ragTokens: (accumulatedUsage.ragTokens ?? 0) + (u.ragTokens ?? 0),
+            builtinToolsTokens: (accumulatedUsage.builtinToolsTokens ?? 0) + (u.builtinToolsTokens ?? 0),
+            mcpToolsTokens: (accumulatedUsage.mcpToolsTokens ?? 0) + (u.mcpToolsTokens ?? 0),
+            toolResultsTokens: (accumulatedUsage.toolResultsTokens ?? 0) + (u.toolResultsTokens ?? 0),
           }
         }
         updateMessage(sid, aiMsgId, {
@@ -81,7 +90,22 @@ function driveAiMessage(
           durationMs,
           backendMessageId: event.conversationId ?? null,
         })
-        updateUsage(sid, u)
+        // 向 store 提交增量而非全量，避免 ask_user 恢复时重复累加固定部分
+        const delta: TokenUsage = {
+          promptTokens: (accumulatedUsage.promptTokens ?? 0) - (lastReportedUsage?.promptTokens ?? 0),
+          completionTokens: (accumulatedUsage.completionTokens ?? 0) - (lastReportedUsage?.completionTokens ?? 0),
+          totalTokens: (accumulatedUsage.totalTokens ?? 0) - (lastReportedUsage?.totalTokens ?? 0),
+          systemPromptTokens: (accumulatedUsage.systemPromptTokens ?? 0) - (lastReportedUsage?.systemPromptTokens ?? 0),
+          messagesTokens: (accumulatedUsage.messagesTokens ?? 0) - (lastReportedUsage?.messagesTokens ?? 0),
+          skillTokens: (accumulatedUsage.skillTokens ?? 0) - (lastReportedUsage?.skillTokens ?? 0),
+          systemToolsTokens: (accumulatedUsage.systemToolsTokens ?? 0) - (lastReportedUsage?.systemToolsTokens ?? 0),
+          ragTokens: (accumulatedUsage.ragTokens ?? 0) - (lastReportedUsage?.ragTokens ?? 0),
+          builtinToolsTokens: (accumulatedUsage.builtinToolsTokens ?? 0) - (lastReportedUsage?.builtinToolsTokens ?? 0),
+          mcpToolsTokens: (accumulatedUsage.mcpToolsTokens ?? 0) - (lastReportedUsage?.mcpToolsTokens ?? 0),
+          toolResultsTokens: (accumulatedUsage.toolResultsTokens ?? 0) - (lastReportedUsage?.toolResultsTokens ?? 0),
+        }
+        lastReportedUsage = { ...accumulatedUsage }
+        updateUsage(sid, delta)
       }
     } else if (event.type === 'done') {
       const durationMs = Date.now() - startTime
@@ -172,6 +196,10 @@ export function useChat() {
             currentRoundUsage.messagesTokens = (currentRoundUsage.messagesTokens ?? 0) + (usage.messagesTokens ?? 0)
             currentRoundUsage.skillTokens = (currentRoundUsage.skillTokens ?? 0) + (usage.skillTokens ?? 0)
             currentRoundUsage.systemToolsTokens = (currentRoundUsage.systemToolsTokens ?? 0) + (usage.systemToolsTokens ?? 0)
+            currentRoundUsage.ragTokens = (currentRoundUsage.ragTokens ?? 0) + (usage.ragTokens ?? 0)
+            currentRoundUsage.builtinToolsTokens = (currentRoundUsage.builtinToolsTokens ?? 0) + (usage.builtinToolsTokens ?? 0)
+            currentRoundUsage.mcpToolsTokens = (currentRoundUsage.mcpToolsTokens ?? 0) + (usage.mcpToolsTokens ?? 0)
+            currentRoundUsage.toolResultsTokens = (currentRoundUsage.toolResultsTokens ?? 0) + (usage.toolResultsTokens ?? 0)
           }
         }
 
@@ -275,6 +303,10 @@ export function useChat() {
           messagesTokens: 0,
           skillTokens: 0,
           systemToolsTokens: 0,
+          ragTokens: 0,
+          builtinToolsTokens: 0,
+          mcpToolsTokens: 0,
+          toolResultsTokens: 0,
         }
         
         // Sum usage from the raw backend list so we include intermediate tool calls
@@ -287,6 +319,10 @@ export function useChat() {
             totalUsage.messagesTokens! += m.usage.messagesTokens || 0
             totalUsage.skillTokens! += m.usage.skillTokens || 0
             totalUsage.systemToolsTokens! += m.usage.systemToolsTokens || 0
+            totalUsage.ragTokens! += m.usage.ragTokens || 0
+            totalUsage.builtinToolsTokens! += m.usage.builtinToolsTokens || 0
+            totalUsage.mcpToolsTokens! += m.usage.mcpToolsTokens || 0
+            totalUsage.toolResultsTokens! += m.usage.toolResultsTokens || 0
           }
           if (m.role === 'system') {
             msgs.push({
@@ -536,8 +572,11 @@ export function useChat() {
       abortRef.current = ctrl
       const startTime = Date.now() - (aiMsg.durationMs ?? 0)
 
+      // 传入之前已累积的 usage，避免 ask_user 恢复后 token 重新从零计算
+      const prevUsage = (aiMsg.usage as TokenUsage) ?? null
       const { onEvent, handleDone, handleError } = driveAiMessage(
-        sid, msgId, updateMessage, updateUsage, startTime, typeof aiMsg.content === 'string' ? aiMsg.content : '', updatedSteps
+        sid, msgId, updateMessage, updateUsage, startTime, typeof aiMsg.content === 'string' ? aiMsg.content : '', updatedSteps,
+        undefined, undefined, prevUsage
       )
 
       await chatStream({

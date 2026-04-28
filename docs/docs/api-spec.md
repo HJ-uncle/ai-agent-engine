@@ -83,10 +83,10 @@
 - `PUT /api/v1/agents/:id`: 更新 Agent
 - `DELETE /api/v1/agents/:id`: 删除 Agent
 
-### 2. 会话与历史 Conversation (`/api/v1/conversation`)
+### 2. 会话与历史 Conversation (`/api/v1/conversation` & `/api/v1/sessions`)
 - `GET /api/v1/conversation/sessions`: 获取有对话的会话列表 (支持分页)
 - `GET /api/v1/conversation/history?sessionId=xxx`: 查询指定会话的所有历史消息 (支持分页)
-- `DELETE /api/v1/conversation/history?sessionId=xxx`: 清空指定会话的历史消息记录
+- `DELETE /api/v1/conversation/history?sessionId=xxx`: 清空指定会话的历史消息记录（**不**解除 Agent 绑定，绑定与会话生命周期一致）
 - `GET /api/v1/conversations/:conversationId`: 按 conversationId 查询单轮对话消息 (支持分页)
 - `DELETE /api/v1/sessions/:sessionId`: 硬删除整个会话记录及关联 (可选参数 `?keepWorkspace=true` 仅删除记录保留物理工作区文件)
 
@@ -259,6 +259,13 @@
 
 ### POST `/api/v1/chat` — 发送消息（SSE 流式响应）
 
+> **Agent 绑定机制：** 会话首次发送消息时，请求体中的 `agentId` 会被自动写入 `sessions` 表，永久锁定该会话使用的 Agent。后续同一 `sessionId` 的请求无论传入什么 `agentId` 均会被忽略，始终使用绑定值。
+>
+> - 绑定**不会**因清空对话历史（`DELETE /api/v1/conversation/history`）而解除
+> - 绑定**仅在**硬删除整个会话（`DELETE /api/v1/sessions/:sessionId`）时随会话一起删除
+> - 如需更换 Agent，请新建一个会话
+> - `GET /api/v1/sessions/:sessionId/binding` — 查询绑定状态（`started: false` 未锁定 / `started: true` 已锁定，返回 `agentId` 和 `agent` 信息）
+
 **请求体：**
 ```json
 {
@@ -284,6 +291,6 @@
 | `{ "thinking": "..." }` | thinking | 模型思考过程（DeepSeek R1 / Claude 3.7 Sonnet） |
 | `{ "toolStart": { "name": "...", "args": {...}, "toolCallId": "..." } }` | tool_start | 工具调用开始 |
 | `{ "toolEnd": { "name": "...", "toolCallId": "...", "success": true, "outputPreview": "..." } }` | tool_end | 工具调用结束 |
-| `{ "usage": { "systemPromptTokens": ..., "completionTokens": ..., "totalTokens": ... } }` | usage | Token 使用量统计 |
+| `{ "usage": { "systemPromptTokens": ..., "ragTokens": ..., "skillTokens": ..., "builtinToolsTokens": ..., "mcpToolsTokens": ..., "messagesTokens": ..., "toolResultsTokens": ..., "completionTokens": ..., "promptTokens": ..., "totalTokens": ..., "systemToolsTokens": ... } }` | usage | Token 使用量统计（8 类精细分项 + 汇总） |
 | `{ "ask_user": { "question": "...", "options": [...], "toolCallId": "..." } }` | ask_user | 向用户提问卡片 |
 | `[DONE]` | done | 流式响应结束 |

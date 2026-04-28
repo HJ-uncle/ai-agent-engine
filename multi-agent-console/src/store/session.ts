@@ -256,6 +256,10 @@ export const useSessionStore = create<SessionState>()(
             messagesTokens: (prev?.messagesTokens ?? 0) + (usage.messagesTokens ?? 0),
             skillTokens: (prev?.skillTokens ?? 0) + (usage.skillTokens ?? 0),
             systemToolsTokens: (prev?.systemToolsTokens ?? 0) + (usage.systemToolsTokens ?? 0),
+            ragTokens: (prev?.ragTokens ?? 0) + (usage.ragTokens ?? 0),
+            builtinToolsTokens: (prev?.builtinToolsTokens ?? 0) + (usage.builtinToolsTokens ?? 0),
+            mcpToolsTokens: (prev?.mcpToolsTokens ?? 0) + (usage.mcpToolsTokens ?? 0),
+            toolResultsTokens: (prev?.toolResultsTokens ?? 0) + (usage.toolResultsTokens ?? 0),
           }
           return { usageMap: { ...state.usageMap, [sessionId]: merged } }
         }),

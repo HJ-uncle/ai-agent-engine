@@ -223,25 +223,41 @@ function CopyBtn({ text }: { text: string }) {
 
 // ── Token meta ─────────────────────────────────────────────────────────────────
 const TOKEN_META = [
-  {
-    key: "systemPromptTokens" as keyof TokenUsage,
-    color: "#818cf8",
-    label: "系统提示词",
-  },
+  // ── 按消耗权重排序：History → Prompts → Tools → Output ──
   {
     key: "messagesTokens" as keyof TokenUsage,
     color: "#38bdf8",
     label: "历史消息",
   },
   {
-    key: "skillTokens" as keyof TokenUsage,
-    color: "#c084fc",
-    label: "技能/工具",
+    key: "systemPromptTokens" as keyof TokenUsage,
+    color: "#818cf8",
+    label: "系统提示词",
   },
   {
-    key: "systemToolsTokens" as keyof TokenUsage,
+    key: "skillTokens" as keyof TokenUsage,
+    color: "#c084fc",
+    label: "技能 Prompt",
+  },
+  {
+    key: "ragTokens" as keyof TokenUsage,
+    color: "#34d399",
+    label: "知识库(RAG)",
+  },
+  {
+    key: "mcpToolsTokens" as keyof TokenUsage,
+    color: "#f97316",
+    label: "MCP 工具",
+  },
+  {
+    key: "builtinToolsTokens" as keyof TokenUsage,
     color: "#fbbf24",
-    label: "系统工具",
+    label: "内置工具",
+  },
+  {
+    key: "toolResultsTokens" as keyof TokenUsage,
+    color: "#a78bfa",
+    label: "工具调用结果",
   },
   {
     key: "completionTokens" as keyof TokenUsage,
@@ -310,10 +326,10 @@ function FileCard({ file, onCopyPath }: { file: any, onCopyPath: (path: string) 
     try {
       const data = await workspaceApi.getFileContent(activeSessionId, file.name);
       if (!data) throw new Error('未获取到文件内容');
-      
+
       const { content, isBinary } = data;
       let blob;
-      
+
       if (isBinary) {
         const byteCharacters = atob(content);
         const byteNumbers = new Array(byteCharacters.length);
@@ -334,7 +350,7 @@ function FileCard({ file, onCopyPath }: { file: any, onCopyPath: (path: string) 
       link.click();
       document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
-      
+
       message.success(`已开始下载：${file.name}`);
     } catch (err: any) {
       message.error(`下载失败：${err.message}`);
@@ -389,9 +405,9 @@ function FileCard({ file, onCopyPath }: { file: any, onCopyPath: (path: string) 
           getFileIcon(displayInfo.type, displayInfo.isImage)
         )}
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          <div style={{ 
-            fontSize: 14, 
-            fontWeight: 600, 
+          <div style={{
+            fontSize: 14,
+            fontWeight: 600,
             color: '#e6edf3',
             whiteSpace: 'nowrap',
             overflow: 'hidden',
@@ -405,20 +421,20 @@ function FileCard({ file, onCopyPath }: { file: any, onCopyPath: (path: string) 
         </div>
         <div style={{ display: 'flex', gap: 2 }}>
           <Tooltip title="下载">
-            <Button 
-              type="text" 
-              size="small" 
+            <Button
+              type="text"
+              size="small"
               loading={isDownloading}
-              icon={<DownloadOutlined />} 
+              icon={<DownloadOutlined />}
               onClick={handleDownload}
               style={{ color: '#8b949e' }}
             />
           </Tooltip>
           <Tooltip title="复制文件名">
-            <Button 
-              type="text" 
-              size="small" 
-              icon={<CopyOutlined />} 
+            <Button
+              type="text"
+              size="small"
+              icon={<CopyOutlined />}
               onClick={() => onCopyPath(file.name)}
               style={{ color: '#8b949e' }}
             />
@@ -446,11 +462,11 @@ function FileCard({ file, onCopyPath }: { file: any, onCopyPath: (path: string) 
 
           {/* 图片文件特殊处理：显示工作区地址链接 */}
           {displayInfo.isImage && displayInfo.workspacePath && (
-            <div style={{ 
-              display: 'flex', 
-              alignItems: 'center', 
-              gap: 4, 
-              fontSize: 11, 
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              fontSize: 11,
               color: '#58a6ff',
               cursor: 'pointer',
               flex: 1,
@@ -458,9 +474,9 @@ function FileCard({ file, onCopyPath }: { file: any, onCopyPath: (path: string) 
               overflow: 'hidden'
             }} onClick={handleImageLinkClick}>
               <LinkOutlined style={{ fontSize: 12 }} />
-              <span style={{ 
-                whiteSpace: 'nowrap', 
-                overflow: 'hidden', 
+              <span style={{
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 textDecoration: 'underline'
               }}>
@@ -485,7 +501,7 @@ function TokenDetailsContent({
   title?: string;
 }) {
   return (
-    <div style={{ width: 200, fontSize: 12 }}>
+    <div style={{ width: 220, fontSize: 12 }}>
       <div style={{ fontWeight: 700, marginBottom: 8, color: "#e6edf3" }}>
         ⚡ {title}{" "}
         {durationMs != null && (
@@ -1146,10 +1162,10 @@ function MessageItem({
             }
             if (item.type === "file") {
               return (
-                <FileCard 
-                  key={i} 
-                  file={item.file} 
-                  onCopyPath={handleCopyPath} 
+                <FileCard
+                  key={i}
+                  file={item.file}
+                  onCopyPath={handleCopyPath}
                 />
               );
             }
@@ -1438,6 +1454,10 @@ export default function ChatArea() {
   const [showTodoPanel, setShowTodoPanel] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isCompressing, setIsCompressing] = useState(false);
+
+  // 会话是否已开始 —— 直接从本地 messageMap 判断，无需额外 API 请求
+  // 后端在首次 POST /chat 时自动绑定 agentId，messages.length > 0 即代表已锁定
+  const sessionStarted = messages.length > 0;
   const compressStats = session?.compressStats || null;
   const scrollRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -1667,7 +1687,7 @@ export default function ChatArea() {
       setIsStreaming(true);
       atBottomRef.current = true;
       scrollToBottom();
-      
+
       try {
         const userContentParts: any[] = [];
         if (content.trim()) {
@@ -1675,7 +1695,7 @@ export default function ChatArea() {
         }
 
         const attachmentData: Array<{ name: string; content: string; type: string; encoding?: 'utf-8' | 'base64' }> = [];
-        
+
         if (currentAttachments.length > 0) {
           const hide = message.loading("正在处理附件...", 0);
           try {
@@ -1683,11 +1703,11 @@ export default function ChatArea() {
             for (const file of currentAttachments) {
               const isImage = file.type.startsWith("image/");
               const fileContent = isImage ? await readFileAsBase64(file) : await readFileAsText(file);
-              
+
               // 1. Upload to workspace
               await workspaceApi.uploadFile(activeSessionId, file.name, fileContent, isImage ? "base64" : "utf-8");
               uploadedFiles.push(file.name);
-              
+
               // 2. Prepare for AI
               // 图片已上传到 workspace，只传文件名给后端，让 AI 用 read_image 工具读取
               // 不传 base64 content，避免消息体过大
@@ -1728,8 +1748,8 @@ export default function ChatArea() {
 
         // If it's only text, send as string to maintain compatibility, 
         // otherwise send as array of parts.
-        const finalContent = userContentParts.length === 1 && userContentParts[0].type === "text" 
-          ? userContentParts[0].text 
+        const finalContent = userContentParts.length === 1 && userContentParts[0].type === "text"
+          ? userContentParts[0].text
           : userContentParts;
 
         await send(finalContent, activeSessionId, attachmentData);
@@ -1821,31 +1841,42 @@ export default function ChatArea() {
           )}
         </div>
         <div className={styles.headerRight}>
-          {/* Agent selector */}
-          <Select
-            size="small"
-            placeholder="选择 Agent"
-            allowClear
-            className={styles.agentSelect}
-            value={session?.agentId || undefined}
-            onChange={(val) =>
-              updateSessionAgent(activeSessionId, val || undefined)
-            }
-            options={[
-              ...agents.map((a) => ({
-                value: a.id,
-                label: (
-                  <span
-                    style={{ display: "flex", alignItems: "center", gap: 6 }}
-                  >
-                    <RobotOutlined style={{ fontSize: 11 }} />
-                    {a.name}
-                  </span>
-                ),
-              })),
-            ]}
-            styles={{ popup: { root: { minWidth: 180 } } }}
-          />
+          {/* Agent selector - 会话开始后显示锁定文本标签，否则展示下拉选择器 */}
+          {sessionStarted ? (
+            <Tooltip
+              title="Agent 已绑定，无法更换。如需使用其他 Agent 请新建会话。"
+              placement="bottom"
+            >
+              <span className={styles.agentLocked}>
+                <RobotOutlined className={styles.agentLockedIcon} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {currentAgent?.name ?? "默认对话"}
+                </span>
+                <span className={styles.agentLockedLock}>🔒</span>
+              </span>
+            </Tooltip>
+          ) : (
+            <Tooltip title="选择 Agent" placement="bottom">
+              <Select
+                size="small"
+                placeholder="选择 Agent"
+                allowClear
+                className={styles.agentSelect}
+                value={session?.agentId || undefined}
+                onChange={(val) => updateSessionAgent(activeSessionId, val || undefined)}
+                options={agents.map((a) => ({
+                  value: a.id,
+                  label: (
+                    <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <RobotOutlined style={{ fontSize: 11 }} />
+                      {a.name}
+                    </span>
+                  ),
+                }))}
+                styles={{ popup: { root: { minWidth: 180 } } }}
+              />
+            </Tooltip>
+          )}
 
           <Tooltip title="工作区管理">
             <Button
@@ -1901,13 +1932,13 @@ export default function ChatArea() {
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, fontSize: 11 }}>
                         <span style={{ color: '#8b949e', flexShrink: 0 }}>最近一次压缩比例</span>
                         <Tooltip title={`${compressStats.ratio} (${compressStats.originalTokens} → ${compressStats.compressedTokens})`}>
-                          <span style={{ 
-                            color: '#3fb950', 
-                            fontWeight: 600, 
-                            whiteSpace: 'nowrap', 
-                            marginLeft: 8, 
-                            overflow: 'hidden', 
-                            textOverflow: 'ellipsis', 
+                          <span style={{
+                            color: '#3fb950',
+                            fontWeight: 600,
+                            whiteSpace: 'nowrap',
+                            marginLeft: 8,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
                             maxWidth: '180px',
                             display: 'inline-block',
                             direction: 'ltr'
@@ -1948,13 +1979,13 @@ export default function ChatArea() {
               trigger="click"
             >
               <span className={styles.sessionToken} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ 
-                  display: 'inline-flex', 
-                  alignItems: 'center', 
+                <span style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
                   justifyContent: 'center',
-                  width: 14, 
-                  height: 14, 
-                  borderRadius: '50%', 
+                  width: 14,
+                  height: 14,
+                  borderRadius: '50%',
                   border: '2px solid #8b949e',
                   borderTopColor: '#3fb950',
                   borderRightColor: '#3fb950',
@@ -2205,7 +2236,7 @@ export default function ChatArea() {
           <p style={{ fontSize: 13, color: "#8b949e", marginBottom: 16 }}>
             您可以为当前会话绑定多个额外的工作区路径。Agent 将能够访问这些路径下的文件。
           </p>
-          
+
           <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
             <Input
               placeholder="输入工作区绝对路径 (例如: /Users/work/project)"
@@ -2214,19 +2245,19 @@ export default function ChatArea() {
               onPressEnter={handleAddWorkspace}
               style={{ background: "#2d2d2d", color: "#cccccc", border: "1px solid #3e3e3e" }}
             />
-            <Button 
-              type="primary" 
-              icon={<PlusOutlined />} 
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
               onClick={handleAddWorkspace}
             >
               添加
             </Button>
           </div>
 
-          <div style={{ 
-            maxHeight: 300, 
-            overflowY: "auto", 
-            border: "1px solid #333333", 
+          <div style={{
+            maxHeight: 300,
+            overflowY: "auto",
+            border: "1px solid #333333",
             borderRadius: 4,
             padding: 8,
             background: "#161616"
@@ -2241,11 +2272,11 @@ export default function ChatArea() {
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: "100%" }}>
                 {session.workspacePaths.map((path: string) => (
-                  <div 
-                    key={path} 
-                    style={{ 
-                      display: "flex", 
-                      justifyContent: "space-between", 
+                  <div
+                    key={path}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
                       alignItems: "center",
                       padding: "8px 12px",
                       background: "#252526",
@@ -2254,11 +2285,11 @@ export default function ChatArea() {
                     }}
                   >
                     <span style={{ fontSize: 13, color: "#cccccc", wordBreak: "break-all" }}>{path}</span>
-                    <Button 
-                      type="text" 
-                      danger 
-                      size="small" 
-                      icon={<CloseOutlined />} 
+                    <Button
+                      type="text"
+                      danger
+                      size="small"
+                      icon={<CloseOutlined />}
                       onClick={() => handleRemoveWorkspace(path)}
                     />
                   </div>

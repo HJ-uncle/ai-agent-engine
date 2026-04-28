@@ -8,9 +8,9 @@ export const todoTools: Tool[] = [
   {
     name: 'todo_list',
     displayName: '列出待办',
-    description: '列出当前会话的所有待办任务',
+    description: '列出待办任务',
     parameters: { type: 'object', properties: {
-      status: { type: 'string', enum: ['pending','in_progress','done','cancelled'], description: '按状态过滤（可选）' },
+      status: { type: 'string', enum: ['pending','in_progress','done','cancelled'] },
     }, required: [] },
     async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
       try {
@@ -28,12 +28,12 @@ export const todoTools: Tool[] = [
   {
     name: 'todo_create',
     displayName: '创建待办',
-    description: '创建一条新的待办任务',
+    description: '创建待办任务',
     parameters: { type: 'object', properties: {
-      title: { type: 'string', description: '待办标题（必填）' },
-      description: { type: 'string', description: '详细描述' },
-      priority: { type: 'string', enum: ['low','medium','high'], description: '优先级，默认 medium' },
-      dueAt: { type: 'string', description: '截止时间，ISO 8601 格式，如 "2026-05-01T18:00:00"' },
+      title: { type: 'string' },
+      description: { type: 'string' },
+      priority: { type: 'string', enum: ['low','medium','high'] },
+      dueAt: { type: 'string', description: 'ISO 8601' },
     }, required: ['title'] },
     async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
       const { title, description, priority, dueAt } = rawArgs as any
@@ -49,19 +49,18 @@ export const todoTools: Tool[] = [
   {
     name: 'todo_update',
     displayName: '更新待办',
-    description: '更新待办任务的状态、标题或优先级',
+    description: '更新待办状态/标题/优先级',
     parameters: { type: 'object', properties: {
-      id: { type: 'string', description: '待办 ID（可用前8位）' },
+      id: { type: 'string' },
       title: { type: 'string' },
       description: { type: 'string' },
       status: { type: 'string', enum: ['pending','in_progress','done','cancelled'] },
       priority: { type: 'string', enum: ['low','medium','high'] },
-      dueAt: { type: 'string', description: 'ISO 8601 截止时间' },
+      dueAt: { type: 'string' },
     }, required: ['id'] },
     async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
       const { id, ...updates } = rawArgs as any
       try {
-        // 支持短 ID 匹配
         const all = await store.list(ctx.tenantId)
         const todo = all.find(t => t.id === id || t.id.startsWith(id))
         if (!todo) return { success: false, output: `待办 "${id}" 不存在` }
@@ -76,9 +75,9 @@ export const todoTools: Tool[] = [
   {
     name: 'todo_delete',
     displayName: '删除待办',
-    description: '删除指定的待办任务',
+    description: '删除待办任务',
     parameters: { type: 'object', properties: {
-      id: { type: 'string', description: '待办 ID（可用前8位）' },
+      id: { type: 'string' },
     }, required: ['id'] },
     async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
       const { id } = rawArgs as any

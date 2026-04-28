@@ -14,34 +14,16 @@ const execAsync = promisify(exec)
 export const installPackageTool: Tool = {
   name: 'install_package',
   displayName: '安装 npm 包',
-  description: '在工作区目录安装 npm 包，支持指定版本和全局安装。出于安全考虑，执行前需要用户确认。',
+  description: '安装 npm 包。首次调用返回确认信息，confirm=true 时执行安装',
   parameters: {
     type: 'object',
     properties: {
-      packageName: {
-        type: 'string',
-        description: '要安装的包名（必填），如 "lodash" 或 "lodash@4.17.21"'
-      },
-      version: {
-        type: 'string',
-        description: '指定版本，如 "4.17.21"，与 packageName 中的版本互斥'
-      },
-      global: {
-        type: 'boolean',
-        description: '是否全局安装，默认 false'
-      },
-      saveDev: {
-        type: 'boolean',
-        description: '是否作为开发依赖安装（--save-dev），默认 false'
-      },
-      installPath: {
-        type: 'string',
-        description: '安装路径，默认为当前工作区目录'
-      },
-      confirm: {
-        type: 'boolean',
-        description: '是否已确认安装（安全机制），默认 false。首次调用时工具会返回确认信息，用户确认后设置为 true 再调用以执行安装'
-      }
+      packageName: { type: 'string', description: '包名，如 lodash 或 lodash@4.17.21' },
+      version: { type: 'string' },
+      global: { type: 'boolean' },
+      saveDev: { type: 'boolean', description: '--save-dev' },
+      installPath: { type: 'string' },
+      confirm: { type: 'boolean', description: '确认后设为 true 执行' }
     },
     required: ['packageName']
   },

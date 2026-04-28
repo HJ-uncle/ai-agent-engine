@@ -7,12 +7,12 @@ export const taskControlTools: Tool[] = [
   {
     name: 'task_list',
     displayName: '列出后台任务',
-    description: '列出当前租户的后台任务（任务队列中的 Job）',
+    description: '列出后台任务',
     parameters: {
       type: 'object',
       properties: {
-        status: { type: 'string', enum: ['pending','running','done','failed','cancelled'], description: '按状态过滤（可选）' },
-        limit: { type: 'number', description: '返回条数，默认 20', default: 20 },
+        status: { type: 'string', enum: ['pending','running','done','failed','cancelled'] },
+        limit: { type: 'number' },
       },
       required: [],
     },
@@ -36,11 +36,11 @@ export const taskControlTools: Tool[] = [
   {
     name: 'task_cancel',
     displayName: '取消后台任务',
-    description: '取消一个 pending 状态的后台任务',
+    description: '取消后台任务',
     parameters: {
       type: 'object',
       properties: {
-        id: { type: 'string', description: '任务 ID（可用前8位）' },
+        id: { type: 'string' },
       },
       required: ['id'],
     },
@@ -61,11 +61,11 @@ export const taskControlTools: Tool[] = [
   {
     name: 'task_status',
     displayName: '查看任务状态',
-    description: '查看指定后台任务的详细状态',
+    description: '查看任务状态',
     parameters: {
       type: 'object',
       properties: {
-        id: { type: 'string', description: '任务 ID（可用前8位）' },
+        id: { type: 'string' },
       },
       required: ['id'],
     },

@@ -54,6 +54,10 @@ A production-ready AI Agent Engine built with Node.js + TypeScript ESM. Supports
 | 44 | **Get Context** — `get_context` tool for runtime context inspection |
 | 45 | **Install Package** — `install_package` tool for npm package installation |
 | 46 | **Fine-grained Tool Control** — Per-agent `allowedTools` configuration via `agent_allowed_tools` table |
+| 47 | **Session Agent Lock** — Once a session starts, the Agent is locked and cannot be switched mid-session; cleared on history delete |
+| 48 | **Granular Token Breakdown** — 8-category Token usage: system prompt, RAG, skill prompt, builtin tools, MCP tools, history messages, tool results, completion |
+| 49 | **Tool Output Truncation** — Oversized tool outputs auto-truncated (head + tail) to prevent token budget explosion |
+| 50 | **OpenAI Base URL Auto-fix** — Automatically strips `/chat/completions` or other endpoint suffixes from `OPENAI_BASE_URL` |
 
 ---
 
@@ -161,9 +165,12 @@ curl http://localhost:12323/metrics
 | `WORKSPACE_ROOT` | `./workspace` | Root directory for per-tenant workspaces |
 | `AUTH_ENABLED` | `true` | Enable JWT/API-key authentication (`false` for dev) |
 | `JWT_SECRET` | `dev-secret-change-in-production` | JWT signing secret |
-| `TOKEN_BUDGET` | `8000` | Max tokens per agent context window |
-| `MAX_ITERATIONS` | `50` | Max ReAct loop iterations |
-| `ENCRYPTION_KEY` | _(auto-generated)_ | AES-256-GCM key for API key encryption (32 hex chars) |
+| `TOKEN_BUDGET` | `100000` | Max tokens per agent context window |
+| `MAX_ITERATIONS` | `100` | Max ReAct loop iterations |
+| `HISTORY_MAX_TOKENS` | `20000` | Max tokens kept in conversation history window (older messages dropped first) |
+| `TOOL_OUTPUT_MAX_CHARS` | `4000` | Max characters of tool output before head+tail truncation |
+| `COMPRESS_THRESHOLD_RATIO` | `0.5` | Compression trigger ratio of `TOKEN_BUDGET`; lower = compress earlier |
+| `ENCRYPTION_KEY` | _(required)_ | 64 hex characters (32 bytes) AES-256-GCM key for encrypting API keys |
 
 ---
 
@@ -171,9 +178,12 @@ curl http://localhost:12323/metrics
 
 ### Chat
 
+> On the **first** `POST /api/v1/chat` of a session, the supplied `agentId` is automatically locked to that session. Subsequent requests for the same session will always use the bound agent regardless of the `agentId` field in the body. The lock is cleared automatically when conversation history is deleted.
+
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/api/v1/chat` | Send a message; streams SSE response |
+| `GET` | `/api/v1/sessions/:sessionId/binding` | Get session Agent binding (`started`, `agentId`, `agent`); `started: false` = not yet locked |
 
 **Request body:**
 ```json
@@ -204,7 +214,7 @@ data: {"thinking":"Let me think about this..."}
 data: {"toolStart":{"name":"calculator","args":{"expr":"2+2"},"toolCallId":"call_1"}}
 data: {"toolEnd":{"name":"calculator","toolCallId":"call_1","success":true,"outputPreview":"4"}}
 data: {"ask_user":{"question":"...","options":["A","B"],"toolCallId":"call_2"}}
-data: {"usage":{"systemPromptTokens":50,"completionTokens":10,"totalTokens":60}}
+data: {"usage":{"systemPromptTokens":50,"ragTokens":0,"skillTokens":0,"builtinToolsTokens":120,"mcpToolsTokens":0,"messagesTokens":300,"toolResultsTokens":80,"completionTokens":10,"promptTokens":550,"totalTokens":560,"systemToolsTokens":120}}
 
 ### Workspace
 
@@ -372,6 +382,7 @@ src/
 │       ├── settings.ts        # System settings
 │       ├── todos.ts           # Todo CRUD
 │       ├── cron.ts            # Cron Job CRUD + enable/disable
+│       ├── sessions.ts        # Session Agent binding (lock/query/reset)
 │       └── metrics.ts         # Health + metrics
 ├── core/
 │   ├── agent-context/         # AgentContext, Tool interfaces
@@ -400,6 +411,7 @@ src/
 │   ├── agent/                 # SQLiteAgentStore
 │   ├── todo/                  # TodoStore (CRUD, status/priority filters)
 │   ├── cron/                  # CronStore (CRUD, enable/disable, lastRunAt)
+│   ├── session/               # SessionStore (Agent binding lock per session)
 │   └── knowledge/             # Knowledge base + RAG
 ├── tools/
 │   ├── file/                  # read_file / write_file / list_files / delete_file / create_dir / read_image
@@ -444,6 +456,11 @@ src/
 - **Todo + Cron as first-class tools** — agents can create, read, update and delete todos/cron jobs via `todo_*` / `cron_*` tools, enabling self-scheduling autonomous workflows
 - **grep_search ripgrep fallback** — `grep_search` detects `rg` at startup; if absent it falls back to a recursive Node.js `fs` traversal so the tool works on every machine without extra dependencies
 - **TodoPanel UI** — a React side panel above the chat input renders live todo items; the agent can drive it by calling `todo_create` / `todo_update` and the UI reacts in real-time
+- **Session Agent Lock** — on the first `POST /api/v1/chat`, the chosen `agentId` is permanently written to the `sessions` table; subsequent requests for the same session ignore `agentId` in the body and always use the bound value; the binding is **not** cleared by `DELETE /conversation/history` — it persists for the lifetime of the session and is only removed when the entire session is hard-deleted (`DELETE /sessions/:sessionId`); to use a different Agent, start a new session
+- **Granular Token Breakdown** — Token usage is split into 8 categories (`systemPromptTokens`, `ragTokens`, `skillTokens`, `builtinToolsTokens`, `mcpToolsTokens`, `messagesTokens`, `toolResultsTokens`, `completionTokens`); backward-compatible `systemToolsTokens` is retained as the sum of builtin + MCP
+- **Tool Output Truncation** — `truncateToolOutput()` in `react.ts` keeps head + tail of oversized tool results (default 4000 chars), preventing unbounded history growth in long-running agents
+- **OpenAI Base URL normalisation** — `normalizeBaseURL()` in `openai.ts` automatically strips `/chat/completions`, `/embeddings` and other SDK-appended suffixes so users can paste any endpoint URL
+- **`allowedTools` empty-array semantics** — an empty `allowedTools: []` on an Agent now means "no tools allowed" (previously treated as "all tools"); only a `null` / absent value means "all tools"
 
 ---
 

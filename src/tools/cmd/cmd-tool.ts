@@ -11,19 +11,12 @@ export interface CMDToolOptions {
 export const cmdTool: Tool = {
   name: 'execute_cmd',
   displayName: '执行命令',
-  description: '在工作区目录中执行被允许的 Shell 命令，仅限安全且在白名单中的命令',
+  description: '执行白名单内的 Shell 命令',
   parameters: {
     type: 'object',
     properties: {
-      command: {
-        type: 'string',
-        description: '要执行的命令 (例如: "ls", "echo hello")',
-      },
-      args: {
-        type: 'array',
-        items: { type: 'string' },
-        description: '以数组形式提供的命令参数',
-      },
+      command: { type: 'string' },
+      args: { type: 'array', items: { type: 'string' } },
     },
     required: ['command'],
   },

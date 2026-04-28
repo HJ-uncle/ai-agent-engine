@@ -17,6 +17,7 @@ import { settingsRoutes } from './routes/settings.js'
 import { modelsRoutes } from './routes/models.js'
 import { todoRoutes } from './routes/todos.js'
 import { cronRoutes } from './routes/cron.js'
+import { sessionRoutes } from './routes/sessions.js'
 import { cronScheduler } from '../../scheduler/cron-scheduler.js'
 import { globalRequestMiddleware, WHITELIST_PATHS } from './middleware.js'
 import { fail } from './response.js'
@@ -78,6 +79,7 @@ export async function buildServer() {
     await api.register(settingsRoutes)
     await api.register(todoRoutes)
     await api.register(cronRoutes)
+    await api.register(sessionRoutes)
   }, { prefix: '/api/v1' })
 
   // Health and metrics at root level

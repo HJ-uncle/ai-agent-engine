@@ -64,33 +64,15 @@ function grepDir(dir: string, regex: RegExp, maxResults: number, fileGlob?: stri
 export const grepTool: Tool = {
   name: 'grep_search',
   displayName: 'Grep 内容搜索',
-  description: '在工作区文件中搜索包含指定文本或正则表达式的行。优先使用 ripgrep (rg) 以获得更快的速度。',
+  description: '在文件中搜索文本或正则，支持 ripgrep',
   parameters: {
     type: 'object',
     properties: {
-      pattern: {
-        type: 'string',
-        description: '要搜索的文本或正则表达式',
-      },
-      path: {
-        type: 'string',
-        description: '搜索目录或文件（相对工作区根目录，默认为根目录）',
-        default: '.',
-      },
-      filePattern: {
-        type: 'string',
-        description: '文件名过滤模式，如 "*.ts"（仅 ripgrep 模式支持）',
-      },
-      caseSensitive: {
-        type: 'boolean',
-        description: '是否区分大小写，默认 false',
-        default: false,
-      },
-      maxResults: {
-        type: 'number',
-        description: '最多返回结果数量，默认 50',
-        default: 50,
-      },
+      pattern: { type: 'string' },
+      path: { type: 'string' },
+      filePattern: { type: 'string', description: '文件过滤如 *.ts' },
+      caseSensitive: { type: 'boolean' },
+      maxResults: { type: 'number' },
     },
     required: ['pattern'],
   },

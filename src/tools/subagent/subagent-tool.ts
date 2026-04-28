@@ -15,28 +15,14 @@ import { SQLiteConversationHistory } from '../../storage/conversation/index.js'
 export const subagentTool: Tool = {
   name: 'subagent',
   displayName: '子代理',
-  description: '创建子代理执行特定任务，可自定义系统提示词、模型和最大执行步数',
+  description: '创建子代理执行任务',
   parameters: {
     type: 'object',
     properties: {
-      task: {
-        type: 'string',
-        description: '子代理需要完成的任务描述（必填）'
-      },
-      systemPrompt: {
-        type: 'string',
-        description: '子代理的系统提示词，定义其角色和行为'
-      },
-      model: {
-        type: 'string',
-        description: '子代理使用的模型，默认使用系统配置'
-      },
-      maxSteps: {
-        type: 'integer',
-        description: '最大执行步数，默认 10 步',
-        minimum: 1,
-        maximum: 50
-      }
+      task: { type: 'string' },
+      systemPrompt: { type: 'string' },
+      model: { type: 'string' },
+      maxSteps: { type: 'integer', description: '默认10' }
     },
     required: ['task']
   },
@@ -74,9 +60,8 @@ export const subagentTool: Tool = {
 
       // 使用 ReAct 策略执行子代理
       const strategy = new ReActStrategy(llm, {
-        maxSteps,
+        maxIterations: maxSteps,
         systemPrompt: finalSystemPrompt,
-        model: model
       })
 
       // 执行子代理

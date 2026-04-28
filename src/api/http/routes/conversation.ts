@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { SQLiteConversationHistory } from '../../../storage/conversation/index.js'
+import { SessionStore } from '../../../storage/session/index.js'
 import { success, fail, paginateArray } from '../response.js'
 import { workspaceManager } from '../../../workspace/index.js'
 import fs from 'node:fs'
@@ -34,6 +35,7 @@ export async function conversationRoutes(fastify: FastifyInstance) {
       return reply.code(200).send(fail(40001, '参数验证失败：sessionId 不能为空'))
     }
     await history.clear({ tenantId, sessionId })
+    // 注意：Agent 绑定不随历史清空而解除，绑定与会话生命周期一致（仅硬删除 session 时清除）
     return reply.code(200).send(success({ success: true }))
   })
 
@@ -49,8 +51,12 @@ export async function conversationRoutes(fastify: FastifyInstance) {
 
     // 1. Delete DB history
     await history.clear({ tenantId, sessionId })
-    
-    // 2. Delete physical workspace directory if keepWorkspace is not true
+
+    // 2. 同步清除会话 Agent 绑定，允许重新选择 Agent
+    const sessionStore = new SessionStore()
+    await sessionStore.clearBinding(sessionId, tenantId)
+
+    // 3. Delete physical workspace directory if keepWorkspace is not true
     if (keepWorkspace !== 'true') {
       try {
         const dir = workspaceManager.getPath({ tenantId, sessionId })

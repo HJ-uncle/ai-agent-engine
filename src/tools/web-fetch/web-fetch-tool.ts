@@ -9,22 +9,13 @@ import { loadSecurityConfig, checkDomainAllowed } from './security-config.js'
 export const webFetchTool: Tool = {
   name: 'web_fetch',
   displayName: '获取网页内容',
-  description: '根据 URL 获取网页内容，支持自动转换为 Markdown 格式。受域名白名单/黑名单控制。',
+  description: '获取网页内容，自动转 Markdown',
   parameters: {
     type: 'object',
     properties: {
-      url: {
-        type: 'string',
-        description: '要获取的网页 URL（必填）'
-      },
-      convertToMarkdown: {
-        type: 'boolean',
-        description: '是否转换为 Markdown 格式，默认 true'
-      },
-      bypassSecurityCheck: {
-        type: 'boolean',
-        description: '是否绕过安全检查（仅管理员可用），默认 false'
-      }
+      url: { type: 'string' },
+      convertToMarkdown: { type: 'boolean' },
+      bypassSecurityCheck: { type: 'boolean' }
     },
     required: ['url']
   },

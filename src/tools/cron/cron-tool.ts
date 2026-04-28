@@ -7,7 +7,7 @@ export const cronTools: Tool[] = [
   {
     name: 'cron_list',
     displayName: '列出定时任务',
-    description: '列出当前租户所有定时任务',
+    description: '列出所有定时任务',
     parameters: { type: 'object', properties: {}, required: [] },
     async execute(_: unknown, ctx: AgentContext): Promise<ToolResult> {
       try {
@@ -23,16 +23,16 @@ export const cronTools: Tool[] = [
   {
     name: 'cron_create',
     displayName: '创建定时任务',
-    description: '创建一个新的定时任务，到期时自动向指定会话发送消息触发 AI 对话',
+    description: '创建定时任务，到期自动触发 AI 对话',
     parameters: {
       type: 'object',
       properties: {
-        name: { type: 'string', description: '任务名称' },
-        cronExpr: { type: 'string', description: 'Cron 表达式（5字段：分 时 日 月 周），如 "0 9 * * 1" 表示每周一9点' },
-        message: { type: 'string', description: '定时触发时发给 AI 的消息内容' },
-        sessionId: { type: 'string', description: '目标会话 ID（默认使用当前会话）' },
-        description: { type: 'string', description: '任务描述' },
-        agentId: { type: 'string', description: '使用的 Agent ID（可选）' },
+        name: { type: 'string' },
+        cronExpr: { type: 'string', description: '5字段cron：分 时 日 月 周' },
+        message: { type: 'string', description: '触发时发给AI的消息' },
+        sessionId: { type: 'string' },
+        description: { type: 'string' },
+        agentId: { type: 'string' },
       },
       required: ['name', 'cronExpr', 'message'],
     },
@@ -50,15 +50,15 @@ export const cronTools: Tool[] = [
   {
     name: 'cron_update',
     displayName: '更新定时任务',
-    description: '更新定时任务配置（包括启用/禁用）',
+    description: '更新定时任务配置',
     parameters: {
       type: 'object',
       properties: {
-        id: { type: 'string', description: '任务 ID（可用前8位）' },
+        id: { type: 'string' },
         name: { type: 'string' },
         cronExpr: { type: 'string' },
         message: { type: 'string' },
-        enabled: { type: 'boolean', description: 'true=启用, false=禁用' },
+        enabled: { type: 'boolean' },
         description: { type: 'string' },
       },
       required: ['id'],
@@ -77,9 +77,9 @@ export const cronTools: Tool[] = [
   {
     name: 'cron_delete',
     displayName: '删除定时任务',
-    description: '删除指定定时任务',
+    description: '删除定时任务',
     parameters: { type: 'object', properties: {
-      id: { type: 'string', description: '任务 ID（可用前8位）' },
+      id: { type: 'string' },
     }, required: ['id'] },
     async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
       const { id } = rawArgs as any

@@ -7,6 +7,7 @@ export interface AuthConfig {
   token?: string
   apiKey?: string
   apiKeyHeader?: string
+  apiKeyPrefix?: string
   oauth2TokenUrl?: string
   oauth2ClientId?: string
   oauth2ClientSecret?: string
@@ -22,79 +23,21 @@ export interface AuthConfig {
 export const httpRequestTool: Tool = {
   name: 'http_request',
   displayName: 'HTTP 请求',
-  description: '发起 HTTP 请求，支持 GET、POST、PUT、DELETE 等方法，支持多种认证方式',
+  description: 'HTTP 请求，支持 GET/POST/PUT/DELETE，支持 basic/bearer/apikey 认证',
   parameters: {
     type: 'object',
     properties: {
-      url: {
-        type: 'string',
-        description: '请求的 URL（必填）'
-      },
-      method: {
-        type: 'string',
-        description: 'HTTP 方法，默认 GET',
-        enum: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']
-      },
-      headers: {
-        type: 'object',
-        description: '请求头，如 { "Content-Type": "application/json" }'
-      },
-      body: {
-        type: 'string',
-        description: '请求体内容（可选）'
-      },
-      timeout: {
-        type: 'integer',
-        description: '请求超时时间（毫秒），默认 30000'
-      },
+      url: { type: 'string' },
+      method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] },
+      headers: { type: 'object' },
+      body: { type: 'string', description: '请求体' },
+      timeout: { type: 'integer', description: '超时ms，默认30000' },
       auth: {
         type: 'object',
-        description: '认证配置',
-        properties: {
-          type: {
-            type: 'string',
-            description: '认证类型',
-            enum: ['basic', 'bearer', 'apikey', 'custom']
-          },
-          username: {
-            type: 'string',
-            description: 'Basic 认证的用户名'
-          },
-          password: {
-            type: 'string',
-            description: 'Basic 认证的密码'
-          },
-          token: {
-            type: 'string',
-            description: 'Bearer Token'
-          },
-          apiKey: {
-            type: 'string',
-            description: 'API Key 值'
-          },
-          apiKeyHeader: {
-            type: 'string',
-            description: 'API Key 的请求头名称，默认 "Authorization"'
-          },
-          apiKeyPrefix: {
-            type: 'string',
-            description: 'API Key 的前缀，如 "Bearer"、"Api-Key"，默认无'
-          },
-          customHeaders: {
-            type: 'object',
-            description: '自定义认证请求头'
-          }
-        }
+        description: '认证: {type:"bearer",token:"xxx"} 或 {type:"basic",username,password} 或 {type:"apikey",apiKey,apiKeyHeader,apiKeyPrefix}',
       },
-      followRedirects: {
-        type: 'boolean',
-        description: '是否跟随重定向，默认 true'
-      },
-      responseType: {
-        type: 'string',
-        description: '响应类型，默认 auto',
-        enum: ['auto', 'json', 'text', 'binary']
-      }
+      followRedirects: { type: 'boolean' },
+      responseType: { type: 'string', enum: ['auto', 'json', 'text'] }
     },
     required: ['url']
   },

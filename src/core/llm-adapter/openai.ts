@@ -6,22 +6,47 @@ import { estimateTokens } from '../utils/tokens.js'
 /**
  * Normalize a base URL for use with the OpenAI SDK.
  * The OpenAI SDK appends `/chat/completions` to the baseURL, so the URL
- * must end with `/v1` (or a versioned path). If the user omits `/v1`,
- * we append it automatically — unless the URL already contains a version
- * segment or ends with a path that looks intentional (e.g. `/v2`, `/api`).
+ * must end with `/v1` (or a versioned path). This function:
+ *   1. Strips trailing slashes
+ *   2. Strips known SDK-appended suffixes like `/chat/completions`,
+ *      `/embeddings`, `/completions`, `/models` etc. so users can paste
+ *      a full endpoint URL and it still works.
+ *   3. Appends `/v1` if no version segment is present.
  *
  * Examples:
- *   https://api.example.com          → https://api.example.com/v1
- *   https://api.example.com/         → https://api.example.com/v1
- *   https://api.example.com/v1       → https://api.example.com/v1  (unchanged)
- *   https://api.example.com/v1/      → https://api.example.com/v1  (trailing slash removed)
- *   https://api.example.com/v2       → https://api.example.com/v2  (unchanged)
- *   https://api.example.com/api/v1   → https://api.example.com/api/v1 (unchanged)
+ *   https://api.example.com                          → https://api.example.com/v1
+ *   https://api.example.com/                         → https://api.example.com/v1
+ *   https://api.example.com/v1                       → https://api.example.com/v1  (unchanged)
+ *   https://api.example.com/v1/                      → https://api.example.com/v1  (trailing slash removed)
+ *   https://api.example.com/v1/chat/completions      → https://api.example.com/v1  (suffix stripped)
+ *   https://api.example.com/v1/chat/completions/     → https://api.example.com/v1  (suffix stripped)
+ *   https://api.example.com/v2                       → https://api.example.com/v2  (unchanged)
+ *   https://api.example.com/api/v1                   → https://api.example.com/api/v1 (unchanged)
+ *   https://api.example.com/v1/embeddings            → https://api.example.com/v1  (suffix stripped)
  */
 function normalizeBaseURL(url: string | undefined): string | undefined {
   if (!url) return url
   // Remove trailing slash
-  const trimmed = url.replace(/\/+$/, '')
+  let trimmed = url.replace(/\/+$/, '')
+  // Strip known OpenAI SDK endpoint suffixes that users may accidentally include.
+  // Order matters: check longest patterns first.
+  const sdkSuffixes = [
+    '/chat/completions',
+    '/completions',
+    '/embeddings',
+    '/models',
+    '/images/generations',
+    '/audio/transcriptions',
+    '/audio/translations',
+  ]
+  for (const suffix of sdkSuffixes) {
+    if (trimmed.endsWith(suffix)) {
+      trimmed = trimmed.slice(0, -suffix.length)
+      break
+    }
+  }
+  // Remove any trailing slash left after stripping
+  trimmed = trimmed.replace(/\/+$/, '')
   // If already ends with a version segment like /v1, /v2, /v3 … leave it as-is
   if (/\/v\d+$/.test(trimmed)) return trimmed
   // Otherwise append /v1
@@ -234,11 +259,23 @@ function messagesToOpenAI(
 
     // user/assistant/system 消息：支持多模态数组（image_url / workspace_image）
     const finalContent = contentToMultimodal(msg.content, supportsVision)
-    result.push({
-      role: msg.role as 'user' | 'assistant' | 'system',
-      content: finalContent as string | OpenAI.Chat.ChatCompletionContentPart[],
-      ...((msg.role === 'assistant' && (msg as any).reasoningContent != null) ? { reasoning_content: (msg as any).reasoningContent } : {})
-    })
+    if (msg.role === 'assistant') {
+      result.push({
+        role: 'assistant' as const,
+        content: finalContent as any,
+        ...((msg as any).reasoningContent != null ? { reasoning_content: (msg as any).reasoningContent } : {})
+      })
+    } else if (msg.role === 'user') {
+      result.push({
+        role: 'user' as const,
+        content: finalContent as string | OpenAI.Chat.ChatCompletionContentPart[],
+      })
+    } else {
+      result.push({
+        role: 'system' as const,
+        content: finalContent as string,
+      })
+    }
   }
   // 最终消息列表摘要日志
   const msgSummary = result.map((m, i) => {

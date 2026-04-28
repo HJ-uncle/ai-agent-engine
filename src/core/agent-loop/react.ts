@@ -5,10 +5,26 @@ import type { Message } from '../agent-context/index.js'
 import { estimateTokens } from '../utils/tokens.js'
 import { v4 as uuidv4 } from 'uuid'
 
+/**
+ * 截断过大的工具输出，避免历史消息膨胀。
+ * 保留开头和结尾各 maxChars/2 的内容，中间用省略标记替代。
+ * 对于 24/7 长期运行的 Agent 至关重要。
+ */
+const TOOL_OUTPUT_MAX_CHARS = parseInt(process.env.TOOL_OUTPUT_MAX_CHARS ?? '4000', 10)
+
+function truncateToolOutput(output: string, maxChars: number = TOOL_OUTPUT_MAX_CHARS): string {
+  if (output.length <= maxChars) return output
+  const half = Math.floor(maxChars / 2)
+  const head = output.slice(0, half)
+  const tail = output.slice(-half)
+  const truncatedChars = output.length - maxChars
+  return `${head}\n\n... [truncated ${truncatedChars} chars] ...\n\n${tail}`
+}
+
 export interface TokenUsage {
-  /** Tokens in the system prompt (including RAG context) */
+  /** Tokens in the system prompt (excluding RAG context) */
   systemPromptTokens: number
-  /** Tokens used by tool definitions */
+  /** Tokens used by tool definitions (builtin + MCP combined, kept for backward compat) */
   systemToolsTokens: number
   /** Tokens from conversation messages (history window) */
   messagesTokens: number
@@ -20,6 +36,16 @@ export interface TokenUsage {
   completionTokens: number
   /** Grand total */
   totalTokens: number
+
+  // ── Granular breakdown (new) ──────────────────────────────────────────
+  /** Tokens from RAG / knowledge-base context injected into the system prompt */
+  ragTokens: number
+  /** Tokens used by built-in tool definitions only */
+  builtinToolsTokens: number
+  /** Tokens used by MCP tool definitions only */
+  mcpToolsTokens: number
+  /** Cumulative tokens from tool-call result messages in the ReAct loop */
+  toolResultsTokens: number
 }
 
 export interface ReActOptions {
@@ -30,7 +56,7 @@ export interface ReActOptions {
   /** Unique ID for this conversation round (one chat request = one conversationId) */
   conversationId?: string
   /** Pre-computed token counts for the injected prompts (optional) */
-  promptBreakdown?: Pick<TokenUsage, 'systemPromptTokens' | 'systemToolsTokens' | 'skillTokens'>
+  promptBreakdown?: Pick<TokenUsage, 'systemPromptTokens' | 'systemToolsTokens' | 'skillTokens' | 'ragTokens' | 'builtinToolsTokens' | 'mcpToolsTokens'>
   thinkingConfig?: Record<string, unknown> | null
   responseThinkingField?: string | null
   /**
@@ -71,6 +97,13 @@ export class ReActStrategy implements LoopStrategy {
     // Build tool list from registry
     const toolList = ctx.tools.list()
 
+    /** Names of tools actually called in the last iteration */
+    let lastUsedToolNames: Set<string> = new Set()
+    /** 记录迭代 0 的工具定义 token 数，后续迭代的 usage 展示统一使用此值 */
+    let iter0ToolDefsTokens: number | null = null
+    /** Cumulative token count of tool-call result messages across all iterations */
+    let cumulativeToolResultsTokens = 0
+
     let askUserCount = 0
     try {
       const messages = await ctx.history.getHistory(ctx)
@@ -89,7 +122,9 @@ export class ReActStrategy implements LoopStrategy {
 
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       // 1. 先检查是否需要压缩（用 raw token count，不受 window 限制）
-      const compressThreshold = Math.floor(ctx.tokenBudget * 0.75)
+      // 对 24/7 Agent，使用更激进的阈值（0.5）以尽早触发压缩
+      const compressRatio = parseFloat(process.env.COMPRESS_THRESHOLD_RATIO ?? '0.5')
+      const compressThreshold = Math.floor(ctx.tokenBudget * compressRatio)
       const rawTokens = await ctx.history.getRawTokenCount(ctx)
       if (rawTokens > compressThreshold) {
         ctx.logger.info({ rawTokens, threshold: compressThreshold }, 'Compressing conversation history')
@@ -130,28 +165,26 @@ export class ReActStrategy implements LoopStrategy {
         return
       }
 
+      // ── 全量工具：每次都把所有已注册工具发给 LLM，不做截断 ─────────────────
+      const effectiveTools = toolList.filter((t) => {
+        if (t.name === 'ask_user' && askUserCount >= maxAskUserCount) return false
+        return true
+      })
+
+      ctx.logger.debug({ iteration, toolCount: effectiveTools.length }, 'Sending all tools to LLM')
+
       const llmOptions: LLMAdapterOptions = {
         model: this.llm.model,
         systemPrompt: this.options.systemPrompt,
         temperature: this.options.temperature,
         thinkingConfig: this.options.thinkingConfig,
         responseThinkingField: this.options.responseThinkingField,
-        // Pass tools as the registry list (adapter will convert)
-        tools: toolList
-          .filter((t) => {
-            // If ask_user has been called too many times, remove it from the available tools
-            if (t.name === 'ask_user' && askUserCount >= maxAskUserCount) {
-              ctx.logger.info({ maxAskUserCount, askUserCount }, 'Filtering out ask_user tool due to limit reached')
-              return false
-            }
-            return true
-          })
-          .map((t) => ({
-            name: t.name,
-            description: t.description,
-            parameters: t.parameters,
-            execute: async (_args: unknown, _ctx: AgentContext) => ({ success: true as const, output: '' }),
-          })),
+        tools: effectiveTools.map((t) => ({
+          name: t.name,
+          description: t.description,
+          parameters: t.parameters,
+          execute: async (_args: unknown, _ctx: AgentContext) => ({ success: true as const, output: '' }),
+        })),
       }
 
       ctx.logger.debug({ iteration, messageCount: messages.length }, 'ReAct iteration')
@@ -179,17 +212,44 @@ export class ReActStrategy implements LoopStrategy {
     // prompt tokens across iterations (history is already tracked via getTokenCount)
     ctx.tokenBudget -= response.completionTokens
 
-    const bd = this.options.promptBreakdown ?? { systemPromptTokens: 0, systemToolsTokens: 0, skillTokens: 0 }
-    const promptTokens = response.promptTokens || (bd.systemPromptTokens + bd.systemToolsTokens + bd.skillTokens + historyTokens)
+    const bd = this.options.promptBreakdown ?? { systemPromptTokens: 0, systemToolsTokens: 0, skillTokens: 0, ragTokens: 0, builtinToolsTokens: 0, mcpToolsTokens: 0 }
     const completionTokens = response.completionTokens
+
+    // ── 真实 Token 统计 ──────────────────────────────────────────────
+    // 优先使用 LLM API 返回的 promptTokens（真实计费值）。
+    // 本地估算的 systemPromptTokens / systemToolsTokens / skillTokens 仅用于分项展示参考。
+    // 实际发送给 LLM 的工具数 = effectiveTools.length，不是全量 registry。
+    const effectiveToolDefsTokens = estimateTokens(
+      effectiveTools.map(t => `${t.name}: ${t.description} ${JSON.stringify(t.parameters ?? {})}`).join('\n')
+    )
+    // 记录迭代 0 的工具定义 token 数，后续迭代展示时统一使用此值
+    // 避免工具裁剪导致最终回答的 systemToolsTokens 异常偏低（Bug fix）
+    if (iter0ToolDefsTokens === null) {
+      iter0ToolDefsTokens = effectiveToolDefsTokens
+    }
+    // 展示用的工具 token 数：始终使用迭代 0 的值，保证前端显示一致
+    const displayToolDefsTokens = iter0ToolDefsTokens
+
+    const apiPromptTokens = response.promptTokens  // LLM 返回的真实值（0 则降级用本地估算）
+    const localEstimate = bd.systemPromptTokens + displayToolDefsTokens + bd.skillTokens + historyTokens
+    const promptTokens = apiPromptTokens || localEstimate
+    // 用 API 真实 prompt 减去本地可确定的部分，得到更准确的 messagesTokens
+    const realMessagesTokens = apiPromptTokens
+      ? Math.max(0, apiPromptTokens - bd.systemPromptTokens - displayToolDefsTokens - bd.skillTokens)
+      : historyTokens
+
     const currentUsage: TokenUsage = {
       systemPromptTokens: bd.systemPromptTokens,
-      systemToolsTokens: bd.systemToolsTokens,
+      systemToolsTokens: displayToolDefsTokens,
       skillTokens: bd.skillTokens,
-      messagesTokens: historyTokens,
+      messagesTokens: realMessagesTokens,
       promptTokens,
       completionTokens,
       totalTokens: promptTokens + completionTokens,
+      ragTokens: (bd as any).ragTokens ?? 0,
+      builtinToolsTokens: (bd as any).builtinToolsTokens ?? 0,
+      mcpToolsTokens: (bd as any).mcpToolsTokens ?? 0,
+      toolResultsTokens: cumulativeToolResultsTokens ?? 0,
     }
 
       // Handle tool calls
@@ -205,6 +265,9 @@ export class ReActStrategy implements LoopStrategy {
         // 如果没有 reasoningContent 但有工具调用，旧模型通常把思考过程写在 content 里
         yield `\x00__thinking__${fallbackThinking}`
       }
+
+      // Record which tools were used in this iteration (for next-iteration pruning)
+      lastUsedToolNames = new Set(response.toolCalls.map((tc) => tc.name))
 
       // Execute each tool call sequentially
       let consecutiveFailures = 0
@@ -275,14 +338,17 @@ export class ReActStrategy implements LoopStrategy {
           consecutiveFailures = 0
         }
 
-        // Add tool result to history
+        // Add tool result to history (truncate oversized output to save tokens)
+        const truncatedOutput = truncateToolOutput(String(toolResult.output))
+        const toolResultTokenCount = estimateTokens(truncatedOutput)
+        cumulativeToolResultsTokens += toolResultTokenCount
         const toolMsg: Message & { conversationId?: string } = {
           role: 'tool',
-          content: toolResult.output,
+          content: truncatedOutput,
           toolCallId: toolCall.id,
           toolName: toolCall.name,
           createdAt: Date.now(),
-          tokens: estimateTokens(toolResult.output),
+          tokens: toolResultTokenCount,
           ...(conversationId ? { conversationId } : {}),
         }
         await ctx.history.append(toolMsg, ctx)
@@ -316,16 +382,27 @@ export class ReActStrategy implements LoopStrategy {
       }
 
       // Yield token usage breakdown as a special __usage__ frame (includes conversationId)
+      // 使用 displayToolDefsTokens（迭代 0 的值）而非当前迭代的 effectiveToolDefsTokens
+      // 确保最终回答的 usage 与工具调用阶段一致（Bug fix: 避免裁剪后数值异常偏低）
       const finalCompletionTokens = response.completionTokens
-      const finalPromptTokens = response.promptTokens || (bd.systemPromptTokens + bd.systemToolsTokens + bd.skillTokens + historyTokens)
+      const finalApiPrompt = response.promptTokens
+      const finalLocalEstimate = bd.systemPromptTokens + displayToolDefsTokens + bd.skillTokens + historyTokens
+      const finalPromptTokens = finalApiPrompt || finalLocalEstimate
+      const finalRealMessages = finalApiPrompt
+        ? Math.max(0, finalApiPrompt - bd.systemPromptTokens - displayToolDefsTokens - bd.skillTokens)
+        : historyTokens
       const finalUsage: TokenUsage = {
         systemPromptTokens: bd.systemPromptTokens,
-        systemToolsTokens: bd.systemToolsTokens,
-        messagesTokens: historyTokens,
+        systemToolsTokens: displayToolDefsTokens,
+        messagesTokens: finalRealMessages,
         skillTokens: bd.skillTokens,
         promptTokens: finalPromptTokens,
         completionTokens: finalCompletionTokens,
         totalTokens: finalPromptTokens + finalCompletionTokens,
+        ragTokens: (bd as any).ragTokens ?? 0,
+        builtinToolsTokens: (bd as any).builtinToolsTokens ?? 0,
+        mcpToolsTokens: (bd as any).mcpToolsTokens ?? 0,
+        toolResultsTokens: cumulativeToolResultsTokens,
       }
 
       const messageId = uuidv4()

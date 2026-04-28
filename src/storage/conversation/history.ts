@@ -74,8 +74,10 @@ function rowToMessage(row: Row): Message & { conversationId?: string } {
   return msg
 }
 
-// 默认历史窗口：保留最多 40000 tokens（约 3 万字），超出时裁剪最旧的普通消息
-const DEFAULT_HISTORY_MAX_TOKENS = parseInt(process.env.HISTORY_MAX_TOKENS ?? '40000', 10)
+// 默认历史窗口：保留最多 20000 tokens，超出时裁剪最旧的普通消息
+// 对于 24/7 长期运行的 Agent，较小的窗口可显著降低每次 LLM 调用的 token 消耗
+// 可通过 HISTORY_MAX_TOKENS 环境变量调整
+const DEFAULT_HISTORY_MAX_TOKENS = parseInt(process.env.HISTORY_MAX_TOKENS ?? '20000', 10)
 
 export class SQLiteConversationHistory implements ConversationHistory {
   constructor(private readonly maxTokens: number = DEFAULT_HISTORY_MAX_TOKENS) {}
@@ -246,7 +248,11 @@ export class SQLiteConversationHistory implements ConversationHistory {
                    SUM(CAST(json_extract(token_usage, '$.skillTokens') AS INTEGER)) as skill_tokens,
                    SUM(CAST(json_extract(token_usage, '$.promptTokens') AS INTEGER)) as prompt_tokens,
                    SUM(CAST(json_extract(token_usage, '$.completionTokens') AS INTEGER)) as completion_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.totalTokens') AS INTEGER)) as total_tokens
+                   SUM(CAST(json_extract(token_usage, '$.totalTokens') AS INTEGER)) as total_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.ragTokens') AS INTEGER)) as rag_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.builtinToolsTokens') AS INTEGER)) as builtin_tools_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.mcpToolsTokens') AS INTEGER)) as mcp_tools_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.toolResultsTokens') AS INTEGER)) as tool_results_tokens
             FROM conversations c
             WHERE tenant_id = ? AND role IN ('user','assistant')
             GROUP BY session_id
@@ -267,6 +273,10 @@ export class SQLiteConversationHistory implements ConversationHistory {
         promptTokens: Number(row['prompt_tokens'] ?? 0),
         completionTokens: Number(row['completion_tokens'] ?? 0),
         totalTokens: Number(row['total_tokens'] ?? 0),
+        ragTokens: Number(row['rag_tokens'] ?? 0),
+        builtinToolsTokens: Number(row['builtin_tools_tokens'] ?? 0),
+        mcpToolsTokens: Number(row['mcp_tools_tokens'] ?? 0),
+        toolResultsTokens: Number(row['tool_results_tokens'] ?? 0),
       }
     }))
   }

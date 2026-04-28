@@ -28,6 +28,10 @@ export interface QALogEntry {
     promptTokens: number
     completionTokens: number
     totalTokens: number
+    ragTokens?: number
+    builtinToolsTokens?: number
+    mcpToolsTokens?: number
+    toolResultsTokens?: number
   }
   createdAt: number
 }
@@ -152,10 +156,13 @@ export class QALogger {
       md += `\n#### ⚡ Token 详情\n`
       md += `| 类别 | 消耗 (Tokens) |\n`
       md += `| :--- | :--- |\n`
-      md += `| � 系统提示词 | ${u.systemPromptTokens} |\n`
+      md += `| 🟣 系统提示词 | ${u.systemPromptTokens} |\n`
+      md += `| 🟢 知识库(RAG) | ${u.ragTokens ?? 0} |\n`
+      md += `| 🟣 技能 Prompt | ${u.skillTokens} |\n`
+      md += `| 🟡 内置工具 | ${u.builtinToolsTokens ?? 0} |\n`
+      md += `| 🟠 MCP 工具 | ${u.mcpToolsTokens ?? 0} |\n`
       md += `| 🔵 历史消息 | ${u.messagesTokens} |\n`
-      md += `| 🟣 技能/工具 | ${u.skillTokens} |\n`
-      md += `| 🟡 系统工具 | ${u.systemToolsTokens} |\n`
+      md += `| 🟣 工具调用结果 | ${u.toolResultsTokens ?? 0} |\n`
       md += `| 🔴 生成内容 | ${u.completionTokens} |\n`
       md += `| **输入 (Prompt)** | **${u.promptTokens}** |\n`
       md += `| **输出 (Completion)** | **${u.completionTokens}** |\n`
