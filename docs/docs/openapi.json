@@ -1078,6 +1078,245 @@
         }
       }
     },
+    "/workspace/file/create": {
+      "post": {
+        "summary": "创建空文件",
+        "tags": ["Workspace"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionId": { "type": "string" },
+                  "path":      { "type": "string", "example": "subdir/newfile.ts" }
+                },
+                "required": ["sessionId", "path"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
+          }
+        }
+      }
+    },
+    "/workspace/folder/create": {
+      "post": {
+        "summary": "创建目录（递归创建父目录）",
+        "tags": ["Workspace"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionId": { "type": "string" },
+                  "path":      { "type": "string", "example": "subdir/newfolder" }
+                },
+                "required": ["sessionId", "path"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
+          }
+        }
+      }
+    },
+    "/workspace/file/move": {
+      "post": {
+        "summary": "移动或重命名文件/目录（原子操作，目标已存在时报错）",
+        "tags": ["Workspace"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionId": { "type": "string" },
+                  "srcPath":   { "type": "string", "example": "old/path.ts" },
+                  "destPath":  { "type": "string", "example": "new/path.ts" }
+                },
+                "required": ["sessionId", "srcPath", "destPath"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
+          }
+        }
+      }
+    },
+    "/workspace/file/trash": {
+      "post": {
+        "summary": "将文件/目录移入系统回收站（trash 包，不可用时降级为永久删除）",
+        "tags": ["Workspace"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionId": { "type": "string" },
+                  "path":      { "type": "string", "example": "subdir/file.ts" }
+                },
+                "required": ["sessionId", "path"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应；降级删除时 data.fallback = 'permanent_delete'",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
+          }
+        }
+      }
+    },
+    "/workspace/file/format": {
+      "post": {
+        "summary": "使用 prettier 格式化文件内容（工作区存在 prettier 配置时生效，否则原样返回）",
+        "tags": ["Workspace"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionId": { "type": "string" },
+                  "path":      { "type": "string", "example": "src/index.ts" },
+                  "content":   { "type": "string", "description": "待格式化的源代码" }
+                },
+                "required": ["sessionId", "path", "content"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应，data.content 为格式化后内容",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/StandardResponse" },
+                    { "properties": { "data": { "type": "object", "properties": { "content": { "type": "string" } } } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspace/file/stream": {
+      "get": {
+        "summary": "视频/二进制流媒体（支持 HTTP Range 分片，206 Partial Content）",
+        "tags": ["Workspace"],
+        "parameters": [
+          { "name": "sessionId", "in": "query", "schema": { "type": "string" } },
+          { "name": "path",      "in": "query", "required": true, "schema": { "type": "string", "example": "video.mp4" } }
+        ],
+        "responses": {
+          "200": { "description": "完整视频流（Content-Type: video/mp4 等）" },
+          "206": { "description": "Range 分片响应（Accept-Ranges: bytes）" },
+          "404": { "description": "文件不存在" }
+        }
+      }
+    },
+    "/terminal/create": {
+      "post": {
+        "summary": "创建 PTY 终端会话",
+        "description": "基于 node-pty 创建服务器端 PTY，工作目录物理锁定在会话工作空间内。返回 terminalId 供后续 WebSocket 连接使用。",
+        "tags": ["Terminal"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionId": { "type": "string", "description": "关联的工作区会话 ID" },
+                  "cwd":       { "type": "string", "description": "相对工作区根目录的初始路径（可选）" },
+                  "cols":      { "type": "integer", "default": 120, "description": "终端初始列数" },
+                  "rows":      { "type": "integer", "default": 30,  "description": "终端初始行数" }
+                },
+                "required": ["sessionId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应，返回 terminalId 和实际 cwd",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/StandardResponse" },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "terminalId": { "type": "string", "example": "550e8400-e29b-41d4-a716-446655440000" },
+                            "cwd":        { "type": "string", "example": "/workspace/my-session" }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/terminal/ws/{id}": {
+      "get": {
+        "summary": "WebSocket 双向桥接 PTY ↔ xterm.js",
+        "description": "升级为 WebSocket 连接后，客户端发送 JSON 消息控制终端，服务器推送 PTY 输出。\n\n**客户端 → 服务器：**\n- `{\"type\":\"input\",\"data\":\"...\"}` — 键入字符\n- `{\"type\":\"resize\",\"cols\":120,\"rows\":30}` — 调整尺寸\n- `{\"type\":\"kill\"}` — 终止 PTY\n\n**服务器 → 客户端：**\n- `{\"type\":\"output\",\"data\":\"...\"}` — PTY 输出\n- `{\"type\":\"exit\",\"code\":0}` — 进程退出\n- `{\"type\":\"error\",\"message\":\"...\"}` — 会话不存在",
+        "tags": ["Terminal"],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "terminalId（由 /terminal/create 返回）" }
+        ],
+        "responses": {
+          "101": { "description": "WebSocket 升级成功" },
+          "200": { "description": "会话不存在时发送 error 消息后关闭连接" }
+        }
+      }
+    },
+    "/terminal/{id}": {
+      "delete": {
+        "summary": "手动终止并销毁 PTY 会话",
+        "tags": ["Terminal"],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
+          }
+        }
+      }
+    },
     "/settings": {
       "get": {
         "summary": "获取系统运行时配置（从 SQLite system_config 表读取，fallback 到 process.env）",

@@ -3,7 +3,12 @@ import { success, fail } from '../response.js'
 import { workspaceManager } from '../../../workspace/index.js'
 import { getDb } from '../../../storage/sqlite/db.js'
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import path from 'node:path'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+
+const execFileAsync = promisify(execFile)
 
 interface FileInfo {
   name: string
@@ -240,4 +245,151 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
       return reply.code(200).send(fail(50000, `Failed to write file: ${e.message}`))
     }
   })
+
+  // ── NEW: POST /workspace/file/create — 创建空文件 ──────────────────────────
+  fastify.post<{ Body: { sessionId: string; path: string } }>('/workspace/file/create', async (request, reply) => {
+    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const { sessionId, path: filePath } = request.body
+    if (!sessionId || !filePath) return reply.code(200).send(fail(40001, 'sessionId and path are required'))
+    try {
+      const safePath = workspaceManager.resolveSafePath({ tenantId, sessionId }, filePath)
+      const dir = path.dirname(safePath)
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+      if (fs.existsSync(safePath)) return reply.code(200).send(fail(40000, 'File already exists'))
+      fs.writeFileSync(safePath, '')
+      return reply.code(200).send(success({ path: filePath }))
+    } catch (e: any) {
+      return reply.code(200).send(fail(50000, `Failed to create file: ${e.message}`))
+    }
+  })
+
+  // ── NEW: POST /workspace/folder/create — 创建目录 ──────────────────────────
+  fastify.post<{ Body: { sessionId: string; path: string } }>('/workspace/folder/create', async (request, reply) => {
+    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const { sessionId, path: folderPath } = request.body
+    if (!sessionId || !folderPath) return reply.code(200).send(fail(40001, 'sessionId and path are required'))
+    try {
+      const safePath = workspaceManager.resolveSafePath({ tenantId, sessionId }, folderPath)
+      if (fs.existsSync(safePath)) return reply.code(200).send(fail(40000, 'Folder already exists'))
+      fs.mkdirSync(safePath, { recursive: true })
+      return reply.code(200).send(success({ path: folderPath }))
+    } catch (e: any) {
+      return reply.code(200).send(fail(50000, `Failed to create folder: ${e.message}`))
+    }
+  })
+
+  // ── NEW: POST /workspace/file/trash — 移至系统回收站 ──────────────────────
+  fastify.post<{ Body: { sessionId: string; path: string } }>('/workspace/file/trash', async (request, reply) => {
+    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const { sessionId, path: filePath } = request.body
+    if (!sessionId || !filePath) return reply.code(200).send(fail(40001, 'sessionId and path are required'))
+    try {
+      const safePath = workspaceManager.resolveSafePath({ tenantId, sessionId }, filePath)
+      if (!fs.existsSync(safePath)) return reply.code(200).send(fail(40400, 'File not found'))
+      // Dynamically import trash (ESM package)
+      const { default: trash } = await import('trash')
+      await trash(safePath)
+      return reply.code(200).send(success({ success: true }))
+    } catch (e: any) {
+      // Fallback: if trash is unavailable, permanently delete
+      try {
+        const safePath = workspaceManager.resolveSafePath({ tenantId, sessionId }, filePath)
+        fs.rmSync(safePath, { recursive: true, force: true })
+        return reply.code(200).send(success({ success: true, fallback: 'permanent_delete' }))
+      } catch {
+        return reply.code(200).send(fail(50000, `Failed to delete: ${e.message}`))
+      }
+    }
+  })
+
+  // ── NEW: POST /workspace/file/move — 移动/重命名文件 ─────────────────────
+  fastify.post<{ Body: { sessionId: string; srcPath: string; destPath: string } }>('/workspace/file/move', async (request, reply) => {
+    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const { sessionId, srcPath, destPath } = request.body
+    if (!sessionId || !srcPath || !destPath) return reply.code(200).send(fail(40001, 'sessionId, srcPath and destPath are required'))
+    try {
+      const safeSrc = workspaceManager.resolveSafePath({ tenantId, sessionId }, srcPath)
+      const safeDest = workspaceManager.resolveSafePath({ tenantId, sessionId }, destPath)
+      if (!fs.existsSync(safeSrc)) return reply.code(200).send(fail(40400, 'Source not found'))
+      if (fs.existsSync(safeDest)) return reply.code(200).send(fail(40000, 'Destination already exists'))
+      const destDir = path.dirname(safeDest)
+      if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true })
+      await fsp.rename(safeSrc, safeDest)
+      return reply.code(200).send(success({ path: destPath }))
+    } catch (e: any) {
+      return reply.code(200).send(fail(50000, `Failed to move: ${e.message}`))
+    }
+  })
+
+  // ── NEW: POST /workspace/file/format — prettier/eslint 格式化 ───────────
+  fastify.post<{ Body: { sessionId: string; path: string; content: string } }>('/workspace/file/format', async (request, reply) => {
+    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const { sessionId, path: filePath, content } = request.body
+    if (!sessionId || !filePath || content === undefined) return reply.code(200).send(fail(40001, 'Required fields missing'))
+    try {
+      const safePath = workspaceManager.resolveSafePath({ tenantId, sessionId }, filePath)
+      const workspaceRoot = workspaceManager.getPath({ tenantId, sessionId })
+
+      // Try prettier first
+      try {
+        // Check if prettier config exists in workspace root
+        const prettierConfigs = ['.prettierrc', '.prettierrc.json', '.prettierrc.js', 'prettier.config.js', '.prettierrc.yaml']
+        const hasPrettier = prettierConfigs.some(c => fs.existsSync(path.join(workspaceRoot, c)))
+        if (hasPrettier) {
+          const { stdout } = await execFileAsync(
+            'npx', ['prettier', '--stdin-filepath', safePath],
+            { input: content, cwd: workspaceRoot, timeout: 10000 }
+          )
+          return reply.code(200).send(success({ content: stdout }))
+        }
+      } catch { /* prettier not available or failed */ }
+
+      // Return as-is if no formatter available
+      return reply.code(200).send(success({ content }))
+    } catch (e: any) {
+      return reply.code(200).send(success({ content })) // graceful fallback
+    }
+  })
+
+  // ── NEW: GET /workspace/file/stream — 视频流媒体 ─────────────────────────
+  fastify.get<{ Querystring: { sessionId?: string; path: string } }>('/workspace/file/stream', async (request, reply) => {
+    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const sessionId = request.query.sessionId || 'default'
+    const reqPath = request.query.path
+    if (!reqPath) return reply.code(400).send('path is required')
+    try {
+      const safePath = workspaceManager.resolveSafePath({ tenantId, sessionId }, reqPath)
+      if (!fs.existsSync(safePath)) return reply.code(404).send('File not found')
+      const ext = path.extname(safePath).toLowerCase()
+      const mimeMap: Record<string, string> = {
+        '.mp4': 'video/mp4', '.webm': 'video/webm', '.ogg': 'video/ogg',
+        '.mov': 'video/quicktime', '.avi': 'video/x-msvideo',
+      }
+      const mime = mimeMap[ext] ?? 'application/octet-stream'
+      const stat = fs.statSync(safePath)
+      const rangeHeader = request.headers.range
+      if (rangeHeader) {
+        const [startStr, endStr] = rangeHeader.replace('bytes=', '').split('-')
+        const start = parseInt(startStr, 10)
+        const end = endStr ? parseInt(endStr, 10) : stat.size - 1
+        const chunkSize = end - start + 1
+        const stream = fs.createReadStream(safePath, { start, end })
+        return reply.code(206)
+          .header('Content-Range', `bytes ${start}-${end}/${stat.size}`)
+          .header('Accept-Ranges', 'bytes')
+          .header('Content-Length', chunkSize)
+          .header('Content-Type', mime)
+          .send(stream)
+      }
+      const stream = fs.createReadStream(safePath)
+      return reply.code(200)
+        .header('Content-Type', mime)
+        .header('Content-Length', stat.size)
+        .header('Accept-Ranges', 'bytes')
+        .send(stream)
+    } catch (e: any) {
+      return reply.code(500).send(`Stream error: ${e.message}`)
+    }
+  })
+
 }

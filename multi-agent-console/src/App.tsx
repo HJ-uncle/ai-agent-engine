@@ -12,15 +12,24 @@ import ChatArea from './components/ChatArea'
 import AgentPanel from './components/AgentPanel'
 import McpPanel from './components/McpPanel'
 import KnowledgePanel from './components/KnowledgePanel'
-import ExplorerPanel from './components/ExplorerPanel'
+import OldExplorerPanel from './components/ExplorerPanel'
+import NewExplorerPanel from './components/explorer'
 import SettingsModal from './components/SettingsModal'
 import { useSessionStore } from './store/session'
 import { conversationApi, toolsApi, memoryApi, tasksApi } from './api'
 import type { Tool, MemoryEntry, Task } from './types'
 import styles from './App.module.css'
 import 'highlight.js/styles/vs2015.css'
-
 import EditorArea from './components/EditorArea'
+import { useExplorerStore } from './store/explorer'
+
+const ExplorerPanel = process.env.REACT_APP_NEW_EXPLORER === '0' ? OldExplorerPanel : NewExplorerPanel
+
+// ── EditorArea or Chat switcher ───────────────────────────────────────────────
+function EditorAreaOrChat() {
+  const activeTabPath = useExplorerStore(s => s.activeTabPath)
+  return activeTabPath ? <EditorArea /> : <ChatArea />
+}
 
 // ── Activity bar nav ───────────────────────────────────────────────────────────
 type PanelKey = 'chat' | 'agents' | 'mcp' | 'knowledge' | 'tools' | 'memory' | 'tasks' | 'history' | 'explorer'
@@ -321,7 +330,7 @@ export default function App() {
 
           {/* Main chat or Editor */}
           <div className={styles.main}>
-            {useSessionStore(s => s.activeFile) ? <EditorArea /> : <ChatArea />}
+            <EditorAreaOrChat />
           </div>
         </div>
         <SettingsModal />

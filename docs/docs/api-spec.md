@@ -162,6 +162,66 @@
 - `DELETE /api/v1/workspace/recent/:sessionId`: 物理删除指定的工作区目录
 - `POST /api/v1/workspace/rename`: 重命名工作区目录及关联的 `sessionId` (自动更新对话记录和记忆中的关联)
 
+  **扩展文件操作接口（VS Code Explorer 支持）：**
+
+- `POST /api/v1/workspace/file/create`: 在工作区中创建空文件
+
+  **请求体：** `{ "sessionId": "xxx", "path": "subdir/newfile.ts" }`
+
+- `POST /api/v1/workspace/folder/create`: 在工作区中创建目录（自动递归创建父目录）
+
+  **请求体：** `{ "sessionId": "xxx", "path": "subdir/newfolder" }`
+
+- `POST /api/v1/workspace/file/move`: 移动或重命名文件/目录（原子操作，目标已存在时报错）
+
+  **请求体：** `{ "sessionId": "xxx", "srcPath": "old/path.ts", "destPath": "new/path.ts" }`
+
+- `POST /api/v1/workspace/file/trash`: 将文件/目录移入系统回收站（依赖 `trash` 包，不可用时降级为永久删除）
+
+  **请求体：** `{ "sessionId": "xxx", "path": "subdir/file.ts" }`
+
+- `POST /api/v1/workspace/file/format`: 使用 prettier 格式化文件内容（工作区根目录存在 prettier 配置时生效，否则原样返回）
+
+  **请求体：** `{ "sessionId": "xxx", "path": "src/index.ts", "content": "..." }`
+
+  **返回：** `{ "content": "格式化后的内容" }`
+
+- `GET /api/v1/workspace/file/stream`: 视频/二进制流媒体，支持 HTTP Range 分片（206 Partial Content）
+
+  **参数：** `?sessionId=xxx&path=video.mp4`
+
+### 15. 终端 Terminal (`/api/v1/terminal`)
+
+> 基于 `node-pty` 的服务器端 PTY 终端，工作目录物理锁定在会话工作空间内，通过 WebSocket 与前端 `xterm.js` 双向通信。
+
+- `POST /api/v1/terminal/create`: 创建 PTY 会话，返回 `terminalId` 和实际 `cwd`
+
+  **请求体：**
+  ```json
+  { "sessionId": "my-session", "cwd": "optional/subdir", "cols": 120, "rows": 30 }
+  ```
+  **返回：** `{ "terminalId": "uuid", "cwd": "/abs/path/to/workspace" }`
+
+- `WS /api/v1/terminal/ws/:id`: WebSocket 双向桥接，将 PTY 输入输出与 xterm.js 互联
+
+  **客户端 → 服务器消息类型：**
+
+  | type | 字段 | 说明 |
+  |------|------|------|
+  | `input` | `data: string` | 按键 / stdin 字符串 |
+  | `resize` | `cols, rows` | 终端尺寸调整 |
+  | `kill` | — | 终止 PTY 进程 |
+
+  **服务器 → 客户端消息类型：**
+
+  | type | 字段 | 说明 |
+  |------|------|------|
+  | `output` | `data: string` | PTY stdout/stderr 输出 |
+  | `exit` | `code: number` | 进程已退出 |
+  | `error` | `message: string` | 会话不存在 |
+
+- `DELETE /api/v1/terminal/:id`: 手动终止并销毁指定 PTY 会话
+
 ### 10. 模型管理 Models (`/api/v1/models`)
 - `GET /api/v1/models/whitelist`: 获取模型白名单列表（包含思考模式配置）
 - `GET /api/v1/models`: 获取当前租户已配置的模型列表（API Key 脱敏显示）

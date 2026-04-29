@@ -6,12 +6,11 @@ module.exports = function(app) {
       pathFilter: '/api',
       target: 'http://localhost:12323',
       changeOrigin: true,
+      ws: true,          // ← 代理 WebSocket upgrade（终端功能必须）
       onProxyReq: (proxyReq, req, res) => {
-        // Disable proxy buffering for Nginx/other reverse proxies
         res.setHeader('X-Accel-Buffering', 'no');
       },
       onProxyRes: (proxyRes) => {
-        // Set headers for SSE to not buffer in development server
         proxyRes.headers['Cache-Control'] = 'no-cache';
         proxyRes.headers['X-Accel-Buffering'] = 'no';
       }

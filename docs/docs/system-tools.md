@@ -512,3 +512,115 @@ DELETE /api/v1/tasks/:jobId          取消
 └─────────────────────────────────┘
 [          聊天输入框              ]
 ```
+
+---
+
+## 终端（Terminal）
+
+`multi-agent-console` 集成了完整的浏览器内 PTY 终端，由服务器端 `node-pty` 驱动，通过 WebSocket 与前端 `xterm.js` 互联。
+
+### 架构概述
+
+```
+前端 XTerminal.tsx (xterm.js)
+       ↕  WebSocket
+后端 terminal.ts  (Fastify WS 路由)
+       ↕  EventEmitter
+    TerminalManager (node-pty sessions)
+       ↕  PTY
+  workspace-shell.mjs (沙箱 Shell)
+```
+
+### 沙箱 Shell 内置命令
+
+`workspace-shell.mjs` 是一个纯 Node.js 实现的受限 Shell，`cd` 越界直接拒绝，无需系统 Bash。
+
+| 命令 | 说明 |
+|------|------|
+| `ls [-a]` | 列出目录（多列对齐） |
+| `ll [-a]` | 详细列表（大小 + 时间） |
+| `cd <dir>` | 切换目录（`~` 回主工作区，`@ws2` 切第二工作区） |
+| `pwd` | 打印当前目录 |
+| `cat <file>` | 输出文件内容 |
+| `mkdir <dir>` | 创建目录（`-p` 递归） |
+| `touch <file>` | 创建空文件 / 更新时间戳 |
+| `rm [-rf] <path>` | 删除文件/目录 |
+| `cp <src> <dst>` | 复制文件 |
+| `mv <src> <dst>` | 移动/重命名 |
+| `find [-name <pat>]` | 递归查找文件 |
+| `grep <pat> [file]` | 全文搜索 |
+| `tree [dir]` | 目录树（最深 3 级） |
+| `echo <text>` | 输出文本 |
+| `env` | 列出环境变量 |
+| `clear` | 清屏 |
+| `help` | 显示帮助 |
+| 其他命令 | 透传给操作系统执行（UTF-8 编码） |
+
+### 安全机制
+
+- `cd` 及所有文件操作均经过 `safeResolve()` 检查，路径必须在 `WORKSPACE_ROOTS` 之内
+- 越界请求直接输出 `⛔ 禁止离开工作空间`，不执行
+- 多工作空间通过 `WORKSPACE_ROOTS` 环境变量传入，支持 `@ws2`、`@ws3` 等别名跳转
+- Windows 启动时自动切换代码页至 UTF-8（`chcp 65001`），避免乱码
+
+### 前端组件
+
+| 组件 | 说明 |
+|------|------|
+| `XTerminal.tsx` | xterm.js 实例封装，处理 WebSocket 连接 / 断线重连 / resize |
+| `TerminalPanel.tsx` | 多 Tab 面板容器，支持新建、关闭、切换终端 Tab |
+| `useTerminalStore` | Zustand store，管理 Tab 列表 / 活跃终端 / 面板高度 |
+
+---
+
+## VS Code–style Explorer
+
+`multi-agent-console` 内置类 VS Code 文件浏览器，提供完整 IDE 侧边栏体验。
+
+### 组件概览
+
+| 组件 | 说明 |
+|------|------|
+| `explorer/index.tsx` | 顶层容器，集成文件树 + 编辑区 + 终端面板 |
+| `explorer/FileTree.tsx` | 文件树（懒加载 + 虚拟滚动），支持展开/折叠/选中 |
+| `explorer/ContextMenu.tsx` | 右键菜单（新建文件/目录、重命名、移至回收站、复制路径） |
+| `explorer/QuickOpenPanel.tsx` | `Ctrl+P` 快速打开，模糊匹配，由 Web Worker 构建索引 |
+| `editor/EditorTabs.tsx` | Tab 栏，脏状态指示点，关闭前弹确认对话框 |
+| `editor/MonacoEditor.tsx` | Monaco 编辑器，支持语言自动检测、格式化、保存（`Ctrl+S`） |
+| `editor/ImagePreview.tsx` | 图片预览（PNG / JPG / GIF / WebP / SVG） |
+| `editor/VideoPreview.tsx` | 视频播放器，走 `/workspace/file/stream` Range 流 |
+| `editor/HexEditor.tsx` | 二进制 Hex 查看器 |
+| `editor/UnsavedDialog.tsx` | 关闭未保存 Tab 时弹出的确认对话框 |
+
+### 状态管理
+
+| Store | 说明 |
+|-------|------|
+| `useExplorerStore` | Tab 列表、活跃 Tab、脏状态、撤销日志、Quick Open 可见性 |
+| `dirtyContentCache` | 模块级 `Map<path, content>`，编辑时仅写此 Map，**绕开 Zustand** 不触发重渲，保存时再写回 store |
+| `useTerminalStore` | 终端 Tab 列表、活跃终端 ID、面板高度 |
+| `useFileIndex` | Web Worker 驱动的文件路径索引，供 Quick Open 模糊搜索 |
+
+### 文件操作流
+
+```
+右键菜单 → ContextMenu
+  ├─ 新建文件   → POST /workspace/file/create
+  ├─ 新建目录   → POST /workspace/folder/create
+  ├─ 重命名     → POST /workspace/file/move
+  ├─ 移至回收站 → POST /workspace/file/trash
+  └─ 复制路径   → clipboard.writeText()
+
+编辑器保存 (Ctrl+S)
+  → dirtyContentCache.get(path)
+  → PUT /workspace/file (multipart upload)
+  → markSaved(path, content)
+
+Quick Open (Ctrl+P)
+  → fileIndex.worker.ts 构建路径列表
+  → 模糊匹配 → openTab(path)
+```
+
+### Undo Log
+
+删除 / 重命名操作写入 `undoLog`（最多保留 50 条，持久化到 `localStorage`），方便后续实现撤销还原功能。

@@ -1,104 +1,98 @@
 import React, { useEffect, useState } from 'react'
+import { useExplorerStore, selectActiveTab } from '../store/explorer'
 import { useSessionStore } from '../store/session'
+import { useTerminalStore } from '../store/terminal'
 import { workspaceApi } from '../api'
-import hljs from 'highlight.js'
+import { EditorTabs } from './editor/EditorTabs'
+import { MonacoEditor } from './editor/MonacoEditor'
+import { ImagePreview } from './editor/ImagePreview'
+import { VideoPreview } from './editor/VideoPreview'
+import { HexEditor } from './editor/HexEditor'
+import TerminalPanel from './terminal/TerminalPanel'
+
+// ─── File type detection ──────────────────────────────────────────────────────
+
+const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'])
+const VIDEO_EXTS = new Set(['mp4', 'webm', 'ogg'])
+
+function getExt(name: string) {
+  return name.split('.').pop()?.toLowerCase() ?? ''
+}
+
+// ─── EditorArea ───────────────────────────────────────────────────────────────
 
 export default function EditorArea() {
-  const activeSessionId = useSessionStore(s => s.activeSessionId)
-  const activeFile = useSessionStore(s => s.activeFile)
-  const [content, setContent] = useState('')
-  const [loading, setLoading] = useState(false)
+  const activeTab = useExplorerStore(selectActiveTab)
+  const sessionId = useSessionStore(s => s.activeSessionId) ?? ''
+  const panelVisible = useTerminalStore(s => s.panelVisible)
+
+  // For image: build a URL via API proxy or direct path
+  const [imageSrc, setImageSrc] = useState<string>('')
+
+  // For binary/hex: raw bytes
+  const [hexData, setHexData] = useState<Uint8Array>(new Uint8Array(0))
 
   useEffect(() => {
-    if (!activeSessionId || !activeFile) {
-      setContent('')
-      return
-    }
+    if (!activeTab) return
 
-    let isMounted = true
-    setLoading(true)
-    workspaceApi.getFileContent(activeSessionId, activeFile)
-      .then(res => {
-        if (isMounted) {
-          if (!res) {
-            setContent('')
-            return
-          }
-          // Detect language from extension
-          const ext = activeFile.split('.').pop() || 'txt'
-          const langMap: Record<string, string> = {
-            'js': 'javascript', 'ts': 'typescript', 'jsx': 'javascript', 'tsx': 'typescript',
-            'json': 'json', 'md': 'markdown', 'html': 'xml', 'css': 'css', 'py': 'python'
-          }
-          const lang = langMap[ext] || 'plaintext'
-          
-          try {
-            const highlighted = hljs.highlight(res.content, { language: lang }).value
-            setContent(highlighted)
-          } catch (e) {
-            setContent(hljs.highlightAuto(res.content).value)
-          }
+    const ext = getExt(activeTab.name)
+
+    if (IMAGE_EXTS.has(ext)) {
+      // Fetch as base64 then convert to data URL
+      workspaceApi.readFileBinary(sessionId, activeTab.path).then(b64 => {
+        const mimeMap: Record<string, string> = {
+          jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+          gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+          bmp: 'image/bmp', ico: 'image/x-icon',
         }
-      })
-      .catch(() => {
-        if (isMounted) setContent('Failed to load file content.')
-      })
-      .finally(() => {
-        if (isMounted) setLoading(false)
-      })
+        setImageSrc(`data:${mimeMap[ext] ?? 'image/png'};base64,${b64}`)
+      }).catch(() => setImageSrc(''))
+    } else if (activeTab.type === 'binary') {
+      workspaceApi.readFileBinary(sessionId, activeTab.path).then(b64 => {
+        const binary = atob(b64)
+        const bytes = new Uint8Array(binary.length)
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+        setHexData(bytes)
+      }).catch(() => setHexData(new Uint8Array(0)))
+    }
+  }, [activeTab, sessionId])
 
-    return () => { isMounted = false }
-  }, [activeSessionId, activeFile])
-
-  if (!activeFile) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#484f58', fontSize: 24, userSelect: 'none' }}>
-        VS Code Editor View
-      </div>
-    )
-  }
+  const ext = activeTab ? getExt(activeTab.name) : ''
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: '#1e1e1e', overflow: 'hidden' }}>
-      {/* Editor Tabs */}
-      <div style={{ display: 'flex', backgroundColor: '#252526', overflowX: 'auto', flexShrink: 0 }}>
-        <div style={{ 
-          padding: '8px 16px', 
-          backgroundColor: '#1e1e1e', 
-          color: '#d4d4d4', 
-          fontSize: 13, 
-          borderTop: '1px solid #007fd4',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          cursor: 'pointer'
-        }}>
-          {activeFile.split('/').pop()}
-          <span 
-            style={{ fontSize: 12, padding: '2px 4px', borderRadius: 3, cursor: 'pointer' }}
-            onClick={(e) => {
-              e.stopPropagation()
-              useSessionStore.setState({ activeFile: null })
-            }}
-            onMouseOver={(e) => (e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)')}
-            onMouseOut={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-          >
-            ✕
-          </span>
-        </div>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#1e1e1e' }}>
+
+      {/* ── 上方：编辑器区 ─────────────────────────────────────────────── */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
+        {!activeTab ? (
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#555', fontSize: 14, flexDirection: 'column', gap: 8 }}>
+            <span style={{ fontSize: 48 }}>📁</span>
+            <span>在左侧文件树中选择文件打开</span>
+            <span style={{ fontSize: 12, color: '#444' }}>Ctrl+P 快速打开文件</span>
+          </div>
+        ) : (
+          <>
+            <EditorTabs />
+            <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+              {IMAGE_EXTS.has(ext) ? (
+                <ImagePreview src={imageSrc} name={activeTab.name} />
+              ) : VIDEO_EXTS.has(ext) ? (
+                <VideoPreview
+                  src={`/api/v1/workspace/file/stream?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(activeTab.path)}`}
+                  name={activeTab.name}
+                />
+              ) : activeTab.type === 'binary' ? (
+                <HexEditor data={hexData} name={activeTab.name} />
+              ) : (
+                <MonacoEditor />
+              )}
+            </div>
+          </>
+        )}
       </div>
 
-      {/* Editor Content */}
-      <div style={{ flex: 1, overflow: 'auto', padding: '16px', position: 'relative' }}>
-        {loading && <div style={{ position: 'absolute', top: 16, right: 16, color: '#888', fontSize: 12 }}>Loading...</div>}
-        <pre style={{ margin: 0, padding: 0 }}>
-          <code 
-            className="hljs" 
-            style={{ backgroundColor: 'transparent', padding: 0, fontSize: 13, fontFamily: "Consolas, 'Courier New', monospace", lineHeight: 1.5 }}
-            dangerouslySetInnerHTML={{ __html: content || ' ' }}
-          />
-        </pre>
-      </div>
+      {/* ── 下方：终端面板（panelVisible 控制显示） ────────────────────── */}
+      {panelVisible && <TerminalPanel sessionId={sessionId} />}
     </div>
   )
 }

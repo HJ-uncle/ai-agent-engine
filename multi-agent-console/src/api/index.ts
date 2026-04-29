@@ -699,7 +699,114 @@ export const workspaceApi = {
       body: JSON.stringify({ sessionId, path, content, encoding })
     })
     return res.data
-  }
+  },
+
+  // ── New file-ops (VS Code explorer refactor) ─────────────────────────────
+
+  /** Create an empty file at the given path */
+  createFile: async (sessionId: string, path: string) => {
+    const res = await request<{ path: string }>('/workspace/file/create', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId, path }),
+    })
+    return res.data
+  },
+
+  /** Create a directory at the given path */
+  createFolder: async (sessionId: string, path: string) => {
+    const res = await request<{ path: string }>('/workspace/folder/create', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId, path }),
+    })
+    return res.data
+  },
+
+  /** Move a file/folder to system trash (safe delete) */
+  deleteFile: async (sessionId: string, path: string) => {
+    const res = await request<{ success: boolean }>('/workspace/file/trash', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId, path }),
+    })
+    return res.data
+  },
+
+  /** Move / rename a file or folder */
+  moveFile: async (sessionId: string, srcPath: string, destPath: string) => {
+    const res = await request<{ path: string }>('/workspace/file/move', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId, srcPath, destPath }),
+    })
+    return res.data
+  },
+
+  /** Read file as UTF-8 text */
+  readFileText: async (sessionId: string, path: string): Promise<string> => {
+    const qs = `?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`
+    const res = await request<{ content: string }>(`/workspace/file/content${qs}`)
+    return res.data?.content ?? ''
+  },
+
+  /** Read file as base64-encoded binary */
+  readFileBinary: async (sessionId: string, path: string): Promise<string> => {
+    const qs = `?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}&encoding=base64`
+    const res = await request<{ content: string }>(`/workspace/file/content${qs}`)
+    return res.data?.content ?? ''
+  },
+
+  /** Write text content to a file */
+  writeFile: async (sessionId: string, path: string, content: string) => {
+    const res = await request<{ path: string; size: number }>('/workspace/file', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId, path, content, encoding: 'utf-8' }),
+    })
+    return res.data
+  },
+
+  /** Format a file via prettier/eslint on the server */
+  formatFile: async (sessionId: string, path: string, content: string): Promise<string> => {
+    const res = await request<{ content: string }>('/workspace/file/format', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId, path, content }),
+    })
+    return res.data?.content ?? content
+  },
+}
+
+// ── Utility: path normalization ───────────────────────────────────────────────
+
+/** Normalize path to always use '/' separators */
+export function normalizePath(p: string): string {
+  return p.replace(/\\/g, '/')
+}
+
+// ── Terminal API ──────────────────────────────────────────────────────────────
+
+export const terminalApi = {
+  /** 创建 PTY 会话，返回 terminalId */
+  create: async (sessionId: string, cwd?: string, cols = 120, rows = 30) => {
+    const res = await request<{ terminalId: string; cwd: string }>('/terminal/create', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId, cwd, cols, rows }),
+    })
+    return res.data!
+  },
+
+  /** 关闭 PTY 会话 */
+  kill: async (terminalId: string) => {
+    await request(`/terminal/${terminalId}`, { method: 'DELETE' })
+  },
+
+  /**
+   * 获取 WebSocket URL（ws:// 或 wss://）
+   * 开发环境：直连后端 12323 端口（CRA proxy 不代理 WS upgrade）
+   * 生产环境：同域，自动用 window.location.host
+   */
+  wsUrl: (terminalId: string): string => {
+    // setupProxy.js 已配置 ws:true，WS upgrade 走同域 proxy
+    // 生产/开发环境统一用 window.location.host（同域相对路径）
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    return `${protocol}//${window.location.host}/api/v1/terminal/ws/${terminalId}`
+  },
 }
 
 // ── Health API ────────────────────────────────────────────────────────────────

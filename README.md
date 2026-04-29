@@ -59,6 +59,9 @@ A production-ready AI Agent Engine built with Node.js + TypeScript ESM. Supports
 | 49 | **Tool Output Truncation** — Oversized tool outputs auto-truncated (head + tail) to prevent token budget explosion |
 | 50 | **OpenAI Base URL Auto-fix** — Automatically strips `/chat/completions` or other endpoint suffixes from `OPENAI_BASE_URL` |
 | 51 | **DB-backed Settings** — Runtime settings (LLM, agent params, skills, tools, workspace) stored in SQLite `system_config` table; sensitive keys (API keys) encrypted with AES-256-GCM; synced to `process.env` on startup |
+| 52 | **Integrated Terminal** — Browser-based PTY terminal (`node-pty` + `xterm.js`) locked to session workspace; multi-tab support; `POST /terminal/create` + `WS /terminal/ws/:id` |
+| 53 | **VS Code–style Explorer** — File tree with context menu (create / rename / delete / move), Monaco editor tabs, image/video preview, hex viewer, Quick Open (`Ctrl+P`), undo log |
+| 54 | **Workspace Extended API** — New REST endpoints: `POST /workspace/file/create`, `POST /workspace/folder/create`, `POST /workspace/file/move`, `POST /workspace/file/trash`, `POST /workspace/file/format`, `GET /workspace/file/stream` |
 
 ---
 
@@ -359,6 +362,46 @@ The scheduler fires a loopback `POST /api/v1/chat` request at the matched minute
 | `GET` | `/api/v1/settings` | Get system environment settings (includes `webFetch` security config) |
 | `PUT` | `/api/v1/settings` | Update system settings (writes to `.env`; supports `webFetch` config) |
 
+### Terminal
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/terminal/create` | Create a PTY session; returns `terminalId` and `cwd` |
+| `WS` | `/api/v1/terminal/ws/:id` | WebSocket duplex bridge: PTY ↔ xterm.js |
+| `DELETE` | `/api/v1/terminal/:id` | Kill a terminal session |
+
+**Create body:**
+```json
+{ "sessionId": "my-session", "cwd": "optional/subdir", "cols": 120, "rows": 30 }
+```
+
+**WebSocket message types (client → server):**
+
+| Type | Fields | Description |
+|------|--------|-------------|
+| `input` | `data: string` | Keystrokes / stdin |
+| `resize` | `cols, rows` | Terminal resize |
+| `kill` | — | Terminate PTY |
+
+**WebSocket message types (server → client):**
+
+| Type | Fields | Description |
+|------|--------|-------------|
+| `output` | `data: string` | PTY stdout/stderr |
+| `exit` | `code: number` | Process exited |
+| `error` | `message: string` | Session not found |
+
+### Workspace (Extended)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/workspace/file/create` | Create an empty file (body: `sessionId`, `path`) |
+| `POST` | `/api/v1/workspace/folder/create` | Create a directory (body: `sessionId`, `path`) |
+| `POST` | `/api/v1/workspace/file/move` | Move / rename a file (body: `sessionId`, `srcPath`, `destPath`) |
+| `POST` | `/api/v1/workspace/file/trash` | Move file to system trash (falls back to permanent delete) |
+| `POST` | `/api/v1/workspace/file/format` | Format file content via prettier (body: `sessionId`, `path`, `content`) |
+| `GET` | `/api/v1/workspace/file/stream` | Range-aware video/binary streaming (`?sessionId=&path=`) |
+
 ### System
 
 | Method | Path | Description |
@@ -390,6 +433,7 @@ src/
 │       ├── todos.ts           # Todo CRUD
 │       ├── cron.ts            # Cron Job CRUD + enable/disable
 │       ├── sessions.ts        # Session Agent binding (lock/query/reset)
+│       ├── terminal.ts        # ★ PTY terminal (create / ws / kill)
 │       └── metrics.ts         # Health + metrics
 ├── core/
 │   ├── agent-context/         # AgentContext, Tool interfaces
@@ -438,6 +482,9 @@ src/
 │   ├── get-context/           # get_context tool for runtime context inspection
 │   ├── install-package/       # install_package tool for npm package installation
 │   └── registry-factory.ts   # ★ Unified tool registry factory (single source of truth)
+├── terminal/
+│   ├── index.ts               # ★ TerminalManager — node-pty session CRUD (create/write/resize/kill)
+│   └── workspace-shell.mjs    # ★ Sandboxed workspace shell (cd jail, built-in ls/cat/grep/find …)
 ├── skills/                    # Built-in skills (math, time) + external skill loader
 ├── auth/                      # JWT + API key middleware
 ├── observability/             # Logger + metrics + QA logger
@@ -470,6 +517,9 @@ src/
 - **OpenAI Base URL normalisation** — `normalizeBaseURL()` in `openai.ts` automatically strips `/chat/completions`, `/embeddings` and other SDK-appended suffixes so users can paste any endpoint URL
 - **`allowedTools` empty-array semantics** — an empty `allowedTools: []` on an Agent now means "no tools allowed" (previously treated as "all tools"); only a `null` / absent value means "all tools"
 - **DB-backed Settings** — `PUT /api/v1/settings` no longer writes to `.env`; all runtime settings are stored in the `system_config` SQLite table (key-value, UPSERT); sensitive keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) are encrypted with AES-256-GCM using `ENCRYPTION_KEY`; on startup, `main.ts` syncs all rows to `process.env` so every module reads the correct value transparently; `.env` now only contains bootstrap params (`PORT`, `HOST`, `DB_PATH`, `ENCRYPTION_KEY`, `AUTH_ENABLED`, `LOG_LEVEL`) that must be known before the database is available
+- **Integrated Terminal** — `TerminalManager` (`src/terminal/index.ts`) manages `node-pty` PTY instances keyed by UUID; `workspace-shell.mjs` is a sandboxed Node.js shell that physically jails the cwd inside the session workspace (all `cd` attempts outside are rejected); built-in commands: `ls`, `ll`, `cat`, `mkdir`, `touch`, `rm`, `cp`, `mv`, `find`, `grep`, `tree`, `echo`, `env`, `clear`, `help`; external commands transparently delegated to the OS; multi-workspace support via `WORKSPACE_ROOTS` env var
+- **VS Code–style Explorer** — `multi-agent-console` ships a full IDE-like sidebar: `FileTree` component with right-click context menu (create file/folder, rename, delete to trash, copy path), `EditorTabs` with dirty-state tracking via module-level `dirtyContentCache` (no re-render on every keystroke), Monaco editor for text, `ImagePreview` for images, `VideoPreview` with Range-request streaming, `HexEditor` for binary, `UnsavedDialog` on close, `QuickOpenPanel` (`Ctrl+P`) with fuzzy search backed by a `fileIndex.worker.ts` Web Worker; undo log persisted to `localStorage`
+- **Workspace Extended API** — six new REST endpoints added to `workspace.ts`: create-file, create-folder, move/rename (atomic `fs.rename`), trash (uses `trash` npm package with permanent-delete fallback), format (delegates to `npx prettier` if config present in workspace root), and video stream with HTTP Range request support (206 Partial Content)
 
 ---
 
