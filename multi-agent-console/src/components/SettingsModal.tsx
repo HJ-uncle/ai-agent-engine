@@ -6,7 +6,6 @@ import {
   FolderOpenOutlined, 
   CloudServerOutlined,
   UserOutlined,
-  ThunderboltOutlined,
   RobotOutlined,
   ApiOutlined,
   MessageOutlined,
@@ -26,6 +25,7 @@ import AgentSettings from './settings/AgentSettings'
 import ChatFlowSettings from './settings/ChatFlowSettings'
 import SkillSettings from './settings/SkillSettings'
 import SystemSettings from './settings/SystemSettings'
+import McpSettings from './settings/McpSettings'
 import styles from './settings/SettingsLayout.module.css'
 
 export default function SettingsModal() {
@@ -110,7 +110,7 @@ export default function SettingsModal() {
           <span style={{ marginLeft: 8 }}>MCP</span>
         </span>
       ),
-      children: <div className={styles.settingsContainer}><div className={styles.sectionTitle}>MCP 设置 (即将推出)</div></div>,
+      children: <McpSettings />,
     },
     {
       key: 'chatflow',
@@ -152,16 +152,16 @@ export default function SettingsModal() {
       ),
       children: <RemoteSettings />,
     },
-    {
-      key: 'beta',
-      label: (
-        <span>
-          <ThunderboltOutlined />
-          <span style={{ marginLeft: 8 }}>Beta</span>
-        </span>
-      ),
-      children: <div className={styles.settingsContainer}><div className={styles.sectionTitle}>Beta 功能 (即将推出)</div></div>,
-    },
+    // {
+    //   key: 'beta',
+    //   label: (
+    //     <span>
+    //       <ThunderboltOutlined />
+    //       <span style={{ marginLeft: 8 }}>Beta</span>
+    //     </span>
+    //   ),
+    //   children: <div className={styles.settingsContainer}><div className={styles.sectionTitle}>Beta 功能 (即将推出)</div></div>,
+    // },
     {
       key: 'about',
       label: (

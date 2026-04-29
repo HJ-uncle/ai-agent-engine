@@ -184,10 +184,40 @@
 - `POST /api/v1/models/:id/test`: 测试模型连接（支持传入临时参数测试未保存的配置）
 
 ### 11. 系统设置 Settings (`/api/v1/settings`)
-- `GET /api/v1/settings`: 获取当前系统环境变量配置（含 `webFetch` 安全配置）
-- `PUT /api/v1/settings`: 更新系统环境变量配置（写入 `.env` 文件）
 
-  **webFetch 安全配置说明**
+> **存储机制变更**：`PUT /api/v1/settings` 不再写入 `.env` 文件，所有运行时配置均存储在 SQLite `system_config` 表（key-value UPSERT）。敏感字段（`OPENAI_API_KEY`、`ANTHROPIC_API_KEY`）使用 AES-256-GCM 加密存储。服务启动时会自动将数据库配置同步到 `process.env`，所有模块无需感知变化。`.env` 文件仅保留启动前必须确定的引导参数（`PORT`、`HOST`、`DB_PATH`、`ENCRYPTION_KEY`、`AUTH_ENABLED`、`LOG_LEVEL`）。
+
+- `GET /api/v1/settings`: 获取当前系统运行时配置（从数据库读取，fallback 到 `process.env`，含 `webFetch` 安全配置）
+
+  **返回字段说明：**
+
+  | 字段 | 类型 | 分类 | 说明 |
+  |------|------|------|------|
+  | `LLM_PROVIDER` | string | LLM | 当前 LLM 提供商 (`openai` / `anthropic` / `ollama`) |
+  | `LLM_PRIMARY_MODEL` | string | LLM | 主模型名称 |
+  | `OPENAI_API_KEY` | string | LLM | OpenAI 兼容 API Key（已加密存储，返回明文） |
+  | `OPENAI_BASE_URL` | string | LLM | OpenAI 兼容 Base URL |
+  | `ANTHROPIC_API_KEY` | string | LLM | Anthropic API Key（已加密存储，返回明文） |
+  | `OLLAMA_BASE_URL` | string | LLM | Ollama 服务地址 |
+  | `MAX_ITERATIONS` | number | Agent | ReAct 循环最大迭代次数 |
+  | `TOKEN_BUDGET` | number | Agent | Agent 上下文窗口 Token 预算 |
+  | `HISTORY_MAX_TOKENS` | number | Agent | 历史消息最大 Token 窗口（超出则丢弃旧消息） |
+  | `TOOL_OUTPUT_MAX_CHARS` | number | Agent | 工具输出最大字符数（超出则头尾截断） |
+  | `COMPRESS_THRESHOLD_RATIO` | number | Agent | 压缩触发阈值（占 `TOKEN_BUDGET` 的比例） |
+  | `SKILLS_ROOT` | string | Skills | 自定义技能目录路径 |
+  | `BASH_PATH` | string | Skills | Bash 可执行文件路径（Windows 需配置） |
+  | `CMD_TIMEOUT_MS` | number | Tools | Shell 命令执行超时时间（毫秒） |
+  | `MAX_FILE_SIZE_BYTES` | number | Tools | 文件读取工具最大文件大小（字节） |
+  | `WEB_SEARCH_SERVER` | string | Tools | Web 搜索后端服务地址 |
+  | `WORKSPACE_ROOT` | string | Workspace | 工作区根目录路径 |
+  | `MCP_CONFIG_PATH` | string | Workspace | MCP 服务器配置文件路径 |
+  | `QA_LOG_ENABLED` | boolean | Observability | 是否启用 Q&A 审计日志 |
+  | `QA_LOG_DIR` | string | Observability | Q&A 审计日志输出目录 |
+  | `webFetch` | object | Security | Web 获取工具安全策略（见下方说明） |
+
+- `PUT /api/v1/settings`: 更新系统运行时配置（写入 SQLite `system_config` 表，并同步到 `process.env` 立即生效）
+
+  **webFetch 安全配置说明**（仍存储于 `config/security.json` 文件，因结构较复杂不适合 KV 存储）
 
   通过 `webFetch` 字段可配置 Web 获取工具的安全策略：
 

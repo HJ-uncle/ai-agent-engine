@@ -7,7 +7,7 @@ import { ReActStrategy } from '../../../core/agent-loop/index.js'
 import { createPipeline, sseStream } from '../../../core/stream-pipeline/index.js'
 import { createAgentContext, Message } from '../../../core/agent-context/index.js'
 import { SQLiteConversationHistory } from '../../../storage/conversation/index.js'
-import { createLLMAdapter } from '../../../core/llm-adapter/index.js'
+import { createLLMAdapterWithDbConfig } from '../../../core/llm-adapter/index.js'
 import { createRequestLogger, QALogger, type QALogEntry } from '../../../observability/index.js'
 import { buildSkillsSystemPrompt } from '../../../skills/index.js'
 import { createToolRegistry } from '../../../tools/registry-factory.js'
@@ -304,7 +304,7 @@ ${workspaceInfo}
           prompt = promptText
         }
 
-        const llm = createLLMAdapter({ 
+        const llm = await createLLMAdapterWithDbConfig({ 
           model: resolvedModel,   // agent model 优先；DB 配置不可用时回退 env primaryModel
           apiKey: modelApiKey, 
           baseUrl: modelBaseUrl, 

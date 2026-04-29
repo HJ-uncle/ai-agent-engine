@@ -3,7 +3,7 @@ import { SQLiteConversationHistory } from '../../../storage/conversation/index.j
 import { ReActStrategy } from '../../../core/agent-loop/index.js'
 import { createPipeline, sseStream } from '../../../core/stream-pipeline/index.js'
 import { createAgentContext } from '../../../core/agent-context/index.js'
-import { createLLMAdapter } from '../../../core/llm-adapter/index.js'
+import { createLLMAdapterWithDbConfig } from '../../../core/llm-adapter/index.js'
 import { createRequestLogger } from '../../../observability/index.js'
 import { buildSkillsSystemPrompt } from '../../../skills/index.js'
 import { createToolRegistry } from '../../../tools/registry-factory.js'
@@ -164,7 +164,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 
     async function* runAgent(): AsyncIterable<string> {
       try {
-        const llm = createLLMAdapter({
+        const llm = await createLLMAdapterWithDbConfig({
           model: effectiveModel,
           apiKey: modelApiKey,
           baseUrl: modelBaseUrl,

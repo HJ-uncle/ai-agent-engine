@@ -154,28 +154,30 @@ export interface KnowledgeSearchResult {
   chunkIndex?: number
 }
 
-// ── MCP Server 类型 ───────────────────────────────────────────────────────────
+// ── MCP Server 类型（对齐后端 McpServerRecord）────────────────────────────────
 export interface McpServer {
   id: string
   name: string
-  command: string
+  description: string
+  enabled: boolean
+  transportType: 'stdio' | 'sse' | 'http' | 'streamableHttp'
+  command?: string
   args?: string[]
   env?: Record<string, string>
-  enabled: boolean
+  url?: string
+  headers?: Record<string, string>
+  isBuiltIn: boolean
+  githubUrl?: string
+  registryId?: string
+  createdAt: number
+  updatedAt: number
+  /** 运行时状态（前端本地维护，后端不返回） */
   status?: 'running' | 'stopped' | 'error' | 'unknown'
+  /** 工具数量缓存（测试连接后填充） */
   toolCount?: number
-  tenantId?: string
-  createdAt?: number
-  updatedAt?: number
 }
 
-export interface CreateMcpServerInput {
-  name: string
-  command: string
-  args?: string[]
-  env?: Record<string, string>
-  enabled?: boolean
-}
+export type CreateMcpServerInput = Omit<McpServer, 'createdAt' | 'updatedAt' | 'status' | 'toolCount'>
 
 // ── Memory 类型 ───────────────────────────────────────────────────────────────
 export interface MemoryEntry {

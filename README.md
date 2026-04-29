@@ -58,6 +58,7 @@ A production-ready AI Agent Engine built with Node.js + TypeScript ESM. Supports
 | 48 | **Granular Token Breakdown** — 8-category Token usage: system prompt, RAG, skill prompt, builtin tools, MCP tools, history messages, tool results, completion |
 | 49 | **Tool Output Truncation** — Oversized tool outputs auto-truncated (head + tail) to prevent token budget explosion |
 | 50 | **OpenAI Base URL Auto-fix** — Automatically strips `/chat/completions` or other endpoint suffixes from `OPENAI_BASE_URL` |
+| 51 | **DB-backed Settings** — Runtime settings (LLM, agent params, skills, tools, workspace) stored in SQLite `system_config` table; sensitive keys (API keys) encrypted with AES-256-GCM; synced to `process.env` on startup |
 
 ---
 
@@ -170,6 +171,12 @@ curl http://localhost:12323/metrics
 | `HISTORY_MAX_TOKENS` | `20000` | Max tokens kept in conversation history window (older messages dropped first) |
 | `TOOL_OUTPUT_MAX_CHARS` | `4000` | Max characters of tool output before head+tail truncation |
 | `COMPRESS_THRESHOLD_RATIO` | `0.5` | Compression trigger ratio of `TOKEN_BUDGET`; lower = compress earlier |
+| `BASH_PATH` | _(none)_ | Path to bash executable for shell tools (e.g. `C:/Program Files/Git/bin/bash.exe` on Windows) |
+| `CMD_TIMEOUT_MS` | `5000` | Shell command execution timeout in milliseconds |
+| `MAX_FILE_SIZE_BYTES` | `10485760` | Maximum file size (bytes) for file read tool (default 10 MB) |
+| `WEB_SEARCH_SERVER` | `http://127.0.0.1:8923` | Backend URL for web search integration |
+| `MCP_CONFIG_PATH` | `./mcp.config.json` | Path to MCP server configuration file |
+| `QA_LOG_DIR` | `./logs/qa` | Directory for Q&A audit log files (when `QA_LOG_ENABLED=true`) |
 | `ENCRYPTION_KEY` | _(required)_ | 64 hex characters (32 bytes) AES-256-GCM key for encrypting API keys |
 
 ---
@@ -379,7 +386,7 @@ src/
 │       ├── messages.ts        # Message edit/regenerate/tokens
 │       ├── agents.ts          # Agent CRUD
 │       ├── models.ts          # Model management
-│       ├── settings.ts        # System settings
+│       ├── settings.ts        # System settings (DB-backed; reads/writes system_config table)
 │       ├── todos.ts           # Todo CRUD
 │       ├── cron.ts            # Cron Job CRUD + enable/disable
 │       ├── sessions.ts        # Session Agent binding (lock/query/reset)
@@ -412,6 +419,7 @@ src/
 │   ├── todo/                  # TodoStore (CRUD, status/priority filters)
 │   ├── cron/                  # CronStore (CRUD, enable/disable, lastRunAt)
 │   ├── session/               # SessionStore (Agent binding lock per session)
+│   ├── system-config/         # SystemConfigStore (SQLite KV for runtime settings, encrypted secrets)
 │   └── knowledge/             # Knowledge base + RAG
 ├── tools/
 │   ├── file/                  # read_file / write_file / list_files / delete_file / create_dir / read_image
@@ -461,6 +469,7 @@ src/
 - **Tool Output Truncation** — `truncateToolOutput()` in `react.ts` keeps head + tail of oversized tool results (default 4000 chars), preventing unbounded history growth in long-running agents
 - **OpenAI Base URL normalisation** — `normalizeBaseURL()` in `openai.ts` automatically strips `/chat/completions`, `/embeddings` and other SDK-appended suffixes so users can paste any endpoint URL
 - **`allowedTools` empty-array semantics** — an empty `allowedTools: []` on an Agent now means "no tools allowed" (previously treated as "all tools"); only a `null` / absent value means "all tools"
+- **DB-backed Settings** — `PUT /api/v1/settings` no longer writes to `.env`; all runtime settings are stored in the `system_config` SQLite table (key-value, UPSERT); sensitive keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) are encrypted with AES-256-GCM using `ENCRYPTION_KEY`; on startup, `main.ts` syncs all rows to `process.env` so every module reads the correct value transparently; `.env` now only contains bootstrap params (`PORT`, `HOST`, `DB_PATH`, `ENCRYPTION_KEY`, `AUTH_ENABLED`, `LOG_LEVEL`) that must be known before the database is available
 
 ---
 

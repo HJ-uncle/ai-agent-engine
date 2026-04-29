@@ -11,6 +11,7 @@ import { up as up6 } from './migrations/006_add_todos_cron.js'
 import { up as up7 } from './migrations/007_add_models_management.js'
 import { up as up8 } from './migrations/008_add_agent_allowed_tools.js'
 import { up as up9 } from './migrations/009_add_sessions.js'
+import { up as up10 } from './migrations/010_add_system_config.js'
 
 let client: Client | null = null
 let initialized = false
@@ -52,6 +53,7 @@ export async function initDb(): Promise<void> {
   await up7(db)
   await up8(db)
   await up9(db)
+  await up10(db)
   // 兼容旧数据库：补充新列
   await db.execute('ALTER TABLE conversations ADD COLUMN tool_call_name TEXT').catch(() => {})
   await db.execute('ALTER TABLE conversations ADD COLUMN conversation_id TEXT').catch(() => {})

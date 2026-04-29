@@ -63,11 +63,15 @@ function McpFormModal({
       const values = await form.validateFields()
       setLoading(true)
       const input: CreateMcpServerInput = {
+        id: values.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
         name: values.name,
+        description: '',
+        transportType: 'stdio',
         command: values.command,
         args: values.args ? values.args.trim().split(/\s+/) : [],
         enabled: values.enabled ?? true,
         env: values.envJson ? JSON.parse(values.envJson) : undefined,
+        isBuiltIn: false,
       }
       let server: McpServer
       if (editing) {

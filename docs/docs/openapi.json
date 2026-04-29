@@ -1080,14 +1080,53 @@
     },
     "/settings": {
       "get": {
-        "summary": "获取系统设置",
+        "summary": "获取系统运行时配置（从 SQLite system_config 表读取，fallback 到 process.env）",
         "responses": {
           "200": {
             "description": "成功响应",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/StandardResponse"
+                  "allOf": [
+                    { "$ref": "#/components/schemas/StandardResponse" },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "LLM_PROVIDER":             { "type": "string",  "example": "openai" },
+                            "LLM_PRIMARY_MODEL":        { "type": "string",  "example": "gpt-4o-mini" },
+                            "OPENAI_API_KEY":           { "type": "string",  "example": "sk-..." },
+                            "OPENAI_BASE_URL":          { "type": "string",  "example": "https://api.openai.com/v1" },
+                            "ANTHROPIC_API_KEY":        { "type": "string",  "example": "" },
+                            "OLLAMA_BASE_URL":          { "type": "string",  "example": "http://localhost:11434" },
+                            "MAX_ITERATIONS":           { "type": "integer", "example": 50 },
+                            "TOKEN_BUDGET":             { "type": "integer", "example": 80000 },
+                            "HISTORY_MAX_TOKENS":       { "type": "integer", "example": 20000 },
+                            "TOOL_OUTPUT_MAX_CHARS":    { "type": "integer", "example": 4000 },
+                            "COMPRESS_THRESHOLD_RATIO": { "type": "number",  "example": 0.5 },
+                            "SKILLS_ROOT":              { "type": "string",  "example": "./skills" },
+                            "BASH_PATH":                { "type": "string",  "example": "" },
+                            "CMD_TIMEOUT_MS":           { "type": "integer", "example": 5000 },
+                            "MAX_FILE_SIZE_BYTES":      { "type": "integer", "example": 10485760 },
+                            "WEB_SEARCH_SERVER":        { "type": "string",  "example": "http://127.0.0.1:8923" },
+                            "WORKSPACE_ROOT":           { "type": "string",  "example": "./workspace" },
+                            "MCP_CONFIG_PATH":          { "type": "string",  "example": "./mcp.config.json" },
+                            "QA_LOG_ENABLED":           { "type": "boolean", "example": false },
+                            "QA_LOG_DIR":               { "type": "string",  "example": "./logs/qa" },
+                            "webFetch": {
+                              "type": "object",
+                              "properties": {
+                                "enabled":        { "type": "boolean" },
+                                "allowedDomains": { "type": "array", "items": { "type": "string" } },
+                                "blockedDomains": { "type": "array", "items": { "type": "string" } }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
                 }
               }
             }
@@ -1095,7 +1134,8 @@
         }
       },
       "put": {
-        "summary": "更新系统设置",
+        "summary": "更新系统运行时配置（写入 SQLite system_config 表，敏感字段 AES-256-GCM 加密，立即同步到 process.env）",
+        "description": "webFetch 字段仍存储于 config/security.json；其余所有字段写入 system_config 表。OPENAI_API_KEY / ANTHROPIC_API_KEY 自动加密存储。",
         "requestBody": {
           "required": true,
           "content": {
@@ -1103,17 +1143,41 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "LLM_PROVIDER":             { "type": "string" },
+                  "LLM_PRIMARY_MODEL":        { "type": "string" },
+                  "OPENAI_API_KEY":           { "type": "string" },
+                  "OPENAI_BASE_URL":          { "type": "string" },
+                  "ANTHROPIC_API_KEY":        { "type": "string" },
+                  "OLLAMA_BASE_URL":          { "type": "string" },
+                  "MAX_ITERATIONS":           { "type": "integer" },
+                  "TOKEN_BUDGET":             { "type": "integer" },
+                  "HISTORY_MAX_TOKENS":       { "type": "integer" },
+                  "TOOL_OUTPUT_MAX_CHARS":    { "type": "integer" },
+                  "COMPRESS_THRESHOLD_RATIO": { "type": "number" },
+                  "SKILLS_ROOT":              { "type": "string" },
+                  "BASH_PATH":                { "type": "string" },
+                  "CMD_TIMEOUT_MS":           { "type": "integer" },
+                  "MAX_FILE_SIZE_BYTES":      { "type": "integer" },
+                  "WEB_SEARCH_SERVER":        { "type": "string" },
+                  "WORKSPACE_ROOT":           { "type": "string" },
+                  "MCP_CONFIG_PATH":          { "type": "string" },
+                  "QA_LOG_ENABLED":           { "type": "boolean" },
+                  "QA_LOG_DIR":               { "type": "string" },
                   "webFetch": {
                     "type": "object",
                     "properties": {
-                      "enabled": { "type": "boolean" },
+                      "enabled":        { "type": "boolean" },
                       "allowedDomains": { "type": "array", "items": { "type": "string" } },
                       "blockedDomains": { "type": "array", "items": { "type": "string" } }
                     }
                   }
                 },
                 "additionalProperties": {
-                  "type": "string"
+                  "oneOf": [
+                    { "type": "string" },
+                    { "type": "number" },
+                    { "type": "boolean" }
+                  ]
                 }
               }
             }

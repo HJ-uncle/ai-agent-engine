@@ -1,93 +1,57 @@
 import { FastifyInstance } from 'fastify'
-import * as fs from 'fs/promises'
-import * as path from 'path'
 import { success } from '../response.js'
 import { loadSecurityConfig, saveSecurityConfig, WebFetchConfig } from '../../../tools/web-fetch/security-config.js'
+import { systemConfigStore, SECRET_KEYS } from '../../../storage/sqlite/system-config.js'
 
-const ENV_PATH = path.resolve(process.cwd(), '.env')
-
-async function readEnvFile(): Promise<Record<string, string>> {
-  try {
-    const content = await fs.readFile(ENV_PATH, 'utf-8')
-    const lines = content.split('\n')
-    const env: Record<string, string> = {}
-    for (const line of lines) {
-      const trimmed = line.trim()
-      if (trimmed && !trimmed.startsWith('#')) {
-        const [key, ...rest] = trimmed.split('=')
-        if (key) {
-          env[key.trim()] = rest.join('=').trim()
-        }
-      }
-    }
-    return env
-  } catch (err) {
-    return {}
-  }
-}
-
-async function writeEnvFile(updates: Record<string, string>): Promise<void> {
-  let content = ''
-  try {
-    content = await fs.readFile(ENV_PATH, 'utf-8')
-  } catch (err) {
-    // File might not exist
-  }
-
-  const lines = content.split('\n')
-  const newLines: string[] = []
-  const updatedKeys = new Set<string>()
-
-  for (let line of lines) {
-    const trimmed = line.trim()
-    if (trimmed && !trimmed.startsWith('#')) {
-      const [key] = trimmed.split('=')
-      const trimmedKey = key?.trim()
-      if (trimmedKey && updates[trimmedKey] !== undefined) {
-        newLines.push(`${trimmedKey}=${updates[trimmedKey]}`)
-        updatedKeys.add(trimmedKey)
-        process.env[trimmedKey] = updates[trimmedKey]
-        continue
-      }
-    }
-    newLines.push(line)
-  }
-
-  for (const [key, value] of Object.entries(updates)) {
-    if (!updatedKeys.has(key)) {
-      newLines.push(`${key}=${value}`)
-      process.env[key] = value
-    }
-  }
-
-  await fs.writeFile(ENV_PATH, newLines.join('\n'), 'utf-8')
-}
-
+/** 所有通过 PUT /settings 保存的字段都写数据库 */
 export async function settingsRoutes(fastify: FastifyInstance) {
   fastify.get('/settings', async (request, reply) => {
-    const env = await readEnvFile()
     const securityConfig = loadSecurityConfig()
-    
+
+    // 从数据库读取全部配置，fallback 到 process.env，再 fallback 到默认值
+    const dbConfig = await systemConfigStore.getAll()
+
+    const getStr = (key: string, def: string) =>
+      dbConfig[key] ?? process.env[key] ?? def
+
     const settings = {
-      LLM_PROVIDER: env.LLM_PROVIDER || process.env.LLM_PROVIDER || 'openai',
-      LLM_PRIMARY_MODEL: env.LLM_PRIMARY_MODEL || process.env.LLM_PRIMARY_MODEL || 'deepseek-chat',
-      OPENAI_API_KEY: env.OPENAI_API_KEY || process.env.OPENAI_API_KEY || '',
-      OPENAI_BASE_URL: env.OPENAI_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.deepseek.com',
-      ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || '',
-      DATABASE_URL: env.DATABASE_URL || process.env.DATABASE_URL || 'file:./data/agent.db',
-      MAX_ITERATIONS: parseInt(env.MAX_ITERATIONS || process.env.MAX_ITERATIONS || '50', 10),
-      TOKEN_BUDGET: parseInt(env.TOKEN_BUDGET || process.env.TOKEN_BUDGET || '80000', 10),
-      SKILLS_ROOT: env.SKILLS_ROOT || process.env.SKILLS_ROOT || './skills',
-      QA_LOG_ENABLED: env.QA_LOG_ENABLED === 'true' || process.env.QA_LOG_ENABLED === 'true',
+      // ── LLM ──────────────────────────────────────────────────────────────
+      LLM_PROVIDER:      getStr('LLM_PROVIDER',      'openai'),
+      LLM_PRIMARY_MODEL: getStr('LLM_PRIMARY_MODEL',  'deepseek-chat'),
+      OPENAI_API_KEY:    getStr('OPENAI_API_KEY',     ''),
+      OPENAI_BASE_URL:   getStr('OPENAI_BASE_URL',    'https://api.deepseek.com'),
+      ANTHROPIC_API_KEY: getStr('ANTHROPIC_API_KEY',  ''),
+      OLLAMA_BASE_URL:   getStr('OLLAMA_BASE_URL',    'http://localhost:11434'),
+      // ── Agent ────────────────────────────────────────────────────────────
+      MAX_ITERATIONS:          parseInt(getStr('MAX_ITERATIONS',          '50'),      10),
+      TOKEN_BUDGET:            parseInt(getStr('TOKEN_BUDGET',            '80000'),   10),
+      HISTORY_MAX_TOKENS:      parseInt(getStr('HISTORY_MAX_TOKENS',      '20000'),   10),
+      TOOL_OUTPUT_MAX_CHARS:   parseInt(getStr('TOOL_OUTPUT_MAX_CHARS',   '4000'),    10),
+      COMPRESS_THRESHOLD_RATIO: parseFloat(getStr('COMPRESS_THRESHOLD_RATIO', '0.5')),
+      // ── Skills ───────────────────────────────────────────────────────────
+      SKILLS_ROOT:   getStr('SKILLS_ROOT',   './skills'),
+      BASH_PATH:     getStr('BASH_PATH',     ''),
+      // ── Tools ────────────────────────────────────────────────────────────
+      CMD_TIMEOUT_MS:      parseInt(getStr('CMD_TIMEOUT_MS',      '5000'),    10),
+      MAX_FILE_SIZE_BYTES: parseInt(getStr('MAX_FILE_SIZE_BYTES', '10485760'), 10),
+      WEB_SEARCH_SERVER:   getStr('WEB_SEARCH_SERVER', 'http://127.0.0.1:8923'),
+      // ── Workspace ────────────────────────────────────────────────────────
+      WORKSPACE_ROOT: getStr('WORKSPACE_ROOT', './workspace'),
+      MCP_CONFIG_PATH: getStr('MCP_CONFIG_PATH', './mcp.config.json'),
+      // ── Observability ────────────────────────────────────────────────────
+      QA_LOG_ENABLED: getStr('QA_LOG_ENABLED', 'false') === 'true',
+      QA_LOG_DIR:     getStr('QA_LOG_DIR',     './logs/qa'),
+      // ── WebFetch Security ────────────────────────────────────────────────
       webFetch: securityConfig.webFetch,
     }
 
     return reply.code(200).send(success(settings))
   })
 
-  fastify.put<{ Body: Record<string, string | number | WebFetchConfig> }>('/settings', async (request, reply) => {
+  fastify.put<{ Body: Record<string, string | number | boolean | WebFetchConfig> }>('/settings', async (request, reply) => {
     const updates = request.body
-    
+
+    // webFetch 仍保存在 security config JSON 文件（结构复杂，不适合 kv 存储）
     if (updates.webFetch) {
       const securityConfig = loadSecurityConfig()
       securityConfig.webFetch = updates.webFetch as WebFetchConfig
@@ -95,13 +59,12 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       delete updates.webFetch
     }
 
-    const stringUpdates: Record<string, string> = {}
+    // 其余所有字段写入数据库
     for (const [k, v] of Object.entries(updates)) {
-      stringUpdates[k] = String(v)
-    }
-
-    if (Object.keys(stringUpdates).length > 0) {
-      await writeEnvFile(stringUpdates)
+      const strVal = String(v)
+      await systemConfigStore.set(k, strVal, SECRET_KEYS.has(k))
+      // 同步更新 process.env，保证当前进程内立即生效
+      process.env[k] = strVal
     }
 
     return reply.code(200).send(success({ updated: true }))

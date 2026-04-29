@@ -30,6 +30,7 @@ import { buildServer } from './api/http/index.js'
 import { logger } from './observability/index.js'
 import { skillsRegistry } from './skills/index.js'
 import { initDb } from './storage/sqlite/db.js'
+import { systemConfigStore } from './storage/sqlite/system-config.js'
 import { networkInterfaces } from 'node:os'
 
 const PORT = parseInt(process.env.PORT ?? '12323', 10)
@@ -39,6 +40,17 @@ async function main() {
   try {
     // 初始化数据库（建表、补列，幂等）
     await initDb()
+
+    // 将数据库中的 system_config 同步到 process.env（DB 优先）
+    // 这样所有直接读取 process.env 的模块（react.ts、history.ts 等）
+    // 在运行时都能自动获取用户在 UI 配置的值
+    const dbConfig = await systemConfigStore.getAll()
+    for (const [key, value] of Object.entries(dbConfig)) {
+      if (value !== null) {
+        process.env[key] = value
+      }
+    }
+    logger.info({ keys: Object.keys(dbConfig).length }, 'Synced system_config from DB to process.env')
 
     // 启动技能注册表（扫描 + 热监听 SKILLS_ROOT）
     skillsRegistry.start()
