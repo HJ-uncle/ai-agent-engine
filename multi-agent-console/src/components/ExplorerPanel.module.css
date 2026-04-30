@@ -65,6 +65,20 @@
   display: none !important;
 }
 
+/* 让 Tree 内部列表不自己产生滚动，交由外层容器统一处理 */
+.vscodeTree :global(.ant-tree-list) {
+  overflow: visible !important;
+}
+
+.vscodeTree :global(.ant-tree-list-holder) {
+  overflow: visible !important;
+  max-height: none !important;
+}
+
+.vscodeTree :global(.ant-tree-list-scrollbar) {
+  display: none !important;
+}
+
 .vscodeTree :global(.ant-tree-iconEle) {
   width: 16px !important;
   height: 16px !important;

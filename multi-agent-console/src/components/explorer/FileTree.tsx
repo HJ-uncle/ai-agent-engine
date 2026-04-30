@@ -46,6 +46,7 @@ export function FileTree({ treeData, sessionId, onRefresh }: FileTreeProps) {
 
   const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([])
   const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([])
+  const containerRef = useRef<HTMLDivElement>(null)
 
   // ── Inline rename state
   const [renamingKey, setRenamingKey] = useState<string | null>(null)
@@ -178,6 +179,9 @@ export function FileTree({ treeData, sessionId, onRefresh }: FileTreeProps) {
 
   // ─── Select handler (Ctrl+Click multi / Shift+Click range) ────────────────
 
+  // 双击计时
+  const lastClickRef = useRef<{ key: string; time: number } | null>(null)
+
   const onSelect = (
     keys: React.Key[],
     info: { nativeEvent: MouseEvent; node: EventDataNode<FileNode> },
@@ -186,14 +190,12 @@ export function FileTree({ treeData, sessionId, onRefresh }: FileTreeProps) {
     const fileNode = node as unknown as FileNode
 
     if (nativeEvent.ctrlKey || nativeEvent.metaKey) {
-      // Toggle selection
       setSelectedKeys(prev =>
         prev.includes(fileNode.path)
           ? prev.filter(k => k !== fileNode.path)
           : [...prev, fileNode.path],
       )
     } else if (nativeEvent.shiftKey && selectedKeys.length > 0) {
-      // Range select: collect all visible leaf paths in order
       const flatten = (nodes: FileNode[], acc: string[] = []): string[] => {
         for (const n of nodes) {
           acc.push(n.path)
@@ -209,14 +211,31 @@ export function FileTree({ treeData, sessionId, onRefresh }: FileTreeProps) {
     } else {
       setSelectedKeys([fileNode.path])
       if (fileNode.isLeaf) {
+        // 文件：单击打开
         openTab({ path: fileNode.path, name: fileNode.name, type: undefined as any })
+      } else {
+        // 文件夹：检测双击（300ms 内再次点击同一个节点）
+        const now = Date.now()
+        const last = lastClickRef.current
+        if (last && last.key === fileNode.path && now - last.time < 300) {
+          // 双击：切换展开/折叠
+          setExpandedKeys(prev =>
+            prev.includes(fileNode.path)
+              ? prev.filter(k => k !== fileNode.path)
+              : [...prev, fileNode.path],
+          )
+          lastClickRef.current = null
+        } else {
+          lastClickRef.current = { key: fileNode.path, time: now }
+        }
       }
     }
   }
 
   return (
     <div
-      style={{ flex: 1, overflowY: 'auto', padding: '4px 0', outline: 'none' }}
+      ref={containerRef}
+      style={{ flex: 1, overflow: 'auto', padding: '4px 0', outline: 'none' }}
       tabIndex={0}
       onKeyDown={onKeyDown}
       onClick={() => ctxMenu && setCtxMenu(null)}
@@ -225,9 +244,6 @@ export function FileTree({ treeData, sessionId, onRefresh }: FileTreeProps) {
         treeData={decorateNodes(treeData)}
         showIcon
         blockNode
-        virtual
-        height={800}
-        itemHeight={22}
         multiple
         draggable={{ icon: false }}
         selectedKeys={selectedKeys}

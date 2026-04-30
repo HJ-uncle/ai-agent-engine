@@ -6,11 +6,11 @@ import React, { useRef, useCallback } from 'react'
 import { Tooltip, App } from 'antd'
 import {
   PlusOutlined,
-  CloseOutlined,
   DownOutlined,
   FullscreenOutlined,
 } from '@ant-design/icons'
 import { useTerminalStore } from '../../store/terminal'
+import { useSessionStore } from '../../store/session'
 import { terminalApi } from '../../api'
 import XTerminal from './XTerminal'
 
@@ -32,9 +32,15 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ sessionId }) => {
   const setPanelHeight  = useTerminalStore(s => s.setPanelHeight)
 
   // ── 新建终端 ────────────────────────────────────────────────────────────
+  const sessionWorkspacePaths = useSessionStore(s =>
+    s.sessions.find(sess => sess.id === s.activeSessionId)?.workspacePaths
+  )
+
   const handleNewTerminal = useCallback(async (cwd?: string) => {
     try {
-      const { terminalId, cwd: resolvedCwd } = await terminalApi.create(sessionId, cwd)
+      const { terminalId, cwd: resolvedCwd } = await terminalApi.create(
+        sessionId, cwd, 120, 30, sessionWorkspacePaths ?? undefined
+      )
       // 根据操作系统显示合适的 shell 名称
       const isWin = navigator.platform.startsWith('Win') || navigator.userAgent.includes('Windows')
       const shell = isWin ? 'pwsh' : 'bash'
@@ -42,7 +48,16 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ sessionId }) => {
     } catch (e: any) {
       message.error(`创建终端失败: ${e.message}`)
     }
-  }, [sessionId, addTab, message])
+  }, [sessionId, addTab, message, sessionWorkspacePaths])
+
+  // ── 首次打开时自动创建一个终端 ────────────────────────────────────────────
+  React.useEffect(() => {
+    if (tabs.length === 0) {
+      handleNewTerminal()
+    }
+    // 仅在组件挂载时执行一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // 监听右键菜单事件「在终端中打开」
   React.useEffect(() => {
@@ -93,89 +108,123 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ sessionId }) => {
         display: 'flex',
         flexDirection: 'column',
         height: panelHeight,
-        background: '#1e1e1e',
-        borderTop: '1px solid #333',
+        background: '#141414',
+        borderTop: '1px solid #1e1e1e',
         flexShrink: 0,
       }}
     >
-      {/* 拖拽条 */}
+      {/* 拖拽条 — 常态可见 */}
       <div
         onMouseDown={handleDragStart}
         style={{
           height: 4,
           cursor: 'row-resize',
-          background: 'transparent',
+          background: '#1e1e1e',
           flexShrink: 0,
+          transition: 'background 0.15s',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
         }}
         onMouseEnter={e => (e.currentTarget.style.background = '#0e639c')}
-        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-      />
+        onMouseLeave={e => (e.currentTarget.style.background = '#1e1e1e')}
+      >
+        {/* 拖拽提示三点 */}
+        <div style={{ display: 'flex', gap: 3, pointerEvents: 'none' }}>
+          {[0,1,2].map(i => (
+            <div key={i} style={{ width: 3, height: 3, borderRadius: '50%', background: 'rgba(255,255,255,0.12)' }} />
+          ))}
+        </div>
+      </div>
 
       {/* Tab 栏 */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
-          height: 35,
-          background: '#252526',
-          borderBottom: '1px solid #333',
+          height: 36,
+          background: '#1a1a1a',
+          borderBottom: '1px solid #222',
           flexShrink: 0,
           overflow: 'hidden',
         }}
       >
+        {/* 左侧 TERMINAL 标签 */}
+        <div style={{ padding: '0 12px', fontSize: 10, fontWeight: 700, letterSpacing: '.1em', color: '#3c3c3c', textTransform: 'uppercase', flexShrink: 0 }}>
+          终端
+        </div>
+
+        {/* 分隔线 */}
+        <div style={{ width: 1, height: 16, background: '#2a2a2a', flexShrink: 0 }} />
+
         {/* 终端 Tab 列表 */}
-        <div style={{ display: 'flex', flex: 1, overflow: 'hidden', alignItems: 'stretch' }}>
-          {tabs.map(tab => (
-            <div
-              key={tab.terminalId}
-              onClick={() => setActive(tab.terminalId)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '0 10px',
-                height: '100%',
-                cursor: 'pointer',
-                fontSize: 12,
-                color: tab.terminalId === activeId ? '#fff' : '#888',
-                background: tab.terminalId === activeId ? '#1e1e1e' : 'transparent',
-                borderRight: '1px solid #333',
-                whiteSpace: 'nowrap',
-                userSelect: 'none',
-                flexShrink: 0,
-              }}
-            >
-              {/* 运行状态指示点 */}
-              <span style={{ color: tab.alive ? '#3fb950' : '#666', fontSize: 8 }}>●</span>
-              <span>{tab.title}</span>
-              <CloseOutlined
-                onClick={e => handleCloseTab(tab.terminalId, e)}
-                style={{ fontSize: 10, color: '#888', marginLeft: 2 }}
-              />
-            </div>
-          ))}
+        <div style={{ display: 'flex', flex: 1, overflow: 'hidden', alignItems: 'stretch', paddingLeft: 4 }}>
+          {tabs.map(tab => {
+            const isActive = tab.terminalId === activeId
+            return (
+              <div
+                key={tab.terminalId}
+                onClick={() => setActive(tab.terminalId)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  padding: '0 10px',
+                  height: '100%',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  color: isActive ? '#e0e0e0' : '#555',
+                  background: isActive ? 'rgba(255,255,255,0.05)' : 'transparent',
+                  borderBottom: isActive ? '2px solid #0e639c' : '2px solid transparent',
+                  borderRight: '1px solid #1e1e1e',
+                  whiteSpace: 'nowrap',
+                  userSelect: 'none',
+                  flexShrink: 0,
+                  transition: 'all 0.12s',
+                }}
+              >
+                {/* 运行状态指示点 */}
+                <span style={{
+                  width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+                  background: tab.alive ? '#3fb950' : '#444',
+                  boxShadow: tab.alive && isActive ? '0 0 4px #3fb950' : 'none',
+                  transition: 'all 0.2s',
+                }} />
+                <span style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}>{tab.title}</span>
+                <span
+                  onClick={e => handleCloseTab(tab.terminalId, e)}
+                  style={{
+                    marginLeft: 2, width: 14, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    borderRadius: 3, fontSize: 10, color: '#444', cursor: 'pointer',
+                    transition: 'all 0.1s',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.1)'; e.currentTarget.style.color = '#ccc' }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#444' }}
+                >✕</span>
+              </div>
+            )
+          })}
         </div>
 
         {/* 右侧按钮组 */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '0 8px', flexShrink: 0 }}>
-          <Tooltip title="新建终端 (Ctrl+`)">
-            <PlusOutlined
-              onClick={() => handleNewTerminal()}
-              style={{ color: '#ccc', cursor: 'pointer', fontSize: 14 }}
-            />
-          </Tooltip>
-          <Tooltip title={panelHeight >= 600 ? '还原' : '最大化'}>
-            <FullscreenOutlined
-              onClick={handleToggleMax}
-              style={{ color: '#ccc', cursor: 'pointer', fontSize: 14 }}
-            />
-          </Tooltip>
-          <Tooltip title="隐藏终端">
-            <DownOutlined
-              onClick={() => setPanelVisible(false)}
-              style={{ color: '#ccc', cursor: 'pointer', fontSize: 14 }}
-            />
-          </Tooltip>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 1, padding: '0 6px', flexShrink: 0 }}>
+          {[
+            { tip: '新建终端', icon: <PlusOutlined />, action: () => handleNewTerminal() },
+            { tip: panelHeight >= 600 ? '还原' : '最大化', icon: <FullscreenOutlined />, action: handleToggleMax },
+            { tip: '隐藏终端', icon: <DownOutlined />, action: () => setPanelVisible(false) },
+          ].map((btn, i) => (
+            <Tooltip key={i} title={btn.tip}>
+              <div
+                onClick={btn.action}
+                style={{
+                  width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  borderRadius: 4, color: '#555', cursor: 'pointer', fontSize: 13, transition: 'all 0.12s',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; e.currentTarget.style.color = '#aaa' }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#555' }}
+              >{btn.icon}</div>
+            </Tooltip>
+          ))}
         </div>
       </div>
 

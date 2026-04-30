@@ -220,7 +220,7 @@
 }
 
 .bubble {
-  max-width: 75%;
+  max-width: 88%;
   min-width: 60px;
   display: flex;
   flex-direction: column;

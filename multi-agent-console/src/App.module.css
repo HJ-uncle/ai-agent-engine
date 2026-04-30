@@ -74,14 +74,28 @@
 
 /* ── Sidebar ───────────────────────────────────────────────────────── */
 .sidebar {
-  width: 240px;
-  min-width: 180px;
   background: #252526;
-  border-right: 1px solid #2d2d2d;
-  flex-shrink: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
+  min-width: 120px;
+  max-width: 600px;
+}
+
+/* ── Sidebar resize handle ──────────────────────────────────────────── */
+.sidebarResizer {
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  transition: background 0.15s;
+  z-index: 5;
+}
+
+.sidebarResizer:hover,
+.sidebarResizer.dragging {
+  background: #0e639c;
 }
 
 /* ── Main ──────────────────────────────────────────────────────────── */

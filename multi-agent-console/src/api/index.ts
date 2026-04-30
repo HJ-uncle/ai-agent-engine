@@ -783,12 +783,22 @@ export function normalizePath(p: string): string {
 
 export const terminalApi = {
   /** 创建 PTY 会话，返回 terminalId */
-  create: async (sessionId: string, cwd?: string, cols = 120, rows = 30) => {
+  create: async (sessionId: string, cwd?: string, cols = 120, rows = 30, workspacePaths?: string[]) => {
     const res = await request<{ terminalId: string; cwd: string }>('/terminal/create', {
       method: 'POST',
-      body: JSON.stringify({ sessionId, cwd, cols, rows }),
+      body: JSON.stringify({ sessionId, cwd, cols, rows, workspacePaths }),
     })
     return res.data!
+  },
+
+  /** 更新已存在终端的工作区路径（工作区管理绑定新路径后调用） */
+  updateWorkspaces: async (terminalId: string, workspacePaths: string[]) => {
+    try {
+      await request(`/terminal/${terminalId}/workspaces`, {
+        method: 'POST',
+        body: JSON.stringify({ workspacePaths }),
+      })
+    } catch { /* 后端未实现时静默失败 */ }
   },
 
   /** 关闭 PTY 会话 */
