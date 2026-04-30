@@ -384,3 +384,48 @@
 | `{ "usage": { "systemPromptTokens": ..., "ragTokens": ..., "skillTokens": ..., "builtinToolsTokens": ..., "mcpToolsTokens": ..., "messagesTokens": ..., "toolResultsTokens": ..., "completionTokens": ..., "promptTokens": ..., "totalTokens": ..., "systemToolsTokens": ... } }` | usage | Token 使用量统计（8 类精细分项 + 汇总） |
 | `{ "ask_user": { "question": "...", "options": [...], "toolCallId": "..." } }` | ask_user | 向用户提问卡片 |
 | `[DONE]` | done | 流式响应结束 |
+
+---
+
+## 前端 UI 说明
+
+### 分屏布局（Split Layout）
+
+`multi-agent-console` 主区域（`MainArea` 组件）支持三种显示模式，可在顶部工具栏一键切换：
+
+| 模式 | 说明 |
+|------|------|
+| `chat-only` | 仅显示聊天区域（默认） |
+| `horizontal` | 上下分割：文件管理器/编辑器（上）+ 聊天（下） |
+| `vertical` | 左右分割：文件管理器/编辑器（左）+ 聊天（右，最小宽度 420 px） |
+
+- 分隔线可用鼠标拖拽，比例范围 15 %–85 %
+- 当前模式和分割比例自动持久化到 `localStorage`（key：`ui.splitMode` / `ui.splitRatio`），刷新页面后恢复
+- 拖拽期间自动覆盖透明遮罩，防止 iframe/iframe 内容捕获鼠标事件
+
+### macOS Sonoma 设计 Token（`macos-sonoma-tokens.css`）
+
+项目根目录提供符合 Apple HIG 规范的 CSS 自定义属性集，可供 Web / Electron 应用复用：
+
+| 分类 | 前缀 | 说明 |
+|------|------|------|
+| 材质 — 标题栏 | `--macos-titlebar-*` | 半透明毛玻璃效果，含失焦变体 |
+| 材质 — 侧边栏 | `--macos-sidebar-*` | 轻量级半透明，含宽度预设 |
+| 材质 — 内容区 | `--macos-content-*` | 纯色背景，含 elevated / sunken 层次 |
+| 排版 | `--macos-font-*` | SF Pro 字体栈，含各层级字号、字重 |
+| 系统颜色 | `--macos-label-*` / `--macos-text-*` | 主/次/三/四级文字颜色 |
+| 强调色 | `--macos-accent-*` | 蓝色强调（含 hover / pressed / subtle 变体） |
+| 语义色 | `--macos-color-*` | 红/绿/橙/紫/粉/青/灰及其柔和背景 |
+| 填充色 | `--macos-fill-*` | 控件背景三级填充 |
+| 间距 | `--macos-space-*` / `--macos-padding-*` | 4 px 基准格栅 |
+| 阴影 | `--macos-shadow-*` | 窗口/菜单/卡片/内阴影/Sheet 五级 |
+| 圆角 | `--macos-radius-*` | 窗口/面板/卡片/控件/按钮/标签/全圆 |
+| 交通灯按钮 | `--macos-traffic-light-*` | 尺寸、间距及红/黄/绿颜色含 hover 态 |
+| 交互状态 | `--macos-list-row-*` / `--macos-icon-*` | 列表行悬停/选中/非聚焦三态 |
+| 控件 | `--macos-input-*` / `--macos-btn-*` | 输入框、主/次按钮样式 |
+| 动画 | `--macos-transition-*` | fast(80ms) / base(150ms) / slow(250ms) / spring |
+
+深色模式通过 `@media (prefers-color-scheme: dark)` 自动覆盖所有 Token，无需额外 class。
+
+工具类（可选）：`.mac-titlebar`、`.mac-sidebar`、`.mac-content`、`.mac-window`、`.mac-sidebar-label`、`.mac-list-row`、`.mac-traffic-lights`。
+

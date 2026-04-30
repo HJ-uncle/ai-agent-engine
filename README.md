@@ -62,6 +62,8 @@ A production-ready AI Agent Engine built with Node.js + TypeScript ESM. Supports
 | 52 | **Integrated Terminal** — Browser-based PTY terminal (`node-pty` + `xterm.js`) locked to session workspace; multi-tab support; `POST /terminal/create` + `WS /terminal/ws/:id` |
 | 53 | **VS Code–style Explorer** — File tree with context menu (create / rename / delete / move), Monaco editor tabs, image/video preview, hex viewer, Quick Open (`Ctrl+P`), undo log |
 | 54 | **Workspace Extended API** — New REST endpoints: `POST /workspace/file/create`, `POST /workspace/folder/create`, `POST /workspace/file/move`, `POST /workspace/file/trash`, `POST /workspace/file/format`, `GET /workspace/file/stream` |
+| 55 | **Split Layout** — Three-mode main area: `chat-only`, `horizontal` (top/bottom), `vertical` (left/right); draggable divider (15–85%); layout ratio persisted to `localStorage` |
+| 56 | **macOS Sonoma Design Tokens** — `macos-sonoma-tokens.css` — full CSS custom-property set covering materials (title bar / sidebar / content), typography, colors, spacing, shadows, border-radius, traffic-light buttons, hover states, dark-mode overrides, and utility classes |
 
 ---
 
@@ -498,6 +500,8 @@ src/
 - **SQLite for everything** — no Redis, no external services required
 - **Unified `Tool` interface** — file tools, shell tools, memory tools, MCP tools all share the same interface
 - **`registry-factory.ts`** — single place to add/remove tools; all routes (chat / messages / tools) call `createToolRegistry()` for a consistent, complete toolset; supports `allowedTools` parameter for per-agent tool restrictions
+- **Split Layout** — `MainArea` component in `App.tsx` supports three modes (`chat-only` / `horizontal` / `vertical`) switchable from a toolbar; a draggable divider resizes panes between 15 % and 85 %; the active mode and ratio are persisted to `localStorage` via a `usePersist` hook so the layout survives page reloads
+- **macOS Sonoma Design Tokens** — `macos-sonoma-tokens.css` at the project root provides a comprehensive CSS custom-property library aligned with Apple HIG: materials (title bar, sidebar, content), typography (SF Pro stack), system colors & accents, spacing (4 px grid), shadow system, border-radius scale, traffic-light button sizes/colors, hover/interaction states, and dark-mode overrides via `@media (prefers-color-scheme: dark)`
 - **Fine-grained tool control** — each agent can have an `agent_allowed_tools` entry in SQLite restricting which tools it can use; `createToolRegistry({ allowedTools: [...] })` filters at registration time
 - **Multi-tenant isolation** — tenantId + sessionId scope all storage reads/writes
 - **Auth optional** — set `AUTH_ENABLED=false` during development
