@@ -100,9 +100,9 @@ export default function WhitelistManager() {
       key: 'action',
       render: (_: any, record: WhitelistItem) => (
         <Space size="middle">
-          <button type="button" onClick={() => handleEdit(record)} style={{ background: 'none', border: 'none', color: '#1677ff', cursor: 'pointer', padding: 0 }}>编辑</button>
+          <button type="button" onClick={() => handleEdit(record)} style={{ background: 'none', border: 'none', color: 'var(--color-accent)', cursor: 'pointer', padding: 0 }}>编辑</button>
           <Popconfirm title="确定删除吗?" onConfirm={() => handleDelete(record.command)}>
-            <button type="button" style={{ background: 'none', border: 'none', color: '#f85149', cursor: 'pointer', padding: 0 }}>删除</button>
+            <button type="button" style={{ background: 'none', border: 'none', color: 'var(--color-red)', cursor: 'pointer', padding: 0 }}>删除</button>
           </Popconfirm>
         </Space>
       ),

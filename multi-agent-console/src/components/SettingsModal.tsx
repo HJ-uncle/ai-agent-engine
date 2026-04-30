@@ -27,9 +27,39 @@ import SkillSettings from './settings/SkillSettings'
 import SystemSettings from './settings/SystemSettings'
 import McpSettings from './settings/McpSettings'
 import styles from './settings/SettingsLayout.module.css'
+import { useTheme } from '../hooks/useTheme'
+
+/** 从当前 :root CSS 变量读取颜色值，供 AntD ConfigProvider 使用 */
+function useTokenColors() {
+  const { isDark } = useTheme()
+  return React.useMemo(() => {
+    if (typeof window === 'undefined') {
+      return {
+        colorPrimary:     '#007AFF',
+        colorBgContainer: '#F2F2F7',
+        colorBgElevated:  '#FFFFFF',
+        colorText:        '#000000',
+        colorBorder:      '#E5E5EA',
+      }
+    }
+    const s = getComputedStyle(document.documentElement)
+    const read = (name: string, fallback: string) =>
+      (s.getPropertyValue(name).trim() || fallback)
+    return {
+      colorPrimary:     read('--color-accent',       isDark ? '#0A84FF' : '#007AFF'),
+      colorBgContainer: read('--color-bg-secondary', isDark ? '#1C1C1E' : '#F2F2F7'),
+      colorBgElevated:  read('--color-bg-tertiary',  isDark ? '#2C2C2E' : '#FFFFFF'),
+      colorText:        read('--color-label',        isDark ? '#FFFFFF' : '#000000'),
+      colorBorder:      read('--color-gray-5',       isDark ? '#2C2C2E' : '#E5E5EA'),
+    }
+    // 主题变化时重新计算
+  }, [isDark])
+}
 
 export default function SettingsModal() {
   const { isSettingsOpen, settingsTab, closeSettings, openSettings } = useSessionStore()
+  const { isDark } = useTheme()
+  const tokenColors = useTokenColors()
 
   const items = [
     {
@@ -177,12 +207,12 @@ export default function SettingsModal() {
   return (
     <ConfigProvider
       theme={{
-        algorithm: theme.darkAlgorithm,
+        algorithm: isDark ? theme.darkAlgorithm : theme.defaultAlgorithm,
         token: {
-          colorPrimary: '#007acc',
-          borderRadius: 6,
-          colorBgContainer: '#1e1e1e',
-          colorBgElevated: '#252526',
+          ...tokenColors,
+          borderRadius: 10,
+          fontFamily:   '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif',
+          fontSize:     13,
         },
       }}
     >

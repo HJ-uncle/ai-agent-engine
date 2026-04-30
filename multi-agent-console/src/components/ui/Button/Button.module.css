@@ -1,0 +1,171 @@
+/* ======================================================
+   Button.module.css — Apple HIG 风格按钮
+   依赖 tokens.css 中的 CSS 变量
+   ====================================================== */
+
+/* --- 基础结构 --- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-2);
+  min-height: var(--min-touch-target);  /* 44px HIG 最小触碰区 */
+  padding: 0 var(--spacing-4);
+  border: none;
+  border-radius: var(--radius-md);
+  font-family: var(--font-sans);
+  font-size: var(--text-callout-size);       /* 16px */
+  font-weight: 600;
+  letter-spacing: var(--text-callout-tracking);
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  text-decoration: none;
+  outline: none;
+  position: relative;
+  /* 弹性缩放基础过渡 */
+  transition:
+    background-color var(--duration-instant) var(--easing-ease-out),
+    color            var(--duration-instant) var(--easing-ease-out),
+    box-shadow       var(--duration-fast)    var(--easing-ease-out),
+    transform        var(--duration-fast)    var(--easing-spring),
+    opacity          var(--duration-fast)    var(--easing-ease-out);
+}
+
+/* 按下弹性缩放 */
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
+  transition-duration: var(--duration-instant);
+}
+
+/* 焦点可见环（键盘导航） */
+.btn:focus-visible {
+  box-shadow: var(--shadow-focus-ring);
+  transition: box-shadow var(--duration-instant) var(--easing-ease-out);
+}
+
+/* ======================================================
+   变体 · Variants
+   ====================================================== */
+
+/* --- Primary（主要按钮） --- */
+.primary {
+  background-color: var(--color-accent);
+  color: var(--color-label-inverted);
+  box-shadow: var(--shadow-button);
+}
+.primary:hover:not(:disabled) {
+  background-color: var(--color-accent-hover);
+  box-shadow: var(--shadow-button-hover-accent);
+}
+.primary:active:not(:disabled) {
+  background-color: var(--color-accent-pressed);
+  box-shadow: var(--shadow-button);
+}
+
+/* --- Secondary（次要按钮） --- */
+.secondary {
+  background-color: var(--color-fill-secondary);
+  color: var(--color-accent);
+}
+.secondary:hover:not(:disabled) {
+  background-color: var(--color-fill);
+}
+.secondary:active:not(:disabled) {
+  background-color: var(--color-fill-secondary);
+}
+
+/* --- Ghost（幽灵按钮） --- */
+.ghost {
+  background-color: transparent;
+  color: var(--color-accent);
+  box-shadow: inset 0 0 0 1px var(--color-accent);
+}
+.ghost:hover:not(:disabled) {
+  background-color: var(--color-accent-subtle);
+}
+.ghost:active:not(:disabled) {
+  background-color: var(--color-accent-subtle);
+  filter: brightness(0.92);
+}
+
+/* --- Danger（危险按钮） --- */
+.danger {
+  background-color: var(--color-red);
+  color: var(--color-label-inverted);
+  box-shadow: var(--shadow-button);
+}
+.danger:hover:not(:disabled) {
+  background-color: var(--color-red-hover);
+  box-shadow: var(--shadow-button-hover-danger);
+}
+.danger:active:not(:disabled) {
+  background-color: var(--color-red-pressed);
+  box-shadow: var(--shadow-button);
+}
+
+/* ======================================================
+   尺寸 · Sizes
+   ====================================================== */
+
+/* 紧凑模式 32px */
+.compact {
+  min-height: 32px;
+  padding: 0 var(--spacing-3);
+  font-size: var(--text-subheadline-size);  /* 15px */
+  border-radius: var(--radius-sm);
+}
+
+/* 大号 50px */
+.large {
+  min-height: 50px;
+  padding: 0 var(--spacing-6);
+  font-size: var(--text-body-size);          /* 17px */
+  border-radius: var(--radius-lg);
+}
+
+/* 宽度占满 */
+.fullWidth {
+  width: 100%;
+}
+
+/* ======================================================
+   状态 · States
+   ====================================================== */
+
+/* 禁用态 */
+.btn:disabled {
+  opacity: 0.36;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* 加载中（含旋转图标时） */
+.loading {
+  opacity: 0.75;
+  cursor: wait;
+  pointer-events: none;
+}
+
+/* ======================================================
+   图标 · Icon
+   ====================================================== */
+.iconWrapper {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+}
+
+.iconOnly {
+  padding: 0;
+  width: var(--min-touch-target);
+  border-radius: var(--radius-md);
+}
+.iconOnly.compact {
+  width: 32px;
+  height: 32px;
+}

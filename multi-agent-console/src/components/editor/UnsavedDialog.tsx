@@ -30,32 +30,36 @@ export function UnsavedDialog({ path, onSave, onDiscard, onCancel }: UnsavedDial
       style={{
         position: 'fixed', inset: 0, zIndex: 10000,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: 'rgba(0,0,0,0.5)',
+        background: 'var(--color-overlay-heavy)',
+        backdropFilter: 'blur(8px)',
+        WebkitBackdropFilter: 'blur(8px)',
       }}
     >
       <div
         style={{
-          background: '#252526',
-          border: '1px solid #454545',
-          borderRadius: 6,
+          background: 'var(--material-thick)',
+          backdropFilter: 'saturate(1.8) blur(20px)',
+          WebkitBackdropFilter: 'saturate(1.8) blur(20px)',
+          border: 'var(--border-default)',
+          borderRadius: 'var(--radius-xl)',
           padding: '24px 28px',
           minWidth: 360,
-          boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+          boxShadow: 'var(--shadow-modal)',
         }}
       >
-        <div style={{ fontSize: 14, color: '#ccc', marginBottom: 8, fontWeight: 600 }}>
+        <div style={{ fontSize: 15, color: 'var(--color-label)', marginBottom: 8, fontWeight: 600 }}>
           是否保存对 "{name}" 的更改？
         </div>
-        <div style={{ fontSize: 12, color: '#888', marginBottom: 24 }}>
+        <div style={{ fontSize: 12, color: 'var(--color-label-secondary)', marginBottom: 24 }}>
           你的更改尚未保存。如果不保存，你的更改将会丢失。
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button
             onClick={onDiscard}
             style={{
-              padding: '5px 14px', background: 'transparent',
-              border: '1px solid #555', color: '#ccc',
-              borderRadius: 4, cursor: 'pointer', fontSize: 13,
+              padding: '6px 14px', background: 'transparent',
+              border: 'var(--border-emphasis)', color: 'var(--color-label)',
+              borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 13,
             }}
           >
             不保存
@@ -63,9 +67,9 @@ export function UnsavedDialog({ path, onSave, onDiscard, onCancel }: UnsavedDial
           <button
             onClick={onCancel}
             style={{
-              padding: '5px 14px', background: 'transparent',
-              border: '1px solid #555', color: '#ccc',
-              borderRadius: 4, cursor: 'pointer', fontSize: 13,
+              padding: '6px 14px', background: 'transparent',
+              border: 'var(--border-emphasis)', color: 'var(--color-label)',
+              borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 13,
             }}
           >
             取消
@@ -75,9 +79,9 @@ export function UnsavedDialog({ path, onSave, onDiscard, onCancel }: UnsavedDial
             onClick={onSave}
             autoFocus
             style={{
-              padding: '5px 14px', background: '#0e639c',
+              padding: '6px 14px', background: 'var(--color-accent)',
               border: 'none', color: '#fff',
-              borderRadius: 4, cursor: 'pointer', fontSize: 13,
+              borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 13,
               outline: '2px solid #007acc',
             }}
           >

@@ -1,81 +1,421 @@
-/* ── Global reset & base ──────────────────────────────────────────── */
+/* ==========================================================================
+   Agent Engine — 全局基础样式 & 主题层
+   依赖：tokens.css（优先导入）
+   主题规则：
+     - <html data-theme="dark">  → 深色（默认）
+     - <html data-theme="light"> → 浅色
+   切换由 src/hooks/useTheme.ts 控制
+   ========================================================================== */
+
 *, *::before, *::after {
   box-sizing: border-box;
 }
 
+/* ── 深色主题 · Dark（默认） ─────────────────────────────────────── */
+html[data-theme="dark"] {
+  --color-accent:           #0A84FF;
+  --color-accent-hover:     #409CFF;
+  --color-accent-pressed:   #6BB0FF;
+  --color-accent-subtle:    rgba(10, 132, 255, 0.18);
+
+  --color-green:            #30D158;
+  --color-green-hover:      #2AB94D;
+  --color-green-pressed:    #22A342;
+  --color-green-subtle:     rgba(48, 209, 88, 0.15);
+  --color-orange:           #FF9F0A;
+  --color-orange-hover:     #E88F09;
+  --color-orange-pressed:   #C57A08;
+  --color-orange-subtle:    rgba(255, 159, 10, 0.15);
+  --color-red:              #FF453A;
+  --color-red-hover:        #E53E34;
+  --color-red-pressed:      #C4352D;
+  --color-red-subtle:       rgba(255, 69, 58, 0.15);
+  --color-teal:             #64D2FF;
+  --color-indigo:           #5E5CE6;
+  --color-purple:           #BF5AF2;
+  --color-yellow:           #FFD60A;
+
+  --color-gray-1:           #8E8E93;
+  --color-gray-2:           #636366;
+  --color-gray-3:           #48484A;
+  --color-gray-4:           #3A3A3C;
+  --color-gray-5:           #2C2C2E;
+  --color-gray-6:           #1C1C1E;
+
+  --color-bg-primary:       #000000;
+  --color-bg-secondary:     #1C1C1E;
+  --color-bg-tertiary:      #2C2C2E;
+  --color-bg-elevated:      #1C1C1E;
+
+  --color-label:            #FFFFFF;
+  --color-label-secondary:  rgba(235,235,245, 0.60);
+  --color-label-tertiary:   rgba(235,235,245, 0.30);
+  --color-label-quaternary: rgba(235,235,245, 0.18);
+  --color-label-disabled:   rgba(235,235,245, 0.28);
+  --color-label-inverted:   #000000;
+
+  --color-separator:        rgba(84, 84, 88, 0.65);
+  --color-separator-opaque: #38383A;
+
+  --color-fill:             rgba(120,120,128, 0.36);
+  --color-fill-secondary:   rgba(120,120,128, 0.32);
+  --color-fill-tertiary:    rgba(118,118,128, 0.24);
+  --color-fill-quaternary:  rgba(118,118,128, 0.18);
+
+  --color-overlay-light:    rgba(255,255,255, 0.05);
+  --color-overlay-medium:   rgba(0, 0, 0, 0.40);
+  --color-overlay-heavy:    rgba(0, 0, 0, 0.70);
+
+  /* ✨ 苹果磨砂玻璃 — 深色（加厚以突出质感） */
+  --material-ultra-thin:    rgba(28, 28, 30, 0.42);
+  --material-thin:          rgba(28, 28, 30, 0.60);
+  --material-regular:       rgba(28, 28, 30, 0.72);
+  --material-thick:         rgba(44, 44, 46, 0.82);
+  --material-ultra-thick:   rgba(44, 44, 46, 0.92);
+  --material-chrome:        rgba(22, 22, 24, 0.85);
+
+  /* Dark 模式下的按钮阴影 */
+  --shadow-button:
+    0 1px 2px rgba(0, 0, 0, 0.40),
+    0 0 0 0.5px rgba(255, 255, 255, 0.04);
+  --shadow-button-hover-accent:
+    0 2px 10px rgba(10, 132, 255, 0.45);
+  --shadow-button-hover-danger:
+    0 2px 10px rgba(255, 69, 58, 0.45);
+
+  --shadow-xs:
+    0 1px 2px rgba(0, 0, 0, 0.20),
+    0 1px 4px rgba(0, 0, 0, 0.28);
+  --shadow-card:
+    0 1px 3px  rgba(0, 0, 0, 0.30),
+    0 4px 12px rgba(0, 0, 0, 0.36);
+  --shadow-card-hover:
+    0 2px 8px  rgba(0, 0, 0, 0.38),
+    0 8px 24px rgba(0, 0, 0, 0.40);
+  --shadow-popover:
+    0 4px 6px   rgba(0, 0, 0, 0.30),
+    0 10px 30px rgba(0, 0, 0, 0.50),
+    0 0 0 0.5px rgba(255, 255, 255, 0.06);
+  --shadow-modal:
+    0 8px 16px  rgba(0, 0, 0, 0.40),
+    0 24px 64px rgba(0, 0, 0, 0.60),
+    0 0 0 0.5px rgba(255, 255, 255, 0.06);
+  --shadow-focus-ring:
+    0 0 0 3px rgba(10, 132, 255, 0.50);
+
+  --border-default:         1px solid var(--color-gray-5);
+  --border-emphasis:        1px solid var(--color-gray-4);
+  --border-hairline:        0.5px solid var(--color-separator);
+
+  /* 深色模式背景 — 带微妙渐变增强层次 */
+  color-scheme: dark;
+}
+
+/* ── 浅色主题 · Light ───────────────────────────────────────────── */
+html[data-theme="light"] {
+  --color-accent:           #007AFF;
+  --color-accent-hover:     #0066D6;
+  --color-accent-pressed:   #0055B3;
+  --color-accent-subtle:    rgba(0, 122, 255, 0.12);
+
+  --color-green:            #34C759;
+  --color-green-hover:      #2AB04A;
+  --color-green-pressed:    #249A40;
+  --color-green-subtle:     rgba(52, 199, 89, 0.12);
+  --color-orange:           #FF9500;
+  --color-orange-hover:     #E8860A;
+  --color-orange-pressed:   #C6730A;
+  --color-orange-subtle:    rgba(255, 149, 0, 0.12);
+  --color-red:              #FF3B30;
+  --color-red-hover:        #E0352B;
+  --color-red-pressed:      #C62F25;
+  --color-red-subtle:       rgba(255, 59, 48, 0.12);
+  --color-teal:             #5AC8FA;
+  --color-indigo:           #5856D6;
+  --color-purple:           #AF52DE;
+  --color-yellow:           #FFCC00;
+
+  --color-gray-1:           #8E8E93;
+  --color-gray-2:           #AEAEB2;
+  --color-gray-3:           #C7C7CC;
+  --color-gray-4:           #D1D1D6;
+  --color-gray-5:           #E5E5EA;
+  --color-gray-6:           #F2F2F7;
+
+  --color-bg-primary:       #F5F5F7;
+  --color-bg-secondary:     #FFFFFF;
+  --color-bg-tertiary:      #FFFFFF;
+  --color-bg-elevated:      #FFFFFF;
+
+  --color-label:            #000000;
+  --color-label-secondary:  rgba(60,60,67, 0.60);
+  --color-label-tertiary:   rgba(60,60,67, 0.30);
+  --color-label-quaternary: rgba(60,60,67, 0.18);
+  --color-label-disabled:   rgba(60,60,67, 0.28);
+  --color-label-inverted:   #FFFFFF;
+
+  --color-separator:        rgba(60,60,67, 0.29);
+  --color-separator-opaque: #C6C6C8;
+
+  --color-fill:             rgba(120,120,128, 0.20);
+  --color-fill-secondary:   rgba(120,120,128, 0.16);
+  --color-fill-tertiary:    rgba(118,118,128, 0.12);
+  --color-fill-quaternary:  rgba(116,116,128, 0.08);
+
+  --color-overlay-light:    rgba(0, 0, 0, 0.04);
+  --color-overlay-medium:   rgba(0, 0, 0, 0.24);
+  --color-overlay-heavy:    rgba(0, 0, 0, 0.48);
+
+  /* ✨ 苹果磨砂玻璃 — 浅色（加厚以突出质感） */
+  --material-ultra-thin:    rgba(255,255,255, 0.42);
+  --material-thin:          rgba(255,255,255, 0.60);
+  --material-regular:       rgba(255,255,255, 0.72);
+  --material-thick:         rgba(255,255,255, 0.85);
+  --material-ultra-thick:   rgba(255,255,255, 0.92);
+  --material-chrome:        rgba(246,246,246, 0.80);
+
+  /* Light 模式下的按钮阴影 */
+  --shadow-button:
+    0 1px 2px rgba(0, 0, 0, 0.08),
+    0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  --shadow-button-hover-accent:
+    0 2px 8px rgba(0, 122, 255, 0.28);
+  --shadow-button-hover-danger:
+    0 2px 8px rgba(255, 59, 48, 0.28);
+
+  --shadow-xs:
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 1px 4px rgba(0, 0, 0, 0.06);
+  --shadow-card:
+    0 1px 3px  rgba(0, 0, 0, 0.08),
+    0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-card-hover:
+    0 2px 8px  rgba(0, 0, 0, 0.10),
+    0 8px 24px rgba(0, 0, 0, 0.10);
+  --shadow-popover:
+    0 4px 6px  rgba(0, 0, 0, 0.07),
+    0 10px 30px rgba(0, 0, 0, 0.12),
+    0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  --shadow-modal:
+    0 8px 16px  rgba(0, 0, 0, 0.10),
+    0 24px 64px rgba(0, 0, 0, 0.18),
+    0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  --shadow-focus-ring:
+    0 0 0 3px rgba(0, 122, 255, 0.40);
+
+  --border-default:         1px solid var(--color-gray-5);
+  --border-emphasis:        1px solid var(--color-gray-4);
+  --border-hairline:        0.5px solid var(--color-separator);
+
+  color-scheme: light;
+}
+
+/* ── 全局 body ──────────────────────────────────────────────────── */
 html, body {
   margin: 0;
   padding: 0;
   height: 100%;
   overflow: hidden;
-  background: #1e1e1e;
-  color: #d4d4d4;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Segoe WPC', Roboto,
-    'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji';
+  font-family: var(--font-sans);
   font-size: 13px;
-  line-height: 1.4;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  color: var(--color-label);
+  transition: background var(--duration-normal) var(--easing-ease),
+              color      var(--duration-normal) var(--easing-ease);
 }
 
-#root {
-  height: 100%;
+/* ✨ 磨砂玻璃背景 — 多层渐变 + 彩色光斑（供磨砂层透出） */
+html[data-theme="dark"] body {
+  background:
+    radial-gradient(ellipse 80% 60% at 15% 10%,  rgba(10, 132, 255, 0.14) 0%, transparent 55%),
+    radial-gradient(ellipse 70% 60% at 85% 90%,  rgba(191, 90, 242, 0.12) 0%, transparent 55%),
+    radial-gradient(ellipse 50% 40% at 50% 50%,  rgba(94, 92, 230, 0.08)  0%, transparent 60%),
+    linear-gradient(135deg, #0a0a0c 0%, #14141a 50%, #0a0a0c 100%);
+  background-attachment: fixed;
 }
 
-/* ── Scrollbar ────────────────────────────────────────────────────── */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.22);
+html[data-theme="light"] body {
+  background:
+    radial-gradient(ellipse 80% 60% at 15% 10%,  rgba(0, 122, 255, 0.10)  0%, transparent 55%),
+    radial-gradient(ellipse 70% 60% at 85% 90%,  rgba(175, 82, 222, 0.08) 0%, transparent 55%),
+    radial-gradient(ellipse 50% 40% at 50% 50%,  rgba(88, 86, 214, 0.05)  0%, transparent 60%),
+    linear-gradient(135deg, #F5F5F7 0%, #FFFFFF 50%, #EDEDEF 100%);
+  background-attachment: fixed;
 }
 
-/* ── Antd overrides ───────────────────────────────────────────────── */
+#root { height: 100%; }
+
+/* ── 全局滚动条 ─────────────────────────────────────────────────── */
+::-webkit-scrollbar        { width: 6px; height: 6px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  {
+  background: var(--color-gray-4);
+  border-radius: var(--radius-full);
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--color-gray-3); background-clip: padding-box; }
+
+/* ========================================================================
+   ✨ Apple Vibrancy 工具类 — 主定义在 tokens.css
+   （此处保留 material-chrome 增强，其余全局已覆盖）
+   ======================================================================== */
+
+/* ========================================================================
+   Antd 全局覆盖 — 统一用 token 变量
+   ======================================================================== */
 .ant-tooltip-inner {
   font-size: 12px !important;
+  border-radius: var(--radius-sm) !important;
+  background: var(--color-bg-elevated) !important;
+  color: var(--color-label) !important;
+  box-shadow: var(--shadow-popover) !important;
+  border: var(--border-default) !important;
 }
+.ant-tooltip-arrow::before { background: var(--color-bg-elevated) !important; }
 
 .ant-popover-inner {
-  background: #2d2d2d !important;
-  border: 1px solid #3c3c3c !important;
+  background: var(--material-thick) !important;
+  backdrop-filter: saturate(var(--vibrancy-saturation)) blur(var(--blur-lg));
+  -webkit-backdrop-filter: saturate(var(--vibrancy-saturation)) blur(var(--blur-lg));
+  border: var(--border-default) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--shadow-popover) !important;
 }
 
 .ant-select-dropdown {
-  background: #252526 !important;
-  border: 1px solid #3c3c3c !important;
+  background: var(--material-thick) !important;
+  backdrop-filter: saturate(var(--vibrancy-saturation)) blur(var(--blur-lg));
+  -webkit-backdrop-filter: saturate(var(--vibrancy-saturation)) blur(var(--blur-lg));
+  border: var(--border-default) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--shadow-popover) !important;
+  padding: 4px !important;
 }
-
 .ant-select-item {
-  color: #d4d4d4 !important;
+  color: var(--color-label) !important;
   font-size: 12px !important;
+  border-radius: var(--radius-xs) !important;
+  transition: background var(--duration-fast) var(--easing-ease) !important;
 }
-
-.ant-select-item-option-active {
-  background: rgba(14, 99, 156, 0.2) !important;
-}
-
+.ant-select-item-option-active  { background: var(--color-fill) !important; }
 .ant-select-item-option-selected {
-  background: rgba(14, 99, 156, 0.35) !important;
+  background: var(--color-accent-subtle) !important;
+  color: var(--color-accent) !important;
 }
 
 .ant-modal-mask {
-  background: rgba(0, 0, 0, 0.7) !important;
+  background: var(--color-overlay-heavy) !important;
+  backdrop-filter: blur(var(--blur-md));
+  -webkit-backdrop-filter: blur(var(--blur-md));
+}
+.ant-modal-content {
+  background: var(--material-thick) !important;
+  backdrop-filter: saturate(var(--vibrancy-saturation)) blur(var(--blur-lg));
+  -webkit-backdrop-filter: saturate(var(--vibrancy-saturation)) blur(var(--blur-lg));
+  border: var(--border-default) !important;
+  border-radius: var(--radius-xl) !important;
+  box-shadow: var(--shadow-modal) !important;
+}
+.ant-modal-header {
+  background: transparent !important;
+  border-bottom: var(--border-hairline) !important;
+  padding: 16px 20px !important;
+}
+.ant-modal-title {
+  color: var(--color-label) !important;
+  font-size: 17px !important;
+  font-weight: 600 !important;
+}
+.ant-modal-close { color: var(--color-label-secondary) !important; }
+.ant-modal-close:hover {
+  color: var(--color-label) !important;
+  background: var(--color-fill) !important;
+  border-radius: var(--radius-xs) !important;
+}
+.ant-modal-body   { color: var(--color-label) !important; }
+.ant-modal-footer { border-top: var(--border-hairline) !important; }
+
+.ant-input, .ant-input-affix-wrapper, .ant-input-number {
+  background: var(--color-fill-secondary) !important;
+  border-color: var(--color-gray-4) !important;
+  color: var(--color-label) !important;
+  border-radius: var(--radius-sm) !important;
+  transition: border-color var(--duration-fast) var(--easing-ease),
+              box-shadow   var(--duration-fast) var(--easing-ease) !important;
+}
+.ant-input::placeholder { color: var(--color-label-tertiary) !important; }
+.ant-input:focus,
+.ant-input-affix-wrapper:focus,
+.ant-input-affix-wrapper-focused,
+.ant-input-number-focused {
+  border-color: var(--color-accent) !important;
+  box-shadow: var(--shadow-focus-ring) !important;
 }
 
-/* ── KaTeX math ───────────────────────────────────────────────────── */
-.katex {
-  font-size: 1em !important;
+.ant-btn {
+  border-radius: var(--radius-sm) !important;
+  font-size: 13px !important;
+  transition: all var(--duration-fast) var(--easing-ease) !important;
+}
+.ant-btn-primary {
+  background: var(--color-accent) !important;
+  border-color: var(--color-accent) !important;
+}
+.ant-btn-primary:hover {
+  background: var(--color-accent-hover) !important;
+  border-color: var(--color-accent-hover) !important;
+  transform: translateY(-1px);
 }
 
-code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
+.ant-form-item-label > label { color: var(--color-label-secondary) !important; font-size: 12px !important; }
+.ant-form-item-explain-error  { color: var(--color-red) !important; font-size: 11px !important; }
+
+.ant-switch                   { background: var(--color-fill) !important; }
+.ant-switch-checked           { background: var(--color-accent) !important; }
+
+.ant-slider-rail   { background: var(--color-fill) !important; }
+.ant-slider-track  { background: var(--color-accent) !important; }
+.ant-slider-handle {
+  border-color: var(--color-accent) !important;
+  background: var(--color-accent) !important;
 }
+
+.ant-tag {
+  border-radius: var(--radius-xs) !important;
+  font-size: 11px !important;
+  border-color: var(--color-gray-4) !important;
+  background: var(--color-fill) !important;
+  color: var(--color-label-secondary) !important;
+}
+
+.ant-table {
+  background: transparent !important;
+  color: var(--color-label) !important;
+}
+.ant-table-thead > tr > th {
+  background: var(--color-fill-quaternary) !important;
+  color: var(--color-label-secondary) !important;
+  border-bottom: var(--border-hairline) !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+}
+.ant-table-tbody > tr > td {
+  border-bottom: var(--border-hairline) !important;
+  color: var(--color-label) !important;
+}
+.ant-table-tbody > tr:hover > td {
+  background: var(--color-fill-quaternary) !important;
+}
+
+.ant-tabs-tab                 { color: var(--color-label-secondary) !important; }
+.ant-tabs-tab:hover           { color: var(--color-label) !important; }
+.ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--color-accent) !important;
+}
+
+/* ── KaTeX ────────────────────────────────────────────────────────── */
+.katex { font-size: 1em !important; }
+code   { font-family: var(--font-mono); }

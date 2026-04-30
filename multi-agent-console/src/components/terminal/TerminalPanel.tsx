@@ -108,8 +108,8 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ sessionId }) => {
         display: 'flex',
         flexDirection: 'column',
         height: panelHeight,
-        background: '#141414',
-        borderTop: '1px solid #1e1e1e',
+        background: 'var(--color-bg-primary)',
+        borderTop: 'var(--border-hairline)',
         flexShrink: 0,
       }}
     >
@@ -119,20 +119,20 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ sessionId }) => {
         style={{
           height: 4,
           cursor: 'row-resize',
-          background: '#1e1e1e',
+          background: 'var(--color-fill-quaternary)',
           flexShrink: 0,
-          transition: 'background 0.15s',
+          transition: 'background var(--duration-fast) var(--easing-ease)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
         }}
-        onMouseEnter={e => (e.currentTarget.style.background = '#0e639c')}
-        onMouseLeave={e => (e.currentTarget.style.background = '#1e1e1e')}
+        onMouseEnter={e => (e.currentTarget.style.background = 'var(--color-accent)')}
+        onMouseLeave={e => (e.currentTarget.style.background = 'var(--color-fill-quaternary)')}
       >
         {/* 拖拽提示三点 */}
         <div style={{ display: 'flex', gap: 3, pointerEvents: 'none' }}>
           {[0,1,2].map(i => (
-            <div key={i} style={{ width: 3, height: 3, borderRadius: '50%', background: 'rgba(255,255,255,0.12)' }} />
+            <div key={i} style={{ width: 3, height: 3, borderRadius: '50%', background: 'var(--color-label-quaternary)' }} />
           ))}
         </div>
       </div>
@@ -143,19 +143,21 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ sessionId }) => {
           display: 'flex',
           alignItems: 'center',
           height: 36,
-          background: '#1a1a1a',
-          borderBottom: '1px solid #222',
+          background: 'var(--material-chrome)',
+          backdropFilter: 'saturate(1.8) blur(20px)',
+          WebkitBackdropFilter: 'saturate(1.8) blur(20px)',
+          borderBottom: 'var(--border-hairline)',
           flexShrink: 0,
           overflow: 'hidden',
         }}
       >
         {/* 左侧 TERMINAL 标签 */}
-        <div style={{ padding: '0 12px', fontSize: 10, fontWeight: 700, letterSpacing: '.1em', color: '#3c3c3c', textTransform: 'uppercase', flexShrink: 0 }}>
+        <div style={{ padding: '0 12px', fontSize: 10, fontWeight: 700, letterSpacing: '.1em', color: 'var(--color-label-tertiary)', textTransform: 'uppercase', flexShrink: 0 }}>
           终端
         </div>
 
         {/* 分隔线 */}
-        <div style={{ width: 1, height: 16, background: '#2a2a2a', flexShrink: 0 }} />
+        <div style={{ width: 1, height: 16, background: 'var(--color-separator)', flexShrink: 0 }} />
 
         {/* 终端 Tab 列表 */}
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden', alignItems: 'stretch', paddingLeft: 4 }}>
@@ -173,10 +175,10 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ sessionId }) => {
                   height: '100%',
                   cursor: 'pointer',
                   fontSize: 12,
-                  color: isActive ? '#e0e0e0' : '#555',
-                  background: isActive ? 'rgba(255,255,255,0.05)' : 'transparent',
-                  borderBottom: isActive ? '2px solid #0e639c' : '2px solid transparent',
-                  borderRight: '1px solid #1e1e1e',
+                  color: isActive ? 'var(--color-label)' : 'var(--color-label-secondary)',
+                  background: isActive ? 'var(--color-fill-quaternary)' : 'transparent',
+                  borderBottom: isActive ? `2px solid var(--color-accent)` : '2px solid transparent',
+                  borderRight: 'var(--border-hairline)',
                   whiteSpace: 'nowrap',
                   userSelect: 'none',
                   flexShrink: 0,

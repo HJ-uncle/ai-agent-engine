@@ -18,7 +18,7 @@ function SettingRow({
         <div className={styles.itemTitle}>
           {title}
           <Tooltip title={`环境变量: ${envKey}`}>
-            <InfoCircleOutlined style={{ marginLeft: 6, color: '#555', fontSize: 12, cursor: 'help' }} />
+            <InfoCircleOutlined style={{ marginLeft: 6, color: 'var(--color-label-tertiary)', fontSize: 12, cursor: 'help' }} />
           </Tooltip>
         </div>
         <div className={styles.itemDescription}>{desc}</div>
@@ -28,7 +28,7 @@ function SettingRow({
   )
 }
 
-const INPUT_STYLE = { background: '#2d2d2d', border: '1px solid #444', color: '#ccc' }
+const INPUT_STYLE = { background: 'var(--color-fill-secondary)', border: '1px solid var(--color-gray-4)', color: 'var(--color-label)', borderRadius: 'var(--radius-sm)' }
 
 export default function AgentSettings() {
   const { settings, handleChange, saveKeys, saving } = useSettings()
@@ -109,7 +109,7 @@ export default function AgentSettings() {
                 />
               </Col>
               <Col>
-                <span style={{ color: '#ccc', fontSize: 13, minWidth: 36, textAlign: 'right', display: 'inline-block' }}>
+                <span style={{ color: 'var(--color-label)', fontSize: 13, minWidth: 36, textAlign: 'right', display: 'inline-block' }}>
                   {settings.COMPRESS_THRESHOLD_RATIO
                     ? `${Math.round(settings.COMPRESS_THRESHOLD_RATIO * 100)}%`
                     : '50%'}

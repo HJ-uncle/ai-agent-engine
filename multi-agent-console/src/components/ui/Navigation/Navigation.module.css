@@ -1,0 +1,222 @@
+/* ======================================================
+   Navigation.module.css — Apple HIG 导航组件
+   包含：顶部标题栏 (TopBar) + 侧边栏导航项 (NavItem)
+   ====================================================== */
+
+/* ============================================================
+   顶部标题栏 · TopBar
+   ============================================================ */
+.topBar {
+  position:      sticky;
+  top:           0;
+  z-index:       200;
+  width:         100%;
+  height:        var(--nav-bar-height);      /* 44px */
+  /* 顶部安全区 */
+  padding-top:   var(--safe-area-top);
+  /* 毛玻璃效果 */
+  background:    var(--material-thin);
+  backdrop-filter:
+    blur(var(--blur-md)) saturate(var(--vibrancy-saturation));
+  -webkit-backdrop-filter:
+    blur(var(--blur-md)) saturate(var(--vibrancy-saturation));
+  border-bottom: var(--border-hairline);
+  display:       flex;
+  align-items:   center;
+  justify-content: space-between;
+  padding-left:  var(--spacing-4);
+  padding-right: var(--spacing-4);
+  gap:           var(--spacing-2);
+}
+
+/* 标题栏左侧区域（返回按钮等） */
+.topBarLeft {
+  display:     flex;
+  align-items: center;
+  gap:         var(--spacing-1);
+  min-width:   80px;
+}
+
+/* 标题栏中心标题 */
+.topBarTitle {
+  font-family:    var(--font-sans);
+  font-size:      var(--text-headline-size);   /* 17px semibold */
+  font-weight:    var(--text-headline-weight);
+  letter-spacing: var(--text-headline-tracking);
+  color:          var(--color-label);
+  margin:         0;
+  flex:           1;
+  text-align:     center;
+  white-space:    nowrap;
+  overflow:       hidden;
+  text-overflow:  ellipsis;
+}
+
+/* 标题栏右侧区域 */
+.topBarRight {
+  display:         flex;
+  align-items:     center;
+  justify-content: flex-end;
+  gap:             var(--spacing-1);
+  min-width:       80px;
+}
+
+/* 标题栏图标按钮 */
+.topBarBtn {
+  display:         flex;
+  align-items:     center;
+  justify-content: center;
+  min-width:       var(--min-touch-target);
+  min-height:      var(--min-touch-target);
+  border-radius:   var(--radius-sm);
+  background:      transparent;
+  border:          none;
+  color:           var(--color-accent);
+  font-family:     var(--font-sans);
+  font-size:       var(--text-callout-size);
+  font-weight:     600;
+  cursor:          pointer;
+  padding:         0 var(--spacing-2);
+  transition:
+    background var(--duration-instant) var(--easing-ease-out),
+    transform  var(--duration-fast)    var(--easing-spring);
+}
+.topBarBtn:hover   { background: var(--color-fill-tertiary); }
+.topBarBtn:active  { transform: scale(0.94); }
+.topBarBtn:focus-visible {
+  outline:    none;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+/* 返回按钮 */
+.backBtn {
+  display:     flex;
+  align-items: center;
+  gap:         var(--spacing-1);
+  color:       var(--color-accent);
+  font-size:   var(--text-callout-size);
+  font-weight: 400;
+}
+
+/* ============================================================
+   侧边栏 · Sidebar
+   ============================================================ */
+.sidebar {
+  width:         var(--sidebar-width);
+  min-height:    100vh;
+  background:    var(--material-regular);
+  backdrop-filter:
+    blur(var(--blur-md)) saturate(var(--vibrancy-saturation));
+  -webkit-backdrop-filter:
+    blur(var(--blur-md)) saturate(var(--vibrancy-saturation));
+  border-right:  var(--border-hairline);
+  display:       flex;
+  flex-direction: column;
+  padding:       var(--spacing-3) var(--spacing-2);
+  gap:           var(--spacing-1);
+  overflow-y:    auto;
+  /* 左侧安全区 */
+  padding-left:  calc(var(--spacing-2) + var(--safe-area-left));
+}
+
+/* 侧边栏分区标题 */
+.sidebarSectionTitle {
+  font-family:    var(--font-sans);
+  font-size:      var(--text-footnote-size);   /* 13px */
+  font-weight:    600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color:          var(--color-label-secondary);
+  padding:        var(--spacing-3) var(--spacing-3) var(--spacing-1);
+  margin:         0;
+}
+
+/* 侧边栏分割线 */
+.sidebarDivider {
+  height: 1px;
+  background: var(--color-separator);
+  margin: var(--spacing-2) var(--spacing-3);
+  border: none;
+}
+
+/* ============================================================
+   侧边栏导航项 · NavItem
+   ============================================================ */
+.navItem {
+  display:         flex;
+  align-items:     center;
+  gap:             var(--spacing-3);
+  min-height:      var(--min-touch-target);    /* 44px */
+  padding:         0 var(--spacing-3);
+  border-radius:   var(--radius-md);           /* 10px */
+  background:      transparent;
+  border:          none;
+  cursor:          pointer;
+  text-decoration: none;
+  color:           var(--color-label);
+  font-family:     var(--font-sans);
+  font-size:       var(--text-callout-size);   /* 16px */
+  font-weight:     400;
+  letter-spacing:  var(--text-callout-tracking);
+  width:           100%;
+  text-align:      left;
+  transition:
+    background  var(--duration-instant) var(--easing-ease-out),
+    color       var(--duration-instant) var(--easing-ease-out),
+    transform   var(--duration-fast)    var(--easing-spring);
+  position: relative;
+}
+
+.navItem:hover:not(.navItemActive) {
+  background: var(--color-fill-tertiary);
+}
+
+.navItem:active {
+  transform: scale(0.98);
+  transition-duration: var(--duration-instant);
+}
+
+.navItem:focus-visible {
+  outline:    none;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+/* 激活态（当前选中页面） */
+.navItemActive {
+  background: var(--color-accent-subtle);
+  color:      var(--color-accent);
+  font-weight: 600;
+}
+
+/* 导航项图标 */
+.navItemIcon {
+  display:      flex;
+  align-items:  center;
+  justify-content: center;
+  width:        22px;
+  height:       22px;
+  flex-shrink:  0;
+  color:        inherit;
+}
+
+/* 导航项标签 */
+.navItemLabel {
+  flex: 1;
+  white-space:   nowrap;
+  overflow:      hidden;
+  text-overflow: ellipsis;
+}
+
+/* 右侧徽章 / 计数 */
+.navItemBadge {
+  margin-left: auto;
+  font-size:   var(--text-caption2-size);
+  font-weight: 600;
+  background:  var(--color-red);
+  color:       white;
+  border-radius: var(--radius-full);
+  padding:     1px 6px;
+  min-width:   18px;
+  text-align:  center;
+  line-height: 16px;
+}

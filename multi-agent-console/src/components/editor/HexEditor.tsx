@@ -24,7 +24,7 @@ export function HexEditor({ data, name }: HexEditorProps) {
   const toAscii = (b: number) => (b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : '·')
 
   return (
-    <div style={{ flex: 1, overflow: 'auto', background: '#1e1e1e', padding: '12px 16px', fontFamily: 'Consolas, monospace', fontSize: 13 }}>
+    <div style={{ flex: 1, overflow: 'auto', background: 'var(--color-bg-primary)', padding: '12px 16px', fontFamily: 'var(--font-mono)', fontSize: 13 }}>
       {/* Header */}
       <div style={{ display: 'flex', color: '#555', marginBottom: 4, paddingBottom: 4, borderBottom: '1px solid #333', userSelect: 'none' }}>
         <span style={{ width: 80, display: 'inline-block', flexShrink: 0 }}>Offset</span>

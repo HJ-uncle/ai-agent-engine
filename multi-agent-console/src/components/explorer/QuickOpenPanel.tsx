@@ -95,20 +95,24 @@ export function QuickOpenPanel({ files, onClose }: QuickOpenPanelProps) {
         position: 'fixed', inset: 0, zIndex: 9998,
         display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
         paddingTop: '15vh',
-        background: 'rgba(0,0,0,0.5)',
+        background: 'var(--color-overlay-heavy)',
+        backdropFilter: 'blur(8px)',
+        WebkitBackdropFilter: 'blur(8px)',
       }}
       onClick={onClose}
     >
       <div
         style={{
-          background: '#252526',
-          border: '1px solid #454545',
-          borderRadius: 6,
+          background: 'var(--material-thick)',
+          backdropFilter: 'saturate(1.8) blur(24px)',
+          WebkitBackdropFilter: 'saturate(1.8) blur(24px)',
+          border: 'var(--border-default)',
+          borderRadius: 'var(--radius-xl)',
           width: 600,
           maxHeight: 480,
           display: 'flex',
           flexDirection: 'column',
-          boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+          boxShadow: 'var(--shadow-modal)',
           overflow: 'hidden',
         }}
         onClick={e => e.stopPropagation()}
@@ -122,11 +126,11 @@ export function QuickOpenPanel({ files, onClose }: QuickOpenPanelProps) {
           style={{
             background: 'transparent',
             border: 'none',
-            borderBottom: '1px solid #454545',
+            borderBottom: 'var(--border-hairline)',
             outline: 'none',
-            padding: '10px 16px',
+            padding: '12px 16px',
             fontSize: 14,
-            color: '#ccc',
+            color: 'var(--color-label)',
             width: '100%',
             boxSizing: 'border-box',
           }}
@@ -142,19 +146,20 @@ export function QuickOpenPanel({ files, onClose }: QuickOpenPanelProps) {
                 style={{
                   padding: '6px 16px',
                   cursor: 'pointer',
-                  background: i === activeIdx ? '#094771' : 'transparent',
+                  background: i === activeIdx ? 'var(--color-accent-subtle)' : 'transparent',
                   display: 'flex',
                   flexDirection: 'column',
+                  transition: 'background var(--duration-fast) var(--easing-ease)',
                 }}
                 onMouseEnter={() => setActiveIdx(i)}
               >
-                <span style={{ fontSize: 13 }}>{highlight(name, query)}</span>
-                <span style={{ fontSize: 11, color: '#666', marginTop: 1 }}>{dir}</span>
+                <span style={{ fontSize: 13, color: 'var(--color-label)' }}>{highlight(name, query)}</span>
+                <span style={{ fontSize: 11, color: 'var(--color-label-tertiary)', marginTop: 1 }}>{dir}</span>
               </div>
             )
           })}
           {results.length === 0 && (
-            <div style={{ padding: '16px', color: '#666', fontSize: 13, textAlign: 'center' }}>
+            <div style={{ padding: '16px', color: 'var(--color-label-tertiary)', fontSize: 13, textAlign: 'center' }}>
               无匹配结果
             </div>
           )}

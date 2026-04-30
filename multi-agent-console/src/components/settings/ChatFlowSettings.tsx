@@ -49,7 +49,7 @@ export default function ChatFlowSettings() {
                   max={50}
                   value={maxAskUserCount}
                   onChange={(val) => setMaxAskUserCount(val || 5)}
-                  style={{ width: 120, background: '#2d2d2d', border: '1px solid #444', color: '#ccc' }}
+                  style={{ width: 120, background: 'var(--color-fill-secondary)', border: '1px solid var(--color-gray-4)', color: 'var(--color-label)', borderRadius: 'var(--radius-sm)' }}
                 />
               </div>
             </div>

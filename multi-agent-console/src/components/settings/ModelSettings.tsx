@@ -82,7 +82,7 @@ export default function ModelSettings() {
     },
   ]
 
-  const inputStyle = { width: 250, background: '#2d2d2d', border: '1px solid #444', color: '#ccc' }
+  const inputStyle = { width: 250, background: 'var(--color-fill-secondary)', border: '1px solid var(--color-gray-4)', color: 'var(--color-label)', borderRadius: 'var(--radius-sm)' }
 
   return (
     <div className={styles.settingsContainer}>
@@ -129,7 +129,7 @@ export default function ModelSettings() {
               <Input
                 value={settings.LLM_PRIMARY_MODEL}
                 onChange={(e) => handleChange('LLM_PRIMARY_MODEL', e.target.value)}
-                style={{ width: 200, background: '#2d2d2d', border: '1px solid #444', color: '#ccc' }}
+                style={{ width: 200, background: 'var(--color-fill-secondary)', border: '1px solid var(--color-gray-4)', color: 'var(--color-label)', borderRadius: 'var(--radius-sm)' }}
               />
             </div>
           </div>

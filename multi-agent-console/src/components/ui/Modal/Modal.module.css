@@ -1,0 +1,176 @@
+/* ======================================================
+   Modal.module.css — Apple HIG 风格模态 / Sheet
+   ====================================================== */
+
+/* --- 遮罩层 --- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: var(--color-overlay-medium);
+  /* 毛玻璃遮罩 */
+  backdrop-filter: blur(4px) saturate(120%);
+  -webkit-backdrop-filter: blur(4px) saturate(120%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-4);
+}
+
+/* --- 进入/离开动画 --- */
+.overlayEnter {
+  animation: overlayFadeIn var(--duration-normal) var(--easing-ease-out) forwards;
+}
+.overlayExit {
+  animation: overlayFadeOut var(--duration-fast) var(--easing-ease-in) forwards;
+}
+@keyframes overlayFadeIn  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes overlayFadeOut { from { opacity: 1; } to { opacity: 0; } }
+
+/* ======================================================
+   居中弹窗 · Dialog
+   ====================================================== */
+.dialog {
+  position: relative;
+  background: var(--material-thick);
+  backdrop-filter: blur(var(--blur-lg)) saturate(var(--vibrancy-saturation));
+  -webkit-backdrop-filter: blur(var(--blur-lg)) saturate(var(--vibrancy-saturation));
+  border-radius: var(--radius-xl);           /* 16px */
+  box-shadow: var(--shadow-modal);
+  width: 100%;
+  max-width: 540px;
+  max-height: 85vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  outline: none;
+}
+
+.dialogEnter {
+  animation: dialogPopIn var(--duration-slow) var(--easing-spring) forwards;
+}
+.dialogExit {
+  animation: dialogPopOut var(--duration-fast) var(--easing-ease-in) forwards;
+}
+@keyframes dialogPopIn {
+  from { opacity: 0; transform: scale(0.88) translateY(10px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0); }
+}
+@keyframes dialogPopOut {
+  from { opacity: 1; transform: scale(1); }
+  to   { opacity: 0; transform: scale(0.94); }
+}
+
+/* ======================================================
+   底部滑出 Sheet
+   ====================================================== */
+.sheetOverlay {
+  align-items: flex-end;
+  padding: 0;
+}
+
+.sheet {
+  position: relative;
+  background: var(--material-thick);
+  backdrop-filter: blur(var(--blur-lg)) saturate(var(--vibrancy-saturation));
+  -webkit-backdrop-filter: blur(var(--blur-lg)) saturate(var(--vibrancy-saturation));
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  box-shadow: var(--shadow-modal);
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  outline: none;
+  /* 底部安全区 */
+  padding-bottom: var(--safe-area-bottom);
+}
+
+.sheetEnter {
+  animation: sheetSlideUp var(--duration-slow) var(--easing-spring) forwards;
+}
+.sheetExit {
+  animation: sheetSlideDown var(--duration-fast) var(--easing-ease-in) forwards;
+}
+@keyframes sheetSlideUp {
+  from { transform: translateY(100%); opacity: 0.6; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+@keyframes sheetSlideDown {
+  from { transform: translateY(0);    opacity: 1; }
+  to   { transform: translateY(100%); opacity: 0; }
+}
+
+/* --- 拖拽指示条 --- */
+.grabber {
+  width: 36px;
+  height: 4px;
+  background: var(--color-gray-3);
+  border-radius: var(--radius-full);
+  margin: var(--spacing-2) auto var(--spacing-3);
+  flex-shrink: 0;
+}
+
+/* ======================================================
+   内部结构
+   ====================================================== */
+
+/* 标题栏 */
+.header {
+  display:         flex;
+  align-items:     center;
+  justify-content: space-between;
+  padding:         var(--spacing-4) var(--spacing-4) 0;
+  min-height:      var(--nav-bar-height);
+}
+
+.modalTitle {
+  font-family:    var(--font-sans);
+  font-size:      var(--text-headline-size);
+  font-weight:    var(--text-headline-weight);
+  letter-spacing: var(--text-headline-tracking);
+  color:          var(--color-label);
+  margin:         0;
+  flex: 1;
+  text-align:     center;
+}
+
+/* 关闭按钮 */
+.closeBtn {
+  display:         flex;
+  align-items:     center;
+  justify-content: center;
+  width:           30px;
+  height:          30px;
+  border-radius:   var(--radius-full);
+  background:      var(--color-fill);
+  border:          none;
+  cursor:          pointer;
+  color:           var(--color-label-secondary);
+  flex-shrink:     0;
+  transition:
+    background var(--duration-instant) var(--easing-ease-out),
+    transform  var(--duration-fast)    var(--easing-spring);
+}
+.closeBtn:hover {
+  background: var(--color-fill-secondary);
+}
+.closeBtn:active {
+  transform: scale(0.92);
+}
+.closeBtn:focus-visible {
+  box-shadow: var(--shadow-focus-ring);
+  outline:    none;
+}
+
+/* 内容区 */
+.body {
+  padding: var(--spacing-4);
+}
+
+/* 底部操作区 */
+.footer {
+  display:     flex;
+  flex-direction: column;
+  gap:         var(--spacing-2);
+  padding:     var(--spacing-3) var(--spacing-4) var(--spacing-4);
+  border-top:  var(--border-hairline);
+}

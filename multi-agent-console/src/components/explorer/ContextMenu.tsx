@@ -126,10 +126,12 @@ export function ContextMenu({ state, sessionId, onClose, onRefresh, onStartRenam
     top: Math.min(state.y, window.innerHeight - 240),
     left: Math.min(state.x, window.innerWidth - 220),
     zIndex: 9999,
-    background: '#252526',
-    border: '1px solid #454545',
-    borderRadius: 4,
-    boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+    background: 'var(--material-thick)',
+    backdropFilter: 'saturate(1.8) blur(20px)',
+    WebkitBackdropFilter: 'saturate(1.8) blur(20px)',
+    border: 'var(--border-default)',
+    borderRadius: 'var(--radius-md)',
+    boxShadow: 'var(--shadow-popover)',
     minWidth: 200,
     padding: '4px 0',
     userSelect: 'none',
@@ -145,17 +147,18 @@ export function ContextMenu({ state, sessionId, onClose, onRefresh, onStartRenam
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
-            padding: '5px 12px',
+            padding: '6px 12px',
             fontSize: 13,
             cursor: 'pointer',
-            color: item.danger ? '#f14c4c' : '#cccccc',
+            color: item.danger ? 'var(--color-red)' : 'var(--color-label)',
+            transition: 'background var(--duration-fast) var(--easing-ease)',
           }}
-          onMouseEnter={e => (e.currentTarget.style.background = '#094771')}
+          onMouseEnter={e => (e.currentTarget.style.background = 'var(--color-accent-subtle)')}
           onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
         >
           <span>{item.label}</span>
           {item.shortcut && (
-            <span style={{ fontSize: 11, color: '#888', marginLeft: 16 }}>{item.shortcut}</span>
+            <span style={{ fontSize: 11, color: 'var(--color-label-tertiary)', marginLeft: 16 }}>{item.shortcut}</span>
           )}
         </div>
       ))}

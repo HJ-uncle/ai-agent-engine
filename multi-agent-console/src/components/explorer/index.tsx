@@ -272,7 +272,7 @@ export default function NewExplorerPanel() {
             placeholder="搜索文件..."
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid #3c3c3c', color: '#ccc' }}
+            style={{ background: 'var(--color-fill-tertiary)', border: 'var(--border-default)', color: 'var(--color-label)' }}
             allowClear
           />
         </div>
@@ -304,7 +304,7 @@ export default function NewExplorerPanel() {
           onClick={() => setRenameModalOpen(false)}
         >
           <div
-            style={{ background: '#1e1e1e', border: '1px solid #454545', borderRadius: 6, padding: 24, minWidth: 320 }}
+            style={{ background: 'var(--material-thick)', backdropFilter: 'saturate(1.8) blur(24px)', WebkitBackdropFilter: 'saturate(1.8) blur(24px)', border: 'var(--border-default)', borderRadius: 'var(--radius-xl)', padding: 24, minWidth: 320, boxShadow: 'var(--shadow-modal)' }}
             onClick={e => e.stopPropagation()}
           >
             <div style={{ marginBottom: 12, fontWeight: 600, color: '#ccc' }}>重命名工作区</div>

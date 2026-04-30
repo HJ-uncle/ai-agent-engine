@@ -79,12 +79,14 @@ export function EditorTabs() {
         style={{
           display: 'flex',
           flexDirection: 'row',
-          background: '#1e1e1e',
-          borderBottom: '1px solid #252526',
+          background: 'var(--material-chrome)',
+          backdropFilter: 'saturate(1.8) blur(20px)',
+          WebkitBackdropFilter: 'saturate(1.8) blur(20px)',
+          borderBottom: 'var(--border-hairline)',
           overflowX: 'auto',
           flexShrink: 0,
-          height: 35,
-          scrollbarWidth: 'none', // Firefox 隐藏滚动条（滚轮操控）
+          height: 36,
+          scrollbarWidth: 'none',
         }}
         onClick={() => ctxMenu && setCtxMenu(null)}
       >
@@ -108,19 +110,20 @@ export function EditorTabs() {
                 fontSize: 13,
                 whiteSpace: 'nowrap',
                 userSelect: 'none',
-                background: isActive ? '#1e1e1e' : '#2d2d2d',
-                borderTop: isActive ? '1px solid #007acc' : '1px solid transparent',
-                borderRight: '1px solid #252526',
-                color: isActive ? '#fff' : '#999',
+                background: isActive ? 'var(--color-bg-primary)' : 'transparent',
+                borderTop: isActive ? `2px solid var(--color-accent)` : '2px solid transparent',
+                borderRight: 'var(--border-hairline)',
+                color: isActive ? 'var(--color-label)' : 'var(--color-label-secondary)',
+                transition: 'background var(--duration-fast) var(--easing-ease), color var(--duration-fast) var(--easing-ease)',
                 flexShrink: 0,
               }}
             >
               {isDirty && (
-                <span style={{ color: '#e2c08d', fontSize: 10, lineHeight: 1 }}>●</span>
+                <span style={{ color: 'var(--color-orange)', fontSize: 10, lineHeight: 1 }}>●</span>
               )}
               <span>{tab.name}</span>
               <CloseOutlined
-                style={{ fontSize: 10, color: '#888' }}
+                style={{ fontSize: 10, color: 'var(--color-label-tertiary)' }}
                 onClick={e => handleClose(e, tab.path)}
               />
             </div>
@@ -143,11 +146,13 @@ export function EditorTabs() {
               left: ctxMenu.x,
               top: ctxMenu.y,
               zIndex: 1000,
-              background: '#252526',
-              border: '1px solid #454545',
-              borderRadius: 4,
+              background: 'var(--material-thick)',
+              backdropFilter: 'saturate(1.8) blur(20px)',
+              WebkitBackdropFilter: 'saturate(1.8) blur(20px)',
+              border: 'var(--border-default)',
+              borderRadius: 'var(--radius-md)',
               minWidth: 180,
-              boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+              boxShadow: 'var(--shadow-popover)',
               padding: '4px 0',
             }}
           >
@@ -165,17 +170,18 @@ export function EditorTabs() {
                   display: 'flex',
                   justifyContent: 'space-between',
                   alignItems: 'center',
-                  padding: '5px 16px',
+                  padding: '6px 16px',
                   fontSize: 13,
-                  color: '#d4d4d4',
+                  color: 'var(--color-label)',
                   cursor: 'pointer',
                   gap: 24,
+                  transition: 'background var(--duration-fast) var(--easing-ease)',
                 }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(14,99,156,0.4)')}
+                onMouseEnter={e => (e.currentTarget.style.background = 'var(--color-accent-subtle)')}
                 onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
               >
                 <span>{item.label}</span>
-                {item.shortcut && <span style={{ fontSize: 11, color: '#888' }}>{item.shortcut}</span>}
+                {item.shortcut && <span style={{ fontSize: 11, color: 'var(--color-label-tertiary)' }}>{item.shortcut}</span>}
               </div>
             ))}
           </div>

@@ -155,11 +155,11 @@ export default function McpSettings() {
       width: 160,
       render: (text: string, r: McpServer) => (
         <div style={{ minWidth: 0 }}>
-          <div style={{ color: '#fff', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <div style={{ color: 'var(--color-label)', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {text}
           </div>
           {r.description && (
-            <div style={{ color: '#666', fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            <div style={{ color: 'var(--color-label-tertiary)', fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {r.description}
             </div>
           )}
@@ -173,8 +173,8 @@ export default function McpSettings() {
       render: (v: string) => (
         <Tooltip title={v}>
           <code style={{
-            background: '#2d2d2d', padding: '1px 6px', borderRadius: 4,
-            fontSize: 12, color: '#9cdcfe',
+            background: 'var(--color-fill)', padding: '1px 6px', borderRadius: 'var(--radius-xs)',
+            fontSize: 12, color: 'var(--color-teal)',
             display: 'inline-block', maxWidth: 140,
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
           }}>
@@ -194,7 +194,7 @@ export default function McpSettings() {
       ellipsis: { showTitle: false },
       render: (_: any, r: McpServer) => (
         <Tooltip title={r.url || r.command}>
-          <span style={{ color: '#ccc', fontSize: 12 }}>{r.url || r.command || '—'}</span>
+          <span style={{ color: 'var(--color-label-secondary)', fontSize: 12 }}>{r.url || r.command || '—'}</span>
         </Tooltip>
       ),
     },
@@ -218,8 +218,8 @@ export default function McpSettings() {
                 ? `${res.toolCount} 个工具: ${res.tools?.map(t => t.name).join(', ')}`
                 : res.error}>
                 {res.success
-                  ? <CheckCircleOutlined style={{ color: '#73c991' }} />
-                  : <CloseCircleOutlined style={{ color: '#f48771' }} />}
+                  ? <CheckCircleOutlined style={{ color: 'var(--color-green)' }} />
+                  : <CloseCircleOutlined style={{ color: 'var(--color-red)' }} />}
               </Tooltip>
             )}
           </Space>
@@ -250,7 +250,7 @@ export default function McpSettings() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <div>
             <div className={styles.sectionTitle} style={{ margin: 0 }}>MCP 服务器管理</div>
-            <div style={{ color: '#666', fontSize: 12, marginTop: 4 }}>
+            <div style={{ color: 'var(--color-label-tertiary)', fontSize: 12, marginTop: 4 }}>
               配置外部 MCP (Model Context Protocol) 服务器，Agent 将自动注册其提供的工具
             </div>
           </div>
@@ -343,7 +343,7 @@ export default function McpSettings() {
             <Switch />
           </Form.Item>
 
-          <Divider style={{ borderColor: '#333' }} />
+          <Divider style={{ borderColor: 'var(--color-separator)' }} />
 
           <Form.Item
             name="env"

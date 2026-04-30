@@ -242,7 +242,7 @@ export default function ExplorerPanel() {
             placeholder="搜索文件..." 
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid #3c3c3c', color: '#ccc' }}
+            style={{ background: 'var(--color-fill-tertiary)', border: 'var(--border-default)', color: 'var(--color-label)' }}
             allowClear
           />
         </div>

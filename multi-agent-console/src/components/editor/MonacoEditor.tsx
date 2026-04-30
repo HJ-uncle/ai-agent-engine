@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Editor, { OnMount } from '@monaco-editor/react'
 import type * as MonacoType from 'monaco-editor'
 import { App } from 'antd'
@@ -39,10 +39,15 @@ export function MonacoEditor() {
   const activeTabName    = useExplorerStore(s => s.tabs.find(t => t.path === s.activeTabPath)?.name    ?? '')
   const activeTabType    = useExplorerStore(s => s.tabs.find(t => t.path === s.activeTabPath)?.type    ?? 'text') as TabItem['type']
   const activeTabIsDirty = useExplorerStore(s => s.tabs.find(t => t.path === s.activeTabPath)?.isDirty ?? false)
-  // 组合成稳定对象（每次渲染重新组合，但字段都是原始类型，比较精确）
-  const activeTab: TabItem | null = activeTabPath
-    ? { path: activeTabPath, name: activeTabName, type: activeTabType, isDirty: activeTabIsDirty }
-    : null
+  // 组合成稳定对象 — 用 useMemo 确保只有字段真正变化时才产生新引用
+  // 这样 useCallback / useEffect 的依赖比较才能精确，不会每次渲染都触发
+  const activeTab: TabItem | null = useMemo(
+    () => activeTabPath
+      ? { path: activeTabPath, name: activeTabName, type: activeTabType, isDirty: activeTabIsDirty }
+      : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeTabPath, activeTabName, activeTabType, activeTabIsDirty]
+  )
   const markDirty = useExplorerStore(s => s.markDirty)
   const markSaved = useExplorerStore(s => s.markSaved)
   // dirtyTabs 仅供 saveAllFiles 用，通过 getState() 在回调里读，不订阅响应式

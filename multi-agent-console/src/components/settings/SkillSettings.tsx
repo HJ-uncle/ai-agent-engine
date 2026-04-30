@@ -4,7 +4,7 @@ import { InfoCircleOutlined } from '@ant-design/icons'
 import { useSettings } from './useSettings'
 import styles from './SettingsLayout.module.css'
 
-const INPUT_STYLE: React.CSSProperties = { background: '#2d2d2d', border: '1px solid #444', color: '#ccc' }
+const INPUT_STYLE: React.CSSProperties = { background: 'var(--color-fill-secondary)', border: '1px solid var(--color-gray-4)', color: 'var(--color-label)', borderRadius: 'var(--radius-sm)' }
 
 function SettingRow({ title, desc, envKey, children }: {
   title: string; desc: string; envKey: string; children: React.ReactNode
@@ -15,7 +15,7 @@ function SettingRow({ title, desc, envKey, children }: {
         <div className={styles.itemTitle}>
           {title}
           <Tooltip title={`环境变量: ${envKey}`}>
-            <InfoCircleOutlined style={{ marginLeft: 6, color: '#555', fontSize: 12, cursor: 'help' }} />
+            <InfoCircleOutlined style={{ marginLeft: 6, color: 'var(--color-label-tertiary)', fontSize: 12, cursor: 'help' }} />
           </Tooltip>
         </div>
         <div className={styles.itemDescription}>{desc}</div>

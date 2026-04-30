@@ -1,0 +1,152 @@
+/* ======================================================
+   Card.module.css — Apple HIG 风格卡片
+   ====================================================== */
+
+/* --- 基础卡片 --- */
+.card {
+  background:    var(--color-bg-tertiary);
+  border-radius: var(--radius-lg);           /* 12px HIG 标准 */
+  box-shadow:    var(--shadow-card);
+  overflow:      hidden;
+  position:      relative;
+  transition:
+    box-shadow var(--duration-fast)    var(--easing-ease-out),
+    transform  var(--duration-fast)    var(--easing-spring);
+}
+
+/* --- 可点击卡片 --- */
+.clickable {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  outline: none;
+  /* 需设 display:block 以便 focus-visible 生效 */
+  display: block;
+  width: 100%;
+  border: none;
+  text-align: left;
+  text-decoration: none;
+  color: inherit;
+}
+
+.clickable:hover {
+  box-shadow: var(--shadow-card-hover);
+  transform:  translateY(-1px);
+}
+
+.clickable:active {
+  transform:  scale(0.985) translateY(0);
+  box-shadow: var(--shadow-card);
+  transition-duration: var(--duration-instant);
+}
+
+.clickable:focus-visible {
+  box-shadow:
+    var(--shadow-card-hover),
+    var(--shadow-focus-ring);
+}
+
+/* --- 信息卡片（不可点击，静态展示） --- */
+.static {
+  display:  block;
+  cursor:   default;
+}
+
+/* --- 分组背景变体（用于侧边栏/设置页） --- */
+.grouped {
+  background:    var(--color-bg-secondary);
+  box-shadow:    var(--shadow-xs);
+}
+
+/* --- 毛玻璃材质变体 --- */
+.glass {
+  background:
+    var(--material-regular);
+  backdrop-filter:
+    blur(var(--blur-md)) saturate(var(--vibrancy-saturation));
+  -webkit-backdrop-filter:
+    blur(var(--blur-md)) saturate(var(--vibrancy-saturation));
+  box-shadow:    var(--shadow-card);
+}
+
+/* ======================================================
+   内部结构
+   ====================================================== */
+
+/* 封面图区域（卡片顶部全宽图片） */
+.cover {
+  width:  100%;
+  aspect-ratio: 16 / 9;
+  object-fit:   cover;
+  display:      block;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+/* 内容区 */
+.body {
+  padding: var(--spacing-4);
+}
+
+/* 标题 */
+.title {
+  font-family:    var(--font-sans);
+  font-size:      var(--text-headline-size);     /* 17px semibold */
+  font-weight:    var(--text-headline-weight);
+  letter-spacing: var(--text-headline-tracking);
+  line-height:    var(--text-headline-leading);
+  color:          var(--color-label);
+  margin: 0 0 var(--spacing-1) 0;
+}
+
+/* 副标题 */
+.subtitle {
+  font-family:    var(--font-sans);
+  font-size:      var(--text-subheadline-size);  /* 15px */
+  font-weight:    400;
+  letter-spacing: var(--text-subheadline-tracking);
+  line-height:    var(--text-subheadline-leading);
+  color:          var(--color-label-secondary);
+  margin: 0 0 var(--spacing-2) 0;
+}
+
+/* 正文描述 */
+.description {
+  font-family:    var(--font-sans);
+  font-size:      var(--text-callout-size);      /* 16px */
+  font-weight:    var(--text-callout-weight);
+  letter-spacing: var(--text-callout-tracking);
+  line-height:    var(--text-callout-leading);
+  color:          var(--color-label-secondary);
+  margin: 0;
+}
+
+/* 底部操作栏 */
+.footer {
+  display:         flex;
+  align-items:     center;
+  justify-content: space-between;
+  gap:             var(--spacing-2);
+  padding:         var(--spacing-3) var(--spacing-4);
+  border-top:      var(--border-hairline);
+}
+
+/* 顶部分隔线（用于 header 区域底部） */
+.headerDivider {
+  border-bottom: var(--border-hairline);
+  padding-bottom: var(--spacing-3);
+  margin-bottom:  var(--spacing-3);
+}
+
+/* 右侧箭头指示（可点击卡片专用） */
+.chevron {
+  position: absolute;
+  right:    var(--spacing-4);
+  top:      50%;
+  transform: translateY(-50%);
+  color:    var(--color-gray-2);
+  transition: transform var(--duration-fast) var(--easing-ease-out),
+              color     var(--duration-fast) var(--easing-ease-out);
+}
+.clickable:hover .chevron {
+  transform: translateY(-50%) translateX(2px);
+  color:     var(--color-gray-1);
+}

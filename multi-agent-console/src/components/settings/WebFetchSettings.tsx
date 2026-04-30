@@ -27,6 +27,10 @@ const DEFAULT_CONFIG: WebFetchConfig = {
 
 export default function WebFetchSettings() {
   const { message: antMessage } = App.useApp()
+  // 用 ref 稳定引用，避免 antMessage 每次渲染产生新引用导致 exhaustive-deps 警告
+  const antMessageRef = React.useRef(antMessage)
+  React.useEffect(() => { antMessageRef.current = antMessage }, [antMessage])
+
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
   const [config, setConfig] = useState<WebFetchConfig>(DEFAULT_CONFIG)
@@ -59,7 +63,7 @@ export default function WebFetchSettings() {
         })
       }
     } catch (error) {
-      antMessage.error('加载配置失败，使用默认设置')
+      antMessageRef.current.error('加载配置失败，使用默认设置')
       form.setFieldsValue({
         enabled: DEFAULT_CONFIG.enabled,
         allowListEnabled: DEFAULT_CONFIG.allowListEnabled,

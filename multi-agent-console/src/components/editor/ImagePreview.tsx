@@ -63,7 +63,7 @@ export function ImagePreview({ src, name }: ImagePreviewProps) {
   }
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#1a1a1a' }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--color-bg-primary)' }}>
       {/* Toolbar */}
       <div style={{ display: 'flex', gap: 8, padding: '6px 12px', borderBottom: '1px solid #2a2a2a', flexShrink: 0, alignItems: 'center' }}>
         <button onClick={() => setScale(s => Math.min(16, s * 1.2))} style={btnStyle} title="放大"><PlusOutlined /></button>

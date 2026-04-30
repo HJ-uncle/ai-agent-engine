@@ -60,15 +60,30 @@ export default function EditorArea() {
   const ext = activeTab ? getExt(activeTab.name) : ''
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#1e1e1e' }}>
+    <div style={{
+      flex: 1,
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+      background: 'var(--color-bg-primary)',
+    }}>
 
       {/* ── 上方：编辑器区 ─────────────────────────────────────────────── */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
         {!activeTab ? (
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#555', fontSize: 14, flexDirection: 'column', gap: 8 }}>
-            <span style={{ fontSize: 48 }}>📁</span>
+          <div style={{
+            flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--color-label-tertiary)',
+            fontSize: 14,
+            flexDirection: 'column',
+            gap: 12,
+          }}>
+            <span style={{ fontSize: 48, opacity: 0.5 }}>📁</span>
             <span>在左侧文件树中选择文件打开</span>
-            <span style={{ fontSize: 12, color: '#444' }}>Ctrl+P 快速打开文件</span>
+            <span style={{ fontSize: 12, color: 'var(--color-label-quaternary)' }}>Ctrl+P 快速打开文件</span>
           </div>
         ) : (
           <>

@@ -4,7 +4,7 @@ import { InfoCircleOutlined, WarningOutlined } from '@ant-design/icons'
 import { useSettings } from './useSettings'
 import styles from './SettingsLayout.module.css'
 
-const INPUT_STYLE: React.CSSProperties = { background: '#2d2d2d', border: '1px solid #444', color: '#ccc' }
+const INPUT_STYLE: React.CSSProperties = { background: 'var(--color-fill-secondary)', border: '1px solid var(--color-gray-4)', color: 'var(--color-label)', borderRadius: 'var(--radius-sm)' }
 
 function SettingRow({ title, desc, envKey, badge, children }: {
   title: string; desc: string; envKey: string
@@ -17,7 +17,7 @@ function SettingRow({ title, desc, envKey, badge, children }: {
         <div className={styles.itemTitle} style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           {title}
           <Tooltip title={`环境变量: ${envKey}`}>
-            <InfoCircleOutlined style={{ color: '#555', fontSize: 12, cursor: 'help' }} />
+            <InfoCircleOutlined style={{ color: 'var(--color-label-tertiary)', fontSize: 12, cursor: 'help' }} />
           </Tooltip>
           {badge === 'restart' && (
             <Tag color="orange" style={{ fontSize: 11, lineHeight: '16px', padding: '0 5px' }}>需重启</Tag>
@@ -101,7 +101,7 @@ export default function SystemSettings() {
               value={settings.CMD_TIMEOUT_MS}
               onChange={(v) => handleChange('CMD_TIMEOUT_MS', v)}
               style={{ width: 130, ...INPUT_STYLE }}
-              addonAfter={<span style={{ color: '#888', fontSize: 11 }}>ms</span>}
+              addonAfter={<span style={{ color: 'var(--color-label-secondary)', fontSize: 11 }}>ms</span>}
             />
           </SettingRow>
 
@@ -158,7 +158,7 @@ export default function SystemSettings() {
       {/* ── 只读提示 ── */}
       <div className={styles.section}>
         <div className={styles.sectionTitle}>
-          <WarningOutlined style={{ marginRight: 6, color: '#e6c07b' }} />
+          <WarningOutlined style={{ marginRight: 6, color: 'var(--color-orange)' }} />
           启动参数（仅 .env 可配置）
         </div>
         <div className={styles.card}>
@@ -172,12 +172,12 @@ export default function SystemSettings() {
             <div key={label} className={styles.settingItem}>
               <div className={styles.itemInfo}>
                 <div className={styles.itemTitle} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <code style={{ background: '#2d2d2d', padding: '1px 6px', borderRadius: 4, fontSize: 12 }}>{label}</code>
-                  <span style={{ fontWeight: 400, color: '#ccc', fontSize: 13 }}>{value}</span>
+                  <code style={{ background: 'var(--color-fill)', padding: '1px 6px', borderRadius: 'var(--radius-xs)', fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--color-teal)' }}>{label}</code>
+                  <span style={{ fontWeight: 400, color: 'var(--color-label)', fontSize: 13 }}>{value}</span>
                 </div>
               </div>
               <div className={styles.itemControls}>
-                <Tag color="default" style={{ color: '#888' }}>仅 .env</Tag>
+                <Tag color="default" style={{ color: 'var(--color-label-tertiary)' }}>仅 .env</Tag>
               </div>
             </div>
           ))}

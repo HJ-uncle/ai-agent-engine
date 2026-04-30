@@ -43,25 +43,33 @@ const XTerminal: React.FC<XTerminalProps> = ({
   useEffect(() => {
     if (!containerRef.current) return
 
+    // ── 动态读取当前主题色（响应 light / dark） ──────────────────────────
+    const cs = getComputedStyle(document.documentElement)
+    const getVar = (name: string, fallback: string) =>
+      (cs.getPropertyValue(name).trim() || fallback)
+    const isDark = document.documentElement.getAttribute('data-theme') !== 'light'
+    const termBg = isDark ? '#000000' : '#FFFFFF'
+    const termFg = isDark ? '#F5F5F7' : '#1D1D1F'
+
     // ── 初始化 xterm ─────────────────────────────────────────────────────
     const term = new Terminal({
       theme: {
-        background: '#1e1e1e',
-        foreground: '#d4d4d4',
-        cursor: '#d4d4d4',
-        selectionBackground: '#264f78',
+        background: termBg,
+        foreground: termFg,
+        cursor: getVar('--color-accent', '#0A84FF'),
+        selectionBackground: isDark ? 'rgba(10,132,255,0.30)' : 'rgba(0,122,255,0.22)',
         black: '#000000', brightBlack: '#666666',
-        red: '#cd3131', brightRed: '#f14c4c',
-        green: '#0dbc79', brightGreen: '#23d18b',
-        yellow: '#e5e510', brightYellow: '#f5f543',
-        blue: '#2472c8', brightBlue: '#3b8eea',
-        magenta: '#bc3fbc', brightMagenta: '#d670d6',
-        cyan: '#11a8cd', brightCyan: '#29b8db',
-        white: '#e5e5e5', brightWhite: '#e5e5e5',
+        red: '#FF453A', brightRed: '#FF6961',
+        green: '#30D158', brightGreen: '#4ADE80',
+        yellow: '#FFD60A', brightYellow: '#FFE55C',
+        blue: '#0A84FF', brightBlue: '#409CFF',
+        magenta: '#BF5AF2', brightMagenta: '#D670D6',
+        cyan: '#64D2FF', brightCyan: '#A6E1FA',
+        white: '#E5E5EA', brightWhite: '#FFFFFF',
       },
-      fontFamily: '"Cascadia Code", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace',
+      fontFamily: 'var(--font-mono), "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace',
       fontSize: 13,
-      lineHeight: 1.2,
+      lineHeight: 1.3,
       cursorBlink: true,
       cursorStyle: 'bar',
       scrollback: 5000,
@@ -225,7 +233,7 @@ const XTerminal: React.FC<XTerminalProps> = ({
       style={{
         width: '100%',
         height: '100%',
-        background: '#1e1e1e',
+        background: 'var(--color-bg-primary)',
         overflow: 'hidden',
         boxSizing: 'border-box',
         ...style,

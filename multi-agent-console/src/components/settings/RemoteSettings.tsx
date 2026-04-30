@@ -58,8 +58,8 @@ export default function RemoteSettings() {
             </div>
             <div className={styles.itemControls}>
               <div className={styles.controlRow}>
-                <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#888', marginRight: 8 }} />
-                <span style={{ color: '#888', fontSize: 12 }}>离线</span>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--color-label-tertiary)', marginRight: 8 }} />
+                <span style={{ color: 'var(--color-label-tertiary)', fontSize: 12 }}>离线</span>
               </div>
             </div>
           </div>

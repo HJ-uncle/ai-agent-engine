@@ -34,7 +34,6 @@ import {
   FileTextOutlined,
   DownloadOutlined,
   SettingOutlined,
-  PlusOutlined,
   LinkOutlined,
 } from "@ant-design/icons";
 import ReactMarkdown from "react-markdown";
@@ -2234,15 +2233,15 @@ export default function ChatArea() {
         width={560}
         centered
           styles={{
-            mask: { backdropFilter: "blur(6px)", background: "rgba(0,0,0,0.55)" },
-            body: { padding: 0, background: "#1a1a1a" },
+            mask: { backdropFilter: "blur(8px)", background: "var(--color-overlay-heavy)" },
+            body: { padding: 0, background: "transparent" },
           } as any}
-          style={{ borderRadius: 10, overflow: "hidden", border: "1px solid #2a2a2a", padding: 0 }}
+          style={{ borderRadius: "var(--radius-xl)", overflow: "hidden", padding: 0 }}
       >
         {/* 标题栏 */}
-        <div style={{ padding: "14px 18px 12px", borderBottom: "1px solid #1f1f1f", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span style={{ fontSize: 14, fontWeight: 600, color: "#d4d4d4" }}>工作区管理</span>
-          <span style={{ fontSize: 11, color: "#555" }}>已绑定 {(session?.workspacePaths ?? []).length} 个</span>
+        <div style={{ padding: "14px 18px 12px", borderBottom: "var(--border-hairline)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span style={{ fontSize: 14, fontWeight: 600, color: "var(--color-label)" }}>工作区管理</span>
+          <span style={{ fontSize: 11, color: "var(--color-label-tertiary)" }}>已绑定 {(session?.workspacePaths ?? []).length} 个</span>
         </div>
 
         <div style={{ padding: "8px 14px 14px", maxHeight: "60vh", overflowY: "auto" }}>
@@ -2259,19 +2258,19 @@ export default function ChatArea() {
                   const shortPath = parts.length > 3 ? "\u2026/" + parts.slice(-2).join("/") : path;
                   return (
                     <div key={path} onClick={() => { if (isBound) return; updateSession(activeSessionId, { workspacePaths: [...bound, path] }); message.success("已绑定 " + name); }}
-                      style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 4, cursor: isBound ? "default" : "pointer", transition: "background 0.1s" }}
-                      onMouseEnter={e => { if (!isBound) e.currentTarget.style.background = "rgba(255,255,255,0.04)"; }}
+                      style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: "var(--radius-xs)", cursor: isBound ? "default" : "pointer", transition: "background var(--duration-fast) var(--easing-ease)" }}
+                      onMouseEnter={e => { if (!isBound) e.currentTarget.style.background = "var(--color-fill-quaternary)"; }}
                       onMouseLeave={e => { if (!isBound) e.currentTarget.style.background = "transparent"; }}>
-                      <div style={{ width: 6, height: 6, borderRadius: "50%", flexShrink: 0, background: isBound ? "#4ade80" : "#333" }} />
-                      <span style={{ fontSize: 13, color: isBound ? "#cccccc" : "#777", fontWeight: isBound ? 500 : 400, flexShrink: 0 }}>{name}</span>
-                      <span style={{ fontSize: 11, color: "#3d3d3d", fontFamily: "Consolas,monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }} title={path}>{shortPath}</span>
+                      <div style={{ width: 6, height: 6, borderRadius: "50%", flexShrink: 0, background: isBound ? "var(--color-green)" : "var(--color-label-quaternary)" }} />
+                      <span style={{ fontSize: 13, color: isBound ? "var(--color-label)" : "var(--color-label-secondary)", fontWeight: isBound ? 500 : 400, flexShrink: 0 }}>{name}</span>
+                      <span style={{ fontSize: 11, color: "var(--color-label-tertiary)", fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }} title={path}>{shortPath}</span>
                       {isBound ? (
                         <div onClick={e => { e.stopPropagation(); handleRemoveWorkspace(path); }}
-                          style={{ width: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 3, color: "#3a3a3a", cursor: "pointer", fontSize: 11, transition: "all 0.1s", flexShrink: 0 }}
-                          onMouseEnter={e => { e.currentTarget.style.color = "#f85149"; e.currentTarget.style.background = "rgba(248,81,73,0.1)"; }}
-                          onMouseLeave={e => { e.currentTarget.style.color = "#3a3a3a"; e.currentTarget.style.background = "transparent"; }}>\u2715</div>
+                          style={{ width: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "var(--radius-xs)", color: "var(--color-label-tertiary)", cursor: "pointer", fontSize: 11, transition: "all var(--duration-fast) var(--easing-ease)", flexShrink: 0 }}
+                          onMouseEnter={e => { e.currentTarget.style.color = "var(--color-red)"; e.currentTarget.style.background = "var(--color-red-subtle)"; }}
+                          onMouseLeave={e => { e.currentTarget.style.color = "var(--color-label-tertiary)"; e.currentTarget.style.background = "transparent"; }}>\u2715</div>
                       ) : (
-                        <span style={{ fontSize: 11, color: "#3a3a3a", flexShrink: 0 }}>+</span>
+                        <span style={{ fontSize: 11, color: "var(--color-label-tertiary)", flexShrink: 0 }}>+</span>
                       )}
                     </div>
                   );
@@ -2279,10 +2278,10 @@ export default function ChatArea() {
               </div>
             );
           })()}
-          <div style={{ borderTop: "1px solid #1f1f1f", paddingTop: 10, display: "flex", gap: 6 }}>
+          <div style={{ borderTop: "var(--border-hairline)", paddingTop: 10, display: "flex", gap: 6 }}>
             <Input size="small" placeholder="粘贴绝对路径后按 Enter..." value={newWorkspacePath} onChange={(e) => setNewWorkspacePath(e.target.value)} onPressEnter={handleAddWorkspace}
-              style={{ background: "#111", color: "#cccccc", border: "1px solid #252525", borderRadius: 4, fontSize: 12 }}
-              onFocus={e => (e.target.style.borderColor = "#0e639c")} onBlur={e => (e.target.style.borderColor = "#252525")} />
+              style={{ background: "var(--color-fill-secondary)", color: "var(--color-label)", border: "var(--border-default)", borderRadius: "var(--radius-sm)", fontSize: 12 }}
+              onFocus={e => (e.target.style.borderColor = "var(--color-accent)")} onBlur={e => (e.target.style.borderColor = "var(--color-gray-4)")} />
             <Button size="small" type="primary" onClick={handleAddWorkspace} disabled={!newWorkspacePath.trim()} style={{ borderRadius: 4, flexShrink: 0 }}>\u6dfb\u52a0</Button>
           </div>
           {(session?.workspacePaths ?? []).length === 0 && recentWorkspaces.length === 0 && (

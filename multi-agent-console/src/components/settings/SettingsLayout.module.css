@@ -1,38 +1,49 @@
+/* ============================================================
+   SettingsLayout.module.css — Apple HIG tokens 统一重写
+   ============================================================ */
+
 .settingsContainer {
   display: flex;
   flex-direction: column;
-  gap: 24px;
-  padding: 16px 0;
-  color: #cccccc;
+  gap: var(--spacing-6);
+  padding: var(--spacing-4) 0;
+  color: var(--color-label);
 }
 
 .section {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--spacing-3);
 }
 
 .sectionTitle {
-  font-size: 14px;
-  font-weight: 600;
-  color: #ffffff;
-  margin-bottom: 4px;
-  letter-spacing: 0.5px;
+  font-size: var(--text-title3-size);
+  font-weight: var(--text-title3-weight);
+  color: var(--color-label);
+  margin-bottom: var(--spacing-1);
+  letter-spacing: var(--text-title3-tracking);
 }
 
 .card {
-  background: #1e1e1e;
-  border: 1px solid #333333;
-  border-radius: 8px;
+  background: var(--color-bg-secondary);
+  border: var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
   overflow: hidden;
+  backdrop-filter: var(--backdrop-thin);
+  -webkit-backdrop-filter: var(--backdrop-thin);
 }
 
 .settingItem {
-  padding: 16px;
+  padding: var(--spacing-4);
   display: flex;
   justify-content: space-between;
   align-items: center;
-  border-bottom: 1px solid #333333;
+  border-bottom: var(--border-hairline);
+  transition: background var(--duration-fast) var(--easing-ease);
+}
+.settingItem:hover {
+  background: var(--color-fill-quaternary);
 }
 
 .settingItem:last-child {
@@ -41,26 +52,26 @@
 
 .itemInfo {
   flex: 1;
-  margin-right: 24px;
+  margin-right: var(--spacing-6);
 }
 
 .itemTitle {
-  font-size: 14px;
+  font-size: var(--text-callout-size);
   font-weight: 500;
-  color: #ffffff;
-  margin-bottom: 4px;
+  color: var(--color-label);
+  margin-bottom: var(--spacing-1);
 }
 
 .itemDescription {
-  font-size: 12px;
-  color: #888888;
+  font-size: var(--text-footnote-size);
+  color: var(--color-label-secondary);
   line-height: 1.6;
 }
 
 .itemControls {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--spacing-2);
   min-width: 140px;
 }
 
@@ -68,12 +79,12 @@
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  gap: 12px;
+  gap: var(--spacing-3);
 }
 
 .controlLabel {
-  font-size: 12px;
-  color: #888888;
+  font-size: var(--text-footnote-size);
+  color: var(--color-label-secondary);
   text-transform: uppercase;
 }
 
@@ -83,39 +94,42 @@
 
 :global(.settings-modal-tabs .ant-tabs-nav) {
   width: 220px !important;
-  background: #252526 !important;
-  border-right: 1px solid #333333 !important;
+  background: var(--material-thin) !important;
+  backdrop-filter: var(--backdrop-regular);
+  -webkit-backdrop-filter: var(--backdrop-regular);
+  border-right: var(--border-hairline) !important;
   margin-right: 0 !important;
-  padding: 16px 0 !important;
+  padding: var(--spacing-4) 0 !important;
 }
 
 :global(.settings-modal-tabs .ant-tabs-content-holder) {
-  background: #1e1e1e !important;
-  padding: 0 40px !important;
+  background: transparent !important;
+  padding: 0 var(--spacing-8) !important;
   border-left: none !important;
   overflow-y: auto !important;
 }
 
 :global(.settings-modal-tabs .ant-tabs-tab) {
-  padding: 10px 20px !important;
-  margin: 2px 12px !important;
-  border-radius: 6px !important;
-  color: #cccccc !important;
-  transition: all 0.2s !important;
+  padding: var(--spacing-2) var(--spacing-4) !important;
+  margin: 2px var(--spacing-3) !important;
+  border-radius: var(--radius-sm) !important;
+  color: var(--color-label-secondary) !important;
+  transition: background var(--duration-fast) var(--easing-ease-out),
+              color      var(--duration-fast) var(--easing-ease-out) !important;
 }
 
 :global(.settings-modal-tabs .ant-tabs-tab:hover) {
-  background: #2a2d2e !important;
-  color: #ffffff !important;
+  background: var(--color-fill) !important;
+  color: var(--color-label) !important;
 }
 
 :global(.settings-modal-tabs .ant-tabs-tab-active) {
-  background: #37373d !important;
+  background: var(--color-accent-subtle) !important;
 }
 
 :global(.settings-modal-tabs .ant-tabs-tab-active .ant-tabs-tab-btn) {
-  color: #ffffff !important;
-  font-weight: 500 !important;
+  color: var(--color-accent) !important;
+  font-weight: 600 !important;
 }
 
 :global(.settings-modal-tabs .ant-tabs-ink-bar) {
@@ -123,7 +137,7 @@
 }
 
 :global(.settings-modal-tabs .ant-tabs-content-holder::-webkit-scrollbar) {
-  width: 10px;
+  width: 4px;
 }
 
 :global(.settings-modal-tabs .ant-tabs-content-holder::-webkit-scrollbar-track) {
@@ -131,20 +145,20 @@
 }
 
 :global(.settings-modal-tabs .ant-tabs-content-holder::-webkit-scrollbar-thumb) {
-  background: #333;
-  border-radius: 5px;
+  background: var(--color-gray-4);
+  border-radius: var(--radius-full);
 }
 
 :global(.settings-modal-tabs .ant-tabs-content-holder::-webkit-scrollbar-thumb:hover) {
-  background: #444;
+  background: var(--color-gray-3);
 }
 
 .settingRow {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 0;
-  border-bottom: 1px solid #2d2d2d;
+  padding: var(--spacing-3) 0;
+  border-bottom: var(--border-hairline);
 }
 
 .settingRow:last-child {
@@ -157,58 +171,59 @@
 }
 
 .settingDescription {
-  font-size: 12px;
-  color: #858585;
-  margin-top: 4px;
+  font-size: var(--text-footnote-size);
+  color: var(--color-label-secondary);
+  margin-top: var(--spacing-1);
   line-height: 1.5;
 }
 
 .settingControl {
   flex-shrink: 0;
-  margin-left: 24px;
+  margin-left: var(--spacing-6);
 }
 
 .settingSection {
-  padding: 8px 0;
+  padding: var(--spacing-2) 0;
 }
 
 .settingDivider {
-  margin: 16px 0 !important;
-  border-color: #2d2d2d !important;
+  margin: var(--spacing-4) 0 !important;
+  border-color: var(--color-separator) !important;
 }
 
 .sectionSubtitle {
-  font-size: 13px;
+  font-size: var(--text-footnote-size);
   font-weight: 600;
-  color: #cccccc;
-  margin-bottom: 4px;
+  color: var(--color-label);
+  margin-bottom: var(--spacing-1);
 }
 
 .sectionDescription {
-  font-size: 12px;
-  color: #858585;
-  margin-bottom: 12px;
+  font-size: var(--text-footnote-size);
+  color: var(--color-label-secondary);
+  margin-bottom: var(--spacing-3);
   display: block;
 }
 
 .tagContainer {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 12px;
+  gap: var(--spacing-2);
+  margin-bottom: var(--spacing-3);
 }
 
 .domainTag {
-  background: rgba(114, 118, 125, 0.2) !important;
-  border: 1px solid rgba(114, 118, 125, 0.3) !important;
-  color: #cccccc !important;
-  border-radius: 4px !important;
-  padding: 4px 12px !important;
-  font-size: 12px !important;
+  background: var(--color-fill) !important;
+  border: var(--border-default) !important;
+  color: var(--color-label) !important;
+  border-radius: var(--radius-xs) !important;
+  padding: var(--spacing-1) var(--spacing-3) !important;
+  font-size: var(--text-footnote-size) !important;
+  transition: background var(--duration-fast) var(--easing-ease) !important;
 }
 
 .domainTag:hover {
-  background: rgba(114, 118, 125, 0.3) !important;
+  background: var(--color-fill-secondary) !important;
 }
 
 .addInput {
@@ -218,6 +233,67 @@
 }
 
 .actionButton {
-  padding: 8px 16px;
-  font-size: 13px;
+  padding: var(--spacing-2) var(--spacing-4);
+  font-size: var(--text-footnote-size);
+}
+
+/* ── 通用 Tile 按钮（用于主题切换、语言切换等卡片式选择） ── */
+.tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-1);
+  padding: var(--spacing-2) var(--spacing-3);
+  min-width: 72px;
+  min-height: 64px;
+  border-radius: var(--radius-sm);
+  border: var(--border-default);
+  background: var(--color-fill-secondary);
+  color: var(--color-label-secondary);
+  cursor: pointer;
+  font-size: var(--text-caption2-size);
+  font-family: var(--font-sans);
+  font-weight: 400;
+  transition:
+    background   var(--duration-fast) var(--easing-ease-out),
+    border-color var(--duration-fast) var(--easing-ease-out),
+    color        var(--duration-fast) var(--easing-ease-out),
+    transform    var(--duration-fast) var(--easing-spring),
+    box-shadow   var(--duration-fast) var(--easing-ease-out);
+}
+.tile:hover {
+  background: var(--color-fill);
+  color: var(--color-label);
+  border-color: var(--color-gray-4);
+}
+.tile:active { transform: scale(0.97); }
+.tile:focus-visible { outline: none; box-shadow: var(--shadow-focus-ring); }
+
+.tileActive {
+  background: var(--color-accent-subtle);
+  border: var(--border-focus);
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+.tileIcon { font-size: 20px; line-height: 1; }
+
+.tileRow {
+  display: flex;
+  gap: var(--spacing-2);
+  flex-wrap: wrap;
+}
+
+/* 语言 / 只读展示卡片 */
+.readonlyChip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  padding: var(--spacing-1) var(--spacing-3);
+  border-radius: var(--radius-sm);
+  border: var(--border-default);
+  background: var(--color-fill);
+  color: var(--color-label-secondary);
+  font-size: var(--text-caption1-size);
+  font-family: var(--font-sans);
 }

@@ -31,7 +31,7 @@ export default function WorkspaceSettings() {
               <Form.Item name="path" style={{ marginBottom: 12 }}>
                 <Input 
                   placeholder="/Users/username/my-project" 
-                  style={{ background: '#2d2d2d', border: '1px solid #444', color: '#ccc' }}
+                  style={{ background: 'var(--color-fill-secondary)', border: '1px solid var(--color-gray-4)', color: 'var(--color-label)', borderRadius: 'var(--radius-sm)' }}
                 />
               </Form.Item>
               <Button type="primary" htmlType="submit">

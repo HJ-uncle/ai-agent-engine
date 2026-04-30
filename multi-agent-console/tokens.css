@@ -1,0 +1,600 @@
+
+/* ==========================================================================
+   Apple HIG Design Tokens — tokens.css
+   基于 Apple Human Interface Guidelines 的 CSS 自定义属性系统
+   支持浅色模式（默认）与深色模式（prefers-color-scheme / [data-theme="dark"]）
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   :root — 浅色模式（Light Mode）默认令牌
+   -------------------------------------------------------------------------- */
+:root {
+
+  /* ============================================================
+     § 1. 颜色系统 · Color System
+     ============================================================ */
+
+  /* --- 1.1 主强调色 · Primary Accent (System Blue) --- */
+  /* 用于按钮、链接、选中态、进度指示器等交互元素 */
+  --color-accent:          #007AFF;
+  --color-accent-hover:    #0066D6;
+  --color-accent-pressed:  #0055B3;
+  --color-accent-subtle:   rgba(0, 122, 255, 0.12);
+
+  /* --- 1.2 系统语义色 · Semantic Colors --- */
+  /* 成功 / 确认 */
+  --color-green:           #34C759;
+  --color-green-subtle:    rgba(52, 199, 89, 0.12);
+  /* 警告 */
+  --color-orange:          #FF9500;
+  --color-orange-subtle:   rgba(255, 149, 0, 0.12);
+  /* 错误 / 危险 */
+  --color-red:             #FF3B30;
+  --color-red-subtle:      rgba(255, 59, 48, 0.12);
+  /* 信息 / 辅助 */
+  --color-teal:            #5AC8FA;
+  --color-indigo:          #5856D6;
+  --color-purple:          #AF52DE;
+  --color-pink:            #FF2D55;
+  --color-yellow:          #FFCC00;
+
+  /* --- 1.3 灰阶 · Gray Scale (iOS System Grays) --- */
+  --color-gray-1:          #8E8E93;   /* 辅助文字、占位符 */
+  --color-gray-2:          #AEAEB2;   /* 禁用状态文字 */
+  --color-gray-3:          #C7C7CC;   /* 分隔线 */
+  --color-gray-4:          #D1D1D6;   /* 输入框边框 */
+  --color-gray-5:          #E5E5EA;   /* 卡片描边、背景分组线 */
+  --color-gray-6:          #F2F2F7;   /* 分组列表背景 */
+
+  /* --- 1.4 背景色 · Background Colors --- */
+  /* 层级遵循 HIG：Primary > Secondary > Tertiary */
+  --color-bg-primary:      #FFFFFF;   /* 主窗口、全页背景 */
+  --color-bg-secondary:    #F2F2F7;   /* 分组列表、侧边栏 */
+  --color-bg-tertiary:     #FFFFFF;   /* 内嵌卡片内部背景 */
+  --color-bg-grouped:      #F2F2F7;   /* UITableView Grouped 风格背景 */
+  --color-bg-elevated:     #FFFFFF;   /* 悬浮面板、Sheet */
+
+  /* --- 1.5 前景 / 文字色 · Foreground / Text Colors --- */
+  /* 遵循 WCAG AA：正文对比度 ≥ 4.5:1，大字 ≥ 3:1 */
+  --color-label:           #000000;         /* 主标题、正文 — 对比度 21:1 */
+  --color-label-secondary: rgba(60,60,67, 0.60);   /* 次要说明文字 */
+  --color-label-tertiary:  rgba(60,60,67, 0.30);   /* 提示、时间戳 */
+  --color-label-quaternary:rgba(60,60,67, 0.18);   /* 极淡占位 */
+  --color-label-disabled:  rgba(60,60,67, 0.28);   /* 禁用文字 */
+  --color-label-inverted:  #FFFFFF;                /* 深色背景上的白色文字 */
+
+  /* --- 1.6 分隔线色 · Separator Colors --- */
+  --color-separator:       rgba(60,60,67, 0.29);   /* 标准分隔线 */
+  --color-separator-opaque:#C6C6C8;                 /* 不透明场景回退 */
+
+  /* --- 1.7 填充色 · Fill Colors (用于图形、控件背景) --- */
+  --color-fill:            rgba(120,120,128, 0.20); /* 标准填充 */
+  --color-fill-secondary:  rgba(120,120,128, 0.16);
+  --color-fill-tertiary:   rgba(118,118,128, 0.12);
+  --color-fill-quaternary: rgba(116,116,128, 0.08);
+
+  /* --- 1.8 叠加遮罩色 · Overlay Colors --- */
+  --color-overlay-light:   rgba(0, 0, 0, 0.04);    /* 悬停态蒙层 */
+  --color-overlay-medium:  rgba(0, 0, 0, 0.24);    /* 弹窗半透明遮罩 */
+  --color-overlay-heavy:   rgba(0, 0, 0, 0.48);    /* 全屏模态遮罩 */
+
+  /* ============================================================
+     § 2. 材质效果 · Material & Vibrancy
+     ============================================================ */
+
+  /* --- 2.1 毛玻璃背景色 · Frosted Glass Base --- */
+  /* 使用方式：background + backdrop-filter 组合，见《使用规范》 */
+  --material-thin:         rgba(255,255,255, 0.50);  /* 轻薄材质 — 顶栏 */
+  --material-regular:      rgba(255,255,255, 0.72);  /* 常规材质 — 侧边栏 */
+  --material-thick:        rgba(255,255,255, 0.85);  /* 厚重材质 — Sheet */
+  --material-chrome:       rgba(246,246,246, 0.80);  /* 窗口边框/工具栏 */
+
+  /* --- 2.2 模糊半径 · Blur Radius --- */
+  --blur-sm:    8px;     /* 轻微模糊 — 下拉菜单 */
+  --blur-md:   20px;     /* 标准模糊 — 导航栏、侧边栏 */
+  --blur-lg:   40px;     /* 强模糊  — 全屏 Sheet、弹窗背景 */
+  --blur-xl:   80px;     /* 超强模糊 — macOS 窗口背景 */
+
+  /* --- 2.3 饱和度增强 · Vibrancy Saturation --- */
+  --vibrancy-saturation: 180%;  /* backdrop-filter: saturate() 值 */
+
+  /* ============================================================
+     § 3. 字体排版 · Typography
+     ============================================================ */
+
+  /* --- 3.1 字体栈 · Font Stack --- */
+  /* 优先使用系统 San Francisco，回退到跨平台等价字体 */
+  --font-sans:
+    -apple-system,           /* macOS / iOS SF Pro */
+    "SF Pro Text",
+    "SF Pro Display",
+    BlinkMacSystemFont,      /* Chromium on macOS */
+    "Segoe UI",              /* Windows */
+    "Helvetica Neue",
+    Arial,
+    sans-serif;
+
+  --font-rounded:
+    "SF Pro Rounded",
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+
+  --font-mono:
+    "SF Mono",
+    "SFMono-Regular",
+    ui-monospace,
+    "Cascadia Code",
+    "Fira Code",
+    Consolas,
+    monospace;
+
+  /* --- 3.2 字阶 · Type Scale (基于 HIG Dynamic Type) --- */
+
+  /* Large Title — 主页顶部大标题 (≥ 34pt) */
+  --text-large-title-size:    34px;
+  --text-large-title-weight:  700;
+  --text-large-title-leading: 41px;
+  --text-large-title-tracking: 0.37px;
+
+  /* Title 1 — 页面主标题 (28pt) */
+  --text-title1-size:    28px;
+  --text-title1-weight:  700;
+  --text-title1-leading: 34px;
+  --text-title1-tracking: 0.36px;
+
+  /* Title 2 — 次级标题 (22pt) */
+  --text-title2-size:    22px;
+  --text-title2-weight:  700;
+  --text-title2-leading: 28px;
+  --text-title2-tracking: 0.35px;
+
+  /* Title 3 — 第三级标题 (20pt) */
+  --text-title3-size:    20px;
+  --text-title3-weight:  600;
+  --text-title3-leading: 25px;
+  --text-title3-tracking: 0.38px;
+
+  /* Headline — 强调正文，semibold (17pt) */
+  --text-headline-size:    17px;
+  --text-headline-weight:  600;
+  --text-headline-leading: 22px;
+  --text-headline-tracking: -0.41px;
+
+  /* Body — 正文 (17pt) */
+  --text-body-size:    17px;
+  --text-body-weight:  400;
+  --text-body-leading: 22px;
+  --text-body-tracking: -0.41px;
+
+  /* Callout — 说明文字 (16pt) */
+  --text-callout-size:    16px;
+  --text-callout-weight:  400;
+  --text-callout-leading: 21px;
+  --text-callout-tracking: -0.32px;
+
+  /* Subheadline — 副标题 (15pt) */
+  --text-subheadline-size:    15px;
+  --text-subheadline-weight:  400;
+  --text-subheadline-leading: 20px;
+  --text-subheadline-tracking: -0.24px;
+
+  /* Footnote — 脚注 (13pt) */
+  --text-footnote-size:    13px;
+  --text-footnote-weight:  400;
+  --text-footnote-leading: 18px;
+  --text-footnote-tracking: -0.08px;
+
+  /* Caption 1 — 图说、辅助信息 (12pt) */
+  --text-caption1-size:    12px;
+  --text-caption1-weight:  400;
+  --text-caption1-leading: 16px;
+  --text-caption1-tracking: 0px;
+
+  /* Caption 2 — 最小辅助信息 (11pt) */
+  --text-caption2-size:    11px;
+  --text-caption2-weight:  400;
+  --text-caption2-leading: 13px;
+  --text-caption2-tracking: 0.07px;
+
+  /* ============================================================
+     § 4. 间距系统 · Spacing System (4px 基准网格)
+     ============================================================ */
+
+  /* 基准单元：1 unit = 4px */
+  --spacing-1:   4px;   /* 极小间距：图标与文字内边距 */
+  --spacing-2:   8px;   /* 小间距：行内元素间隔、输入框 padding */
+  --spacing-3:  12px;   /* 紧凑间距：列表项竖向内边距 */
+  --spacing-4:  16px;   /* 标准间距：卡片内边距、段落间距 */
+  --spacing-5:  20px;   /* 中等间距：分区间距 */
+  --spacing-6:  24px;   /* 大间距：模块间距 */
+  --spacing-7:  28px;   /* 较宽间距 */
+  --spacing-8:  32px;   /* 超大间距：页面区块间距 */
+  --spacing-10: 40px;   /* 宽松区块间距 */
+  --spacing-12: 48px;   /* 顶栏高度参考 */
+  --spacing-16: 64px;   /* 页面级间距 */
+  --spacing-20: 80px;   /* 大区块留白 */
+  --spacing-24: 96px;   /* Hero 区域留白 */
+  --spacing-32: 128px;  /* 超大页面留白 */
+
+  /* ============================================================
+     § 5. 圆角系统 · Border Radius
+     ============================================================ */
+
+  /* 极小圆角：标签、徽章、代码片段 */
+  --radius-xs:    4px;
+  /* 小圆角：按钮（小号）、输入框、提示条 */
+  --radius-sm:    8px;
+  /* 中等圆角：按钮（标准）、列表项 */
+  --radius-md:   10px;
+  /* 卡片圆角：内容卡片、抽屉卡片 (HIG 标准) */
+  --radius-lg:   12px;
+  /* 大圆角：底部 Sheet、弹出面板 */
+  --radius-xl:   16px;
+  /* 超大圆角：全屏弹窗内容区 */
+  --radius-2xl:  20px;
+  /* macOS 窗口圆角 */
+  --radius-window: 10px;
+  /* 胶囊形（Pill）：全圆角按钮、搜索框 */
+  --radius-full: 9999px;
+
+  /* ============================================================
+     § 6. 阴影系统 · Shadow System
+     ============================================================ */
+
+  /* ⚠️ 绝不使用纯黑阴影，统一使用半透明深灰 */
+
+  /* 微弱阴影：悬浮卡片轮廓感 */
+  --shadow-xs:
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 1px 4px rgba(0, 0, 0, 0.06);
+
+  /* 卡片阴影：标准内容卡片 */
+  --shadow-card:
+    0 1px 3px  rgba(0, 0, 0, 0.08),
+    0 4px 12px rgba(0, 0, 0, 0.08);
+
+  /* 上浮阴影：hover 态卡片 */
+  --shadow-card-hover:
+    0 2px 8px  rgba(0, 0, 0, 0.10),
+    0 8px 24px rgba(0, 0, 0, 0.10);
+
+  /* 弹窗阴影：Popover、下拉菜单 */
+  --shadow-popover:
+    0 4px 6px  rgba(0, 0, 0, 0.07),
+    0 10px 30px rgba(0, 0, 0, 0.12),
+    0 0 0 0.5px rgba(0, 0, 0, 0.06);
+
+  /* 模态阴影：Dialog、Sheet */
+  --shadow-modal:
+    0 8px 16px  rgba(0, 0, 0, 0.10),
+    0 24px 64px rgba(0, 0, 0, 0.18),
+    0 0 0 0.5px rgba(0, 0, 0, 0.06);
+
+  /* 窗口阴影：macOS 风格应用窗口 */
+  --shadow-window:
+    0 2px 4px   rgba(0, 0, 0, 0.08),
+    0 12px 32px rgba(0, 0, 0, 0.16),
+    0 32px 64px rgba(0, 0, 0, 0.12),
+    0 0 0 0.5px rgba(0, 0, 0, 0.08);
+
+  /* 内嵌阴影：输入框焦点环 */
+  --shadow-focus-ring:
+    0 0 0 3px rgba(0, 122, 255, 0.40);
+
+  /* ============================================================
+     § 7. 安全区与可点击区 · Safe Area & Touch Target
+     ============================================================ */
+
+  /* HIG 规定最小可点击区域为 44×44pt */
+  --min-touch-target: 44px;
+
+  /* iOS 安全区（结合 env() 变量使用） */
+  --safe-area-top:    env(safe-area-inset-top,    0px);
+  --safe-area-right:  env(safe-area-inset-right,  0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-left:   env(safe-area-inset-left,   0px);
+
+  /* ============================================================
+     § 8. 动效曲线与时长 · Motion & Duration
+     ============================================================ */
+
+  /* --- 8.1 时长 · Duration --- */
+  --duration-instant:   80ms;   /* 即时反馈：按钮按下高亮 */
+  --duration-fast:     150ms;   /* 快速过渡：Tooltip、菜单展开 */
+  --duration-normal:   250ms;   /* 标准动画：页面元素进入 */
+  --duration-slow:     400ms;   /* 缓慢过渡：Modal 弹出 */
+  --duration-slower:   550ms;   /* 叙事动画：Onboarding 等 */
+
+  /* --- 8.2 缓动曲线 · Easing Curves --- */
+  /* 标准 iOS 弹性曲线 */
+  --easing-spring:      cubic-bezier(0.34, 1.56, 0.64, 1.00);
+  /* 自然弹入（稍微过冲）*/
+  --easing-bounce:      cubic-bezier(0.68, -0.55, 0.27, 1.55);
+  /* 系统标准缓入缓出 */
+  --easing-ease:        cubic-bezier(0.42, 0.00, 0.58, 1.00);
+  /* 加速进入（元素离开时用）*/
+  --easing-ease-in:     cubic-bezier(0.42, 0.00, 1.00, 1.00);
+  /* 减速退出（元素进入时用）*/
+  --easing-ease-out:    cubic-bezier(0.00, 0.00, 0.58, 1.00);
+  /* 苹果自定义曲线（丝滑平滑）*/
+  --easing-smooth:      cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  /* 强调曲线：拖拽释放、卡片展开 */
+  --easing-expressive:  cubic-bezier(0.34, 1.30, 0.64, 1.00);
+
+  /* ============================================================
+     § 9. 尺寸与布局 · Sizing & Layout
+     ============================================================ */
+
+  /* 导航栏高度 */
+  --nav-bar-height:      44px;
+  /* Tab Bar 高度 */
+  --tab-bar-height:      49px;
+  /* 标准侧边栏宽度 */
+  --sidebar-width:      260px;
+  --sidebar-width-sm:   220px;
+  /* 内容区最大宽度 */
+  --content-max-width:  980px;
+  --prose-max-width:    680px;
+
+  /* ============================================================
+     § 10. 边框 · Borders
+     ============================================================ */
+
+  /* 精细描边（Retina 屏半像素效果）*/
+  --border-hairline:  0.5px solid var(--color-separator);
+  /* 标准边框 */
+  --border-default:   1px solid var(--color-gray-5);
+  /* 强调边框 */
+  --border-emphasis:  1px solid var(--color-gray-4);
+  /* 焦点边框 */
+  --border-focus:     1.5px solid var(--color-accent);
+}
+
+
+/* ==========================================================================
+   深色模式 · Dark Mode
+   优先响应系统偏好，也可通过 [data-theme="dark"] 强制覆盖
+   ========================================================================== */
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* 深色模式变量覆盖 */
+    /* ------------------------------------------------------------ */
+
+    /* --- 主强调色 · Accent（深色模式下略微提亮） --- */
+    --color-accent:          #0A84FF;
+    --color-accent-hover:    #409CFF;
+    --color-accent-pressed:  #6BB0FF;
+    --color-accent-subtle:   rgba(10, 132, 255, 0.18);
+
+    /* --- 系统语义色 · Semantic Colors (Dark variants) --- */
+    --color-green:           #30D158;
+    --color-green-subtle:    rgba(48, 209, 88, 0.15);
+    --color-orange:          #FF9F0A;
+    --color-orange-subtle:   rgba(255, 159, 10, 0.15);
+    --color-red:             #FF453A;
+    --color-red-subtle:      rgba(255, 69, 58, 0.15);
+    --color-teal:            #64D2FF;
+    --color-indigo:          #5E5CE6;
+    --color-purple:          #BF5AF2;
+    --color-pink:            #FF375F;
+    --color-yellow:          #FFD60A;
+
+    /* --- 灰阶 · Gray Scale (Dark) --- */
+    --color-gray-1:          #8E8E93;
+    --color-gray-2:          #636366;
+    --color-gray-3:          #48484A;
+    --color-gray-4:          #3A3A3C;
+    --color-gray-5:          #2C2C2E;
+    --color-gray-6:          #1C1C1E;
+
+    /* --- 背景色 · Background (Dark) --- */
+    /* 纯黑模式：#000000 或深灰 #1c1c1e */
+    --color-bg-primary:      #000000;   /* 系统级背景 — 纯黑 */
+    --color-bg-secondary:    #1C1C1E;   /* 分组区域背景 */
+    --color-bg-tertiary:     #2C2C2E;   /* 卡片背景 */
+    --color-bg-grouped:      #000000;   /* Grouped 列表背景 */
+    --color-bg-elevated:     #1C1C1E;   /* 悬浮面板背景 */
+
+    /* --- 文字色 · Text (Dark) — 保证 WCAG AA 对比度 --- */
+    /* 白色文字在纯黑背景上对比度 21:1，远超标准 */
+    --color-label:            #FFFFFF;
+    --color-label-secondary:  rgba(235,235,245, 0.60);
+    --color-label-tertiary:   rgba(235,235,245, 0.30);
+    --color-label-quaternary: rgba(235,235,245, 0.18);
+    --color-label-disabled:   rgba(235,235,245, 0.28);
+    --color-label-inverted:   #000000;
+
+    /* --- 分隔线 · Separator (Dark) --- */
+    --color-separator:        rgba(84, 84, 88, 0.65);
+    --color-separator-opaque: #38383A;
+
+    /* --- 填充色 · Fill (Dark) --- */
+    --color-fill:             rgba(120,120,128, 0.36);
+    --color-fill-secondary:   rgba(120,120,128, 0.32);
+    --color-fill-tertiary:    rgba(118,118,128, 0.24);
+    --color-fill-quaternary:  rgba(118,118,128, 0.18);
+
+    /* --- 叠加遮罩 · Overlay (Dark) --- */
+    --color-overlay-light:   rgba(255,255,255, 0.05);
+    --color-overlay-medium:  rgba(0, 0, 0, 0.40);
+    --color-overlay-heavy:   rgba(0, 0, 0, 0.70);
+
+    /* --- 毛玻璃材质 · Material (Dark) --- */
+    /* 深色模式下使用深色半透明背景 */
+    --material-thin:          rgba(28, 28, 30, 0.55);
+    --material-regular:       rgba(28, 28, 30, 0.72);
+    --material-thick:         rgba(44, 44, 46, 0.85);
+    --material-chrome:        rgba(22, 22, 24, 0.80);
+
+    /* --- 阴影 · Shadow (Dark) --- */
+    /* 深色背景上阴影需要更深更扩散 */
+    --shadow-xs:
+      0 1px 2px rgba(0, 0, 0, 0.20),
+      0 1px 4px rgba(0, 0, 0, 0.28);
+
+    --shadow-card:
+      0 1px 3px  rgba(0, 0, 0, 0.30),
+      0 4px 12px rgba(0, 0, 0, 0.36);
+
+    --shadow-card-hover:
+      0 2px 8px  rgba(0, 0, 0, 0.38),
+      0 8px 24px rgba(0, 0, 0, 0.40);
+
+    --shadow-popover:
+      0 4px 6px   rgba(0, 0, 0, 0.30),
+      0 10px 30px rgba(0, 0, 0, 0.50),
+      0 0 0 0.5px rgba(255, 255, 255, 0.06);
+
+    --shadow-modal:
+      0 8px 16px  rgba(0, 0, 0, 0.40),
+      0 24px 64px rgba(0, 0, 0, 0.60),
+      0 0 0 0.5px rgba(255, 255, 255, 0.06);
+
+    --shadow-window:
+      0 2px 4px   rgba(0, 0, 0, 0.40),
+      0 12px 32px rgba(0, 0, 0, 0.60),
+      0 32px 64px rgba(0, 0, 0, 0.50),
+      0 0 0 0.5px rgba(255, 255, 255, 0.08);
+
+    --shadow-focus-ring:
+      0 0 0 3px rgba(10, 132, 255, 0.50);
+
+    /* --- 边框 · Borders (Dark) --- */
+    --border-default:   1px solid var(--color-gray-5);
+    --border-emphasis:  1px solid var(--color-gray-4);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   强制深色模式：通过 [data-theme="dark"] 属性手动切换
+   优先级高于媒体查询，适合用户手动切换主题
+   -------------------------------------------------------------------------- */
+[data-theme="dark"] {
+  --color-accent:          #0A84FF;
+  --color-accent-hover:    #409CFF;
+  --color-accent-pressed:  #6BB0FF;
+  --color-accent-subtle:   rgba(10, 132, 255, 0.18);
+
+  --color-green:           #30D158;
+  --color-green-subtle:    rgba(48, 209, 88, 0.15);
+  --color-orange:          #FF9F0A;
+  --color-orange-subtle:   rgba(255, 159, 10, 0.15);
+  --color-red:             #FF453A;
+  --color-red-subtle:      rgba(255, 69, 58, 0.15);
+  --color-teal:            #64D2FF;
+  --color-indigo:          #5E5CE6;
+  --color-purple:          #BF5AF2;
+  --color-pink:            #FF375F;
+  --color-yellow:          #FFD60A;
+
+  --color-gray-1:          #8E8E93;
+  --color-gray-2:          #636366;
+  --color-gray-3:          #48484A;
+  --color-gray-4:          #3A3A3C;
+  --color-gray-5:          #2C2C2E;
+  --color-gray-6:          #1C1C1E;
+
+  --color-bg-primary:      #000000;
+  --color-bg-secondary:    #1C1C1E;
+  --color-bg-tertiary:     #2C2C2E;
+  --color-bg-grouped:      #000000;
+  --color-bg-elevated:     #1C1C1E;
+
+  --color-label:            #FFFFFF;
+  --color-label-secondary:  rgba(235,235,245, 0.60);
+  --color-label-tertiary:   rgba(235,235,245, 0.30);
+  --color-label-quaternary: rgba(235,235,245, 0.18);
+  --color-label-disabled:   rgba(235,235,245, 0.28);
+  --color-label-inverted:   #000000;
+
+  --color-separator:        rgba(84, 84, 88, 0.65);
+  --color-separator-opaque: #38383A;
+
+  --color-fill:             rgba(120,120,128, 0.36);
+  --color-fill-secondary:   rgba(120,120,128, 0.32);
+  --color-fill-tertiary:    rgba(118,118,128, 0.24);
+  --color-fill-quaternary:  rgba(118,118,128, 0.18);
+
+  --color-overlay-light:   rgba(255,255,255, 0.05);
+  --color-overlay-medium:  rgba(0, 0, 0, 0.40);
+  --color-overlay-heavy:   rgba(0, 0, 0, 0.70);
+
+  --material-thin:          rgba(28, 28, 30, 0.55);
+  --material-regular:       rgba(28, 28, 30, 0.72);
+  --material-thick:         rgba(44, 44, 46, 0.85);
+  --material-chrome:        rgba(22, 22, 24, 0.80);
+
+  --shadow-xs:
+    0 1px 2px rgba(0, 0, 0, 0.20),
+    0 1px 4px rgba(0, 0, 0, 0.28);
+
+  --shadow-card:
+    0 1px 3px  rgba(0, 0, 0, 0.30),
+    0 4px 12px rgba(0, 0, 0, 0.36);
+
+  --shadow-card-hover:
+    0 2px 8px  rgba(0, 0, 0, 0.38),
+    0 8px 24px rgba(0, 0, 0, 0.40);
+
+  --shadow-popover:
+    0 4px 6px   rgba(0, 0, 0, 0.30),
+    0 10px 30px rgba(0, 0, 0, 0.50),
+    0 0 0 0.5px rgba(255, 255, 255, 0.06);
+
+  --shadow-modal:
+    0 8px 16px  rgba(0, 0, 0, 0.40),
+    0 24px 64px rgba(0, 0, 0, 0.60),
+    0 0 0 0.5px rgba(255, 255, 255, 0.06);
+
+  --shadow-window:
+    0 2px 4px   rgba(0, 0, 0, 0.40),
+    0 12px 32px rgba(0, 0, 0, 0.60),
+    0 32px 64px rgba(0, 0, 0, 0.50),
+    0 0 0 0.5px rgba(255, 255, 255, 0.08);
+
+  --shadow-focus-ring:
+    0 0 0 3px rgba(10, 132, 255, 0.50);
+
+  --border-default:   1px solid var(--color-gray-5);
+  --border-emphasis:  1px solid var(--color-gray-4);
+}
+
+
+/* ==========================================================================
+   辅助工具类 · Utility Classes（可选引入，快速验证令牌）
+   ========================================================================== */
+
+/* 毛玻璃效果基类 */
+.material-thin {
+  background: var(--material-thin);
+  backdrop-filter: blur(var(--blur-md)) saturate(var(--vibrancy-saturation));
+  -webkit-backdrop-filter: blur(var(--blur-md)) saturate(var(--vibrancy-saturation));
+}
+
+.material-regular {
+  background: var(--material-regular);
+  backdrop-filter: blur(var(--blur-md)) saturate(var(--vibrancy-saturation));
+  -webkit-backdrop-filter: blur(var(--blur-md)) saturate(var(--vibrancy-saturation));
+}
+
+.material-thick {
+  background: var(--material-thick);
+  backdrop-filter: blur(var(--blur-lg)) saturate(var(--vibrancy-saturation));
+  -webkit-backdrop-filter: blur(var(--blur-lg)) saturate(var(--vibrancy-saturation));
+}
+
+/* 标准卡片 */
+.card-apple {
+  background:    var(--color-bg-tertiary);
+  border-radius: var(--radius-lg);
+  box-shadow:    var(--shadow-card);
+  padding:       var(--spacing-4);
+}
+
+/* 焦点可见环（替代 outline） */
+.focus-ring:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus-ring);
+}

@@ -87,7 +87,7 @@ export function VideoPreview({ src, name }: VideoPreviewProps) {
       </video>
 
       {/* Controls */}
-      <div style={{ background: '#1e1e1e', padding: '8px 12px', borderTop: '1px solid #333', flexShrink: 0 }}>
+      <div style={{ background: 'var(--material-chrome)', backdropFilter: 'saturate(1.8) blur(20px)', WebkitBackdropFilter: 'saturate(1.8) blur(20px)', padding: '8px 12px', borderTop: 'var(--border-hairline)', flexShrink: 0 }}>
         {/* Progress bar */}
         <input
           type="range"
