@@ -722,16 +722,18 @@
 
 .attachmentPreview {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 8px 12px;
-  background: var(--vscode-sideBar-background, #252526);
+  gap: 6px;
+  padding: 6px 8px;
+  background: transparent;
   border-bottom: 1px solid var(--vscode-panel-border, #2d2d2d);
-  max-height: 120px;
-  overflow-y: auto;
+  max-height: 40px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
 }
 
 .attachmentItem {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -778,4 +780,136 @@
 
 .sendBtn:hover:not(:disabled) {
   opacity: 0.9;
+}
+
+/* ── Resize handle ────────────────────────────────────────────────────── */
+.resizeHandle {
+  position: absolute;
+  top: -3px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40px;
+  height: 5px;
+  cursor: ns-resize;
+  border-radius: 2px;
+  opacity: 0;
+  transition: opacity 0.2s;
+  background: var(--vscode-focusBorder, #007fd4);
+  z-index: 10;
+}
+
+.inputWrapper:hover .resizeHandle,
+.inputWrapper:focus-within .resizeHandle {
+  opacity: 0.5;
+}
+
+.resizeHandle:hover {
+  opacity: 1 !important;
+}
+
+/* ── Character count ─────────────────────────────────────────────────── */
+.charCount {
+  font-size: 11px;
+  color: var(--vscode-input-placeholderForeground, #555);
+  padding: 0 2px;
+  user-select: none;
+}
+
+.charCount.nearLimit {
+  color: #f0883e;
+}
+
+.charCount.atLimit {
+  color: #f85149;
+}
+
+/* ── Clear button ────────────────────────────────────────────────────── */
+.clearBtn {
+  width: 22px !important;
+  height: 22px !important;
+  padding: 0 !important;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px !important;
+  opacity: 0.5;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.clearBtn:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* ── Image thumbnail in attachment preview ───────────────────────────── */
+.attachmentThumb {
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.attachmentItemImage {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.attachmentItemImage:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.removeAttachmentImage {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--vscode-errorForeground, #f14c4c);
+  color: white;
+  border-radius: 50%;
+  font-size: 10px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  z-index: 10;
+}
+
+.attachmentItemImage:hover .removeAttachmentImage {
+  opacity: 1;
+}
+
+.attachmentItem .removeAttachmentIcon {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--vscode-errorForeground, #f14c4c) !important;
+  color: white !important;
+  border-radius: 50% !important;
+  font-size: 10px;
+  cursor: pointer;
+  opacity: 0 !important;
+  transition: opacity 0.2s ease;
+  z-index: 10;
+}
+
+.attachmentItem:hover .removeAttachmentIcon {
+  opacity: 1 !important;
+}
+
+/* ── Shortcut hint ───────────────────────────────────────────────────── */
+.shortcutHint {
+  font-size: 11px;
+  color: var(--vscode-input-placeholderForeground, #555);
+  user-select: none;
+  white-space: nowrap;
 }

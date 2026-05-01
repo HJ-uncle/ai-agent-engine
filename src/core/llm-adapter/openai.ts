@@ -467,12 +467,18 @@ export class OpenAIAdapter implements LLMAdapter {
       ? (message as any)[options.responseThinkingField] 
       : (message as any).reasoning_content
 
+    // 处理缓存token：OpenAI API在使用缓存时，prompt_tokens只包含未命中缓存的token
+    // 完整的输入token应该是：prompt_tokens + prompt_tokens_details.cached_tokens
+    const usage = response.usage
+    const promptTokensFromCache = (usage as any)?.prompt_tokens_details?.cached_tokens ?? 0
+    const promptTokens = (usage?.prompt_tokens ?? 0) + promptTokensFromCache
+
     return {
       content: cleanContent,
       reasoningContent,
       toolCalls,
-      promptTokens: response.usage?.prompt_tokens ?? 0,
-      completionTokens: response.usage?.completion_tokens ?? 0,
+      promptTokens,
+      completionTokens: usage?.completion_tokens ?? 0,
       finishReason: (choice.finish_reason === 'tool_calls' || (toolCalls && toolCalls.length > 0)
         ? 'tool_calls'
         : choice.finish_reason === 'length' ? 'length' : 'stop'),
@@ -524,10 +530,14 @@ export class OpenAIAdapter implements LLMAdapter {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const finalMessage = await (stream as any).finalMessage()
+    const finalUsage = finalMessage?.usage
+    const finalPromptTokensFromCache = (finalUsage as any)?.prompt_tokens_details?.cached_tokens ?? 0
+    const finalPromptTokens = (finalUsage?.prompt_tokens ?? 0) + finalPromptTokensFromCache
+
     yield {
       done: true,
-      promptTokens: finalMessage?.usage?.prompt_tokens ?? 0,
-      completionTokens: finalMessage?.usage?.completion_tokens ?? 0,
+      promptTokens: finalPromptTokens,
+      completionTokens: finalUsage?.completion_tokens ?? 0,
     }
   }
 

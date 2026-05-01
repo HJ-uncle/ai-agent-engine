@@ -6,7 +6,7 @@ import React, {
   useLayoutEffect,
 } from "react";
 import { TodoPanel } from './TodoPanel';
-import { Button, Tooltip, Popconfirm, Input, Select, Switch, message, Modal } from "antd";
+import { Button, Tooltip, Popconfirm, Input, Select, Switch, message, Modal, Image } from "antd";
 import {
   SendOutlined,
   ReloadOutlined,
@@ -34,7 +34,6 @@ import {
   FileTextOutlined,
   DownloadOutlined,
   SettingOutlined,
-  PlusOutlined,
   LinkOutlined,
 } from "@ant-design/icons";
 import ReactMarkdown from "react-markdown";
@@ -1454,6 +1453,8 @@ export default function ChatArea() {
   const [showTodoPanel, setShowTodoPanel] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isCompressing, setIsCompressing] = useState(false);
+  const [isComposing, setIsComposing] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // 会话是否已开始 —— 直接从本地 messageMap 判断，无需额外 API 请求
   // 后端在首次 POST /chat 时自动绑定 agentId，messages.length > 0 即代表已锁定
@@ -2063,27 +2064,65 @@ export default function ChatArea() {
       )}
 
       {/* Input area */}
-      <div className={styles.inputArea} onDrop={handleDrop} onDragOver={(e) => e.preventDefault()}>
+      <div className={styles.inputArea} onDrop={handleDrop} onDragOver={(e) => e.preventDefault()} style={{ position: "relative" }}>
         <div
           className={styles.inputWrapper}
-          style={{ flexDirection: "column", alignItems: "stretch" }}
+          style={{ flexDirection: "column", alignItems: "stretch", position: "relative" }}
         >
+          <div className={styles.resizeHandle} />
           {attachments.length > 0 && (
             <div className={styles.attachmentPreview}>
-              {attachments.map((file, index) => (
-                <div key={index} className={styles.attachmentItem}>
-                  {file.type.startsWith("image/") ? (
-                    <FileImageOutlined style={{ color: "#a855f7" }} />
-                  ) : (
-                    <FileOutlined style={{ color: "#0e639c" }} />
-                  )}
-                  <span className={styles.attachmentName}>{file.name}</span>
-                  <CloseOutlined
-                    onClick={() => removeAttachment(index)}
-                    className={styles.removeAttachment}
-                  />
-                </div>
-              ))}
+              {attachments.map((file, index) => {
+                // 生成带时间戳的文件名
+                const ext = file.name.split('.').pop();
+                const baseName = file.name.replace(/\.[^/.]+$/, '');
+                const timestamp = Date.now();
+                const newFileName = `${baseName}_${timestamp}.${ext}`;
+                
+                if (file.type.startsWith("image/")) {
+                  const imageUrl = URL.createObjectURL(file);
+                  return (
+                    <div key={index} className={styles.attachmentItemImage}>
+                      <CloseOutlined
+                        onClick={(e) => { e.stopPropagation(); removeAttachment(index); }}
+                        className={styles.removeAttachmentImage}
+                      />
+                      <Image
+                        src={imageUrl}
+                        alt={newFileName}
+                        width={24}
+                        height={24}
+                        className={styles.attachmentThumb}
+                        preview={{
+                          src: imageUrl,
+                        }}
+                      />
+                    </div>
+                  );
+                } else {
+                  // 根据文件类型显示不同图标
+                  const getFileIcon = () => {
+                    if (file.type.includes('pdf')) return <FileTextOutlined style={{ color: '#f85149' }} />;
+                    if (file.type.includes('video')) return <FileOutlined style={{ color: '#34d399' }} />;
+                    if (file.type.includes('audio')) return <FileOutlined style={{ color: '#60a5fa' }} />;
+                    if (file.type.includes('zip') || file.type.includes('rar')) return <FileOutlined style={{ color: '#fbbf24' }} />;
+                    if (file.type.includes('text')) return <FileTextOutlined style={{ color: '#34d399' }} />;
+                    if (file.type.includes('code') || file.type.includes('json') || file.type.includes('xml')) return <FileTextOutlined style={{ color: '#a78bfa' }} />;
+                    return <FileOutlined style={{ color: '#0e639c' }} />;
+                  };
+                  
+                  return (
+                    <div key={index} className={styles.attachmentItem}>
+                      {getFileIcon()}
+                      <span className={styles.attachmentName}>{file.name}</span>
+                      <CloseOutlined
+                        onClick={() => removeAttachment(index)}
+                        className={styles.removeAttachmentIcon}
+                      />
+                    </div>
+                  );
+                }
+              })}
             </div>
           )}
           <Input.TextArea
@@ -2094,13 +2133,21 @@ export default function ChatArea() {
             autoSize={{ minRows: 1, maxRows: 8 }}
             disabled={isInputDisabled}
             className={styles.input}
+            onCompositionStart={() => setIsComposing(true)}
+            onCompositionEnd={() => setIsComposing(false)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
+              if (e.key === "Enter" && !e.shiftKey && !isComposing) {
                 e.preventDefault();
-                // Do not send if it's disabled or empty
                 if (!isInputDisabled && (inputValue.trim() || attachments.length > 0)) {
                   sendMessage(inputValue);
                 }
+              }
+              if (e.key === "Enter" && e.ctrlKey) {
+                e.preventDefault();
+                const start = e.currentTarget.selectionStart;
+                const end = e.currentTarget.selectionEnd;
+                const newValue = inputValue.substring(0, start) + "\n" + inputValue.substring(end);
+                setInputValue(newValue);
               }
             }}
           />
@@ -2175,8 +2222,27 @@ export default function ChatArea() {
                 multiple
                 onChange={handleFileSelect}
               />
+
+              {inputValue.length > 0 && (
+                <Tooltip title="清空输入">
+                  <Button
+                    type="text"
+                    icon={<CloseOutlined />}
+                    className={styles.clearBtn}
+                    onClick={() => {
+                      setInputValue("");
+                      textareaRef.current?.focus();
+                    }}
+                  />
+                </Tooltip>
+              )}
+
+              <span className={styles.charCount}>
+                {inputValue.length > 0 && `${inputValue.length}`}
+              </span>
             </div>
-            <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span className={styles.shortcutHint}>Enter 发送 · Ctrl+Enter 换行</span>
               {isStreaming ? (
                 <Tooltip title="停止生成">
                   <Button

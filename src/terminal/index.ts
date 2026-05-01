@@ -4,7 +4,9 @@
  */
 import os from 'node:os'
 import { existsSync } from 'node:fs'
+import { resolve, dirname } from 'node:path'
 import { EventEmitter } from 'node:events'
+import { fileURLToPath } from 'node:url'
 import * as pty from 'node-pty'
 
 export interface TerminalSession {
@@ -27,26 +29,48 @@ class TerminalManager {
    * @param rows     初始行数
    */
   create(id: string, cwd: string, cols = 120, rows = 30, workspaceRoots?: string[]): TerminalSession {
-    // 使用自定义受限 shell（workspace-shell.mjs）
-    const shellScript = new URL('./workspace-shell.mjs', import.meta.url).pathname
-      .replace(/^\/([A-Za-z]:)/, '$1')
+    // 正确获取 workspace-shell.mjs 的路径（跨平台兼容）
+    const __filename = fileURLToPath(import.meta.url)
+    const __dirname = dirname(__filename)
+    const shellScript = resolve(__dirname, './workspace-shell.mjs')
+
+    // 确保 cwd 必须存在且可访问
+    let safeCwd = cwd
+    if (!existsSync(safeCwd)) {
+      safeCwd = os.homedir()
+      if (!existsSync(safeCwd)) {
+        safeCwd = process.cwd()
+      }
+    }
 
     // 所有绑定的工作空间（含自定义路径）传给 shell
-    const roots = workspaceRoots && workspaceRoots.length > 0 ? workspaceRoots : [cwd]
+    const roots = workspaceRoots && workspaceRoots.length > 0 ? workspaceRoots : [safeCwd]
 
-    const p = pty.spawn(process.execPath, [shellScript], {
+    // 准备 spawn 选项
+    const spawnOptions: any = {
       name: 'xterm-256color',
       cols,
       rows,
-      cwd,
+      cwd: safeCwd,
       env: {
         ...process.env,
         TERM: 'xterm-256color',
         COLORTERM: 'truecolor',
         WORKSPACE_ROOT: roots[0],
         WORKSPACE_ROOTS: JSON.stringify(roots),  // shell 读取所有工作空间
-      } as Record<string, string>,
-    })
+      },
+    }
+
+    let p: pty.IPty
+    try {
+      // 首先尝试用 workspace-shell.mjs
+      p = pty.spawn(process.execPath, [shellScript], spawnOptions)
+    } catch (err: any) {
+      console.error('Failed to spawn workspace-shell, falling back to basic shell')
+      // 降级方案：直接使用系统 shell
+      const fallbackShell = os.platform() === 'win32' ? 'powershell.exe' : (os.platform() === 'darwin' ? '/bin/zsh' : '/bin/bash')
+      p = pty.spawn(fallbackShell, [], spawnOptions)
+    }
 
     const events = new EventEmitter()
 
@@ -57,7 +81,7 @@ class TerminalManager {
       this.sessions.delete(id)
     })
 
-    const session: TerminalSession = { id, pty: p, cwd, title: 'workspace-shell', events }
+    const session: TerminalSession = { id, pty: p, cwd: safeCwd, title: 'workspace-shell', events }
     this.sessions.set(id, session)
     return session
   }

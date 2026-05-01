@@ -67,8 +67,8 @@ export default function EditorArea() {
         {!activeTab ? (
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#555', fontSize: 14, flexDirection: 'column', gap: 8 }}>
             <span style={{ fontSize: 48 }}>📁</span>
-            <span>在左侧文件树中选择文件打开</span>
-            <span style={{ fontSize: 12, color: '#444' }}>Ctrl+P 快速打开文件</span>
+            <span>在左侧资源管理树中选择文件打开</span>
+            {/* <span style={{ fontSize: 12, color: '#444' }}>Ctrl+P 快速打开文件</span> */}
           </div>
         ) : (
           <>

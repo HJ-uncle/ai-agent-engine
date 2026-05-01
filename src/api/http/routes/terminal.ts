@@ -42,11 +42,14 @@ export async function terminalRoutes(fastify: FastifyInstance) {
 
     const id = randomUUID()
     try {
+      console.log(`[Terminal] Creating terminal ${id} in ${cwd}`)
       const session = terminalManager.create(id, cwd, cols, rows, allWorkspacePaths)
 
       return reply.code(200).send(success({ terminalId: id, cwd }))
     } catch (e: any) {
-      return reply.code(200).send(fail(50000, `Failed to create terminal: ${e.message}`))
+      console.error('[Terminal] Failed to create terminal:', e)
+      const errorMsg = e.message || String(e)
+      return reply.code(200).send(fail(50000, `Failed to create terminal: ${errorMsg}`))
     }
   })
 

@@ -67,7 +67,7 @@ export default function WebFetchSettings() {
         maxContentLength: DEFAULT_CONFIG.maxContentLength
       })
     }
-  }, [form])
+  }, [form, antMessage])
 
   useEffect(() => {
     loadConfig()

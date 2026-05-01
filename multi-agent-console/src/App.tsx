@@ -24,7 +24,6 @@ import type { Todo } from './api'
 import styles from './App.module.css'
 import 'highlight.js/styles/vs2015.css'
 import EditorArea from './components/EditorArea'
-import { useExplorerStore } from './store/explorer'
 
 const ExplorerPanel = process.env.REACT_APP_NEW_EXPLORER === '0' ? OldExplorerPanel : NewExplorerPanel
 

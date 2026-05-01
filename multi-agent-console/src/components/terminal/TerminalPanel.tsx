@@ -20,16 +20,16 @@ interface TerminalPanelProps {
 
 const TerminalPanel: React.FC<TerminalPanelProps> = ({ sessionId }) => {
   const { message } = App.useApp()
-  const tabs            = useTerminalStore(s => s.tabs)
-  const activeId        = useTerminalStore(s => s.activeTerminalId)
-  const panelHeight     = useTerminalStore(s => s.panelHeight)
-  const addTab          = useTerminalStore(s => s.addTab)
-  const removeTab       = useTerminalStore(s => s.removeTab)
-  const setActive       = useTerminalStore(s => s.setActiveTerminal)
-  const setTabTitle     = useTerminalStore(s => s.setTabTitle)
-  const setTabAlive     = useTerminalStore(s => s.setTabAlive)
+  const tabs = useTerminalStore(s => s.tabs)
+  const activeId = useTerminalStore(s => s.activeTerminalId)
+  const panelHeight = useTerminalStore(s => s.panelHeight)
+  const addTab = useTerminalStore(s => s.addTab)
+  const removeTab = useTerminalStore(s => s.removeTab)
+  const setActive = useTerminalStore(s => s.setActiveTerminal)
+  const setTabTitle = useTerminalStore(s => s.setTabTitle)
+  const setTabAlive = useTerminalStore(s => s.setTabAlive)
   const setPanelVisible = useTerminalStore(s => s.setPanelVisible)
-  const setPanelHeight  = useTerminalStore(s => s.setPanelHeight)
+  const setPanelHeight = useTerminalStore(s => s.setPanelHeight)
 
   // ── 新建终端 ────────────────────────────────────────────────────────────
   const sessionWorkspacePaths = useSessionStore(s =>
@@ -131,7 +131,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ sessionId }) => {
       >
         {/* 拖拽提示三点 */}
         <div style={{ display: 'flex', gap: 3, pointerEvents: 'none' }}>
-          {[0,1,2].map(i => (
+          {[0, 1, 2].map(i => (
             <div key={i} style={{ width: 3, height: 3, borderRadius: '50%', background: 'rgba(255,255,255,0.12)' }} />
           ))}
         </div>
@@ -229,7 +229,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ sessionId }) => {
       </div>
 
       {/* 终端内容区：所有 xterm 实例同时 mount，通过 display 切换可见性 */}
-      <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+      <div style={{ flex: 1, overflow: 'hidden', position: 'relative', paddingLeft: 4 }}>
         {tabs.length === 0 && (
           <div
             style={{
@@ -269,6 +269,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ sessionId }) => {
             >
               <XTerminal
                 terminalId={tab.terminalId}
+                style={{ paddingLeft: 8 }}
                 wsUrl={terminalApi.wsUrl(tab.terminalId)}
                 onTitleChange={title => setTabTitle(tab.terminalId, title)}
                 onExit={() => setTabAlive(tab.terminalId, false)}
