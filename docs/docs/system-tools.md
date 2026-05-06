@@ -29,6 +29,7 @@ Agent Engine 内置一套**系统级工具**，让 AI Agent 具备任务管理�
 | `install_package` | Package | 安装 npm 包到工作区 |
 | `read_file` | File | 读取文件内容 |
 | `write_file` | File | 写入文件内容 |
+| `smart_read` | File | **智能文件读取**（自动识别类型、Excel/CSV预览、代码摘要提取） |
 | `list_files` | File | 列出目录文件 |
 | `delete_file` | File | 删除文件或目录 |
 | `create_dir` | File | 创建目录 |

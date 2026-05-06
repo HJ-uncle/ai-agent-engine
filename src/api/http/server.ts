@@ -25,6 +25,7 @@ import { performanceRoutes } from './routes/performance.js'
 import { cronScheduler } from '../../scheduler/cron-scheduler.js'
 import { globalRequestMiddleware, WHITELIST_PATHS } from './middleware.js'
 import fastifyWebsocket from '@fastify/websocket'
+import fastifyMultipart from '@fastify/multipart'
 import { fail } from './response.js'
 
 export async function buildServer() {
@@ -71,6 +72,7 @@ export async function buildServer() {
 
   // WebSocket 插件（终端路由依赖，必须在路由注册前完成）
   await fastify.register(fastifyWebsocket)
+  await fastify.register(fastifyMultipart, { limits: { fileSize: 100 * 1024 * 1024 } })
 
   // Register routes under /api/v1
   await fastify.register(async (api) => {

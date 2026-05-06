@@ -232,12 +232,47 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
         fs.mkdirSync(dir, { recursive: true })
       }
       
-      const buffer = encoding === 'base64' ? Buffer.from(content, 'base64') : content
+      const buffer = encoding === 'base64' ? Buffer.from(content, 'base64') : Buffer.from(content, 'utf-8')
       fs.writeFileSync(safePath, buffer)
       
       return reply.code(200).send(success({ path: filePath, size: buffer.length }))
     } catch (e: any) {
       return reply.code(200).send(fail(50000, `Failed to write file: ${e.message}`))
+    }
+  })
+
+  // POST /workspace/upload — multipart 文件上传，保留二进制完整性
+  fastify.post('/workspace/upload', async (request, reply) => {
+    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    
+    try {
+      const data = await request.file()
+      if (!data) {
+        return reply.code(200).send(fail(40001, 'No file uploaded'))
+      }
+
+      const sessionId = (data.fields as any)?.sessionId?.value ?? 'default'
+      const uploadPath = (data.fields as any)?.path?.value
+      if (!uploadPath) {
+        return reply.code(200).send(fail(40001, 'path field is required'))
+      }
+
+      const safePath = workspaceManager.resolveSafePath({ tenantId, sessionId }, uploadPath)
+      const dir = path.dirname(safePath)
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true })
+      }
+
+      const chunks: Buffer[] = []
+      for await (const chunk of data.file) {
+        chunks.push(chunk)
+      }
+      const buffer = Buffer.concat(chunks)
+      fs.writeFileSync(safePath, buffer)
+
+      return reply.code(200).send(success({ path: uploadPath, size: buffer.length, filename: data.filename }))
+    } catch (e: any) {
+      return reply.code(200).send(fail(50000, `Failed to upload file: ${e.message}`))
     }
   })
 
@@ -281,19 +316,17 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
     try {
       const safePath = workspaceManager.resolveSafePath({ tenantId, sessionId }, filePath)
       if (!fs.existsSync(safePath)) return reply.code(200).send(fail(40400, 'File not found'))
-      // Dynamically import trash (ESM package)
-      const { default: trash } = await import('trash')
-      await trash(safePath)
-      return reply.code(200).send(success({ success: true }))
-    } catch (e: any) {
-      // Fallback: if trash is unavailable, permanently delete
       try {
-        const safePath = workspaceManager.resolveSafePath({ tenantId, sessionId }, filePath)
+        // @ts-expect-error trash may not be installed
+        const { default: trash } = await import('trash')
+        await trash(safePath)
+        return reply.code(200).send(success({ success: true }))
+      } catch {
         fs.rmSync(safePath, { recursive: true, force: true })
         return reply.code(200).send(success({ success: true, fallback: 'permanent_delete' }))
-      } catch {
-        return reply.code(200).send(fail(50000, `Failed to delete: ${e.message}`))
       }
+    } catch (e: any) {
+      return reply.code(200).send(fail(50000, `Failed to delete: ${e.message}`))
     }
   })
 
@@ -333,7 +366,7 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
         if (hasPrettier) {
           const { stdout } = await execFileAsync(
             'npx', ['prettier', '--stdin-filepath', safePath],
-            { input: content, cwd: workspaceRoot, timeout: 10000 }
+            { input: content, cwd: workspaceRoot, timeout: 10000 } as any
           )
           return reply.code(200).send(success({ content: stdout }))
         }

@@ -7,7 +7,7 @@
 import { ToolRegistry } from '../core/tool-registry/index.js'
 import { SQLiteMemoryStore } from '../storage/memory-store/index.js'
 import { registerBuiltinSkills, skillsRegistry } from '../skills/index.js'
-import { fileTools } from './file/index.js'
+import { fileTools, smartReadFileTool } from './file/index.js'
 import { cmdTool } from './cmd/index.js'
 import { askUserTool } from './ask-user/index.js'
 import { createMemoryTools } from './memory/index.js'
@@ -95,7 +95,8 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   // list_skills / get_skill are skill-infrastructure tools → track as skill
   skillTools.push('list_skills', 'get_skill')
 
-  // 2. 文件工具（read_file / write_file / list_files / delete_file / create_dir / read_image）
+  // 2. 文件工具（smart_read / read_file / write_file / list_files / delete_file / create_dir / read_image）
+  if (shouldRegister('smart_read')) registerBuiltin(smartReadFileTool)
   if (shouldRegister('read_file')) fileTools.filter(t => t.name === 'read_file').forEach((t) => registerBuiltin(t))
   if (shouldRegister('write_file')) fileTools.filter(t => t.name === 'write_file').forEach((t) => registerBuiltin(t))
   if (shouldRegister('list_files')) fileTools.filter(t => t.name === 'list_files').forEach((t) => registerBuiltin(t))

@@ -1258,6 +1258,55 @@
         }
       }
     },
+    "/workspace/upload": {
+      "post": {
+        "summary": "multipart 二进制文件上传（保留原始字节流）",
+        "description": "通过 multipart/form-data 上传文件，保留原始二进制完整性，适用于 xlsx、图片等二进制文件，避免 UTF-8 编码污染。最大 100MB。",
+        "tags": ["Workspace"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": { "type": "string", "format": "binary", "description": "二进制文件" },
+                  "sessionId": { "type": "string", "description": "目标会话 ID" },
+                  "path": { "type": "string", "description": "上传路径（相对于工作区根目录）" }
+                },
+                "required": ["file", "sessionId", "path"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/StandardResponse" },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "path": { "type": "string" },
+                            "size": { "type": "integer" },
+                            "filename": { "type": "string" }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/workspace/file/stream": {
       "get": {
         "summary": "视频/二进制流媒体（支持 HTTP Range 分片，206 Partial Content）",

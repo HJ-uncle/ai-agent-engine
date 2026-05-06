@@ -724,6 +724,21 @@ export const workspaceApi = {
     return res.data
   },
 
+  /** Multipart 上传文件，保留二进制完整性（用于 xlsx、图片等二进制文件） */
+  uploadFileBinary: async (sessionId: string, filePath: string, file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('sessionId', sessionId)
+    formData.append('path', filePath)
+
+    const res = await fetch(`${API_PREFIX}/workspace/upload`, {
+      method: 'POST',
+      body: formData,
+    })
+    const json = await res.json()
+    return json.data as { path: string; size: number; filename: string } | undefined
+  },
+
   // ── New file-ops (VS Code explorer refactor) ─────────────────────────────
 
   /** Create an empty file at the given path */

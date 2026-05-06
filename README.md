@@ -41,38 +41,40 @@ A production-ready AI Agent Engine built with Node.js + TypeScript ESM. Supports
 | 31 | **Context Compression** — Extractive + keyword compression with accuracy validation |
 | 32 | **Unified Tool Registry Factory** — Single source of truth for all tool registration |
 | 33 | **QA Logger** — Structured Q&A audit log for every conversation turn |
-| 34 | **Workspace File Upload** — Upload images/files up to 100 MB directly to session workspace |
-| 35 | **Context Memory Switch** — Per-session toggle for conversation history injection |
-| 36 | **Todo Management** — Task CRUD with REST API + AI tools (`todo_list/create/update/delete`) + UI panel |
-| 37 | **Cron Jobs** — Scheduled AI actions via standard 5-field cron expressions; loopback triggers full ReAct loop |
-| 38 | **Glob Search** — File pattern matching tool (`glob_search`) with wildcard support (`**`, `*`, `?`) |
-| 39 | **Grep Search** — Full-text / regex search tool (`grep_search`); uses ripgrep when available, falls back to Node.js |
-| 40 | **Task Control** — Agent tools to list, cancel and inspect background queue jobs (`task_list/cancel/status`) |
-| 41 | **Web Fetch** — `web_fetch` tool with security domain filtering via `config/security.json` |
-| 42 | **HTTP Request** — `http_request` tool for external API calls |
-| 43 | **Agent Tools** — `agent` / `subagent` tools for sub-agent creation and management |
-| 44 | **Get Context** — `get_context` tool for runtime context inspection |
-| 45 | **Install Package** — `install_package` tool for npm package installation |
-| 46 | **Fine-grained Tool Control** — Per-agent `allowedTools` configuration via `agent_allowed_tools` table |
-| 47 | **Session Agent Lock** — Once a session starts, the Agent is locked and cannot be switched mid-session; cleared on history delete |
-| 48 | **Granular Token Breakdown** — 8-category Token usage: system prompt, RAG, skill prompt, builtin tools, MCP tools, history messages, tool results, completion |
-| 49 | **Tool Output Truncation** — Oversized tool outputs auto-truncated (head + tail) to prevent token budget explosion |
-| 50 | **OpenAI Base URL Auto-fix** — Automatically strips `/chat/completions` or other endpoint suffixes from `OPENAI_BASE_URL` |
-| 51 | **DB-backed Settings** — Runtime settings (LLM, agent params, skills, tools, workspace) stored in SQLite `system_config` table; sensitive keys (API keys) encrypted with AES-256-GCM; synced to `process.env` on startup |
-| 52 | **Integrated Terminal** — Browser-based PTY terminal (`node-pty` + `xterm.js`) locked to session workspace; multi-tab support; `POST /terminal/create` + `WS /terminal/ws/:id` |
-| 53 | **VS Code–style Explorer** — File tree with context menu (create / rename / delete / move), Monaco editor tabs, image/video preview, hex viewer, Quick Open (`Ctrl+P`), undo log |
-| 54 | **Workspace Extended API** — New REST endpoints: `POST /workspace/file/create`, `POST /workspace/folder/create`, `POST /workspace/file/move`, `POST /workspace/file/trash`, `POST /workspace/file/format`, `GET /workspace/file/stream` |
-| 55 | **Split Layout** — Three-mode main area: `chat-only`, `horizontal` (top/bottom), `vertical` (left/right); draggable divider (15–85%); layout ratio persisted to `localStorage` |
-| 56 | **macOS Sonoma Design Tokens** — `macos-sonoma-tokens.css` — full CSS custom-property set covering materials (title bar / sidebar / content), typography, colors, spacing, shadows, border-radius, traffic-light buttons, hover states, dark-mode overrides, and utility classes |
-| 57 | **Security Policy Engine** — Command injection detection with regex pattern matching; per-policy enable/disable; audit trail for every blocked command (`src/security/policy-engine.ts`) |
-| 58 | **SSRF Protection** — `network-policy.ts` performs DNS pre-lookup and blocks requests to RFC-1918 private IPs (10.x, 172.16-31.x, 192.168.x, 127.x, 169.254.x); domain whitelist / blacklist support; applied to both `web_fetch` and `http_request` tools |
-| 59 | **Audit Log** — Structured per-tool audit entries (`toolName`, `args`, `result`, `blocked`, `tenantId`, `sessionId`) written to `audit_log` SQLite table; queryable via `GET /api/v1/security/audit-log` with filters |
-| 60 | **LSP Diagnostics** — `code_diagnose` agent tool runs TypeScript compiler (`tsc --noEmit`) and ESLint on workspace files; results are cached by file-content hash; exposed as `GET /api/v1/lsp/diagnostics`; enables AI self-correction of code errors |
-| 61 | **SQLite Performance Tuning** — WAL journal mode, `synchronous=NORMAL`, 20 MB page cache, 256 MB mmap, 5 s busy-timeout applied at startup via `applyPerformancePragmas()`; all thresholds configurable via env vars; expected 30-50 % query speed improvement |
-| 62 | **Concurrency Pool** — `src/core/utils/concurrency-pool.ts` provides a generic async semaphore limiting parallel tool / LSP invocations to prevent DB lock contention |
-| 63 | **Idempotent Message Delete** — Backend DELETE `/api/v1/messages/:id` uses a 3-branch strategy: (a) find by `message_id` → cascade-delete entire conversation round; (b) find by `conversation_id` → delete round; (c) already gone → return success; frontend cancels running stream before delete to prevent race-condition resurrection |
-| 64 | **User Message Backend ID Sync** — After persisting user message to DB, backend yields `__user_msg_id__` SSE frame; frontend intercepts it and writes `backendMessageId` onto the user message object, enabling accurate delete / regenerate targeting even for messages created mid-stream |
-| 65 | **Orphan Row Auto-Cleanup** — `getHistory()` detects sessions whose first rows have no `user` message (e.g. interrupted `ask_user` sub-sessions) and asynchronously deletes them, preventing ghost tool-call blocks from appearing in the UI after page refresh |
+| 34 | **Workspace File Upload** — Upload images/files up to 100 MB directly to session workspace via multipart binary upload |
+| 35 | **Smart Read** — `smart_read` tool auto-detects file type (Excel/CSV/JSON/Code) and returns structured preview; memory-cached with mtime validation |
+| 36 | **Binary File Handling** — Frontend uploads xlsx/pdf/zip and other binary files as base64; multipart upload preserves byte integrity |
+| 37 | **Context Memory Switch** — Per-session toggle for conversation history injection |
+| 38 | **Todo Management** — Task CRUD with REST API + AI tools (`todo_list/create/update/delete`) + UI panel |
+| 39 | **Cron Jobs** — Scheduled AI actions via standard 5-field cron expressions; loopback triggers full ReAct loop |
+| 40 | **Glob Search** — File pattern matching tool (`glob_search`) with wildcard support (`**`, `*`, `?`) |
+| 41 | **Grep Search** — Full-text / regex search tool (`grep_search`); uses ripgrep when available, falls back to Node.js |
+| 42 | **Task Control** — Agent tools to list, cancel and inspect background queue jobs (`task_list/cancel/status`) |
+| 43 | **Web Fetch** — `web_fetch` tool with security domain filtering via `config/security.json` |
+| 44 | **HTTP Request** — `http_request` tool for external API calls |
+| 45 | **Agent Tools** — `agent` / `subagent` tools for sub-agent creation and management |
+| 46 | **Get Context** — `get_context` tool for runtime context inspection |
+| 47 | **Install Package** — `install_package` tool for npm package installation |
+| 48 | **Fine-grained Tool Control** — Per-agent `allowedTools` configuration via `agent_allowed_tools` table |
+| 49 | **Session Agent Lock** — Once a session starts, the Agent is locked and cannot be switched mid-session; cleared on history delete |
+| 50 | **Granular Token Breakdown** — 8-category Token usage: system prompt, RAG, skill prompt, builtin tools, MCP tools, history messages, tool results, completion |
+| 51 | **Tool Output Truncation** — Oversized tool outputs auto-truncated (head + tail) to prevent token budget explosion |
+| 52 | **OpenAI Base URL Auto-fix** — Automatically strips `/chat/completions` or other endpoint suffixes from `OPENAI_BASE_URL` |
+| 53 | **DB-backed Settings** — Runtime settings (LLM, agent params, skills, tools, workspace) stored in SQLite `system_config` table; sensitive keys (API keys) encrypted with AES-256-GCM; synced to `process.env` on startup |
+| 54 | **Integrated Terminal** — Browser-based PTY terminal (`node-pty` + `xterm.js`) locked to session workspace; multi-tab support; `POST /terminal/create` + `WS /terminal/ws/:id` |
+| 55 | **VS Code–style Explorer** — File tree with context menu (create / rename / delete / move), Monaco editor tabs, image/video preview, hex viewer, Quick Open (`Ctrl+P`), undo log |
+| 56 | **Workspace Extended API** — New REST endpoints: `POST /workspace/file/create`, `POST /workspace/folder/create`, `POST /workspace/file/move`, `POST /workspace/file/trash`, `POST /workspace/file/format`, `GET /workspace/file/stream`, `POST /workspace/upload` |
+| 57 | **Split Layout** — Three-mode main area: `chat-only`, `horizontal` (top/bottom), `vertical` (left/right); draggable divider (15–85%); layout ratio persisted to `localStorage` |
+| 58 | **macOS Sonoma Design Tokens** — `macos-sonoma-tokens.css` — full CSS custom-property set covering materials (title bar / sidebar / content), typography, colors, spacing, shadows, border-radius, traffic-light buttons, hover states, dark-mode overrides, and utility classes |
+| 59 | **Security Policy Engine** — Command injection detection with regex pattern matching; per-policy enable/disable; audit trail for every blocked command (`src/security/policy-engine.ts`) |
+| 60 | **SSRF Protection** — `network-policy.ts` performs DNS pre-lookup and blocks requests to RFC-1918 private IPs (10.x, 172.16-31.x, 192.168.x, 127.x, 169.254.x); domain whitelist / blacklist support; applied to both `web_fetch` and `http_request` tools |
+| 61 | **Audit Log** — Structured per-tool audit entries (`toolName`, `args`, `result`, `blocked`, `tenantId`, `sessionId`) written to `audit_log` SQLite table; queryable via `GET /api/v1/security/audit-log` with filters |
+| 62 | **LSP Diagnostics** — `code_diagnose` agent tool runs TypeScript compiler (`tsc --noEmit`) and ESLint on workspace files; results are cached by file-content hash; exposed as `GET /api/v1/lsp/diagnostics`; enables AI self-correction of code errors |
+| 63 | **SQLite Performance Tuning** — WAL journal mode, `synchronous=NORMAL`, 20 MB page cache, 256 MB mmap, 5 s busy-timeout applied at startup via `applyPerformancePragmas()`; all thresholds configurable via env vars; expected 30-50 % query speed improvement |
+| 64 | **Concurrency Pool** — `src/core/utils/concurrency-pool.ts` provides a generic async semaphore limiting parallel tool / LSP invocations to prevent DB lock contention |
+| 65 | **Idempotent Message Delete** — Backend DELETE `/api/v1/messages/:id` uses a 3-branch strategy: (a) find by `message_id` → cascade-delete entire conversation round; (b) find by `conversation_id` → delete round; (c) already gone → return success; frontend cancels running stream before delete to prevent race-condition resurrection |
+| 66 | **User Message Backend ID Sync** — After persisting user message to DB, backend yields `__user_msg_id__` SSE frame; frontend intercepts it and writes `backendMessageId` onto the user message object, enabling accurate delete / regenerate targeting even for messages created mid-stream |
+| 67 | **Orphan Row Auto-Cleanup** — `getHistory()` detects sessions whose first rows have no `user` message (e.g. interrupted `ask_user` sub-sessions) and asynchronously deletes them, preventing ghost tool-call blocks from appearing in the UI after page refresh |
 
 ---
 

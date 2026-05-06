@@ -1912,6 +1912,22 @@ export default function ChatArea() {
     });
   };
 
+  const BINARY_EXTENSIONS = new Set([
+    '.xlsx', '.xls', '.xlsm', '.xlsb', '.csv',
+    '.zip', '.tar', '.gz', '.rar', '.7z',
+    '.pdf', '.doc', '.docx', '.ppt', '.pptx',
+    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.tiff',
+    '.mp3', '.wav', '.ogg', '.mp4', '.avi', '.mov', '.webm',
+    '.exe', '.dll', '.so', '.dylib',
+    '.ttf', '.otf', '.woff', '.woff2',
+    '.db', '.sqlite', '.sqlite3',
+  ])
+
+  const isBinaryFile = (fileName: string): boolean => {
+    const ext = fileName.substring(fileName.lastIndexOf('.')).toLowerCase()
+    return BINARY_EXTENSIONS.has(ext)
+  }
+
   const readFileAsText = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -1945,21 +1961,19 @@ export default function ChatArea() {
             const uploadedFiles = [];
             for (const file of currentAttachments) {
               const isImage = file.type.startsWith("image/");
-              const fileContent = isImage ? await readFileAsBase64(file) : await readFileAsText(file);
+              const isBinary = !isImage && isBinaryFile(file.name);
+              const fileContent = (isImage || isBinary) ? await readFileAsBase64(file) : await readFileAsText(file);
 
               // 1. Upload to workspace
-              await workspaceApi.uploadFile(activeSessionId, file.name, fileContent, isImage ? "base64" : "utf-8");
+              await workspaceApi.uploadFile(activeSessionId, file.name, fileContent, (isImage || isBinary) ? "base64" : "utf-8");
               uploadedFiles.push(file.name);
 
               // 2. Prepare for AI
-              // 图片已上传到 workspace，只传文件名给后端，让 AI 用 read_image 工具读取
-              // 不传 base64 content，避免消息体过大
-              // 文件已上传到 workspace，content 不传内容，让 AI 用 read_file/read_image 工具读取
               attachmentData.push({
                 name: file.name,
-                content: '',  // 不传内容，避免消息体过大
+                content: '',
                 type: file.type,
-                encoding: isImage ? "base64" : "utf-8"
+                encoding: (isImage || isBinary) ? "base64" : "utf-8"
               });
 
               if (isImage) {

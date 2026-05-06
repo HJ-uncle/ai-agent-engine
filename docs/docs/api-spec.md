@@ -190,6 +190,23 @@
 
   **参数：** `?sessionId=xxx&path=video.mp4`
 
+- `POST /api/v1/workspace/upload`: **multipart 二进制文件上传**（保留原始字节流，适用于 xlsx、图片等二进制文件，避免 UTF-8 编码污染）
+
+  **请求方式：** `multipart/form-data`
+
+  **表单字段：**
+
+  | 字段 | 类型 | 必填 | 说明 |
+  |------|------|------|------|
+  | `file` | File | ✅ | 二进制文件 |
+  | `sessionId` | string | ✅ | 目标会话 ID |
+  | `path` | string | ✅ | 上传路径（相对于工作区根目录） |
+
+  **返回：**
+  ```json
+  { "path": "uploads/report.xlsx", "size": 45678, "filename": "report.xlsx" }
+  ```
+
 ### 15. 终端 Terminal (`/api/v1/terminal`)
 
 > 基于 `node-pty` 的服务器端 PTY 终端，工作目录物理锁定在会话工作空间内，通过 WebSocket 与前端 `xterm.js` 双向通信。
