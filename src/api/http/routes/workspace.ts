@@ -133,20 +133,15 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
         const content = fs.readFileSync(safePath, 'base64')
         return reply.code(200).send(success({ content, isBinary, totalSize: stat.size }))
       } else {
-        // 文本文件只返回前200行或10KB，避免直接输出全部内容
+        // 文本文件：只限制大小（500KB），不限制行数
         let content = fs.readFileSync(safePath, 'utf-8')
         const originalLength = content.length
         const originalSize = stat.size
-        
-        // 先限制行数
-        const lines = content.split('\n')
-        if (lines.length > 200) {
-          content = lines.slice(0, 200).join('\n') + '\n\n... (截断，完整内容共 ' + lines.length + ' 行)'
-        }
-        
-        // 再限制大小
-        if (content.length > 10 * 1024) {
-          content = content.slice(0, 10 * 1024) + '\n\n... (截断，完整大小: ' + originalSize + ' 字节)'
+        const MAX_TEXT_SIZE = 500 * 1024 // 500KB
+
+        // 仅在超过 500KB 时截断，避免浏览器/网络传输过大
+        if (content.length > MAX_TEXT_SIZE) {
+          content = content.slice(0, MAX_TEXT_SIZE) + '\n\n... (截断，完整大小: ' + originalSize + ' 字节)'
         }
         
         return reply.code(200).send(success({ content, isBinary, totalSize: stat.size, originalLength }))

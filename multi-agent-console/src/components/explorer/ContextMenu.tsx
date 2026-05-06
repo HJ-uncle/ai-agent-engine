@@ -102,6 +102,21 @@ export function ContextMenu({ state, sessionId, onClose, onRefresh, onStartRenam
     navigator.clipboard.writeText(node.path).then(() => message.success('路径已复制'))
   }
 
+  const handleCopyFullPath = async () => {
+    onClose()
+    try {
+      const info = await workspaceApi.getFileInfo(sessionId, node.path)
+      if (info?.workspacePath) {
+        await navigator.clipboard.writeText(info.workspacePath)
+        message.success('完整路径已复制')
+      } else {
+        message.error('无法获取完整路径')
+      }
+    } catch (e: any) {
+      message.error(e.message ?? '获取完整路径失败')
+    }
+  }
+
   const handleOpenTerminal = () => {
     onClose()
     // 若右键点的是文件，取父目录；若是文件夹，直接用该目录
@@ -117,13 +132,14 @@ export function ContextMenu({ state, sessionId, onClose, onRefresh, onStartRenam
     { label: '重命名', shortcut: 'F2', onClick: handleRename },
     { label: '删除', shortcut: 'Delete', danger: true, onClick: handleDelete },
     { label: '复制路径', shortcut: 'Ctrl+Shift+C', onClick: handleCopyPath },
+    { label: '复制完整路径', shortcut: 'Ctrl+Shift+A', onClick: handleCopyFullPath },
     { label: '在终端中打开', shortcut: 'Ctrl+`', onClick: handleOpenTerminal },
   ]
 
   // Adjust position to stay in viewport
   const menuStyle: React.CSSProperties = {
     position: 'fixed',
-    top: Math.min(state.y, window.innerHeight - 240),
+    top: Math.min(state.y, window.innerHeight - 260),
     left: Math.min(state.x, window.innerWidth - 220),
     zIndex: 9999,
     background: '#252526',

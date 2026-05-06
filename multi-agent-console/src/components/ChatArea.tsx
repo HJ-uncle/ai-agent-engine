@@ -4,6 +4,8 @@ import React, {
   useCallback,
   useState,
   useLayoutEffect,
+  useMemo,
+  memo,
 } from "react";
 import { TodoPanel } from './TodoPanel';
 import { Button, Tooltip, Popconfirm, Input, Select, Switch, message, Modal, Image } from "antd";
@@ -281,6 +283,9 @@ function fmtToken(n: number) {
   return n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n ?? 0);
 }
 
+// ── File info module-level cache（避免同一文件重复请求 API）────────────────
+const fileInfoCache = new Map<string, any>()
+
 // ── File Card Component ──────────────────────────────────────────────────────
 function FileCard({ file, onCopyPath }: { file: any, onCopyPath: (path: string) => void }) {
   const { activeSessionId } = useSessionStore();
@@ -288,12 +293,18 @@ function FileCard({ file, onCopyPath }: { file: any, onCopyPath: (path: string) 
   const [fileInfo, setFileInfo] = useState<any>(null);
   const [isLoadingInfo, setIsLoadingInfo] = useState(false);
 
-  // 获取文件元数据
+  // 获取文件元数据（带模块级缓存，避免重复请求）
   useEffect(() => {
+    const cacheKey = `${activeSessionId}:${file.name}`
+    if (fileInfoCache.has(cacheKey)) {
+      setFileInfo(fileInfoCache.get(cacheKey))
+      return
+    }
     const loadFileInfo = async () => {
       try {
         setIsLoadingInfo(true);
         const info = await workspaceApi.getFileInfo(activeSessionId, file.name);
+        fileInfoCache.set(cacheKey, info)
         setFileInfo(info);
       } catch (err) {
         // 静默失败，继续使用默认显示
@@ -676,7 +687,7 @@ const TOOL_NAME_MAP: Record<string, string> = {
   get_weather: "获取天气",
 };
 
-function ThinkingPanel({
+function ThinkingPanelInner({
   msgId,
   steps,
   isActive,
@@ -696,6 +707,17 @@ function ThinkingPanel({
 }) {
   const { files, setActiveFile } = useSessionStore();
   const [expanded, setExpanded] = useState(isActive ?? false);
+
+  // O(1) 文件查找（ThinkingPanel 内也可能渲染文件链接）
+  const filesBaseMapInner = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const f of files) {
+      const base = f.substring(f.lastIndexOf('/') + 1)
+      if (!m.has(base)) m.set(base, f)
+    }
+    return m
+  }, [files])
+  const filesSetInner = useMemo(() => new Set(files), [files])
 
   const needsUserInput = steps.some(
     (s) =>
@@ -734,9 +756,7 @@ function ThinkingPanel({
 
     // 如果 text 直接就是一个文件名
     const trimmed = text.trim();
-    const foundFull = files.find(
-      (f) => f === trimmed || f.endsWith("/" + trimmed),
-    );
+    const foundFull = filesSetInner.has(trimmed) ? trimmed : filesBaseMapInner.get(trimmed);
     if (foundFull) {
       return (
         <span
@@ -961,6 +981,8 @@ function ThinkingPanel({
   );
 }
 
+const ThinkingPanel = memo(ThinkingPanelInner)
+
 // ── Welcome screen ─────────────────────────────────────────────────────────────
 const WELCOME_PROMPTS = [
   {
@@ -1034,7 +1056,7 @@ function WelcomeScreen({
 }
 
 // ── Message item ───────────────────────────────────────────────────────────────
-function MessageItem({
+function MessageItemInner({
   msg,
   isLast,
   onRegenerate,
@@ -1045,7 +1067,7 @@ function MessageItem({
   msg: Message;
   isLast?: boolean;
   onRegenerate?: () => void;
-  onEdit?: (newContent: string) => void;
+  onEdit?: (msgId: string, newContent: string) => void;
   onToolReply?: (
     msgId: string,
     toolCallId: string,
@@ -1067,6 +1089,23 @@ function MessageItem({
 
   const timeStr = dayjs(msg.createdAt).format("YYYY-MM-DD HH:mm:ss");
 
+  // ── O(1) 文件查找结构：只在 files 数组变化时重建 ──────────────────────────
+  const filesSet = useMemo(() => new Set(files), [files])
+  // basename → fullPath 映射（e.g. "index.ts" → "src/index.ts"）
+  const filesBaseMap = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const f of files) {
+      const base = f.substring(f.lastIndexOf('/') + 1)
+      if (!m.has(base)) m.set(base, f) // 取第一个匹配
+    }
+    return m
+  }, [files])
+
+  const findFile = useCallback((content: string): string | undefined => {
+    if (filesSet.has(content)) return content
+    return filesBaseMap.get(content)
+  }, [filesSet, filesBaseMap])
+
   const getMessageText = (content: string | any[]): string => {
     if (typeof content === "string") return content;
     if (Array.isArray(content)) {
@@ -1085,7 +1124,7 @@ function MessageItem({
   const cancelEdit = () => setEditing(false);
   const confirmEdit = () => {
     const text = getMessageText(msg.content);
-    if (draft.trim() && draft !== text) onEdit?.(draft.trim());
+    if (draft.trim() && draft !== text) onEdit?.(msg.id, draft.trim());
     setEditing(false);
   };
 
@@ -1093,6 +1132,66 @@ function MessageItem({
     navigator.clipboard.writeText(fileName);
     message.success("路径已复制到剪贴板");
   };
+
+  // ── markdownComponents：用 useMemo 缓存，避免每次渲染重建导致 ReactMarkdown 强制重新 parse
+  const markdownComponents = useMemo(() => ({
+    code({ node, className, children, ...props }: any) {
+      const isBlock = className?.includes("language-");
+      const content = String(children).trim();
+      const fullPath = !isBlock ? findFile(content) : undefined
+      const isFilePath = Boolean(fullPath)
+
+      if (isBlock) {
+        return (
+          <div className={styles.codeBlock}>
+            <div className={styles.codeHeader}>
+              <span className={styles.codeLang}>
+                {className?.replace("language-", "") ?? "code"}
+              </span>
+              <CopyBtn text={String(children)} />
+            </div>
+            <code className={className} {...props}>
+              {children}
+            </code>
+          </div>
+        );
+      }
+
+      return (
+        <code
+          className={
+            isFilePath
+              ? `${styles.inlineCode} ${styles.fileLink}`
+              : styles.inlineCode
+          }
+          onClick={() => {
+            if (isFilePath && fullPath) setActiveFile(fullPath)
+          }}
+          {...props}
+        >
+          {children}
+        </code>
+      );
+    },
+    td({ node, children, ...props }: any) {
+      const content = String(children).trim();
+      const fullPath = findFile(content)
+      if (fullPath) {
+        return (
+          <td {...props}>
+            <span
+              className={styles.fileLink}
+              onClick={() => setActiveFile(fullPath)}
+            >
+              {children}
+            </span>
+          </td>
+        );
+      }
+      return <td {...props}>{children}</td>;
+    },
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [findFile, setActiveFile])
 
   const renderContent = () => {
     if (typeof msg.content === "string") {
@@ -1199,78 +1298,6 @@ function MessageItem({
     }
 
     return null;
-  };
-
-  const markdownComponents = {
-    code({ node, className, children, ...props }: any) {
-      const isBlock = className?.includes("language-");
-      const content = String(children).trim();
-      const isFilePath =
-        !isBlock &&
-        files.some((f) => f === content || f.endsWith("/" + content));
-
-      if (isBlock) {
-        return (
-          <div className={styles.codeBlock}>
-            <div className={styles.codeHeader}>
-              <span className={styles.codeLang}>
-                {className?.replace("language-", "") ?? "code"}
-              </span>
-              <CopyBtn text={String(children)} />
-            </div>
-            <code className={className} {...props}>
-              {children}
-            </code>
-          </div>
-        );
-      }
-
-      return (
-        <code
-          className={
-            isFilePath
-              ? `${styles.inlineCode} ${styles.fileLink}`
-              : styles.inlineCode
-          }
-          onClick={() => {
-            if (isFilePath) {
-              const fullPath = files.find(
-                (f) => f === content || f.endsWith("/" + content),
-              );
-              if (fullPath) setActiveFile(fullPath);
-            }
-          }}
-          {...props}
-        >
-          {children}
-        </code>
-      );
-    },
-    td({ node, children, ...props }: any) {
-      const content = String(children).trim();
-      const isFilePath = files.some(
-        (f) => f === content || f.endsWith("/" + content),
-      );
-
-      if (isFilePath) {
-        return (
-          <td {...props}>
-            <span
-              className={styles.fileLink}
-              onClick={() => {
-                const fullPath = files.find(
-                  (f) => f === content || f.endsWith("/" + content),
-                );
-                if (fullPath) setActiveFile(fullPath);
-              }}
-            >
-              {children}
-            </span>
-          </td>
-        );
-      }
-      return <td {...props}>{children}</td>;
-    },
   };
 
   return (
@@ -1428,6 +1455,20 @@ function MessageItem({
   );
 }
 
+// ── memo 化 MessageItem：只有 msg 引用变化时才重渲染
+// status=done 的历史消息不会再变化，流式输出时只有最后一条消息重渲染
+const MessageItem = memo(MessageItemInner, (prev, next) => {
+  // 所有 props 均相同则跳过渲染
+  return (
+    prev.msg === next.msg &&
+    prev.isLast === next.isLast &&
+    prev.onRegenerate === next.onRegenerate &&
+    prev.onEdit === next.onEdit &&
+    prev.onToolReply === next.onToolReply &&
+    prev.onDelete === next.onDelete
+  )
+})
+
 // ── Main ChatArea ──────────────────────────────────────────────────────────────
 export default function ChatArea() {
   const {
@@ -1506,6 +1547,111 @@ export default function ChatArea() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const atBottomRef = useRef(true);
   const lastActionRef = useRef<number>(0);
+
+  // ── 导航按钮可见性状态 ───────────────────────────────────────────────────
+  const [navVisible, setNavVisible] = useState(false);
+  // 当前聚焦的"组"索引（每条 user 消息为一组的起点）
+  const currentGroupRef = useRef(-1);
+
+  // 计算消息分组锚点：每条 user 消息在 DOM 中的位置
+  const getGroupAnchors = useCallback((): Element[] => {
+    const el = scrollRef.current;
+    if (!el) return [];
+    // 取所有 msgRow，user 消息用 userRow 区分
+    return Array.from(el.querySelectorAll('[data-msg-role="user"]'));
+  }, []);
+
+  // 带缓冲的平滑滚动（easeInOutCubic 曲线，比原生 smooth 更丝滑）
+  const smoothScrollTo = useCallback((targetScrollTop: number, duration = 380) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const start = el.scrollTop;
+    const distance = targetScrollTop - start;
+    if (Math.abs(distance) < 2) return;
+    const startTime = performance.now();
+    const easeInOutCubic = (t: number) =>
+      t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    const step = (now: number) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      el.scrollTop = start + distance * easeInOutCubic(progress);
+      if (progress < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }, []);
+
+  // 一键置顶
+  const scrollToTop = useCallback(() => {
+    smoothScrollTo(0, 420);
+    currentGroupRef.current = -1;
+  }, [smoothScrollTo]);
+
+  // 一键到底（覆写原有的 scrollToBottom，统一用 smoothScrollTo）
+  // 注意：流式输出时保持用原 auto 模式避免干扰
+  const scrollToBottomSmooth = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    smoothScrollTo(el.scrollHeight - el.clientHeight, 380);
+    currentGroupRef.current = getGroupAnchors().length;
+  }, [smoothScrollTo, getGroupAnchors]);
+
+  // 跳上一组（上一条 user 消息）
+  const scrollToPrevGroup = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const anchors = getGroupAnchors();
+    if (!anchors.length) return;
+    // 当前滚动位置对应的组
+    const elRect = el.getBoundingClientRect();
+    const visibleTop = elRect.top;
+    // 找到第一个在当前视口顶部之上的 anchor
+    let targetIdx = -1;
+    for (let i = anchors.length - 1; i >= 0; i--) {
+      const rect = anchors[i].getBoundingClientRect();
+      if (rect.top < visibleTop - 10) {
+        targetIdx = i;
+        break;
+      }
+    }
+    if (targetIdx < 0) {
+      smoothScrollTo(0, 380);
+      currentGroupRef.current = -1;
+      return;
+    }
+    currentGroupRef.current = targetIdx;
+    const anchor = anchors[targetIdx] as HTMLElement;
+    const targetTop = el.scrollTop + anchor.getBoundingClientRect().top - elRect.top - 16;
+    smoothScrollTo(Math.max(0, targetTop), 380);
+  }, [getGroupAnchors, smoothScrollTo]);
+
+  // 跳下一组（下一条 user 消息）
+  const scrollToNextGroup = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const anchors = getGroupAnchors();
+    if (!anchors.length) return;
+    const elRect = el.getBoundingClientRect();
+    const visibleTop = elRect.top;
+    // 找到第一个在当前视口顶部之下的 anchor（含一点余量）
+    let targetIdx = -1;
+    for (let i = 0; i < anchors.length; i++) {
+      const rect = anchors[i].getBoundingClientRect();
+      if (rect.top > visibleTop + 10) {
+        targetIdx = i;
+        break;
+      }
+    }
+    if (targetIdx < 0) {
+      // 已经是最后一组，滚到底部
+      smoothScrollTo(el.scrollHeight - el.clientHeight, 380);
+      currentGroupRef.current = anchors.length;
+      return;
+    }
+    currentGroupRef.current = targetIdx;
+    const anchor = anchors[targetIdx] as HTMLElement;
+    const targetTop = el.scrollTop + anchor.getBoundingClientRect().top - elRect.top - 16;
+    smoothScrollTo(Math.max(0, targetTop), 380);
+  }, [getGroupAnchors, smoothScrollTo]);
 
   const BASE_URL = (import.meta as any).env?.VITE_API_URL ?? "";
 
@@ -1666,6 +1812,16 @@ export default function ChatArea() {
   }, [activeSessionId, fetchHistory]);
 
   // Scroll logic
+  // 消息数量变化时刷新导航按钮可见性
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) {
+      // 等 DOM 更新完成后再量
+      requestAnimationFrame(() => {
+        setNavVisible(el.scrollHeight > el.clientHeight + 60);
+      });
+    }
+  }, [messages.length]);
   const scrollToBottom = useCallback((smooth = false) => {
     if (smooth) {
       messagesEndRef.current?.scrollIntoView({
@@ -1687,6 +1843,8 @@ export default function ChatArea() {
       const { scrollTop, scrollHeight, clientHeight } = el;
       // 增加容错范围
       atBottomRef.current = scrollHeight - scrollTop - clientHeight < 100;
+      // 有滚动内容时才显示导航按钮
+      setNavVisible(scrollHeight > clientHeight + 60);
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
@@ -1704,6 +1862,9 @@ export default function ChatArea() {
   useEffect(() => {
     atBottomRef.current = true;
     scrollToBottom(true);
+    // 切换会话后重新评估是否显示导航按钮
+    const el = scrollRef.current;
+    if (el) setNavVisible(el.scrollHeight > el.clientHeight + 60);
   }, [activeSessionId, scrollToBottom]);
 
   const readFileAsBase64 = (file: File): Promise<string> => {
@@ -1837,6 +1998,16 @@ export default function ChatArea() {
     },
     [activeSessionId, isStreaming, editAndResend, scrollToBottom, debounceCheck, logOperation],
   );
+
+  const handleDeleteMessage = useCallback(
+    (messageId: string) => deleteMessageWithBackend(activeSessionId, messageId),
+    [activeSessionId, deleteMessageWithBackend],
+  )
+
+  const handleEditMessage = useCallback(
+    (msgId: string, newContent: string) => handleEditAndResend(msgId, newContent),
+    [handleEditAndResend],
+  )
 
   const handleToolReply = useCallback(
     async (
@@ -2058,35 +2229,92 @@ export default function ChatArea() {
         </div>
       </div>
 
-      {/* Messages */}
-      <div className={styles.messages} ref={scrollRef}>
-        {messages.length === 0 ? (
-          <WelcomeScreen
-            onPrompt={sendMessage}
-            agentName={currentAgent?.name}
-          />
-        ) : (
-          <>
-            {messages.map((msg, idx) => (
-              <MessageItem
-                key={msg.id}
-                msg={msg}
-                isLast={idx === messages.length - 1}
-                onRegenerate={
-                  idx === messages.length - 1 ? handleRegenerate : undefined
-                }
-                onEdit={
-                  msg.role === "user"
-                    ? (newContent) => handleEditAndResend(msg.id, newContent)
-                    : undefined
-                }
-                onToolReply={handleToolReply}
-                onDelete={(messageId) => deleteMessageWithBackend(activeSessionId, messageId)}
-              />
-            ))}
-            <div ref={messagesEndRef} style={{ height: 1, clear: "both" }} />
-          </>
-        )}
+      {/* Messages + 导航按钮 wrapper */}
+      <div style={{ position: "relative", flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <div className={styles.messages} ref={scrollRef}>
+          {messages.length === 0 ? (
+            <WelcomeScreen
+              onPrompt={sendMessage}
+              agentName={currentAgent?.name}
+            />
+          ) : (
+            <>
+              {messages.map((msg, idx) => (
+                <div
+                  key={msg.id}
+                  data-msg-role={msg.role}
+                >
+                  <MessageItem
+                    msg={msg}
+                    isLast={idx === messages.length - 1}
+                    onRegenerate={
+                      idx === messages.length - 1 ? handleRegenerate : undefined
+                    }
+                    onEdit={msg.role === "user" ? handleEditMessage : undefined}
+                    onToolReply={handleToolReply}
+                    onDelete={handleDeleteMessage}
+                  />
+                </div>
+              ))}
+              <div ref={messagesEndRef} style={{ height: 1, clear: "both" }} />
+            </>
+          )}
+        </div>
+
+        {/* ── 悬浮导航按钮（在 overflow wrapper 外，不被裁剪）── */}
+        <div className={styles.scrollNav}>
+          {/* 置顶 */}
+          <div
+            className={`${styles.scrollNavBtn} ${navVisible ? styles.scrollNavBtnVisible : ""}`}
+            onClick={scrollToTop}
+            title="置顶"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+              <path d="M6 1L1 7h3v4h4V7h3L6 1z"/>
+              <rect x="1" y="0" width="10" height="1.5" rx="0.75"/>
+            </svg>
+          </div>
+
+          {/* 上一组 */}
+          <div
+            className={`${styles.scrollNavBtn} ${navVisible ? styles.scrollNavBtnVisible : ""}`}
+            style={{ transitionDelay: navVisible ? '0.04s' : '0s' }}
+            onClick={scrollToPrevGroup}
+            title="上一组对话"
+          >
+            <svg width="11" height="11" viewBox="0 0 11 11" fill="currentColor">
+              <path d="M5.5 2L1 7h3v2h3V7h3L5.5 2z"/>
+            </svg>
+          </div>
+
+          {/* 分隔线 */}
+          <div className={styles.scrollNavDivider} />
+
+          {/* 下一组 */}
+          <div
+            className={`${styles.scrollNavBtn} ${navVisible ? styles.scrollNavBtnVisible : ""}`}
+            style={{ transitionDelay: navVisible ? '0.08s' : '0s' }}
+            onClick={scrollToNextGroup}
+            title="下一组对话"
+          >
+            <svg width="11" height="11" viewBox="0 0 11 11" fill="currentColor">
+              <path d="M5.5 9L10 4H7V2H4v2H1L5.5 9z"/>
+            </svg>
+          </div>
+
+          {/* 到底 */}
+          <div
+            className={`${styles.scrollNavBtn} ${navVisible ? styles.scrollNavBtnVisible : ""}`}
+            style={{ transitionDelay: navVisible ? '0.12s' : '0s' }}
+            onClick={scrollToBottomSmooth}
+            title="到底部"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+              <path d="M6 11L11 5H8V1H4v4H1L6 11z"/>
+              <rect x="1" y="10.5" width="10" height="1.5" rx="0.75"/>
+            </svg>
+          </div>
+        </div>
       </div>
 
       {/* Todo Panel — 在输入框上方展示 */}

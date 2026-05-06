@@ -92,6 +92,7 @@
 /* ── Messages ────────────────────────────────────────────────────────── */
 .messages {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 16px 0;
   /* 移除全局 scroll-behavior: smooth 以免与 JS 频繁调用冲突 */
@@ -641,6 +642,62 @@
 
 .editArea {
   padding: 4px 0;
+}
+
+/* ── Scroll Navigation Buttons ───────────────────────────────────────── */
+.scrollNav {
+  position: absolute;
+  right: 20px;
+  bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.scrollNavBtn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(30, 30, 30, 0.85);
+  backdrop-filter: blur(8px);
+  color: #8b949e;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  pointer-events: all;
+  font-size: 13px;
+  transition: background 0.18s, color 0.18s, border-color 0.18s, transform 0.18s, opacity 0.22s;
+  opacity: 0;
+  transform: translateX(12px);
+  user-select: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.scrollNavBtn:hover {
+  background: rgba(14, 99, 156, 0.75);
+  border-color: #0e639c;
+  color: #ffffff;
+  transform: translateX(0) scale(1.08);
+}
+
+.scrollNavBtn:active {
+  transform: translateX(0) scale(0.94);
+}
+
+.scrollNavBtnVisible {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.scrollNavDivider {
+  width: 32px;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  pointer-events: none;
 }
 
 /* ── Input area ──────────────────────────────────────────────────────── */
