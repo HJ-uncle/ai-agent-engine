@@ -82,10 +82,44 @@
             "example": 1745222400000
           }
         }
+      },
+      "DiagnosticResult": {
+        "type": "object",
+        "properties": {
+          "severity": { "type": "string", "enum": ["error", "warning", "info"] },
+          "message":  { "type": "string" },
+          "line":     { "type": "integer" },
+          "column":   { "type": "integer" },
+          "source":   { "type": "string", "enum": ["typescript", "eslint"] }
+        }
+      },
+      "SecurityPolicy": {
+        "type": "object",
+        "properties": {
+          "id":          { "type": "string" },
+          "name":        { "type": "string" },
+          "pattern":     { "type": "string", "description": "正则表达式，匹配则拦截命令" },
+          "description": { "type": "string" },
+          "enabled":     { "type": "boolean" },
+          "createdAt":   { "type": "integer" }
+        }
+      },
+      "AuditLogEntry": {
+        "type": "object",
+        "properties": {
+          "id":        { "type": "integer" },
+          "tenantId":  { "type": "string" },
+          "sessionId": { "type": "string" },
+          "toolName":  { "type": "string" },
+          "args":      { "type": "object" },
+          "result":    { "type": "string" },
+          "blocked":   { "type": "boolean" },
+          "reason":    { "type": "string" },
+          "createdAt": { "type": "integer" }
+        }
       }
     }
   },
-  "paths": {
     "/chat": {
       "post": {
         "summary": "发送消息（SSE 流式响应）",
@@ -1435,6 +1469,283 @@
           }
         }
       }
+    },
+    "/security/policies": {
+      "get": {
+        "summary": "获取所有命令安全策略",
+        "tags": ["Security"],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
+          }
+        }
+      },
+      "post": {
+        "summary": "创建命令安全策略",
+        "tags": ["Security"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name":        { "type": "string", "example": "禁止删除根目录" },
+                  "pattern":     { "type": "string", "example": "rm\\s+-rf\\s+/" },
+                  "description": { "type": "string" },
+                  "enabled":     { "type": "boolean", "default": true }
+                },
+                "required": ["name", "pattern"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
+          }
+        }
+      }
+    },
+    "/security/policies/{id}": {
+      "put": {
+        "summary": "更新安全策略",
+        "tags": ["Security"],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除安全策略",
+        "tags": ["Security"],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
+          }
+        }
+      }
+    },
+    "/security/network-policy": {
+      "get": {
+        "summary": "获取 SSRF 网络策略配置",
+        "tags": ["Security"],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/StandardResponse" },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "enabled":        { "type": "boolean" },
+                            "blockPrivateIPs":{ "type": "boolean" },
+                            "whitelist":      { "type": "array", "items": { "type": "string" } },
+                            "blacklist":      { "type": "array", "items": { "type": "string" } }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "更新 SSRF 网络策略",
+        "tags": ["Security"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled":        { "type": "boolean" },
+                  "blockPrivateIPs":{ "type": "boolean" },
+                  "whitelist":      { "type": "array", "items": { "type": "string" } },
+                  "blacklist":      { "type": "array", "items": { "type": "string" } }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
+          }
+        }
+      }
+    },
+    "/security/audit-log": {
+      "get": {
+        "summary": "查询审计日志",
+        "tags": ["Security"],
+        "parameters": [
+          { "name": "limit",    "in": "query", "schema": { "type": "integer", "default": 100 } },
+          { "name": "offset",   "in": "query", "schema": { "type": "integer", "default": 0 } },
+          { "name": "tenantId", "in": "query", "schema": { "type": "string" } },
+          { "name": "toolName", "in": "query", "schema": { "type": "string" } },
+          { "name": "blocked",  "in": "query", "schema": { "type": "boolean" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedResponse" } } }
+          }
+        }
+      }
+    },
+    "/lsp/diagnostics": {
+      "get": {
+        "summary": "获取 LSP 诊断配置",
+        "tags": ["LSP"],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
+          }
+        }
+      },
+      "put": {
+        "summary": "更新 LSP 诊断配置",
+        "tags": ["LSP"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled":   { "type": "boolean" },
+                  "languages": {
+                    "type": "array",
+                    "items": { "type": "string", "enum": ["typescript", "javascript"] }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
+          }
+        }
+      }
+    },
+    "/lsp/diagnostics/run": {
+      "post": {
+        "summary": "对工作区文件运行 TypeScript / ESLint 诊断",
+        "tags": ["LSP"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionId": { "type": "string" },
+                  "path":      { "type": "string", "example": "src/index.ts" }
+                },
+                "required": ["sessionId", "path"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/StandardResponse" },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "file": { "type": "string" },
+                            "diagnostics": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "severity": { "type": "string", "enum": ["error", "warning", "info"] },
+                                  "message":  { "type": "string" },
+                                  "line":     { "type": "integer" },
+                                  "column":   { "type": "integer" },
+                                  "source":   { "type": "string", "enum": ["typescript", "eslint"] }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/performance/stats": {
+      "get": {
+        "summary": "获取 SQLite 运行时 pragma 统计",
+        "tags": ["Performance"],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/StandardResponse" },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "journal_mode": { "type": "string",  "example": "wal" },
+                            "synchronous":  { "type": "integer", "example": 1 },
+                            "cache_size":   { "type": "integer", "example": -20000 },
+                            "temp_store":   { "type": "integer", "example": 2 },
+                            "mmap_size":    { "type": "integer", "example": 268435456 },
+                            "busy_timeout": { "type": "integer", "example": 5000 },
+                            "foreign_keys": { "type": "integer", "example": 1 }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
-}
