@@ -64,6 +64,15 @@ A production-ready AI Agent Engine built with Node.js + TypeScript ESM. Supports
 | 54 | **Workspace Extended API** — New REST endpoints: `POST /workspace/file/create`, `POST /workspace/folder/create`, `POST /workspace/file/move`, `POST /workspace/file/trash`, `POST /workspace/file/format`, `GET /workspace/file/stream` |
 | 55 | **Split Layout** — Three-mode main area: `chat-only`, `horizontal` (top/bottom), `vertical` (left/right); draggable divider (15–85%); layout ratio persisted to `localStorage` |
 | 56 | **macOS Sonoma Design Tokens** — `macos-sonoma-tokens.css` — full CSS custom-property set covering materials (title bar / sidebar / content), typography, colors, spacing, shadows, border-radius, traffic-light buttons, hover states, dark-mode overrides, and utility classes |
+| 57 | **Security Policy Engine** — Command injection detection with regex pattern matching; per-policy enable/disable; audit trail for every blocked command (`src/security/policy-engine.ts`) |
+| 58 | **SSRF Protection** — `network-policy.ts` performs DNS pre-lookup and blocks requests to RFC-1918 private IPs (10.x, 172.16-31.x, 192.168.x, 127.x, 169.254.x); domain whitelist / blacklist support; applied to both `web_fetch` and `http_request` tools |
+| 59 | **Audit Log** — Structured per-tool audit entries (`toolName`, `args`, `result`, `blocked`, `tenantId`, `sessionId`) written to `audit_log` SQLite table; queryable via `GET /api/v1/security/audit-log` with filters |
+| 60 | **LSP Diagnostics** — `code_diagnose` agent tool runs TypeScript compiler (`tsc --noEmit`) and ESLint on workspace files; results are cached by file-content hash; exposed as `GET /api/v1/lsp/diagnostics`; enables AI self-correction of code errors |
+| 61 | **SQLite Performance Tuning** — WAL journal mode, `synchronous=NORMAL`, 20 MB page cache, 256 MB mmap, 5 s busy-timeout applied at startup via `applyPerformancePragmas()`; all thresholds configurable via env vars; expected 30-50 % query speed improvement |
+| 62 | **Concurrency Pool** — `src/core/utils/concurrency-pool.ts` provides a generic async semaphore limiting parallel tool / LSP invocations to prevent DB lock contention |
+| 63 | **Idempotent Message Delete** — Backend DELETE `/api/v1/messages/:id` uses a 3-branch strategy: (a) find by `message_id` → cascade-delete entire conversation round; (b) find by `conversation_id` → delete round; (c) already gone → return success; frontend cancels running stream before delete to prevent race-condition resurrection |
+| 64 | **User Message Backend ID Sync** — After persisting user message to DB, backend yields `__user_msg_id__` SSE frame; frontend intercepts it and writes `backendMessageId` onto the user message object, enabling accurate delete / regenerate targeting even for messages created mid-stream |
+| 65 | **Orphan Row Auto-Cleanup** — `getHistory()` detects sessions whose first rows have no `user` message (e.g. interrupted `ask_user` sub-sessions) and asynchronously deletes them, preventing ghost tool-call blocks from appearing in the UI after page refresh |
 
 ---
 
@@ -183,6 +192,9 @@ curl http://localhost:12323/metrics
 | `MCP_CONFIG_PATH` | `./mcp.config.json` | Path to MCP server configuration file |
 | `QA_LOG_DIR` | `./logs/qa` | Directory for Q&A audit log files (when `QA_LOG_ENABLED=true`) |
 | `ENCRYPTION_KEY` | _(required)_ | 64 hex characters (32 bytes) AES-256-GCM key for encrypting API keys |
+| `SQLITE_CACHE_KB` | `20000` | SQLite page cache size in KB (default 20 MB) |
+| `SQLITE_MMAP_BYTES` | `268435456` | SQLite memory-mapped I/O size in bytes (default 256 MB) |
+| `SQLITE_BUSY_TIMEOUT_MS` | `5000` | SQLite busy timeout in milliseconds |
 
 ---
 
@@ -364,6 +376,32 @@ The scheduler fires a loopback `POST /api/v1/chat` request at the matched minute
 | `GET` | `/api/v1/settings` | Get system environment settings (includes `webFetch` security config) |
 | `PUT` | `/api/v1/settings` | Update system settings (writes to `.env`; supports `webFetch` config) |
 
+### Security
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/security/policies` | List all command security policies |
+| `POST` | `/api/v1/security/policies` | Create a policy (body: `name`, `pattern`, `description`, `enabled`) |
+| `PUT` | `/api/v1/security/policies/:id` | Update a policy |
+| `DELETE` | `/api/v1/security/policies/:id` | Delete a policy |
+| `GET` | `/api/v1/security/network-policy` | Get SSRF network policy (whitelist / blacklist) |
+| `PUT` | `/api/v1/security/network-policy` | Update SSRF network policy |
+| `GET` | `/api/v1/security/audit-log` | Query audit log (params: `limit`, `offset`, `tenantId`, `toolName`, `blocked`) |
+
+### LSP Diagnostics
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/lsp/diagnostics` | Get LSP configuration |
+| `PUT` | `/api/v1/lsp/diagnostics` | Update LSP config (enable/disable, language settings) |
+| `POST` | `/api/v1/lsp/diagnostics/run` | Run diagnostics on a file (body: `sessionId`, `path`) |
+
+### Performance
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/performance/stats` | Get SQLite runtime pragma stats (`journal_mode`, `cache_size`, `mmap_size`, etc.) |
+
 ### Terminal
 
 | Method | Path | Description |
@@ -434,6 +472,9 @@ src/
 │       ├── settings.ts        # System settings (DB-backed; reads/writes system_config table)
 │       ├── todos.ts           # Todo CRUD
 │       ├── cron.ts            # Cron Job CRUD + enable/disable
+│       ├── lsp.ts             # ★ GET /api/v1/lsp/diagnostics — LSP config
+│       ├── performance.ts     # ★ GET /api/v1/performance/stats — SQLite pragma stats
+│       ├── security.ts        # ★ Security policy CRUD + audit log query
 │       ├── sessions.ts        # Session Agent binding (lock/query/reset)
 │       ├── terminal.ts        # ★ PTY terminal (create / ws / kill)
 │       └── metrics.ts         # Health + metrics
@@ -442,9 +483,9 @@ src/
 │   ├── agent-loop/            # ReActStrategy
 │   ├── compression/           # Context compression (extractive + keyword)
 │   ├── llm-adapter/           # OpenAI / Anthropic / Ollama (multi-modal)
-│   ├── stream-pipeline/       # Async pipeline + SSE sink
+│   ├── stream-pipeline/       # Async pipeline + SSE sink (incl. __user_msg_id__ frame)
 │   ├── tool-registry/         # ToolRegistry
-│   └── utils/                 # Token estimation utilities
+│   └── utils/                 # Token estimation + concurrency-pool.ts
 ├── storage/
 │   ├── sqlite/                # DB connection + migrations
 │   ├── memory-store/          # SQLiteMemoryStore
@@ -453,6 +494,12 @@ src/
 │   ├── cache-store/           # SQLiteCacheStore
 │   ├── agent/                 # SQLiteAgentStore
 │   └── knowledge/             # Knowledge base + RAG
+├── lsp/                       # ★ LSP diagnostic adapters
+│   ├── index.ts               # DiagnosticService: run + hash-cache
+│   ├── types.ts               # DiagnosticResult interface
+│   └── adapters/
+│       ├── typescript.ts      # tsc --noEmit runner
+│       └── eslint.ts          # ESLint programmatic API
 ├── scheduler/
 │   └── cron-scheduler.ts      # ★ Minute-level cron ticker; loopback triggers full ReAct loop
 ├── storage/
@@ -475,6 +522,7 @@ src/
 │   ├── skill/                 # External skill runner
 │   ├── mcp/                   # HTTP MCP client
 │   ├── search/                # glob_search (glob) + grep_search (ripgrep / Node.js fallback)
+│   ├── lsp/                   # ★ code_diagnose tool (TypeScript tsc + ESLint, hash-cached)
 │   ├── todo/                  # todo_list / todo_create / todo_update / todo_delete
 │   ├── cron/                  # cron_list / cron_create / cron_update / cron_delete
 │   ├── task/                  # task_list / task_cancel / task_status
@@ -492,12 +540,20 @@ src/
 ├── observability/             # Logger + metrics + QA logger
 ├── prompt-template/           # Template store
 ├── workspace/                 # Workspace manager (multi-path support)
-├── security/                  # Command whitelist
+├── security/                  # Command whitelist + policy engine + SSRF guard
+│   ├── policy-engine.ts       # ★ Regex-based command injection detection; per-policy CRUD
+│   ├── network-policy.ts      # ★ SSRF protection: DNS pre-lookup + private IP blocking
+│   ├── audit-log.ts           # ★ Structured audit entries → audit_log SQLite table
+│   └── __tests__/             # Unit tests for policy engine
 └── utils/                     # Encryption utilities
 ```
 
 **Key design decisions:**
 - **SQLite for everything** — no Redis, no external services required
+- **Security-in-depth** — policy engine + SSRF guard + audit log form a three-layer defense; all tool executions pass through `checkPolicy()` before running; network requests pre-resolve DNS to block SSRF via private IPs
+- **Idempotent deletes** — `DELETE /messages/:id` never returns 404; uses a 3-branch fallback (message_id → conversation_id → already-gone) so frontend store and DB stay in sync even after partial failures
+- **Stream-cancel-then-delete** — deleting a message while a stream is running first cancels the agent loop (via the global `AbortController` registry), waits 400 ms, deletes, then waits another 600 ms and deletes again; this prevents the "resurrection" bug where the agent loop writes new DB rows after the DELETE
+- **Orphan row self-healing** — every `getHistory()` call checks whether the session starts with non-user rows; if so, those rows are asynchronously deleted, preventing ghost tool-call blocks in the UI
 - **Unified `Tool` interface** — file tools, shell tools, memory tools, MCP tools all share the same interface
 - **`registry-factory.ts`** — single place to add/remove tools; all routes (chat / messages / tools) call `createToolRegistry()` for a consistent, complete toolset; supports `allowedTools` parameter for per-agent tool restrictions
 - **Split Layout** — `MainArea` component in `App.tsx` supports three modes (`chat-only` / `horizontal` / `vertical`) switchable from a toolbar; a draggable divider resizes panes between 15 % and 85 %; the active mode and ratio are persisted to `localStorage` via a `usePersist` hook so the layout survives page reloads

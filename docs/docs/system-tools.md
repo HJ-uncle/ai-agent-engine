@@ -36,11 +36,12 @@ Agent Engine 内置一套**系统级工具**，让 AI Agent 具备任务管理�
 | `remember` | Memory | 存储记忆条目 |
 | `recall` | Memory | 根据 Key 回忆记忆 |
 | `search_memory` | Memory | 搜索记忆内容 |
-| `run_command` | System | 执行 Shell 命令 |
+| `run_command` | System | 执行 Shell 命令（经安全策略引擎校验） |
 | `ask_user` | Interaction | 向用户提问 |
 | `list_skills` | Skill | 列出可用技能 |
 | `get_skill` | Skill | 获取技能详情 |
 | `run_skill_script` | Skill | 运行技能脚本 |
+| `code_diagnose` | LSP | 对工作区文件运行 TypeScript/ESLint 诊断 |
 
 ---
 
@@ -456,6 +457,50 @@ src/tools/search/grep-tool.ts:14:async function hasRipgrep(): Promise<boolean> {
 安装 typescript 作为开发依赖
 → 调用 install_package({ packageName: "typescript", saveDev: true })
 ```
+
+---
+
+## LSP 诊断工具
+
+### `code_diagnose`
+
+对工作区内的文件运行静态代码分析，支持 TypeScript 编译器（`tsc --noEmit`）和 ESLint。结果按文件内容哈希缓存，相同文件内容不会重复分析。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `path` | string | ✅ | 相对于工作区根目录的文件路径 |
+| `language` | string | 否 | `typescript` / `javascript`，默认自动检测 |
+
+**返回**
+
+```json
+{
+  "file": "src/index.ts",
+  "diagnostics": [
+    {
+      "severity": "error",
+      "message": "Type 'string' is not assignable to type 'number'",
+      "line": 42,
+      "column": 5,
+      "source": "typescript"
+    }
+  ]
+}
+```
+
+**示例**
+
+```
+帮我检查 src/utils/parser.ts 有没有类型错误
+→ 调用 code_diagnose({ path: "src/utils/parser.ts" })
+```
+
+**安全说明**
+
+- 只能分析工作区内的文件，不能访问工作区外路径
+- 分析过程完全在服务器本地执行，不向外部发送代码
 
 ---
 

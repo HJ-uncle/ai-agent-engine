@@ -343,6 +343,100 @@
 
   > `CronScheduler` 每分钟整点轮询，匹配到表达式后通过 loopback HTTP `POST /api/v1/chat` 触发完整 ReAct 循环，并更新 `lastRunAt` 字段。
 
+### 16. 安全策略 Security (`/api/v1/security`)
+
+> 三层纵深防御：命令注入检测（policy-engine）+ SSRF 防护（network-policy）+ 审计日志（audit-log）。
+
+- `GET /api/v1/security/policies`: 获取所有命令安全策略列表
+
+  **返回字段：** `id`, `name`, `pattern`（正则），`description`, `enabled`, `createdAt`
+
+- `POST /api/v1/security/policies`: 创建新的命令安全策略
+
+  **请求体：**
+  ```json
+  {
+    "name": "禁止删除根目录",
+    "pattern": "rm\\s+-rf\\s+/",
+    "description": "防止误删根目录",
+    "enabled": true
+  }
+  ```
+
+- `PUT /api/v1/security/policies/:id`: 更新策略（name、pattern、description、enabled 均可选）
+- `DELETE /api/v1/security/policies/:id`: 删除指定策略
+
+- `GET /api/v1/security/network-policy`: 获取当前 SSRF 网络策略配置
+
+  **返回字段：**
+  ```json
+  {
+    "enabled": true,
+    "blockPrivateIPs": true,
+    "whitelist": ["example.com"],
+    "blacklist": ["malicious.io"]
+  }
+  ```
+
+- `PUT /api/v1/security/network-policy`: 更新 SSRF 网络策略
+
+- `GET /api/v1/security/audit-log`: 查询审计日志
+
+  **查询参数：** `limit`（默认100）, `offset`, `tenantId`, `toolName`, `blocked`（true/false）
+
+  **返回字段：** `id`, `tenantId`, `sessionId`, `toolName`, `args`, `result`, `blocked`, `reason`, `createdAt`
+
+### 17. LSP 诊断 LSP (`/api/v1/lsp`)
+
+> 让 AI 具备代码自检能力：运行 TypeScript 编译器 + ESLint，结果按文件内容哈希缓存，避免重复分析。
+
+- `GET /api/v1/lsp/diagnostics`: 获取 LSP 诊断配置（启用状态、支持的语言）
+- `PUT /api/v1/lsp/diagnostics`: 更新 LSP 诊断配置
+
+  **请求体：**
+  ```json
+  {
+    "enabled": true,
+    "languages": ["typescript", "javascript"]
+  }
+  ```
+
+- `POST /api/v1/lsp/diagnostics/run`: 对工作区指定文件执行诊断
+
+  **请求体：** `{ "sessionId": "xxx", "path": "src/index.ts" }`
+
+  **返回：**
+  ```json
+  {
+    "file": "src/index.ts",
+    "diagnostics": [
+      {
+        "severity": "error",
+        "message": "Type 'string' is not assignable to type 'number'",
+        "line": 42,
+        "column": 5,
+        "source": "typescript"
+      }
+    ]
+  }
+  ```
+
+### 18. 性能统计 Performance (`/api/v1/performance`)
+
+- `GET /api/v1/performance/stats`: 获取 SQLite 运行时 pragma 配置与统计
+
+  **返回字段：**
+
+  | 字段 | 说明 |
+  |------|------|
+  | `journal_mode` | 当前日志模式（应为 `wal`） |
+  | `synchronous` | 同步策略（`1` = NORMAL） |
+  | `cache_size` | 页缓存大小（负数为 KB） |
+  | `temp_store` | 临时存储位置（`2` = MEMORY） |
+  | `mmap_size` | 内存映射大小（字节） |
+  | `busy_timeout` | 写锁等待超时（毫秒） |
+  | `foreign_keys` | 外键约束开关 |
+
 ---
 
 ## Chat 接口详细说明
