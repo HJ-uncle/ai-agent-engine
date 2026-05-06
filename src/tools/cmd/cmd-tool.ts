@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
 import { isCommandAllowed, getCmdWhitelist } from '../../security/cmd-whitelist.js'
+import { policyEngine } from '../../security/policy-engine.js'
 import { workspaceManager } from '../../workspace/index.js'
 
 export interface CMDToolOptions {
@@ -26,7 +27,37 @@ export const cmdTool: Tool = {
     const { command, args: cmdArgs = [] } = args
     const startTime = Date.now()
 
-    // Security: check whitelist
+    // 1) 策略引擎裁决（含注入检测 + 审计日志）
+    const decision = await policyEngine.evaluate({
+      command,
+      args: cmdArgs,
+      tenantId: ctx.tenantId,
+      sessionId: ctx.sessionId,
+    })
+    if (decision.action === 'deny') {
+      return {
+        success: false,
+        output: `❌ 命令被策略拒绝: ${decision.reason}`,
+      }
+    }
+    if (decision.action === 'ask') {
+      // 交给 agent-loop / 前端做二次确认。此处返回 needsConfirmation。
+      return {
+        success: false,
+        needsConfirmation: true,
+        pendingAction: {
+          type: 'confirm_command',
+          command,
+          args: cmdArgs,
+          reason: decision.reason,
+          ruleId: decision.ruleId,
+          ruleName: decision.ruleName,
+        },
+        output: `⚠️ 该命令需要用户确认: ${decision.reason}`,
+      }
+    }
+
+    // 2) 兼容旧白名单（默认 allow 的命令必须同时在白名单里，双保险）
     if (!isCommandAllowed(command)) {
       return {
         success: false,

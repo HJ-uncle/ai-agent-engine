@@ -82,7 +82,7 @@ const DEFAULT_HISTORY_MAX_TOKENS = parseInt(process.env.HISTORY_MAX_TOKENS ?? '2
 export class SQLiteConversationHistory implements ConversationHistory {
   constructor(private readonly maxTokens: number = DEFAULT_HISTORY_MAX_TOKENS) {}
 
-  async append(message: Message & { conversationId?: string }, ctx: Ctx): Promise<void> {
+  async append(message: Message & { conversationId?: string }, ctx: Ctx): Promise<string> {
     const db = getDb()
     const messageId = message.id ?? uuidv4()
     await db.execute({
@@ -105,32 +105,61 @@ export class SQLiteConversationHistory implements ConversationHistory {
         message.usage ? JSON.stringify(message.usage) : null,
       ],
     })
+    return messageId
   }
 
   async getHistory(ctx: Ctx & { inheritContext?: boolean }): Promise<Message[]> {
     const db = getDb()
     const result = await db.execute({
-      sql: `SELECT message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id
+      sql: `SELECT id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id
             FROM conversations
             WHERE tenant_id = ? AND session_id = ?
             ORDER BY created_at ASC, id ASC`,
       args: [ctx.tenantId, ctx.sessionId],
     })
-    const allMessages = result.rows.map(rowToMessage)
+    const allRows = result.rows
+    const allMessages = allRows.map(rowToMessage)
+    
+    // ── 清理孤立数据：找第一条 user 消息，其之前的所有 non-user 行直接删除 ────
+    // 原因：某些场景（ask_user 子 session、被中断的 regenerate）会留下没有 user 消息
+    // 开头的孤立 tool/assistant 行，fetchHistory 会把它们渲染成幽灵块，删不掉。
+    const firstUserIdx = allRows.findIndex((r) => r['role'] === 'user')
+    if (firstUserIdx === -1 && allRows.length > 0) {
+      // 整个 session 没有任何 user 消息：全是孤立数据，异步清空
+      db.execute({
+        sql: `DELETE FROM conversations WHERE tenant_id = ? AND session_id = ?`,
+        args: [ctx.tenantId, ctx.sessionId],
+      }).catch(() => {})
+      return []
+    }
+    if (firstUserIdx > 0) {
+      // 有 user 消息但前面有孤立行：删掉那些孤立前置行
+      const orphanIds = allRows.slice(0, firstUserIdx).map((r) => r['id'] as number)
+      Promise.all(
+        orphanIds.map((id) =>
+          db.execute({
+            sql: `DELETE FROM conversations WHERE id = ? AND tenant_id = ?`,
+            args: [id, ctx.tenantId],
+          }).catch(() => {})
+        )
+      ).catch(() => {})
+    }
+    // 去掉孤立前置行（只留 firstUserIdx 开始的数据）
+    const cleanMessages = firstUserIdx > 0 ? allMessages.slice(firstUserIdx) : allMessages
     
     // If inheritContext is false, only return the most recent user message (current new message)
     // This ensures the AI doesn't see previous conversation history
     if (ctx.inheritContext === false) {
       // Find the last user message (the current new message)
-      for (let i = allMessages.length - 1; i >= 0; i--) {
-        if (allMessages[i].role === 'user') {
-          return [allMessages[i]]
+      for (let i = cleanMessages.length - 1; i >= 0; i--) {
+        if (cleanMessages[i].role === 'user') {
+          return [cleanMessages[i]]
         }
       }
       return []
     }
     
-    return this.applyTokenWindow(allMessages)
+    return this.applyTokenWindow(cleanMessages)
   }
 
   /** 按 conversationId 查询单轮对话的所有消息 */

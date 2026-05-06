@@ -1,5 +1,5 @@
 import React from 'react'
-import { Input, InputNumber, Switch, Button, Tooltip, Tag } from 'antd'
+import { Input, InputNumber, Switch, Button, Tooltip, Tag, Space } from 'antd'
 import { InfoCircleOutlined, WarningOutlined } from '@ant-design/icons'
 import { useSettings } from './useSettings'
 import styles from './SettingsLayout.module.css'
@@ -96,13 +96,20 @@ export default function SystemSettings() {
             desc="execute_cmd 工具的最大执行时间（毫秒），超时后强制终止进程"
             envKey="CMD_TIMEOUT_MS"
           >
-            <InputNumber
-              min={1000} max={300000} step={1000}
-              value={settings.CMD_TIMEOUT_MS}
-              onChange={(v) => handleChange('CMD_TIMEOUT_MS', v)}
-              style={{ width: 130, ...INPUT_STYLE }}
-              addonAfter={<span style={{ color: '#888', fontSize: 11 }}>ms</span>}
-            />
+            <Space.Compact>
+              <InputNumber
+                min={1000} max={300000} step={1000}
+                value={settings.CMD_TIMEOUT_MS}
+                onChange={(v) => handleChange('CMD_TIMEOUT_MS', v)}
+                style={{ width: 110, ...INPUT_STYLE }}
+              />
+              <span style={{
+                display: 'inline-flex', alignItems: 'center',
+                padding: '0 10px', background: '#2d2d2d',
+                border: '1px solid #444', borderLeft: 'none',
+                borderRadius: '0 6px 6px 0', color: '#888', fontSize: 11,
+              }}>ms</span>
+            </Space.Compact>
           </SettingRow>
 
           <SettingRow

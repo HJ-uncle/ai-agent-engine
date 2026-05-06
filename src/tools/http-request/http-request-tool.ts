@@ -1,4 +1,5 @@
 import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
+import { checkNetworkAccess } from '../../security/network-policy.js'
 
 export interface AuthConfig {
   type: 'basic' | 'bearer' | 'apikey' | 'digest' | 'oauth2' | 'custom'
@@ -63,6 +64,18 @@ export const httpRequestTool: Tool = {
 
       if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
         return { success: false, output: `❌ 只支持 http 和 https 协议的 URL` }
+      }
+
+      // 统一网络策略（防 SSRF、私有 IP、CIDR 黑名单、审计日志）
+      const netDecision = await checkNetworkAccess({
+        url,
+        tenantId: ctx.tenantId,
+        sessionId: ctx.sessionId,
+        source: 'http_request',
+      })
+      if (!netDecision.allowed) {
+        ctx.logger.warn(`[http_request] Network policy denied ${url}: ${netDecision.reason}`)
+        return { success: false, output: `❌ 请求被网络策略拒绝: ${netDecision.reason}` }
       }
 
       ctx.logger.info(`[http_request] ${method} ${url}`)

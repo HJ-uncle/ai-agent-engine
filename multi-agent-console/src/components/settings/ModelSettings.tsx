@@ -156,7 +156,7 @@ export default function ModelSettings() {
                 <div className={styles.itemDescription}>密钥 (OPENAI_API_KEY)</div>
               </div>
               <div className={styles.itemControls}>
-                <Input.Password value={settings.OPENAI_API_KEY} onChange={(e) => handleChange('OPENAI_API_KEY', e.target.value)} style={inputStyle} />
+                <Input.Password value={settings.OPENAI_API_KEY} onChange={(e) => handleChange('OPENAI_API_KEY', e.target.value)} style={inputStyle} autoComplete="new-password" />
               </div>
             </div>
           </div>
@@ -174,7 +174,7 @@ export default function ModelSettings() {
                 <div className={styles.itemDescription}>密钥 (ANTHROPIC_API_KEY)</div>
               </div>
               <div className={styles.itemControls}>
-                <Input.Password value={settings.ANTHROPIC_API_KEY} onChange={(e) => handleChange('ANTHROPIC_API_KEY', e.target.value)} style={inputStyle} />
+                <Input.Password value={settings.ANTHROPIC_API_KEY} onChange={(e) => handleChange('ANTHROPIC_API_KEY', e.target.value)} style={inputStyle} autoComplete="new-password" />
               </div>
             </div>
           </div>

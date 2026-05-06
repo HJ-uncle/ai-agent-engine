@@ -1,5 +1,6 @@
 import type { Tool, IToolRegistry, AgentContext, ToolResult, JSONSchema } from '../agent-context/index.js'
 import { DuplicateToolError, ToolNotFoundError } from '../agent-context/index.js'
+import { getGlobalToolPool } from '../utils/concurrency-pool.js'
 
 export class ToolRegistry implements IToolRegistry {
   private tools = new Map<string, Tool>()
@@ -34,6 +35,8 @@ export class ToolRegistry implements IToolRegistry {
     if (!tool) {
       throw new ToolNotFoundError(name)
     }
-    return tool.execute(args, ctx)
+    // 全局并发池：防止大量并发调用把服务器打爆
+    const pool = getGlobalToolPool()
+    return pool(() => tool.execute(args, ctx))
   }
 }

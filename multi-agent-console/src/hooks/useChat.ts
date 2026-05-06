@@ -221,6 +221,9 @@ export function useChat() {
         let currentThinkingSteps: ThinkingStep[] = []
         // Accumulate usage across tool-call rounds for a single assistant turn
         let currentRoundUsage: TokenUsage | null = null
+        // ★ 跟踪当前积累轮次的 conversation_id（用于末尾无 backendMessageId 块的删除）
+        let currentConvId: string | null = null
+        let currentConvLastTime: number = 0   // ★ 追踪合成块的真实时间
 
         const accumulateUsage = (usage: TokenUsage | undefined | null) => {
           if (!usage) return
@@ -249,13 +252,19 @@ export function useChat() {
               content: m.content,
               status: 'done',
               createdAt: m.createdAt || Date.now(),
-              backendMessageId: m.id, // Backend message_id for regenerate/edit
+              backendMessageId: m.id,
+              conversationId: m.conversationId ?? null,  // ★ 保留，重发/删除时用
             })
             currentThinkingSteps = []
             currentRoundUsage = null
+            currentConvId = null
+            currentConvLastTime = 0
           } else if (m.role === 'assistant') {
             // Accumulate usage from every assistant message in this round (including tool-call intermediates)
             accumulateUsage(m.usage)
+            // ★ 记录当前轮次的 conversation_id（最后一个非空值为准）和时间
+            if (m.conversationId) currentConvId = m.conversationId
+            if (m.createdAt) currentConvLastTime = m.createdAt
             if (m.reasoningContent?.trim()) {
               currentThinkingSteps.push({ type: 'thinking', text: m.reasoningContent })
             }
@@ -278,7 +287,8 @@ export function useChat() {
                 content: m.content,
                 status: 'done',
                 createdAt: m.createdAt || Date.now(),
-                backendMessageId: m.id, // Backend message_id for regenerate/edit
+                backendMessageId: m.id,        // 后端 message_id，删除 / 重发时用
+                conversationId: m.conversationId ?? null,  // ★ 轮次 ID，删整轮时用
                 usage: currentRoundUsage || m.usage || null,
                 thinkingSteps: [...currentThinkingSteps],
               })
@@ -322,15 +332,19 @@ export function useChat() {
 
         if (currentThinkingSteps.length > 0) {
           msgs.push({
-            id: `hist-a-${Date.now()}-${Math.random()}`,
+            id: `hist-a-${currentConvLastTime || Date.now()}-${Math.random()}`,
             role: 'assistant',
             content: '',
             status: 'done',
-            createdAt: Date.now(),
+            createdAt: currentConvLastTime || Date.now(),  // ★ 用真实时间，避免 sort 把它排到末尾
             thinkingSteps: currentThinkingSteps,
             usage: currentRoundUsage || null,
+            // ★ 传递轮次 ID，使删除时能通过后端 conversation_id 清掉整轮
+            conversationId: currentConvId ?? null,
           })
           currentRoundUsage = null
+          currentConvId = null
+          currentConvLastTime = 0
         }
 
         const totalUsage: TokenUsage = {
@@ -375,8 +389,8 @@ export function useChat() {
           }
         }
 
-        // Add sorting by createdAt to ensure correct order
-        msgs.sort((a, b) => a.createdAt - b.createdAt)
+        // DB 返回的顺序已经是 ORDER BY created_at ASC, id ASC，不需要再排序
+        // （之前的 sort 会把合成块（Date.now()）错误地排到末尾，导致删除时错位）
 
         setMessages(sid, msgs)
         useSessionStore.setState((state) => ({
@@ -445,11 +459,21 @@ export function useChat() {
       const ctrl = startStream(sid)
       const startTime = Date.now()
 
-      const { onEvent, handleDone, handleError } = driveAiMessage(
+      const { onEvent: onAiEvent, handleDone, handleError } = driveAiMessage(
         sid, aiMsgId, updateMessage, updateUsage, startTime, '', [],
         () => finishStream(sid, ctrl),
         () => finishStream(sid, ctrl),
       )
+
+      // 包裹 onEvent：拦截 user_msg_id 帧，其余事件转发给 driveAiMessage
+      const onEvent = (event: any) => {
+        if (event.type === 'user_msg_id' && event.userMsgId) {
+          // ★ 将后端落库后的 message_id 写回 userMsg，用于后续删除/重发时的精确定位
+          updateMessage(sid, userMsg.id, { backendMessageId: event.userMsgId })
+          return
+        }
+        onAiEvent(event)
+      }
 
       try {
         await chatStream({
@@ -478,52 +502,62 @@ export function useChat() {
     async (sessionId?: string) => {
       const sid = sessionId ?? activeSessionId
       const msgs = useSessionStore.getState().messageMap[sid] ?? []
-      const lastAi = [...msgs].reverse().find((m) => m.role === 'assistant' && m.conversationId)
 
-      if (!lastAi?.conversationId) {
+      // ★ Fix: backendMessageId 是 SSE 完成后写入的实际后端 ID，conversationId 是兼容旧字段。
+      //        两者都要查，取到任何一个都视为"有后端 ID"。
+      const getBackendId = (m: Message) => m.backendMessageId || m.conversationId || null
+
+      const lastAi = [...msgs].reverse().find(
+        (m) => m.role === 'assistant' && !!getBackendId(m),
+      )
+      const backendAiId = lastAi ? getBackendId(lastAi) : null
+
+      if (!backendAiId) {
+        // ── CASE 2: 消息尚未落库（如刚发送中断），退回到删前端 + 重发 ──────────
         const lastUser = [...msgs].reverse().find((m) => m.role === 'user')
         if (lastUser) {
-          // 删除 lastUser 及其之后的所有消息（包括 AI 消息），再由 send() 重新添加 user 消息
+          // ★ Fix: 顺带删后端残留（若有 backendMessageId 就调一次 DELETE）
+          const msgsToClean = msgs.slice(msgs.findIndex((m) => m.id === lastUser.id))
+          for (const m of msgsToClean) {
+            const bid = getBackendId(m)
+            if (bid) await messagesApi.delete(bid).catch(() => {})
+          }
           useSessionStore.getState().deleteMessagesAfter(sid, lastUser.id)
           useSessionStore.getState().deleteMessage(sid, lastUser.id)
-          // 直接传原始 content（string 或 array），不能 JSON.stringify，否则数组会变成 JSON 文本
           await send(lastUser.content as string | any[], sid)
         }
         return
       }
 
-      const aiIdx = msgs.findIndex((m) => m.id === lastAi.id)
+      // ── CASE 1: 有后端 ID，交由后端 /regenerate 删旧数据并重新生成 ─────────
+      // 先清前端 store 中 lastAi 及其之后的消息
+      const aiIdx = msgs.findIndex((m) => m.id === lastAi!.id)
       if (aiIdx >= 0) {
-        const msgsAfterAi = msgs.slice(aiIdx + 1)
-        msgsAfterAi.forEach((m) => useSessionStore.getState().deleteMessage(sid, m.id))
+        msgs.slice(aiIdx + 1).forEach((m) => useSessionStore.getState().deleteMessage(sid, m.id))
       }
-      useSessionStore.getState().deleteMessage(sid, lastAi.id)
+      useSessionStore.getState().deleteMessage(sid, lastAi!.id)
 
       const aiMsgId = genId()
-      const placeholder: Message = {
+      addMessage(sid, {
         id: aiMsgId,
         role: 'assistant',
         content: '',
         status: 'streaming',
         createdAt: Date.now(),
         thinkingSteps: [],
-      }
-      addMessage(sid, placeholder)
+      })
 
       const ctrl = startStream(sid)
-      const startTime = Date.now()
-
       const thinkingMode = useSessionStore.getState().thinkingMode
-
       const { onEvent, handleDone, handleError } = driveAiMessage(
-        sid, aiMsgId, updateMessage, updateUsage, startTime, '', [],
+        sid, aiMsgId, updateMessage, updateUsage, Date.now(), '', [],
         () => finishStream(sid, ctrl),
         () => finishStream(sid, ctrl),
       )
 
       try {
         await regenerateStream({
-          messageId: lastAi.conversationId!,
+          messageId: backendAiId,   // ← 用真实后端 ID
           thinkingMode,
           signal: ctrl.signal,
           onEvent,
@@ -544,41 +578,50 @@ export function useChat() {
       const msgs = useSessionStore.getState().messageMap[sid] ?? []
       const msg = msgs.find((m) => m.id === msgId)
 
-      if (!msg?.conversationId) {
-        // 删除原始 user 消息及其后续，send() 会重新添加新的 user 消息
+      // ★ Fix: 同 regenerate，统一使用 backendMessageId || conversationId
+      const backendMsgId = msg?.backendMessageId || msg?.conversationId || null
+
+      if (!backendMsgId) {
+        // ── CASE 2: 消息未落库，清后端残留 + 重发 ───────────────────────────
+        const msgIdx = msgs.findIndex((m) => m.id === msgId)
+        if (msgIdx >= 0) {
+          const msgsToClean = msgs.slice(msgIdx)
+          for (const m of msgsToClean) {
+            const bid = m.backendMessageId || m.conversationId
+            if (bid) await messagesApi.delete(bid).catch(() => {})
+          }
+        }
         useSessionStore.getState().deleteMessagesAfter(sid, msgId)
         useSessionStore.getState().deleteMessage(sid, msgId)
         await send(newContent, sid)
         return
       }
 
+      // ── CASE 1: 有后端 ID，由 PUT /messages/:id 更新内容 + 删后续 + 重生成 ─
       useSessionStore.getState().editUserMessage(sid, msgId, newContent)
       useSessionStore.getState().deleteMessagesAfter(sid, msgId)
 
       const aiMsgId = genId()
-      const placeholder: Message = {
+      addMessage(sid, {
         id: aiMsgId,
         role: 'assistant',
         content: '',
         status: 'streaming',
         createdAt: Date.now(),
         thinkingSteps: [],
-      }
-      addMessage(sid, placeholder)
+      })
 
       const ctrl = startStream(sid)
-      const startTime = Date.now()
       const thinkingMode = useSessionStore.getState().thinkingMode
-
       const { onEvent, handleDone, handleError } = driveAiMessage(
-        sid, aiMsgId, updateMessage, updateUsage, startTime, '', [],
+        sid, aiMsgId, updateMessage, updateUsage, Date.now(), '', [],
         () => finishStream(sid, ctrl),
         () => finishStream(sid, ctrl),
       )
 
       try {
         await editMessageStream({
-          messageId: msg.conversationId!,
+          messageId: backendMsgId,   // ← 用真实后端 ID
           content: newContent,
           thinkingMode,
           signal: ctrl.signal,
@@ -689,24 +732,91 @@ export function useChat() {
   }, [activeSessionId])
 
   /**
-   * 删除消息：先调后端持久化删除，再删前端缓存。
-   * 修复 Bug 5：之前只删前端 store，刷新后从后端拉回历史 → 消息复活。
+   * 删除一条消息并同步到后端 DB（幂等，前后端同步删除）。
+   *
+   * 规则：
+   * - 删除「用户消息」→ 级联删除其后所有属于同一轮次的消息
+   *   （tool_call 中间行、tool 结果行、assistant 最终行，直到下一条 user 消息或末尾）
+   * - 删除「AI/tool 消息」→ 只删该条（后端会通过 conversation_id 清整轮 non-user 行）
+   *
+   * 修复 Bug: 之前只删前端 store，刷新后从后端拉回历史 → 消息复活。
    */
   const deleteMessageAndPersist = useCallback(
     async (sessionId: string, messageId: string) => {
       const msgs = useSessionStore.getState().messageMap[sessionId] ?? []
-      const msg = msgs.find((m) => m.id === messageId)
-      // 优先用 backendMessageId（从后端拉历史时填入），其次用 conversationId
-      const backendId = msg?.backendMessageId || msg?.conversationId
-      if (backendId) {
-        try {
-          await messagesApi.delete(backendId)
-        } catch (err) {
-          // 删后端失败时，前端也不应删（避免假象），抛出让上层提示
-          throw err
+      const msgIdx = msgs.findIndex((m) => m.id === messageId)
+      const msg = msgs[msgIdx]
+      if (!msg) return
+
+      // ── Step 0: 先 cancel 正在运行的流，防止后端继续写 DB ────────────
+      // 根因：agent loop 仍在运行时，用户删除消息，DELETE 执行完后 loop 继续 append → DB 复活
+      const isRunning = useSessionStore.getState().runningSessions[sessionId]
+      if (isRunning) {
+        // 通知后端停止 agent loop（兜底，即使前端 fetch 已经关闭了也要确保后端停止写 DB）
+        cancelChat(sessionId).catch(() => {})
+        // 标记 session 为 done，防止 UI 继续显示 streaming 状态
+        useSessionStore.getState().markSessionDone(sessionId)
+        // 等待后端处理 cancel 指令，避免 race condition（cancel 后立即 DELETE，DB 还在被写）
+        await new Promise((resolve) => setTimeout(resolve, 400))
+      }
+
+      // ── 收集需要从前端 store 清除的消息 ─────────────────────────────
+      const toDeleteFromStore: typeof msgs = [msg]
+
+      if (msg.role === 'user') {
+        // 把 user 消息之后、下一个 user 消息之前的所有行（tool/assistant 等）都收集进来
+        for (let i = msgIdx + 1; i < msgs.length; i++) {
+          if (msgs[i].role === 'user') break
+          toDeleteFromStore.push(msgs[i])
         }
       }
-      useSessionStore.getState().deleteMessage(sessionId, messageId)
+
+      // ── 先调后端删除（幂等，失败容错） ───────────────────────────────
+      // 对 user 消息：user 本身 + 同一轮次所有 AI/tool 行（含多个 conversation_id）
+      //   → 对每一个有 backendId 的消息都单独调一次 DELETE，后端会按 conversation_id 级联清轮
+      // 对 ai/tool 消息：只删这一条（后端会级联删同 conversation_id 的整轮）
+
+      // 收集所有需要通知后端删除的 backendId（去重，避免同 conversation_id 重复调用）
+      const deletedConvIds = new Set<string>()
+      const backendDeleteTasks: string[] = []
+
+      for (const m of toDeleteFromStore) {
+        const bid = m.backendMessageId || m.conversationId
+        if (!bid) continue
+
+        // 以 conversationId 去重（同一轮次只调一次，避免后端重复删）
+        const dedupeKey = m.conversationId || bid
+        if (deletedConvIds.has(dedupeKey)) continue
+        deletedConvIds.add(dedupeKey)
+        backendDeleteTasks.push(bid)
+      }
+
+      console.log('[deleteMessage] toDelete store ids:', toDeleteFromStore.map(m => ({ id: m.id, role: m.role, backendMessageId: m.backendMessageId, conversationId: m.conversationId })))
+      console.log('[deleteMessage] backend delete tasks:', backendDeleteTasks)
+
+      // 并发删除，互不依赖
+      const doBackendDelete = () => Promise.all(
+        backendDeleteTasks.map((bid) =>
+          messagesApi.delete(bid).catch((e) => {
+            console.warn('[deleteMessage] backend delete warn:', bid, e)
+          }),
+        ),
+      )
+
+      await doBackendDelete()
+
+      // ── 若之前有流在跑，cancel 后再做一次二次删除 ──────────────────────
+      // 原因：cancel 信号到达后端 → agent loop 停止 → 可能最后一次 append 已在 cancel 前写入
+      // 二次删除（在等待后）可清理这部分残留
+      if (isRunning) {
+        await new Promise((resolve) => setTimeout(resolve, 600))
+        await doBackendDelete()
+      }
+
+      // ── 再清前端 store ────────────────────────────────────────────────
+      for (const m of toDeleteFromStore) {
+        useSessionStore.getState().deleteMessage(sessionId, m.id)
+      }
     },
     [],
   )

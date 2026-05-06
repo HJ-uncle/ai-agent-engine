@@ -1,5 +1,6 @@
 import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
 import { loadSecurityConfig, checkDomainAllowed } from './security-config.js'
+import { checkNetworkAccess } from '../../security/network-policy.js'
 
 /**
  * Web Fetch 工具
@@ -40,11 +41,23 @@ export const webFetchTool: Tool = {
           return { success: false, output: `❌ Web Fetch 工具已被管理员禁用` }
         }
 
-        // 检查域名白名单/黑名单
+        // 旧版白/黑名单（按域名文本匹配）
         const checkResult = checkDomainAllowed(url, config)
         if (!checkResult.allowed) {
           ctx.logger.warn(`[web_fetch] Access denied for ${url}: ${checkResult.reason}`)
           return { success: false, output: `❌ 访问被拒绝: ${checkResult.reason}` }
+        }
+
+        // 新版网络策略（SSRF 防护、DNS 检查、CIDR 等）
+        const net = await checkNetworkAccess({
+          url,
+          tenantId: ctx.tenantId,
+          sessionId: ctx.sessionId,
+          source: 'web_fetch',
+        })
+        if (!net.allowed) {
+          ctx.logger.warn(`[web_fetch] Network policy denied ${url}: ${net.reason}`)
+          return { success: false, output: `❌ 访问被网络策略拒绝: ${net.reason}` }
         }
       }
 

@@ -96,7 +96,7 @@ export interface MemoryStore {
 }
 
 export interface ConversationHistory {
-  append(message: Message, ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<void>
+  append(message: Message, ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<string>
   getHistory(ctx: Pick<AgentContext, 'tenantId' | 'sessionId' | 'inheritContext'>): Promise<Message[]>
   clear(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<void>
   summarize(ctx: AgentContext): Promise<void>

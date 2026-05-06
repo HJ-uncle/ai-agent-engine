@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify'
 import { success } from '../response.js'
 import { loadSecurityConfig, saveSecurityConfig, WebFetchConfig } from '../../../tools/web-fetch/security-config.js'
 import { systemConfigStore, SECRET_KEYS } from '../../../storage/sqlite/system-config.js'
+import { setGlobalToolPoolLimit } from '../../../core/utils/concurrency-pool.js'
 
 /** 所有通过 PUT /settings 保存的字段都写数据库 */
 export async function settingsRoutes(fastify: FastifyInstance) {
@@ -41,6 +42,11 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       // ── Observability ────────────────────────────────────────────────────
       QA_LOG_ENABLED: getStr('QA_LOG_ENABLED', 'false') === 'true',
       QA_LOG_DIR:     getStr('QA_LOG_DIR',     './logs/qa'),
+      // ── Performance ──────────────────────────────────────────────────────
+      TOOL_CONCURRENCY_LIMIT: parseInt(getStr('TOOL_CONCURRENCY_LIMIT', '8'),      10),
+      SQLITE_CACHE_KB:        parseInt(getStr('SQLITE_CACHE_KB',        '20000'),  10),
+      SQLITE_MMAP_BYTES:      parseInt(getStr('SQLITE_MMAP_BYTES',      '268435456'), 10),
+      SQLITE_BUSY_TIMEOUT_MS: parseInt(getStr('SQLITE_BUSY_TIMEOUT_MS', '5000'),   10),
       // ── WebFetch Security ────────────────────────────────────────────────
       webFetch: securityConfig.webFetch,
     }
@@ -65,6 +71,12 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       await systemConfigStore.set(k, strVal, SECRET_KEYS.has(k))
       // 同步更新 process.env，保证当前进程内立即生效
       process.env[k] = strVal
+    }
+
+    // 立即应用：工具并发池大小可热更
+    if (updates['TOOL_CONCURRENCY_LIMIT'] !== undefined) {
+      const n = parseInt(String(updates['TOOL_CONCURRENCY_LIMIT']), 10)
+      if (!isNaN(n)) setGlobalToolPoolLimit(n)
     }
 
     return reply.code(200).send(success({ updated: true }))

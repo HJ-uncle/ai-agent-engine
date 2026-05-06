@@ -233,7 +233,7 @@ export default function ModelManagerModal({ open, onClose, onSuccess, editModel 
                 control={control}
                 render={({ field, fieldState }) => (
                   <>
-                    <Input.Password {...field} placeholder={isEdit ? '留空保留原有 Key，或输入新 Key' : 'sk-...'} status={fieldState.error ? 'error' : ''} />
+                    <Input.Password {...field} placeholder={isEdit ? '留空保留原有 Key，或输入新 Key' : 'sk-...'} status={fieldState.error ? 'error' : ''} autoComplete="new-password" />
                     {fieldState.error && !isEdit && <Text type="danger">{fieldState.error.message}</Text>}
                   </>
                 )}

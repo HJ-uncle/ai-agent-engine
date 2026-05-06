@@ -401,6 +401,9 @@ async function parseSseStream(
         } else if (parsed.ask_user !== undefined) {
           // 提问卡片
           event = { type: 'ask_user', data: parsed.ask_user }
+        } else if (parsed.userMsgId !== undefined) {
+          // 用户消息落库通知：携带后端 message_id，前端据此更新 backendMessageId
+          event = { type: 'user_msg_id', userMsgId: parsed.userMsgId as string }
         } else if (parsed.type !== undefined) {
           // 后端已经是标准格式（兼容）
           event = parsed as SseEvent
@@ -935,6 +938,177 @@ export const settingsApi = {
     const res = await request<{ updated: boolean }>('/settings', {
       method: 'PUT',
       body: JSON.stringify(updates),
+    })
+    return res.data
+  },
+}
+
+// ── Security Policy API ───────────────────────────────────────────────────────
+export interface PolicyRule {
+  id?: number
+  name: string
+  command: string
+  argPattern?: string | null
+  action: 'allow' | 'ask' | 'deny'
+  priority: number
+  enabled: boolean
+  description?: string | null
+  createdAt?: number
+  updatedAt?: number
+}
+
+export interface AuditEntry {
+  id: number
+  tenantId: string
+  sessionId: string | null
+  category: 'cmd' | 'network' | 'fs' | 'lsp'
+  target: string
+  details: any
+  decision: 'allow' | 'ask' | 'deny' | 'error'
+  ruleId: number | null
+  reason: string
+  createdAt: number
+}
+
+export interface NetworkPolicy {
+  allowedProtocols: string[]
+  denyListEnabled: boolean
+  denyDomains: string[]
+  denyCidrs: string[]
+  allowListEnabled: boolean
+  allowDomains: string[]
+  blockPrivateIP: boolean
+  dnsCacheTtl: number
+  maxResponseBytes: number
+  timeoutMs: number
+}
+
+export const securityApi = {
+  // ── Policies ─────────────────────────────────────────────────────────────
+  listPolicies: async (params?: { current?: number; pageSize?: number }) => {
+    const qs = params ? `?${new URLSearchParams(params as any).toString()}` : ''
+    const res = await request<PolicyRule[]>(`/security/policies${qs}`)
+    return {
+      list: (res.data ?? []) as PolicyRule[],
+      total: res.pagination?.total ?? (res.data as any[])?.length ?? 0,
+    }
+  },
+  createPolicy: async (rule: PolicyRule) => {
+    const res = await request<PolicyRule>('/security/policies', {
+      method: 'POST', body: JSON.stringify(rule),
+    })
+    return res.data as PolicyRule
+  },
+  updatePolicy: async (id: number, rule: Partial<PolicyRule>) => {
+    const res = await request<PolicyRule>(`/security/policies/${id}`, {
+      method: 'PUT', body: JSON.stringify(rule),
+    })
+    return res.data as PolicyRule
+  },
+  deletePolicy: async (id: number) => {
+    await request(`/security/policies/${id}`, { method: 'DELETE' })
+  },
+  resetPolicies: async () => {
+    await request('/security/policies/reset', { method: 'POST' })
+  },
+
+  // ── Audit Log ────────────────────────────────────────────────────────────
+  listAuditLog: async (params?: {
+    current?: number; pageSize?: number
+    category?: string; decision?: string; since?: number
+  }) => {
+    const qs = params ? `?${new URLSearchParams(params as any).toString()}` : ''
+    const res = await request<AuditEntry[]>(`/security/audit-log${qs}`)
+    return {
+      list: (res.data ?? []) as AuditEntry[],
+      total: res.pagination?.total ?? (res.data as any[])?.length ?? 0,
+    }
+  },
+  purgeAuditLog: async (days: number) => {
+    const res = await request<{ removed: number }>(`/security/audit-log?days=${days}`, {
+      method: 'DELETE',
+    })
+    return res.data
+  },
+
+  // ── Network Policy ───────────────────────────────────────────────────────
+  getNetworkPolicy: async () => {
+    const res = await request<NetworkPolicy>('/security/network-policy')
+    return res.data as NetworkPolicy
+  },
+  updateNetworkPolicy: async (policy: NetworkPolicy) => {
+    const res = await request<NetworkPolicy>('/security/network-policy', {
+      method: 'PUT', body: JSON.stringify(policy),
+    })
+    return res.data as NetworkPolicy
+  },
+  resetNetworkPolicy: async () => {
+    const res = await request<NetworkPolicy>('/security/network-policy/reset', { method: 'POST' })
+    return res.data as NetworkPolicy
+  },
+}
+
+// ── LSP API ────────────────────────────────────────────────────────────────
+export interface LspAdapterInfo {
+  name: string
+  language: string
+  extensions: string[]
+  available: boolean
+}
+
+export interface LspDiagnostic {
+  severity: 'error' | 'warning' | 'info' | 'hint'
+  line: number
+  column: number
+  endLine?: number
+  endColumn?: number
+  code?: string
+  message: string
+  source: string
+  fix?: { title: string; newText: string }
+}
+
+export interface LspDiagnoseResult {
+  filePath: string
+  language: string
+  adapter: string
+  diagnostics: LspDiagnostic[]
+  durationMs: number
+  fromCache: boolean
+}
+
+export const lspApi = {
+  listAdapters: async () => {
+    const res = await request<LspAdapterInfo[]>('/lsp/adapters')
+    return (res.data ?? []) as LspAdapterInfo[]
+  },
+  diagnose: async (payload: { filePath: string; content?: string; adapters?: string[]; sessionId?: string; useCache?: boolean }) => {
+    const res = await request<LspDiagnoseResult>('/lsp/diagnose', {
+      method: 'POST', body: JSON.stringify(payload),
+    })
+    return res.data as LspDiagnoseResult
+  },
+  purgeCache: async (days = 7) => {
+    const res = await request<{ removed: number }>(`/lsp/cache?days=${days}`, { method: 'DELETE' })
+    return res.data
+  },
+}
+
+// ── Performance API ───────────────────────────────────────────────────────
+export interface PerformanceStats {
+  sqlite: Record<string, string | number>
+  toolPool: { size: number; active: number; pending: number }
+  toolStats: Array<{ tool: string; count: number; avgMs: number; successRate: number }>
+}
+
+export const performanceApi = {
+  getStats: async () => {
+    const res = await request<PerformanceStats>('/performance/stats')
+    return res.data as PerformanceStats
+  },
+  setToolPoolLimit: async (limit: number) => {
+    const res = await request<{ limit: number }>('/performance/tool-pool', {
+      method: 'POST', body: JSON.stringify({ limit }),
     })
     return res.data
   },

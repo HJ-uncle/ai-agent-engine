@@ -10,6 +10,7 @@ import { createToolRegistry } from '../../../tools/registry-factory.js'
 import { estimateTokens } from '../../../core/utils/tokens.js'
 import { v4 as uuidv4 } from 'uuid'
 import { success, fail } from '../response.js'
+import { registerActiveChat, unregisterActiveChat } from './chat.js'
 
 interface RegenerateBody {
   messageId: string
@@ -26,7 +27,22 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     const tenantId = (request as any).authContext?.tenantId ?? 'default'
 
     const message = await history.getMessageById(messageId, tenantId)
+
+    // ★ 兼容：若按 message_id 找不到，尝试把 messageId 当作 conversation_id 删整轮
+    //   （前端幽灵块只有 conversationId 没有 backendMessageId 时走此路径）
     if (!message) {
+      const db2 = (await import('../../../storage/sqlite/db.js')).getDb()
+      const byConv = await db2.execute({
+        sql: `SELECT COUNT(*) AS c FROM conversations WHERE conversation_id = ? AND tenant_id = ?`,
+        args: [messageId, tenantId],
+      })
+      if (Number(byConv.rows[0]?.c ?? 0) > 0) {
+        await db2.execute({
+          sql: `DELETE FROM conversations WHERE conversation_id = ? AND tenant_id = ? AND role != 'user'`,
+          args: [messageId, tenantId],
+        })
+        return reply.code(200).send(success({ success: true, messageId }))
+      }
       return reply.code(200).send(fail(40400, 'Message not found'))
     }
 
@@ -42,18 +58,58 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     return reply.code(200).send(success({ sessionId, totalTokens }))
   })
 
-  // 2. 硬删除消息
+  // 2. 硬删除消息（幂等：找不到也返回 success，避免前端 store 与 DB 双向卡死）
+  //    删除策略（按优先级）：
+  //    a. 先按 message_id 找到消息 → 若有 conversation_id 删整轮，否则删单条
+  //    b. 若 message_id 未命中，尝试把参数当 conversation_id 删整轮（幽灵块兜底）
+  //    c. 以上均未命中 → 视为已删，幂等返回 success
   fastify.delete<{ Params: { messageId: string } }>('/messages/:messageId', async (request, reply) => {
     const { messageId } = request.params
     const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const db = (await import('../../../storage/sqlite/db.js')).getDb()
 
     const message = await history.getMessageById(messageId, tenantId)
-    if (!message) {
-      return reply.code(200).send(fail(40400, 'Message not found'))
+
+    if (message) {
+      // ── a. 按 message_id 找到了 ──────────────────────────────────────
+      const sessionResult = await db.execute({
+        sql: 'SELECT session_id FROM conversations WHERE message_id = ? AND tenant_id = ?',
+        args: [messageId, tenantId],
+      })
+      const sessionId = sessionResult.rows[0]?.session_id as string | undefined
+      const convId = (message as any).conversationId as string | undefined
+
+      if (convId && sessionId) {
+        // 删整轮非 user 行（tool_call 中间行 + tool 结果行 + 最终 assistant 行）
+        await db.execute({
+          sql: `DELETE FROM conversations
+                WHERE tenant_id = ? AND session_id = ? AND conversation_id = ? AND role != 'user'`,
+          args: [tenantId, sessionId, convId],
+        })
+        // user 消息本身无论如何也要删掉（这是调用方明确要删的那条）
+        await history.deleteMessage(messageId, tenantId)
+      } else {
+        await history.deleteMessage(messageId, tenantId)
+      }
+      return reply.code(200).send(success({ success: true, messageId }))
     }
 
-    await history.deleteMessage(messageId, tenantId)
-    return reply.code(200).send(success({ success: true, messageId }))
+    // ── b. 尝试当作 conversation_id 删整轮（前端幽灵块只有 conversationId）
+    const byConv = await db.execute({
+      sql: `SELECT COUNT(*) AS c FROM conversations WHERE conversation_id = ? AND tenant_id = ?`,
+      args: [messageId, tenantId],
+    })
+    console.log(`[DELETE /messages/${messageId}] branch-b count=${byConv.rows[0]?.c}`)
+    if (Number(byConv.rows[0]?.c ?? 0) > 0) {
+      await db.execute({
+        sql: `DELETE FROM conversations WHERE conversation_id = ? AND tenant_id = ?`,
+        args: [messageId, tenantId],
+      })
+      return reply.code(200).send(success({ success: true, messageId }))
+    }
+
+    // ── c. 找不到 → 幂等成功（消息已被其他操作删除，前端可安全清理 store）
+    return reply.code(200).send(success({ success: true, messageId, alreadyGone: true }))
   })
 
   // 辅助函数：运行 AI pipeline
@@ -163,6 +219,9 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     const prompt = newMessageContent ?? null
 
     async function* runAgent(): AsyncIterable<string> {
+      const abortController = new AbortController()
+      // ★ 注册到全局 cancel 表，使 POST /chat/cancel 能中止此流（regenerate/edit 场景）
+      registerActiveChat(tenantId, sessionId, abortController)
       try {
         const llm = await createLLMAdapterWithDbConfig({
           model: effectiveModel,
@@ -179,11 +238,19 @@ export async function messagesRoutes(fastify: FastifyInstance) {
           responseThinkingField: finalResponseThinkingField,
         })
         const pipeline = createPipeline([])
+        // ★ 把 ctx 的 signal 替换为受 cancel 控制的 abortController.signal
+        ctx.signal = abortController.signal
 
         yield* pipeline.pipe(strategy.run(prompt, ctx))
       } catch (err: any) {
+        if (abortController.signal.aborted) {
+          // 被 cancel 中止，静默退出，不输出错误信息
+          return
+        }
         reqLogger.error({ err }, 'Agent execution error')
         yield `\n\n[System Error: ${err.message || String(err)}]`
+      } finally {
+        unregisterActiveChat(tenantId, sessionId, abortController)
       }
     }
 

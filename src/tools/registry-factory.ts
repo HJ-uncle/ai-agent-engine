@@ -25,6 +25,7 @@ import { getCurrentContextTool } from './get-context/index.js'
 import { installPackageTool, listPackagesTool } from './install-package/install-package-tool.js'
 import { agentTools } from './agent/index.js'
 import { listSystemToolsTool } from './list-system-tools/index.js'
+import { lspDiagnoseTool } from './lsp/index.js'
 import type { ExternalSkill } from '../skills/external-loader.js'
 
 export interface RegistryFactoryOptions {
@@ -174,6 +175,9 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   if (shouldRegister('agent_do_update')) agentTools.filter(t => t.name === 'agent_do_update').forEach((t) => registerBuiltin(t))
   if (shouldRegister('agent_delete')) agentTools.filter(t => t.name === 'agent_delete').forEach((t) => registerBuiltin(t))
   if (shouldRegister('agent_do_delete')) agentTools.filter(t => t.name === 'agent_do_delete').forEach((t) => registerBuiltin(t))
+
+  // 19. 代码诊断工具（LSP：tsc + eslint），用于 AI 自动检查/修复代码
+  if (shouldRegister('code_diagnose')) registerBuiltin(lspDiagnoseTool)
 
   const toolCategories: ToolCategories = { builtinTools, mcpTools, skillTools }
   return { registry, memory, externalSkills, toolCategories }

@@ -1383,7 +1383,16 @@ function MessageItem({
                 </Tooltip>
               )}
               <Popconfirm
-                title="删除这条消息？"
+                title={
+                  msg.role === 'user'
+                    ? '删除这条提问及其 AI 回答？'
+                    : '删除这条 AI 回答？'
+                }
+                description={
+                  msg.role === 'user'
+                    ? '同时删除紧跟其后的 AI 回答，操作不可撤销。'
+                    : '仅删除该条回答，不影响上方提问。'
+                }
                 onConfirm={async () => {
                   // 优先使用从父组件注入的 onDelete（会同时持久化到后端 DB），
                   // 否则降级到只删前端 store（仅在缺失 prop 时兜底，避免 UI 卡死）。
@@ -1567,7 +1576,7 @@ export default function ChatArea() {
   // 打开工作区管理时加载最近工作区列表
   React.useEffect(() => {
     if (isWorkspaceModalOpen) {
-      workspaceApi.listRecent().then(setRecentWorkspaces).catch(() => {});
+      workspaceApi.listRecent().then(setRecentWorkspaces).catch(() => { });
     }
   }, [isWorkspaceModalOpen]);
 
@@ -2104,7 +2113,7 @@ export default function ChatArea() {
                 const baseName = file.name.replace(/\.[^/.]+$/, '');
                 const timestamp = Date.now();
                 const newFileName = `${baseName}_${timestamp}.${ext}`;
-                
+
                 if (file.type.startsWith("image/")) {
                   const imageUrl = URL.createObjectURL(file);
                   return (
@@ -2136,7 +2145,7 @@ export default function ChatArea() {
                     if (file.type.includes('code') || file.type.includes('json') || file.type.includes('xml')) return <FileTextOutlined style={{ color: '#a78bfa' }} />;
                     return <FileOutlined style={{ color: '#0e639c' }} />;
                   };
-                  
+
                   return (
                     <div key={index} className={styles.attachmentItem}>
                       {getFileIcon()}
@@ -2323,63 +2332,220 @@ export default function ChatArea() {
         open={isWorkspaceModalOpen}
         onCancel={() => { setIsWorkspaceModalOpen(false); setNewWorkspacePath(""); }}
         footer={null}
-        width={560}
+        width={580}
         centered
-          styles={{
-            mask: { backdropFilter: "blur(6px)", background: "rgba(0,0,0,0.55)" },
-            body: { padding: 0, background: "#1a1a1a" },
-          } as any}
-          style={{ borderRadius: 10, overflow: "hidden", border: "1px solid #2a2a2a", padding: 0 }}
+        styles={{
+          mask: { backdropFilter: "blur(6px)", background: "rgba(0,0,0,0.55)" },
+          body: { padding: 0, background: "#141414" },
+        } as any}
+        style={{ borderRadius: 12, overflow: "hidden", border: "1px solid #2a2a2a", padding: 0 }}
       >
-        {/* 标题栏 */}
-        <div style={{ padding: "14px 18px 12px", borderBottom: "1px solid #1f1f1f", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span style={{ fontSize: 14, fontWeight: 600, color: "#d4d4d4" }}>工作区管理</span>
-          <span style={{ fontSize: 11, color: "#555" }}>已绑定 {(session?.workspacePaths ?? []).length} 个</span>
+        {/* ── 标题栏 ── */}
+        <div style={{
+          padding: "16px 20px 14px",
+          borderBottom: "1px solid #222",
+          display: "flex", alignItems: "center", gap: 10,
+        }}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="#6b7280">
+            <path d="M1.5 3A1.5 1.5 0 0 1 3 1.5h2.879a1.5 1.5 0 0 1 1.06.44l1.122 1.12A1.5 1.5 0 0 0 9.12 3.5H13A1.5 1.5 0 0 1 14.5 5v7A1.5 1.5 0 0 1 13 13.5H3A1.5 1.5 0 0 1 1.5 12V3z" />
+          </svg>
+          <span style={{ fontSize: 14, fontWeight: 600, color: "#e0e0e0", flex: 1 }}>工作区管理</span>
+          {(() => {
+            const cnt = (session?.workspacePaths ?? []).length;
+            return cnt > 0 ? (
+              <span style={{
+                fontSize: 11, color: "#4ade80", background: "rgba(74,222,128,0.1)",
+                border: "1px solid rgba(74,222,128,0.2)", borderRadius: 10,
+                padding: "1px 8px", fontWeight: 500,
+              }}>{cnt} 个已绑定</span>
+            ) : null;
+          })()}
         </div>
-
-        <div style={{ padding: "8px 14px 14px", maxHeight: "60vh", overflowY: "auto" }}>
+        {/* ── 添加新路径 ── */}
+        <div style={{
+          marginBottom: 10,
+          borderBottom: "1px solid #1f1f1f",
+          paddingBottom: 12,
+          padding: "12px 16px 16px",
+        }}>
+          <div style={{ fontSize: 11, color: "#4b5563", marginBottom: 6, paddingLeft: 2 }}>
+            添加自定义路径
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              value={newWorkspacePath}
+              onChange={e => setNewWorkspacePath(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") handleAddWorkspace(); }}
+              placeholder="粘贴绝对路径，按 Enter 确认…"
+              style={{
+                flex: 1,
+                background: "#0d0d0d", color: "#cccccc",
+                border: "1px solid #2a2a2a", borderRadius: 7,
+                padding: "7px 12px", fontSize: 12,
+                fontFamily: "Consolas, monospace",
+                outline: "none", transition: "border-color 0.15s",
+              }}
+              onFocus={e => { e.currentTarget.style.borderColor = "#0e639c"; }}
+              onBlur={e => { e.currentTarget.style.borderColor = "#2a2a2a"; }}
+            />
+            <button
+              onClick={handleAddWorkspace}
+              disabled={!newWorkspacePath.trim()}
+              style={{
+                padding: "7px 16px", fontSize: 12, fontWeight: 500,
+                borderRadius: 7, border: "none", cursor: newWorkspacePath.trim() ? "pointer" : "not-allowed",
+                background: newWorkspacePath.trim() ? "#0e639c" : "#1a1a1a",
+                color: newWorkspacePath.trim() ? "#fff" : "#444",
+                transition: "all 0.15s", flexShrink: 0,
+              }}
+            >添加</button>
+          </div>
+        </div>
+        {/* ── 内容区 ── */}
+        <div style={{ padding: "12px 16px 16px", maxHeight: "62vh", overflowY: "auto" }}>
           {(() => {
             const bound = session?.workspacePaths ?? [];
             const available = recentWorkspaces.filter(ws => !bound.includes(ws.path));
-            const allItems = [...bound.map(p => ({ path: p, isBound: true })), ...available.map(ws => ({ path: ws.path, isBound: false }))];
-            if (allItems.length === 0) return null;
+
+            // 从路径推导显示名称
+            const parsePath = (p: string, apiName?: string) => {
+              const norm = p.replace(/\\/g, "/");
+              const parts = norm.split("/").filter(Boolean);
+              const last = parts[parts.length - 1] ?? p;
+              const parent = parts[parts.length - 2] ?? "";
+              // 随机 session ID（纯小写字母数字 ≥12位）→ 用 apiName 或 "会话工作区"
+              const isSessionId = /^[a-z0-9]{12,}$/.test(last);
+              const displayName = isSessionId
+                ? (apiName && apiName !== last ? apiName : (parent || "会话工作区"))
+                : last;
+              const subPath = parts.length >= 3
+                ? "…/" + parts.slice(-3, -1).join("/") + "/"
+                : (parent ? parent + "/" : "");
+              return { displayName, subPath, isSessionId };
+            };
+
+            const WorkspaceRow = ({
+              path, apiName, isBound, onAction,
+            }: { path: string; apiName?: string; isBound: boolean; onAction: () => void }) => {
+              const { displayName, subPath } = parsePath(path, apiName);
+              const [hovered, setHovered] = React.useState(false);
+              const [btnHovered, setBtnHovered] = React.useState(false);
+              return (
+                <div
+                  onMouseEnter={() => setHovered(true)}
+                  onMouseLeave={() => setHovered(false)}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 10,
+                    padding: "9px 12px", borderRadius: 8,
+                    background: hovered ? "rgba(255,255,255,0.04)" : "transparent",
+                    transition: "background 0.12s",
+                    cursor: isBound ? "default" : "pointer",
+                  }}
+                  onClick={() => { if (!isBound) onAction(); }}
+                >
+                  {/* 状态点 */}
+                  <div style={{
+                    width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
+                    background: isBound ? "#4ade80" : "#3d3d3d",
+                    boxShadow: isBound ? "0 0 6px rgba(74,222,128,0.4)" : "none",
+                    transition: "all 0.2s",
+                  }} />
+
+                  {/* 路径信息 */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{
+                      fontSize: 13, fontWeight: 500,
+                      color: isBound ? "#d4d4d4" : "#6b7280",
+                      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                    }}>{displayName}</div>
+                    <div
+                      title={path}
+                      style={{
+                        fontSize: 11, color: "#3a3a3a",
+                        fontFamily: "Consolas, monospace",
+                        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                        marginTop: 1,
+                      }}
+                    >{subPath}<span style={{ color: "#555" }}>{displayName}</span></div>
+                  </div>
+
+                  {/* 操作按钮 */}
+                  {isBound ? (
+                    <button
+                      onClick={e => { e.stopPropagation(); onAction(); }}
+                      onMouseEnter={() => setBtnHovered(true)}
+                      onMouseLeave={() => setBtnHovered(false)}
+                      title="解除绑定"
+                      style={{
+                        width: 26, height: 26, flexShrink: 0,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        borderRadius: 6, border: "none", cursor: "pointer",
+                        background: btnHovered ? "rgba(248,81,73,0.12)" : "transparent",
+                        color: btnHovered ? "#f85149" : "#444",
+                        fontSize: 14, transition: "all 0.15s",
+                      }}
+                    >×</button>
+                  ) : (
+                    <div style={{
+                      fontSize: 11, color: hovered ? "#9cdcfe" : "#3a3a3a",
+                      flexShrink: 0, transition: "color 0.15s", fontWeight: 500,
+                    }}>+ 绑定</div>
+                  )}
+                </div>
+              );
+            };
+
             return (
-              <div style={{ marginBottom: 10 }}>
-                {allItems.map(({ path, isBound }) => {
-                  const parts = path.replace(/\\\\/g, "/").split("/").filter(Boolean);
-                  const name = parts[parts.length - 1] ?? path;
-                  const shortPath = parts.length > 3 ? "\u2026/" + parts.slice(-2).join("/") : path;
-                  return (
-                    <div key={path} onClick={() => { if (isBound) return; updateSession(activeSessionId, { workspacePaths: [...bound, path] }); message.success("已绑定 " + name); }}
-                      style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 4, cursor: isBound ? "default" : "pointer", transition: "background 0.1s" }}
-                      onMouseEnter={e => { if (!isBound) e.currentTarget.style.background = "rgba(255,255,255,0.04)"; }}
-                      onMouseLeave={e => { if (!isBound) e.currentTarget.style.background = "transparent"; }}>
-                      <div style={{ width: 6, height: 6, borderRadius: "50%", flexShrink: 0, background: isBound ? "#4ade80" : "#333" }} />
-                      <span style={{ fontSize: 13, color: isBound ? "#cccccc" : "#777", fontWeight: isBound ? 500 : 400, flexShrink: 0 }}>{name}</span>
-                      <span style={{ fontSize: 11, color: "#3d3d3d", fontFamily: "Consolas,monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }} title={path}>{shortPath}</span>
-                      {isBound ? (
-                        <div onClick={e => { e.stopPropagation(); handleRemoveWorkspace(path); }}
-                          style={{ width: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 3, color: "#3a3a3a", cursor: "pointer", fontSize: 11, transition: "all 0.1s", flexShrink: 0 }}
-                          onMouseEnter={e => { e.currentTarget.style.color = "#f85149"; e.currentTarget.style.background = "rgba(248,81,73,0.1)"; }}
-                          onMouseLeave={e => { e.currentTarget.style.color = "#3a3a3a"; e.currentTarget.style.background = "transparent"; }}>\u2715</div>
-                      ) : (
-                        <span style={{ fontSize: 11, color: "#3a3a3a", flexShrink: 0 }}>+</span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+              <>
+                {/* ── 已绑定 ── */}
+                {bound.length > 0 && (
+                  <div style={{ marginBottom: 6 }}>
+                    <div style={{
+                      fontSize: 10, fontWeight: 600, color: "#4b5563",
+                      textTransform: "uppercase", letterSpacing: "0.08em",
+                      padding: "4px 12px 6px",
+                    }}>已绑定</div>
+                    {bound.map(p => (
+                      <WorkspaceRow key={p} path={p} isBound={true} onAction={() => handleRemoveWorkspace(p)} />
+                    ))}
+                  </div>
+                )}
+
+                {/* ── 最近使用 ── */}
+                {available.length > 0 && (
+                  <div style={{ marginBottom: 6 }}>
+                    {bound.length > 0 && <div style={{ height: 1, background: "#1f1f1f", margin: "6px 0 10px" }} />}
+                    <div style={{
+                      fontSize: 10, fontWeight: 600, color: "#4b5563",
+                      textTransform: "uppercase", letterSpacing: "0.08em",
+                      padding: "4px 12px 6px",
+                    }}>最近使用</div>
+                    {available.map(ws => (
+                      <WorkspaceRow
+                        key={ws.path} path={ws.path} apiName={ws.name} isBound={false}
+                        onAction={() => {
+                          updateSession(activeSessionId, { workspacePaths: [...bound, ws.path] });
+                          const { displayName } = parsePath(ws.path, ws.name);
+                          message.success("已绑定：" + displayName);
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {/* ── 空状态 ── */}
+                {bound.length === 0 && available.length === 0 && (
+                  <div style={{
+                    textAlign: "center", padding: "28px 0 20px",
+                    color: "#3d3d3d", fontSize: 12,
+                  }}>
+                    <div style={{ fontSize: 28, marginBottom: 10, opacity: 0.3 }}>📁</div>
+                    <div>暂无工作区，请在下方输入路径添加</div>
+                  </div>
+                )}
+              </>
             );
           })()}
-          <div style={{ borderTop: "1px solid #1f1f1f", paddingTop: 10, display: "flex", gap: 6 }}>
-            <Input size="small" placeholder="粘贴绝对路径后按 Enter..." value={newWorkspacePath} onChange={(e) => setNewWorkspacePath(e.target.value)} onPressEnter={handleAddWorkspace}
-              style={{ background: "#111", color: "#cccccc", border: "1px solid #252525", borderRadius: 4, fontSize: 12 }}
-              onFocus={e => (e.target.style.borderColor = "#0e639c")} onBlur={e => (e.target.style.borderColor = "#252525")} />
-            <Button size="small" type="primary" onClick={handleAddWorkspace} disabled={!newWorkspacePath.trim()} style={{ borderRadius: 4, flexShrink: 0 }}>\u6dfb\u52a0</Button>
-          </div>
-          {(session?.workspacePaths ?? []).length === 0 && recentWorkspaces.length === 0 && (
-            <div style={{ textAlign: "center", padding: "16px 0", color: "#444", fontSize: 12 }}>暂无可用工作区，请手动输入路径</div>
-          )}
         </div>
       </Modal>
     </div>

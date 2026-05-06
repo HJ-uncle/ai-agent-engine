@@ -51,6 +51,13 @@ export async function sseStream(
         } catch { /* ignore */ }
         continue
       }
+      // ── __user_msg_id__ frame ──────────────────────────────────────────
+      // 通知前端：用户消息已落库，携带后端 message_id，前端凭此 ID 做删除/重发
+      if (chunk.startsWith('\x00__user_msg_id__')) {
+        const id = chunk.slice('\x00__user_msg_id__'.length)
+        reply.raw.write(`data: ${JSON.stringify({ userMsgId: id })}\n\n`)
+        continue
+      }
       // ── 普通内容 ─────────────────────────────────────────────────────────
       reply.raw.write(`data: ${JSON.stringify({ content: chunk })}\n\n`)
     }

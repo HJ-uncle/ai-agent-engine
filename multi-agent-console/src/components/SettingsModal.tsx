@@ -12,7 +12,11 @@ import {
   CodeOutlined,
   BulbOutlined,
   InfoCircleOutlined,
-  DatabaseOutlined
+  DatabaseOutlined,
+  AuditOutlined,
+  GlobalOutlined,
+  ThunderboltOutlined,
+  BugOutlined
 } from '@ant-design/icons'
 import { useSessionStore } from '../store/session'
 import GeneralSettings from './settings/GeneralSettings'
@@ -26,6 +30,11 @@ import ChatFlowSettings from './settings/ChatFlowSettings'
 import SkillSettings from './settings/SkillSettings'
 import SystemSettings from './settings/SystemSettings'
 import McpSettings from './settings/McpSettings'
+import SecurityPolicySettings from './settings/SecurityPolicySettings'
+import NetworkPolicySettings from './settings/NetworkPolicySettings'
+import AuditLogViewer from './settings/AuditLogViewer'
+import LspSettings from './settings/LspSettings'
+import PerformanceSettings from './settings/PerformanceSettings'
 import styles from './settings/SettingsLayout.module.css'
 
 export default function SettingsModal() {
@@ -131,6 +140,56 @@ export default function SettingsModal() {
         </span>
       ),
       children: <WhitelistManager />,
+    },
+    {
+      key: 'security-policy',
+      label: (
+        <span>
+          <SafetyCertificateOutlined />
+          <span style={{ marginLeft: 8 }}>安全策略</span>
+        </span>
+      ),
+      children: <SecurityPolicySettings />,
+    },
+    {
+      key: 'network-policy',
+      label: (
+        <span>
+          <GlobalOutlined />
+          <span style={{ marginLeft: 8 }}>网络策略</span>
+        </span>
+      ),
+      children: <NetworkPolicySettings />,
+    },
+    {
+      key: 'audit-log',
+      label: (
+        <span>
+          <AuditOutlined />
+          <span style={{ marginLeft: 8 }}>审计日志</span>
+        </span>
+      ),
+      children: <AuditLogViewer />,
+    },
+    {
+      key: 'lsp',
+      label: (
+        <span>
+          <BugOutlined />
+          <span style={{ marginLeft: 8 }}>代码诊断</span>
+        </span>
+      ),
+      children: <LspSettings />,
+    },
+    {
+      key: 'performance',
+      label: (
+        <span>
+          <ThunderboltOutlined />
+          <span style={{ marginLeft: 8 }}>性能</span>
+        </span>
+      ),
+      children: <PerformanceSettings />,
     },
     {
       key: 'webfetch',

@@ -35,7 +35,7 @@ export default function RemoteSettings() {
             </Form.Item>
             
             <Form.Item label="私钥路径或密码" name="auth">
-              <Input.Password placeholder="~/.ssh/id_rsa" />
+              <Input.Password placeholder="~/.ssh/id_rsa" autoComplete="new-password" />
             </Form.Item>
 
             <Space style={{ marginTop: 8 }}>

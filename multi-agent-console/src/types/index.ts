@@ -118,6 +118,7 @@ export type SseEventType =
   | 'done'
   | 'token_usage'
   | 'ask_user'
+  | 'user_msg_id'
 
 export interface SseEvent {
   type: SseEventType
@@ -132,6 +133,7 @@ export interface SseEvent {
   usage?: TokenUsage
   error?: string
   data?: any
+  userMsgId?: string
 }
 
 // ── Knowledge 类型 ────────────────────────────────────────────────────────────

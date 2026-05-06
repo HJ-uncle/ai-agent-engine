@@ -91,7 +91,9 @@ export class ReActStrategy implements LoopStrategy {
         tokens: estimateTokens(historyContent),
         ...(conversationId ? { conversationId } : {}),
       }
-      await ctx.history.append(userMessage, ctx)
+      const savedUserMsgId = await ctx.history.append(userMessage, ctx)
+      // ★ 把后端 message_id 回传给前端，前端用它做删除/重发的准确定位
+      yield `\x00__user_msg_id__${savedUserMsgId}`
     }
 
     // Build tool list from registry
