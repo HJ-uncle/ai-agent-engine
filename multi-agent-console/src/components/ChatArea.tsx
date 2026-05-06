@@ -1528,6 +1528,7 @@ export default function ChatArea() {
 
   const [inputValue, setInputValue] = useState("");
   const [attachments, setAttachments] = useState<File[]>([]);
+  const [attachmentUrls, setAttachmentUrls] = useState<Map<number, string>>(new Map());
   const [showTodoPanel, setShowTodoPanel] = useState(false);
   // ── isStreaming 改为派生自全局 runningSessions ─────────────────────────────
   // 之前是局部 state，会话切换后状态错乱（A 流式中切到 B，B 显示 streaming）。
@@ -1711,9 +1712,40 @@ export default function ChatArea() {
     }
   }, [addFiles]);
 
+  const attachmentUrlsRef = useRef(attachmentUrls);
+  attachmentUrlsRef.current = attachmentUrls;
+
   const removeAttachment = (index: number) => {
-    setAttachments(prev => prev.filter((_, i) => i !== index));
+    setAttachments(prev => {
+      const url = attachmentUrls.get(index);
+      if (url) {
+        URL.revokeObjectURL(url);
+      }
+      return prev.filter((_, i) => i !== index);
+    });
+    setAttachmentUrls(prev => {
+      const newUrls = new Map(prev);
+      const url = newUrls.get(index);
+      if (url) {
+        URL.revokeObjectURL(url);
+      }
+      newUrls.delete(index);
+      // 更新索引映射
+      const updatedUrls = new Map<number, string>();
+      newUrls.forEach((url, idx) => {
+        updatedUrls.set(idx < index ? idx : idx - 1, url);
+      });
+      return updatedUrls;
+    });
   };
+
+  useEffect(() => {
+    return () => {
+      attachmentUrlsRef.current.forEach(url => {
+        URL.revokeObjectURL(url);
+      });
+    };
+  }, []);
 
   const [isWorkspaceModalOpen, setIsWorkspaceModalOpen] = useState(false);
   const [newWorkspacePath, setNewWorkspacePath] = useState("");
@@ -2343,7 +2375,10 @@ export default function ChatArea() {
                 const newFileName = `${baseName}_${timestamp}.${ext}`;
 
                 if (file.type.startsWith("image/")) {
-                  const imageUrl = URL.createObjectURL(file);
+                  const imageUrl = attachmentUrls.get(index) || URL.createObjectURL(file);
+                  if (!attachmentUrls.has(index)) {
+                    setAttachmentUrls(prev => new Map(prev).set(index, imageUrl));
+                  }
                   return (
                     <div key={index} className={styles.attachmentItemImage}>
                       <CloseOutlined
