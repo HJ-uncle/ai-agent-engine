@@ -1,5 +1,5 @@
 import { useCallback, useRef } from 'react'
-import { chatStream, regenerateStream, editMessageStream, conversationApi } from '../api'
+import { chatStream, regenerateStream, editMessageStream, conversationApi, cancelChat, messagesApi } from '../api'
 import { useSessionStore } from '../store/session'
 import type { Message, ThinkingStep, TokenUsage } from '../types'
 
@@ -169,14 +169,52 @@ export function useChat() {
     updateSessionTitle,
   } = useSessionStore()
 
-  const abortRef = useRef<AbortController | null>(null)
+  /**
+   * 每个会话独立的 AbortController。
+   * 修复 Bug：之前 abortRef 是单例，多会话切换/并发时会互相覆盖；
+   * 现在按 sessionId 隔离，cancel(sid) 只终止指定会话。
+   */
+  const abortMapRef = useRef<Map<string, AbortController>>(new Map())
+
+  const startStream = useCallback((sid: string): AbortController => {
+    // 同会话已有运行中的流：先 abort 旧的
+    const prev = abortMapRef.current.get(sid)
+    if (prev && !prev.signal.aborted) {
+      try { prev.abort() } catch { /* noop */ }
+    }
+    const ctrl = new AbortController()
+    abortMapRef.current.set(sid, ctrl)
+    useSessionStore.getState().markSessionRunning(sid)
+    return ctrl
+  }, [])
+
+  const finishStream = useCallback((sid: string, ctrl: AbortController) => {
+    // 仅当注册的还是同一个 controller 时才清理（避免误删后续新流）
+    if (abortMapRef.current.get(sid) === ctrl) {
+      abortMapRef.current.delete(sid)
+    }
+    useSessionStore.getState().markSessionDone(sid)
+  }, [])
 
   /** 获取历史消息 */
   const fetchHistory = useCallback(
-    async (sessionId?: string) => {
+    async (sessionId?: string, options?: { force?: boolean }) => {
       const sid = sessionId ?? activeSessionId
       if (!sid) return
-      
+
+      // ── Bug 4 修复 ─────────────────────────────────────────────────────
+      // 如果该会话正在流式生成中，跳过 fetchHistory，避免覆盖正在流式的消息。
+      // 切换走→切换回时常见此问题：fetchHistory 会用 backend 数据替换 messageMap[sid]，
+      // 把还没入库的流式 AI 消息（含已收到的 token）抹掉，导致前端「断流」假象。
+      // 用户主动刷新（如点击重新加载）可传 { force: true } 强制覆盖。
+      if (!options?.force) {
+        const isRunning = useSessionStore.getState().runningSessions[sid]
+        if (isRunning) {
+          // 仍然存在的流仍在写 messageMap[sid]，无需重新拉历史
+          return
+        }
+      }
+
       try {
         const { list } = await conversationApi.getHistory(sid)
         const msgs: Message[] = []
@@ -404,15 +442,17 @@ export function useChat() {
       }
       addMessage(sid, aiMsg)
 
-      const ctrl = new AbortController()
-      abortRef.current = ctrl
+      const ctrl = startStream(sid)
       const startTime = Date.now()
 
       const { onEvent, handleDone, handleError } = driveAiMessage(
-        sid, aiMsgId, updateMessage, updateUsage, startTime, '', []
+        sid, aiMsgId, updateMessage, updateUsage, startTime, '', [],
+        () => finishStream(sid, ctrl),
+        () => finishStream(sid, ctrl),
       )
 
-      await chatStream({
+      try {
+        await chatStream({
           message: content,
           sessionId: sid,
           agentId,
@@ -426,8 +466,11 @@ export function useChat() {
           onDone: handleDone,
           onError: handleError,
         })
+      } finally {
+        finishStream(sid, ctrl)
+      }
     },
-    [activeSessionId, addMessage, updateMessage, updateUsage, updateSessionTitle],
+    [activeSessionId, addMessage, updateMessage, updateUsage, updateSessionTitle, startStream, finishStream],
   )
 
   /** 重新生成（调用后端 /messages/:id/regenerate SSE 接口）*/
@@ -467,26 +510,31 @@ export function useChat() {
       }
       addMessage(sid, placeholder)
 
-      const ctrl = new AbortController()
-      abortRef.current = ctrl
+      const ctrl = startStream(sid)
       const startTime = Date.now()
 
       const thinkingMode = useSessionStore.getState().thinkingMode
 
       const { onEvent, handleDone, handleError } = driveAiMessage(
-        sid, aiMsgId, updateMessage, updateUsage, startTime, '', []
+        sid, aiMsgId, updateMessage, updateUsage, startTime, '', [],
+        () => finishStream(sid, ctrl),
+        () => finishStream(sid, ctrl),
       )
 
-      await regenerateStream({
-        messageId: lastAi.conversationId!,
-        thinkingMode,
-        signal: ctrl.signal,
-        onEvent,
-        onDone: handleDone,
-        onError: handleError,
-      })
+      try {
+        await regenerateStream({
+          messageId: lastAi.conversationId!,
+          thinkingMode,
+          signal: ctrl.signal,
+          onEvent,
+          onDone: handleDone,
+          onError: handleError,
+        })
+      } finally {
+        finishStream(sid, ctrl)
+      }
     },
-    [activeSessionId, addMessage, updateMessage, updateUsage, send],
+    [activeSessionId, addMessage, updateMessage, updateUsage, send, startStream, finishStream],
   )
 
   /** 编辑用户消息并重新生成（调用后端 PUT /messages/:id SSE 接口）*/
@@ -518,26 +566,31 @@ export function useChat() {
       }
       addMessage(sid, placeholder)
 
-      const ctrl = new AbortController()
-      abortRef.current = ctrl
+      const ctrl = startStream(sid)
       const startTime = Date.now()
       const thinkingMode = useSessionStore.getState().thinkingMode
 
       const { onEvent, handleDone, handleError } = driveAiMessage(
-        sid, aiMsgId, updateMessage, updateUsage, startTime, '', []
+        sid, aiMsgId, updateMessage, updateUsage, startTime, '', [],
+        () => finishStream(sid, ctrl),
+        () => finishStream(sid, ctrl),
       )
 
-      await editMessageStream({
-        messageId: msg.conversationId!,
-        content: newContent,
-        thinkingMode,
-        signal: ctrl.signal,
-        onEvent,
-        onDone: handleDone,
-        onError: handleError,
-      })
+      try {
+        await editMessageStream({
+          messageId: msg.conversationId!,
+          content: newContent,
+          thinkingMode,
+          signal: ctrl.signal,
+          onEvent,
+          onDone: handleDone,
+          onError: handleError,
+        })
+      } finally {
+        finishStream(sid, ctrl)
+      }
     },
-    [activeSessionId, addMessage, updateMessage, updateUsage, send],
+    [activeSessionId, addMessage, updateMessage, updateUsage, send, startStream, finishStream],
   )
 
   /** 工具栏交互提交：无需创建新的用户消息，而是直接继续当前会话的流式生成 */
@@ -568,37 +621,95 @@ export function useChat() {
         thinkingSteps: updatedSteps,
       })
 
-      const ctrl = new AbortController()
-      abortRef.current = ctrl
+      const ctrl = startStream(sid)
       const startTime = Date.now() - (aiMsg.durationMs ?? 0)
 
       // 传入之前已累积的 usage，避免 ask_user 恢复后 token 重新从零计算
       const prevUsage = (aiMsg.usage as TokenUsage) ?? null
       const { onEvent, handleDone, handleError } = driveAiMessage(
         sid, msgId, updateMessage, updateUsage, startTime, typeof aiMsg.content === 'string' ? aiMsg.content : '', updatedSteps,
-        undefined, undefined, prevUsage
+        () => finishStream(sid, ctrl),
+        () => finishStream(sid, ctrl),
+        prevUsage
       )
 
-      await chatStream({
-        message: '',
-        sessionId: sid,
-        agentId,
-        maxAskUserCount,
-        thinkingMode,
-        toolResponse: { toolCallId, name: toolName, output },
-        signal: ctrl.signal,
-        onEvent,
-        onDone: handleDone,
-        onError: handleError,
-      })
+      try {
+        await chatStream({
+          message: '',
+          sessionId: sid,
+          agentId,
+          maxAskUserCount,
+          thinkingMode,
+          toolResponse: { toolCallId, name: toolName, output },
+          signal: ctrl.signal,
+          onEvent,
+          onDone: handleDone,
+          onError: handleError,
+        })
+      } finally {
+        finishStream(sid, ctrl)
+      }
     },
-    [activeSessionId, updateMessage, updateUsage]
+    [activeSessionId, updateMessage, updateUsage, startStream, finishStream]
   )
 
-  const cancel = useCallback(() => {
-    abortRef.current?.abort()
-    abortRef.current = null
-  }, [])
+  /**
+   * 取消会话流式生成。
+   * 1. 前端 abort fetch（释放本地连接）
+   * 2. 调用后端 /chat/cancel（兜底，确保后端 agent 立即停）
+   * 3. 标记会话为 done
+   * @param sessionId 不传则取消当前激活的会话
+   */
+  const cancel = useCallback(async (sessionId?: string) => {
+    const sid = sessionId ?? activeSessionId
+    if (!sid) return
+    const ctrl = abortMapRef.current.get(sid)
+    if (ctrl && !ctrl.signal.aborted) {
+      try { ctrl.abort() } catch { /* noop */ }
+    }
+    abortMapRef.current.delete(sid)
+    useSessionStore.getState().markSessionDone(sid)
+    // 兜底：通知后端立即停止（即使前端 fetch 已 abort，后端可能还没感知到）
+    try {
+      await cancelChat(sid)
+    } catch {
+      // 忽略：cancel 仅作兜底，失败不影响前端体验
+    }
+    // 把还在 streaming 的占位 AI 消息标记为已完成
+    const msgs = useSessionStore.getState().messageMap[sid] ?? []
+    const streamingMsg = [...msgs].reverse().find((m) => m.status === 'streaming')
+    if (streamingMsg) {
+      useSessionStore.getState().updateMessage(sid, streamingMsg.id, {
+        status: 'done',
+        content: typeof streamingMsg.content === 'string' && streamingMsg.content
+          ? streamingMsg.content + '\n\n[已停止]'
+          : '[已停止]',
+      })
+    }
+  }, [activeSessionId])
 
-  return { send, regenerate, editAndResend, fetchHistory, cancel, sendToolResponse }
+  /**
+   * 删除消息：先调后端持久化删除，再删前端缓存。
+   * 修复 Bug 5：之前只删前端 store，刷新后从后端拉回历史 → 消息复活。
+   */
+  const deleteMessageAndPersist = useCallback(
+    async (sessionId: string, messageId: string) => {
+      const msgs = useSessionStore.getState().messageMap[sessionId] ?? []
+      const msg = msgs.find((m) => m.id === messageId)
+      // 优先用 backendMessageId（从后端拉历史时填入），其次用 conversationId
+      const backendId = msg?.backendMessageId || msg?.conversationId
+      if (backendId) {
+        try {
+          await messagesApi.delete(backendId)
+        } catch (err) {
+          // 删后端失败时，前端也不应删（避免假象），抛出让上层提示
+          throw err
+        }
+      }
+      useSessionStore.getState().deleteMessage(sessionId, messageId)
+    },
+    [],
+  )
+
+  return { send, regenerate, editAndResend, fetchHistory, cancel, sendToolResponse, deleteMessage: deleteMessageAndPersist }
 }

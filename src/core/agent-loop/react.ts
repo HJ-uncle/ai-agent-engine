@@ -121,6 +121,13 @@ export class ReActStrategy implements LoopStrategy {
     }
 
     for (let iteration = 0; iteration < maxIterations; iteration++) {
+      // ── 每轮迭代开始时检查 abort signal，确保用户中止能及时生效 ──────────────
+      // 之前只在 LLM 调用时检查，导致工具执行/历史压缩等阶段无法被中断。
+      if (ctx.signal?.aborted) {
+        ctx.logger.info({ iteration }, 'Agent loop aborted at iteration boundary')
+        return
+      }
+
       // 1. 先检查是否需要压缩（用 raw token count，不受 window 限制）
       // 对 24/7 Agent，使用更激进的阈值（0.5）以尽早触发压缩
       const compressRatio = parseFloat(process.env.COMPRESS_THRESHOLD_RATIO ?? '0.5')
@@ -315,8 +322,18 @@ export class ReActStrategy implements LoopStrategy {
 
         let toolResult
         try {
+          // 工具执行前再次检查 abort，避免长时间运行的工具浪费资源
+          if (ctx.signal?.aborted) {
+            ctx.logger.info({ toolName: toolCall.name }, 'Aborted before tool execution')
+            return
+          }
           toolResult = await ctx.tools.execute(toolCall.name, toolCall.args, ctx)
         } catch (err) {
+          // 区分主动 abort 与真正的工具错误
+          if ((err as any)?.name === 'AbortError' || ctx.signal?.aborted) {
+            ctx.logger.info({ toolName: toolCall.name }, 'Tool execution aborted')
+            return
+          }
           toolResult = {
             success: false,
             output: `Tool error: ${err instanceof Error ? err.message : 'unknown error'}`,

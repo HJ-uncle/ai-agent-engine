@@ -31,9 +31,64 @@ interface ChatBody {
   ragTopK?: number
 }
 
+// ── 全局会话级 AbortController 注册表 ──────────────────────────────────────────
+// 用于支持前端通过 POST /chat/cancel 主动终止某个会话的流式生成。
+// key = `${tenantId}:${sessionId}`，value = 当前正在运行的 AbortController。
+// 同一会话同时只允许有一个流（新流开始前会先 abort 旧流）。
+const activeChatAborters = new Map<string, AbortController>()
+
+function makeAbortKey(tenantId: string, sessionId: string): string {
+  return `${tenantId}:${sessionId}`
+}
+
+export function registerActiveChat(tenantId: string, sessionId: string, controller: AbortController) {
+  const key = makeAbortKey(tenantId, sessionId)
+  // 如果已有同会话的旧流，先终止它
+  const prev = activeChatAborters.get(key)
+  if (prev && !prev.signal.aborted) {
+    try { prev.abort(new Error('Superseded by a new chat request')) } catch { /* noop */ }
+  }
+  activeChatAborters.set(key, controller)
+}
+
+export function unregisterActiveChat(tenantId: string, sessionId: string, controller: AbortController) {
+  const key = makeAbortKey(tenantId, sessionId)
+  // 仅当注册的还是同一个 controller 时才删除（避免误删后续新流）
+  if (activeChatAborters.get(key) === controller) {
+    activeChatAborters.delete(key)
+  }
+}
+
+export function abortActiveChat(tenantId: string, sessionId: string, reason = 'User cancelled'): boolean {
+  const key = makeAbortKey(tenantId, sessionId)
+  const controller = activeChatAborters.get(key)
+  if (!controller || controller.signal.aborted) return false
+  try { controller.abort(new Error(reason)) } catch { /* noop */ }
+  activeChatAborters.delete(key)
+  return true
+}
+
 export async function chatRoutes(fastify: FastifyInstance) {
   // Initialize agent store
   const agentStore = new SQLiteAgentStore()
+
+  // ── 取消正在运行的会话 ────────────────────────────────────────────────────
+  // POST /chat/cancel  body: { sessionId }
+  // 即使前端 SSE 连接异常未触发 close，前端也可主动调用此接口终止后端运行。
+  fastify.post<{ Body: { sessionId?: string } }>('/chat/cancel', async (request, reply) => {
+    const { sessionId } = request.body ?? {}
+    if (!sessionId) {
+      return reply.code(400).send({ code: 40001, message: 'sessionId is required', data: null, timestamp: Date.now() })
+    }
+    const tenantId = (request as unknown as { authContext?: { tenantId: string } }).authContext?.tenantId ?? 'default'
+    const cancelled = abortActiveChat(tenantId, sessionId, 'Cancelled by user via /chat/cancel')
+    return reply.code(200).send({
+      code: 200,
+      message: cancelled ? 'OK' : 'No active chat for this session',
+      data: { sessionId, cancelled },
+      timestamp: Date.now(),
+    })
+  })
 
   fastify.post<{ Body: ChatBody }>('/chat', async (request, reply) => {
     const requestId = uuidv4()
@@ -97,12 +152,22 @@ export async function chatRoutes(fastify: FastifyInstance) {
     const { registry, memory, externalSkills, toolCategories } = await createToolRegistry({ allowedSkills, allowedTools })
 
     const abortController = new AbortController()
-    request.raw.on('close', () => {
-      if (request.raw.destroyed) {
-        reqLogger.info({ sessionId }, 'Client disconnected, aborting agent execution')
-        abortController.abort(new Error('Client disconnected'))
-      }
-    })
+    // 注册到全局表，使 POST /chat/cancel 能找到并终止
+    registerActiveChat(tenantId, sessionId, abortController)
+
+    // ── 客户端断开检测：去掉 destroyed 守卫，close 事件触发即视为断开 ───────
+    // 之前的 `if (request.raw.destroyed)` 守卫导致部分场景（如 fetch.abort()）
+    // 不会触发 abort，后端继续跑导致用户 token 浪费。
+    let aborted = false
+    const onClientClose = () => {
+      if (aborted) return
+      aborted = true
+      reqLogger.info({ sessionId }, 'Client connection closed, aborting agent execution')
+      try { abortController.abort(new Error('Client disconnected')) } catch { /* noop */ }
+      unregisterActiveChat(tenantId, sessionId, abortController)
+    }
+    request.raw.on('close', onClientClose)
+    request.raw.on('aborted', onClientClose)
 
     // Build agent context
     const ctx = createAgentContext({
@@ -392,7 +457,12 @@ ${workspaceInfo}
 
     reqLogger.info({ message: typeof message === 'string' ? message.slice(0, 100) : 'Multimodal message', agentId }, 'Chat request received')
 
-    await sseStream(runAgent(), reply)
+    try {
+      await sseStream(runAgent(), reply)
+    } finally {
+      // 流结束（正常完成 / 出错 / abort）都要从注册表清理
+      unregisterActiveChat(tenantId, sessionId, abortController)
+    }
     return reply
   })
 }

@@ -226,6 +226,26 @@ export async function chatStream(options: ChatOptions): Promise<void> {
   }
 }
 
+/**
+ * 主动通知后端取消会话当前正在运行的流式生成。
+ * 即使前端已经 abort 了 fetch，调用此接口可作为兜底，确保后端 agent 循环立即停止。
+ * @returns 是否成功取消（false 表示后端没有该会话的运行中流）
+ */
+export async function cancelChat(sessionId: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_PREFIX}/chat/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId }),
+    })
+    if (!res.ok) return false
+    const json = await res.json()
+    return Boolean(json?.data?.cancelled)
+  } catch {
+    return false
+  }
+}
+
 // ── SSE-driven edit & regenerate (call backend API) ──────────────────────────
 export interface RegenerateOptions {
   messageId: string

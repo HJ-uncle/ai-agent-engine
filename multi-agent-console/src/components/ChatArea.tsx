@@ -61,7 +61,19 @@ function InteractiveCard({
   onReply: (msg: string) => void;
   disabled?: boolean;
 }) {
-  const { question, options, multiSelect } = data;
+  const { question, multiSelect } = data;
+  // 安全解析 options：可能是 JSON 字符串，也可能直接是数组
+  let options: any[] = [];
+  try {
+    if (Array.isArray(data.options)) {
+      options = data.options;
+    } else if (typeof data.options === "string") {
+      const parsed = JSON.parse(data.options);
+      options = Array.isArray(parsed) ? parsed : [];
+    }
+  } catch {
+    options = [];
+  }
   const [selected, setSelected] = useState<string[]>([]);
   const [otherText, setOtherText] = useState("");
   const [isOther, setIsOther] = useState(false);
@@ -1028,6 +1040,7 @@ function MessageItem({
   onRegenerate,
   onEdit,
   onToolReply,
+  onDelete,
 }: {
   msg: Message;
   isLast?: boolean;
@@ -1039,6 +1052,7 @@ function MessageItem({
     toolName: string,
     content: string,
   ) => void;
+  onDelete?: (messageId: string) => void | Promise<void>;
 }) {
   const {
     activeSessionId,
@@ -1370,7 +1384,20 @@ function MessageItem({
               )}
               <Popconfirm
                 title="删除这条消息？"
-                onConfirm={() => deleteMessage(activeSessionId, msg.id)}
+                onConfirm={async () => {
+                  // 优先使用从父组件注入的 onDelete（会同时持久化到后端 DB），
+                  // 否则降级到只删前端 store（仅在缺失 prop 时兜底，避免 UI 卡死）。
+                  if (onDelete) {
+                    try {
+                      await onDelete(msg.id)
+                    } catch (err: any) {
+                      message.error(`删除失败：${err?.message ?? '未知错误'}`)
+                      return
+                    }
+                  } else {
+                    deleteMessage(activeSessionId, msg.id)
+                  }
+                }}
                 okText="删除"
                 cancelText="取消"
                 okButtonProps={{ danger: true }}
@@ -1415,6 +1442,7 @@ export default function ChatArea() {
     fetchHistory,
     cancel,
     sendToolResponse,
+    deleteMessage: deleteMessageWithBackend,
   } = useChat();
 
   const [supportedModels, setSupportedModels] = useState<string[]>([]);
@@ -1451,7 +1479,11 @@ export default function ChatArea() {
   const [inputValue, setInputValue] = useState("");
   const [attachments, setAttachments] = useState<File[]>([]);
   const [showTodoPanel, setShowTodoPanel] = useState(false);
-  const [isStreaming, setIsStreaming] = useState(false);
+  // ── isStreaming 改为派生自全局 runningSessions ─────────────────────────────
+  // 之前是局部 state，会话切换后状态错乱（A 流式中切到 B，B 显示 streaming）。
+  // 现在以 store 中的 runningSessions[activeSessionId] 为准，跨会话切换始终准确。
+  const runningSessions = useSessionStore((s) => s.runningSessions);
+  const isStreaming = Boolean(runningSessions[activeSessionId]);
   const [isCompressing, setIsCompressing] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1693,7 +1725,7 @@ export default function ChatArea() {
       setInputValue("");
       const currentAttachments = [...attachments];
       setAttachments([]);
-      setIsStreaming(true);
+      // isStreaming 由 useChat hook 内部通过 markSessionRunning 自动管理
       atBottomRef.current = true;
       scrollToBottom();
 
@@ -1763,7 +1795,6 @@ export default function ChatArea() {
 
         await send(finalContent, activeSessionId, attachmentData);
       } finally {
-        setIsStreaming(false);
         setTimeout(() => scrollToBottom(true), 100);
       }
     },
@@ -1774,13 +1805,11 @@ export default function ChatArea() {
   const handleRegenerate = useCallback(() => {
     if (isStreaming || !debounceCheck()) return;
     logOperation('regenerate', { action: 'start' });
-    setIsStreaming(true);
     atBottomRef.current = true;
     regenerate(activeSessionId)
       .then(() => logOperation('regenerate', { action: 'done' }))
       .catch((err) => logOperation('regenerate', { action: 'error', error: err.message }))
       .finally(() => {
-        setIsStreaming(false);
         setTimeout(() => scrollToBottom(true), 100);
       });
   }, [activeSessionId, isStreaming, regenerate, scrollToBottom, debounceCheck, logOperation]);
@@ -1789,13 +1818,11 @@ export default function ChatArea() {
     (msgId: string, newContent: string) => {
       if (isStreaming || !debounceCheck()) return;
       logOperation('editAndResend', { action: 'start', msgId });
-      setIsStreaming(true);
       atBottomRef.current = true;
       editAndResend(msgId, newContent, activeSessionId)
         .then(() => logOperation('editAndResend', { action: 'done', msgId }))
         .catch((err) => logOperation('editAndResend', { action: 'error', msgId, error: err.message }))
         .finally(() => {
-          setIsStreaming(false);
           setTimeout(() => scrollToBottom(true), 100);
         });
     },
@@ -1809,7 +1836,6 @@ export default function ChatArea() {
       toolName: string,
       content: string,
     ) => {
-      setIsStreaming(true);
       atBottomRef.current = true;
       scrollToBottom();
       try {
@@ -1821,7 +1847,6 @@ export default function ChatArea() {
           activeSessionId,
         );
       } finally {
-        setIsStreaming(false);
         setTimeout(() => scrollToBottom(true), 100);
       }
     },
@@ -2047,6 +2072,7 @@ export default function ChatArea() {
                     : undefined
                 }
                 onToolReply={handleToolReply}
+                onDelete={(messageId) => deleteMessageWithBackend(activeSessionId, messageId)}
               />
             ))}
             <div ref={messagesEndRef} style={{ height: 1, clear: "both" }} />
@@ -2258,7 +2284,7 @@ export default function ChatArea() {
                       ></div>
                     }
                     className={styles.sendBtn}
-                    onClick={cancel}
+                    onClick={() => { cancel() }}
                   />
                 </Tooltip>
               ) : (

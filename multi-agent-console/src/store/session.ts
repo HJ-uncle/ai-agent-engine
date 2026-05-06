@@ -12,6 +12,15 @@ interface SessionState {
   messageMap: Record<string, Message[]>
   usageMap: Record<string, TokenUsage | null>
 
+  /**
+   * 当前正在流式生成中的会话 ID 集合（不持久化）。
+   * 用于：
+   *  - 切换会话回到运行中会话时，跳过 fetchHistory 避免覆盖流式消息
+   *  - UI 显示「会话运行中」状态指示
+   *  - 避免重复 send 同一会话
+   */
+  runningSessions: Record<string, boolean>
+
   // UI State
   isSettingsOpen: boolean
   settingsTab: string
@@ -39,6 +48,13 @@ interface SessionState {
   clearMessages: (sessionId: string) => void
 
   updateUsage: (sessionId: string, usage: TokenUsage) => void
+
+  /** 标记会话进入流式运行状态（开始 chat 前调用） */
+  markSessionRunning: (sessionId: string) => void
+  /** 标记会话结束流式运行（流完成/错误/cancel 时调用） */
+  markSessionDone: (sessionId: string) => void
+  /** 查询会话是否正在流式运行 */
+  isSessionRunning: (sessionId: string) => boolean
 
   openSettings: (tab?: string) => void
   closeSettings: () => void
@@ -85,6 +101,7 @@ export const useSessionStore = create<SessionState>()(
       lastTodosUpdate: 0,
       messageMap: { [initial.id]: [] },
       usageMap: { [initial.id]: null },
+      runningSessions: {},
       isSettingsOpen: false,
       settingsTab: 'general',
       maxAskUserCount: 5,
@@ -266,6 +283,25 @@ export const useSessionStore = create<SessionState>()(
 
       openSettings: (tab = 'general') => set({ isSettingsOpen: true, settingsTab: tab }),
       closeSettings: () => set({ isSettingsOpen: false }),
+
+      // ── 流式运行状态管理 ──────────────────────────────────────────────────
+      markSessionRunning: (sessionId) =>
+        set((state) => ({
+          runningSessions: { ...state.runningSessions, [sessionId]: true },
+        })),
+      markSessionDone: (sessionId) =>
+        set((state) => {
+          if (!state.runningSessions[sessionId]) return state
+          const next = { ...state.runningSessions }
+          delete next[sessionId]
+          return { runningSessions: next }
+        }),
+      isSessionRunning: (sessionId: string): boolean => {
+        // 通过 get() 或外部 getState 访问可能在 zustand 类型推断中出现循环引用，
+        // 这里直接通过模块顶层的 useSessionStore.getState() 访问
+        // 注意：useSessionStore 在文件末尾导出，此处函数仅在调用时执行，不会立即解析
+        return Boolean((useSessionStore as any).getState().runningSessions[sessionId])
+      },
     }),
     {
       name: 'mac-session-store',
@@ -276,6 +312,7 @@ export const useSessionStore = create<SessionState>()(
         usageMap: state.usageMap,
         maxAskUserCount: state.maxAskUserCount,
         thinkingMode: state.thinkingMode,
+        // 注意：runningSessions 不持久化（页面刷新后所有运行视为终止）
       }),
     },
   ),
