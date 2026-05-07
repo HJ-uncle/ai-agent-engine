@@ -389,7 +389,7 @@ function stripToolCallBlocks(content: string): string {
 }
 
 export class OpenAIAdapter implements LLMAdapter {
-  readonly provider = 'openai'
+  readonly provider: string = 'openai'
   readonly supportsVision: boolean
   private client: OpenAI
 
@@ -421,11 +421,27 @@ export class OpenAIAdapter implements LLMAdapter {
       oaiMessages.unshift({ role: 'system', content: options.systemPrompt })
     }
 
+    // ── DeepSeek Chat Prefix Completion (β) ────────────────────────────────
+    // 在最后一条 assistant 上加 prefix:true，引导模型从指定文本开始续写
+    if (options?.prefix) {
+      oaiMessages.push({
+        role: 'assistant',
+        content: options.prefix,
+        // @ts-expect-error DeepSeek 私有字段
+        prefix: true,
+      })
+    }
+
     const params: any = {
       model: options?.model ?? this.model,
       messages: oaiMessages,
       max_tokens: options?.maxTokens,
       temperature: options?.temperature,
+    }
+
+    // ── DeepSeek JSON Mode（OpenAI 也兼容此协议） ──────────────────────────
+    if (options?.responseFormat === 'json') {
+      params.response_format = { type: 'json_object' }
     }
 
     if (options?.thinkingConfig) {
@@ -473,6 +489,22 @@ export class OpenAIAdapter implements LLMAdapter {
     const promptTokensFromCache = (usage as any)?.prompt_tokens_details?.cached_tokens ?? 0
     const promptTokens = (usage?.prompt_tokens ?? 0) + promptTokensFromCache
 
+    // ── DeepSeek 专有 usage 字段（其他 provider 自动为 undefined）──────────
+    // 1. KV Cache 命中：prompt_cache_hit_tokens / prompt_cache_miss_tokens (旧)
+    //    或 prompt_tokens_details.cached_tokens (新, V4)
+    // 2. R1/V3 thinking：completion_tokens_details.reasoning_tokens
+    const cacheHitTokens =
+      (usage as any)?.prompt_cache_hit_tokens ??
+      (usage as any)?.prompt_tokens_details?.cached_tokens ??
+      undefined
+    const cacheMissTokens =
+      (usage as any)?.prompt_cache_miss_tokens ??
+      (cacheHitTokens != null
+        ? Math.max(0, (usage?.prompt_tokens ?? 0) - 0)  // miss = prompt_tokens (因为 prompt_tokens 默认就是未命中部分)
+        : undefined)
+    const reasoningTokens =
+      (usage as any)?.completion_tokens_details?.reasoning_tokens ?? undefined
+
     return {
       content: cleanContent,
       reasoningContent,
@@ -482,6 +514,9 @@ export class OpenAIAdapter implements LLMAdapter {
       finishReason: (choice.finish_reason === 'tool_calls' || (toolCalls && toolCalls.length > 0)
         ? 'tool_calls'
         : choice.finish_reason === 'length' ? 'length' : 'stop'),
+      ...(cacheHitTokens != null ? { cacheHitTokens } : {}),
+      ...(cacheMissTokens != null ? { cacheMissTokens } : {}),
+      ...(reasoningTokens != null ? { reasoningTokens } : {}),
     }
   }
 
@@ -491,12 +526,33 @@ export class OpenAIAdapter implements LLMAdapter {
       oaiMessages.unshift({ role: 'system', content: options.systemPrompt })
     }
 
+    // ── DeepSeek Chat Prefix Completion (β) ────────────────────────────────
+    if (options?.prefix) {
+      oaiMessages.push({
+        role: 'assistant',
+        content: options.prefix,
+        // @ts-expect-error DeepSeek 私有字段
+        prefix: true,
+      })
+    }
+
     const params: any = {
       model: options?.model ?? this.model,
       messages: oaiMessages,
       stream: true,
       max_tokens: options?.maxTokens,
       temperature: options?.temperature,
+    }
+
+    // 默认开启 stream_options.include_usage（DeepSeek/OpenAI 均支持，
+    // 否则流式调用拿不到 usage / cached_tokens / reasoning_tokens）
+    if (options?.includeStreamUsage !== false) {
+      params.stream_options = { include_usage: true }
+    }
+
+    // DeepSeek JSON Mode
+    if (options?.responseFormat === 'json') {
+      params.response_format = { type: 'json_object' }
     }
 
     if (options?.thinkingConfig) {
@@ -534,10 +590,23 @@ export class OpenAIAdapter implements LLMAdapter {
     const finalPromptTokensFromCache = (finalUsage as any)?.prompt_tokens_details?.cached_tokens ?? 0
     const finalPromptTokens = (finalUsage?.prompt_tokens ?? 0) + finalPromptTokensFromCache
 
+    // ── DeepSeek 私有 usage 字段透传 ───────────────────────────────────────
+    const cacheHitTokens =
+      (finalUsage as any)?.prompt_cache_hit_tokens ??
+      (finalUsage as any)?.prompt_tokens_details?.cached_tokens ??
+      undefined
+    const cacheMissTokens =
+      (finalUsage as any)?.prompt_cache_miss_tokens ?? undefined
+    const reasoningTokens =
+      (finalUsage as any)?.completion_tokens_details?.reasoning_tokens ?? undefined
+
     yield {
       done: true,
       promptTokens: finalPromptTokens,
       completionTokens: finalUsage?.completion_tokens ?? 0,
+      ...(cacheHitTokens != null ? { cacheHitTokens } : {}),
+      ...(cacheMissTokens != null ? { cacheMissTokens } : {}),
+      ...(reasoningTokens != null ? { reasoningTokens } : {}),
     }
   }
 

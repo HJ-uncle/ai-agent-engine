@@ -18,7 +18,7 @@ import OldExplorerPanel from './components/ExplorerPanel'
 import NewExplorerPanel from './components/explorer'
 import SettingsModal from './components/SettingsModal'
 import { useSessionStore } from './store/session'
-import { conversationApi, toolsApi, memoryApi, todoApi } from './api'
+import { conversationApi, toolsApi, memoryApi, todoApi, deepseekApi } from './api'
 import type { Tool, MemoryEntry } from './types'
 import type { Todo } from './api'
 import styles from './App.module.css'
@@ -610,6 +610,22 @@ export default function App() {
           return { sessions: merged, messageMap: msgMap, usageMap }
         })
       } catch { /* offline */ }
+    })()
+  }, [])
+
+  // ── 启动时拉取 DeepSeek 有效价格（供 ChatArea 成本估算使用） ─────────────
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const data = await deepseekApi.getPrices()
+        if (data?.models) {
+          const priceMap: Record<string, any> = {}
+          for (const m of data.models) {
+            if (m.effectivePrice) priceMap[m.modelId] = m.effectivePrice
+          }
+          useSessionStore.getState().setDeepSeekPrices(priceMap)
+        }
+      } catch { /* DeepSeek 未配置，忽略 */ }
     })()
   }, [])
 

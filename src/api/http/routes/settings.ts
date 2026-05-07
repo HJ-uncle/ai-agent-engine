@@ -23,6 +23,14 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       OPENAI_BASE_URL:   getStr('OPENAI_BASE_URL',    'https://api.deepseek.com'),
       ANTHROPIC_API_KEY: getStr('ANTHROPIC_API_KEY',  ''),
       OLLAMA_BASE_URL:   getStr('OLLAMA_BASE_URL',    'http://localhost:11434'),
+      // ── DeepSeek 专有通道 ────────────────────────────────────────────────
+      DEEPSEEK_API_KEY:               getStr('DEEPSEEK_API_KEY',     ''),
+      DEEPSEEK_BASE_URL:              getStr('DEEPSEEK_BASE_URL',    'https://api.deepseek.com'),
+      DEEPSEEK_AUTO_THINKING:         getStr('DEEPSEEK_AUTO_THINKING', 'true') !== 'false',
+      DEEPSEEK_THINKING_EFFORT:       getStr('DEEPSEEK_THINKING_EFFORT', 'medium'),
+      DEEPSEEK_DEFAULT_JSON_MODE:     getStr('DEEPSEEK_DEFAULT_JSON_MODE', 'false') === 'true',
+      DEEPSEEK_INCLUDE_STREAM_USAGE:  getStr('DEEPSEEK_INCLUDE_STREAM_USAGE', 'true') !== 'false',
+      DEEPSEEK_LOG_CACHE_HITS:        getStr('DEEPSEEK_LOG_CACHE_HITS', 'true') !== 'false',
       // ── Agent ────────────────────────────────────────────────────────────
       MAX_ITERATIONS:          parseInt(getStr('MAX_ITERATIONS',          '50'),      10),
       TOKEN_BUDGET:            parseInt(getStr('TOKEN_BUDGET',            '80000'),   10),

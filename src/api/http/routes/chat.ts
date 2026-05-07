@@ -262,19 +262,46 @@ export async function chatRoutes(fastify: FastifyInstance) {
       /qwen|qwq/i.test(currentModelName) ||
       /qwen|qwq/i.test(effectiveBaseUrl)
 
+    // ── DeepSeek 通道自动检测：模型名/baseUrl 命中 deepseek 时自动启用 ────
+    // 用户无感知：只要选中的模型是 deepseek 的就走专有通道，
+    // factory.createLLMAdapterWithDbConfig 会根据 modelProvider/model 自动路由
+    const isDeepSeekModel =
+      /deepseek/i.test(currentModelName) || /deepseek/i.test(effectiveBaseUrl)
+    if (isDeepSeekModel && !modelProvider) {
+      modelProvider = 'deepseek'
+      reqLogger.info(
+        { model: currentModelName, baseUrl: effectiveBaseUrl },
+        'DeepSeek 模型检测到，自动切换到 DeepSeek 专有通道（启用 KV Cache / 思考模式 / 流式 usage 等）',
+      )
+    }
+    // DeepSeek reasoner / R1 / V3-thinking / V4-Pro 自动启用思考模式
+    const isDeepSeekReasoner =
+      isDeepSeekModel &&
+      (/reasoner|r1|v4-pro/i.test(currentModelName) || /v3.*think/i.test(currentModelName))
+
     if (thinkingMode) {
       if (isQwenModel) {
         // Qwen 系列使用专用 thinking 参数
         finalThinkingConfig = { enable_thinking: true }
         finalResponseThinkingField = 'reasoning_content'
         reqLogger.info({ model: currentModelName, baseUrl: effectiveBaseUrl }, 'Qwen model detected, using enable_thinking API')
+      } else if (isDeepSeekModel) {
+        // DeepSeek 系列：thinking-mode 直接通过 reasoning_effort 控制
+        finalThinkingConfig = { reasoning_effort: 'high' }
+        finalResponseThinkingField = 'reasoning_content'
+        reqLogger.info({ model: currentModelName }, 'DeepSeek 模型启用思考模式 (reasoning_effort=high)')
       } else if (whitelistInfo && whitelistInfo.thinkingMode) {
         finalThinkingConfig = whitelistInfo.thinkingConfig
         finalResponseThinkingField = whitelistInfo.responseThinkingField
         reqLogger.info({ model: currentModelName, thinkingConfig: finalThinkingConfig }, 'Thinking mode enabled via whitelist')
       } else {
-        reqLogger.warn({ model: currentModelName }, 'Thinking mode requested but model not found in whitelist and not Qwen, thinking disabled')
+        reqLogger.warn({ model: currentModelName }, 'Thinking mode requested but model not found in whitelist and not Qwen/DeepSeek, thinking disabled')
       }
+    } else if (isDeepSeekReasoner) {
+      // 用户没显式开 thinkingMode，但模型本身就是推理模型 → 自动开启
+      finalThinkingConfig = { reasoning_effort: 'medium' }
+      finalResponseThinkingField = 'reasoning_content'
+      reqLogger.info({ model: currentModelName }, 'DeepSeek reasoner 模型，自动启用 thinking-mode (reasoning_effort=medium)')
     }
 
     // 注入工作区路径信息，让 AI 知道所有绑定的工作区
@@ -451,7 +478,13 @@ ${workspaceInfo}
         })
       } catch (err: any) {
         reqLogger.error({ err, agentId }, 'Agent execution error')
-        yield `\n\n[System Error: ${err.message || String(err)}]`
+        // DeepSeek 特有错误：附加 errorType 以便前端分级处理
+        const dsErrorType: string | null =
+          err?.constructor?.name?.startsWith('DeepSeek') ? err.constructor.name : null
+        const errPayload = dsErrorType
+          ? JSON.stringify({ errorType: dsErrorType, message: err.message, rechargeUrl: err.rechargeUrl })
+          : null
+        yield `\n\n[System Error: ${err.message || String(err)}]${errPayload ? `\n__DS_ERR__${errPayload}` : ''}`
       }
     }
 

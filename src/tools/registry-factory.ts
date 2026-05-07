@@ -24,7 +24,6 @@ import { httpRequestTool } from './http-request/index.js'
 import { getCurrentContextTool } from './get-context/index.js'
 import { installPackageTool, listPackagesTool } from './install-package/install-package-tool.js'
 import { agentTools } from './agent/index.js'
-import { listSystemToolsTool } from './list-system-tools/index.js'
 import { lspDiagnoseTool } from './lsp/index.js'
 import type { ExternalSkill } from '../skills/external-loader.js'
 
@@ -164,10 +163,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   // 16. MCP 工具（动态加载）- 按名称过滤
   const mcpTools = await registerMCPTools(registry, opts.allowedTools ? (name: string) => opts.allowedTools!.includes(name) : undefined)
 
-  // 17. 查询系统工具列表 - 始终注册，meta 工具
-//   registerBuiltin(listSystemToolsTool)
-
-  // 18. Agent 系统工具 - 按 allowedTools 过滤
+  // 17. Agent 系统工具 - 按 allowedTools 过滤
   if (shouldRegister('agent_list')) agentTools.filter(t => t.name === 'agent_list').forEach((t) => registerBuiltin(t))
   if (shouldRegister('agent_get')) agentTools.filter(t => t.name === 'agent_get').forEach((t) => registerBuiltin(t))
   if (shouldRegister('agent_create')) agentTools.filter(t => t.name === 'agent_create').forEach((t) => registerBuiltin(t))
@@ -177,7 +173,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   if (shouldRegister('agent_delete')) agentTools.filter(t => t.name === 'agent_delete').forEach((t) => registerBuiltin(t))
   if (shouldRegister('agent_do_delete')) agentTools.filter(t => t.name === 'agent_do_delete').forEach((t) => registerBuiltin(t))
 
-  // 19. 代码诊断工具（LSP：tsc + eslint），用于 AI 自动检查/修复代码
+  // 18. 代码诊断工具（LSP：tsc + eslint），用于 AI 自动检查/修复代码
   if (shouldRegister('code_diagnose')) registerBuiltin(lspDiagnoseTool)
 
   const toolCategories: ToolCategories = { builtinTools, mcpTools, skillTools }

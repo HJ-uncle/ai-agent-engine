@@ -16,7 +16,7 @@ export default function ModelSettings() {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingModel, setEditingModel] = useState<any | null>(null)
 
-  const LLM_KEYS = ['LLM_PROVIDER', 'LLM_PRIMARY_MODEL', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'ANTHROPIC_API_KEY', 'OLLAMA_BASE_URL']
+  const LLM_KEYS = ['LLM_PROVIDER', 'LLM_PRIMARY_MODEL', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'ANTHROPIC_API_KEY', 'OLLAMA_BASE_URL', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL']
 
   const loadModels = async () => {
     setLoadingModels(true)
@@ -198,6 +198,45 @@ export default function ModelSettings() {
           </div>
         </div>
       )}
+
+      {/* ── DeepSeek 专属 API ── */}
+      <div className={styles.section}>
+        <div className={styles.sectionTitle}>🐋 DeepSeek 专属配置</div>
+        <div className={styles.card}>
+          <div className={styles.settingItem}>
+            <div className={styles.itemInfo}>
+              <div className={styles.itemTitle}>API Base URL</div>
+              <div className={styles.itemDescription}>
+                DeepSeek 接口地址 (DEEPSEEK_BASE_URL)，留空或默认时使用 https://api.deepseek.com
+              </div>
+            </div>
+            <div className={styles.itemControls}>
+              <Input
+                value={settings.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com'}
+                onChange={(e) => handleChange('DEEPSEEK_BASE_URL', e.target.value)}
+                style={inputStyle}
+              />
+            </div>
+          </div>
+          <div className={styles.settingItem}>
+            <div className={styles.itemInfo}>
+              <div className={styles.itemTitle}>API Key</div>
+              <div className={styles.itemDescription}>
+                DeepSeek 专属密钥 (DEEPSEEK_API_KEY)；留空时自动复用上方 OPENAI_API_KEY
+              </div>
+            </div>
+            <div className={styles.itemControls}>
+              <Input.Password
+                value={settings.DEEPSEEK_API_KEY ?? ''}
+                onChange={(e) => handleChange('DEEPSEEK_API_KEY', e.target.value)}
+                placeholder="留空则复用 OPENAI_API_KEY"
+                style={inputStyle}
+                autoComplete="new-password"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
 
       <div style={{ marginTop: 20, textAlign: 'right', paddingRight: 4 }}>
         <Button type="primary" onClick={() => saveKeys(LLM_KEYS, '模型设置已保存')} loading={saving}>保存设置</Button>

@@ -1,10 +1,46 @@
 import { useCallback, useRef } from 'react'
+import { message as antMessage } from 'antd'
 import { chatStream, regenerateStream, editMessageStream, conversationApi, cancelChat, messagesApi } from '../api'
 import { useSessionStore } from '../store/session'
 import type { Message, ThinkingStep, TokenUsage } from '../types'
 
 function genId() {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
+}
+
+/** 解析 content 中的 DeepSeek 错误标记并弹出分级提示 */
+function handleDeepSeekErrorInContent(content: string): string {
+  const DS_ERR_MARKER = '__DS_ERR__'
+  const idx = content.indexOf(DS_ERR_MARKER)
+  if (idx === -1) return content
+
+  try {
+    const jsonStr = content.slice(idx + DS_ERR_MARKER.length)
+    const err = JSON.parse(jsonStr)
+    const rechargeUrl = err.rechargeUrl ?? 'https://platform.deepseek.com/top_up'
+    switch (err.errorType) {
+      case 'DeepSeekInsufficientBalanceError':
+        antMessage.error({
+          content: `🐋 DeepSeek 余额不足 — ${err.message}。点击充值: ${rechargeUrl}`,
+          duration: 8,
+        })
+        break
+      case 'DeepSeekRateLimitError':
+        antMessage.warning('🐋 DeepSeek 请求过于频繁，请稍后重试')
+        break
+      case 'DeepSeekServiceUnavailableError':
+        antMessage.error('🐋 DeepSeek 服务暂时不可用，请稍后重试')
+        break
+      case 'DeepSeekInvalidParamError':
+        antMessage.error(`🐋 DeepSeek 参数错误：${err.message}`)
+        break
+      default:
+        break
+    }
+  } catch { /* 解析失败不影响主流程 */ }
+
+  // 从内容中移除 __DS_ERR__ 标记及其 JSON，保留 [System Error: ...] 部分
+  return content.slice(0, idx).trimEnd()
 }
 
 /** 从 SSE 事件流中驱动一条 AI 消息 */
@@ -83,6 +119,10 @@ function driveAiMessage(
             builtinToolsTokens: (accumulatedUsage.builtinToolsTokens ?? 0) + (u.builtinToolsTokens ?? 0),
             mcpToolsTokens: (accumulatedUsage.mcpToolsTokens ?? 0) + (u.mcpToolsTokens ?? 0),
             toolResultsTokens: (accumulatedUsage.toolResultsTokens ?? 0) + (u.toolResultsTokens ?? 0),
+            // ── DeepSeek 专有累加 ─────────────────────────────────────
+            cacheHitTokens: (accumulatedUsage.cacheHitTokens ?? 0) + (u.cacheHitTokens ?? 0),
+            cacheMissTokens: (accumulatedUsage.cacheMissTokens ?? 0) + (u.cacheMissTokens ?? 0),
+            reasoningTokens: (accumulatedUsage.reasoningTokens ?? 0) + (u.reasoningTokens ?? 0),
           }
         }
         updateMessage(sid, aiMsgId, {
@@ -103,6 +143,10 @@ function driveAiMessage(
           builtinToolsTokens: (accumulatedUsage.builtinToolsTokens ?? 0) - (lastReportedUsage?.builtinToolsTokens ?? 0),
           mcpToolsTokens: (accumulatedUsage.mcpToolsTokens ?? 0) - (lastReportedUsage?.mcpToolsTokens ?? 0),
           toolResultsTokens: (accumulatedUsage.toolResultsTokens ?? 0) - (lastReportedUsage?.toolResultsTokens ?? 0),
+          // ── DeepSeek 专有 delta ──────────────────────────────────────
+          cacheHitTokens: (accumulatedUsage.cacheHitTokens ?? 0) - (lastReportedUsage?.cacheHitTokens ?? 0),
+          cacheMissTokens: (accumulatedUsage.cacheMissTokens ?? 0) - (lastReportedUsage?.cacheMissTokens ?? 0),
+          reasoningTokens: (accumulatedUsage.reasoningTokens ?? 0) - (lastReportedUsage?.reasoningTokens ?? 0),
         }
         lastReportedUsage = { ...accumulatedUsage }
         updateUsage(sid, delta)
@@ -131,9 +175,11 @@ function driveAiMessage(
 
   const handleDone = () => {
     const durationMs = Date.now() - startTime
+    // 检查是否包含 DeepSeek 特有错误标记，触发分级提示
+    const cleanedContent = handleDeepSeekErrorInContent(finalContent)
     updateMessage(sid, aiMsgId, {
       status: 'done',
-      content: finalContent,
+      content: cleanedContent,
       thinkingSteps: [...thinkingSteps],
       durationMs,
       // 保留已累积的 usage
@@ -241,6 +287,10 @@ export function useChat() {
             currentRoundUsage.builtinToolsTokens = (currentRoundUsage.builtinToolsTokens ?? 0) + (usage.builtinToolsTokens ?? 0)
             currentRoundUsage.mcpToolsTokens = (currentRoundUsage.mcpToolsTokens ?? 0) + (usage.mcpToolsTokens ?? 0)
             currentRoundUsage.toolResultsTokens = (currentRoundUsage.toolResultsTokens ?? 0) + (usage.toolResultsTokens ?? 0)
+            // ── DeepSeek 专有：KV Cache 命中 / Reasoning ──────────────
+            currentRoundUsage.cacheHitTokens = (currentRoundUsage.cacheHitTokens ?? 0) + (usage.cacheHitTokens ?? 0)
+            currentRoundUsage.cacheMissTokens = (currentRoundUsage.cacheMissTokens ?? 0) + (usage.cacheMissTokens ?? 0)
+            currentRoundUsage.reasoningTokens = (currentRoundUsage.reasoningTokens ?? 0) + (usage.reasoningTokens ?? 0)
           }
         }
 
@@ -359,6 +409,10 @@ export function useChat() {
           builtinToolsTokens: 0,
           mcpToolsTokens: 0,
           toolResultsTokens: 0,
+          // ── DeepSeek 专有 ─────────────────────────────────────────
+          cacheHitTokens: 0,
+          cacheMissTokens: 0,
+          reasoningTokens: 0,
         }
         
         // Sum usage from the raw backend list so we include intermediate tool calls
@@ -375,6 +429,9 @@ export function useChat() {
             totalUsage.builtinToolsTokens! += m.usage.builtinToolsTokens || 0
             totalUsage.mcpToolsTokens! += m.usage.mcpToolsTokens || 0
             totalUsage.toolResultsTokens! += m.usage.toolResultsTokens || 0
+            totalUsage.cacheHitTokens! += m.usage.cacheHitTokens || 0
+            totalUsage.cacheMissTokens! += m.usage.cacheMissTokens || 0
+            totalUsage.reasoningTokens! += m.usage.reasoningTokens || 0
           }
           if (m.role === 'system') {
             msgs.push({

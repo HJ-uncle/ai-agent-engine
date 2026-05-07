@@ -11,6 +11,13 @@ export interface LLMResponse {
   promptTokens: number
   completionTokens: number
   finishReason: 'stop' | 'tool_calls' | 'length' | 'error'
+  // ── DeepSeek 专有：上下文硬盘缓存 (KV Cache) 与推理模式 ─────────────
+  /** DeepSeek 命中上下文缓存的 token 数（计费 0.1元/百万，原价 1/10） */
+  cacheHitTokens?: number
+  /** DeepSeek 未命中缓存的 token 数（按正常输入价计费） */
+  cacheMissTokens?: number
+  /** R1/V3 thinking 模式下 reasoning_content 实际产生的推理 token 数 */
+  reasoningTokens?: number
 }
 
 export interface LLMStreamChunk {
@@ -24,6 +31,9 @@ export interface LLMStreamChunk {
   done: boolean
   promptTokens?: number
   completionTokens?: number
+  cacheHitTokens?: number
+  cacheMissTokens?: number
+  reasoningTokens?: number
 }
 
 export interface LLMAdapterOptions {
@@ -35,6 +45,13 @@ export interface LLMAdapterOptions {
   thinkingConfig?: Record<string, unknown> | null
   responseThinkingField?: string | null
   signal?: AbortSignal
+  // ── DeepSeek 专有可选项 ───────────────────────────────────────────────
+  /** "json" 强制模型输出严格 JSON（DeepSeek JSON Mode） */
+  responseFormat?: 'json' | 'text'
+  /** Chat Prefix Completion：在最后一条 assistant 消息上预填的前缀文本 */
+  prefix?: string
+  /** stream 时是否要求服务端在最后 chunk 中带 usage（默认 true） */
+  includeStreamUsage?: boolean
 }
 
 export interface LLMAdapter {

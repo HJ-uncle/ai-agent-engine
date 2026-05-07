@@ -492,7 +492,7 @@
 | `{ "thinking": "..." }` | thinking | 模型思考过程（DeepSeek R1 / Claude 3.7 Sonnet） |
 | `{ "toolStart": { "name": "...", "args": {...}, "toolCallId": "..." } }` | tool_start | 工具调用开始 |
 | `{ "toolEnd": { "name": "...", "toolCallId": "...", "success": true, "outputPreview": "..." } }` | tool_end | 工具调用结束 |
-| `{ "usage": { "systemPromptTokens": ..., "ragTokens": ..., "skillTokens": ..., "builtinToolsTokens": ..., "mcpToolsTokens": ..., "messagesTokens": ..., "toolResultsTokens": ..., "completionTokens": ..., "promptTokens": ..., "totalTokens": ..., "systemToolsTokens": ... } }` | usage | Token 使用量统计（8 类精细分项 + 汇总） |
+| `{ "usage": { "systemPromptTokens": ..., "ragTokens": ..., "skillTokens": ..., "builtinToolsTokens": ..., "mcpToolsTokens": ..., "messagesTokens": ..., "toolResultsTokens": ..., "completionTokens": ..., "promptTokens": ..., "totalTokens": ..., "systemToolsTokens": ..., "cacheHitTokens": ..., "cacheMissTokens": ..., "reasoningTokens": ... } }` | usage | Token 使用量统计（8 类精细分项 + 汇总 + DeepSeek 专有指标） |
 | `{ "ask_user": { "question": "...", "options": [...], "toolCallId": "..." } }` | ask_user | 向用户提问卡片 |
 | `[DONE]` | done | 流式响应结束 |
 
@@ -539,4 +539,119 @@
 深色模式通过 `@media (prefers-color-scheme: dark)` 自动覆盖所有 Token，无需额外 class。
 
 工具类（可选）：`.mac-titlebar`、`.mac-sidebar`、`.mac-content`、`.mac-window`、`.mac-sidebar-label`、`.mac-list-row`、`.mac-traffic-lights`。
+
+---
+
+## DeepSeek 专有通道接口 (`/api/v1/deepseek`)
+
+> 仅在配置了 DeepSeek API Key（`DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY`）时可用。所有接口复用已配置的密钥，不需要前端额外传递。
+
+### 19. DeepSeek 通道 (`/api/v1/deepseek`)
+
+- `GET /api/v1/deepseek/status`: 通道探针，返回当前 DeepSeek 通道状态
+
+  **返回示例：**
+  ```json
+  {
+    "enabled": true,
+    "hasApiKey": true,
+    "baseUrl": "https://api.deepseek.com",
+    "currentModel": "deepseek-chat",
+    "isReasoner": false,
+    "features": {
+      "kvCache": "enabled",
+      "thinkingMode": "auto",
+      "fim": "beta"
+    }
+  }
+  ```
+
+- `POST /api/v1/deepseek/fim`: Fill-in-Middle 代码补全（Beta）
+
+  **请求体：**
+  ```json
+  {
+    "prompt": "def hello(",
+    "suffix": "\n    print(msg)",
+    "maxTokens": 128,
+    "model": "deepseek-chat"
+  }
+  ```
+  **返回：** `{ "content": "msg: str):", "promptTokens": 12, "completionTokens": 5 }`
+
+- `POST /api/v1/deepseek/json`: 强制 JSON Mode 调用
+
+  **请求体：** `{ "prompt": "提取以下文本中的日期", "systemPrompt": "可选", "model": "deepseek-chat" }`
+
+- `POST /api/v1/deepseek/prefix`: Chat Prefix Completion 续写
+
+  **请求体：** `{ "prompt": "生成一份会议纪要", "prefix": "# 会议纪要\n\n## 时间：", "model": "deepseek-chat" }`
+
+- `GET /api/v1/deepseek/prices`: 读取当前有效价格配置
+
+  **返回示例（含折扣状态）：**
+  ```json
+  {
+    "models": [
+      {
+        "modelId": "deepseek-chat",
+        "normalPrice": { "input": 2, "output": 8, "cacheHit": 0.5 },
+        "discountPrice": { "input": 1, "output": 4, "cacheHit": 0.1 },
+        "discountUntil": "2026-05-31T23:59:59+08:00",
+        "effectivePrice": { "input": 1, "output": 4, "cacheHit": 0.1, "isDiscounted": true }
+      }
+    ],
+    "lowBalanceThreshold": 10,
+    "updatedAt": "2026-05-07T00:00:00.000Z"
+  }
+  ```
+
+- `PUT /api/v1/deepseek/prices`: 持久化价格配置（写入 `~/.agent-engine/deepseek-prices.json`）
+
+  **请求体：** 与上方 GET 返回格式相同的 JSON 对象
+
+- `GET /api/v1/deepseek/balance`: 代理查询 DeepSeek 账户余额
+
+  **返回示例：**
+  ```json
+  {
+    "balance": 67.48,
+    "currency": "CNY",
+    "isAvailable": true,
+    "lowBalance": false,
+    "lowBalanceThreshold": 10,
+    "updatedAt": "2026-05-07T07:21:22.000Z"
+  }
+  ```
+  > Key 读取优先级：`DEEPSEEK_API_KEY` → `OPENAI_API_KEY`；未配置时返回错误码 `40003`
+
+- `GET /api/v1/deepseek/models`: 动态拉取可用模型列表（5 分钟内存缓存）
+
+  **返回示例：**
+  ```json
+  { "models": ["deepseek-chat", "deepseek-reasoner"], "fallback": false, "cached": true }
+  ```
+  > 拉取失败时 `fallback: true`，返回内置列表 `["deepseek-chat", "deepseek-reasoner"]`
+
+---
+
+## DeepSeek Token 指标说明
+
+使用 DeepSeek 模型时，`usage` 事件中会额外携带以下字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `cacheHitTokens` | number? | KV Cache 命中的 token 数，按 0.1元/百万计费（折扣期）|
+| `cacheMissTokens` | number? | KV Cache 未命中的 token 数，按正常输入价计费 |
+| `reasoningTokens` | number? | R1/V3 thinking 模式下 `reasoning_content` 消耗的 token 数 |
+
+**KV Cache 节省估算（UI 显示）：**
+```
+节省金额（元）= cacheHitTokens × (原价缓存命中 − 折扣价缓存命中) / 1_000_000
+```
+例：命中 42 万 token，原价 0.5元/M，折扣价 0.1元/M → 节省 ¥0.168
+
+> 所有三个字段仅在 DeepSeek 模型下存在（值为 `undefined` 时不携带），不影响其他 Provider。
+> 多轮工具调用时这三个值会跨轮次累加，反映整次对话的总计值。
+
 

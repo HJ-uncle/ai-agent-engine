@@ -13,6 +13,12 @@ interface SessionState {
   usageMap: Record<string, TokenUsage | null>
 
   /**
+   * DeepSeek 动态价格配置（从服务端拉取，用于 ChatArea 成本估算）
+   * key: modelId（如 deepseek-chat），value: 有效价格 tier
+   */
+  deepseekEffectivePrices: Record<string, { input: number; output: number; cacheHit: number; isDiscounted: boolean } | null>
+
+  /**
    * 当前正在流式生成中的会话 ID 集合（不持久化）。
    * 用于：
    *  - 切换会话回到运行中会话时，跳过 fetchHistory 避免覆盖流式消息
@@ -62,6 +68,8 @@ interface SessionState {
   setActiveFile: (file: string | null) => void
   triggerFilesRefresh: () => void
   triggerTodosRefresh: () => void
+  /** 更新 DeepSeek 有效价格（供 ChatArea 使用） */
+  setDeepSeekPrices: (prices: SessionState['deepseekEffectivePrices']) => void
 }
 
 function genId() {
@@ -102,6 +110,7 @@ export const useSessionStore = create<SessionState>()(
       messageMap: { [initial.id]: [] },
       usageMap: { [initial.id]: null },
       runningSessions: {},
+      deepseekEffectivePrices: {},
       isSettingsOpen: false,
       settingsTab: 'general',
       maxAskUserCount: 5,
@@ -113,6 +122,7 @@ export const useSessionStore = create<SessionState>()(
       setActiveFile: (file) => set({ activeFile: file }),
       triggerFilesRefresh: () => set({ lastFilesUpdate: Date.now() }),
       triggerTodosRefresh: () => set({ lastTodosUpdate: Date.now() }),
+      setDeepSeekPrices: (prices) => set({ deepseekEffectivePrices: prices }),
       addSession: (agentId?: string) => {
         const s = { ...defaultSession(), agentId }
         set((state) => ({
@@ -277,6 +287,10 @@ export const useSessionStore = create<SessionState>()(
             builtinToolsTokens: (prev?.builtinToolsTokens ?? 0) + (usage.builtinToolsTokens ?? 0),
             mcpToolsTokens: (prev?.mcpToolsTokens ?? 0) + (usage.mcpToolsTokens ?? 0),
             toolResultsTokens: (prev?.toolResultsTokens ?? 0) + (usage.toolResultsTokens ?? 0),
+            // ── DeepSeek 专有累加 ────────────────────────────────────
+            cacheHitTokens: (prev?.cacheHitTokens ?? 0) + (usage.cacheHitTokens ?? 0),
+            cacheMissTokens: (prev?.cacheMissTokens ?? 0) + (usage.cacheMissTokens ?? 0),
+            reasoningTokens: (prev?.reasoningTokens ?? 0) + (usage.reasoningTokens ?? 0),
           }
           return { usageMap: { ...state.usageMap, [sessionId]: merged } }
         }),

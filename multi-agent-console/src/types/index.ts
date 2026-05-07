@@ -62,6 +62,13 @@ export interface TokenUsage {
   builtinToolsTokens?: number
   mcpToolsTokens?: number
   toolResultsTokens?: number
+  // ── DeepSeek 专有指标 ──────────────────────────────────────────────────
+  /** KV Cache 命中的 token 数（计费按 0.1元/百万） */
+  cacheHitTokens?: number
+  /** KV Cache 未命中的 token 数（按正常输入价计费） */
+  cacheMissTokens?: number
+  /** R1/V3 thinking 模式的推理 token 数 */
+  reasoningTokens?: number
 }
 
 export interface ThinkingStep {

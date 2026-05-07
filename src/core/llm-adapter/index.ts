@@ -2,5 +2,7 @@ export type { LLMAdapter, LLMResponse, LLMStreamChunk, LLMAdapterOptions, RetryO
 export { OpenAIAdapter } from './openai.js'
 export { AnthropicAdapter } from './anthropic.js'
 export { OllamaAdapter } from './ollama.js'
+export { DeepSeekAdapter } from './deepseek.js'
+export type { DeepSeekAdapterOptions } from './deepseek.js'
 export { RetryingAdapter, FallbackAdapter, withRetry } from './retry.js'
 export { createLLMAdapter, createLLMAdapterWithDbConfig } from './factory.js'

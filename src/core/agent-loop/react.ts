@@ -46,6 +46,14 @@ export interface TokenUsage {
   mcpToolsTokens: number
   /** Cumulative tokens from tool-call result messages in the ReAct loop */
   toolResultsTokens: number
+
+  // ── DeepSeek 专有 (KV Cache / Reasoning) ──────────────────────────────
+  /** KV Cache 命中的 token 数（DeepSeek 计费 0.1元/百万） */
+  cacheHitTokens?: number
+  /** KV Cache 未命中的 token 数（按正常输入价计费） */
+  cacheMissTokens?: number
+  /** R1/V3 thinking 模式实际产生的推理 token 数 */
+  reasoningTokens?: number
 }
 
 export interface ReActOptions {
@@ -105,6 +113,10 @@ export class ReActStrategy implements LoopStrategy {
     let iter0ToolDefsTokens: number | null = null
     /** Cumulative token count of tool-call result messages across all iterations */
     let cumulativeToolResultsTokens = 0
+    // ── DeepSeek 专有 token 跨轮次累加 ────────────────────────────────────
+    let cumulativeCacheHitTokens: number | undefined
+    let cumulativeCacheMissTokens: number | undefined
+    let cumulativeReasoningTokens: number | undefined
 
     let askUserCount = 0
     try {
@@ -247,6 +259,11 @@ export class ReActStrategy implements LoopStrategy {
       ? Math.max(0, apiPromptTokens - bd.systemPromptTokens - displayToolDefsTokens - bd.skillTokens)
       : historyTokens
 
+    // ── DeepSeek 专有：KV Cache 命中 / 推理 token 跨轮次累加 ─────────────
+    if (response.cacheHitTokens != null) cumulativeCacheHitTokens = (cumulativeCacheHitTokens ?? 0) + response.cacheHitTokens
+    if (response.cacheMissTokens != null) cumulativeCacheMissTokens = (cumulativeCacheMissTokens ?? 0) + response.cacheMissTokens
+    if (response.reasoningTokens != null) cumulativeReasoningTokens = (cumulativeReasoningTokens ?? 0) + response.reasoningTokens
+
     const currentUsage: TokenUsage = {
       systemPromptTokens: bd.systemPromptTokens,
       systemToolsTokens: displayToolDefsTokens,
@@ -259,6 +276,10 @@ export class ReActStrategy implements LoopStrategy {
       builtinToolsTokens: (bd as any).builtinToolsTokens ?? 0,
       mcpToolsTokens: (bd as any).mcpToolsTokens ?? 0,
       toolResultsTokens: cumulativeToolResultsTokens ?? 0,
+      // ── DeepSeek 专有：使用累计值（多轮工具调用时累加）─────────────
+      ...(cumulativeCacheHitTokens != null ? { cacheHitTokens: cumulativeCacheHitTokens } : {}),
+      ...(cumulativeCacheMissTokens != null ? { cacheMissTokens: cumulativeCacheMissTokens } : {}),
+      ...(cumulativeReasoningTokens != null ? { reasoningTokens: cumulativeReasoningTokens } : {}),
     }
 
       // Handle tool calls
@@ -422,6 +443,10 @@ export class ReActStrategy implements LoopStrategy {
         builtinToolsTokens: (bd as any).builtinToolsTokens ?? 0,
         mcpToolsTokens: (bd as any).mcpToolsTokens ?? 0,
         toolResultsTokens: cumulativeToolResultsTokens,
+        // ── DeepSeek 专有：使用累计值 ─────────────────────────────────
+        ...(cumulativeCacheHitTokens != null ? { cacheHitTokens: cumulativeCacheHitTokens } : {}),
+        ...(cumulativeCacheMissTokens != null ? { cacheMissTokens: cumulativeCacheMissTokens } : {}),
+        ...(cumulativeReasoningTokens != null ? { reasoningTokens: cumulativeReasoningTokens } : {}),
       }
 
       const messageId = uuidv4()

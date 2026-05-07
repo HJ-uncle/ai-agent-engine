@@ -958,6 +958,81 @@ export const settingsApi = {
   },
 }
 
+// ── DeepSeek 专有通道 API ─────────────────────────────────────────────────────
+export interface DeepSeekStatus {
+  enabled: boolean
+  hasApiKey: boolean
+  baseUrl: string
+  currentModel: string
+  isReasoner: boolean
+  features: Record<string, string>
+}
+
+export const deepseekApi = {
+  /** 探针：返回当前 DeepSeek 通道状态（是否启用、模型、特性列表） */
+  status: async () => {
+    const res = await request<DeepSeekStatus>('/deepseek/status')
+    return res.data
+  },
+  /** Fill-in-Middle 代码补全 (β) */
+  fim: async (params: { prompt: string; suffix: string; maxTokens?: number; model?: string }) => {
+    const res = await request<{ content: string; promptTokens: number; completionTokens: number }>(
+      '/deepseek/fim',
+      { method: 'POST', body: JSON.stringify(params) },
+    )
+    return res.data
+  },
+  /** 强制 JSON Mode 调用 */
+  json: async (params: { prompt: string; systemPrompt?: string; model?: string }) => {
+    const res = await request<{ raw: string; parsed: any; usage: any }>(
+      '/deepseek/json',
+      { method: 'POST', body: JSON.stringify(params) },
+    )
+    return res.data
+  },
+  /** Chat Prefix Completion (β) */
+  prefix: async (params: { prompt: string; prefix: string; systemPrompt?: string; model?: string }) => {
+    const res = await request<{ content: string; continuation: string; usage: any }>(
+      '/deepseek/prefix',
+      { method: 'POST', body: JSON.stringify(params) },
+    )
+    return res.data
+  },
+  /** 获取当前有效价格配置（含折扣状态） */
+  getPrices: async () => {
+    const res = await request<any>('/deepseek/prices')
+    return res.data
+  },
+  /** 持久化价格配置 */
+  savePrices: async (config: any) => {
+    const res = await request<any>('/deepseek/prices', {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    })
+    return res.data
+  },
+  /** 查询账户余额 */
+  getBalance: async () => {
+    const res = await request<{
+      balance: number
+      currency: string
+      isAvailable: boolean
+      lowBalance: boolean
+      lowBalanceThreshold: number
+      updatedAt: string
+    }>('/deepseek/balance')
+    return res.data
+  },
+  /** 获取可用模型列表（5 分钟服务端缓存） */
+  getModels: async () => {
+    const res = await request<{ models: string[]; fallback: boolean; reason?: string }>(
+      '/deepseek/models',
+    )
+    console.log(res.data);
+    return res.data
+  },
+}
+
 // ── Security Policy API ───────────────────────────────────────────────────────
 export interface PolicyRule {
   id?: number

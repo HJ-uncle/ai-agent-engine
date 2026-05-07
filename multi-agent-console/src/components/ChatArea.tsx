@@ -279,6 +279,22 @@ const TOKEN_META = [
   },
 ];
 
+// ── DeepSeek KV Cache 指标（独立展示，因不属于 Prompt 分项加权）─────
+const DEEPSEEK_CACHE_META = [
+  {
+    key: "cacheHitTokens" as keyof TokenUsage,
+    color: "#10b981",
+    label: "KV Cache 命中",
+    hint: "命中部分计费仅 0.1元/百万",
+  },
+  {
+    key: "cacheMissTokens" as keyof TokenUsage,
+    color: "#f59e0b",
+    label: "KV Cache 未命中",
+    hint: "按正常输入价计费",
+  },
+];
+
 function fmtToken(n: number) {
   return n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n ?? 0);
 }
@@ -517,11 +533,37 @@ function TokenDetailsContent({
   usage,
   durationMs,
   title = "Token 详情",
+  modelId,
 }: {
   usage: TokenUsage;
   durationMs?: number;
   title?: string;
+  modelId?: string;
 }) {
+  // 从 store 读取 DeepSeek 有效价格（拉取失败则为 null，不显示估算）
+  const deepseekPrices = useSessionStore((s) => s.deepseekEffectivePrices);
+
+  /** 根据模型 ID 获取当前有效的 cacheHit 差价（元/M），用于节省估算 */
+  const getCacheHitSavings = (hit: number): { savedYuan: number; priceDiff: number } | null => {
+    if (!modelId) return null;
+    // 前缀匹配（如 deepseek-chat-0324 → deepseek-chat）
+    const entry =
+      deepseekPrices[modelId] ??
+      Object.entries(deepseekPrices).find(([k]) => modelId.startsWith(k))?.[1];
+    if (!entry) return null;
+    // normalCacheHit 需要从未折扣状态推导，此处取 entry 里的 cacheHit 作为有效价
+    // 差价 = 原价（0.5/1元/M） - 有效价（0.1元/M）
+    // 由于 store 只存有效价，差价需要额外知道原价；
+    // 退而求其次：仅在折扣中时显示节省（差价 = 当前有效 cacheHit，与原价对比需从 API 重取）
+    // 此处保留: 若 isDiscounted=true 则计算节省，否则显示"无折扣"
+    if (!entry.isDiscounted) return null;
+    // 原价 cacheHit 近似：deepseek-chat=0.5，deepseek-reasoner=1
+    const normalCacheHit = modelId.includes('reasoner') ? 1 : 0.5;
+    const priceDiff = normalCacheHit - entry.cacheHit;
+    if (priceDiff <= 0) return null;
+    return { savedYuan: (hit / 1_000_000) * priceDiff, priceDiff };
+  };
+
   return (
     <div style={{ width: 220, fontSize: 12 }}>
       <div style={{ fontWeight: 700, marginBottom: 8, color: "#e6edf3" }}>
@@ -632,6 +674,129 @@ function TokenDetailsContent({
         <span style={{ color: "#8b949e" }}>总计</span>
         <span style={{ color: "#3fb950" }}>{fmtToken(usage.totalTokens)}</span>
       </div>
+      {/* ── DeepSeek 专有指标面板（仅当存在 KV Cache 命中或推理 token 时显示）── */}
+      {((usage.cacheHitTokens ?? 0) > 0 || (usage.reasoningTokens ?? 0) > 0) && (
+        <div
+          style={{
+            marginTop: 10,
+            paddingTop: 8,
+            borderTop: "1px dashed #21262d",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              color: "#10b981",
+              marginBottom: 6,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <span style={{ fontSize: 13 }}>🐋</span> DeepSeek 专有
+          </div>
+          {DEEPSEEK_CACHE_META.map((m) => {
+            const v = (usage[m.key] as number) ?? 0;
+            if (v <= 0) return null;
+            return (
+              <div
+                key={m.key}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  marginBottom: 4,
+                  fontSize: 11,
+                }}
+              >
+                <span
+                  style={{
+                    color: "#8b949e",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 5,
+                  }}
+                  title={m.hint}
+                >
+                  <span
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: 2,
+                      background: m.color,
+                      display: "inline-block",
+                    }}
+                  />
+                  {m.label}
+                </span>
+                <span style={{ color: "#e6edf3", fontWeight: 600 }}>
+                  {fmtToken(v)}
+                </span>
+              </div>
+            );
+          })}
+          {/* KV Cache 命中率与节省金额估算 */}
+          {(usage.cacheHitTokens ?? 0) > 0 && (usage.promptTokens ?? 0) > 0 && (() => {
+            const hit = usage.cacheHitTokens ?? 0;
+            const prompt = usage.promptTokens ?? 1;
+            const ratio = (hit / prompt) * 100;
+            const savings = getCacheHitSavings(hit);
+            return (
+              <div
+                style={{
+                  marginTop: 6,
+                  padding: "5px 8px",
+                  background: "rgba(16,185,129,0.08)",
+                  border: "1px solid rgba(16,185,129,0.25)",
+                  borderRadius: 5,
+                  fontSize: 11,
+                  color: "#10b981",
+                  lineHeight: 1.5,
+                }}
+              >
+                💰 命中率 <strong>{ratio.toFixed(1)}%</strong>
+                {savings != null && (
+                  <>，节省约<strong> ¥{savings.savedYuan.toFixed(5)}</strong></>
+                )}
+              </div>
+            );
+          })()}
+          {(usage.reasoningTokens ?? 0) > 0 && (
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                marginTop: 4,
+                fontSize: 11,
+              }}
+            >
+              <span
+                style={{
+                  color: "#8b949e",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 5,
+                }}
+                title="R1/V3 thinking 模式 reasoning_content 实际消耗的 token"
+              >
+                <span
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: 2,
+                    background: "#22d3ee",
+                    display: "inline-block",
+                  }}
+                />
+                推理 Tokens
+              </span>
+              <span style={{ color: "#22d3ee", fontWeight: 600 }}>
+                {fmtToken(usage.reasoningTokens ?? 0)}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

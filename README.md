@@ -75,6 +75,9 @@ A production-ready AI Agent Engine built with Node.js + TypeScript ESM. Supports
 | 65 | **Idempotent Message Delete** — Backend DELETE `/api/v1/messages/:id` uses a 3-branch strategy: (a) find by `message_id` → cascade-delete entire conversation round; (b) find by `conversation_id` → delete round; (c) already gone → return success; frontend cancels running stream before delete to prevent race-condition resurrection |
 | 66 | **User Message Backend ID Sync** — After persisting user message to DB, backend yields `__user_msg_id__` SSE frame; frontend intercepts it and writes `backendMessageId` onto the user message object, enabling accurate delete / regenerate targeting even for messages created mid-stream |
 | 67 | **Orphan Row Auto-Cleanup** — `getHistory()` detects sessions whose first rows have no `user` message (e.g. interrupted `ask_user` sub-sessions) and asynchronously deletes them, preventing ghost tool-call blocks from appearing in the UI after page refresh |
+| 68 | **DeepSeek Optimized Channel** — Dedicated `DeepSeekAdapter` with KV Cache hit/miss token tracking, Reasoning Mode (`reasoning_effort` injection for R1/V3), FIM (Fill-in-Middle) completion, Chat Prefix Completion, JSON Mode, and stream usage inclusion; auto-routed when model name or base URL matches `deepseek` |
+| 69 | **DeepSeek Pricing & Balance** — Per-model price config (normal / discount / discount-until) stored in `~/.agent-engine/deepseek-prices.json`; discount expires automatically at the configured timestamp and reverts to normal price; `GET /api/v1/deepseek/balance` proxies account balance query; `GET /api/v1/deepseek/models` returns live model list with 5-minute cache |
+| 70 | **DeepSeek Error Classification** — HTTP 402 → `DeepSeekInsufficientBalanceError` (no retry, recharge URL attached); 429 → `DeepSeekRateLimitError` (exponential back-off retry 1s/2s/4s, max 3); 503 → `DeepSeekServiceUnavailableError` (retryable flag); 422 → `DeepSeekInvalidParamError` (problematic param logged); error type propagated to frontend via SSE `__DS_ERR__` marker for contextual toast/modal |
 
 ---
 
@@ -197,6 +200,13 @@ curl http://localhost:12323/metrics
 | `SQLITE_CACHE_KB` | `20000` | SQLite page cache size in KB (default 20 MB) |
 | `SQLITE_MMAP_BYTES` | `268435456` | SQLite memory-mapped I/O size in bytes (default 256 MB) |
 | `SQLITE_BUSY_TIMEOUT_MS` | `5000` | SQLite busy timeout in milliseconds |
+| `DEEPSEEK_API_KEY` | _(optional)_ | DeepSeek-specific API key; takes priority over `OPENAI_API_KEY` when routing to DeepSeek channel |
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | DeepSeek API base URL; falls back to `OPENAI_BASE_URL` |
+| `DEEPSEEK_AUTO_THINKING` | `true` | Automatically inject `reasoning_effort` for complex tasks on R1/V3 models |
+| `DEEPSEEK_THINKING_EFFORT` | `medium` | Default reasoning effort level (`low` / `medium` / `high`) |
+| `DEEPSEEK_DEFAULT_JSON_MODE` | `false` | Force `response_format: json_object` on every DeepSeek request |
+| `DEEPSEEK_INCLUDE_STREAM_USAGE` | `true` | Inject `stream_options.include_usage: true` so streaming calls return token counts |
+| `DEEPSEEK_LOG_CACHE_HITS` | `true` | Log KV Cache hit ratio to console after each DeepSeek request |
 
 ---
 
@@ -240,7 +250,7 @@ data: {"thinking":"Let me think about this..."}
 data: {"toolStart":{"name":"calculator","args":{"expr":"2+2"},"toolCallId":"call_1"}}
 data: {"toolEnd":{"name":"calculator","toolCallId":"call_1","success":true,"outputPreview":"4"}}
 data: {"ask_user":{"question":"...","options":["A","B"],"toolCallId":"call_2"}}
-data: {"usage":{"systemPromptTokens":50,"ragTokens":0,"skillTokens":0,"builtinToolsTokens":120,"mcpToolsTokens":0,"messagesTokens":300,"toolResultsTokens":80,"completionTokens":10,"promptTokens":550,"totalTokens":560,"systemToolsTokens":120}}
+data: {"usage":{"systemPromptTokens":50,"ragTokens":0,"skillTokens":0,"builtinToolsTokens":120,"mcpToolsTokens":0,"messagesTokens":300,"toolResultsTokens":80,"completionTokens":10,"promptTokens":550,"totalTokens":560,"systemToolsTokens":120,"cacheHitTokens":420,"cacheMissTokens":130,"reasoningTokens":85}}
 
 ### Workspace
 
@@ -404,6 +414,19 @@ The scheduler fires a loopback `POST /api/v1/chat` request at the matched minute
 |--------|------|-------------|
 | `GET` | `/api/v1/performance/stats` | Get SQLite runtime pragma stats (`journal_mode`, `cache_size`, `mmap_size`, etc.) |
 
+### DeepSeek
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/deepseek/status` | Channel probe — returns `{ enabled, hasApiKey, currentModel, isReasoner, features }` |
+| `POST` | `/api/v1/deepseek/fim` | Fill-in-Middle code completion (β); body: `{ prompt, suffix, maxTokens?, model? }` |
+| `POST` | `/api/v1/deepseek/json` | Force JSON-mode chat; body: `{ prompt, systemPrompt?, model? }` |
+| `POST` | `/api/v1/deepseek/prefix` | Chat Prefix Completion; body: `{ prompt, prefix, systemPrompt?, model? }` |
+| `GET` | `/api/v1/deepseek/prices` | Get current effective price config (with discount-active flag per model) |
+| `PUT` | `/api/v1/deepseek/prices` | Persist custom price config (normal / discount / discountUntil per model) |
+| `GET` | `/api/v1/deepseek/balance` | Proxy DeepSeek `/user/balance`; returns `{ balance, currency, lowBalance, lowBalanceThreshold }` |
+| `GET` | `/api/v1/deepseek/models` | Proxy DeepSeek `/models` with 5-minute in-memory cache; falls back to built-in list |
+
 ### Terminal
 
 | Method | Path | Description |
@@ -476,6 +499,7 @@ src/
 │       ├── cron.ts            # Cron Job CRUD + enable/disable
 │       ├── lsp.ts             # ★ GET /api/v1/lsp/diagnostics — LSP config
 │       ├── performance.ts     # ★ GET /api/v1/performance/stats — SQLite pragma stats
+│       ├── deepseek.ts        # ★ DeepSeek 专有路由 (FIM / balance / prices / models)
 │       ├── security.ts        # ★ Security policy CRUD + audit log query
 │       ├── sessions.ts        # Session Agent binding (lock/query/reset)
 │       ├── terminal.ts        # ★ PTY terminal (create / ws / kill)
@@ -484,7 +508,10 @@ src/
 │   ├── agent-context/         # AgentContext, Tool interfaces
 │   ├── agent-loop/            # ReActStrategy
 │   ├── compression/           # Context compression (extractive + keyword)
-│   ├── llm-adapter/           # OpenAI / Anthropic / Ollama (multi-modal)
+│   ├── deepseek/              # ★ DeepSeek pricing util (getPriceForModel, calcCacheSavings, file persistence)
+│   ├── llm-adapter/           # OpenAI / Anthropic / Ollama / DeepSeek (multi-modal)
+│   │   ├── deepseek.ts        # ★ DeepSeekAdapter — KV Cache logging, reasoning_effort, FIM, error mapping
+│   │   └── deepseek-errors.ts # ★ DeepSeek typed errors (402/429/503/422 → semantic Error subclasses)
 │   ├── stream-pipeline/       # Async pipeline + SSE sink (incl. __user_msg_id__ frame)
 │   ├── tool-registry/         # ToolRegistry
 │   └── utils/                 # Token estimation + concurrency-pool.ts
@@ -580,6 +607,9 @@ src/
 - **`allowedTools` empty-array semantics** — an empty `allowedTools: []` on an Agent now means "no tools allowed" (previously treated as "all tools"); only a `null` / absent value means "all tools"
 - **DB-backed Settings** — `PUT /api/v1/settings` no longer writes to `.env`; all runtime settings are stored in the `system_config` SQLite table (key-value, UPSERT); sensitive keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) are encrypted with AES-256-GCM using `ENCRYPTION_KEY`; on startup, `main.ts` syncs all rows to `process.env` so every module reads the correct value transparently; `.env` now only contains bootstrap params (`PORT`, `HOST`, `DB_PATH`, `ENCRYPTION_KEY`, `AUTH_ENABLED`, `LOG_LEVEL`) that must be known before the database is available
 - **Integrated Terminal** — `TerminalManager` (`src/terminal/index.ts`) manages `node-pty` PTY instances keyed by UUID; `workspace-shell.mjs` is a sandboxed Node.js shell that physically jails the cwd inside the session workspace (all `cd` attempts outside are rejected); built-in commands: `ls`, `ll`, `cat`, `mkdir`, `touch`, `rm`, `cp`, `mv`, `find`, `grep`, `tree`, `echo`, `env`, `clear`, `help`; external commands transparently delegated to the OS; multi-workspace support via `WORKSPACE_ROOTS` env var
+- **DeepSeek optimized channel** — `DeepSeekAdapter` extends `OpenAIAdapter` and overrides `complete` / `stream` to: (a) inject `stream_options.include_usage` so streaming calls always return token counts; (b) parse `prompt_tokens_details.cached_tokens` / `prompt_cache_hit_tokens` and `completion_tokens_details.reasoning_tokens` from the usage object; (c) expose `cacheHitTokens`, `cacheMissTokens`, `reasoningTokens` on every `LLMResponse` / `LLMStreamChunk`; (d) auto-inject `reasoning_effort` from `DEEPSEEK_THINKING_EFFORT` env; (e) implement `fimComplete()` for Fill-in-Middle beta. `factory.ts` auto-routes any `deepseek*` model or `api.deepseek.com` base URL to this adapter without configuration
+- **DeepSeek KV Cache savings UI** — `ChatArea.tsx` reads effective prices from the Zustand store (loaded at startup via `GET /api/v1/deepseek/prices`) and computes `savedYuan = cacheHitTokens × (normalPrice − effectivePrice) / 1_000_000`; when no price data is available the savings row is hidden rather than showing a hardcoded value; a "折扣中" badge shows when `discountUntil > now`
+- **DeepSeek error propagation** — `DeepSeekAdapter` maps HTTP 402/429/503/422 to typed Error subclasses; `chat.ts` serialises the error type to a `__DS_ERR__{json}` suffix in the SSE content chunk; `useChat.ts` strips the marker and fires a contextual `antMessage` toast or link to the DeepSeek top-up page, keeping the message content clean
 - **VS Code–style Explorer** — `multi-agent-console` ships a full IDE-like sidebar: `FileTree` component with right-click context menu (create file/folder, rename, delete to trash, copy path), `EditorTabs` with dirty-state tracking via module-level `dirtyContentCache` (no re-render on every keystroke), Monaco editor for text, `ImagePreview` for images, `VideoPreview` with Range-request streaming, `HexEditor` for binary, `UnsavedDialog` on close, `QuickOpenPanel` (`Ctrl+P`) with fuzzy search backed by a `fileIndex.worker.ts` Web Worker; undo log persisted to `localStorage`
 - **Workspace Extended API** — six new REST endpoints added to `workspace.ts`: create-file, create-folder, move/rename (atomic `fs.rename`), trash (uses `trash` npm package with permanent-delete fallback), format (delegates to `npx prettier` if config present in workspace root), and video stream with HTTP Range request support (206 Partial Content)
 

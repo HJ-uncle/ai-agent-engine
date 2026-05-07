@@ -35,6 +35,7 @@ import NetworkPolicySettings from './settings/NetworkPolicySettings'
 import AuditLogViewer from './settings/AuditLogViewer'
 import LspSettings from './settings/LspSettings'
 import PerformanceSettings from './settings/PerformanceSettings'
+import DeepSeekSettings from './settings/DeepSeekSettings'
 import styles from './settings/SettingsLayout.module.css'
 
 export default function SettingsModal() {
@@ -70,6 +71,16 @@ export default function SettingsModal() {
         </span>
       ),
       children: <ModelSettings />,
+    },
+    {
+      key: 'deepseek',
+      label: (
+        <span>
+          <span style={{ marginRight: 6, fontSize: 14 }}>🐋</span>
+          <span>DeepSeek</span>
+        </span>
+      ),
+      children: <DeepSeekSettings />,
     },
     {
       key: 'workspace',

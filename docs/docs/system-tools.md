@@ -44,6 +44,8 @@ Agent Engine 内置一套**系统级工具**，让 AI Agent 具备任务管理�
 | `run_skill_script` | Skill | 运行技能脚本 |
 | `code_diagnose` | LSP | 对工作区文件运行 TypeScript/ESLint 诊断 |
 
+> **注：** DeepSeek 专有功能（FIM、Prefix Completion、JSON Mode）通过 `/api/v1/deepseek/*` REST 接口暴露，不作为 Agent 工具注册；DeepSeek KV Cache / Reasoning 指标由 `DeepSeekAdapter` 自动采集，在 Token Badge 中可视化展示。
+
 ---
 
 ## Todo 工具
