@@ -1,0 +1,252 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 消息列表 */
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--adm-color-text-secondary);
+  font-size: 14px;
+  padding-top: 60px;
+}
+
+/* 气泡 */
+.bubbleWrap {
+  display: flex;
+  max-width: 100%;
+}
+
+.userWrap {
+  justify-content: flex-end;
+}
+
+.aiWrap {
+  justify-content: flex-start;
+}
+
+.bubble {
+  max-width: 78%;
+  padding: 10px 13px;
+  border-radius: 16px;
+  font-size: 15px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.userBubble {
+  background: var(--adm-color-primary);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+
+.aiBubble {
+  background: var(--adm-color-fill-content);
+  color: var(--adm-color-text);
+  border-bottom-left-radius: 4px;
+}
+
+.bubbleText {
+  white-space: pre-wrap;
+}
+
+.typing {
+  letter-spacing: 4px;
+  animation: blink 1s steps(3, end) infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+
+/* 输入栏 */
+.inputBar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 12px calc(8px + var(--safe-bottom));
+  background: var(--adm-color-background);
+  border-top: 1px solid var(--adm-color-border);
+}
+
+.input {
+  flex: 1;
+  min-height: 44px;
+  max-height: 120px;
+  padding: 10px 12px;
+  border-radius: 22px;
+  border: 1px solid var(--adm-color-border);
+  background: var(--adm-color-fill-content);
+  color: var(--adm-color-text);
+  font-size: 16px; /* 防止 iOS 放大 */
+  resize: none;
+  outline: none;
+  line-height: 1.4;
+  overflow-y: auto;
+}
+
+.input::placeholder {
+  color: var(--adm-color-text-secondary);
+}
+
+.sendBtn {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--adm-color-primary);
+  color: #fff;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.sendBtn:active {
+  opacity: 0.7;
+}
+
+.sendBtnDisabled {
+  background: #555;
+}
+
+.stopIcon {
+  font-size: 14px;
+}
+
+/* ── 图片 grid（气泡内） ────────────────────────────────────────────────── */
+.imageGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.thumbImage {
+  width: 80px;
+  height: 80px;
+  object-fit: cover;
+  border-radius: 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* ── 附件预览栏（输入栏上方） ────────────────────────────────────────────── */
+.attachBar {
+  flex-shrink: 0;
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px 0;
+  overflow-x: auto;
+  background: var(--adm-color-background);
+  -webkit-overflow-scrolling: touch;
+}
+
+.attachThumb {
+  position: relative;
+  flex-shrink: 0;
+  width: 72px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.attachImg {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 8px;
+}
+
+.attachIcon {
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
+  background: var(--adm-color-fill-content);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  color: var(--adm-color-text-secondary);
+}
+
+.attachName {
+  font-size: 11px;
+  color: var(--adm-color-text-secondary);
+  text-align: center;
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachSize {
+  font-size: 10px;
+  color: var(--adm-color-text-secondary);
+}
+
+.attachRemove {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #555;
+  color: #fff;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+
+/* ── 输入栏图标按钮 ─────────────────────────────────────────────────────── */
+.iconBtn {
+  flex-shrink: 0;
+  width: 36px;
+  height: 44px;
+  border: none;
+  background: transparent;
+  color: var(--adm-color-text-secondary);
+  font-size: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  border-radius: 8px;
+}
+
+.iconBtn:active {
+  background: var(--adm-color-fill-content);
+}
+
+.iconBtn:disabled {
+  opacity: 0.4;
+}

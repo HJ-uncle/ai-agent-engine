@@ -1,0 +1,16 @@
+/* ──────────────────────────────────────────────────────────────────────
+ * Core Design Tokens
+ * UI 框架无关的全局 CSS 变量，桌面与移动端共用。
+ * 仅放基础 token（安全区、触控最小尺寸等），形态相关（app-bar / tab）
+ * 放到各入口各自的样式文件里。
+ * ────────────────────────────────────────────────────────────────────── */
+:root {
+  /* 最小触控热区（iOS HIG / Material 都建议 44–48） */
+  --touch-min: 44px;
+
+  /* iOS / Android 安全区（浏览器不支持 env() 时回落 0） */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+}

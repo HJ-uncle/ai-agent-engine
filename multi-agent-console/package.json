@@ -21,6 +21,7 @@
     "ajv": "^8.17.1",
     "ajv-keywords": "^5.1.0",
     "antd": "^6.3.6",
+    "antd-mobile": "^5.42.3",
     "axios": "^1.15.2",
     "dayjs": "^1.11.20",
     "fuse.js": "^7.0.0",
@@ -64,17 +65,81 @@
     "ts-node": "^10.9.2"
   },
   "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test",
+    "start": "craco start",
+    "build": "craco build",
+    "test": "craco test",
     "eject": "react-scripts eject",
     "typecheck": "tsc --noEmit",
-    "perf:bench": "ts-node scripts/perf-benchmark.ts"
+    "perf:bench": "ts-node scripts/perf-benchmark.ts",
+    "check:mobile": "node scripts/check-mobile-bundle.js"
   },
   "eslintConfig": {
     "extends": [
       "react-app",
       "react-app/jest"
+    ],
+    "overrides": [
+      {
+        "files": [
+          "src/core/**/*.ts",
+          "src/core/**/*.tsx"
+        ],
+        "rules": {
+          "no-restricted-imports": [
+            "error",
+            {
+              "paths": [
+                { "name": "antd",           "message": "src/core/ 必须 UI 框架无关，禁止 import antd。把 UI 逻辑放到 src/web/ 或 src/mobile/。" },
+                { "name": "antd-mobile",    "message": "src/core/ 必须 UI 框架无关，禁止 import antd-mobile。" },
+                { "name": "react-dom",      "message": "src/core/ 不允许直接操作 DOM，禁止 import react-dom。" },
+                { "name": "react-dom/client","message": "src/core/ 不允许直接操作 DOM，禁止 import react-dom/client。" },
+                { "name": "monaco-editor",  "message": "桌面专属重型依赖，禁止在 core 出现。" }
+              ],
+              "patterns": [
+                { "group": ["antd/*"],          "message": "src/core/ 禁止 import antd 子模块。" },
+                { "group": ["antd-mobile/*"],   "message": "src/core/ 禁止 import antd-mobile 子模块。" },
+                { "group": ["@xterm/*"],        "message": "桌面专属重型依赖，禁止在 core 出现。" },
+                { "group": ["monaco-editor/*"], "message": "桌面专属重型依赖，禁止在 core 出现。" }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "files": [
+          "src/web/**/*.ts",
+          "src/web/**/*.tsx"
+        ],
+        "rules": {
+          "no-restricted-imports": [
+            "error",
+            {
+              "patterns": [
+                { "group": ["@mobile/*", "**/mobile/*"], "message": "src/web/ 禁止 import 移动端代码。" },
+                { "group": ["antd-mobile", "antd-mobile/*"], "message": "桌面端禁止使用 antd-mobile。" }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "files": [
+          "src/mobile/**/*.ts",
+          "src/mobile/**/*.tsx"
+        ],
+        "rules": {
+          "no-restricted-imports": [
+            "error",
+            {
+              "patterns": [
+                { "group": ["@web/*", "**/web/*"], "message": "src/mobile/ 禁止 import 桌面端代码。" },
+                { "group": ["monaco-editor", "monaco-editor/*"], "message": "移动端禁止打入 Monaco。" },
+                { "group": ["@xterm/*"], "message": "移动端禁止打入 xterm。" }
+              ]
+            }
+          ]
+        }
+      }
     ]
   },
   "browserslist": {

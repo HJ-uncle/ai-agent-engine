@@ -1,0 +1,225 @@
+.settingsContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 16px 0;
+  color: #cccccc;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sectionTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffffff;
+  margin-bottom: 4px;
+  letter-spacing: 0.5px;
+}
+
+.card {
+  background: #1e1e1e;
+  border: 1px solid #333333;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.settingItem {
+  padding: 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #333333;
+}
+
+.settingItem:last-child {
+  border-bottom: none;
+}
+
+.itemInfo {
+  flex: 1;
+  margin-right: 24px;
+}
+
+.itemTitle {
+  font-size: 14px;
+  font-weight: 500;
+  color: #ffffff;
+  margin-bottom: 4px;
+}
+
+.itemDescription {
+  font-size: 12px;
+  color: #888888;
+  line-height: 1.6;
+}
+
+.itemControls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 140px;
+}
+
+.controlRow {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+}
+
+.controlLabel {
+  font-size: 12px;
+  color: #888888;
+  text-transform: uppercase;
+}
+
+.settingsTabs {
+  height: 100%;
+}
+
+:global(.settings-modal-tabs .ant-tabs-nav) {
+  width: 220px !important;
+  background: #252526 !important;
+  border-right: 1px solid #333333 !important;
+  margin-right: 0 !important;
+  padding: 16px 0 !important;
+}
+
+:global(.settings-modal-tabs .ant-tabs-content-holder) {
+  background: #1e1e1e !important;
+  padding: 0 40px !important;
+  border-left: none !important;
+  overflow-y: auto !important;
+}
+
+:global(.settings-modal-tabs .ant-tabs-tab) {
+  padding: 10px 20px !important;
+  margin: 2px 12px !important;
+  border-radius: 6px !important;
+  color: #cccccc !important;
+  transition: all 0.2s !important;
+}
+
+:global(.settings-modal-tabs .ant-tabs-tab:hover) {
+  background: #2a2d2e !important;
+  color: #ffffff !important;
+}
+
+:global(.settings-modal-tabs .ant-tabs-tab-active) {
+  background: #37373d !important;
+}
+
+:global(.settings-modal-tabs .ant-tabs-tab-active .ant-tabs-tab-btn) {
+  color: #ffffff !important;
+  font-weight: 500 !important;
+}
+
+:global(.settings-modal-tabs .ant-tabs-ink-bar) {
+  display: none !important;
+}
+
+:global(.settings-modal-tabs .ant-tabs-content-holder::-webkit-scrollbar) {
+  width: 10px;
+}
+
+:global(.settings-modal-tabs .ant-tabs-content-holder::-webkit-scrollbar-track) {
+  background: transparent;
+}
+
+:global(.settings-modal-tabs .ant-tabs-content-holder::-webkit-scrollbar-thumb) {
+  background: #333;
+  border-radius: 5px;
+}
+
+:global(.settings-modal-tabs .ant-tabs-content-holder::-webkit-scrollbar-thumb:hover) {
+  background: #444;
+}
+
+.settingRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid #2d2d2d;
+}
+
+.settingRow:last-child {
+  border-bottom: none;
+}
+
+.settingLabel {
+  flex: 1;
+  min-width: 0;
+}
+
+.settingDescription {
+  font-size: 12px;
+  color: #858585;
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+.settingControl {
+  flex-shrink: 0;
+  margin-left: 24px;
+}
+
+.settingSection {
+  padding: 8px 0;
+}
+
+.settingDivider {
+  margin: 16px 0 !important;
+  border-color: #2d2d2d !important;
+}
+
+.sectionSubtitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: #cccccc;
+  margin-bottom: 4px;
+}
+
+.sectionDescription {
+  font-size: 12px;
+  color: #858585;
+  margin-bottom: 12px;
+  display: block;
+}
+
+.tagContainer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.domainTag {
+  background: rgba(114, 118, 125, 0.2) !important;
+  border: 1px solid rgba(114, 118, 125, 0.3) !important;
+  color: #cccccc !important;
+  border-radius: 4px !important;
+  padding: 4px 12px !important;
+  font-size: 12px !important;
+}
+
+.domainTag:hover {
+  background: rgba(114, 118, 125, 0.3) !important;
+}
+
+.addInput {
+  width: 100%;
+  max-width: 400px;
+  gap: 1px;
+}
+
+.actionButton {
+  padding: 8px 16px;
+  font-size: 13px;
+}
+
+/* Mobile ≤767px 补丁已移除 — 移动端由 src/mobile/ 独立实现 */

@@ -1,0 +1,111 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.title {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--adm-color-text);
+}
+
+.lastMsg {
+  font-size: 13px;
+  color: var(--adm-color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+  max-width: 200px;
+}
+
+.time {
+  font-size: 12px;
+  color: var(--adm-color-text-secondary);
+}
+
+.active {
+  background: rgba(0, 122, 204, 0.12) !important;
+}
+
+.empty {
+  text-align: center;
+  color: var(--adm-color-text-secondary);
+  font-size: 14px;
+  padding: 60px 24px;
+}
+
+/* 重命名对话框 */
+.renameOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+}
+
+.renameBox {
+  background: var(--adm-color-box);
+  border-radius: 12px;
+  padding: 20px;
+  width: 100%;
+  max-width: 320px;
+}
+
+.renameTitle {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--adm-color-text);
+}
+
+.renameInput {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--adm-color-border);
+  background: var(--adm-color-fill-content);
+  color: var(--adm-color-text);
+  font-size: 16px;
+  outline: none;
+  margin-bottom: 16px;
+  box-sizing: border-box;
+}
+
+.renameActions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.renameCancelBtn,
+.renameOkBtn {
+  min-width: 72px;
+  height: 40px;
+  border-radius: 8px;
+  border: none;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.renameCancelBtn {
+  background: var(--adm-color-fill-content);
+  color: var(--adm-color-text-secondary);
+}
+
+.renameOkBtn {
+  background: var(--adm-color-primary);
+  color: #fff;
+}

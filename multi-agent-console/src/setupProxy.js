@@ -4,7 +4,7 @@ module.exports = function(app) {
   app.use(
     createProxyMiddleware({
       pathFilter: '/api',
-      target: 'http://10.219.97.214:12323',
+      target: 'http://localhost:12323',
       changeOrigin: true,
       ws: true,          // ← 代理 WebSocket upgrade（终端功能必须）
       onProxyReq: (proxyReq, req, res) => {
