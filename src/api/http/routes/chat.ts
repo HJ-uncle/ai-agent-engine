@@ -29,6 +29,99 @@ interface ChatBody {
   toolResponse?: { toolCallId: string, name: string, output: string }
   attachments?: Array<{ name: string; content: string; type: string; encoding?: 'utf-8' | 'base64' }>
   ragTopK?: number
+  /**
+   * 请求级模型覆盖（可选）
+   * 优先级：body.model > agent.model > env.LLM_PRIMARY_MODEL
+   * 用于桌面客户端等需要按会话即时切换模型的场景。
+   */
+  model?: string
+  /**
+   * 请求级 LLM 凭证覆盖（可选 —— 桌面客户端把自己的 model 配置直接下发，
+   * agent-engine 以最高优先级使用这些凭证，避免去自身 DB / .env 取过期 key）
+   *
+   * 优先级：body.modelApiKey > DB.apiKey > env.OPENAI_API_KEY
+   * 当三者均空时由对应 LLM 适配器自身报错。
+   */
+  modelApiKey?: string
+  modelBaseUrl?: string
+  /** provider 短名：'deepseek' | 'openai' | 'qwen' | 'anthropic' | 'openrouter' | ... */
+  modelProvider?: string
+
+  // ────────────────────────────────────────────────────────────────────────
+  // wuzu 项目资源透传（请求级；以最高优先级覆盖 agent-store / env 默认）
+  // 所有字段均可选，未传时走原有 agent-store / env fallback —— 旧调用方零影响。
+  // ────────────────────────────────────────────────────────────────────────
+  /** Skill ID 白名单：覆盖 agent.skills */
+  skills?: string[]
+  /** MCP server ID 白名单：覆盖 agent.mcpServers */
+  mcpServers?: string[]
+  /** 知识库 ID 白名单：覆盖 agent.knowledgeBases */
+  knowledgeBases?: string[]
+  /** 工具白名单：覆盖 agent.allowedTools */
+  allowedTools?: string[]
+  /**
+   * Skill 完整内联 payload（含 SKILL.md 内容）
+   * 当本地 SKILLS_ROOT 没有同 ID 的 skill 时，这些 inlineSkills 会被拼接到
+   * systemPrompt 的"外部技能能力"章节，让 LLM 即时知晓能力描述。
+   * 注意：这些 inline skill 不会真正注册为可调用工具，仅做能力告知；
+   * 若需调用真实工具实现，需配合 SKILLS_ROOT 同步（待 Phase 2）。
+   */
+  inlineSkills?: Array<{
+    id: string
+    name: string
+    description?: string
+    version?: string
+    promptContent?: string
+    skillPath?: string
+  }>
+  /**
+   * MCP server 完整内联配置
+   * Phase 1 仅记录到日志做诊断；Phase 2 计划支持运行时临时挂载。
+   */
+  inlineMcpServers?: Array<{
+    id: string
+    name: string
+    description?: string
+    transportType: 'stdio' | 'sse' | 'http' | 'streamableHttp'
+    command?: string
+    args?: string[]
+    env?: Record<string, string>
+    url?: string
+    headers?: Record<string, string>
+  }>
+  /**
+   * Agent 完整内联配置
+   * 当 agentId 未在 agent-engine DB 中找到（或客户端不希望预注册）时，
+   * 用 inlineAgent 提供 name / systemPrompt / variables / knowledgeBaseIds 即时生效。
+   */
+  inlineAgent?: {
+    name: string
+    description?: string
+    systemPrompt?: string
+    variables?: Array<{ name: string; value: string }>
+    knowledgeBaseIds?: string[]
+    agentId?: string
+  }
+  /**
+   * 客户端透传的知识库文档元数据（id / title / sourceType / chunkCount / scope / tags）。
+   * agent-engine 端会把这份列表渲染成 systemPrompt 中的"客户端可用知识库"章节，
+   * 让 LLM 至少能感知客户端项目里有哪些 KB 文档存在；不携带正文，节省 prompt 容量。
+   */
+  inlineKnowledgeBases?: Array<{
+    id: string
+    title: string
+    sourceType?: string
+    chunkCount?: number
+    scope?: string
+    scopeId?: string
+    tags?: string[]
+  }>
+  /**
+   * 客户端透传的用户长期记忆 XML（已经是 <userMemories>...</userMemories> 形态）。
+   * agent-engine 收到后整段拼接到 systemPrompt 末尾，
+   * 让 LLM 在跨引擎模式下也能看见用户在 wuzu 端积累的记忆。
+   */
+  inlineMemoriesXml?: string
 }
 
 // ── 全局会话级 AbortController 注册表 ──────────────────────────────────────────
@@ -92,7 +185,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
   fastify.post<{ Body: ChatBody }>('/chat', async (request, reply) => {
     const requestId = uuidv4()
-    const { message, sessionId = uuidv4(), agentId, systemPrompt, maxAskUserCount, thinkingMode, inheritContext = true, workspacePaths, toolResponse, attachments, ragTopK = 3 } = request.body
+    const { message, sessionId = uuidv4(), agentId, systemPrompt, maxAskUserCount, thinkingMode, inheritContext = true, workspacePaths, toolResponse, attachments, ragTopK = 3, model: requestedModel, modelApiKey: requestedApiKey, modelBaseUrl: requestedBaseUrl, modelProvider: requestedProvider, skills: requestedSkills, mcpServers: requestedMcpServers, knowledgeBases: requestedKnowledgeBases, allowedTools: requestedAllowedTools, inlineSkills: requestedInlineSkills, inlineMcpServers: requestedInlineMcpServers, inlineAgent: requestedInlineAgent, inlineKnowledgeBases: requestedInlineKnowledgeBases, inlineMemoriesXml: requestedInlineMemoriesXml } = request.body
 
     // Get tenant from auth context (set by auth middleware)
     const tenantId = (request as unknown as { authContext?: { tenantId: string } }).authContext?.tenantId ?? 'default'
@@ -148,8 +241,70 @@ export async function chatRoutes(fastify: FastifyInstance) {
       }
     }
 
+    // ── inlineAgent 兜底：当客户端未在 DB 注册 agent 但本地有自定义 agent 配置时 ─
+    // 用 inlineAgent 提供的字段补齐 effectiveSystemPrompt / boundKnowledgeBases。
+    // 优先级：body.systemPrompt > agent.systemPrompt > inlineAgent.systemPrompt > 空
+    // 关键约束：仅在对应"上层"字段为空时才生效，绝不覆盖 DB agent 已有配置。
+    if (requestedInlineAgent) {
+      if (!effectiveSystemPrompt && requestedInlineAgent.systemPrompt) {
+        effectiveSystemPrompt = requestedInlineAgent.systemPrompt
+      }
+      if ((!boundKnowledgeBases || boundKnowledgeBases.length === 0) &&
+          requestedInlineAgent.knowledgeBaseIds && requestedInlineAgent.knowledgeBaseIds.length > 0) {
+        boundKnowledgeBases = requestedInlineAgent.knowledgeBaseIds
+      }
+      reqLogger.info(
+        { agentName: requestedInlineAgent.name, hasSystemPrompt: !!requestedInlineAgent.systemPrompt },
+        'Inline agent configuration applied (request-level)'
+      )
+    }
+
+    // ── wuzu 项目资源白名单：请求级覆盖 agent 配置（最高优先级）─────────────
+    // 仅当客户端显式传入数组（含空数组语义"明确禁用"）时才覆盖。
+    if (Array.isArray(requestedSkills)) {
+      allowedSkills = requestedSkills
+      reqLogger.info({ count: requestedSkills.length }, 'Request-level skills whitelist applied')
+    }
+    if (Array.isArray(requestedMcpServers)) {
+      allowedMcpServers = requestedMcpServers
+      reqLogger.info({ count: requestedMcpServers.length }, 'Request-level mcpServers whitelist applied')
+    }
+    if (Array.isArray(requestedKnowledgeBases)) {
+      boundKnowledgeBases = requestedKnowledgeBases
+      reqLogger.info({ count: requestedKnowledgeBases.length }, 'Request-level knowledgeBases whitelist applied')
+    }
+    if (Array.isArray(requestedAllowedTools)) {
+      allowedTools = requestedAllowedTools
+      reqLogger.info({ count: requestedAllowedTools.length }, 'Request-level allowedTools whitelist applied')
+    }
+
+    // ── inlineMcpServers 诊断日志（Phase 1：仅记录，Phase 2 计划支持运行时挂载）─
+    if (Array.isArray(requestedInlineMcpServers) && requestedInlineMcpServers.length > 0) {
+      reqLogger.info(
+        {
+          count: requestedInlineMcpServers.length,
+          ids: requestedInlineMcpServers.map(s => s.id)
+        },
+        'Inline MCP servers received (Phase 1: logged only; runtime mount pending)'
+      )
+    }
+
+    // 请求级 model 覆盖（用于桌面客户端按会话即时切换模型）
+    // 注意：仅在显式传入时才覆盖；保持 agent 配置作为默认值。
+    if (typeof requestedModel === 'string' && requestedModel.trim()) {
+      effectiveModel = requestedModel.trim()
+      reqLogger.info({ requestedModel: effectiveModel }, 'Request-level model override applied')
+    }
+
     // Build tool registry（统一工厂，含所有内置工具 + MCP + Skills）
-    const { registry, memory, externalSkills, toolCategories } = await createToolRegistry({ allowedSkills, allowedTools })
+    // 把客户端透传的 inline 资源（wuzu 桌面端本地 skill / mcp）一并注入，
+    // 让 list_skills / get_skill / MCP 工具都能即时看到 + 调用。
+    const { registry, memory, externalSkills, toolCategories } = await createToolRegistry({
+      allowedSkills,
+      allowedTools,
+      inlineSkills: requestedInlineSkills,
+      inlineMcpServers: requestedInlineMcpServers
+    })
 
     const abortController = new AbortController()
     // 注册到全局表，使 POST /chat/cancel 能找到并终止
@@ -184,7 +339,49 @@ export async function chatRoutes(fastify: FastifyInstance) {
     })
 
     const skillsPrompt = buildSkillsSystemPrompt(externalSkills)
+
+    // 注：客户端透传的 inlineSkills 已经在 createToolRegistry 内被合并到
+    // externalSkills 列表，因此 buildSkillsSystemPrompt 自然会把它们渲染进
+    // "Available Skills Index"，同时 list_skills / get_skill 工具也能看到它们 ——
+    // 无需在此再单独拼接 inlineSkillsBlock，避免上下文重复。
+
+    // ── 客户端透传知识库目录（仅元数据，让 AI 感知有哪些 KB 可用）──────────────
+    let inlineKbBlock = ''
+    if (Array.isArray(requestedInlineKnowledgeBases) && requestedInlineKnowledgeBases.length > 0) {
+      const lines = requestedInlineKnowledgeBases
+        .filter(kb => kb && kb.id && kb.title)
+        .slice(0, 100) // 双重保护：客户端已限 100 条，这里再兜底
+        .map((kb, i) => {
+          const tagPart = kb.tags?.length ? `, tags=${kb.tags.join('|')}` : ''
+          const scopePart = kb.scope ? ` [${kb.scope}]` : ''
+          const chunkPart = typeof kb.chunkCount === 'number' ? `, chunks=${kb.chunkCount}` : ''
+          return `${i + 1}. ${kb.title}${scopePart} (id=${kb.id}, source=${kb.sourceType ?? 'unknown'}${chunkPart}${tagPart})`
+        })
+      if (lines.length > 0) {
+        inlineKbBlock =
+          '\n\n## 客户端可用知识库（Client Knowledge Bases）\n' +
+          '以下是客户端项目中可访问的知识库文档列表（仅元数据；具体内容由客户端 RAG 检索后注入）：\n' +
+          lines.join('\n')
+        reqLogger.info({ count: lines.length }, 'Inline KB index injected into systemPrompt')
+      }
+    }
+
+    // ── 客户端透传用户长期记忆（lobster-core buildAllMemoriesXml 直出）──────────
+    let inlineMemoriesBlock = ''
+    if (typeof requestedInlineMemoriesXml === 'string' && requestedInlineMemoriesXml.trim()) {
+      inlineMemoriesBlock =
+        '\n\n## 用户长期记忆（User Memories）\n' +
+        '以下记忆由客户端持久化并随每次会话同步，可作为回答的上下文参考：\n' +
+        requestedInlineMemoriesXml.trim()
+      reqLogger.info(
+        { byteLen: requestedInlineMemoriesXml.length },
+        'Inline user memories XML injected into systemPrompt'
+      )
+    }
+
     const baseSystemPrompt = [effectiveSystemPrompt, skillsPrompt].filter(Boolean).join('\n\n')
+      + inlineKbBlock
+      + inlineMemoriesBlock
 
     // 从 message 中提取纯文本用于 RAG 搜索
     function extractPlainText(msg: any): string {
@@ -256,6 +453,39 @@ export async function chatRoutes(fastify: FastifyInstance) {
       )
     }
 
+    // ── 请求级凭证覆盖（最高优先级）──────────────────────────────────────────
+    // 桌面客户端（如 wuzu-client）把自己 UI 上选中的 (apiKey/baseUrl/provider) 直接随
+    // 请求下发，agent-engine 以请求级凭证完全覆盖 DB / env，避免后端配置漂移导致 401。
+    // 仅当传入字段为非空字符串时覆盖；任何字段缺失则保留 DB / env 的回退。
+    if (typeof requestedApiKey === 'string' && requestedApiKey.trim()) {
+      modelApiKey = requestedApiKey.trim()
+    }
+    if (typeof requestedBaseUrl === 'string' && requestedBaseUrl.trim()) {
+      modelBaseUrl = requestedBaseUrl.trim()
+    }
+    if (typeof requestedProvider === 'string' && requestedProvider.trim()) {
+      modelProvider = requestedProvider.trim()
+    }
+    // 当客户端显式传 model 且与 DB resolved 不同时，确保我们用客户端版本调用 LLM
+    if (typeof requestedModel === 'string' && requestedModel.trim()) {
+      resolvedModel = requestedModel.trim()
+    }
+    if (
+      (typeof requestedApiKey === 'string' && requestedApiKey.trim()) ||
+      (typeof requestedBaseUrl === 'string' && requestedBaseUrl.trim()) ||
+      (typeof requestedProvider === 'string' && requestedProvider.trim())
+    ) {
+      reqLogger.info(
+        {
+          model: resolvedModel,
+          provider: modelProvider,
+          hasApiKey: Boolean(modelApiKey),
+          baseUrl: modelBaseUrl
+        },
+        'Request-level credential override applied (highest priority)'
+      )
+    }
+
     // 判断是否是 Qwen 系列模型（通过模型名或 baseUrl 识别）
     const effectiveBaseUrl = modelBaseUrl || process.env.OPENAI_BASE_URL || ''
     const isQwenModel =
@@ -318,6 +548,9 @@ export async function chatRoutes(fastify: FastifyInstance) {
 2. Use Chinese tool names in replies (e.g. 写入文件, not write_file).
 3. You are ${currentModelName}.
 4. Use \`read_image\` for image files (.png/.jpg/.gif/.webp).
+5. When providing a downloadable file to the user, ALWAYS present it as an HTTP download link using this exact Markdown format:
+   [文件名](/api/v1/workspace/file/download?sessionId=${sessionId}&path=文件名)
+   Use only the filename (not the full path) in the \`path\` parameter. Never use file:// URLs.
 ${workspaceInfo}
 `
 
@@ -330,6 +563,9 @@ ${workspaceInfo}
 2. Use Chinese tool names in replies (e.g. 写入文件, not write_file).
 3. You are ${currentModelName}.
 4. Use \`read_image\` for image files (.png/.jpg/.gif/.webp).
+5. When providing a downloadable file to the user, ALWAYS present it as an HTTP download link using this exact Markdown format:
+   [文件名](/api/v1/workspace/file/download?sessionId=${sessionId}&path=文件名)
+   Use only the filename (not the full path) in the \`path\` parameter. Never use file:// URLs.
 ${workspaceInfo}
 `
     const systemPromptTokens = estimateTokens(pureSystemPrompt)
@@ -471,6 +707,11 @@ ${workspaceInfo}
           userMessage: message,
           assistantResponse,
           reasoningContent: reasoningContent || undefined,
+          systemPromptContent: pureSystemPrompt || undefined,
+          ragContent: ragPrompt || undefined,
+          skillPromptContent: skillsPrompt || undefined,
+          builtinToolsContent: builtinToolDefsText || undefined,
+          mcpToolsContent: mcpToolDefsText || undefined,
           history: historicalMessages,
           toolCalls,
           usage: finalUsage,

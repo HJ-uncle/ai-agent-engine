@@ -40,6 +40,7 @@
     "react-window": "^1.8.10",
     "rehype-highlight": "^7.0.2",
     "rehype-katex": "^7.0.1",
+    "rehype-raw": "^7.0.0",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
     "simple-git": "^3.27.0",
@@ -89,17 +90,52 @@
             "error",
             {
               "paths": [
-                { "name": "antd",           "message": "src/core/ 必须 UI 框架无关，禁止 import antd。把 UI 逻辑放到 src/web/ 或 src/mobile/。" },
-                { "name": "antd-mobile",    "message": "src/core/ 必须 UI 框架无关，禁止 import antd-mobile。" },
-                { "name": "react-dom",      "message": "src/core/ 不允许直接操作 DOM，禁止 import react-dom。" },
-                { "name": "react-dom/client","message": "src/core/ 不允许直接操作 DOM，禁止 import react-dom/client。" },
-                { "name": "monaco-editor",  "message": "桌面专属重型依赖，禁止在 core 出现。" }
+                {
+                  "name": "antd",
+                  "message": "src/core/ 必须 UI 框架无关，禁止 import antd。把 UI 逻辑放到 src/web/ 或 src/mobile/。"
+                },
+                {
+                  "name": "antd-mobile",
+                  "message": "src/core/ 必须 UI 框架无关，禁止 import antd-mobile。"
+                },
+                {
+                  "name": "react-dom",
+                  "message": "src/core/ 不允许直接操作 DOM，禁止 import react-dom。"
+                },
+                {
+                  "name": "react-dom/client",
+                  "message": "src/core/ 不允许直接操作 DOM，禁止 import react-dom/client。"
+                },
+                {
+                  "name": "monaco-editor",
+                  "message": "桌面专属重型依赖，禁止在 core 出现。"
+                }
               ],
               "patterns": [
-                { "group": ["antd/*"],          "message": "src/core/ 禁止 import antd 子模块。" },
-                { "group": ["antd-mobile/*"],   "message": "src/core/ 禁止 import antd-mobile 子模块。" },
-                { "group": ["@xterm/*"],        "message": "桌面专属重型依赖，禁止在 core 出现。" },
-                { "group": ["monaco-editor/*"], "message": "桌面专属重型依赖，禁止在 core 出现。" }
+                {
+                  "group": [
+                    "antd/*"
+                  ],
+                  "message": "src/core/ 禁止 import antd 子模块。"
+                },
+                {
+                  "group": [
+                    "antd-mobile/*"
+                  ],
+                  "message": "src/core/ 禁止 import antd-mobile 子模块。"
+                },
+                {
+                  "group": [
+                    "@xterm/*"
+                  ],
+                  "message": "桌面专属重型依赖，禁止在 core 出现。"
+                },
+                {
+                  "group": [
+                    "monaco-editor/*"
+                  ],
+                  "message": "桌面专属重型依赖，禁止在 core 出现。"
+                }
               ]
             }
           ]
@@ -115,8 +151,20 @@
             "error",
             {
               "patterns": [
-                { "group": ["@mobile/*", "**/mobile/*"], "message": "src/web/ 禁止 import 移动端代码。" },
-                { "group": ["antd-mobile", "antd-mobile/*"], "message": "桌面端禁止使用 antd-mobile。" }
+                {
+                  "group": [
+                    "@mobile/*",
+                    "**/mobile/*"
+                  ],
+                  "message": "src/web/ 禁止 import 移动端代码。"
+                },
+                {
+                  "group": [
+                    "antd-mobile",
+                    "antd-mobile/*"
+                  ],
+                  "message": "桌面端禁止使用 antd-mobile。"
+                }
               ]
             }
           ]
@@ -132,9 +180,26 @@
             "error",
             {
               "patterns": [
-                { "group": ["@web/*", "**/web/*"], "message": "src/mobile/ 禁止 import 桌面端代码。" },
-                { "group": ["monaco-editor", "monaco-editor/*"], "message": "移动端禁止打入 Monaco。" },
-                { "group": ["@xterm/*"], "message": "移动端禁止打入 xterm。" }
+                {
+                  "group": [
+                    "@web/*",
+                    "**/web/*"
+                  ],
+                  "message": "src/mobile/ 禁止 import 桌面端代码。"
+                },
+                {
+                  "group": [
+                    "monaco-editor",
+                    "monaco-editor/*"
+                  ],
+                  "message": "移动端禁止打入 Monaco。"
+                },
+                {
+                  "group": [
+                    "@xterm/*"
+                  ],
+                  "message": "移动端禁止打入 xterm。"
+                }
               ]
             }
           ]

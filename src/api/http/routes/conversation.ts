@@ -3,6 +3,7 @@ import { SQLiteConversationHistory } from '../../../storage/conversation/index.j
 import { SessionStore } from '../../../storage/session/index.js'
 import { success, fail, paginateArray } from '../response.js'
 import { workspaceManager } from '../../../workspace/index.js'
+import { abortActiveChat } from './chat.js'
 import fs from 'node:fs'
 
 export async function conversationRoutes(fastify: FastifyInstance) {
@@ -49,7 +50,11 @@ export async function conversationRoutes(fastify: FastifyInstance) {
       return reply.code(200).send(fail(40001, '参数验证失败：sessionId 不能为空'))
     }
 
-    // 1. Delete DB history
+    // 0. 先 abort 该 session 上正在跑的 SSE 流（如果有），防止流式 append 与 clear 竞态
+    //    history.clear() 会同步设置 5s 墓碑，期间任何 append 都被丢弃，再加这一步是双保险。
+    try { abortActiveChat(tenantId, sessionId, 'Session deleted by user') } catch { /* noop */ }
+
+    // 1. Delete DB history（内部会先设置墓碑，再 DELETE FROM conversations）
     await history.clear({ tenantId, sessionId })
 
     // 2. 同步清除会话 Agent 绑定，允许重新选择 Agent

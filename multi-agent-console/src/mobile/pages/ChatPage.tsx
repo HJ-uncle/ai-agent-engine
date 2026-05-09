@@ -1,32 +1,149 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Toast, ImageViewer } from 'antd-mobile'
-import { SendOutline, PictureOutline, FolderOutline, CloseOutline } from 'antd-mobile-icons'
+import { UnorderedListOutline, AddOutline, AddCircleOutline, CloseOutline } from 'antd-mobile-icons'
+import { useNavigate } from 'react-router-dom'
 import { useSessionStore } from '@core/store/session'
-import { chatStream, cancelChat, workspaceApi } from '@core/api'
-import type { Message } from '@core/types'
-import { AppNavBar } from '../components/AppNavBar'
+import { useAgentStore } from '@core/store/agents'
+import { chatStream, cancelChat, workspaceApi, conversationApi } from '@core/api'
+import type { Message, ThinkingStep } from '@core/types'
+import { processHistoryMessages } from '@core/utils/processHistory'
+import { SessionsDrawer } from '../components/SessionsDrawer'
+import { AgentPicker } from '../components/AgentPicker'
+import { InputToolbox } from '../components/InputToolbox'
+import { MessageBubble } from '../components/MessageBubble'
 import styles from './ChatPage.module.css'
 
+// ─── 轻量 Snack（替代 antd-mobile Toast，避免 React 18 unmountComponentAtNode 崩溃） ─
+
+interface SnackItem { id: number; msg: string; icon: '✅' | '❌' | 'ℹ️' }
+
+function SnackBar({ items }: { items: SnackItem[] }) {
+  if (items.length === 0) return null
+  return (
+    <div style={{
+      position: 'fixed', top: 60, left: '50%', transform: 'translateX(-50%)',
+      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+      zIndex: 9999, pointerEvents: 'none',
+    }}>
+      {items.map((s) => (
+        <div key={s.id} style={{
+          background: 'rgba(40,40,40,0.92)', color: '#eee',
+          padding: '8px 16px', borderRadius: 20, fontSize: 14,
+          display: 'flex', alignItems: 'center', gap: 6,
+          boxShadow: '0 2px 12px rgba(0,0,0,0.4)',
+          backdropFilter: 'blur(8px)',
+          animation: 'fadeInDown 0.2s ease',
+        }}>
+          {s.icon} {s.msg}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+let _snackCounter = 0
+function useSnack() {
+  const [items, setItems] = useState<SnackItem[]>([])
+  const show = useCallback((msg: string, icon: SnackItem['icon'] = 'ℹ️', duration = 2000) => {
+    const id = ++_snackCounter
+    setItems((prev) => [...prev, { id, msg, icon }])
+    setTimeout(() => setItems((prev) => prev.filter((s) => s.id !== id)), duration)
+  }, [])
+  return { items, show }
+}
+
+// ─── SSE 事件驱动 AI 消息（对齐 Web 端 driveAiMessage）──────────────────────
+
+function buildAiDriver(
+  sid: string,
+  aiMsgId: string,
+  updateMessage: (sid: string, id: string, updates: Partial<Message>) => void,
+  markSessionDone: (sid: string) => void,
+  initialContent = '',
+  initialSteps: ThinkingStep[] = [],
+) {
+  let finalContent = initialContent
+  const thinkingSteps: ThinkingStep[] = [...initialSteps]
+
+  const onEvent = (evt: any) => {
+    if (evt.type === 'text_delta') {
+      finalContent += evt.content ?? ''
+      updateMessage(sid, aiMsgId, { content: finalContent, status: 'streaming' })
+    } else if (evt.type === 'thinking') {
+      thinkingSteps.push({ type: 'thinking', text: evt.text ?? '' })
+      updateMessage(sid, aiMsgId, { thinkingSteps: [...thinkingSteps] })
+    } else if (evt.type === 'tool_start') {
+      thinkingSteps.push({
+        type: 'tool_start',
+        toolName: evt.toolName || evt.name,
+        toolArgs: evt.toolArgs || evt.args,
+        toolCallId: evt.toolCallId,
+      })
+      updateMessage(sid, aiMsgId, { thinkingSteps: [...thinkingSteps] })
+    } else if (evt.type === 'tool_end') {
+      const lastToolIdx = [...thinkingSteps].reverse().findIndex(
+        (s) => s.type === 'tool_start' && s.success === undefined &&
+          (evt.toolCallId ? s.toolCallId === evt.toolCallId : true)
+      )
+      if (lastToolIdx !== -1) {
+        const idx = thinkingSteps.length - 1 - lastToolIdx
+        thinkingSteps[idx] = {
+          ...thinkingSteps[idx],
+          success: evt.success,
+          outputPreview: evt.outputPreview ?? (evt.output ?? '').slice(0, 500),
+        }
+      } else {
+        thinkingSteps.push({
+          type: 'tool_end',
+          toolCallId: evt.toolCallId,
+          success: evt.success,
+          outputPreview: evt.outputPreview ?? (evt.output ?? '').slice(0, 500),
+        })
+      }
+      updateMessage(sid, aiMsgId, { thinkingSteps: [...thinkingSteps] })
+    } else if (evt.type === 'usage' || evt.type === 'token_usage') {
+      if (evt.usage) {
+        updateMessage(sid, aiMsgId, { usage: evt.usage })
+      }
+    }
+  }
+
+  const onDone = () => {
+    updateMessage(sid, aiMsgId, {
+      status: 'done',
+      content: finalContent,
+      thinkingSteps: [...thinkingSteps],
+    })
+    markSessionDone(sid)
+  }
+
+  const onError = (err: any) => {
+    updateMessage(sid, aiMsgId, {
+      status: 'error',
+      content: finalContent || `❌ ${err?.message ?? '发生错误，请重试'}`,
+      thinkingSteps: [...thinkingSteps],
+    })
+    markSessionDone(sid)
+  }
+
+  return { onEvent, onDone, onError }
+}
+
 // ─── 常量 ──────────────────────────────────────────────────────────────────
-const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100 MB
+const MAX_FILE_SIZE = 100 * 1024 * 1024
 
 interface AttachmentItem {
   file: File
-  previewUrl?: string   // 图片本地预览 URL
+  previewUrl?: string
   encoding: 'utf-8' | 'base64'
 }
 
 // ─── 工具函数 ──────────────────────────────────────────────────────────────
 
 function isBinary(fileName: string) {
-  const BINARY_EXTS = [
-    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico',
-    '.pdf', '.zip', '.tar', '.gz', '.7z', '.rar',
-    '.mp4', '.mov', '.avi', '.mp3', '.wav', '.ogg',
-    '.exe', '.bin', '.wasm', '.so', '.dll',
-  ]
-  const ext = fileName.toLowerCase().slice(fileName.lastIndexOf('.'))
-  return BINARY_EXTS.includes(ext)
+  const BINARY_EXTS = ['.png','.jpg','.jpeg','.gif','.webp','.bmp','.svg','.ico','.pdf',
+    '.zip','.tar','.gz','.7z','.rar','.mp4','.mov','.avi','.mp3','.wav','.ogg',
+    '.exe','.bin','.wasm','.so','.dll']
+  return BINARY_EXTS.includes(fileName.toLowerCase().slice(fileName.lastIndexOf('.')))
 }
 
 function readAsBase64(file: File): Promise<string> {
@@ -53,62 +170,36 @@ function formatBytes(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
-// ─── 气泡 ──────────────────────────────────────────────────────────────────
+function genId() {
+  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
+}
 
-function Bubble({ msg }: { msg: Message }) {
-  const isUser = msg.role === 'user'
+// ─── 空状态欢迎页 ──────────────────────────────────────────────────────────
 
-  // content 可能是字符串或多模态数组
-  const textContent =
-    typeof msg.content === 'string'
-      ? msg.content
-      : msg.content
-          .filter((c: any) => c.type === 'text')
-          .map((c: any) => c.text)
-          .join('')
+const PROMPT_EXAMPLES = [
+  { emoji: '💡', text: '帮我分析这段代码的逻辑' },
+  { emoji: '✍️', text: '帮我写一份项目方案文档' },
+  { emoji: '🔍', text: '搜索并总结最新行业动态' },
+  { emoji: '🛠️', text: '调试这个报错并给出修复方案' },
+]
 
-  const imageItems: Array<{ url: string; alt: string }> = []
-  if (Array.isArray(msg.content)) {
-    for (const c of msg.content) {
-      if (c.type === 'image_url' && c.image_url?.url) {
-        imageItems.push({ url: c.image_url.url, alt: c.image_url.alt || '图片' })
-      }
-    }
-  }
-
-  const [lightboxVisible, setLightboxVisible] = useState(false)
-  const [lightboxIndex, setLightboxIndex] = useState(0)
-
+function WelcomeScreen({ onPrompt }: { onPrompt: (text: string) => void }) {
   return (
-    <div className={`${styles.bubbleWrap} ${isUser ? styles.userWrap : styles.aiWrap}`}>
-      <div className={`${styles.bubble} ${isUser ? styles.userBubble : styles.aiBubble}`}>
-        {/* 图片附件 */}
-        {imageItems.length > 0 && (
-          <div className={styles.imageGrid}>
-            {imageItems.map((img, i) => (
-              <img
-                key={i}
-                src={img.url}
-                alt={img.alt}
-                className={styles.thumbImage}
-                onClick={() => { setLightboxIndex(i); setLightboxVisible(true) }}
-              />
-            ))}
-            <ImageViewer.Multi
-              images={imageItems.map((img) => img.url)}
-              visible={lightboxVisible}
-              defaultIndex={lightboxIndex}
-              onClose={() => setLightboxVisible(false)}
-            />
-          </div>
-        )}
-
-        {/* 文字内容 */}
-        {msg.status === 'streaming' && !textContent ? (
-          <span className={styles.typing}>···</span>
-        ) : textContent ? (
-          <span className={styles.bubbleText}>{textContent}</span>
-        ) : null}
+    <div className={styles.welcome}>
+      <div className={styles.welcomeEmoji}>🤖</div>
+      <h2 className={styles.welcomeTitle}>Agent 引擎</h2>
+      <p className={styles.welcomeSub}>多智能体协作，让 AI 帮你完成复杂任务</p>
+      <div className={styles.promptGrid}>
+        {PROMPT_EXAMPLES.map((p) => (
+          <button
+            key={p.text}
+            className={styles.promptCard}
+            onClick={() => onPrompt(p.text)}
+          >
+            <span className={styles.promptEmoji}>{p.emoji}</span>
+            <span className={styles.promptText}>{p.text}</span>
+          </button>
+        ))}
       </div>
     </div>
   )
@@ -116,13 +207,7 @@ function Bubble({ msg }: { msg: Message }) {
 
 // ─── 附件预览条 ────────────────────────────────────────────────────────────
 
-function AttachmentBar({
-  items,
-  onRemove,
-}: {
-  items: AttachmentItem[]
-  onRemove: (idx: number) => void
-}) {
+function AttachmentBar({ items, onRemove }: { items: AttachmentItem[]; onRemove: (i: number) => void }) {
   if (items.length === 0) return null
   return (
     <div className={styles.attachBar}>
@@ -133,21 +218,15 @@ function AttachmentBar({
             {isImage && item.previewUrl ? (
               <img src={item.previewUrl} alt={item.file.name} className={styles.attachImg} />
             ) : (
-              <div className={styles.attachIcon}>
-                <FolderOutline />
-              </div>
+              <div className={styles.attachIcon}>📎</div>
             )}
-            <div className={styles.attachName} title={item.file.name}>
-              {item.file.name.length > 12
-                ? item.file.name.slice(0, 10) + '…' + item.file.name.slice(-4)
+            <div className={styles.attachName}>
+              {item.file.name.length > 10
+                ? item.file.name.slice(0, 8) + '…'
                 : item.file.name}
             </div>
             <div className={styles.attachSize}>{formatBytes(item.file.size)}</div>
-            <button
-              className={styles.attachRemove}
-              onClick={() => onRemove(idx)}
-              aria-label="移除"
-            >
+            <button className={styles.attachRemove} onClick={() => onRemove(idx)}>
               <CloseOutline />
             </button>
           </div>
@@ -163,33 +242,112 @@ export default function ChatPage() {
   const {
     activeSessionId,
     messageMap,
+    sessions,
+    addSession,
     addMessage,
     updateMessage,
-    sessions,
+    deleteMessage,
+    setMessages,
     isSessionRunning,
     markSessionRunning,
     markSessionDone,
   } = useSessionStore()
+  const { agents } = useAgentStore()
+  const navigate = useNavigate()
+  const { items: snackItems, show: showSnack } = useSnack()
 
   const messages: Message[] = messageMap[activeSessionId] ?? []
   const session = sessions.find((s) => s.id === activeSessionId)
   const running = isSessionRunning(activeSessionId)
 
+  // 当前 Agent 名称
+  const currentAgent = agents.find((a) => a.id === session?.agentId)
+
+  // ── 加载历史消息（切换会话 / 刷新页面后从后端拉取）────────────────────────
+  const [historyLoading, setHistoryLoading] = useState(false)
+
+  useEffect(() => {
+    if (!activeSessionId) return
+    // 流式运行中跳过，避免覆盖正在接收的消息
+    if (isSessionRunning(activeSessionId)) return
+
+    setHistoryLoading(true)
+    conversationApi.getHistory(activeSessionId)
+      .then(({ list }) => {
+        if (!list || list.length === 0) return
+
+        // ★ 关键：用 processHistoryMessages 解析后端原始消息
+        //    合并 reasoningContent / toolCall / tool_role → thinkingSteps[]
+        //    与 Web 端 useChat.fetchHistory 逻辑完全对齐
+        const { messages: parsed, totalUsage } = processHistoryMessages(list)
+        setMessages(activeSessionId, parsed)
+
+        // 写入 usage 统计（供后续 token 展示）
+        useSessionStore.setState((state) => ({
+          usageMap: { ...state.usageMap, [activeSessionId]: totalUsage },
+        }))
+      })
+      .catch(() => {
+        // 网络错误时静默失败，保留本地 localStorage 缓存
+      })
+      .finally(() => setHistoryLoading(false))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId])
+
+  // ── UI 状态 ────────────────────────────────────────────────────────────────
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [agentPickerOpen, setAgentPickerOpen] = useState(false)
+  const [toolboxOpen, setToolboxOpen] = useState(false)
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<AttachmentItem[]>([])
-  const listRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLTextAreaElement>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const imageInputRef = useRef<HTMLInputElement>(null)
+  const [showScrollBtn, setShowScrollBtn] = useState(false)
 
-  // 自动滚到最新消息
-  const lastMessageContent = messages[messages.length - 1]?.content
+  const listRef  = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+
+  // ── 滚底工具函数 ───────────────────────────────────────────────────────────
+  const scrollToBottom = useCallback((smooth = false) => {
+    const el = listRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
+  }, [])
+
+  // ── 监听滚动位置，决定是否显示"到底"按钮 ─────────────────────────────────
   useEffect(() => {
     const el = listRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [messages.length, lastMessageContent])
+    if (!el) return
+    const onScroll = () => {
+      const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+      setShowScrollBtn(distFromBottom > 120)
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [])
 
-  // visualViewport resize → 输入框保持可见（iOS 键盘弹起时）
+  // ── 自动滚底（仅当用户已在底部附近时才自动跟随）───────────────────────────
+  const lastMsgContent = messages[messages.length - 1]?.content
+  useEffect(() => {
+    const el = listRef.current
+    if (!el) return
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    // 距底部 200px 以内才自动跟随，否则不打扰用户翻阅历史
+    if (distFromBottom < 200) scrollToBottom()
+  }, [messages.length, lastMsgContent, scrollToBottom])
+
+  // ── 页面首次挂载时强制滚底（刷新后恢复历史消息场景）─────────────────────
+  useEffect(() => {
+    const timer = setTimeout(() => scrollToBottom(true), 100)
+    return () => clearTimeout(timer)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // ── 新消息/会话切换时强制滚底 ─────────────────────────────────────────────
+  useEffect(() => {
+    scrollToBottom(true)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId])
+
+  // ── iOS visualViewport 键盘弹出适配 ──────────────────────────────────────
   useEffect(() => {
     const onResize = () => {
       if (document.activeElement === inputRef.current) {
@@ -200,38 +358,31 @@ export default function ChatPage() {
     return () => window.visualViewport?.removeEventListener('resize', onResize)
   }, [])
 
-  // 释放预览 URL
+  // ── 工具箱关闭时输入框聚焦 ────────────────────────────────────────────────
   useEffect(() => {
-    return () => {
-      attachments.forEach((a) => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl) })
-    }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    if (!toolboxOpen) inputRef.current?.focus()
+  }, [toolboxOpen])
 
-  function genId() {
-    return Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
-  }
-
-  // ── 添加附件 ──────────────────────────────────────────────────────────────
-
+  // ── 附件管理 ───────────────────────────────────────────────────────────────
   const addFiles = useCallback((files: File[]) => {
     const valid: AttachmentItem[] = []
     for (const file of files) {
       if (file.size > MAX_FILE_SIZE) {
-        Toast.show({ icon: 'fail', content: `${file.name} 超过 100MB 限制` })
+        showSnack(`${file.name} 超过 100MB`, '❌')
         continue
       }
-      const isImage = file.type.startsWith('image/')
-      const encoding: 'utf-8' | 'base64' = isImage || isBinary(file.name) ? 'base64' : 'utf-8'
-      const previewUrl = isImage ? URL.createObjectURL(file) : undefined
+      const encoding: 'utf-8' | 'base64' =
+        file.type.startsWith('image/') || isBinary(file.name) ? 'base64' : 'utf-8'
+      const previewUrl = file.type.startsWith('image/')
+        ? URL.createObjectURL(file)
+        : undefined
       valid.push({ file, previewUrl, encoding })
     }
-    if (valid.length > 0) setAttachments((prev) => [...prev, ...valid])
-  }, [])
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) addFiles(Array.from(e.target.files))
-    e.target.value = ''
-  }
+    if (valid.length > 0) {
+      setAttachments((prev) => [...prev, ...valid])
+      setToolboxOpen(false)
+    }
+  }, [showSnack])
 
   const removeAttachment = (idx: number) => {
     setAttachments((prev) => {
@@ -241,37 +392,29 @@ export default function ChatPage() {
     })
   }
 
-  // ── 发送 ──────────────────────────────────────────────────────────────────
-
-  const handleSend = async () => {
-    const text = input.trim()
+  // ── 发送逻辑 ───────────────────────────────────────────────────────────────
+  const handleSend = async (quickText?: string) => {
+    const text = (quickText ?? input).trim()
     if ((!text && attachments.length === 0) || running) return
 
-    const currentAttachments = [...attachments]
+    const currentAtts = [...attachments]
     setInput('')
     setAttachments([])
-    // 重置 textarea 高度
     if (inputRef.current) inputRef.current.style.height = 'auto'
 
-    // 上传附件 & 组装 content
-    const attachmentData: Array<{ name: string; content: string; type: string; encoding?: 'utf-8' | 'base64' }> = []
+    // 组装 attachmentData & messageContent
+    const attachmentData: any[] = []
     const messageContent: any[] = []
 
-    for (const att of currentAttachments) {
+    for (const att of currentAtts) {
       try {
         const isImage = att.file.type.startsWith('image/')
-        const fileContent =
-          att.encoding === 'base64' ? await readAsBase64(att.file) : await readAsText(att.file)
+        const fileContent = att.encoding === 'base64'
+          ? await readAsBase64(att.file)
+          : await readAsText(att.file)
 
-        // 上传到工作区（AI 可通过 read_file 工具访问）
         await workspaceApi.uploadFile(activeSessionId, att.file.name, fileContent, att.encoding)
-
-        attachmentData.push({
-          name: att.file.name,
-          content: fileContent,
-          type: att.file.type,
-          encoding: att.encoding,
-        })
+        attachmentData.push({ name: att.file.name, content: fileContent, type: att.file.type, encoding: att.encoding })
 
         if (isImage) {
           messageContent.push({
@@ -284,64 +427,144 @@ export default function ChatPage() {
         } else {
           messageContent.push({ type: 'workspace_file', name: att.file.name, fileType: att.file.type })
         }
-      } catch (err: any) {
-        Toast.show({ icon: 'fail', content: `上传 ${att.file.name} 失败` })
+      } catch {
+        showSnack(`上传 ${att.file.name} 失败`, '❌')
       }
     }
 
     if (text) messageContent.push({ type: 'text', text })
-    const finalContent = messageContent.length === 1 && messageContent[0].type === 'text'
-      ? text
-      : messageContent.length > 0 ? messageContent : text
+    const finalContent =
+      messageContent.length === 1 && messageContent[0].type === 'text'
+        ? text
+        : messageContent.length > 0 ? messageContent : text
 
-    // 用户气泡
-    const userMsgId = genId()
+    // 用户消息
     addMessage(activeSessionId, {
-      id: userMsgId,
-      role: 'user',
-      content: finalContent,
-      status: 'done',
-      createdAt: Date.now(),
+      id: genId(), role: 'user', content: finalContent, status: 'done', createdAt: Date.now(),
     })
 
     // AI 占位
     const aiMsgId = genId()
     addMessage(activeSessionId, {
-      id: aiMsgId,
-      role: 'assistant',
-      content: '',
-      status: 'streaming',
-      createdAt: Date.now(),
+      id: aiMsgId, role: 'assistant', content: '', status: 'streaming', createdAt: Date.now(),
     })
 
     markSessionRunning(activeSessionId)
-    let accumulated = ''
     const sid = activeSessionId
+    const { onEvent, onDone, onError } = buildAiDriver(sid, aiMsgId, updateMessage, markSessionDone)
 
     chatStream({
       message: finalContent,
       sessionId: sid,
       agentId: session?.agentId,
       attachments: attachmentData.length > 0 ? attachmentData : undefined,
-      onEvent: (evt) => {
-        if (evt.type === 'text_delta' && evt.content) {
-          accumulated += evt.content
-          updateMessage(sid, aiMsgId, { content: accumulated, status: 'streaming' })
-        }
-      },
-      onDone: () => {
-        updateMessage(sid, aiMsgId, { status: 'done', content: accumulated })
-        markSessionDone(sid)
-      },
+      onEvent,
+      onDone,
       onError: (err) => {
-        updateMessage(sid, aiMsgId, {
-          status: 'error',
-          content: accumulated || '发生错误，请重试',
-        })
-        Toast.show({ icon: 'fail', content: err?.message ?? '发送失败' })
-        markSessionDone(sid)
+        onError(err)
+        showSnack(err?.message ?? '发送失败', '❌')
       },
     })
+  }
+
+  // ── 重新生成：删除最后一条 AI 消息 → 追加新占位 → 重发 stream ────────────
+  const handleRegenerate = () => {
+    if (running) return
+
+    // 找最后一条用户消息
+    const lastUserIdx = [...messages].map((m, i) => ({ m, i }))
+      .filter(({ m }) => m.role === 'user')
+      .at(-1)
+    if (!lastUserIdx) return
+
+    // 删除最后一条用户消息之后的所有消息（即之前的 AI 回复）
+    const toDelete = messages.slice(lastUserIdx.i + 1)
+    toDelete.forEach((m) => deleteMessage(activeSessionId, m.id))
+
+    // 追加新 AI 占位
+    const aiMsgId = genId()
+    addMessage(activeSessionId, {
+      id: aiMsgId, role: 'assistant', content: '', status: 'streaming', createdAt: Date.now(),
+    })
+
+    markSessionRunning(activeSessionId)
+    const sid = activeSessionId
+    const { onEvent, onDone, onError } = buildAiDriver(sid, aiMsgId, updateMessage, markSessionDone)
+
+    chatStream({
+      message: lastUserIdx.m.content as any,
+      sessionId: sid,
+      agentId: session?.agentId,
+      onEvent,
+      onDone,
+      onError: (err) => {
+        onError(err)
+        showSnack(err?.message ?? '重新生成失败', '❌')
+      },
+    })
+  }
+
+  // ── ask_user 工具回复（完全对齐 Web 端 sendToolResponse）────────────────────
+  // ★ 关键：复用原 AI 消息（msgId）而非新建，先标记 ask_user 步骤已完成，
+  //         然后继续向同一条消息追加后续 AI 输出，与 Web 端行为完全一致。
+  const handleToolReply = useCallback((
+    msgId: string,
+    toolCallId: string,
+    toolName: string,
+    content: string,
+  ) => {
+    if (running) return
+    const sid = activeSessionId
+    const msgs = useSessionStore.getState().messageMap[sid] ?? []
+    const aiMsg = msgs.find((m) => m.id === msgId)
+    if (!aiMsg) return
+
+    // 1. 把原消息中对应的 ask_user tool_start 步骤标记为 success:true
+    const updatedSteps = [...(aiMsg.thinkingSteps ?? [])]
+    const lastToolIdx = [...updatedSteps].reverse().findIndex(
+      (s) => s.type === 'tool_start' && s.success === undefined &&
+        s.toolName === toolName &&
+        (s.toolCallId ? s.toolCallId === toolCallId : true)
+    )
+    if (lastToolIdx !== -1) {
+      const idx = updatedSteps.length - 1 - lastToolIdx
+      updatedSteps[idx] = {
+        ...updatedSteps[idx],
+        success: true,
+        outputPreview: content.slice(0, 500),
+      }
+    }
+
+    // 2. 把原消息恢复为 streaming 状态（面板会自动折叠，输入卡片禁用）
+    updateMessage(sid, msgId, { status: 'streaming', thinkingSteps: updatedSteps })
+    markSessionRunning(sid)
+
+    // 3. 向原消息继续追加 AI 流式输出
+    const { onEvent, onDone, onError } = buildAiDriver(
+      sid, msgId, updateMessage, markSessionDone,
+      typeof aiMsg.content === 'string' ? aiMsg.content : '',
+      updatedSteps,
+    )
+
+    chatStream({
+      message: '',
+      sessionId: sid,
+      agentId: session?.agentId,
+      toolResponse: { toolCallId, name: toolName, output: content },
+      onEvent,
+      onDone,
+      onError: (err) => {
+        onError(err)
+        showSnack(err?.message ?? '回复失败', '❌')
+      },
+    })
+  }, [activeSessionId, running, session, updateMessage, markSessionRunning, markSessionDone, showSnack])
+
+  // ── 输入框高度自适应 ───────────────────────────────────────────────────────
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(e.target.value)
+    e.target.style.height = 'auto'
+    e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -355,93 +578,144 @@ export default function ChatPage() {
 
   return (
     <div className={styles.page}>
-      <AppNavBar title={session?.title || '对话'} back={null} />
 
-      {/* 消息列表 */}
-      <div ref={listRef} className={`${styles.list} scroll-area`}>
-        {messages.length === 0 && (
-          <div className={styles.empty}>发送消息或上传文件开始对话</div>
-        )}
-        {messages
-          .filter((m) => m.role !== 'system')
-          .map((m) => (
-            <Bubble key={m.id} msg={m} />
-          ))}
+      {/* ── NavBar ─────────────────────────────────────────────────────────── */}
+      <div className={styles.navBar}>
+        {/* 左：历史会话按钮 */}
+        <button className={styles.navBtn} onClick={() => setDrawerOpen(true)} aria-label="历史会话">
+          <UnorderedListOutline />
+        </button>
+
+        {/* 中：Agent 选择 */}
+        <button className={styles.agentSelector} onClick={() => setAgentPickerOpen(true)}>
+          <span className={styles.agentName}>
+            {currentAgent?.name ?? '默认对话'}
+          </span>
+          <span className={styles.agentArrow}>▾</span>
+        </button>
+
+        {/* 右：新建 + 我的 */}
+        <div className={styles.navRight}>
+          <button
+            className={styles.navBtn}
+            onClick={() => { addSession(); }}
+            aria-label="新建对话"
+          >
+            <AddCircleOutline />
+          </button>
+          <button
+            className={styles.navAvatar}
+            onClick={() => navigate('/me')}
+            aria-label="我的"
+          >
+            <span>👤</span>
+          </button>
+        </div>
       </div>
 
-      {/* 附件预览 */}
+      {/* ── 消息列表 ───────────────────────────────────────────────────────── */}
+      <div className={styles.listWrap}>
+        <div
+          ref={listRef}
+          className={`${styles.list} scroll-area`}
+          onClick={() => { setToolboxOpen(false); setAgentPickerOpen(false) }}
+        >
+          {historyLoading ? (
+            <div className={styles.historyLoading}>
+              <span className={styles.historyLoadingDot} />
+            </div>
+          ) : messages.filter((m) => m.role !== 'system').length === 0 ? (
+            <WelcomeScreen onPrompt={(text) => handleSend(text)} />
+          ) : (
+            messages
+              .filter((m) => m.role !== 'system')
+              .map((m, i, arr) => {
+                const isLast = i === arr.length - 1
+                const isLastAi = m.role === 'assistant' && isLast
+                return (
+                  <MessageBubble
+                    key={m.id}
+                    msg={m}
+                    isLast={isLast}
+                    isStreaming={running && isLast && m.role === 'assistant'}
+                    sessionId={activeSessionId}
+                    onRegenerate={isLastAi && !running ? handleRegenerate : undefined}
+                    onToolReply={handleToolReply}
+                  />
+                )
+              })
+          )}
+        </div>
+
+        {/* ── 一键到底按钮 ───────────────────────────────────────────────── */}
+        {showScrollBtn && (
+          <button
+            className={styles.scrollBottomBtn}
+            onClick={() => scrollToBottom(true)}
+            aria-label="滚动到底部"
+          >
+            ↓
+          </button>
+        )}
+      </div>
+
+      {/* ── 附件预览条 ─────────────────────────────────────────────────────── */}
       <AttachmentBar items={attachments} onRemove={removeAttachment} />
 
-      {/* 输入栏 */}
-      <div className={styles.inputBar}>
-        {/* 图片选择按钮（相册 + 拍照） */}
-        <button
-          className={styles.iconBtn}
-          onClick={() => imageInputRef.current?.click()}
-          aria-label="图片/拍照"
-          disabled={running}
-        >
-          <PictureOutline />
-        </button>
+      {/* ── 输入区 ─────────────────────────────────────────────────────────── */}
+      <div className={styles.inputArea}>
+        <div className={styles.inputRow}>
+          {/* [+] 工具箱切换 */}
+          <button
+            className={`${styles.iconBtn} ${toolboxOpen ? styles.iconBtnActive : ''}`}
+            onClick={() => setToolboxOpen((v) => !v)}
+            aria-label="工具"
+            disabled={running}
+          >
+            {toolboxOpen ? <CloseOutline /> : <AddOutline />}
+          </button>
 
-        {/* 文件选择按钮 */}
-        <button
-          className={styles.iconBtn}
-          onClick={() => fileInputRef.current?.click()}
-          aria-label="附件"
-          disabled={running}
-        >
-          <FolderOutline />
-        </button>
+          {/* 输入框 */}
+          <textarea
+            ref={inputRef}
+            className={styles.input}
+            placeholder={running ? 'AI 思考中…' : '给 Agent 发消息'}
+            value={input}
+            rows={1}
+            disabled={running && input.length === 0}
+            onChange={handleInputChange}
+            onKeyDown={handleKeyDown}
+            onFocus={() => setToolboxOpen(false)}
+          />
 
-        {/* 文字输入框 */}
-        <textarea
-          ref={inputRef}
-          className={styles.input}
-          placeholder="输入消息…"
-          value={input}
-          rows={1}
-          onChange={(e) => {
-            setInput(e.target.value)
-            e.target.style.height = 'auto'
-            e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`
-          }}
-          onKeyDown={handleKeyDown}
-        />
-
-        {/* 发送 / 停止 */}
-        <button
-          className={`${styles.sendBtn} ${!canSend && !running ? styles.sendBtnDisabled : ''}`}
-          onClick={running ? () => cancelChat(activeSessionId) : handleSend}
-          aria-label={running ? '停止' : '发送'}
-        >
-          {running ? (
-            <span className={styles.stopIcon}>■</span>
-          ) : (
-            <SendOutline />
-          )}
-        </button>
+          {/* 发送 / 停止 */}
+          <button
+            className={`${styles.sendBtn} ${canSend || running ? styles.sendBtnActive : ''}`}
+            onClick={running ? () => cancelChat(activeSessionId) : () => handleSend()}
+            aria-label={running ? '停止' : '发送'}
+          >
+            {running ? (
+              <span className={styles.stopIcon}>■</span>
+            ) : (
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+              </svg>
+            )}
+          </button>
+        </div>
       </div>
 
-      {/* 隐藏 file input：图片（含相机） */}
-      <input
-        ref={imageInputRef}
-        type="file"
-        accept="image/*"
-        capture="environment"
-        multiple
-        style={{ display: 'none' }}
-        onChange={handleFileChange}
-      />
+      {/* ── 工具箱面板 ─────────────────────────────────────────────────────── */}
+      <InputToolbox visible={toolboxOpen} onFileSelected={addFiles} />
 
-      {/* 隐藏 file input：所有文件 */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        style={{ display: 'none' }}
-        onChange={handleFileChange}
-      />
+      {/* ── 左抽屉：历史会话 ───────────────────────────────────────────────── */}
+      <SessionsDrawer visible={drawerOpen} onClose={() => setDrawerOpen(false)} />
+
+      {/* ── Agent 选择 Popup ───────────────────────────────────────────────── */}
+      <AgentPicker visible={agentPickerOpen} onClose={() => setAgentPickerOpen(false)} />
+
+      {/* ── 轻量 Snack 通知（替代 antd-mobile Toast） ─────────────────────── */}
+      <SnackBar items={snackItems} />
     </div>
   )
 }

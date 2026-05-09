@@ -490,11 +490,18 @@
 |---------|------|------|
 | `{ "content": "..." }` | text_delta | 普通文本内容块 |
 | `{ "thinking": "..." }` | thinking | 模型思考过程（DeepSeek R1 / Claude 3.7 Sonnet） |
-| `{ "toolStart": { "name": "...", "args": {...}, "toolCallId": "..." } }` | tool_start | 工具调用开始 |
-| `{ "toolEnd": { "name": "...", "toolCallId": "...", "success": true, "outputPreview": "..." } }` | tool_end | 工具调用结束 |
+| `{ "toolStart": { "name": "...", "args": {...}, "toolCallId": "..." } }` | tool_start | 工具调用开始（旧版命名） |
+| `{ "toolEnd": { "name": "...", "toolCallId": "...", "success": true, "outputPreview": "..." } }` | tool_end | 工具调用结束（旧版命名） |
+| `{ "toolCall": { "toolName": "...", "args": {...}, "toolCallId": "...", "messageId": "..." } }` | tool_call | 工具调用开始（新版命名，wuzu-client 等下游） |
+| `{ "toolResult": { "toolName": "...", "toolCallId": "...", "success": true, "output": "...", "durationMs": 12 } }` | tool_result | 工具调用结束（新版命名，含完整 output） |
 | `{ "usage": { "systemPromptTokens": ..., "ragTokens": ..., "skillTokens": ..., "builtinToolsTokens": ..., "mcpToolsTokens": ..., "messagesTokens": ..., "toolResultsTokens": ..., "completionTokens": ..., "promptTokens": ..., "totalTokens": ..., "systemToolsTokens": ..., "cacheHitTokens": ..., "cacheMissTokens": ..., "reasoningTokens": ... } }` | usage | Token 使用量统计（8 类精细分项 + 汇总 + DeepSeek 专有指标） |
-| `{ "ask_user": { "question": "...", "options": [...], "toolCallId": "..." } }` | ask_user | 向用户提问卡片 |
+| `{ "ask_user": { "question": "...", "options": [...], "toolCallId": "..." } }` | ask_user | 向用户提问卡片（旧版命名） |
+| `{ "permissionRequest": { "requestId": "...", "toolName": "ask_user", "args": {...}, "sessionId": "...", "messageId": "...", "description": "..." } }` | permission_request | 权限/交互请求（新版命名，含 sessionId/requestId） |
+| `{ "userMsgId": "..." }` | user_msg_id | 用户消息已落库的后端 ID（首帧；同时支持 `__user_msg_id__` 与 `__userMsgId__` 两个后端别名） |
+| `{ "messageBlock": { "messageId": "...", "role": "assistant", "content": "..." } }` | message_block | 单条消息边界标记（可选；用于流中持久化锚点） |
 | `[DONE]` | done | 流式响应结束 |
+
+> **协议版本说明**：旧版字段（`toolStart` / `toolEnd` / `ask_user`）与新版字段（`toolCall` / `toolResult` / `permissionRequest`）会**同时**发送。前端可任选其一消费，二者携带的 `toolCallId` 相同，可去重。新版 envelope 命名遵循 camelCase，并补充 `sessionId` / `messageId` / `durationMs` 等元数据。
 
 ---
 

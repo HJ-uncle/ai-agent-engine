@@ -52,6 +52,7 @@ import { modelsApi, settingsApi, workspaceApi } from '@core/api';
 import type { Message, TokenUsage, ThinkingStep } from '@core/types';
 import styles from "./ChatArea.module.css";
 import dayjs from "dayjs";
+import rehypeRaw from "rehype-raw";
 
 // ── Interactive AskUser Card ──────────────────────────────────────────────────
 function InteractiveCard({
@@ -1355,7 +1356,7 @@ function MessageItemInner({
       }
       return <td {...props}>{children}</td>;
     },
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [findFile, setActiveFile])
 
   const renderContent = () => {
@@ -1365,7 +1366,7 @@ function MessageItemInner({
       ) : (
         <ReactMarkdown
           remarkPlugins={[remarkGfm, remarkMath]}
-          rehypePlugins={[rehypeKatex, rehypeHighlight]}
+          rehypePlugins={[rehypeRaw, rehypeKatex, rehypeHighlight]}
           components={markdownComponents}
         >
           {msg.content || (isStreaming ? "▌" : "")}
@@ -1386,7 +1387,7 @@ function MessageItemInner({
                 <ReactMarkdown
                   key={i}
                   remarkPlugins={[remarkGfm, remarkMath]}
-                  rehypePlugins={[rehypeKatex, rehypeHighlight]}
+                  rehypePlugins={[rehypeRaw, rehypeKatex, rehypeHighlight]}
                   components={markdownComponents}
                 >
                   {item.text}
@@ -2481,8 +2482,8 @@ export default function ChatArea() {
             title="置顶"
           >
             <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-              <path d="M6 1L1 7h3v4h4V7h3L6 1z"/>
-              <rect x="1" y="0" width="10" height="1.5" rx="0.75"/>
+              <path d="M6 1L1 7h3v4h4V7h3L6 1z" />
+              <rect x="1" y="0" width="10" height="1.5" rx="0.75" />
             </svg>
           </div>
 
@@ -2494,7 +2495,7 @@ export default function ChatArea() {
             title="上一组对话"
           >
             <svg width="11" height="11" viewBox="0 0 11 11" fill="currentColor">
-              <path d="M5.5 2L1 7h3v2h3V7h3L5.5 2z"/>
+              <path d="M5.5 2L1 7h3v2h3V7h3L5.5 2z" />
             </svg>
           </div>
 
@@ -2509,7 +2510,7 @@ export default function ChatArea() {
             title="下一组对话"
           >
             <svg width="11" height="11" viewBox="0 0 11 11" fill="currentColor">
-              <path d="M5.5 9L10 4H7V2H4v2H1L5.5 9z"/>
+              <path d="M5.5 9L10 4H7V2H4v2H1L5.5 9z" />
             </svg>
           </div>
 
@@ -2521,8 +2522,8 @@ export default function ChatArea() {
             title="到底部"
           >
             <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-              <path d="M6 11L11 5H8V1H4v4H1L6 11z"/>
-              <rect x="1" y="10.5" width="10" height="1.5" rx="0.75"/>
+              <path d="M6 11L11 5H8V1H4v4H1L6 11z" />
+              <rect x="1" y="10.5" width="10" height="1.5" rx="0.75" />
             </svg>
           </div>
         </div>

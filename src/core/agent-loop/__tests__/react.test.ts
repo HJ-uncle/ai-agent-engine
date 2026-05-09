@@ -8,12 +8,9 @@ import type { LLMAdapter, LLMResponse } from '../../llm-adapter/index.js'
 async function collectYields(iterable: AsyncIterable<string>): Promise<string[]> {
   const results: string[] = []
   for await (const chunk of iterable) {
-    if (!chunk.includes('__tool_start__') && 
-        !chunk.includes('__tool_end__') && 
-        !chunk.includes('__thinking__') && 
-        !chunk.includes('__usage__')) {
-      results.push(chunk)
-    }
+    // 过滤所有 \x00__xxx__ 控制帧（含旧版与新版协议别名）
+    if (chunk.startsWith('\x00__')) continue
+    results.push(chunk)
   }
   return results
 }

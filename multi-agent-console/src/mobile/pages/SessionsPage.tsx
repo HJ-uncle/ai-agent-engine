@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { List, ActionSheet, Toast, SwipeAction, Button } from 'antd-mobile'
+import { List, ActionSheet, SwipeAction, Button } from 'antd-mobile'
 import { AddOutline } from 'antd-mobile-icons'
 import { useSessionStore } from '@core/store/session'
 import { AppNavBar } from '../components/AppNavBar'
@@ -24,7 +24,7 @@ export default function SessionsPage() {
 
   const handleDelete = (id: string) => {
     deleteSession(id)
-    Toast.show({ icon: 'success', content: '已删除' })
+    // 不使用 Toast（antd-mobile Toast 在 React 18 中崩溃），用 console 记录即可
   }
 
   const handleRenameConfirm = (id: string, title: string) => {

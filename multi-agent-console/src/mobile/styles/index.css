@@ -2,6 +2,9 @@
    Mobile – Global Reset & Base
    ============================================================ */
 
+/* 0. 代码高亮主题 */
+@import 'highlight.js/styles/github-dark.css';
+
 /* 1. 全高 & 无外层弹性滚动 */
 html,
 body,
@@ -69,4 +72,10 @@ input,
 textarea,
 select {
   font-size: 16px !important;
+}
+
+/* 8. Snack 通知动画 */
+@keyframes fadeInDown {
+  from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0);    }
 }

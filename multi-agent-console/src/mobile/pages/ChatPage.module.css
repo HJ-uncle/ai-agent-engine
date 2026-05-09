@@ -1,158 +1,160 @@
+/* ── 整体结构 ─────────────────────────────────────────────────────────────── */
 .page {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  min-height: 0;
+  height: 100dvh;
+  max-height: 100dvh;
+  background: var(--adm-color-background);
   overflow: hidden;
 }
 
-/* 消息列表 */
-.list {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 12px 12px 8px;
+/* ── NavBar ───────────────────────────────────────────────────────────────── */
+.navBar {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
+  align-items: center;
+  gap: 4px;
+  padding: calc(var(--safe-top) + 8px) 8px 8px;
+  border-bottom: 1px solid var(--adm-color-border);
+  background: var(--adm-color-background);
+  flex-shrink: 0;
 }
 
-.empty {
+.navBtn {
+  width: 40px;
+  height: 40px;
+  border: none;
+  background: transparent;
+  color: var(--adm-color-text);
+  font-size: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  cursor: pointer;
+  flex-shrink: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+.navBtn:active { background: var(--adm-color-fill-content); }
+
+.agentSelector {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--adm-color-text-secondary);
-  font-size: 14px;
-  padding-top: 60px;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 8px 12px;
+  border-radius: 20px;
+  -webkit-tap-highlight-color: transparent;
+  min-width: 0;
 }
+.agentSelector:active { background: var(--adm-color-fill-content); }
 
-/* 气泡 */
-.bubbleWrap {
-  display: flex;
-  max-width: 100%;
-}
-
-.userWrap {
-  justify-content: flex-end;
-}
-
-.aiWrap {
-  justify-content: flex-start;
-}
-
-.bubble {
-  max-width: 78%;
-  padding: 10px 13px;
-  border-radius: 16px;
-  font-size: 15px;
-  line-height: 1.55;
-  word-break: break-word;
-}
-
-.userBubble {
-  background: var(--adm-color-primary);
-  color: #fff;
-  border-bottom-right-radius: 4px;
-}
-
-.aiBubble {
-  background: var(--adm-color-fill-content);
+.agentName {
+  font-size: 16px;
+  font-weight: 600;
   color: var(--adm-color-text);
-  border-bottom-left-radius: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 140px;
 }
 
-.bubbleText {
-  white-space: pre-wrap;
-}
-
-.typing {
-  letter-spacing: 4px;
-  animation: blink 1s steps(3, end) infinite;
-}
-
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50%       { opacity: 0.3; }
-}
-
-/* 输入栏 */
-.inputBar {
-  flex-shrink: 0;
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 8px 12px calc(8px + var(--safe-bottom));
-  background: var(--adm-color-background);
-  border-top: 1px solid var(--adm-color-border);
-}
-
-.input {
-  flex: 1;
-  min-height: 44px;
-  max-height: 120px;
-  padding: 10px 12px;
-  border-radius: 22px;
-  border: 1px solid var(--adm-color-border);
-  background: var(--adm-color-fill-content);
-  color: var(--adm-color-text);
-  font-size: 16px; /* 防止 iOS 放大 */
-  resize: none;
-  outline: none;
-  line-height: 1.4;
-  overflow-y: auto;
-}
-
-.input::placeholder {
+.agentArrow {
+  font-size: 12px;
   color: var(--adm-color-text-secondary);
+  flex-shrink: 0;
 }
 
-.sendBtn {
+.navRight {
+  display: flex;
+  align-items: center;
+  gap: 2px;
   flex-shrink: 0;
-  width: 44px;
-  height: 44px;
+}
+
+.navAvatar {
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
-  background: var(--adm-color-primary);
-  color: #fff;
+  background: var(--adm-color-fill-content);
   border: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 20px;
+  font-size: 18px;
   cursor: pointer;
-  transition: opacity 0.15s;
+  -webkit-tap-highlight-color: transparent;
 }
+.navAvatar:active { opacity: 0.7; }
 
-.sendBtn:active {
-  opacity: 0.7;
-}
-
-.sendBtnDisabled {
-  background: #555;
-}
-
-.stopIcon {
-  font-size: 14px;
-}
-
-/* ── 图片 grid（气泡内） ────────────────────────────────────────────────── */
-.imageGrid {
+/* ── 欢迎页 ───────────────────────────────────────────────────────────────── */
+.welcome {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: center;
+  padding: 48px 24px 24px;
+  text-align: center;
+  gap: 8px;
+}
+
+.welcomeEmoji {
+  font-size: 56px;
+  line-height: 1;
+}
+
+.welcomeTitle {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--adm-color-text);
+  margin: 8px 0 0;
+}
+
+.welcomeSub {
+  font-size: 14px;
+  color: var(--adm-color-text-secondary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.promptGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 20px;
+  width: 100%;
+}
+
+.promptCard {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 6px;
-  margin-bottom: 6px;
-}
-
-.thumbImage {
-  width: 80px;
-  height: 80px;
-  object-fit: cover;
-  border-radius: 8px;
+  background: var(--adm-color-fill-content);
+  border: 1px solid var(--adm-color-border);
+  border-radius: 12px;
+  padding: 14px 12px;
   cursor: pointer;
-  flex-shrink: 0;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.1s;
+}
+.promptCard:active { background: #333; }
+
+.promptEmoji {
+  font-size: 20px;
+  line-height: 1;
 }
 
-/* ── 附件预览栏（输入栏上方） ────────────────────────────────────────────── */
+.promptText {
+  font-size: 13px;
+  color: var(--adm-color-text);
+  line-height: 1.4;
+}
+
+/* ── 附件预览条 ───────────────────────────────────────────────────────────── */
 .attachBar {
   flex-shrink: 0;
   display: flex;
@@ -161,6 +163,7 @@
   overflow-x: auto;
   background: var(--adm-color-background);
   -webkit-overflow-scrolling: touch;
+  border-top: 1px solid var(--adm-color-border);
 }
 
 .attachThumb {
@@ -189,11 +192,10 @@
   align-items: center;
   justify-content: center;
   font-size: 28px;
-  color: var(--adm-color-text-secondary);
 }
 
 .attachName {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--adm-color-text-secondary);
   text-align: center;
   max-width: 72px;
@@ -211,26 +213,41 @@
   position: absolute;
   top: -4px;
   right: -4px;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  background: #555;
+  background: #666;
   color: #fff;
   border: none;
+  font-size: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
   cursor: pointer;
   padding: 0;
-  line-height: 1;
 }
 
-/* ── 输入栏图标按钮 ─────────────────────────────────────────────────────── */
+/* ── 输入区 ───────────────────────────────────────────────────────────────── */
+.inputArea {
+  flex-shrink: 0;
+  padding: 8px 10px calc(8px + var(--safe-bottom));
+  background: var(--adm-color-background);
+  border-top: 1px solid var(--adm-color-border);
+}
+
+.inputRow {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  background: var(--adm-color-fill-content);
+  border-radius: 24px;
+  padding: 4px 4px 4px 6px;
+}
+
 .iconBtn {
   flex-shrink: 0;
   width: 36px;
-  height: 44px;
+  height: 36px;
   border: none;
   background: transparent;
   color: var(--adm-color-text-secondary);
@@ -238,15 +255,125 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  border-radius: 50%;
   cursor: pointer;
   padding: 0;
-  border-radius: 8px;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.15s, background 0.15s;
+}
+.iconBtn:active { background: rgba(255,255,255,0.08); }
+.iconBtn:disabled { opacity: 0.35; }
+
+.iconBtnActive {
+  color: var(--adm-color-primary);
 }
 
-.iconBtn:active {
-  background: var(--adm-color-fill-content);
+.input {
+  flex: 1;
+  min-height: 36px;
+  max-height: 120px;
+  padding: 7px 4px;
+  border: none;
+  background: transparent;
+  color: var(--adm-color-text);
+  font-size: 16px; /* 防 iOS 放大 */
+  resize: none;
+  outline: none;
+  line-height: 1.45;
+  overflow-y: auto;
+}
+.input::placeholder { color: var(--adm-color-text-secondary); }
+
+.sendBtn {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #444;
+  color: #888;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s, color 0.15s;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.iconBtn:disabled {
-  opacity: 0.4;
+.sendBtnActive {
+  background: var(--adm-color-primary);
+  color: #fff;
 }
+.sendBtn:active { opacity: 0.75; }
+
+.stopIcon {
+  font-size: 12px;
+}
+
+/* ── 消息列表外层包裹（用于定位到底按钮）────────────────────────────────── */
+.listWrap {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── 消息列表 ─────────────────────────────────────────────────────────────── */
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  padding: 8px 0 12px;
+  /* 确保内容不撑破宽度 */
+  overflow-x: hidden;
+}
+
+/* ── 滚到底部按钮 ─────────────────────────────────────────────────────────── */
+.scrollBottomBtn {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(30,30,34,0.92);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: #ccc;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+  backdrop-filter: blur(8px);
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 0.2s, transform 0.2s;
+  z-index: 10;
+}
+.scrollBottomBtn:active { opacity: 0.7; transform: scale(0.92); }
+
+
+.historyLoading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 40px;
+}
+
+.historyLoadingDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--adm-color-primary);
+  animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.8); }
+  50%       { opacity: 1;   transform: scale(1.2); }
+}
+

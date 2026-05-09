@@ -379,6 +379,29 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
     }
   })
 
+  // ── GET /workspace/file/download — 文件下载（返回附件流，触发浏览器下载）────
+  fastify.get<{ Querystring: { sessionId?: string; path: string } }>('/workspace/file/download', async (request, reply) => {
+    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const sessionId = request.query.sessionId || 'default'
+    const reqPath = request.query.path
+    if (!reqPath) return reply.code(400).send('path is required')
+    try {
+      const safePath = workspaceManager.resolveSafePath({ tenantId, sessionId }, reqPath)
+      if (!fs.existsSync(safePath)) return reply.code(404).send('File not found')
+      const stat = fs.statSync(safePath)
+      if (!stat.isFile()) return reply.code(400).send('Not a file')
+      const filename = path.basename(safePath)
+      const stream = fs.createReadStream(safePath)
+      return reply.code(200)
+        .header('Content-Type', 'application/octet-stream')
+        .header('Content-Length', stat.size)
+        .header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`)
+        .send(stream)
+    } catch (e: any) {
+      return reply.code(500).send(`Download error: ${e.message}`)
+    }
+  })
+
   // ── NEW: GET /workspace/file/stream — 视频流媒体 ─────────────────────────
   fastify.get<{ Querystring: { sessionId?: string; path: string } }>('/workspace/file/stream', async (request, reply) => {
     const tenantId = (request as any).authContext?.tenantId ?? 'default'

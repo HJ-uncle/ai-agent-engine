@@ -102,6 +102,8 @@ export class ReActStrategy implements LoopStrategy {
       const savedUserMsgId = await ctx.history.append(userMessage, ctx)
       // ★ 把后端 message_id 回传给前端，前端用它做删除/重发的准确定位
       yield `\x00__user_msg_id__${savedUserMsgId}`
+      // ★ 别名帧（新版协议，wuzu-client 等下游消费 camelCase 命名；不影响旧消费者）
+      yield `\x00__userMsgId__${savedUserMsgId}`
     }
 
     // Build tool list from registry
@@ -330,11 +332,23 @@ export class ReActStrategy implements LoopStrategy {
 
         // ── 思考过程：通知前端正在调用哪个工具 ──────────────────────────
         yield `\x00__tool_start__${JSON.stringify({ name: toolCall.name, args: toolCall.args, toolCallId: toolCall.id })}`
+        // ★ 别名帧（新版协议，wuzu-client 等下游消费规范字段；不影响旧消费者）
+        yield `\x00__tool_call__${JSON.stringify({ toolName: toolCall.name, args: toolCall.args, toolCallId: toolCall.id, messageId: assistantMsgId })}`
 
         // SPECIAL CASE: ask_user tool pauses the agent loop
         if (toolCall.name === 'ask_user') {
           // Output the interactive card
           yield `\x00__ask_user__${JSON.stringify({ ...toolCall.args, toolCallId: toolCall.id })}`
+          // ★ 别名帧（新版协议）：携带 sessionId / requestId 以便外部下游做权限关联
+          const askArgs = (toolCall.args ?? {}) as Record<string, unknown>
+          yield `\x00__permission_request__${JSON.stringify({
+            requestId: toolCall.id,
+            toolName: 'ask_user',
+            args: askArgs,
+            sessionId: ctx.sessionId,
+            messageId: assistantMsgId,
+            description: typeof askArgs.question === 'string' ? askArgs.question : undefined,
+          })}`
 
           // DO NOT APPEND A TOOL MSG HERE! Wait for the user to submit it.
           // Otherwise, OpenAI throws 400 because there is no tool_result matching tool_calls
@@ -369,6 +383,14 @@ export class ReActStrategy implements LoopStrategy {
           toolCallId: toolCall.id,
           success: toolResult.success,
           outputPreview: String(toolResult.output),
+        })}`
+        // ★ 别名帧（新版协议）：完整 output（非预览）+ durationMs（如有）
+        yield `\x00__tool_result__${JSON.stringify({
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          success: toolResult.success,
+          output: String(toolResult.output),
+          ...(typeof toolResult.durationMs === 'number' ? { durationMs: toolResult.durationMs } : {}),
         })}`
 
         if (!toolResult.success) {

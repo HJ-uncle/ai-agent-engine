@@ -50,7 +50,8 @@ export default function MeSettingsPage() {
 
   return (
     <div className={styles.page}>
-      <AppNavBar title="我的" back={null} />
+      {/* back 明确回到 /chat，避免无历史记录时退不出去 */}
+      <AppNavBar title="我的" onBack={() => navigate('/chat')} />
 
       <div className={`${styles.content} scroll-area`}>
         <List>

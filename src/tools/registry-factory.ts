@@ -32,6 +32,42 @@ export interface RegistryFactoryOptions {
   allowedSkills?: string[] | null
   /** 允许的系统工具列表，undefined = 全部，[] = 全部，传入列表则只注册指定的工具 */
   allowedTools?: string[] | null
+  /**
+   * 客户端透传的内联 Skill 列表（请求级；典型场景：wuzu 桌面客户端把
+   * 本地安装的 skill 在 chat 请求时一同下发）
+   *
+   * 行为：
+   *   - 转换为 ExternalSkill 后追加到 externalSkills 列表
+   *   - 与 SKILLS_ROOT 已有的 skill 按 name 去重（已有的优先，避免覆盖文件实现）
+   *   - inlineSkill 没有真实 skillMdPath，调用 run_skill_script 会失败
+   *     （Phase B 仅做"能力可见"，工具实际执行待 Phase C 实现）
+   */
+  inlineSkills?: Array<{
+    id: string
+    name: string
+    description?: string
+    promptContent?: string
+    version?: string
+  }>
+  /**
+   * 客户端透传的内联 MCP server 配置（请求级临时挂载）
+   *
+   * 行为：
+   *   - 仅支持 http / sse / streamableHttp 三种远程协议（stdio 跳过——
+   *     wuzu 端启动的 stdio 子进程 agent-engine 接不到）
+   *   - 在 mcp loader 已注册的 server 之外追加这些 inline server
+   *   - 连接失败的 inline server 仅 warn，不阻断 chat 流程
+   */
+  inlineMcpServers?: Array<{
+    id: string
+    name: string
+    transportType: 'stdio' | 'sse' | 'http' | 'streamableHttp'
+    command?: string
+    args?: string[]
+    env?: Record<string, string>
+    url?: string
+    headers?: Record<string, string>
+  }>
 }
 
 /**
@@ -65,11 +101,15 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
 
   // 技能工具名称（需要随自定义技能自动添加）
   const skillToolNames = ['list_skills', 'get_skill', 'run_skill_script']
-  // 获取所有自定义技能名称
+  // 获取所有自定义技能名称（含本地 SKILLS_ROOT 与客户端透传的 inlineSkills）
   const externalSkillNames = skillsRegistry.getSkills().map(s => s.name)
-  // 检查是否选择了自定义技能
+  const inlineSkillNames = Array.isArray(opts.inlineSkills)
+    ? opts.inlineSkills.filter(s => s && s.name).map(s => s.name)
+    : []
+  const allSkillNames = [...externalSkillNames, ...inlineSkillNames]
+  // 检查是否选择了自定义技能（本地或客户端 inline）
   const hasExternalSkill = opts.allowedSkills && opts.allowedSkills.length > 0 &&
-    opts.allowedSkills.some(s => externalSkillNames.includes(s))
+    opts.allowedSkills.some(s => allSkillNames.includes(s))
 
   // 计算 effectiveAllowedTools：如果选择了自定义技能，自动添加技能工具
   let effectiveAllowedTools = opts.allowedTools
@@ -114,8 +154,27 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   if (shouldRegister('recall')) createMemoryTools(memory).filter(t => t.name === 'recall').forEach((t) => registerBuiltin(t))
   if (shouldRegister('search_memory')) createMemoryTools(memory).filter(t => t.name === 'search_memory').forEach((t) => registerBuiltin(t))
 
-  // 6. 外部 Skill 工具（按 allowedSkills 过滤）
+  // 6. 外部 Skill 工具（按 allowedSkills 过滤；合并 inlineSkills）
   let externalSkills = skillsRegistry.getSkills()
+  // ── 合并客户端透传的 inline skill ────────────────────────────────────────
+  // 策略：本地 SKILLS_ROOT 已有的 name 优先（保留 .skill 包的真实文件实现），
+  // 仅当本地没有同名 skill 时才把 inline 版本追加进去（虚拟 skill，仅做能力可见）。
+  if (Array.isArray(opts.inlineSkills) && opts.inlineSkills.length > 0) {
+    const existingNames = new Set(externalSkills.map(s => s.name.toLowerCase()))
+    const inlineSkillsAsExternal: ExternalSkill[] = opts.inlineSkills
+      .filter(s => s && s.name && !existingNames.has(s.name.toLowerCase()))
+      .map((s, i) => ({
+        name: s.name,
+        description: s.description ?? `Skill: ${s.name}${s.version ? ` (v${s.version})` : ''}`,
+        skillMdPath: '', // 无本地文件，依赖 inlineContent
+        order: 1000 + i, // 排在本地 skill 之后
+        enabled: true,
+        inlineContent: s.promptContent
+      }))
+    if (inlineSkillsAsExternal.length > 0) {
+      externalSkills = [...externalSkills, ...inlineSkillsAsExternal]
+    }
+  }
   if (opts.allowedSkills && opts.allowedSkills.length > 0) {
     externalSkills = externalSkills.filter((s) => opts.allowedSkills!.includes(s.name))
   }
@@ -160,8 +219,12 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   if (shouldRegister('install_package')) registerBuiltin(installPackageTool)
   if (shouldRegister('list_packages')) registerBuiltin(listPackagesTool)
 
-  // 16. MCP 工具（动态加载）- 按名称过滤
-  const mcpTools = await registerMCPTools(registry, opts.allowedTools ? (name: string) => opts.allowedTools!.includes(name) : undefined)
+  // 16. MCP 工具（动态加载）- 按名称过滤；合并 inlineMcpServers
+  const mcpTools = await registerMCPTools(
+    registry,
+    opts.allowedTools ? (name: string) => opts.allowedTools!.includes(name) : undefined,
+    opts.inlineMcpServers
+  )
 
   // 17. Agent 系统工具 - 按 allowedTools 过滤
   if (shouldRegister('agent_list')) agentTools.filter(t => t.name === 'agent_list').forEach((t) => registerBuiltin(t))

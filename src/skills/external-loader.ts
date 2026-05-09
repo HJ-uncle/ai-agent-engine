@@ -20,6 +20,13 @@ export interface ExternalSkill {
   skillMdPath: string  // SKILL.md 文件的绝对路径（按需读取全文）
   order: number
   enabled: boolean
+  /**
+   * 内联 SKILL.md 内容（来自客户端 inlineSkills 透传）
+   * 当此字段非空时，getSkillContent 优先返回它而不再读 skillMdPath。
+   * 用于 wuzu 桌面客户端把本地安装的 skill 透传到 agent-engine，
+   * 让 agent-engine 即使本地 SKILLS_ROOT 没有同名 skill 也能让 LLM 看到完整说明。
+   */
+  inlineContent?: string
 }
 
 interface SkillsConfig {
@@ -131,14 +138,24 @@ export function loadExternalSkills(skillsRoot?: string): ExternalSkill[] {
 
 /**
  * 按名称读取技能的完整 SKILL.md 内容（供 get_skill 工具调用）
+ *
+ * 读取优先级：
+ *   1. skill.inlineContent（来自客户端透传，无 fs 依赖）
+ *   2. skill.skillMdPath（agent-engine 本地 SKILLS_ROOT 文件）
  */
 export function getSkillContent(skills: ExternalSkill[], name: string): string | null {
   const skill = skills.find(
     (s) => s.name.toLowerCase() === name.toLowerCase() ||
-           path.basename(path.dirname(s.skillMdPath)).toLowerCase() === name.toLowerCase()
+           (s.skillMdPath && path.basename(path.dirname(s.skillMdPath)).toLowerCase() === name.toLowerCase())
   )
   if (!skill) return null
 
+  // 优先返回 inline 内容（客户端透传的虚拟 skill 无本地文件）
+  if (skill.inlineContent && skill.inlineContent.trim()) {
+    return skill.inlineContent
+  }
+
+  if (!skill.skillMdPath) return null
   try {
     return fs.readFileSync(skill.skillMdPath, 'utf-8')
   } catch {

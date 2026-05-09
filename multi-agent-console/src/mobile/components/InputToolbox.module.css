@@ -1,0 +1,54 @@
+.toolbox {
+  flex-shrink: 0;
+  background: var(--adm-color-background);
+  border-top: 1px solid var(--adm-color-border);
+  padding: 12px 0 calc(12px + var(--safe-bottom));
+  animation: slideUp 0.2s ease;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(20px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  padding: 0 12px;
+}
+
+.toolItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 8px 4px;
+  border-radius: 10px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.toolItem:active {
+  background: var(--adm-color-fill-content);
+}
+
+.toolIcon {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  background: var(--adm-color-fill-content);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  color: var(--adm-color-text);
+}
+
+.toolLabel {
+  font-size: 12px;
+  color: var(--adm-color-text-secondary);
+  white-space: nowrap;
+}

@@ -1,0 +1,251 @@
+/* ════════════════════════════════════════════════════════════
+   MessageBubble — 移动端消息气泡（现代简洁风格）
+   ════════════════════════════════════════════════════════════ */
+
+/* ── 操作按钮 ─────────────────────────────────────────────────────────────── */
+.actBtn {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: transparent; border: none;
+  color: var(--adm-color-text-secondary);
+  font-size: 12px; padding: 5px 10px; border-radius: 14px;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s, color 0.15s;
+}
+.actBtn:active { background: rgba(255,255,255,0.08); }
+.actBtnDone { color: #4caf50 !important; }
+
+/* ── 用户消息 ─────────────────────────────────────────────────────────────── */
+.userRow {
+  display: flex; flex-direction: column;
+  align-items: flex-end; padding: 3px 12px; gap: 3px;
+}
+.userBubble {
+  max-width: 78%; min-width: 40px;
+  background: #1a6db5; color: #fff;
+  border-radius: 18px 4px 18px 18px;
+  padding: 10px 14px; font-size: 15px; line-height: 1.6;
+  word-break: break-word; white-space: pre-wrap;
+  display: flex; flex-direction: column; gap: 6px;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+.actRow { display: flex; gap: 2px; justify-content: flex-end; }
+
+/* ── AI 消息 ──────────────────────────────────────────────────────────────── */
+.aiRow { display: flex; flex-direction: column; padding: 3px 12px 2px; }
+.aiContent { display: flex; flex-direction: column; gap: 4px; max-width: 96%; min-width: 0; overflow: hidden; }
+.aiBubble {
+  background: #2a2a2e; border-radius: 4px 18px 18px 18px;
+  padding: 10px 14px; word-break: break-word; overflow-wrap: break-word;
+  overflow-x: hidden;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+.aiBubbleErr {
+  background: rgba(244,67,54,0.1);
+  border: 1px solid rgba(244,67,54,0.25);
+}
+.aiActs { display: flex; gap: 2px; padding-left: 4px; }
+
+/* ── 打字光标 ─────────────────────────────────────────────────────────────── */
+.cursor {
+  display: inline-block; width: 2px; height: 15px;
+  background: #007acc; border-radius: 1px;
+  animation: blink .7s steps(1) infinite;
+  vertical-align: text-bottom; margin-left: 2px;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+/* ── Markdown ─────────────────────────────────────────────────────────────── */
+.md { font-size: 14.5px; line-height: 1.75; color: #d4d4d4; word-break: break-word; overflow-wrap: break-word; }
+.md p { margin: 0 0 8px; overflow-wrap: break-word; word-break: break-word; }
+.md p:last-child { margin-bottom: 0; }
+.md h1,.md h2,.md h3,.md h4 { margin: 12px 0 5px; font-weight: 600; }
+.md h1{font-size:19px} .md h2{font-size:17px} .md h3{font-size:15px}
+.md ul,.md ol { margin: 5px 0; padding-left: 18px; }
+.md li { margin: 3px 0; }
+.md blockquote {
+  margin: 8px 0; padding: 6px 12px;
+  border-left: 3px solid #1a6db5;
+  background: rgba(26,109,181,0.08);
+  border-radius: 0 6px 6px 0; color: #9d9d9d;
+}
+.md table { width: 100%; border-collapse: collapse; margin: 8px 0; display: block; overflow-x: auto; font-size: 13px; }
+.md th,.md td { border: 1px solid #3c3c3c; padding: 5px 10px; text-align: left; }
+.md th { background: #2d2d30; }
+.md hr { border: none; border-top: 1px solid #3c3c3c; margin: 12px 0; }
+.ic { background: rgba(26,109,181,0.15); color: #ce9178; padding: 1px 5px; border-radius: 4px; font-size: 13px; font-family: 'Menlo','Monaco','Courier New',monospace; word-break: break-all; }
+.mdImg { max-width: 100%; border-radius: 8px; cursor: pointer; display: block; margin: 6px 0; }
+.mdLink { color: #4fc1ff; text-decoration: none; word-break: break-all; }
+.mdLink:active { opacity: 0.7; }
+.mdLinkDownload { color: #4ade80; font-weight: 500; }
+
+/* ── 代码块 ───────────────────────────────────────────────────────────────── */
+.codeBlock { position: relative; margin: 8px 0; border-radius: 8px; overflow: hidden; background: #1e1e1e; border: 1px solid #3a3a3a; }
+.codeLang { display: inline-block; padding: 4px 12px; font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: .5px; }
+.codeCopyBtn {
+  position: absolute; top: 5px; right: 8px;
+  background: rgba(255,255,255,0.08); border: none;
+  color: #888; font-size: 11px; padding: 3px 8px;
+  border-radius: 4px; cursor: pointer;
+  transition: color .2s, background .2s;
+}
+.codeCopyBtn:active { background: rgba(255,255,255,0.15); }
+.codeCopied { color: #4caf50 !important; }
+.codePre { margin: 0; padding: 10px 12px 12px; overflow-x: auto; font-size: 13px; line-height: 1.6; -webkit-overflow-scrolling: touch; }
+.codePre code { font-family: 'Menlo','Monaco','Courier New',monospace; background: transparent; padding: 0; color: #abb2bf; }
+
+/* ── 思考面板 ─────────────────────────────────────────────────────────────── */
+.thinkingPanel {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px; overflow: hidden;
+}
+.thinkingPanelAsk {
+  border-color: rgba(26,109,181,0.35);
+  background: rgba(26,109,181,0.04);
+}
+
+.thinkingHeader {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 9px 12px; cursor: pointer; -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+.thinkingHeader:active { background: rgba(255,255,255,0.04); }
+
+.thinkingLeft { display: flex; align-items: center; gap: 7px; min-width: 0; }
+
+.thinkingLabel {
+  font-size: 12.5px; color: #9d9d9d; font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.thinkingLabelAsk { color: #4fc1ff; }
+
+.thinkingToggle { font-size: 10px; color: #666; flex-shrink: 0; margin-left: 8px; }
+
+/* Spinner */
+.spinner {
+  display: inline-block; width: 13px; height: 13px;
+  border: 2px solid rgba(0,122,204,.25); border-top-color: #007acc;
+  border-radius: 50%; animation: spin .8s linear infinite; flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* 时间轴 */
+.thinkingBody { padding: 4px 12px 10px; display: flex; flex-direction: column; gap: 0; border-top: 1px solid rgba(255,255,255,0.05); }
+
+.tlItem { display: flex; gap: 10px; padding: 7px 0; position: relative; }
+.tlItem::before {
+  content: ''; position: absolute;
+  left: 4px; top: 22px; bottom: -7px;
+  width: 1px; background: rgba(255,255,255,0.06);
+}
+.tlItem:last-child::before { display: none; }
+
+.tlDot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; margin-top: 5px; }
+.tlContent { flex: 1; min-width: 0; }
+.tlTitle { font-size: 12.5px; font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 5px; }
+
+/* 等待点动画 */
+.pendingDots { display: inline-flex; gap: 3px; margin-left: 4px; }
+.pendingDots span { display: inline-block; width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: 0.4; animation: dotPulse 1.2s ease infinite; }
+.pendingDots span:nth-child(2) { animation-delay: .2s; }
+.pendingDots span:nth-child(3) { animation-delay: .4s; }
+@keyframes dotPulse { 0%,100%{opacity:.2} 50%{opacity:1} }
+
+/* 思考文本 */
+.thinkText {
+  font-size: 12px; color: #9d9d9d; line-height: 1.65;
+  white-space: pre-wrap; word-break: break-word;
+  background: rgba(168,85,247,0.06);
+  padding: 6px 10px; border-radius: 6px;
+  border-left: 2px solid rgba(168,85,247,.3);
+  max-height: 180px; overflow-y: auto;
+}
+
+/* 工具输出 */
+.toolOutput {
+  font-size: 11.5px; color: #9d9d9d; background: rgba(255,255,255,0.04);
+  padding: 5px 8px; border-radius: 5px;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 100px; overflow-y: auto; line-height: 1.5;
+}
+.toolArgs {
+  font-size: 11px; color: #666; background: rgba(255,255,255,0.03);
+  padding: 4px 8px; border-radius: 4px;
+  overflow-x: auto; white-space: nowrap; opacity: .8;
+  font-family: 'Menlo','Monaco','Courier New',monospace;
+}
+
+/* ── ask_user 交互卡 ──────────────────────────────────────────────────────── */
+.askCard {
+  background: rgba(26,109,181,0.07);
+  border: 1px solid rgba(26,109,181,0.25);
+  border-radius: 10px; padding: 12px;
+  display: flex; flex-direction: column; gap: 10px;
+  margin-top: 6px;
+}
+.askQuestion {
+  display: flex; gap: 7px; align-items: flex-start;
+  font-size: 14px; font-weight: 600; color: #d4d4d4; line-height: 1.5;
+}
+.askQuestionEmoji { font-size: 16px; flex-shrink: 0; }
+.askOptions { display: flex; flex-direction: column; gap: 7px; }
+
+.askOpt {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px; padding: 10px 12px;
+  cursor: pointer; text-align: left;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .15s, border-color .15s;
+}
+.askOpt:active { background: rgba(26,109,181,0.12); }
+.askOptSel { border-color: #1a6db5 !important; background: rgba(26,109,181,0.15) !important; }
+
+.askOptInner { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.askOptLabel { font-size: 14px; font-weight: 500; color: #d4d4d4; }
+.askOptDesc { font-size: 12px; color: #9d9d9d; }
+.askOptCheck { font-size: 14px; color: #1a6db5; visibility: hidden; flex-shrink: 0; }
+.askOptCheckVis { visibility: visible; }
+
+.askOtherTa {
+  width: 100%; background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 6px; color: #d4d4d4; font-size: 14px;
+  padding: 8px 10px; resize: none; outline: none;
+  line-height: 1.5; box-sizing: border-box;
+}
+.askSubmit {
+  width: 100%; padding: 11px; border-radius: 8px; border: none;
+  background: rgba(255,255,255,0.07); color: #666;
+  font-size: 14px; font-weight: 600;
+  cursor: not-allowed; transition: background .2s, color .2s;
+}
+.askSubmitOn {
+  background: #1a6db5 !important; color: #fff !important; cursor: pointer;
+}
+.askSubmitOn:active { opacity: .8; }
+
+/* 已回复摘要 */
+.askCardDone {
+  display: flex; gap: 8px; align-items: flex-start;
+  background: rgba(76,175,80,0.06);
+  border: 1px solid rgba(76,175,80,0.2);
+  border-radius: 8px; padding: 10px 12px;
+  margin-top: 6px;
+}
+.askDoneIcon { font-size: 15px; flex-shrink: 0; margin-top: 1px; }
+.askDoneQ { font-size: 12.5px; color: #9d9d9d; line-height: 1.5; }
+.askDoneA { font-size: 13px; color: #4caf50; margin-top: 3px; font-weight: 500; }
+
+/* ── 图片网格 ─────────────────────────────────────────────────────────────── */
+.imgGrid { display: flex; flex-wrap: wrap; gap: 5px; }
+.thumbImg { width: 75px; height: 75px; object-fit: cover; border-radius: 8px; cursor: pointer; }
+
+/* ── 文件卡片 ─────────────────────────────────────────────────────────────── */
+.fileCard {
+  display: flex; align-items: center; gap: 7px;
+  background: rgba(255,255,255,0.1); border-radius: 7px; padding: 5px 10px;
+}
+.fileCardName { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }

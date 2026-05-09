@@ -79,10 +79,53 @@ function rowToMessage(row: Row): Message & { conversationId?: string } {
 // 可通过 HISTORY_MAX_TOKENS 环境变量调整
 const DEFAULT_HISTORY_MAX_TOKENS = parseInt(process.env.HISTORY_MAX_TOKENS ?? '20000', 10)
 
+// ============================================================================
+// 会话级墓碑（Tombstone）
+// ----------------------------------------------------------------------------
+// 场景：客户端发起 DELETE /sessions/:sessionId 后，正在跑的 SSE 流可能尚未完全
+// 终止，strategy.run 内部仍可能 await ctx.history.append(...) 把消息写回 DB，
+// 导致下次 listSessions 时该 session "复活"。
+//
+// 墓碑机制：
+//   - clear() 同时设置墓碑（默认 5 秒）
+//   - append() 在写入前检查，若命中墓碑则丢弃本次写入
+//   - 5 秒后自动失效，新的合法 chat 不受影响
+// ============================================================================
+const TOMBSTONE_TTL_MS = 5_000
+const sessionTombstones = new Map<string, number>()
+
+function tombstoneKey(tenantId: string, sessionId: string): string {
+  return `${tenantId}:${sessionId}`
+}
+
+function setTombstone(tenantId: string, sessionId: string, ttlMs: number = TOMBSTONE_TTL_MS): void {
+  sessionTombstones.set(tombstoneKey(tenantId, sessionId), Date.now() + ttlMs)
+  // 顺手清理过期墓碑，避免 Map 无限增长
+  const now = Date.now()
+  for (const [k, expireAt] of sessionTombstones) {
+    if (expireAt <= now) sessionTombstones.delete(k)
+  }
+}
+
+function isTombstoned(tenantId: string, sessionId: string): boolean {
+  const key = tombstoneKey(tenantId, sessionId)
+  const expireAt = sessionTombstones.get(key)
+  if (!expireAt) return false
+  if (expireAt <= Date.now()) {
+    sessionTombstones.delete(key)
+    return false
+  }
+  return true
+}
+
 export class SQLiteConversationHistory implements ConversationHistory {
   constructor(private readonly maxTokens: number = DEFAULT_HISTORY_MAX_TOKENS) {}
 
   async append(message: Message & { conversationId?: string }, ctx: Ctx): Promise<string> {
+    // 墓碑期内丢弃写入：防止已被 DELETE 的会话被尚未终止的流式回写"复活"
+    if (isTombstoned(ctx.tenantId, ctx.sessionId)) {
+      return message.id ?? uuidv4()
+    }
     const db = getDb()
     const messageId = message.id ?? uuidv4()
     await db.execute({
@@ -248,6 +291,8 @@ export class SQLiteConversationHistory implements ConversationHistory {
 
   async clear(ctx: Ctx): Promise<void> {
     const db = getDb()
+    // 先设置墓碑：阻止后续 N 秒内的 append（防止正在跑的 SSE 流回写"复活"会话）
+    setTombstone(ctx.tenantId, ctx.sessionId)
     await db.execute({
       sql: 'DELETE FROM conversations WHERE tenant_id = ? AND session_id = ?',
       args: [ctx.tenantId, ctx.sessionId],
