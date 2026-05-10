@@ -88,33 +88,21 @@ function messagesToOpenAI(
     if (typeof content === 'string') return content
     if (Array.isArray(content)) {
       const texts: string[] = []
-      const imageNames: string[] = []
-      const fileNames: string[] = []
       for (const part of content) {
         if (part.type === 'text') texts.push(part.text ?? '')
         else if (part.type === 'image_url') texts.push('[Image]')
-        else if (part.type === 'workspace_image') imageNames.push(part.name ?? '')
-        else if (part.type === 'workspace_file') fileNames.push(part.name ?? '')
-        // 'file' type (legacy): skip
-      }
-      if (imageNames.length > 0) {
-        texts.push(`[用户上传了以下图片到工作区，请调用 read_image 工具读取后再回答，文件名如下：]\n${imageNames.map(n => `- ${n}`).join('\n')}`)
-      }
-      if (fileNames.length > 0) {
-        texts.push(`[用户上传了以下文件到工作区，请调用 read_file 工具读取后再回答，文件名如下：]\n${fileNames.map(n => `- ${n}`).join('\n')}`)
+        // workspace_image/workspace_file 已在消息入口处自动处理，此处仅作为历史消息兼容
       }
       return texts.filter(Boolean).join('\n')
     }
     return String(content ?? '')
   }
 
-  // 将消息内容转换为 OpenAI 多模态数组（支持 image_url / workspace_image / workspace_file）
+  // 将消息内容转换为 OpenAI 多模态数组（支持 image_url）
   function contentToMultimodal(content: any, supportsVision: boolean = true): string | OpenAI.Chat.ChatCompletionContentPart[] {
     if (typeof content === 'string') return content
     if (!Array.isArray(content)) return String(content ?? '')
     const parts: OpenAI.Chat.ChatCompletionContentPart[] = []
-    const imageNames: string[] = []
-    const fileNames: string[] = []
 
     for (const part of content) {
       if (part.type === 'text') {
@@ -126,32 +114,9 @@ function messagesToOpenAI(
         } else {
           parts.push({ type: 'text', text: '[Image]' })
         }
-      } else if (part.type === 'workspace_image') {
-        // workspace_image：收集文件名，统一在末尾生成 read_image 指令
-        imageNames.push(part.name ?? '')
-      } else if (part.type === 'workspace_file') {
-        // workspace_file：收集文件名，统一在末尾生成 read_file 指令
-        fileNames.push(part.name ?? '')
       }
+      // workspace_image/workspace_file 已在消息入口处自动处理
       // 'file' type (legacy with full content): skip，避免 base64/大文本污染上下文
-    }
-
-    // 为 workspace_image 生成明确的 read_image 指令，避免 LLM 读取错误文件
-    if (imageNames.length > 0) {
-      const imageList = imageNames.map(n => `- ${n}`).join('\n')
-      parts.push({
-        type: 'text',
-        text: `[用户上传了以下图片到工作区，请调用 read_image 工具读取后再回答，文件名如下：]\n${imageList}`,
-      })
-    }
-
-    // 为 workspace_file 生成明确的 read_file 指令，避免 LLM 读取错误文件
-    if (fileNames.length > 0) {
-      const fileList = fileNames.map(n => `- ${n}`).join('\n')
-      parts.push({
-        type: 'text',
-        text: `[用户上传了以下文件到工作区，请调用 read_file 工具读取后再回答，文件名如下：]\n${fileList}`,
-      })
     }
 
     if (parts.length === 0) return ''
@@ -168,7 +133,7 @@ function messagesToOpenAI(
         continue
       }
 
-      // 特殊处理 read_image 工具结果：提取 dataUrl，以 image_url 形式注入 user 消息
+      // 特殊处理 smart_read / read_image 工具结果：提取 dataUrl，以 image_url 形式注入 user 消息
       // （OpenAI 不支持在 tool message 里直接传图片，需要用 user 消息包装）
       const rawToolContent = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
       let imageInjected = false
@@ -320,8 +285,7 @@ const PARAM_TO_TOOL_HEURISTICS: Array<{ keys: string[]; tool: string }> = [
   { keys: ['key', 'value'],         tool: 'remember' },
   { keys: ['key'],                  tool: 'recall' },
   { keys: ['path', 'content'],      tool: 'write_file' },
-  { keys: ['path'],                 tool: 'read_file' },
-  { keys: ['path'],                 tool: 'read_image' }, // 优先级较低，放在 read_file 后面
+  { keys: ['path'],                 tool: 'smart_read' },
   { keys: ['query'],                tool: 'search_memory' },
   { keys: ['name'],                 tool: 'get_skill' },
 ]

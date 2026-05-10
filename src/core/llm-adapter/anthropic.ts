@@ -69,7 +69,7 @@ function messageToAnthropic(
       try {
         parsed = JSON.parse(String(msg.content))
         if (parsed.dataUrl) {
-          // 如果是 read_image 的 JSON 结果，转换成多模态格式
+          // 如果是 smart_read 的图片 JSON 结果，转换成多模态格式
           toolContent = [
             { type: 'text', text: `图片文件 ${parsed.filename} 已读取：` },
             { 

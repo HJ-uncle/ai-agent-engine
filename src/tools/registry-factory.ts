@@ -134,14 +134,14 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   // list_skills / get_skill are skill-infrastructure tools → track as skill
   skillTools.push('list_skills', 'get_skill')
 
-  // 2. 文件工具（smart_read / read_file / write_file / list_files / delete_file / create_dir / read_image）
+  // 2. 文件工具（smart_read 万能读取 / read_file 原始读取 / write_file / list_files / delete_file / create_dir）
+  //    smart_read 已内置图片识别，无需单独注册 read_image
   if (shouldRegister('smart_read')) registerBuiltin(smartReadFileTool)
   if (shouldRegister('read_file')) fileTools.filter(t => t.name === 'read_file').forEach((t) => registerBuiltin(t))
   if (shouldRegister('write_file')) fileTools.filter(t => t.name === 'write_file').forEach((t) => registerBuiltin(t))
   if (shouldRegister('list_files')) fileTools.filter(t => t.name === 'list_files').forEach((t) => registerBuiltin(t))
   if (shouldRegister('delete_file')) fileTools.filter(t => t.name === 'delete_file').forEach((t) => registerBuiltin(t))
   if (shouldRegister('create_dir')) fileTools.filter(t => t.name === 'create_dir').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('read_image')) fileTools.filter(t => t.name === 'read_image').forEach((t) => registerBuiltin(t))
 
   // 3. 命令行工具
   if (shouldRegister('run_command')) registerBuiltin(cmdTool)

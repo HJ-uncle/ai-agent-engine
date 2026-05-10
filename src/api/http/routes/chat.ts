@@ -2,6 +2,7 @@
 // For non-streaming complete() calls, a cache layer could be added here keyed on
 // (message, sessionId, systemPrompt) to avoid redundant LLM roundtrips.
 import type { FastifyInstance } from 'fastify'
+
 import { v4 as uuidv4 } from 'uuid'
 import { ReActStrategy } from '../../../core/agent-loop/index.js'
 import { createPipeline, sseStream } from '../../../core/stream-pipeline/index.js'
@@ -547,8 +548,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
 1. Use \`ask_user\` to clarify intent or confirm actions.
 2. Use Chinese tool names in replies (e.g. 写入文件, not write_file).
 3. You are ${currentModelName}.
-4. Use \`read_image\` for image files (.png/.jpg/.gif/.webp).
-5. When providing a downloadable file to the user, ALWAYS present it as an HTTP download link using this exact Markdown format:
+4. When providing a downloadable file to the user, ALWAYS present it as an HTTP download link using this exact Markdown format:
    [文件名](/api/v1/workspace/file/download?sessionId=${sessionId}&path=文件名)
    Use only the filename (not the full path) in the \`path\` parameter. Never use file:// URLs.
 ${workspaceInfo}
@@ -562,8 +562,7 @@ ${workspaceInfo}
 1. Use \`ask_user\` to clarify intent or confirm actions.
 2. Use Chinese tool names in replies (e.g. 写入文件, not write_file).
 3. You are ${currentModelName}.
-4. Use \`read_image\` for image files (.png/.jpg/.gif/.webp).
-5. When providing a downloadable file to the user, ALWAYS present it as an HTTP download link using this exact Markdown format:
+4. When providing a downloadable file to the user, ALWAYS present it as an HTTP download link using this exact Markdown format:
    [文件名](/api/v1/workspace/file/download?sessionId=${sessionId}&path=文件名)
    Use only the filename (not the full path) in the \`path\` parameter. Never use file:// URLs.
 ${workspaceInfo}
@@ -610,26 +609,26 @@ ${workspaceInfo}
         // 提取消息中的纯文本部分（message 可能是数组格式）
         const messageText = extractPlainText(message)
 
+        // 判断当前模型是否支持视觉
+        const visionModels = [
+          'gpt-4v', 'gpt-4-vision', 'gpt-4-turbo', 'gpt-4o',
+          'claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku',
+          'gemini-pro-vision', 'gemini-1.5-pro', 'gemini-1.5-flash',
+          'llava', 'bakllava', 'qwen-vl', 'qwen2-vl'
+        ]
+        const isVisionModel = visionModels.some(vm =>
+          currentModelName.toLowerCase().includes(vm.toLowerCase())
+        )
+
         let prompt: string | any[] | null = messageText || null
-        if (!toolResponse && attachments && attachments.length > 0) {
-          const imageAttachments = attachments.filter(a => a.type.startsWith('image/'))
-          const otherAttachments = attachments.filter(a => !a.type.startsWith('image/'))
 
-          let promptText = messageText
-
-          // 图片：已上传到 workspace，提示 AI 用 read_image 工具读取（不传 base64，避免消息体过大）
-          if (imageAttachments.length > 0) {
-            const imageList = imageAttachments.map(a => `- ${a.name}`).join('\n')
-            promptText = `${messageText}\n\n[用户上传了以下图片到工作区，请使用 read_image 工具读取后回答：]\n${imageList}`
-          }
-
-          // 非图片文件：已上传到 workspace，提示 AI 用 read_file 工具读取（不内嵌内容，避免消息体过大）
-          if (otherAttachments.length > 0) {
-            const fileList = otherAttachments.map(a => `- ${a.name}`).join('\n')
-            promptText = `${promptText}\n\n[用户上传了以下文件到工作区，请使用 read_file 工具读取后回答：]\n${fileList}`
-          }
-
-          prompt = promptText
+        if (!toolResponse) {
+          const { autoProcessAttachments } = await import('./attachment-auto-processor.js')
+          const result = await autoProcessAttachments(ctx, message, messageText, attachments, {
+            messageText,
+            isVisionModel,
+          })
+          prompt = result.prompt
         }
 
         const llm = await createLLMAdapterWithDbConfig({ 
@@ -646,8 +645,6 @@ ${workspaceInfo}
           promptBreakdown: { systemPromptTokens, systemToolsTokens, skillTokens, ragTokens, builtinToolsTokens, mcpToolsTokens },
           thinkingConfig: finalThinkingConfig,
           responseThinkingField: finalResponseThinkingField,
-          // 原始前端消息格式（含 workspace_image），存入 DB 供刷新后正确渲染
-          // LLM 用 prompt（文本化），DB/UI 用 displayContent（原始格式）
           displayContent: message || null,
         })
         const pipeline = createPipeline([])

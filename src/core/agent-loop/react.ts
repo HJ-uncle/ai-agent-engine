@@ -177,7 +177,21 @@ export class ReActStrategy implements LoopStrategy {
       }
 
       // 2. 压缩后重新取 windowed messages（applyTokenWindow 会截断超大消息）
-      const messages = await ctx.history.getHistory(ctx)
+      let messages = await ctx.history.getHistory(ctx)
+
+      // ★ 修复：当设置了 displayContent（前端原始格式）时，历史存的是 displayContent，
+      //   但 LLM 需要看到处理后的 input（含 OCR/文件内容）。此处将本轮 user 消息的
+      //   content 替换为真正的 LLM prompt，前端刷新时仍从 DB 读到原始格式。
+      if (this.options.displayContent !== undefined && this.options.displayContent !== null &&
+          input && iteration === 0) {
+        const processedInput = input as string | any[]
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].role === 'user') {
+            messages[i] = { ...messages[i], content: processedInput ?? messages[i].content }
+            break
+          }
+        }
+      }
 
       // 3. 计算 windowed token count，检查是否超 budget
       const historyTokens = messages.reduce((sum, m) => sum + (m.tokens ?? estimateTokens(m.content)), 0)
