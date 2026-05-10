@@ -960,7 +960,7 @@ function ThinkingPanelInner({
             {isActive
               ? "正在思考..."
               : toolCount > 0
-                ? `调用了 ${toolCount} 个工具：${toolNames.join("、")}`
+                ? `调用了 ${toolCount} 次工具：${toolNames.join("、")}`
                 : "推理完成"}
           </span>
         </div>
