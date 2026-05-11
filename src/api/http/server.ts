@@ -27,6 +27,9 @@ import { cronScheduler } from '../../scheduler/cron-scheduler.js'
 import { globalRequestMiddleware, WHITELIST_PATHS } from './middleware.js'
 import fastifyWebsocket from '@fastify/websocket'
 import fastifyMultipart from '@fastify/multipart'
+import fastifyStatic from '@fastify/static'
+import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 import { fail } from './response.js'
 
 export async function buildServer() {
@@ -105,6 +108,23 @@ export async function buildServer() {
 
   // 启动定时任务调度器
   cronScheduler.start()
+
+  // 静态文件：托管前端构建产物（SPA 单页应用）
+  const publicDir = process.env.PUBLIC_DIR || join(process.cwd(), 'public')
+  if (existsSync(publicDir)) {
+    await fastify.register(fastifyStatic, {
+      root: publicDir,
+      wildcard: false,
+      prefix: '/',
+    })
+    // SPA 回退：所有非 /api/ 路径返回 index.html
+    fastify.setNotFoundHandler((request, reply) => {
+      if (request.url.startsWith('/api/') || request.url.startsWith('/ws')) {
+        return reply.code(404).send({ code: 40400, message: 'Not found' })
+      }
+      return reply.sendFile('index.html')
+    })
+  }
 
   return fastify
 }

@@ -150,7 +150,7 @@ export const subagentTool: Tool = {
       })
 
       // 创建 LLM 适配器
-      const llm = createLLMAdapter(model || 'gpt-4o-mini')
+      const llm = createLLMAdapter({ model: model || 'gpt-4o-mini' })
 
       // 使用 ReAct 策略执行子代理
       const strategy = new ReActStrategy(llm, {
