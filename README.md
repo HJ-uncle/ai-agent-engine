@@ -78,6 +78,7 @@ A production-ready AI Agent Engine built with Node.js + TypeScript ESM. Supports
 | 68 | **DeepSeek Optimized Channel** — Dedicated `DeepSeekAdapter` with KV Cache hit/miss token tracking, Reasoning Mode (`reasoning_effort` injection for R1/V3), FIM (Fill-in-Middle) completion, Chat Prefix Completion, JSON Mode, and stream usage inclusion; auto-routed when model name or base URL matches `deepseek` |
 | 69 | **DeepSeek Pricing & Balance** — Per-model price config (normal / discount / discount-until) stored in `~/.agent-engine/deepseek-prices.json`; discount expires automatically at the configured timestamp and reverts to normal price; `GET /api/v1/deepseek/balance` proxies account balance query; `GET /api/v1/deepseek/models` returns live model list with 5-minute cache |
 | 70 | **DeepSeek Error Classification** — HTTP 402 → `DeepSeekInsufficientBalanceError` (no retry, recharge URL attached); 429 → `DeepSeekRateLimitError` (exponential back-off retry 1s/2s/4s, max 3); 503 → `DeepSeekServiceUnavailableError` (retryable flag); 422 → `DeepSeekInvalidParamError` (problematic param logged); error type propagated to frontend via SSE `__DS_ERR__` marker for contextual toast/modal |
+| 71 | **Superpower Modes** — Four-tier capability control (`off` / `balanced` / `methodology` / `max`); single `SUPERPOWER_MODE` knob drives tool filtering, budget/iteration/output multipliers, methodology bootstrap injection, and artifact directory creation; hot-reloadable via `PUT /settings` |
 
 ---
 
@@ -202,6 +203,7 @@ curl http://localhost:12323/metrics
 | `SQLITE_BUSY_TIMEOUT_MS` | `5000` | SQLite busy timeout in milliseconds |
 | `DEEPSEEK_API_KEY` | _(optional)_ | DeepSeek-specific API key; takes priority over `OPENAI_API_KEY` when routing to DeepSeek channel |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | DeepSeek API base URL; falls back to `OPENAI_BASE_URL` |
+| `SUPERPOWER_MODE` | `off` | Node capability tier: `off` (core tools only), `balanced` (all tools ×2), `methodology` (×2 + bootstrap), `max` (×5/×4 + bootstrap); hot-reloadable via `PUT /settings` |
 | `DEEPSEEK_AUTO_THINKING` | `true` | Automatically inject `reasoning_effort` for complex tasks on R1/V3 models |
 | `DEEPSEEK_THINKING_EFFORT` | `medium` | Default reasoning effort level (`low` / `medium` / `high`) |
 | `DEEPSEEK_DEFAULT_JSON_MODE` | `false` | Force `response_format: json_object` on every DeepSeek request |
@@ -506,7 +508,9 @@ src/
 │       └── metrics.ts         # Health + metrics
 ├── core/
 │   ├── agent-context/         # AgentContext, Tool interfaces
-│   ├── agent-loop/            # ReActStrategy
+│   ├── agent-loop/            # ReActStrategy + superpower multiplier integration
+│   ├── superpower.ts          # Superpower mode resolution + multipliers + tool filtering + self-check
+│   ├── superpower-bootstrap.ts # Methodology system prompt injection (skills-driven, hot-reload)
 │   ├── compression/           # Context compression (extractive + keyword)
 │   ├── deepseek/              # ★ DeepSeek pricing util (getPriceForModel, calcCacheSavings, file persistence)
 │   ├── llm-adapter/           # OpenAI / Anthropic / Ollama / DeepSeek (multi-modal)
@@ -588,6 +592,7 @@ src/
 - **Split Layout** — `MainArea` component in `App.tsx` supports three modes (`chat-only` / `horizontal` / `vertical`) switchable from a toolbar; a draggable divider resizes panes between 15 % and 85 %; the active mode and ratio are persisted to `localStorage` via a `usePersist` hook so the layout survives page reloads
 - **macOS Sonoma Design Tokens** — `macos-sonoma-tokens.css` at the project root provides a comprehensive CSS custom-property library aligned with Apple HIG: materials (title bar, sidebar, content), typography (SF Pro stack), system colors & accents, spacing (4 px grid), shadow system, border-radius scale, traffic-light button sizes/colors, hover/interaction states, and dark-mode overrides via `@media (prefers-color-scheme: dark)`
 - **Fine-grained tool control** — each agent can have an `agent_allowed_tools` entry in SQLite restricting which tools it can use; `createToolRegistry({ allowedTools: [...] })` filters at registration time
+- **Superpower mode system** — `SUPERPOWER_MODE` (off/balanced/methodology/max) is the single configuration knob; `SUPERPOWER_MODE_CONFIG` in `superpower.ts` is a single truth-table driving tool filtering, budget/iteration/output multipliers, methodology bootstrap injection, artifact directory creation, and compression ratio; explicit `tokenBudget` / `maxIterations` passed by callers (e.g. subagent) are never amplified; all modules re-read `process.env` on every call so `PUT /settings` takes effect without restart
 - **Multi-tenant isolation** — tenantId + sessionId scope all storage reads/writes
 - **Auth optional** — set `AUTH_ENABLED=false` during development
 - **Thinking Mode** — reasoning content extracted from model-specific fields (`reasoning_content` for Qwen/DeepSeek, `thinking` blocks for Claude; auto-detected by model name)
@@ -714,3 +719,49 @@ docker-compose up -d
 ```
 
 See `docker-compose.yml` for full configuration options.
+
+---
+
+## Superpower Modes
+
+`SUPERPOWER_MODE` is the single knob that controls this node's default
+capabilities. Four tiers are available:
+
+| Mode          | Tools         | Token budget ×N | Iterations ×N | Output ×N | Compress ratio | Methodology bootstrap | `docs/superpower/` dirs |
+|---------------|---------------|-----------------|---------------|-----------|----------------|------------------------|-------------------------|
+| `off`         | core only     | ×1              | ×1            | ×1        | caller's       | ✗                      | ✗                       |
+| `balanced`    | full          | ×2              | ×2            | ×2        | caller's       | ✗                      | ✗                       |
+| `methodology` | full          | ×2              | ×2            | ×2        | caller's       | ✓                      | ✓                       |
+| `max`         | full          | ×5              | ×4            | ×4        | 0.7 (looser)   | ✓                      | ✓                       |
+
+- **`off`** — only the safe CORE tools (read/write/memory/search/tasks/
+  skills/ask_user). Conservative numbers. Best for 24×7 shared nodes.
+- **`balanced`** — all tools available (incl. `run_command`, `web_fetch`,
+  `subagent`, `install_package` …), numbers doubled. No methodology
+  injection. Recommended default for day-to-day engineering.
+- **`methodology`** — adds the obra-style methodology skeleton:
+  `skills/superpower-using-superpowers/SKILL.md` is auto-prepended to
+  every outgoing system prompt; the six companion skills
+  (`brainstorming`, `writing-plans`, `tdd`, `systematic-debugging`,
+  `subagent-driven-dev`, `verification-before-completion`) are
+  discoverable via `list_skills` / `get_skill`; `docs/superpower/{specs,
+  plans,reviews}/` are pre-created in the workspace.
+- **`max`** — same as methodology plus ×5 budget / ×4 iterations / ×4
+  output / compression at 0.7. Long autonomous runs only. The console
+  UI forces a confirmation modal when entering this mode.
+
+Change at runtime via the UI or `PUT /settings {"SUPERPOWER_MODE":"..."}`.
+Reads go through `resolveSuperpowerMode()` which re-reads `process.env`
+on every call, so there is no restart required.
+
+### Legacy `SUPERPOWER_ENABLED`
+
+Deprecated soft alias, removed next minor:
+
+- `SUPERPOWER_ENABLED=true`  → `SUPERPOWER_MODE=methodology`
+- `SUPERPOWER_ENABLED=false` → `SUPERPOWER_MODE=off`
+
+`SUPERPOWER_MODE` wins when both are set; a one-shot deprecation warning
+is logged when only the legacy env is present. Note that legacy `true`
+used to imply ×5; it now maps to methodology's ×2. Users who relied on
+the old ×5 behaviour must explicitly set `SUPERPOWER_MODE=max`.

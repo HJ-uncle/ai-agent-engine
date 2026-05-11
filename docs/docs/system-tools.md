@@ -415,23 +415,48 @@ src/tools/search/grep-tool.ts:14:async function hasRipgrep(): Promise<boolean> {
 
 ### `subagent`
 
-调用已存在的子 Agent 执行特定任务。
+调用已存在的子 Agent 执行特定任务。支持可选 `role` 参数启用方法论角色预设（仅在 `methodology` / `max` 模式下生效）。
 
 **参数**
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `agentId` | string | ✅ | 子 Agent ID |
-| `message` | string | ✅ | 发送给子 Agent 的消息 |
-| `timeout` | number | 否 | 超时毫秒数，默认 60000 |
+| `task` | string | ✅ | 子代理任务描述 |
+| `systemPrompt` | string | 否 | 自定义系统提示词（覆盖角色预设模板） |
+| `model` | string | 否 | 使用的模型名 |
+| `maxSteps` | number | 否 | 最大迭代步数，默认 10 |
+| `role` | string | 否 | ⭐ 方法论角色预设：`implementer` / `spec-reviewer` / `code-quality-reviewer`（仅 `methodology` / `max` 模式；其余模式降级为默认行为并记录 warn 日志） |
+
+**role 参数说明：**
+
+| 角色 | 对应 Prompt 模板 | 用途 |
+|------|-----------------|------|
+| `implementer` | `SKILLs/superpower-subagent-driven-dev/implementer-prompt.md` | TDD 驱动的代码实现 |
+| `spec-reviewer` | `SKILLs/superpower-subagent-driven-dev/spec-reviewer-prompt.md` | 对照 spec 审查实现 |
+| `code-quality-reviewer` | `SKILLs/superpower-subagent-driven-dev/code-quality-reviewer-prompt.md` | 代码质量审查 |
+
+设置 `role` 时，对应模板会自动加载为默认系统提示词；若同时提供 `systemPrompt`，则 append 到模板之后。模板缺失时自动降级为内置默认提示词并记录 warn。
 
 **示例**
 
 ```
-让代码分析 Agent 帮我审查 PR
+让代码审查子代理按 TDD 流程实现用户认证模块
 → 调用 subagent({
-    agentId: "agent_xxxx",
-    message: "请审查 PR #42 的代码变更"
+    task: "用 TDD 实现用户认证模块（注册/登录/令牌刷新）",
+    role: "implementer",
+    maxSteps: 20
+  })
+
+让子代理对照 spec 审查实现
+→ 调用 subagent({
+    task: "审查 src/auth/ 目录下的实现是否满足 docs/superpower/specs/auth.md",
+    role: "spec-reviewer"
+  })
+
+通用子代理调用（不指定 role，使用默认行为）
+→ 调用 subagent({
+    task: "分析这段代码的性能瓶颈",
+    maxSteps: 10
   })
 ```
 

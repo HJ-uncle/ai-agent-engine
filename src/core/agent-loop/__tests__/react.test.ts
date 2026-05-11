@@ -236,6 +236,47 @@ describe('ReActStrategy', () => {
     expect(llm.complete).toHaveBeenCalledTimes(3)
   })
 
+  // ── 3b. Explicit maxIterations must not be amplified by Superpower mode ────
+  // Regression guard (openspec change: superpower-methodology-and-tiers, 任务 11.2)：
+  // subagent 等调用方会显式传 maxSteps→maxIterations，一旦被 max 模式 ×4 放大，
+  // 子代理会跑出预期边界。显式值必须原样使用。
+  it('respects explicit maxIterations even under SUPERPOWER_MODE=max', async () => {
+    const prev = process.env.SUPERPOWER_MODE
+    process.env.SUPERPOWER_MODE = 'max'
+    try {
+      const alwaysToolCall: LLMResponse = {
+        content: '',
+        toolCalls: [{ id: 'tc-loop', name: 'looper', args: {} }],
+        promptTokens: 5,
+        completionTokens: 5,
+        finishReason: 'tool_calls',
+      }
+      const llm = makeLLMAdapter(Array(20).fill(alwaysToolCall))
+      const ctx = makeCtx({
+        tools: {
+          register: vi.fn(),
+          unregister: vi.fn(),
+          list: vi.fn().mockReturnValue([
+            { name: 'looper', description: 'Loops', parameters: { type: 'object' } },
+          ]),
+          execute: vi.fn().mockResolvedValue({ success: true, output: 'looping' }),
+          has: vi.fn().mockReturnValue(true),
+        } as unknown as AgentContext['tools'],
+      })
+
+      const strategy = new ReActStrategy(llm, { maxIterations: 3 })
+      const results = await collectYields(strategy.run('Loop', ctx))
+
+      // 若 Superpower 放大了显式 cap，llm.complete 会被调用 12 次（3×4）；
+      // 现在必须维持 3 次。
+      expect(llm.complete).toHaveBeenCalledTimes(3)
+      expect(results[0]).toContain('[Max iterations (3) exceeded')
+    } finally {
+      if (prev === undefined) delete process.env.SUPERPOWER_MODE
+      else process.env.SUPERPOWER_MODE = prev
+    }
+  })
+
   // ── 4. Token budget exhausted ────────────────────────────────────────────────
   it('yields truncation message when token budget is exhausted before LLM call', async () => {
     const llm = makeLLMAdapter([

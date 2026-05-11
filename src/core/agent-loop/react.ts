@@ -4,15 +4,23 @@ import type { LLMAdapter, LLMAdapterOptions } from '../llm-adapter/index.js'
 import type { Message } from '../agent-context/index.js'
 import { estimateTokens } from '../utils/tokens.js'
 import { v4 as uuidv4 } from 'uuid'
+import { applySuperpowerMultiplier, getSuperpowerCompressRatio } from '../superpower.js'
 
 /**
  * 截断过大的工具输出，避免历史消息膨胀。
  * 保留开头和结尾各 maxChars/2 的内容，中间用省略标记替代。
  * 对于 24/7 长期运行的 Agent 至关重要。
+ *
+ * ⚠️ 注意：以前这里用模块顶层 const 缓存 env，导致 process.env 或 superpower
+ * 开关运行时变更无法生效。现改为每次调用时动态读取，保证 PUT /settings 热更新
+ * 能立即生效（与 maxIterations / compressRatio 的动态读取策略对齐）。
  */
-const TOOL_OUTPUT_MAX_CHARS = parseInt(process.env.TOOL_OUTPUT_MAX_CHARS ?? '4000', 10)
+function getToolOutputMaxChars(): number {
+  const base = parseInt(process.env.TOOL_OUTPUT_MAX_CHARS ?? '4000', 10)
+  return applySuperpowerMultiplier('toolOutputMaxChars', base)
+}
 
-function truncateToolOutput(output: string, maxChars: number = TOOL_OUTPUT_MAX_CHARS): string {
+function truncateToolOutput(output: string, maxChars: number = getToolOutputMaxChars()): string {
   if (output.length <= maxChars) return output
   const half = Math.floor(maxChars / 2)
   const head = output.slice(0, half)
@@ -81,8 +89,17 @@ export class ReActStrategy implements LoopStrategy {
   ) {}
 
   async *run(input: string | any[] | null, ctx: AgentContext): AsyncIterable<string> {
-    const maxIterations = this.options.maxIterations ??
+    // maxIterations 决策顺序（与 agent-context/factory.ts 的 tokenBudget 规则对齐）：
+    //   1. this.options.maxIterations 显式传入 → 原样使用
+    //      （调用方已经推导过了，例如 subagent-tool 的 maxSteps；不应再被
+    //       superpower 倍率干预，否则会把子代理步数悄悄放大 4×）
+    //   2. 未显式传入 → 读 env 默认值（50），再按 superpower 模式放大
+    const hasExplicitIterations = typeof this.options.maxIterations === 'number'
+    const baseMaxIterations = this.options.maxIterations ??
       parseInt(process.env.MAX_ITERATIONS ?? '50', 10)
+    const maxIterations = hasExplicitIterations
+      ? baseMaxIterations
+      : applySuperpowerMultiplier('maxIterations', baseMaxIterations)
 
     const maxAskUserCount = this.options.maxAskUserCount ?? 5
     const conversationId = this.options.conversationId
@@ -146,7 +163,9 @@ export class ReActStrategy implements LoopStrategy {
 
       // 1. 先检查是否需要压缩（用 raw token count，不受 window 限制）
       // 对 24/7 Agent，使用更激进的阈值（0.5）以尽早触发压缩
-      const compressRatio = parseFloat(process.env.COMPRESS_THRESHOLD_RATIO ?? '0.5')
+      // superpower 模式下阈值放宽到 0.7，留更多上下文空间
+      const compressRatio = getSuperpowerCompressRatio(
+        parseFloat(process.env.COMPRESS_THRESHOLD_RATIO ?? '0.5'))
       const compressThreshold = Math.floor(ctx.tokenBudget * compressRatio)
       const rawTokens = await ctx.history.getRawTokenCount(ctx)
       if (rawTokens > compressThreshold) {

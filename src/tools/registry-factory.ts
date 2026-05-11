@@ -26,6 +26,8 @@ import { installPackageTool, listPackagesTool } from './install-package/install-
 import { agentTools } from './agent/index.js'
 import { lspDiagnoseTool } from './lsp/index.js'
 import type { ExternalSkill } from '../skills/external-loader.js'
+import { resolveDefaultAllowedTools, runSuperpowerSelfCheck, logSuperpowerSelfCheck } from '../core/superpower.js'
+import { logger } from '../observability/index.js'
 
 export interface RegistryFactoryOptions {
   /** 允许的 skill 列表，undefined = 全部，[] = 全部，传入列表则过滤 */
@@ -111,14 +113,28 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   const hasExternalSkill = opts.allowedSkills && opts.allowedSkills.length > 0 &&
     opts.allowedSkills.some(s => allSkillNames.includes(s))
 
+  // ── Superpower 默认工具过滤（优先于技能合并）────────────────────────────
+  // 当调用方没有显式指定 allowedTools 时，根据 superpower 开关决定默认工具集：
+  //   ON  → 全量工具（undefined，走现有全注册逻辑）
+  //   OFF → 仅核心工具（安全省 token）
+  let effectiveAllowedTools = resolveDefaultAllowedTools(opts.allowedTools)
+
   // 计算 effectiveAllowedTools：如果选择了自定义技能，自动添加技能工具
-  let effectiveAllowedTools = opts.allowedTools
+  //
+  // ⚠️ 修复一个隐藏已久的 bug：以前当 effectiveAllowedTools === undefined 时
+  //   会被错误地赋值为 `[...skillToolNames]`，导致"全量工具"被收窄为"仅 skill 三件套"。
+  //   实际含义：undefined = 全量（shouldRegister 对所有工具返回 true），
+  //   skill 工具本身已经在全量集合内，无需显式列出。继续保持 undefined 即可。
+  //   这一 bug 在 superpower ON + 选了外部 skill 的场景下最明显：
+  //   承诺"全量工具可用"但 Agent 突然失去了 run_command / web_fetch 等能力。
   if (hasExternalSkill) {
     if (effectiveAllowedTools === undefined || effectiveAllowedTools === null) {
-      effectiveAllowedTools = [...skillToolNames]
+      // 保持 undefined：全量工具已经包含 skill 工具，无需窄化
+      // (prev bug: effectiveAllowedTools = [...skillToolNames])
     } else if (effectiveAllowedTools.length > 0) {
       effectiveAllowedTools = [...new Set([...effectiveAllowedTools, ...skillToolNames])]
     }
+    // effectiveAllowedTools.length === 0 → 调用方显式要求"无工具"，保持空数组
   }
 
   const shouldRegister = (toolName: string): boolean => {
@@ -238,6 +254,15 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
 
   // 18. 代码诊断工具（LSP：tsc + eslint），用于 AI 自动检查/修复代码
   if (shouldRegister('code_diagnose')) registerBuiltin(lspDiagnoseTool)
+
+  // ── Superpower 自检 ────────────────────────────────────────────────────
+  // 验证 CORE 工具名与 registry 实际注册保持一致，避免 OFF 模式下 Agent
+  // 因工具名变更而"静默失去能力"。只在注册最多的完整场景（allowedTools
+  // 为 undefined，即本次 registry 理论上应包含所有内置工具）触发。
+  if (effectiveAllowedTools === undefined) {
+    const result = runSuperpowerSelfCheck(registry)
+    logSuperpowerSelfCheck(logger, result)
+  }
 
   const toolCategories: ToolCategories = { builtinTools, mcpTools, skillTools }
   return { registry, memory, externalSkills, toolCategories }

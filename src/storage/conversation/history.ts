@@ -3,6 +3,7 @@ import { getDb } from '../sqlite/db.js'
 import type { Row } from '@libsql/client'
 import { v4 as uuidv4 } from 'uuid'
 import { estimateTokens } from '../../core/utils/tokens.js'
+import { applySuperpowerMultiplier } from '../../core/superpower.js'
 
 type Ctx = { tenantId: string; sessionId: string }
 
@@ -74,10 +75,16 @@ function rowToMessage(row: Row): Message & { conversationId?: string } {
   return msg
 }
 
-// 默认历史窗口：保留最多 20000 tokens，超出时裁剪最旧的普通消息
-// 对于 24/7 长期运行的 Agent，较小的窗口可显著降低每次 LLM 调用的 token 消耗
-// 可通过 HISTORY_MAX_TOKENS 环境变量调整
-const DEFAULT_HISTORY_MAX_TOKENS = parseInt(process.env.HISTORY_MAX_TOKENS ?? '20000', 10)
+// 默认历史窗口：每次实例化时动态读取 env + 应用 Superpower 倍率，
+// 保证 PUT /settings 热更新（SUPERPOWER_MODE 切换 / HISTORY_MAX_TOKENS 修改）
+// 能在下一个请求立即生效，而不需要重启进程。
+// 与 react.ts 的 getToolOutputMaxChars() 策略完全对齐。
+//
+// 注意：若调用方显式传入 maxTokens（例如单元测试固定 cap），则不走此函数。
+function getDefaultHistoryMaxTokens(): number {
+  const base = parseInt(process.env.HISTORY_MAX_TOKENS ?? '20000', 10)
+  return applySuperpowerMultiplier('historyMaxTokens', base)
+}
 
 // ============================================================================
 // 会话级墓碑（Tombstone）
@@ -119,7 +126,16 @@ function isTombstoned(tenantId: string, sessionId: string): boolean {
 }
 
 export class SQLiteConversationHistory implements ConversationHistory {
-  constructor(private readonly maxTokens: number = DEFAULT_HISTORY_MAX_TOKENS) {}
+  private readonly maxTokens: number
+
+  /**
+   * @param maxTokens 显式传入时原样使用（单元测试固定 cap 的场景）；
+   *                  不传时每次实例化都动态读取 env + 应用 Superpower 倍率，
+   *                  确保 PUT /settings 热更新能立即生效。
+   */
+  constructor(maxTokens?: number) {
+    this.maxTokens = maxTokens ?? getDefaultHistoryMaxTokens()
+  }
 
   async append(message: Message & { conversationId?: string }, ctx: Ctx): Promise<string> {
     // 墓碑期内丢弃写入：防止已被 DELETE 的会话被尚未终止的流式回写"复活"

@@ -12,6 +12,7 @@ import { createLLMAdapterWithDbConfig } from '../../../core/llm-adapter/index.js
 import { createRequestLogger, QALogger, type QALogEntry } from '../../../observability/index.js'
 import { buildSkillsSystemPrompt } from '../../../skills/index.js'
 import { createToolRegistry } from '../../../tools/registry-factory.js'
+import { prependBootstrapToSystemPrompt } from '../../../core/superpower-bootstrap.js'
 import { SQLiteAgentStore } from '../../../storage/agent/index.js'
 import { SessionStore } from '../../../storage/session/index.js'
 import { estimateTokens } from '../../../core/utils/tokens.js'
@@ -380,9 +381,12 @@ export async function chatRoutes(fastify: FastifyInstance) {
       )
     }
 
-    const baseSystemPrompt = [effectiveSystemPrompt, skillsPrompt].filter(Boolean).join('\n\n')
-      + inlineKbBlock
-      + inlineMemoriesBlock
+    const baseSystemPrompt = prependBootstrapToSystemPrompt(
+      [effectiveSystemPrompt, skillsPrompt].filter(Boolean).join('\n\n')
+        + inlineKbBlock
+        + inlineMemoriesBlock,
+      reqLogger,
+    )
 
     // 从 message 中提取纯文本用于 RAG 搜索
     function extractPlainText(msg: any): string {

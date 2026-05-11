@@ -7,6 +7,7 @@ import { createLLMAdapterWithDbConfig } from '../../../core/llm-adapter/index.js
 import { createRequestLogger } from '../../../observability/index.js'
 import { buildSkillsSystemPrompt } from '../../../skills/index.js'
 import { createToolRegistry } from '../../../tools/registry-factory.js'
+import { prependBootstrapToSystemPrompt } from '../../../core/superpower-bootstrap.js'
 import { estimateTokens } from '../../../core/utils/tokens.js'
 import { v4 as uuidv4 } from 'uuid'
 import { success, fail } from '../response.js'
@@ -140,7 +141,10 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     })
 
     const skillsPrompt = buildSkillsSystemPrompt(externalSkills)
-    const finalSystemPrompt = [systemPrompt, skillsPrompt].filter(Boolean).join('\n\n')
+    const finalSystemPrompt = prependBootstrapToSystemPrompt(
+      [systemPrompt, skillsPrompt].filter(Boolean).join('\n\n'),
+      reqLogger,
+    )
 
     // RAG for new message if provided
     let ragPrompt = ''
