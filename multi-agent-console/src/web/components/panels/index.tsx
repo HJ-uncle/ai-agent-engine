@@ -32,7 +32,7 @@ import {
 } from '@core/domain/panels'
 
 const ExplorerPanel =
-  process.env.REACT_APP_NEW_EXPLORER === '0' ? OldExplorerPanel : NewExplorerPanel
+  (import.meta.env.VITE_NEW_EXPLORER || (process.env as any).REACT_APP_NEW_EXPLORER) === '0' ? OldExplorerPanel : NewExplorerPanel
 
 // ── PanelKey + Activities ────────────────────────────────────────────
 export type { PanelKey }

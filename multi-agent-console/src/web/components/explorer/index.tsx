@@ -108,7 +108,8 @@ export default function NewExplorerPanel() {
       // Ctrl+` 切换终端面板
       if ((e.ctrlKey || e.metaKey) && e.key === '`') {
         e.preventDefault()
-        useTerminalStore.getState().setPanelVisible(!useTerminalStore.getState().panelVisible)
+        const currentVisible = useTerminalStore.getState().panelVisible
+        useTerminalStore.getState().setPanelVisible(!currentVisible)
       }
     }
     window.addEventListener('keydown', handler)

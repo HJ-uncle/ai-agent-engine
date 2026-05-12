@@ -1823,7 +1823,7 @@ export default function ChatArea() {
     smoothScrollTo(Math.max(0, targetTop), 380);
   }, [getGroupAnchors, smoothScrollTo]);
 
-  const BASE_URL = (import.meta as any).env?.VITE_API_URL ?? "";
+  const BASE_URL = import.meta.env.VITE_API_URL ?? "";
 
   const debounceCheck = useCallback((): boolean => {
     const now = Date.now();

@@ -21,7 +21,7 @@ COPY multi-agent-console/package*.json ./
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --legacy-peer-deps
 COPY multi-agent-console/ .
-RUN NODE_OPTIONS="--max-old-space-size=4096" REACT_APP_API_URL="http://124.221.121.60:12323" npm run build
+RUN NODE_OPTIONS="--max-old-space-size=4096" VITE_API_URL="http://124.221.121.60:12323" npm run build
 
 FROM node:20-alpine AS production
 WORKDIR /app
@@ -31,7 +31,7 @@ COPY --from=base /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package.json .
 COPY --from=builder /app/src ./src
-COPY --from=frontend-builder /app/build ./public
+COPY --from=frontend-builder /app/dist ./public
 RUN npm install -g tsx
 COPY docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
