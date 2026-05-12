@@ -18,7 +18,9 @@ RUN npm run build
 FROM build-base AS frontend-builder
 WORKDIR /app
 COPY multi-agent-console/package*.json ./
+# Vite 构建需要 esbuild，在某些环境下需要显式安装以确保路径正确
 RUN --mount=type=cache,target=/root/.npm \
+    npm install esbuild --legacy-peer-deps && \
     npm ci --legacy-peer-deps
 COPY multi-agent-console/ .
 RUN NODE_OPTIONS="--max-old-space-size=4096" VITE_API_URL="http://124.221.121.60:12323" npm run build

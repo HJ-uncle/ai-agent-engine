@@ -1,22 +1,27 @@
 import React, { useEffect, useState } from 'react'
 import { Input, Select, Button, App, Table, Space, Tag, Popconfirm } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons'
-import { modelsApi } from '@core/api'
+import { modelsApi, settingsApi } from '@core/api'
 import { useSettings } from './useSettings'
 import styles from './SettingsLayout.module.css'
 import ModelManagerModal from '../models/ModelManagerModal'
 
 export default function ModelSettings() {
   const { message } = App.useApp()
-  const { settings, handleChange, saveKeys, saving } = useSettings()
+  const { settings, handleChange, reload } = useSettings()
 
   // Model Management State
   const [models, setModels] = useState<any[]>([])
   const [loadingModels, setLoadingModels] = useState(false)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingModel, setEditingModel] = useState<any | null>(null)
+  const [saving, setSaving] = useState(false)
+
+  // API Key Local State (to hide existing keys)
+  const [keyChanges, setKeyChanges] = useState<Record<string, string>>({})
 
   const LLM_KEYS = ['LLM_PROVIDER', 'LLM_PRIMARY_MODEL', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'ANTHROPIC_API_KEY', 'OLLAMA_BASE_URL', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL']
+  const SECRET_KEYS = ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY']
 
   const loadModels = async () => {
     setLoadingModels(true)
@@ -47,6 +52,33 @@ export default function ModelSettings() {
       loadModels()
     } catch (err) {
       message.error('删除模型失败')
+    }
+  }
+
+  const handleSaveSettings = async () => {
+    setSaving(true)
+    try {
+      const payload: Record<string, any> = {}
+      LLM_KEYS.forEach(key => {
+        if (SECRET_KEYS.includes(key)) {
+          // 密钥类字段：只有当用户输入了新值才发送
+          if (keyChanges[key]) {
+            payload[key] = keyChanges[key]
+          }
+        } else if (settings[key] !== undefined) {
+          // 普通字段：发送当前 state 中的值
+          payload[key] = settings[key]
+        }
+      })
+
+      await settingsApi.update(payload)
+      message.success('模型设置已保存')
+      setKeyChanges({}) // 清空局部修改
+      reload() // 重新加载以确保同步
+    } catch {
+      message.error('保存失败，请重试')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -156,7 +188,13 @@ export default function ModelSettings() {
                 <div className={styles.itemDescription}>密钥 (OPENAI_API_KEY)</div>
               </div>
               <div className={styles.itemControls}>
-                <Input.Password value={settings.OPENAI_API_KEY} onChange={(e) => handleChange('OPENAI_API_KEY', e.target.value)} style={inputStyle} autoComplete="new-password" />
+                <Input.Password
+                  value={keyChanges.OPENAI_API_KEY ?? ''}
+                  onChange={(e) => setKeyChanges({ ...keyChanges, OPENAI_API_KEY: e.target.value })}
+                  placeholder={settings.OPENAI_API_KEY ? '已配置 (输入以覆盖)' : 'sk-...'}
+                  style={inputStyle}
+                  autoComplete="new-password"
+                />
               </div>
             </div>
           </div>
@@ -174,7 +212,13 @@ export default function ModelSettings() {
                 <div className={styles.itemDescription}>密钥 (ANTHROPIC_API_KEY)</div>
               </div>
               <div className={styles.itemControls}>
-                <Input.Password value={settings.ANTHROPIC_API_KEY} onChange={(e) => handleChange('ANTHROPIC_API_KEY', e.target.value)} style={inputStyle} autoComplete="new-password" />
+                <Input.Password
+                  value={keyChanges.ANTHROPIC_API_KEY ?? ''}
+                  onChange={(e) => setKeyChanges({ ...keyChanges, ANTHROPIC_API_KEY: e.target.value })}
+                  placeholder={settings.ANTHROPIC_API_KEY ? '已配置 (输入以覆盖)' : 'sk-...'}
+                  style={inputStyle}
+                  autoComplete="new-password"
+                />
               </div>
             </div>
           </div>
@@ -227,9 +271,9 @@ export default function ModelSettings() {
             </div>
             <div className={styles.itemControls}>
               <Input.Password
-                value={settings.DEEPSEEK_API_KEY ?? ''}
-                onChange={(e) => handleChange('DEEPSEEK_API_KEY', e.target.value)}
-                placeholder="留空则复用 OPENAI_API_KEY"
+                value={keyChanges.DEEPSEEK_API_KEY ?? ''}
+                onChange={(e) => setKeyChanges({ ...keyChanges, DEEPSEEK_API_KEY: e.target.value })}
+                placeholder={settings.DEEPSEEK_API_KEY ? '已配置 (输入以覆盖)' : '留空则复用 OPENAI_API_KEY'}
                 style={inputStyle}
                 autoComplete="new-password"
               />
@@ -239,7 +283,7 @@ export default function ModelSettings() {
       </div>
 
       <div style={{ marginTop: 20, textAlign: 'right', paddingRight: 4 }}>
-        <Button type="primary" onClick={() => saveKeys(LLM_KEYS, '模型设置已保存')} loading={saving}>保存设置</Button>
+        <Button type="primary" onClick={handleSaveSettings} loading={saving}>保存设置</Button>
       </div>
 
       <ModelManagerModal

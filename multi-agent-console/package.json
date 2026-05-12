@@ -66,6 +66,7 @@
     "monaco-editor-webpack-plugin": "^7.1.0",
     "ts-node": "^10.9.2",
     "vite": "^8.0.12",
+    "esbuild": "^0.25.0",
     "vite-plugin-monaco-editor": "^1.1.0"
   },
   "scripts": {

@@ -25,16 +25,21 @@ export async function settingsRoutes(fastify: FastifyInstance) {
     const getStr = (key: string, def: string) =>
       dbConfig[key] ?? process.env[key] ?? def
 
+    const mask = (val: string) => {
+      if (!val || val.length < 8) return val
+      return `${val.slice(0, 3)}...${val.slice(-4)}`
+    }
+
     const settings = {
       // ── LLM ──────────────────────────────────────────────────────────────
       LLM_PROVIDER:      getStr('LLM_PROVIDER',      'openai'),
       LLM_PRIMARY_MODEL: getStr('LLM_PRIMARY_MODEL',  'deepseek-chat'),
-      OPENAI_API_KEY:    getStr('OPENAI_API_KEY',     ''),
+      OPENAI_API_KEY:    mask(getStr('OPENAI_API_KEY',     '')),
       OPENAI_BASE_URL:   getStr('OPENAI_BASE_URL',    'https://api.deepseek.com'),
-      ANTHROPIC_API_KEY: getStr('ANTHROPIC_API_KEY',  ''),
+      ANTHROPIC_API_KEY: mask(getStr('ANTHROPIC_API_KEY',  '')),
       OLLAMA_BASE_URL:   getStr('OLLAMA_BASE_URL',    'http://localhost:11434'),
       // ── DeepSeek 专有通道 ────────────────────────────────────────────────
-      DEEPSEEK_API_KEY:               getStr('DEEPSEEK_API_KEY',     ''),
+      DEEPSEEK_API_KEY:               mask(getStr('DEEPSEEK_API_KEY',     '')),
       DEEPSEEK_BASE_URL:              getStr('DEEPSEEK_BASE_URL',    'https://api.deepseek.com'),
       DEEPSEEK_AUTO_THINKING:         getStr('DEEPSEEK_AUTO_THINKING', 'true') !== 'false',
       DEEPSEEK_THINKING_EFFORT:       getStr('DEEPSEEK_THINKING_EFFORT', 'medium'),
@@ -117,6 +122,10 @@ export async function settingsRoutes(fastify: FastifyInstance) {
     // 其余所有字段写入数据库
     for (const [k, v] of Object.entries(updates)) {
       const strVal = String(v)
+      // 敏感字段安全校验：如果是脱敏后的占位符（包含 ...），则忽略不更新，防止覆盖真实密钥
+      if (SECRET_KEYS.has(k) && strVal.includes('...')) {
+        continue
+      }
       await systemConfigStore.set(k, strVal, SECRET_KEYS.has(k))
       // 同步更新 process.env，保证当前进程内立即生效
       process.env[k] = strVal

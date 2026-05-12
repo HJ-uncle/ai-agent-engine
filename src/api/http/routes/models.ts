@@ -26,7 +26,7 @@ function isValidChatCompletionsEndpoint(url: string): boolean {
 
 // Helper to check admin role
 function requireAdmin(authContext: any): boolean {
-  if (process.env.AUTH_ENABLED === 'false') return true
+  if (process.env.AUTH_ENABLED === 'false' || authContext?.method === 'none') return true
   // For demo/simplicity, if roles includes 'admin' or if it's not set but AUTH_ENABLED is false
   return authContext?.roles?.includes('admin') || false
 }
