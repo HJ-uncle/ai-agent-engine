@@ -249,12 +249,12 @@ export default function NewExplorerPanel() {
       }}>
         <span>文件</span>
         <div style={{ display: 'flex', gap: 8 }}>
-          <Tooltip title="切换终端 (Ctrl+`)">
+          {/* <Tooltip title="切换终端 (Ctrl+`)">
             <CodeOutlined
               style={{ cursor: 'pointer', color: terminalPanelVisible ? '#0e639c' : undefined }}
               onClick={toggleTerminal}
             />
-          </Tooltip>
+          </Tooltip> */}
           <Tooltip title="搜索文件 (Ctrl+P)">
             <SearchOutlined style={{ cursor: 'pointer' }} onClick={() => setShowSearch(v => !v)} />
           </Tooltip>

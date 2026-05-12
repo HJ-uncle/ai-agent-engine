@@ -4,6 +4,9 @@ node_modules/
 # Build output
 dist/
 
+deploy.sh
+
+
 # Environment variables (contains API keys!)
 .env
 .env.local
