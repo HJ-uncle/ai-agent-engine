@@ -52,6 +52,10 @@ interface ExplorerState {
   // ── Quick Open ────────────────────────────────────────────────────────────
   quickOpenVisible: boolean
   setQuickOpenVisible: (visible: boolean) => void
+
+  // ── Clipboard ─────────────────────────────────────────────────────────────
+  clipboard: { path: string; type: 'copy' | 'cut' } | null
+  setClipboard: (clipboard: { path: string; type: 'copy' | 'cut' } | null) => void
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -176,6 +180,12 @@ export const useExplorerStore = create<ExplorerState>()(
         quickOpenVisible: false,
         setQuickOpenVisible(visible) {
           set({ quickOpenVisible: visible }, false, 'setQuickOpenVisible')
+        },
+
+        // ── Clipboard ──────────────────────────────────────────────────────
+        clipboard: null,
+        setClipboard(clipboard) {
+          set({ clipboard }, false, 'setClipboard')
         },
       }),
       {

@@ -32,10 +32,12 @@ interface SessionState {
   settingsTab: string
   maxAskUserCount: number
   thinkingMode: boolean
+  chatInputValues: Record<string, string> // New: map of sessionId to its chat input value
 
   // Actions
   setMaxAskUserCount: (max: number) => void
   setThinkingMode: (enabled: boolean) => void
+  setChatInputValue: (sessionId: string, value: string) => void
   addSession: (agentId?: string) => string
   switchSession: (id: string) => void
   deleteSession: (id: string) => void
@@ -109,6 +111,7 @@ export const useSessionStore = create<SessionState>()(
       lastTodosUpdate: 0,
       messageMap: { [initial.id]: [] },
       usageMap: { [initial.id]: null },
+      chatInputValues: { [initial.id]: '' },
       runningSessions: {},
       deepseekEffectivePrices: {},
       isSettingsOpen: false,
@@ -118,6 +121,9 @@ export const useSessionStore = create<SessionState>()(
 
       setMaxAskUserCount: (max) => set({ maxAskUserCount: max }),
       setThinkingMode: (enabled) => set({ thinkingMode: enabled }),
+      setChatInputValue: (sessionId, value) => set((state) => ({
+        chatInputValues: { ...(state.chatInputValues || {}), [sessionId]: value }
+      })),
       setFiles: (files) => set({ files }),
       setActiveFile: (file) => set({ activeFile: file }),
       triggerFilesRefresh: () => set({ lastFilesUpdate: Date.now() }),
@@ -132,6 +138,7 @@ export const useSessionStore = create<SessionState>()(
           files: [],
           messageMap: { ...state.messageMap, [s.id]: [] },
           usageMap: { ...state.usageMap, [s.id]: null },
+          chatInputValues: { ...(state.chatInputValues || {}), [s.id]: '' },
         }))
         return s.id
       },
@@ -161,11 +168,13 @@ export const useSessionStore = create<SessionState>()(
 
           const { [id]: _m, ...msgMap } = state.messageMap
           const { [id]: _u, ...usageMap } = state.usageMap
+          const { [id]: _c, ...chatInputValues } = (state.chatInputValues || {})
           return {
             sessions: remaining,
             activeSessionId: newActive,
             messageMap: msgMap,
             usageMap,
+            chatInputValues,
           }
         })
       },
@@ -187,8 +196,14 @@ export const useSessionStore = create<SessionState>()(
             usageMap[newId] = usageMap[oldId]
             delete usageMap[oldId]
           }
+
+          const chatInputValues = { ...(state.chatInputValues || {}) }
+          if (chatInputValues[oldId]) {
+            chatInputValues[newId] = chatInputValues[oldId]
+            delete chatInputValues[oldId]
+          }
           
-          return { sessions, activeSessionId, activeFile, messageMap, usageMap }
+          return { sessions, activeSessionId, activeFile, messageMap, usageMap, chatInputValues }
         })
       },
 

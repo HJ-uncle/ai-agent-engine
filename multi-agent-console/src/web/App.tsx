@@ -37,12 +37,19 @@ function usePersist<T>(key: string, defaultVal: T): [T, React.Dispatch<React.Set
 // ── Explorer + Chat split layout (desktop only) ──────────────────────────────
 type SplitMode = 'chat-only' | 'horizontal' | 'vertical'
 
-function MainArea() {
+function MainArea({ activePanel }: { activePanel: PanelKey }) {
   const [splitMode, setSplitMode] = usePersist<SplitMode>('ui.splitMode', 'vertical')
   // horizontal: 上下；vertical: 左右
   const [splitRatio, setSplitRatio] = usePersist<number>('ui.splitRatio', 0.5)
   const containerRef = useRef<HTMLDivElement>(null)
   const draggingRef = useRef(false)
+
+  // 切换到资源管理器时，默认切换左右分割布局
+  useEffect(() => {
+    if (activePanel === 'explorer' && splitMode === 'chat-only') {
+      setSplitMode('vertical')
+    }
+  }, [activePanel, splitMode, setSplitMode])
 
   // 拖拽时禁止 iframe/canvas 抢焦点
   const [isDragging, setIsDragging] = useState(false)
@@ -240,7 +247,7 @@ function DesktopLayout({
 
       {/* Main area */}
       <div className={styles.main}>
-        <MainArea />
+        <MainArea activePanel={activePanel} />
       </div>
     </div>
   )

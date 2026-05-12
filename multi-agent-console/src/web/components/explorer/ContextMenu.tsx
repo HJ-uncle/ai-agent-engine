@@ -1,13 +1,14 @@
 import React, { useEffect, useRef } from 'react'
-import { App, Modal } from 'antd'
+import { App, Modal, Divider } from 'antd'
 import { workspaceApi } from '@core/api'
 import { useExplorerStore } from '@core/store/explorer'
+import { useSessionStore } from '@core/store/session'
 import type { FileNode } from './FileTree'
 
 export interface ContextMenuState {
   x: number
   y: number
-  node: FileNode
+  node?: FileNode // Optional: if undefined, it's an empty area context menu
 }
 
 interface ContextMenuProps {
@@ -29,6 +30,10 @@ export function ContextMenu({ state, sessionId, onClose, onRefresh, onStartRenam
   const { message } = App.useApp()
   const openTab = useExplorerStore(s => s.openTab)
   const pushLog = useExplorerStore(s => s.pushLog)
+  const clipboard = useExplorerStore(s => s.clipboard)
+  const setClipboard = useExplorerStore(s => s.setClipboard)
+  const setChatInputValue = useSessionStore(s => s.setChatInputValue)
+  const chatInputValues = useSessionStore(s => s.chatInputValues)
   const menuRef = useRef<HTMLDivElement>(null)
 
   const { node } = state
@@ -46,7 +51,7 @@ export function ContextMenu({ state, sessionId, onClose, onRefresh, onStartRenam
 
   const handleNewFile = async () => {
     onClose()
-    const dirPath = node.type === 'dir' ? node.path : node.path.substring(0, node.path.lastIndexOf('/'))
+    const dirPath = !node || node.type === 'dir' ? (node?.path || '.') : node.path.substring(0, node.path.lastIndexOf('/'))
     const name = prompt('新建文件名：')
     if (!name?.trim()) return
     try {
@@ -60,7 +65,7 @@ export function ContextMenu({ state, sessionId, onClose, onRefresh, onStartRenam
 
   const handleNewFolder = async () => {
     onClose()
-    const dirPath = node.type === 'dir' ? node.path : node.path.substring(0, node.path.lastIndexOf('/'))
+    const dirPath = !node || node.type === 'dir' ? (node?.path || '.') : node.path.substring(0, node.path.lastIndexOf('/'))
     const name = prompt('新建文件夹名：')
     if (!name?.trim()) return
     try {
@@ -73,10 +78,11 @@ export function ContextMenu({ state, sessionId, onClose, onRefresh, onStartRenam
 
   const handleRename = () => {
     onClose()
-    onStartRename(node)
+    if (node) onStartRename(node)
   }
 
   const handleDelete = () => {
+    if (!node) return
     onClose()
     Modal.confirm({
       title: `确定删除 "${node.name}" 吗？`,
@@ -98,11 +104,13 @@ export function ContextMenu({ state, sessionId, onClose, onRefresh, onStartRenam
   }
 
   const handleCopyPath = () => {
+    if (!node) return
     onClose()
     navigator.clipboard.writeText(node.path).then(() => message.success('路径已复制'))
   }
 
   const handleCopyFullPath = async () => {
+    if (!node) return
     onClose()
     try {
       const info = await workspaceApi.getFileInfo(sessionId, node.path)
@@ -117,23 +125,77 @@ export function ContextMenu({ state, sessionId, onClose, onRefresh, onStartRenam
     }
   }
 
-  const handleOpenTerminal = () => {
+  const handleDownload = () => {
+    if (!node) return
     onClose()
-    // 若右键点的是文件，取父目录；若是文件夹，直接用该目录
-    const path = node.type === 'dir'
-      ? node.path
-      : node.path.substring(0, node.path.lastIndexOf('/')) || '.'
-    window.dispatchEvent(new CustomEvent('explorer:open-terminal', { detail: { path } }))
+    const url = `/api/v1/workspace/file/download?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(node.path)}`
+    window.open(url, '_blank')
   }
 
-  const items: MenuItemDef[] = [
+  const handleAddToChat = () => {
+    if (!node) return
+    onClose()
+    const current = (chatInputValues && chatInputValues[sessionId]) || ''
+    const prefix = node.type === 'dir' ? 'folder' : 'file'
+    const addition = `\n[${prefix}: ${node.path}]\n`
+    setChatInputValue(sessionId, current + addition)
+    message.success(`已将${node.type === 'dir' ? '文件夹' : '文件'}添加到对话输入框`)
+  }
+
+  const handleCopy = () => {
+    if (!node) return
+    onClose()
+    setClipboard({ path: node.path, type: 'copy' })
+    message.success('已复制')
+  }
+
+  const handleCut = () => {
+    if (!node) return
+    onClose()
+    setClipboard({ path: node.path, type: 'cut' })
+    message.success('已剪切')
+  }
+
+  const handlePaste = async () => {
+    onClose()
+    if (!clipboard) return
+    // If no node, paste to root; if node is file, paste to its dir; if node is dir, paste to it.
+    const destDir = !node || node.type === 'dir' ? (node?.path || '.') : node.path.substring(0, node.path.lastIndexOf('/'))
+    const fileName = clipboard.path.substring(clipboard.path.lastIndexOf('/') + 1)
+    const destPath = `${destDir}/${fileName}`
+
+    try {
+      if (clipboard.type === 'cut') {
+        await workspaceApi.moveFile(sessionId, clipboard.path, destPath)
+        setClipboard(null)
+      } else {
+        const content = await workspaceApi.readFileBinary(sessionId, clipboard.path)
+        await workspaceApi.uploadFile(sessionId, destPath, content, 'base64')
+      }
+      onRefresh()
+      message.success('已粘贴')
+    } catch (e: any) {
+      message.error(e.message ?? '粘贴失败')
+    }
+  }
+
+  const items: MenuItemDef[] = node ? [
     { label: '新建文件', shortcut: 'Ctrl+N', onClick: handleNewFile },
     { label: '新建文件夹', shortcut: 'Ctrl+Shift+N', onClick: handleNewFolder },
+    { label: '添加到对话', onClick: handleAddToChat },
+    { label: '下载', onClick: handleDownload },
     { label: '重命名', shortcut: 'F2', onClick: handleRename },
+    { label: '剪切', shortcut: 'Ctrl+X', onClick: handleCut },
+    { label: '复制', shortcut: 'Ctrl+C', onClick: handleCopy },
+    ...(node.type === 'dir' ? [{ label: '粘贴', shortcut: 'Ctrl+V', onClick: handlePaste }] : []),
     { label: '删除', shortcut: 'Delete', danger: true, onClick: handleDelete },
     { label: '复制路径', shortcut: 'Ctrl+Shift+C', onClick: handleCopyPath },
     { label: '复制完整路径', shortcut: 'Ctrl+Shift+A', onClick: handleCopyFullPath },
-    { label: '在终端中打开', shortcut: 'Ctrl+`', onClick: handleOpenTerminal },
+  ] : [
+    { label: '新建文件', shortcut: 'Ctrl+N', onClick: handleNewFile },
+    { label: '新建文件夹', shortcut: 'Ctrl+Shift+N', onClick: handleNewFolder },
+    { label: '粘贴', shortcut: 'Ctrl+V', onClick: handlePaste },
+    { label: '刷新', onClick: onRefresh },
   ]
 
   // Adjust position to stay in viewport
