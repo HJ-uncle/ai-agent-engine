@@ -31,7 +31,7 @@ export default defineConfig({
     outDir: 'dist',
   },
   server: {
-    port: 3000,
+    port: 3010,
     host: true,
     proxy: {
       '/api': {
