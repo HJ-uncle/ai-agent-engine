@@ -1,4 +1,5 @@
 import React, { Suspense, lazy, useEffect, useState } from 'react'
+import { Button } from 'antd'
 import { useExplorerStore, selectActiveTab } from '@core/store/explorer'
 import { useSessionStore } from '@core/store/session'
 import { useTerminalStore } from '@core/store/terminal'
@@ -13,6 +14,8 @@ const MonacoEditor = lazy(() =>
   import('./editor/MonacoEditor').then(m => ({ default: m.MonacoEditor }))
 )
 const TerminalPanel = lazy(() => import('./terminal/TerminalPanel'))
+
+const MAX_FILE_SIZE = 1024 * 1024 * 5 // 5MB
 
 // ─── File type detection ──────────────────────────────────────────────────────
 
@@ -42,32 +45,104 @@ export default function EditorArea() {
   // For binary/hex: raw bytes
   const [hexData, setHexData] = useState<Uint8Array>(new Uint8Array(0))
 
+  const [fileInfo, setFileInfo] = useState<{ size: number; type: string } | null>(null)
+  const [loading, setLoading] = useState(false)
+
   useEffect(() => {
-    if (!activeTab) return
-
-    const ext = getExt(activeTab.name)
-
-    if (IMAGE_EXTS.has(ext)) {
-      // Fetch as base64 then convert to data URL
-      workspaceApi.readFileBinary(sessionId, activeTab.path).then(b64 => {
-        const mimeMap: Record<string, string> = {
-          jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
-          gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
-          bmp: 'image/bmp', ico: 'image/x-icon',
-        }
-        setImageSrc(`data:${mimeMap[ext] ?? 'image/png'};base64,${b64}`)
-      }).catch(() => setImageSrc(''))
-    } else if (activeTab.type === 'binary') {
-      workspaceApi.readFileBinary(sessionId, activeTab.path).then(b64 => {
-        const binary = atob(b64)
-        const bytes = new Uint8Array(binary.length)
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-        setHexData(bytes)
-      }).catch(() => setHexData(new Uint8Array(0)))
+    if (!activeTab) {
+      setFileInfo(null)
+      return
     }
+
+    setLoading(true)
+    workspaceApi.getFileInfo(sessionId, activeTab.path)
+      .then(info => {
+        if (!info) return
+        setFileInfo(info)
+        const ext = getExt(activeTab.name)
+
+        if (info.size > MAX_FILE_SIZE) {
+          setLoading(false)
+          return
+        }
+
+        if (IMAGE_EXTS.has(ext)) {
+          workspaceApi.readFileBinary(sessionId, activeTab.path).then(b64 => {
+            const mimeMap: Record<string, string> = {
+              jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+              gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+              bmp: 'image/bmp', ico: 'image/x-icon',
+            }
+            setImageSrc(`data:${mimeMap[ext] ?? 'image/png'};base64,${b64}`)
+          }).catch(() => setImageSrc(''))
+        } else if (activeTab.type === 'binary') {
+          workspaceApi.readFileBinary(sessionId, activeTab.path).then(b64 => {
+            const binary = atob(b64)
+            const bytes = new Uint8Array(binary.length)
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+            setHexData(bytes)
+          }).catch(() => setHexData(new Uint8Array(0)))
+        }
+      })
+      .finally(() => setLoading(false))
   }, [activeTab, sessionId])
 
+  const handleDownload = () => {
+    if (!activeTab) return
+    const url = `/api/v1/workspace/file/download?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(activeTab.path)}`
+    window.open(url, '_blank')
+  }
+
   const ext = activeTab ? getExt(activeTab.name) : ''
+
+  const renderContent = () => {
+    if (loading) return editorLoading
+
+    if (fileInfo && fileInfo.size > MAX_FILE_SIZE) {
+      return (
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ccc', fontSize: 14, flexDirection: 'column', gap: 12 }}>
+          <span style={{ fontSize: 40 }}>⚠️</span>
+          <span>文件过大 ({Math.round(fileInfo.size / 1024 / 1024 * 100) / 100}MB)，为了性能考虑暂不支持直接打开。</span>
+          <Button
+            type="primary"
+            onClick={handleDownload}
+            style={{ background: '#0e639c', borderColor: '#0e639c' }}
+          >下载文件</Button>
+        </div>
+      )
+    }
+
+    if (activeTab?.type === 'binary' && !IMAGE_EXTS.has(ext) && !VIDEO_EXTS.has(ext)) {
+      return (
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ccc', fontSize: 14, flexDirection: 'column', gap: 12 }}>
+          <span style={{ fontSize: 40 }}>🚫</span>
+          <span>暂不支持打开该类型的文件，直接打开可能会导致乱码。</span>
+          <Button
+            type="primary"
+            onClick={handleDownload}
+            style={{ background: '#0e639c', borderColor: '#0e639c' }}
+          >下载查看</Button>
+        </div>
+      )
+    }
+
+    return (
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+        {IMAGE_EXTS.has(ext) ? (
+          <ImagePreview src={imageSrc} name={activeTab!.name} />
+        ) : VIDEO_EXTS.has(ext) ? (
+          <VideoPreview
+            src={`/api/v1/workspace/file/stream?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(activeTab!.path)}`}
+            name={activeTab!.name}
+          />
+        ) : (
+          <Suspense fallback={editorLoading}>
+            <MonacoEditor />
+          </Suspense>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#1e1e1e' }}>
@@ -83,22 +158,7 @@ export default function EditorArea() {
         ) : (
           <>
             <EditorTabs />
-            <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-              {IMAGE_EXTS.has(ext) ? (
-                <ImagePreview src={imageSrc} name={activeTab.name} />
-              ) : VIDEO_EXTS.has(ext) ? (
-                <VideoPreview
-                  src={`/api/v1/workspace/file/stream?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(activeTab.path)}`}
-                  name={activeTab.name}
-                />
-              ) : activeTab.type === 'binary' ? (
-                <HexEditor data={hexData} name={activeTab.name} />
-              ) : (
-                <Suspense fallback={editorLoading}>
-                  <MonacoEditor />
-                </Suspense>
-              )}
-            </div>
+            {renderContent()}
           </>
         )}
       </div>

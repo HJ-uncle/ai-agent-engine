@@ -9,6 +9,8 @@ import {
   SyncOutlined,
   EditOutlined,
   DeleteOutlined,
+  CheckOutlined,
+  CopyOutlined,
 } from '@ant-design/icons'
 import { workspaceApi } from '@core/api'
 import { useSessionStore } from '@core/store/session'
@@ -106,7 +108,8 @@ export default function NewExplorerPanel() {
       // Ctrl+` 切换终端面板
       if ((e.ctrlKey || e.metaKey) && e.key === '`') {
         e.preventDefault()
-        useTerminalStore.getState().setPanelVisible(!useTerminalStore.getState().panelVisible)
+        const currentVisible = useTerminalStore.getState().panelVisible
+        useTerminalStore.getState().setPanelVisible(!currentVisible)
       }
     }
     window.addEventListener('keydown', handler)
@@ -150,20 +153,22 @@ export default function NewExplorerPanel() {
         type: 'group', label: '最近',
         children: recentWorkspaces.map(w => {
           const session = sessions.find(s => s.id === w.name)
+          const isActive = activeSessionId === w.name
           return {
             key: `recent-${w.name}`,
             label: (
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                    {session && <span>{session.title}</span>}
-                    <span style={{ fontSize: 12, color: '#888' }}>{w.name}</span>
+                    {session && <span style={{ fontWeight: isActive ? 600 : 400, color: isActive ? '#4fc1ff' : undefined }}>{session.title}</span>}
+                    <span style={{ fontSize: 11, color: '#666' }}>{w.name}</span>
                   </div>
-                  <span style={{ fontSize: 12, color: '#888' }}>{w.path}</span>
+                  <span style={{ fontSize: 11, color: '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.path}</span>
                 </div>
-                <div style={{ display: 'flex', gap: 8, paddingLeft: 16 }} onClick={e => e.stopPropagation()}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }} onClick={e => e.stopPropagation()}>
+                  {isActive && <CheckOutlined style={{ color: '#4fc1ff', fontSize: 12 }} />}
                   <Tooltip title="重命名">
-                    <EditOutlined onClick={() => handleRename(w.name)} />
+                    <EditOutlined style={{ fontSize: 12, color: '#888' }} onClick={() => handleRename(w.name)} />
                   </Tooltip>
                   {!w.hasSession && (
                     <Popconfirm
@@ -171,7 +176,7 @@ export default function NewExplorerPanel() {
                       onConfirm={() => workspaceApi.deleteRecent(w.name).then(fetchRecent)}
                       okButtonProps={{ danger: true }}
                     >
-                      <Tooltip title="删除工作区"><DeleteOutlined /></Tooltip>
+                      <Tooltip title="删除工作区"><DeleteOutlined style={{ fontSize: 12, color: '#888' }} /></Tooltip>
                     </Popconfirm>
                   )}
                 </div>
@@ -215,6 +220,17 @@ export default function NewExplorerPanel() {
     return collect(treeData)
   }, [treeData])
 
+  const activeSession = sessions.find(s => s.id === activeSessionId)
+  const activeWorkspace = recentWorkspaces.find(w => w.name === activeSessionId)
+
+  const handleCopyWorkspacePath = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (activeWorkspace?.path) {
+      navigator.clipboard.writeText(activeWorkspace.path)
+      message.success('工作区路径已复制')
+    }
+  }
+
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* Workspace Header Dropdown */}
@@ -228,10 +244,24 @@ export default function NewExplorerPanel() {
           background: 'rgba(255,255,255,0.02)',
           borderBottom: '1px solid #30363d',
         }}>
-          <span style={{ fontWeight: 600, fontSize: 13, letterSpacing: '0.05em' }}>
-            {activeSessionId || '未选择工作空间'}
-          </span>
-          <DownOutlined style={{ fontSize: 10, color: '#888' }} />
+          <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontWeight: 600, fontSize: 13, letterSpacing: '0.05em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {activeSession?.title || '未选择工作空间'}
+              </span>
+              <DownOutlined style={{ fontSize: 10, color: '#888' }} />
+            </div>
+            {activeSessionId && (
+              <div style={{ fontSize: 11, color: '#666', display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>ID: {activeSessionId}</span>
+                {activeWorkspace?.path && (
+                  <Tooltip title="复制路径">
+                    <CopyOutlined style={{ fontSize: 10, cursor: 'pointer' }} onClick={handleCopyWorkspacePath} />
+                  </Tooltip>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </Dropdown>
 
@@ -247,14 +277,14 @@ export default function NewExplorerPanel() {
         alignItems: 'center',
         flexShrink: 0,
       }}>
-        <span>文件</span>
+        <span>文件管理器</span>
         <div style={{ display: 'flex', gap: 8 }}>
-          <Tooltip title="切换终端 (Ctrl+`)">
+          {/* <Tooltip title="切换终端 (Ctrl+`)">
             <CodeOutlined
               style={{ cursor: 'pointer', color: terminalPanelVisible ? '#0e639c' : undefined }}
               onClick={toggleTerminal}
             />
-          </Tooltip>
+          </Tooltip> */}
           <Tooltip title="搜索文件 (Ctrl+P)">
             <SearchOutlined style={{ cursor: 'pointer' }} onClick={() => setShowSearch(v => !v)} />
           </Tooltip>

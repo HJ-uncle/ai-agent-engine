@@ -113,7 +113,13 @@ export function FileTree({ treeData, sessionId, onRefresh }: FileTreeProps) {
 
   const onRightClick = ({ event, node }: { event: React.MouseEvent; node: EventDataNode<FileNode> }) => {
     event.preventDefault()
+    event.stopPropagation()
     setCtxMenu({ x: event.clientX, y: event.clientY, node: node as unknown as FileNode })
+  }
+
+  const onEmptyContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault()
+    setCtxMenu({ x: e.clientX, y: e.clientY })
   }
 
   // ─── Title renderer ───────────────────────────────────────────────────────
@@ -238,6 +244,7 @@ export function FileTree({ treeData, sessionId, onRefresh }: FileTreeProps) {
       style={{ flex: 1, overflow: 'auto', padding: '4px 0', outline: 'none' }}
       tabIndex={0}
       onKeyDown={onKeyDown}
+      onContextMenu={onEmptyContextMenu}
       onClick={() => ctxMenu && setCtxMenu(null)}
     >
       <Tree

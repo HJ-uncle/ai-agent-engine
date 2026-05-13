@@ -117,11 +117,25 @@ export async function buildServer() {
       wildcard: false,
       prefix: '/',
     })
-    // SPA 回退：所有非 /api/ 路径返回 index.html
+    // SPA 回退：所有非 /api/ 路径根据 UA 或路径前缀返回对应的 HTML
     fastify.setNotFoundHandler((request, reply) => {
       if (request.url.startsWith('/api/') || request.url.startsWith('/ws')) {
         return reply.code(404).send({ code: 40400, message: 'Not found' })
       }
+      
+      // 1. 如果路径以 /m 开头，返回移动端入口
+      if (request.url === '/m' || request.url.startsWith('/m/')) {
+        return reply.sendFile('m.html')
+      }
+
+      // 2. 如果 User-Agent 是移动端且访问根路径，也返回移动端入口
+      const ua = request.headers['user-agent'] || ''
+      const isMobile = /android|iphone|ipod|blackberry|webos|windows phone|iemobile|opera mini|mobile/i.test(ua)
+      if (request.url === '/' && isMobile) {
+        return reply.sendFile('m.html')
+      }
+
+      // 3. 其他情况返回桌面端入口
       return reply.sendFile('index.html')
     })
   }

@@ -5,7 +5,7 @@
   "scripts": {
     "dev:win": "chcp 65001 && tsx watch src/main.ts",
     "dev": "tsx watch src/main.ts",
-    "dev:web": "cd multi-agent-console && npm run start",
+    "dev:web": "cd multi-agent-console && npm start",
     "build": "tsc",
     "start:win": "chcp 65001 && node dist/main.js",
     "start": "node dist/main.js",

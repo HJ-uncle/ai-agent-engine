@@ -6,8 +6,8 @@ import type {
 } from '@core/types'
 
 // 开发环境：proxy 配置代理到 localhost:12323，BASE_URL 留空即可走相对路径
-// 生产环境：设置 REACT_APP_API_URL 环境变量（如 https://your-api.example.com）
-const BASE_URL = process.env.REACT_APP_API_URL ?? ''
+// 生产环境：设置 VITE_API_URL 环境变量（如 https://your-api.example.com）
+const BASE_URL = import.meta.env.VITE_API_URL ?? (process.env as any).REACT_APP_API_URL ?? ''
 const API_PREFIX = `${BASE_URL}/api/v1`
 
 // ── 后端响应格式（严格对齐 response.ts）─────────────────────────────────────

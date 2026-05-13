@@ -62,13 +62,18 @@
     "@craco/craco": "^7.1.0",
     "@playwright/test": "^1.44.0",
     "@types/react-window": "^1.8.8",
+    "@vitejs/plugin-react": "^6.0.1",
     "monaco-editor-webpack-plugin": "^7.1.0",
-    "ts-node": "^10.9.2"
+    "ts-node": "^10.9.2",
+    "vite": "^8.0.12",
+    "esbuild": "^0.25.0",
+    "vite-plugin-monaco-editor": "^1.1.0"
   },
   "scripts": {
-    "start": "craco start",
-    "build": "craco build",
-    "test": "craco test",
+    "start": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest",
     "eject": "react-scripts eject",
     "typecheck": "tsc --noEmit",
     "perf:bench": "ts-node scripts/perf-benchmark.ts",

@@ -1649,6 +1649,8 @@ export default function ChatArea() {
     thinkingMode,
     setThinkingMode,
     triggerFilesRefresh,
+    chatInputValues,
+    setChatInputValue,
   } = useSessionStore();
   const { agents } = useAgentStore();
   const {
@@ -1692,7 +1694,8 @@ export default function ChatArea() {
   const activeModelId = currentAgent?.model || primaryModel;
   const isThinkingSupported = supportedModels.includes(activeModelId);
 
-  const [inputValue, setInputValue] = useState("");
+  const inputValue = (chatInputValues && chatInputValues[activeSessionId]) || "";
+  const setInputValue = (val: string) => setChatInputValue(activeSessionId, val);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [attachmentUrls, setAttachmentUrls] = useState<Map<number, string>>(new Map());
   const [showTodoPanel, setShowTodoPanel] = useState(false);
@@ -1820,7 +1823,7 @@ export default function ChatArea() {
     smoothScrollTo(Math.max(0, targetTop), 380);
   }, [getGroupAnchors, smoothScrollTo]);
 
-  const BASE_URL = (import.meta as any).env?.VITE_API_URL ?? "";
+  const BASE_URL = import.meta.env.VITE_API_URL ?? "";
 
   const debounceCheck = useCallback((): boolean => {
     const now = Date.now();
