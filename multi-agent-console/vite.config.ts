@@ -19,7 +19,20 @@ export default defineConfig({
       languageWorkers: [
         'typescript', 'editorWorkerService', 'json', 'html', 'css'
       ]
-    })
+    }),
+    // ── 移动端路由历史回退支持 ──────────────────────────────────
+    // 当访问 /m/* 且不是静态资源时，重写到 /m.html 以支持移动端 SPA
+    {
+      name: 'mobile-history-fallback',
+      configureServer(server) {
+        server.middlewares.use((req, res, next) => {
+          if (req.url && req.url.startsWith('/m/') && !req.url.includes('.')) {
+            req.url = '/m.html'
+          }
+          next()
+        })
+      }
+    }
   ],
   build: {
     rollupOptions: {

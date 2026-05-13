@@ -96,7 +96,7 @@
 
 ### 2. 会话与历史 Conversation (`/api/v1/conversation` & `/api/v1/sessions`)
 - `GET /api/v1/conversation/sessions`: 获取有对话的会话列表 (支持分页)
-- `GET /api/v1/conversation/history?sessionId=xxx`: 查询指定会话的所有历史消息 (支持分页)
+- `GET /api/v1/conversation/history?sessionId=xxx`: 查询指定会话的所有历史消息 (支持分页)。返回的 `Message` 对象包含 `id`, `role`, `content`, `tokens`, `usage`, `modelId` 等字段。
 - `DELETE /api/v1/conversation/history?sessionId=xxx`: 清空指定会话的历史消息记录（**不**解除 Agent 绑定，绑定与会话生命周期一致）
 - `GET /api/v1/conversations/:conversationId`: 按 conversationId 查询单轮对话消息 (支持分页)
 - `DELETE /api/v1/sessions/:sessionId`: 硬删除整个会话记录及关联 (可选参数 `?keepWorkspace=true` 仅删除记录保留物理工作区文件)

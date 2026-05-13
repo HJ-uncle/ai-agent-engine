@@ -96,6 +96,7 @@ export interface Message {
   toolCallId?: string
   toolName?: string
   conversationId?: string | null
+  modelId?: string
 }
 
 // ── 会话类型 ──────────────────────────────────────────────────────────────────

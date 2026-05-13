@@ -8,6 +8,9 @@ import { up as up006 } from './migrations/006_add_todos_cron.js'
 import { up as up007 } from './migrations/007_add_models_management.js'
 import { up as up008 } from './migrations/008_add_agent_allowed_tools.js'
 import { up as up009 } from './migrations/009_add_sessions.js'
+import { up as up010 } from './migrations/010_add_system_config.js'
+import { up as up011 } from './migrations/011_add_security_and_perf.js'
+import { up as up012 } from './migrations/012_add_message_model_id.js'
 
 const BUILTIN_TEMPLATES = [
   {
@@ -110,6 +113,27 @@ async function migrate() {
       console.log('✓ Migration 009_add_sessions complete')
     } catch (err: any) {
       console.log('✓ Migration 009_add_sessions skipped:', err.message)
+    }
+
+    try {
+      await up010(db)
+      console.log('✓ Migration 010_add_system_config complete')
+    } catch (err: any) {
+      console.log('✓ Migration 010_add_system_config skipped:', err.message)
+    }
+
+    try {
+      await up011(db)
+      console.log('✓ Migration 011_add_security_and_perf complete')
+    } catch (err: any) {
+      console.log('✓ Migration 011_add_security_and_perf skipped:', err.message)
+    }
+
+    try {
+      await up012(db)
+      console.log('✓ Migration 012_add_message_model_id complete')
+    } catch (err: any) {
+      console.log('✓ Migration 012_add_message_model_id skipped:', err.message)
     }
 
     // Seed built-in prompt templates

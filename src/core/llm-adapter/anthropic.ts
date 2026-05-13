@@ -278,6 +278,7 @@ export class AnthropicAdapter implements LLMAdapter {
       completionTokens: response.usage.output_tokens,
       finishReason: response.stop_reason === 'tool_use' ? 'tool_calls' :
                     response.stop_reason === 'max_tokens' ? 'length' : 'stop',
+      model: (response as any).model,
     }
   }
 
@@ -319,6 +320,7 @@ export class AnthropicAdapter implements LLMAdapter {
         }>
         finalMessage(): Promise<{
           usage: { input_tokens: number; output_tokens: number }
+          model: string
         }>
       }
     }).stream(streamParams)
@@ -338,6 +340,7 @@ export class AnthropicAdapter implements LLMAdapter {
       done: true,
       promptTokens: finalMessage.usage.input_tokens,
       completionTokens: finalMessage.usage.output_tokens,
+      model: finalMessage.model,
     }
   }
 

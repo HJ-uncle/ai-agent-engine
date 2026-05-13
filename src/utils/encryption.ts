@@ -1,8 +1,19 @@
 import crypto from 'node:crypto'
 
-// Use a fixed key from environment variables, or generate a random one if not provided (for development).
-// In production, this should be managed by a KMS (Key Management Service).
-const ENCRYPTION_KEY_HEX = process.env.ENCRYPTION_KEY || crypto.randomBytes(32).toString('hex')
+// Use a fixed key from environment variables.
+// WARNING: If ENCRYPTION_KEY is not provided, we use a stable fallback for development
+// to prevent data loss on every restart. In production, this MUST be set.
+let ENCRYPTION_KEY_HEX = process.env.ENCRYPTION_KEY
+
+if (!ENCRYPTION_KEY_HEX) {
+  // Use a stable but insecure fallback for development to avoid "losing" keys on every restart.
+  // This is better than crypto.randomBytes(32) which causes decryption failure after restart.
+  ENCRYPTION_KEY_HEX = '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff'
+  console.warn('\x1b[33m%s\x1b[0m', '⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.')
+  console.warn('\x1b[33m%s\x1b[0m', '   This will cause your API keys to be unstable if you change this key later.')
+  console.warn('\x1b[33m%s\x1b[0m', '   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.\n')
+}
+
 const ENCRYPTION_KEY = Buffer.from(ENCRYPTION_KEY_HEX, 'hex')
 const ALGORITHM = 'aes-256-gcm'
 

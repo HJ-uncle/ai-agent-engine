@@ -33,6 +33,7 @@ export interface Message {
   tokens?: number
   usage?: Record<string, number> | null
   createdAt?: number
+  modelId?: string      // real model name used for this message
 }
 
 // ─── Tool Types ────────────────────────────────────────────────────────────────

@@ -575,6 +575,11 @@ function TokenDetailsContent({
           </span>
         )}
       </div>
+      {modelId && (
+        <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 8, wordBreak: 'break-all', opacity: 0.8 }}>
+          {modelId}
+        </div>
+      )}
       {/* Bar */}
       <div
         style={{
@@ -805,14 +810,16 @@ function TokenDetailsContent({
 function TokenBadge({
   usage,
   durationMs,
+  modelId,
 }: {
   usage: TokenUsage;
   durationMs?: number;
+  modelId?: string;
 }) {
   return (
     <Tooltip
       style={{ width: 260 }}
-      title={<TokenDetailsContent usage={usage} durationMs={durationMs} />}
+      title={<TokenDetailsContent usage={usage} durationMs={durationMs} modelId={modelId} />}
       styles={{
         container: {
           background: "#161b22",
@@ -1548,7 +1555,7 @@ function MessageItemInner({
             )}
 
             {!isUser && msg.usage && (
-              <TokenBadge usage={msg.usage} durationMs={msg.durationMs} />
+              <TokenBadge usage={msg.usage} durationMs={msg.durationMs} modelId={msg.modelId} />
             )}
 
             <div className={styles.actions}>
@@ -1576,15 +1583,11 @@ function MessageItemInner({
                 </Tooltip>
               )}
               <Popconfirm
-                title={
-                  msg.role === 'user'
-                    ? '删除这条提问及其 AI 回答？'
-                    : '删除这条 AI 回答？'
-                }
+                title="删除这轮对话？"
                 description={
                   msg.role === 'user'
-                    ? '同时删除紧跟其后的 AI 回答，操作不可撤销。'
-                    : '仅删除该条回答，不影响上方提问。'
+                    ? '将删除该提问及其关联的 AI 思考与回答，操作不可撤销。'
+                    : '将删除该回答及其关联的提问与思考过程，操作不可撤销。'
                 }
                 onConfirm={async () => {
                   // 优先使用从父组件注入的 onDelete（会同时持久化到后端 DB），
@@ -1592,6 +1595,7 @@ function MessageItemInner({
                   if (onDelete) {
                     try {
                       await onDelete(msg.id)
+                      message.success('已删除整轮对话')
                     } catch (err: any) {
                       message.error(`删除失败：${err?.message ?? '未知错误'}`)
                       return
@@ -2224,6 +2228,7 @@ export default function ChatArea() {
     [handleEditAndResend],
   )
 
+  /** 处理工具调用回复，发送到后端 */
   const handleToolReply = useCallback(
     async (
       msgId: string,

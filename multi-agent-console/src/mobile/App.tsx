@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import ChatPage from './pages/ChatPage'
+import TodoPage from './pages/TodoPage'
 import MeSettingsPage from './pages/MeSettingsPage'
 import { SettingsRoutes } from './pages/SettingsRoutes'
 import { useSessionStore } from '@core/store/session'
@@ -107,6 +108,7 @@ export default function MobileApp() {
       <Routes>
         <Route path="/"           element={<Navigate to="/chat" replace />} />
         <Route path="/chat"       element={<ChatPage />} />
+        <Route path="/todo"       element={<TodoPage />} />
         <Route path="/me"         element={<MeSettingsPage />} />
         <Route path="/settings/*" element={<SettingsRoutes />} />
         {/* 404 → 回主页 */}

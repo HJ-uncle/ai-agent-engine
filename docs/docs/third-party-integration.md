@@ -320,6 +320,7 @@ Content-Type: application/json
 | `reasoningTokens` | ⭐ DeepSeek R1 reasoning_content token 数 |
 
 > 带 ⭐ 的字段仅在 DeepSeek 模型下出现，不存在时为 `undefined`。
+> **注意**：从 v1.1.0 开始，历史记录中的 `assistant` 消息会包含 `modelId` 字段，记录实际产生该响应的模型 ID。
 
 ---
 

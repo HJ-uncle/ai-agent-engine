@@ -326,7 +326,7 @@ export default function SessionList({ onNewChat }: Props) {
         cancelText="取消"
       >
         <p style={{ marginBottom: 16 }}>
-          {deleteTarget?.includes(',') ? '确定要删除这些对话记录吗？' : '确定要删除这个对话记录吗？'}
+          {deleteTarget?.includes(',') ? '确定要永久删除这些会话的所有聊天记录吗？' : '确定要永久删除此会话的所有聊天记录吗？'}
         </p>
         <Checkbox checked={keepWorkspace} onChange={e => setKeepWorkspace(e.target.checked)}>
           同时保留工作区文件 (不删除本地沙盒目录)

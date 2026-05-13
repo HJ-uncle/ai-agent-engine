@@ -59,6 +59,7 @@ export class OllamaAdapter implements LLMAdapter {
     }
 
     const data = await response.json() as {
+      model: string
       message: { content: string }
       prompt_eval_count?: number
       eval_count?: number
@@ -69,6 +70,7 @@ export class OllamaAdapter implements LLMAdapter {
       promptTokens: data.prompt_eval_count ?? 0,
       completionTokens: data.eval_count ?? 0,
       finishReason: 'stop',
+      model: data.model,
     }
   }
 
@@ -112,6 +114,7 @@ export class OllamaAdapter implements LLMAdapter {
 
         for (const line of lines) {
           const data = JSON.parse(line) as {
+            model: string
             message?: { content?: string }
             done?: boolean
             prompt_eval_count?: number
@@ -127,6 +130,7 @@ export class OllamaAdapter implements LLMAdapter {
               done: true,
               promptTokens: data.prompt_eval_count ?? 0,
               completionTokens: data.eval_count ?? 0,
+              model: data.model,
             }
           }
         }

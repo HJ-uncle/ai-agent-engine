@@ -5,6 +5,7 @@ import {
   UnorderedListOutline,
   AppstoreOutline,
   UserOutline,
+  CheckCircleOutline,
 } from 'antd-mobile-icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import styles from './AppTabBar.module.css'
@@ -12,6 +13,7 @@ import styles from './AppTabBar.module.css'
 const TABS = [
   { key: '/chat',     title: '对话',  icon: <MessageOutline /> },
   { key: '/sessions', title: '会话',  icon: <UnorderedListOutline /> },
+  { key: '/todo',     title: '任务',  icon: <CheckCircleOutline /> },
   { key: '/agents',   title: '智能体', icon: <AppstoreOutline /> },
   { key: '/me',       title: '我的',  icon: <UserOutline /> },
 ]

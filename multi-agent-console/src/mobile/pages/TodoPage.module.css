@@ -1,0 +1,64 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--adm-color-background);
+}
+
+.nav {
+  background: var(--adm-color-background);
+  border-bottom: 1px solid var(--adm-color-border);
+}
+
+.addBox {
+  padding: 12px;
+  display: flex;
+  gap: 8px;
+  background: var(--adm-color-background);
+}
+
+.input {
+  flex: 1;
+  background: #2a2a2e;
+  padding: 8px 12px;
+  border-radius: 8px;
+  --font-size: 14px;
+}
+
+.addBtn {
+  border-radius: 8px;
+  padding: 0 16px;
+}
+
+.tabs {
+  background: var(--adm-color-background);
+  border-bottom: 1px solid var(--adm-color-border);
+}
+
+.listArea {
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: 80px;
+}
+
+.center {
+  display: flex;
+  justify-content: center;
+  padding: 40px;
+}
+
+.itemExtra {
+  display: flex;
+  align-items: center;
+}
+
+.todoDone {
+  text-decoration: line-through;
+  color: var(--adm-color-text-secondary);
+}
+
+.actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+}

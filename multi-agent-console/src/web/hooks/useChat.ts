@@ -130,6 +130,7 @@ function driveAiMessage(
           usage: accumulatedUsage,
           durationMs,
           backendMessageId: event.conversationId ?? null,
+          modelId: event.modelId || event.model, // Capture modelId
         })
         // 向 store 提交增量而非全量，避免 ask_user 恢复时重复累加固定部分
         const delta: TokenUsage = {
@@ -639,14 +640,20 @@ export function useChat() {
       }
 
       // ── 收集需要从前端 store 清除的消息 ─────────────────────────────
-      const toDeleteFromStore: typeof msgs = [msg]
+      // 规则：删除一轮对话中的任意一条消息，都视为删除整轮（User + AI + Tools）
+      const toDeleteFromStore: typeof msgs = []
+      let startIdx = msgIdx
 
-      if (msg.role === 'user') {
-        // 把 user 消息之后、下一个 user 消息之前的所有行（tool/assistant 等）都收集进来
-        for (let i = msgIdx + 1; i < msgs.length; i++) {
-          if (msgs[i].role === 'user') break
-          toDeleteFromStore.push(msgs[i])
-        }
+      // 往回找，找到这轮对话的起点（最近的一个 user 消息）
+      while (startIdx > 0 && msgs[startIdx].role !== 'user') {
+        startIdx--
+      }
+
+      // 从起点开始，收集到下一个 user 消息之前的所有消息
+      toDeleteFromStore.push(msgs[startIdx])
+      for (let i = startIdx + 1; i < msgs.length; i++) {
+        if (msgs[i].role === 'user') break
+        toDeleteFromStore.push(msgs[i])
       }
 
       // ── 先调后端删除（幂等，失败容错） ───────────────────────────────

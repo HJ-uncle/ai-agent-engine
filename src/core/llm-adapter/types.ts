@@ -18,6 +18,8 @@ export interface LLMResponse {
   cacheMissTokens?: number
   /** R1/V3 thinking 模式下 reasoning_content 实际产生的推理 token 数 */
   reasoningTokens?: number
+  /** 实际使用的模型 ID */
+  model?: string
 }
 
 export interface LLMStreamChunk {
@@ -34,6 +36,7 @@ export interface LLMStreamChunk {
   cacheHitTokens?: number
   cacheMissTokens?: number
   reasoningTokens?: number
+  model?: string
 }
 
 export interface LLMAdapterOptions {

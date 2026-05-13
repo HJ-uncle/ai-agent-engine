@@ -481,6 +481,7 @@ export class OpenAIAdapter implements LLMAdapter {
       ...(cacheHitTokens != null ? { cacheHitTokens } : {}),
       ...(cacheMissTokens != null ? { cacheMissTokens } : {}),
       ...(reasoningTokens != null ? { reasoningTokens } : {}),
+      model: response.model,
     }
   }
 
@@ -571,6 +572,7 @@ export class OpenAIAdapter implements LLMAdapter {
       ...(cacheHitTokens != null ? { cacheHitTokens } : {}),
       ...(cacheMissTokens != null ? { cacheMissTokens } : {}),
       ...(reasoningTokens != null ? { reasoningTokens } : {}),
+      model: finalMessage?.model,
     }
   }
 

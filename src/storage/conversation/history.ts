@@ -33,6 +33,7 @@ function rowToMessage(row: Row): Message & { conversationId?: string } {
   const conversation_id = row['conversation_id'] as string | null
   const message_id = row['message_id'] as string | null
   const reasoning_content = row['reasoning_content'] as string | null
+  const model_id = row['model_id'] as string | null
 
   const msg: Message & { conversationId?: string } = {
     ...(message_id ? { id: message_id } : {}),
@@ -42,6 +43,7 @@ function rowToMessage(row: Row): Message & { conversationId?: string } {
     tokens: tokens != null ? Number(tokens) : 0,
     createdAt: created_at != null ? Number(created_at) * 1000 : 0,
     ...(conversation_id ? { conversationId: conversation_id } : {}),
+    ...(model_id ? { modelId: model_id } : {}),
   }
   if (token_usage) {
     try {
@@ -146,8 +148,8 @@ export class SQLiteConversationHistory implements ConversationHistory {
     const messageId = message.id ?? uuidv4()
     await db.execute({
       sql: `INSERT INTO conversations
-              (tenant_id, session_id, conversation_id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              (tenant_id, session_id, conversation_id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, model_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         ctx.tenantId,
         ctx.sessionId,
@@ -162,6 +164,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
         message.toolCall ? JSON.stringify(message.toolCall.args) : null,
         message.tokens ?? 0,
         message.usage ? JSON.stringify(message.usage) : null,
+        message.modelId ?? null,
       ],
     })
     return messageId
@@ -170,7 +173,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
   async getHistory(ctx: Ctx & { inheritContext?: boolean }): Promise<Message[]> {
     const db = getDb()
     const result = await db.execute({
-      sql: `SELECT id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id
+      sql: `SELECT id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id, model_id
             FROM conversations
             WHERE tenant_id = ? AND session_id = ?
             ORDER BY created_at ASC, id ASC`,

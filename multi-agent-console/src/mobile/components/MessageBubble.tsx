@@ -10,8 +10,10 @@ import {
   RedoOutline,
   CheckCircleOutline,
   CloseCircleOutline,
+  DeleteOutline,
 } from 'antd-mobile-icons'
 import type { Message, ThinkingStep } from '@core/types'
+import { TokenStatsPopup } from './TokenStatsPopup'
 import styles from './MessageBubble.module.css'
 
 // ─── 工具名称映射 ────────────────────────────────────────────────────────────
@@ -70,6 +72,11 @@ function fileIcon(fileType: string) {
   if (fileType.includes('zip') || fileType.includes('tar') || fileType.includes('gz')) return '🗜️'
   if (fileType.includes('text') || fileType.includes('json') || fileType.includes('xml')) return '📝'
   return '📎'
+}
+
+function fmtTokenTotal(n: number = 0) {
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'k'
+  return n.toString()
 }
 
 /**
@@ -447,12 +454,13 @@ interface MessageBubbleProps {
   isStreaming?: boolean
   sessionId?: string
   onRegenerate?: () => void
+  onDelete?: (messageId: string) => Promise<void>
   onToolReply?: (msgId: string, toolCallId: string, toolName: string, content: string) => void
 }
 
 // ─── MessageBubble ────────────────────────────────────────────────────────────
 
-export const MessageBubble = memo(({ msg, isLast, isStreaming, sessionId = '', onRegenerate, onToolReply }: MessageBubbleProps) => {
+export const MessageBubble = memo(({ msg, isLast, isStreaming, sessionId = '', onRegenerate, onDelete, onToolReply }: MessageBubbleProps) => {
   const isUser = msg.role === 'user'
   const isError = msg.status === 'error'
 
@@ -465,6 +473,7 @@ export const MessageBubble = memo(({ msg, isLast, isStreaming, sessionId = '', o
   const [showActs, setShowActs] = useState(false)
   const { copied: uCopied, copy: uCopy } = useCopyBtn()
   const { copied: aCopied, copy: aCopy } = useCopyBtn()
+  const [showStats, setShowStats] = useState(false)
 
   // ── 用户消息 ──────────────────────────────────────────────────────────────
 
@@ -489,9 +498,23 @@ export const MessageBubble = memo(({ msg, isLast, isStreaming, sessionId = '', o
         {showActs && (
           <div className={styles.actRow}>
             <button className={`${styles.actBtn} ${uCopied ? styles.actBtnDone : ''}`}
-              onClick={() => { uCopy(textContent); setShowActs(false) }}>
+              onClick={(e) => { e.stopPropagation(); uCopy(textContent); setShowActs(false) }}>
               {uCopied ? '✓ 已复制' : <><ContentOutline /> 复制</>}
             </button>
+            {onDelete && (
+              <button
+                className={`${styles.actBtn} ${styles.actBtnDanger}`}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  if (window.confirm('删除这轮对话？\n将删除该提问及其关联的 AI 思考与回答，操作不可撤销。')) {
+                    await onDelete(msg.id);
+                    setShowActs(false);
+                  }
+                }}
+              >
+                <DeleteOutline /> 删除
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -568,6 +591,11 @@ export const MessageBubble = memo(({ msg, isLast, isStreaming, sessionId = '', o
         {/* 底部操作按钮 */}
         {!isStreaming && (hasText || hasSteps) && (
           <div className={styles.aiActs}>
+            {msg.usage && (
+              <button className={styles.tokenBtn} onClick={() => setShowStats(true)}>
+                ⚡ {fmtTokenTotal(msg.usage.totalTokens)}
+              </button>
+            )}
             {hasText && (
               <button className={`${styles.actBtn} ${aCopied ? styles.actBtnDone : ''}`} onClick={() => aCopy(textContent)}>
                 {aCopied ? '✓ 已复制' : <><ContentOutline /> 复制</>}
@@ -578,9 +606,31 @@ export const MessageBubble = memo(({ msg, isLast, isStreaming, sessionId = '', o
                 <RedoOutline /> 重新生成
               </button>
             )}
+            {onDelete && (
+              <button
+                className={`${styles.actBtn} ${styles.actBtnDanger}`}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  if (window.confirm('删除这轮对话？\n将删除该回答及其关联的提问与思考过程，操作不可撤销。')) {
+                    await onDelete(msg.id);
+                  }
+                }}
+              >
+                <DeleteOutline /> 删除
+              </button>
+            )}
           </div>
         )}
       </div>
+
+      {msg.usage && (
+        <TokenStatsPopup
+          visible={showStats}
+          onClose={() => setShowStats(false)}
+          usage={msg.usage}
+          modelId={msg.modelId}
+        />
+      )}
     </div>
   )
 })

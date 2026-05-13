@@ -97,6 +97,7 @@ export function processHistoryMessages(list: any[]): {
           conversationId: m.conversationId ?? null,
           usage: currentRoundUsage || m.usage || null,
           thinkingSteps: [...currentThinkingSteps],
+          modelId: m.modelId || m.model,
         })
         currentThinkingSteps = []
         currentRoundUsage = null
@@ -167,6 +168,7 @@ export function processHistoryMessages(list: any[]): {
       thinkingSteps: currentThinkingSteps,
       usage: currentRoundUsage || null,
       conversationId: currentConvId ?? null,
+      modelId: list.find(m => m.conversationId === currentConvId && m.modelId)?.modelId, // Try to find modelId in the same conversation
     })
   }
 

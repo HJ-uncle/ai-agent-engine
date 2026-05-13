@@ -3,9 +3,9 @@ import { UnorderedListOutline, AddOutline, AddCircleOutline, CloseOutline } from
 import { useNavigate } from 'react-router-dom'
 import { useSessionStore } from '@core/store/session'
 import { useAgentStore } from '@core/store/agents'
-import { chatStream, cancelChat, workspaceApi, conversationApi } from '@core/api'
-import type { Message, ThinkingStep } from '@core/types'
-import { processHistoryMessages } from '@core/utils/processHistory'
+import { useChat } from '@web/hooks/useChat'
+import { workspaceApi } from '@core/api'
+import type { Message } from '@core/types'
 import { SessionsDrawer } from '../components/SessionsDrawer'
 import { AgentPicker } from '../components/AgentPicker'
 import { InputToolbox } from '../components/InputToolbox'
@@ -51,83 +51,6 @@ function useSnack() {
   return { items, show }
 }
 
-// ─── SSE 事件驱动 AI 消息（对齐 Web 端 driveAiMessage）──────────────────────
-
-function buildAiDriver(
-  sid: string,
-  aiMsgId: string,
-  updateMessage: (sid: string, id: string, updates: Partial<Message>) => void,
-  markSessionDone: (sid: string) => void,
-  initialContent = '',
-  initialSteps: ThinkingStep[] = [],
-) {
-  let finalContent = initialContent
-  const thinkingSteps: ThinkingStep[] = [...initialSteps]
-
-  const onEvent = (evt: any) => {
-    if (evt.type === 'text_delta') {
-      finalContent += evt.content ?? ''
-      updateMessage(sid, aiMsgId, { content: finalContent, status: 'streaming' })
-    } else if (evt.type === 'thinking') {
-      thinkingSteps.push({ type: 'thinking', text: evt.text ?? '' })
-      updateMessage(sid, aiMsgId, { thinkingSteps: [...thinkingSteps] })
-    } else if (evt.type === 'tool_start') {
-      thinkingSteps.push({
-        type: 'tool_start',
-        toolName: evt.toolName || evt.name,
-        toolArgs: evt.toolArgs || evt.args,
-        toolCallId: evt.toolCallId,
-      })
-      updateMessage(sid, aiMsgId, { thinkingSteps: [...thinkingSteps] })
-    } else if (evt.type === 'tool_end') {
-      const lastToolIdx = [...thinkingSteps].reverse().findIndex(
-        (s) => s.type === 'tool_start' && s.success === undefined &&
-          (evt.toolCallId ? s.toolCallId === evt.toolCallId : true)
-      )
-      if (lastToolIdx !== -1) {
-        const idx = thinkingSteps.length - 1 - lastToolIdx
-        thinkingSteps[idx] = {
-          ...thinkingSteps[idx],
-          success: evt.success,
-          outputPreview: evt.outputPreview ?? (evt.output ?? '').slice(0, 500),
-        }
-      } else {
-        thinkingSteps.push({
-          type: 'tool_end',
-          toolCallId: evt.toolCallId,
-          success: evt.success,
-          outputPreview: evt.outputPreview ?? (evt.output ?? '').slice(0, 500),
-        })
-      }
-      updateMessage(sid, aiMsgId, { thinkingSteps: [...thinkingSteps] })
-    } else if (evt.type === 'usage' || evt.type === 'token_usage') {
-      if (evt.usage) {
-        updateMessage(sid, aiMsgId, { usage: evt.usage })
-      }
-    }
-  }
-
-  const onDone = () => {
-    updateMessage(sid, aiMsgId, {
-      status: 'done',
-      content: finalContent,
-      thinkingSteps: [...thinkingSteps],
-    })
-    markSessionDone(sid)
-  }
-
-  const onError = (err: any) => {
-    updateMessage(sid, aiMsgId, {
-      status: 'error',
-      content: finalContent || `❌ ${err?.message ?? '发生错误，请重试'}`,
-      thinkingSteps: [...thinkingSteps],
-    })
-    markSessionDone(sid)
-  }
-
-  return { onEvent, onDone, onError }
-}
-
 // ─── 常量 ──────────────────────────────────────────────────────────────────
 const MAX_FILE_SIZE = 100 * 1024 * 1024
 
@@ -168,10 +91,6 @@ function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-}
-
-function genId() {
-  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
 }
 
 // ─── 空状态欢迎页 ──────────────────────────────────────────────────────────
@@ -244,17 +163,20 @@ export default function ChatPage() {
     messageMap,
     sessions,
     addSession,
-    addMessage,
-    updateMessage,
-    deleteMessage,
-    setMessages,
     isSessionRunning,
-    markSessionRunning,
-    markSessionDone,
   } = useSessionStore()
   const { agents } = useAgentStore()
   const navigate = useNavigate()
   const { items: snackItems, show: showSnack } = useSnack()
+
+  const {
+    send,
+    regenerate,
+    fetchHistory,
+    cancel,
+    sendToolResponse,
+    deleteMessage: deleteMessageWithBackend,
+  } = useChat()
 
   const messages: Message[] = messageMap[activeSessionId] ?? []
   const session = sessions.find((s) => s.id === activeSessionId)
@@ -268,28 +190,8 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (!activeSessionId) return
-    // 流式运行中跳过，避免覆盖正在接收的消息
-    if (isSessionRunning(activeSessionId)) return
-
     setHistoryLoading(true)
-    conversationApi.getHistory(activeSessionId)
-      .then(({ list }) => {
-        if (!list || list.length === 0) return
-
-        // ★ 关键：用 processHistoryMessages 解析后端原始消息
-        //    合并 reasoningContent / toolCall / tool_role → thinkingSteps[]
-        //    与 Web 端 useChat.fetchHistory 逻辑完全对齐
-        const { messages: parsed, totalUsage } = processHistoryMessages(list)
-        setMessages(activeSessionId, parsed)
-
-        // 写入 usage 统计（供后续 token 展示）
-        useSessionStore.setState((state) => ({
-          usageMap: { ...state.usageMap, [activeSessionId]: totalUsage },
-        }))
-      })
-      .catch(() => {
-        // 网络错误时静默失败，保留本地 localStorage 缓存
-      })
+    fetchHistory(activeSessionId)
       .finally(() => setHistoryLoading(false))
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId])
@@ -438,127 +340,46 @@ export default function ChatPage() {
         ? text
         : messageContent.length > 0 ? messageContent : text
 
-    // 用户消息
-    addMessage(activeSessionId, {
-      id: genId(), role: 'user', content: finalContent, status: 'done', createdAt: Date.now(),
-    })
-
-    // AI 占位
-    const aiMsgId = genId()
-    addMessage(activeSessionId, {
-      id: aiMsgId, role: 'assistant', content: '', status: 'streaming', createdAt: Date.now(),
-    })
-
-    markSessionRunning(activeSessionId)
-    const sid = activeSessionId
-    const { onEvent, onDone, onError } = buildAiDriver(sid, aiMsgId, updateMessage, markSessionDone)
-
-    chatStream({
-      message: finalContent,
-      sessionId: sid,
-      agentId: session?.agentId,
-      attachments: attachmentData.length > 0 ? attachmentData : undefined,
-      onEvent,
-      onDone,
-      onError: (err) => {
-        onError(err)
-        showSnack(err?.message ?? '发送失败', '❌')
-      },
-    })
+    try {
+      await send(finalContent, activeSessionId, attachmentData.length > 0 ? attachmentData : undefined)
+    } catch (err: any) {
+      showSnack(err?.message ?? '发送失败', '❌')
+    }
   }
 
-  // ── 重新生成：删除最后一条 AI 消息 → 追加新占位 → 重发 stream ────────────
-  const handleRegenerate = () => {
+  const handleRegenerate = async () => {
     if (running) return
-
-    // 找最后一条用户消息
-    const lastUserIdx = [...messages].map((m, i) => ({ m, i }))
-      .filter(({ m }) => m.role === 'user')
-      .at(-1)
-    if (!lastUserIdx) return
-
-    // 删除最后一条用户消息之后的所有消息（即之前的 AI 回复）
-    const toDelete = messages.slice(lastUserIdx.i + 1)
-    toDelete.forEach((m) => deleteMessage(activeSessionId, m.id))
-
-    // 追加新 AI 占位
-    const aiMsgId = genId()
-    addMessage(activeSessionId, {
-      id: aiMsgId, role: 'assistant', content: '', status: 'streaming', createdAt: Date.now(),
-    })
-
-    markSessionRunning(activeSessionId)
-    const sid = activeSessionId
-    const { onEvent, onDone, onError } = buildAiDriver(sid, aiMsgId, updateMessage, markSessionDone)
-
-    chatStream({
-      message: lastUserIdx.m.content as any,
-      sessionId: sid,
-      agentId: session?.agentId,
-      onEvent,
-      onDone,
-      onError: (err) => {
-        onError(err)
-        showSnack(err?.message ?? '重新生成失败', '❌')
-      },
-    })
+    try {
+      await regenerate(activeSessionId)
+    } catch (err: any) {
+      showSnack(err?.message ?? '重新生成失败', '❌')
+    }
   }
 
-  // ── ask_user 工具回复（完全对齐 Web 端 sendToolResponse）────────────────────
-  // ★ 关键：复用原 AI 消息（msgId）而非新建，先标记 ask_user 步骤已完成，
-  //         然后继续向同一条消息追加后续 AI 输出，与 Web 端行为完全一致。
-  const handleToolReply = useCallback((
+  const handleDeleteMessage = useCallback(async (messageId: string) => {
+    console.log('[ChatPage] handleDeleteMessage called:', messageId)
+    try {
+      await deleteMessageWithBackend(activeSessionId, messageId)
+      showSnack('已删除整轮对话', '✅')
+    } catch (err: any) {
+      console.error('[ChatPage] delete failed:', err)
+      showSnack(err?.message ?? '删除失败', '❌')
+    }
+  }, [activeSessionId, deleteMessageWithBackend, showSnack])
+
+  const handleToolReply = useCallback(async (
     msgId: string,
     toolCallId: string,
     toolName: string,
     content: string,
   ) => {
     if (running) return
-    const sid = activeSessionId
-    const msgs = useSessionStore.getState().messageMap[sid] ?? []
-    const aiMsg = msgs.find((m) => m.id === msgId)
-    if (!aiMsg) return
-
-    // 1. 把原消息中对应的 ask_user tool_start 步骤标记为 success:true
-    const updatedSteps = [...(aiMsg.thinkingSteps ?? [])]
-    const lastToolIdx = [...updatedSteps].reverse().findIndex(
-      (s) => s.type === 'tool_start' && s.success === undefined &&
-        s.toolName === toolName &&
-        (s.toolCallId ? s.toolCallId === toolCallId : true)
-    )
-    if (lastToolIdx !== -1) {
-      const idx = updatedSteps.length - 1 - lastToolIdx
-      updatedSteps[idx] = {
-        ...updatedSteps[idx],
-        success: true,
-        outputPreview: content.slice(0, 500),
-      }
+    try {
+      await sendToolResponse(msgId, toolCallId, toolName, content, activeSessionId)
+    } catch (err: any) {
+      showSnack(err?.message ?? '回复失败', '❌')
     }
-
-    // 2. 把原消息恢复为 streaming 状态（面板会自动折叠，输入卡片禁用）
-    updateMessage(sid, msgId, { status: 'streaming', thinkingSteps: updatedSteps })
-    markSessionRunning(sid)
-
-    // 3. 向原消息继续追加 AI 流式输出
-    const { onEvent, onDone, onError } = buildAiDriver(
-      sid, msgId, updateMessage, markSessionDone,
-      typeof aiMsg.content === 'string' ? aiMsg.content : '',
-      updatedSteps,
-    )
-
-    chatStream({
-      message: '',
-      sessionId: sid,
-      agentId: session?.agentId,
-      toolResponse: { toolCallId, name: toolName, output: content },
-      onEvent,
-      onDone,
-      onError: (err) => {
-        onError(err)
-        showSnack(err?.message ?? '回复失败', '❌')
-      },
-    })
-  }, [activeSessionId, running, session, updateMessage, markSessionRunning, markSessionDone, showSnack])
+  }, [activeSessionId, running, sendToolResponse, showSnack])
 
   // ── 输入框高度自适应 ───────────────────────────────────────────────────────
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -640,6 +461,7 @@ export default function ChatPage() {
                     isStreaming={running && isLast && m.role === 'assistant'}
                     sessionId={activeSessionId}
                     onRegenerate={isLastAi && !running ? handleRegenerate : undefined}
+                    onDelete={handleDeleteMessage}
                     onToolReply={handleToolReply}
                   />
                 )
@@ -691,7 +513,7 @@ export default function ChatPage() {
           {/* 发送 / 停止 */}
           <button
             className={`${styles.sendBtn} ${canSend || running ? styles.sendBtnActive : ''}`}
-            onClick={running ? () => cancelChat(activeSessionId) : () => handleSend()}
+            onClick={running ? () => cancel(activeSessionId) : () => handleSend()}
             aria-label={running ? '停止' : '发送'}
           >
             {running ? (

@@ -206,7 +206,15 @@ export class DeepSeekAdapter extends OpenAIAdapter {
     maxTokens?: number
     temperature?: number
     model?: string
-  }): Promise<{ content: string; promptTokens: number; completionTokens: number }> {
+  }): Promise<{
+    content: string
+    promptTokens: number
+    completionTokens: number
+    cacheHitTokens?: number
+    cacheMissTokens?: number
+    reasoningTokens?: number
+    model: string
+  }> {
     // 通过 OpenAI SDK 内部 client 拿到 baseURL 和 apiKey
     const client = (this as any).client as { baseURL: string; apiKey: string }
     const baseURL = client?.baseURL ?? DEFAULT_DEEPSEEK_BASE_URL
@@ -238,6 +246,11 @@ export class DeepSeekAdapter extends OpenAIAdapter {
       content: json?.choices?.[0]?.text ?? '',
       promptTokens: json?.usage?.prompt_tokens ?? 0,
       completionTokens: json?.usage?.completion_tokens ?? 0,
+      cacheHitTokens: json?.usage?.prompt_cache_hit_tokens,
+      cacheMissTokens: json?.usage?.prompt_cache_miss_tokens,
+      reasoningTokens:
+        json?.usage?.completion_tokens_details?.reasoning_tokens || json?.usage?.reasoning_tokens,
+      model: json?.model,
     }
   }
 }

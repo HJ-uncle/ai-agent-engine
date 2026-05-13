@@ -352,6 +352,7 @@ export class ReActStrategy implements LoopStrategy {
           createdAt: Date.now(),
           tokens: i === 0 ? response.completionTokens : 0,
           usage: i === 0 ? (currentUsage as unknown as Record<string, number>) : undefined,
+          modelId: response.model, // 持久化真实模型 ID
           ...(conversationId ? { conversationId } : {}),
         }
         await ctx.history.append(assistantMsg, ctx)
@@ -513,6 +514,7 @@ export class ReActStrategy implements LoopStrategy {
         createdAt: Date.now(),
         tokens: finalCompletionTokens,
         usage: finalUsage as unknown as Record<string, number>, // Attach usage to the final message so it gets saved in the DB
+        modelId: response.model,
         ...(conversationId ? { conversationId } : {}),
       }
       await ctx.history.append(finalMsg, ctx)

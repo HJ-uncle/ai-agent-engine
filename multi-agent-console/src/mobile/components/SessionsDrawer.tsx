@@ -1,8 +1,9 @@
 import React, { useEffect, useRef } from 'react'
-import { Popup, List, SwipeAction, Button, Tag, SpinLoading } from 'antd-mobile'
+import { Popup, List, SwipeAction, Button, Tag, SpinLoading, Dialog } from 'antd-mobile'
 import { AddOutline, CloseOutline } from 'antd-mobile-icons'
 import { useSessionStore } from '@core/store/session'
 import { useAgentStore } from '@core/store/agents'
+import { conversationApi } from '@core/api'
 import styles from './SessionsDrawer.module.css'
 
 interface SessionsDrawerProps {
@@ -124,7 +125,16 @@ export function SessionsDrawer({ visible, onClose }: SessionsDrawerProps) {
                           key: 'delete',
                           text: '删除',
                           color: 'danger',
-                          onClick: () => deleteSession(s.id),
+                          onClick: async () => {
+                            if (window.confirm('删除对话？\n确定要永久删除此会话的所有聊天记录吗？')) {
+                              try {
+                                await conversationApi.deleteSession(s.id, true) // 默认保留工作区
+                                deleteSession(s.id)
+                              } catch (e: any) {
+                                alert(e.message || '删除失败')
+                              }
+                            }
+                          },
                         },
                       ]}
                     >
