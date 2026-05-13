@@ -289,24 +289,12 @@ function AgentFormModal({ open, editing, onClose, onSaved }: AgentFormModalProps
 
 // ── Main AgentPanel ────────────────────────────────────────────────────────────
 export default function AgentPanel() {
-  const { agents, loading, setAgents, setLoading, setError, upsertAgent, removeAgent } = useAgentStore()
+  const { agents, loading, fetchAgents, upsertAgent, removeAgent } = useAgentStore()
   const { addSession } = useSessionStore()
 
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Agent | null>(null)
   const [search, setSearch] = useState('')
-
-  const fetchAgents = async () => {
-    setLoading(true)
-    try {
-      const data = await agentApi.list()
-      setAgents(data.list ?? [])
-    } catch (err: any) {
-      setError(err.message)
-    } finally {
-      setLoading(false)
-    }
-  }
 
   useEffect(() => {
     fetchAgents()

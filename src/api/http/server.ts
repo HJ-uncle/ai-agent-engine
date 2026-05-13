@@ -70,8 +70,15 @@ export async function buildServer() {
   fastify.setErrorHandler(async (error, request, reply) => {
     const err = error as Error & { statusCode?: number }
     logger.error({ err, requestId: request.id }, 'Unhandled error')
+    
+    // In production, mask internal error details
+    const isProd = process.env.NODE_ENV === 'production'
+    const message = isProd && (err.statusCode === undefined || err.statusCode >= 500)
+      ? 'Internal server error'
+      : err.message || 'Unknown error'
+
     // All errors should return 200 with standard fail JSON
-    return reply.code(200).send(fail(err.statusCode ?? 50000, err.message ?? 'Internal server error'))
+    return reply.code(200).send(fail(err.statusCode ?? 50000, message))
   })
 
   // WebSocket 插件（终端路由依赖，必须在路由注册前完成）

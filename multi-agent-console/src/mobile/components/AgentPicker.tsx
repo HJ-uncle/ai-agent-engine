@@ -3,7 +3,6 @@ import { Popup, List, Tag, SpinLoading } from 'antd-mobile'
 import { CheckOutline, AppstoreOutline } from 'antd-mobile-icons'
 import { useAgentStore } from '@core/store/agents'
 import { useSessionStore } from '@core/store/session'
-import { agentApi } from '@core/api'
 import styles from './AgentPicker.module.css'
 
 interface AgentPickerProps {
@@ -12,21 +11,17 @@ interface AgentPickerProps {
 }
 
 export function AgentPicker({ visible, onClose }: AgentPickerProps) {
-  const { agents, loading, setAgents, setLoading, setError } = useAgentStore()
+  const { agents, loading, fetchAgents } = useAgentStore()
   const { sessions, activeSessionId, updateSessionAgent } = useSessionStore()
 
   const activeSession = sessions.find((s) => s.id === activeSessionId)
   const currentAgentId = activeSession?.agentId
 
   useEffect(() => {
-    if (!visible) return
-    setLoading(true)
-    agentApi
-      .list()
-      .then((result) => setAgents(result.list))
-      .catch((e: any) => setError(e.message))
-      .finally(() => setLoading(false))
-  }, [visible, setAgents, setError, setLoading])
+    if (visible) {
+      fetchAgents()
+    }
+  }, [visible, fetchAgents])
 
   const handleSelect = (agentId: string | undefined) => {
     updateSessionAgent(activeSessionId, agentId as any)

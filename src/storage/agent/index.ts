@@ -39,7 +39,13 @@ export class SQLiteAgentStore {
       ]
     })
 
-    await this.updateRelations(id, input.skills, input.mcpServers, input.knowledgeBases, input.allowedTools)
+    await this.updateRelations(
+      id,
+      input.skills ?? [],
+      input.mcpServers ?? [],
+      input.knowledgeBases ?? [],
+      input.allowedTools ?? []
+    )
     
     return this.getById(id, tenantId) as Promise<Agent>
   }
@@ -80,16 +86,68 @@ export class SQLiteAgentStore {
   async list(tenantId: string): Promise<Agent[]> {
     const db = getDb()
     const result = await db.execute({
-      sql: `SELECT id FROM agents WHERE tenant_id = ? ORDER BY updated_at DESC`,
+      sql: `SELECT * FROM agents WHERE tenant_id = ? ORDER BY updated_at DESC`,
       args: [tenantId]
     })
 
-    const agents = []
-    for (const row of result.rows) {
-      const agent = await this.getById(String(row['id']), tenantId)
-      if (agent) agents.push(agent)
-    }
-    return agents
+    if (result.rows.length === 0) return []
+
+    const agentIds = result.rows.map(r => String(r['id']))
+    const placeholders = agentIds.map(() => '?').join(',')
+
+    // Fetch all relations in bulk
+    const [allSkills, allMcps, allKbs, allTools] = await Promise.all([
+      db.execute({ sql: `SELECT agent_id, skill_name FROM agent_skills WHERE agent_id IN (${placeholders})`, args: agentIds }),
+      db.execute({ sql: `SELECT agent_id, mcp_server_name FROM agent_mcp WHERE agent_id IN (${placeholders})`, args: agentIds }),
+      db.execute({ sql: `SELECT agent_id, knowledge_id FROM agent_knowledge WHERE agent_id IN (${placeholders})`, args: agentIds }),
+      db.execute({ sql: `SELECT agent_id, tool_name FROM agent_allowed_tools WHERE agent_id IN (${placeholders})`, args: agentIds }),
+    ])
+
+    // Group relations by agent_id
+    const skillsMap: Record<string, string[]> = {}
+    const mcpsMap: Record<string, string[]> = {}
+    const kbsMap: Record<string, string[]> = {}
+    const toolsMap: Record<string, string[]> = {}
+
+    allSkills.rows.forEach(r => {
+      const aid = String(r['agent_id'])
+      if (!skillsMap[aid]) skillsMap[aid] = []
+      skillsMap[aid].push(String(r['skill_name']))
+    })
+    allMcps.rows.forEach(r => {
+      const aid = String(r['agent_id'])
+      if (!mcpsMap[aid]) mcpsMap[aid] = []
+      mcpsMap[aid].push(String(r['mcp_server_name']))
+    })
+    allKbs.rows.forEach(r => {
+      const aid = String(r['agent_id'])
+      if (!kbsMap[aid]) kbsMap[aid] = []
+      kbsMap[aid].push(String(r['knowledge_id']))
+    })
+    allTools.rows.forEach(r => {
+      const aid = String(r['agent_id'])
+      if (!toolsMap[aid]) toolsMap[aid] = []
+      toolsMap[aid].push(String(r['tool_name']))
+    })
+
+    return result.rows.map(row => {
+      const id = String(row['id'])
+      return {
+        id,
+        tenantId: String(row['tenant_id']),
+        name: String(row['name']),
+        description: row['description'] ? String(row['description']) : undefined,
+        systemPrompt: row['system_prompt'] ? String(row['system_prompt']) : undefined,
+        model: row['model'] ? String(row['model']) : undefined,
+        temperature: row['temperature'] != null ? Number(row['temperature']) : undefined,
+        skills: skillsMap[id] ?? [],
+        mcpServers: mcpsMap[id] ?? [],
+        knowledgeBases: kbsMap[id] ?? [],
+        allowedTools: toolsMap[id] ?? [],
+        createdAt: Number(row['created_at']) * 1000,
+        updatedAt: Number(row['updated_at']) * 1000,
+      }
+    })
   }
 
   async update(id: string, tenantId: string, input: UpdateAgentInput): Promise<Agent | null> {

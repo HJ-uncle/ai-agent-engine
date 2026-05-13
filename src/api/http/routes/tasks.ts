@@ -1,20 +1,23 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { SQLiteTaskQueue } from '../../../storage/task-queue/index.js'
 import { success, fail } from '../response.js'
 
 const taskQueue = new SQLiteTaskQueue()
 taskQueue.start()
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
+
 export async function taskRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: { type: string; payload: Record<string, unknown> } }>('/tasks', async (request, reply) => {
     const { type, payload } = request.body
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
     const jobId = await taskQueue.enqueue({ type, payload, tenantId })
     return reply.code(200).send(success({ jobId }))
   })
 
   fastify.get<{ Querystring: { current?: number; pageSize?: number } }>('/tasks', async (request, reply) => {
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
     // 假设 SQLiteTaskQueue 提供 list(tenantId) 方法，否则返回空数组
     let list: any[] = []
     if (typeof (taskQueue as any).list === 'function') {

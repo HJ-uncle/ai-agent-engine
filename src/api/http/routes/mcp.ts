@@ -13,7 +13,7 @@
  * POST   /api/v1/mcp/servers/:id/test     测试连接并返回工具列表
  */
 
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import {
   listServers,
   getServer,
@@ -21,13 +21,39 @@ import {
   updateServer,
   deleteServer,
   toggleServer,
-  type McpServerRecord,
-  type CreateMcpServerInput,
-  type UpdateMcpServerInput,
 } from '../../../storage/mcp/mcp-config.js'
 import { HTTPMCPClient } from '../../../tools/mcp/client.js'
 import { logger } from '../../../observability/index.js'
 import { success, fail, paginateArray } from '../response.js'
+import { z } from 'zod'
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
+
+// ── Validation Schemas ──────────────────────────────────────────────────────
+const McpBaseSchema = z.object({
+  id: z.string().regex(/^[a-z0-9][a-z0-9-_]*$/, 'id 必须是小写字母、数字、连字符或下划线'),
+  name: z.string().min(1, 'name 不能为空'),
+  description: z.string().optional().default(''),
+  transportType: z.enum(['stdio', 'sse', 'http', 'streamableHttp']),
+  url: z.string().url('无效的 URL 格式').optional(),
+  command: z.string().optional(),
+  args: z.array(z.string()).optional(),
+  env: z.record(z.string()).optional(),
+  headers: z.record(z.string()).optional(),
+  enabled: z.boolean().optional().default(true),
+  isBuiltIn: z.boolean().optional().default(false),
+})
+
+const CreateMcpSchema = McpBaseSchema.refine(data => {
+  if (data.transportType !== 'stdio' && !data.url) return false
+  if (data.transportType === 'stdio' && !data.command) return false
+  return true
+}, {
+  message: '非 stdio 传输必须提供 url，stdio 传输必须提供 command',
+})
+
+const UpdateMcpSchema = McpBaseSchema.partial()
 
 export async function mcpRoutes(fastify: FastifyInstance) {
   // ── List ────────────────────────────────────────────────────────────────────
@@ -37,30 +63,15 @@ export async function mcpRoutes(fastify: FastifyInstance) {
   })
 
   // ── Create ──────────────────────────────────────────────────────────────────
-  fastify.post<{ Body: CreateMcpServerInput }>('/mcp/servers', async (req, reply) => {
-    const { id, name, transportType } = req.body
-
-    if (!id || typeof id !== 'string') {
-      return reply.code(200).send(fail(40001, 'id is required'))
-    }
-    if (!/^[a-z0-9][a-z0-9-_]*$/.test(id)) {
-      return reply.code(200).send(fail(40001, 'id must be lowercase alphanumeric with hyphens/underscores'))
-    }
-    if (!name) {
-      return reply.code(200).send(fail(40001, 'name is required'))
-    }
-    if (!transportType) {
-      return reply.code(200).send(fail(40001, 'transportType is required (stdio|sse|http|streamableHttp)'))
-    }
-    if (transportType !== 'stdio' && !req.body.url) {
-      return reply.code(200).send(fail(40001, 'url is required for non-stdio transport'))
-    }
-    if (transportType === 'stdio' && !req.body.command) {
-      return reply.code(200).send(fail(40001, 'command is required for stdio transport'))
+  fastify.post('/mcp/servers', async (req, reply) => {
+    const result = CreateMcpSchema.safeParse(req.body)
+    if (!result.success) {
+      const firstError = result.error.errors[0]
+      return reply.code(200).send(fail(40001, `参数验证失败：${firstError.message}`))
     }
 
     try {
-      const entry = createServer({ ...req.body, enabled: req.body.enabled ?? true, isBuiltIn: req.body.isBuiltIn ?? false, description: req.body.description ?? '' })
+      const entry = createServer(result.data)
       return reply.code(200).send(success(entry))
     } catch (err: any) {
       return reply.code(200).send(fail(40900, err instanceof Error ? err.message : 'Conflict'))
@@ -77,8 +88,14 @@ export async function mcpRoutes(fastify: FastifyInstance) {
   })
 
   // ── Full update ─────────────────────────────────────────────────────────────
-  fastify.put<{ Params: { id: string }; Body: UpdateMcpServerInput }>('/mcp/servers/:id', async (req, reply) => {
-    const updated = updateServer(req.params.id, req.body)
+  fastify.put<{ Params: { id: string } }>('/mcp/servers/:id', async (req, reply) => {
+    const result = UpdateMcpSchema.safeParse(req.body)
+    if (!result.success) {
+      const firstError = result.error.errors[0]
+      return reply.code(200).send(fail(40001, `参数验证失败：${firstError.message}`))
+    }
+
+    const updated = updateServer(req.params.id, result.data)
     if (!updated) {
       return reply.code(200).send(fail(40400, `MCP server "${req.params.id}" not found`))
     }
@@ -86,8 +103,14 @@ export async function mcpRoutes(fastify: FastifyInstance) {
   })
 
   // ── Partial update ──────────────────────────────────────────────────────────
-  fastify.patch<{ Params: { id: string }; Body: UpdateMcpServerInput }>('/mcp/servers/:id', async (req, reply) => {
-    const updated = updateServer(req.params.id, req.body)
+  fastify.patch<{ Params: { id: string } }>('/mcp/servers/:id', async (req, reply) => {
+    const result = UpdateMcpSchema.safeParse(req.body)
+    if (!result.success) {
+      const firstError = result.error.errors[0]
+      return reply.code(200).send(fail(40001, `参数验证失败：${firstError.message}`))
+    }
+
+    const updated = updateServer(req.params.id, result.data)
     if (!updated) {
       return reply.code(200).send(fail(40400, `MCP server "${req.params.id}" not found`))
     }

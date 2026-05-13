@@ -588,6 +588,26 @@ DELETE /api/v1/tasks/:jobId          取消
 
 ---
 
+## 典型应用场景：工具组合拳
+
+### 场景 A：从零构建并部署一个项目
+1. **规划**：AI 调用 `todo_create` 拆解项目步骤。
+2. **编码**：AI 调用 `create_dir` 和 `write_file` 生成代码结构。
+3. **自检**：AI 调用 `code_diagnose` 检查代码语法和类型错误。
+4. **运行**：AI 调用 `run_command` 启动本地服务器，并提供预览链接。
+
+### 场景 B：深度调研与知识库构建
+1. **搜索**：AI 调用 `web_fetch` 获取多个网页的最新技术文档。
+2. **存储**：AI 调用 `remember` 将核心技术指标存入长期记忆。
+3. **整合**：AI 调用 `write_file` 生成一份完整的技术调研报告。
+
+### 场景 C：多 Agent 协同办公
+1. **分发**：主 Agent 调用 `subagent` 创建一个“UI 设计专家”子智能体。
+2. **产出**：子智能体在同一个工作区内生成 CSS 样式文件。
+3. **汇总**：主 Agent 读取子智能体的产出，并通知用户任务完成。
+
+---
+
 ## 终端（Terminal）
 
 `multi-agent-console` 集成了完整的浏览器内 PTY 终端，由服务器端 `node-pty` 驱动，通过 WebSocket 与前端 `xterm.js` 互联。

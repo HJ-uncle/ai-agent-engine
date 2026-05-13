@@ -3,18 +3,21 @@
  *   POST /terminal/create   — 创建 PTY，返回 terminalId
  *   GET  /terminal/ws/:id   — WebSocket 双向转发 PTY ↔ xterm
  */
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { randomUUID } from 'node:crypto'
 import { workspaceManager } from '../../../workspace/index.js'
 import { terminalManager } from '../../../terminal/index.js'
 import { success, fail } from '../response.js'
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
 
 export async function terminalRoutes(fastify: FastifyInstance) {
   // ── POST /terminal/create ────────────────────────────────────────────────
   fastify.post<{
     Body: { sessionId: string; cwd?: string; cols?: number; rows?: number }
   }>('/terminal/create', async (request, reply) => {
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
     const { sessionId, cwd: cwdOverride, cols = 120, rows = 30 } = request.body
 
     if (!sessionId) return reply.code(200).send(fail(40001, 'sessionId is required'))

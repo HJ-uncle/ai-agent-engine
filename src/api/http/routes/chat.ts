@@ -1,7 +1,7 @@
 // TODO: LLM response caching is not implemented for streaming (SSE) endpoints.
 // For non-streaming complete() calls, a cache layer could be added here keyed on
 // (message, sessionId, systemPrompt) to avoid redundant LLM roundtrips.
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 
 import { v4 as uuidv4 } from 'uuid'
 import { ReActStrategy } from '../../../core/agent-loop/index.js'
@@ -163,6 +163,9 @@ export function abortActiveChat(tenantId: string, sessionId: string, reason = 'U
   return true
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
+
 export async function chatRoutes(fastify: FastifyInstance) {
   // Initialize agent store
   const agentStore = new SQLiteAgentStore()
@@ -175,7 +178,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     if (!sessionId) {
       return reply.code(400).send({ code: 40001, message: 'sessionId is required', data: null, timestamp: Date.now() })
     }
-    const tenantId = (request as unknown as { authContext?: { tenantId: string } }).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
     const cancelled = abortActiveChat(tenantId, sessionId, 'Cancelled by user via /chat/cancel')
     return reply.code(200).send({
       code: 200,
@@ -190,7 +193,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     const { message, sessionId = uuidv4(), agentId, systemPrompt, maxAskUserCount, thinkingMode, inheritContext = true, workspacePaths, toolResponse, attachments, ragTopK = 3, model: requestedModel, modelApiKey: requestedApiKey, modelBaseUrl: requestedBaseUrl, modelProvider: requestedProvider, skills: requestedSkills, mcpServers: requestedMcpServers, knowledgeBases: requestedKnowledgeBases, allowedTools: requestedAllowedTools, inlineSkills: requestedInlineSkills, inlineMcpServers: requestedInlineMcpServers, inlineAgent: requestedInlineAgent, inlineKnowledgeBases: requestedInlineKnowledgeBases, inlineMemoriesXml: requestedInlineMemoriesXml } = request.body
 
     // Get tenant from auth context (set by auth middleware)
-    const tenantId = (request as unknown as { authContext?: { tenantId: string } }).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
     const reqLogger = createRequestLogger(requestId, tenantId, sessionId)
 
     // ── 会话 Agent 锁定校验 ────────────────────────────────────────────────────

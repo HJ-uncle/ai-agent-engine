@@ -1,7 +1,10 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { ModelsStore } from '../../../storage/sqlite/models.js'
 import { success, fail } from '../response.js'
 import { createLLMAdapter } from '../../../core/llm-adapter/factory.js'
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
 
 // Simple check for internal IP to prevent SSRF
 function isPrivateIP(ip: string): boolean {
@@ -42,7 +45,7 @@ export async function modelsRoutes(fastify: FastifyInstance) {
 
   // 2. GET /api/v1/models
   fastify.get('/api/v1/models', async (request, reply) => {
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
     const models = await store.getModels(tenantId)
     // Mask API keys
     const safeModels = models.map(m => ({
@@ -60,7 +63,7 @@ export async function modelsRoutes(fastify: FastifyInstance) {
       if (!requireAdmin(authContext)) {
         return reply.code(403).send(fail(40300, 'Forbidden: Admin role required'))
       }
-      const tenantId = authContext?.tenantId ?? 'default'
+      const tenantId = getTenantId(request)
       const { provider, modelId, apiKey, baseUrl, displayName, version } = request.body
 
       // Validation
@@ -71,19 +74,6 @@ export async function modelsRoutes(fastify: FastifyInstance) {
         return reply.code(400).send(fail(40001, 'API key must be at least 16 characters long.'))
       }
 
-      // Removed strict whitelist check to allow users to add any model ID 
-      // even if it's not pre-populated in the whitelist. 
-      // It will just use default thinking configurations.
-      /*
-      const whitelists = await store.getWhitelists()
-      const isCustom = provider === 'custom'
-      if (!isCustom) {
-        const allowed = whitelists.find(w => w.provider === provider && w.modelId === modelId)
-        if (!allowed) {
-          return reply.code(400).send(fail(40001, 'Model is not in the whitelist.'))
-        }
-      }
-      */
 
       try {
         const newModel = await store.createModel({
@@ -106,15 +96,15 @@ export async function modelsRoutes(fastify: FastifyInstance) {
     }
   )
 
-  // 4. PUT /api/v1/models/{id}
-  fastify.put<{ Params: { id: string }, Body: { apiKey?: string; baseUrl?: string; displayName?: string; isEnabled?: boolean; version?: string } }>(
+  // 4. PUT /api/v1/models/:id
+  fastify.put<{ Params: { id: string }, Body: { isEnabled?: boolean; apiKey?: string; baseUrl?: string; displayName?: string; version?: string } }>(
     '/api/v1/models/:id',
     async (request, reply) => {
       const authContext = (request as any).authContext
       if (!requireAdmin(authContext)) {
         return reply.code(403).send(fail(40300, 'Forbidden: Admin role required'))
       }
-      const tenantId = authContext?.tenantId ?? 'default'
+      const tenantId = getTenantId(request)
       const { id } = request.params
       const data = request.body
 
@@ -142,13 +132,15 @@ export async function modelsRoutes(fastify: FastifyInstance) {
     }
   )
 
-  // 5. DELETE /api/v1/models/{id}
-  fastify.delete<{ Params: { id: string } }>('/api/v1/models/:id', async (request, reply) => {
-    const authContext = (request as any).authContext
-    if (!requireAdmin(authContext)) {
-      return reply.code(403).send(fail(40300, 'Forbidden: Admin role required'))
-    }
-    const tenantId = authContext?.tenantId ?? 'default'
+  // 5. DELETE /api/v1/models/:id
+  fastify.delete<{ Params: { id: string } }>(
+    '/api/v1/models/:id',
+    async (request, reply) => {
+      const authContext = (request as any).authContext
+      if (!requireAdmin(authContext)) {
+        return reply.code(403).send(fail(40300, 'Forbidden: Admin role required'))
+      }
+      const tenantId = getTenantId(request)
     const { id } = request.params
     await store.deleteModel(id, tenantId)
     return reply.code(200).send(success({ id }))

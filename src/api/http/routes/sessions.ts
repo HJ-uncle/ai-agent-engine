@@ -1,7 +1,10 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { SessionStore } from '../../../storage/session/index.js'
 import { SQLiteAgentStore } from '../../../storage/agent/index.js'
 import { success, fail } from '../response.js'
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
 
 export async function sessionRoutes(fastify: FastifyInstance) {
   const sessionStore = new SessionStore()
@@ -16,7 +19,7 @@ export async function sessionRoutes(fastify: FastifyInstance) {
    */
   fastify.get<{ Params: { sessionId: string } }>('/sessions/:sessionId/binding', async (request, reply) => {
     const { sessionId } = request.params
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
 
     const boundAgentId = await sessionStore.getBoundAgentId(sessionId, tenantId)
 

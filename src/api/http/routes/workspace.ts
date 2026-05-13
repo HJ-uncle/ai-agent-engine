@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { success, fail } from '../response.js'
 import { workspaceManager } from '../../../workspace/index.js'
 import { getDb } from '../../../storage/sqlite/db.js'
@@ -20,11 +20,22 @@ interface FileInfo {
   workspacePath: string
 }
 
+interface WorkspaceItem {
+  name: string
+  type: 'file' | 'dir'
+  path: string
+  size?: number
+  children?: WorkspaceItem[]
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
+
 export async function workspaceRoutes(fastify: FastifyInstance) {
   // GET /workspace/files
   // Returns a tree of files and directories in the current workspace
   fastify.get<{ Querystring: { sessionId?: string } }>('/workspace/files', async (request, reply) => {
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
     const sessionId = request.query.sessionId || 'default'
     
     // Get the base path of the workspace
@@ -33,7 +44,7 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
       return reply.code(200).send(success({ name: sessionId, type: 'dir', children: [] }))
     }
 
-    function buildTree(dir: string, name: string): any {
+    function buildTree(dir: string, name: string): WorkspaceItem {
       const stats = fs.statSync(dir)
       if (stats.isDirectory()) {
         const children = fs.readdirSync(dir)
@@ -54,7 +65,7 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
 
   // GET /workspace/recent
   fastify.get('/workspace/recent', async (request, reply) => {
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
     const tenantDir = path.dirname(workspaceManager.getPath({ tenantId, sessionId: 'dummy' }))
     if (!fs.existsSync(tenantDir)) return reply.code(200).send(success([]))
     try {
@@ -83,7 +94,7 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
   // GET /workspace/file/info
   // 获取文件元数据（不返回内容）
   fastify.get<{ Querystring: { sessionId?: string; path: string } }>('/workspace/file/info', async (request, reply) => {
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
     const sessionId = request.query.sessionId || 'default'
     const reqPath = request.query.path
     if (!reqPath) return reply.code(200).send(fail(40001, 'path is required'))
@@ -115,7 +126,7 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
 
   // GET /workspace/file/content
   fastify.get<{ Querystring: { sessionId?: string; path: string } }>('/workspace/file/content', async (request, reply) => {
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
     const sessionId = request.query.sessionId || 'default'
     const reqPath = request.query.path
     if (!reqPath) return reply.code(200).send(fail(40001, 'path is required'))
@@ -153,7 +164,7 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
 
   // GET /workspace/image - 直接返回图片二进制流，用于 <img src="..."> 展示
   fastify.get<{ Querystring: { sessionId?: string; path: string } }>('/workspace/image', async (request, reply) => {
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
     const sessionId = request.query.sessionId || 'default'
     const reqPath = request.query.path
     if (!reqPath) return reply.code(400).send('path is required')
@@ -177,7 +188,7 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
 
   // DELETE /workspace/recent/:sessionId
   fastify.delete<{ Params: { sessionId: string } }>('/workspace/recent/:sessionId', async (request, reply) => {
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
     const sessionId = request.params.sessionId
     try {
       const dir = workspaceManager.getPath({ tenantId, sessionId })
@@ -192,7 +203,7 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
 
   // POST /workspace/rename
   fastify.post<{ Body: { oldName: string, newName: string } }>('/workspace/rename', async (request, reply) => {
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
     const { oldName, newName } = request.body
     if (!oldName || !newName) return reply.code(200).send(fail(40001, 'oldName and newName are required'))
     
@@ -219,7 +230,7 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
 
   // POST /workspace/file
   fastify.post<{ Body: { sessionId: string; path: string; content: string; encoding?: 'utf-8' | 'base64' } }>('/workspace/file', async (request, reply) => {
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
     const { sessionId, path: filePath, content, encoding = 'utf-8' } = request.body
     if (!sessionId || !filePath || content === undefined) {
       return reply.code(200).send(fail(40001, 'sessionId, path, and content are required'))
@@ -310,7 +321,7 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
 
   // ── NEW: POST /workspace/file/trash — 移至系统回收站 ──────────────────────
   fastify.post<{ Body: { sessionId: string; path: string } }>('/workspace/file/trash', async (request, reply) => {
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
     const { sessionId, path: filePath } = request.body
     if (!sessionId || !filePath) return reply.code(200).send(fail(40001, 'sessionId and path are required'))
     try {
@@ -332,7 +343,7 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
 
   // ── NEW: POST /workspace/file/move — 移动/重命名文件 ─────────────────────
   fastify.post<{ Body: { sessionId: string; srcPath: string; destPath: string } }>('/workspace/file/move', async (request, reply) => {
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
     const { sessionId, srcPath, destPath } = request.body
     if (!sessionId || !srcPath || !destPath) return reply.code(200).send(fail(40001, 'sessionId, srcPath and destPath are required'))
     try {

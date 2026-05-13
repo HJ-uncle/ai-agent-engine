@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { SQLiteConversationHistory } from '../../../storage/conversation/index.js'
 import { ReActStrategy } from '../../../core/agent-loop/index.js'
 import { createPipeline, sseStream } from '../../../core/stream-pipeline/index.js'
@@ -12,12 +12,24 @@ import { estimateTokens } from '../../../core/utils/tokens.js'
 import { v4 as uuidv4 } from 'uuid'
 import { success, fail } from '../response.js'
 import { registerActiveChat, unregisterActiveChat } from './chat.js'
+import { z } from 'zod'
 
-interface RegenerateBody {
-  messageId: string
-  systemPrompt?: string
-  maxIterations?: number
-}
+// ── Validation Schemas ──────────────────────────────────────────────────────
+const UpdateMessageSchema = z.object({
+  content: z.string().min(1, '内容不能为空'),
+  systemPrompt: z.string().optional(),
+  maxAskUserCount: z.number().optional(),
+  thinkingMode: z.boolean().optional(),
+})
+
+const RegenerateSchema = z.object({
+  systemPrompt: z.string().optional(),
+  maxAskUserCount: z.number().optional(),
+  thinkingMode: z.boolean().optional(),
+})
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
 
 export async function messagesRoutes(fastify: FastifyInstance) {
   const history = new SQLiteConversationHistory()
@@ -25,25 +37,11 @@ export async function messagesRoutes(fastify: FastifyInstance) {
   // 1. 查询消息的 token 消耗量
   fastify.get<{ Params: { messageId: string } }>('/messages/:messageId/tokens', async (request, reply) => {
     const { messageId } = request.params
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
 
     const message = await history.getMessageById(messageId, tenantId)
 
-    // ★ 兼容：若按 message_id 找不到，尝试把 messageId 当作 conversation_id 删整轮
-    //   （前端幽灵块只有 conversationId 没有 backendMessageId 时走此路径）
     if (!message) {
-      const db2 = (await import('../../../storage/sqlite/db.js')).getDb()
-      const byConv = await db2.execute({
-        sql: `SELECT COUNT(*) AS c FROM conversations WHERE conversation_id = ? AND tenant_id = ?`,
-        args: [messageId, tenantId],
-      })
-      if (Number(byConv.rows[0]?.c ?? 0) > 0) {
-        await db2.execute({
-          sql: `DELETE FROM conversations WHERE conversation_id = ? AND tenant_id = ? AND role != 'user'`,
-          args: [messageId, tenantId],
-        })
-        return reply.code(200).send(success({ success: true, messageId }))
-      }
       return reply.code(200).send(fail(40400, 'Message not found'))
     }
 
@@ -53,7 +51,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
   // 查询会话的 token 总和
   fastify.get<{ Params: { sessionId: string } }>('/sessions/:sessionId/tokens', async (request, reply) => {
     const { sessionId } = request.params
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
 
     const totalTokens = await history.getRawTokenCount({ tenantId, sessionId })
     return reply.code(200).send(success({ sessionId, totalTokens }))
@@ -66,7 +64,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
   //    c. 以上均未命中 → 视为已删，幂等返回 success
   fastify.delete<{ Params: { messageId: string } }>('/messages/:messageId', async (request, reply) => {
     const { messageId } = request.params
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
     const db = (await import('../../../storage/sqlite/db.js')).getDb()
 
     const message = await history.getMessageById(messageId, tenantId)
@@ -262,14 +260,17 @@ export async function messagesRoutes(fastify: FastifyInstance) {
   }
 
   // 3. 编辑用户消息并重新生成响应
-  fastify.put<{ Params: { messageId: string }; Body: { content: string; systemPrompt?: string; maxAskUserCount?: number; thinkingMode?: boolean } }>('/messages/:messageId', async (request, reply) => {
+  fastify.put<{ Params: { messageId: string } }>('/messages/:messageId', async (request, reply) => {
     const { messageId } = request.params
-    const { content, systemPrompt, maxAskUserCount, thinkingMode } = request.body
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
 
-    if (!content) {
-      return reply.code(200).send(fail(40001, 'content is required'))
+    const result = UpdateMessageSchema.safeParse(request.body)
+    if (!result.success) {
+      const firstError = result.error.errors[0]
+      return reply.code(200).send(fail(40001, `参数验证失败：${firstError.message}`))
     }
+
+    const { content, systemPrompt, maxAskUserCount, thinkingMode } = result.data
 
     const message = await history.getMessageById(messageId, tenantId)
     if (!message) {
@@ -281,11 +282,11 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 
     // 获取 session_id
     const db = (await import('../../../storage/sqlite/db.js')).getDb()
-    const result = await db.execute({
+    const dbResult = await db.execute({
       sql: 'SELECT session_id FROM conversations WHERE message_id = ? AND tenant_id = ?',
       args: [messageId, tenantId]
     })
-    const sessionId = result.rows[0]?.session_id as string
+    const sessionId = dbResult.rows[0]?.session_id as string
 
     if (!sessionId) {
       return reply.code(200).send(fail(50000, 'Session not found for message'))
@@ -304,10 +305,17 @@ export async function messagesRoutes(fastify: FastifyInstance) {
   })
 
   // 4. 重新生成最后一条 AI 回复
-  fastify.post<{ Params: { messageId: string }; Body: { systemPrompt?: string; maxAskUserCount?: number; thinkingMode?: boolean } }>('/messages/:messageId/regenerate', async (request, reply) => {
+  fastify.post<{ Params: { messageId: string } }>('/messages/:messageId/regenerate', async (request, reply) => {
     const { messageId } = request.params
-    const { systemPrompt, maxAskUserCount, thinkingMode } = request.body
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
+
+    const result = RegenerateSchema.safeParse(request.body)
+    if (!result.success) {
+      const firstError = result.error.errors[0]
+      return reply.code(200).send(fail(40001, `参数验证失败：${firstError.message}`))
+    }
+
+    const { systemPrompt, maxAskUserCount, thinkingMode } = result.data
 
     const message = await history.getMessageById(messageId, tenantId)
     if (!message) {
@@ -318,11 +326,11 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     }
 
     const db = (await import('../../../storage/sqlite/db.js')).getDb()
-    const result = await db.execute({
+    const dbResult = await db.execute({
       sql: 'SELECT session_id FROM conversations WHERE message_id = ? AND tenant_id = ?',
       args: [messageId, tenantId]
     })
-    const sessionId = result.rows[0]?.session_id as string
+    const sessionId = dbResult.rows[0]?.session_id as string
 
     if (!sessionId) {
       return reply.code(200).send(fail(50000, 'Session not found for message'))

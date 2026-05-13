@@ -1,10 +1,13 @@
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, FastifyRequest } from 'fastify'
 import { success, fail } from '../response.js'
 import { loadSecurityConfig, saveSecurityConfig, WebFetchConfig } from '../../../tools/web-fetch/security-config.js'
 import { systemConfigStore, SECRET_KEYS } from '../../../storage/sqlite/system-config.js'
 import { setGlobalToolPoolLimit } from '../../../core/utils/concurrency-pool.js'
 import { resolveSuperpowerMode } from '../../../core/superpower.js'
 import { logger as engineLogger } from '../../../observability/index.js'
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
 
 const SUPERPOWER_MODES = ['off', 'balanced', 'methodology', 'max'] as const
 type SuperpowerModeLiteral = typeof SUPERPOWER_MODES[number]

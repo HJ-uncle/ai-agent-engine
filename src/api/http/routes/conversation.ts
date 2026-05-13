@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { SQLiteConversationHistory } from '../../../storage/conversation/index.js'
 import { SessionStore } from '../../../storage/session/index.js'
 import { success, fail, paginateArray } from '../response.js'
@@ -6,12 +6,15 @@ import { workspaceManager } from '../../../workspace/index.js'
 import { abortActiveChat } from './chat.js'
 import fs from 'node:fs'
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
+
 export async function conversationRoutes(fastify: FastifyInstance) {
   const history = new SQLiteConversationHistory()
 
   // GET /conversation/sessions  — 列出该租户下所有有对话记录的 session
   fastify.get<{ Querystring: { current?: number; pageSize?: number } }>('/conversation/sessions', async (request, reply) => {
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
     const { current, pageSize } = request.query
     const sessions = await history.listSessions(tenantId)
     return reply.code(200).send(paginateArray(sessions, current, pageSize))
@@ -20,7 +23,7 @@ export async function conversationRoutes(fastify: FastifyInstance) {
   // GET /conversation/history?sessionId=xxx  — 查询 session 的所有历史消息
   fastify.get<{ Querystring: { sessionId: string; current?: number; pageSize?: number } }>('/conversation/history', async (request, reply) => {
     const { sessionId, current, pageSize } = request.query
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
     if (!sessionId) {
       return reply.code(200).send(fail(40001, '参数验证失败：sessionId 不能为空'))
     }
@@ -31,7 +34,7 @@ export async function conversationRoutes(fastify: FastifyInstance) {
   // DELETE /conversation/history?sessionId=xxx  — 清空 session 历史
   fastify.delete<{ Querystring: { sessionId: string } }>('/conversation/history', async (request, reply) => {
     const { sessionId } = request.query
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
     if (!sessionId) {
       return reply.code(200).send(fail(40001, '参数验证失败：sessionId 不能为空'))
     }
@@ -44,7 +47,7 @@ export async function conversationRoutes(fastify: FastifyInstance) {
   fastify.delete<{ Params: { sessionId: string }, Querystring: { keepWorkspace?: string } }>('/sessions/:sessionId', async (request, reply) => {
     const { sessionId } = request.params
     const { keepWorkspace } = request.query
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
     
     if (!sessionId) {
       return reply.code(200).send(fail(40001, '参数验证失败：sessionId 不能为空'))
@@ -80,7 +83,7 @@ export async function conversationRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { conversationId: string }, Querystring: { current?: number; pageSize?: number } }>('/conversations/:conversationId', async (request, reply) => {
     const { conversationId } = request.params
     const { current, pageSize } = request.query
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
+    const tenantId = getTenantId(request)
 
     if (!conversationId) {
       return reply.code(200).send(fail(40001, '参数验证失败：conversationId 不能为空'))

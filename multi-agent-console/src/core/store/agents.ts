@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { Agent } from '@core/types'
+import { agentApi } from '@core/api'
 
 interface AgentState {
   agents: Agent[]
@@ -11,11 +12,12 @@ interface AgentState {
   setError: (error: string | null) => void
   upsertAgent: (agent: Agent) => void
   removeAgent: (id: string) => void
+  fetchAgents: () => Promise<void>
 }
 
 export const useAgentStore = create<AgentState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       agents: [],
       loading: false,
       error: null,
@@ -32,6 +34,17 @@ export const useAgentStore = create<AgentState>()(
         }),
       removeAgent: (id) =>
         set((state) => ({ agents: state.agents.filter((a) => a.id !== id) })),
+      fetchAgents: async () => {
+        set({ loading: true, error: null })
+        try {
+          const data = await agentApi.list()
+          set({ agents: data.list ?? [] })
+        } catch (err: any) {
+          set({ error: err.message || '获取 Agent 列表失败' })
+        } finally {
+          set({ loading: false })
+        }
+      },
     }),
     {
       name: 'mac-agent-store',

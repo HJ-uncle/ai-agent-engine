@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import {
   addDocument,
   listDocuments,
@@ -26,8 +26,7 @@ export async function knowledgeRoutes(fastify: FastifyInstance) {
   })
 
   // Helper: extract tenantId from auth context
-  const getTenantId = (request: unknown): string =>
-    (request as { authContext?: { tenantId: string } }).authContext?.tenantId ?? 'default'
+  const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
 
   // ── POST /knowledge/documents ─────────────────────────────────────────────
   // Accepts:
