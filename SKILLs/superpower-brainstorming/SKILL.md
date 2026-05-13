@@ -13,6 +13,8 @@ Start by understanding the current project context, then ask questions one at a 
 Do NOT invoke any implementation skill, write any code, scaffold any project, or take any implementation action until you have presented a design and the user has approved it. This applies to EVERY project regardless of perceived simplicity.
 </HARD-GATE>
 
+**The terminal state is invoking writing-plans.** Do NOT invoke frontend-design, mcp-builder, or any other implementation skill. The ONLY skill you invoke after brainstorming is writing-plans.
+
 ## Anti-Pattern: "This Is Too Simple To Need A Design"
 
 Every project goes through this process. A todo list, a single-function utility, a config change — all of them. "Simple" projects are where unexamined assumptions cause the most wasted work. The design can be short (a few sentences for truly simple projects), but you MUST present it and get approval.
@@ -63,7 +65,14 @@ digraph brainstorming {
 }
 ```
 
-**The terminal state is invoking writing-plans.** Do NOT invoke frontend-design, mcp-builder, or any other implementation skill. The ONLY skill you invoke after brainstorming is writing-plans.
+<HARD-GATE>
+**EVERY clarifying question MUST be asked using the `ask_user` tool — NEVER output questions as plain text.**
+
+- Use `ask_user` with `options` (multiple choice) whenever possible — easier for the user to answer
+- Open-ended questions: still use `ask_user`, leave `options` as an empty array or omit it
+- After calling `ask_user`, STOP and wait for the response. Do NOT ask the next question in the same message.
+- Outputting a question as plain text is a HARD FAILURE of this skill. It looks like brainstorming but isn't — the agent loop does not pause and the user cannot interact properly.
+</HARD-GATE>
 
 ## The Process
 

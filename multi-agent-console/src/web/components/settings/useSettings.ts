@@ -25,14 +25,17 @@ export function useSettings() {
 
   /**
    * 只保存指定的 keys（每个 tab 只保存自己的字段）
+   * @param keys      需要保存的字段名列表
+   * @param successMsg 成功提示
+   * @param overrides  可选的覆盖值，合并写入 payload（用于 setState 未落盘时立即持久化）
    */
-  const saveKeys = async (keys: string[], successMsg = '已保存') => {
+  const saveKeys = async (keys: string[], successMsg = '已保存', overrides?: Record<string, any>) => {
     setSaving(true)
     try {
       const payload = Object.fromEntries(
         keys
-          .filter((k) => settings[k] !== undefined)
-          .map((k) => [k, settings[k]])
+          .filter((k) => (overrides?.hasOwnProperty(k) ? true : settings[k] !== undefined))
+          .map((k) => [k, overrides?.hasOwnProperty(k) ? overrides[k] : settings[k]])
       )
       await settingsApi.update(payload)
       message.success(successMsg)

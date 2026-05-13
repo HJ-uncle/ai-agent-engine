@@ -549,7 +549,8 @@ export async function chatRoutes(fastify: FastifyInstance) {
     const fullSystemPrompt = baseSystemPrompt + ragPrompt + `
 ---
 # Rules
-1. Use \`ask_user\` to clarify intent or confirm actions.
+1. **ALWAYS use the \`ask_user\` tool** to ask questions, clarify intent, or confirm actions — NEVER output questions as plain text. Plain-text questions do not pause the agent loop and cannot be interacted with by the user. This is a hard rule with no exceptions.
+1a. When calling \`ask_user\`, you MUST provide **at least 2 meaningful, specific options**. NEVER call it with only one option (e.g. only "其他"). If you cannot think of at least 2 concrete choices, skip the tool call entirely and ask in your next plain-text reply.
 2. Use Chinese tool names in replies (e.g. 写入文件, not write_file).
 3. You are ${currentModelName}.
 4. When providing a downloadable file to the user, ALWAYS present it as an HTTP download link using this exact Markdown format:
@@ -563,7 +564,8 @@ ${workspaceInfo}
     const pureSystemPrompt = baseSystemPrompt + `
 ---
 # Rules
-1. Use \`ask_user\` to clarify intent or confirm actions.
+1. **ALWAYS use the \`ask_user\` tool** to ask questions, clarify intent, or confirm actions — NEVER output questions as plain text. Plain-text questions do not pause the agent loop and cannot be interacted with by the user. This is a hard rule with no exceptions.
+1a. When calling \`ask_user\`, you MUST provide **at least 2 meaningful, specific options**. NEVER call it with only one option (e.g. only "其他"). If you cannot think of at least 2 concrete choices, skip the tool call entirely and ask in your next plain-text reply.
 2. Use Chinese tool names in replies (e.g. 写入文件, not write_file).
 3. You are ${currentModelName}.
 4. When providing a downloadable file to the user, ALWAYS present it as an HTTP download link using this exact Markdown format:

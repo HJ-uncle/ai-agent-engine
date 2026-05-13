@@ -29,6 +29,15 @@ If CLAUDE.md, GEMINI.md, or AGENTS.md says "don't use TDD" and a skill says "alw
 
 **On agent-engine (this host):** Use the `get_skill` tool (powered by `skillsRegistry`). When you invoke a skill, its content is loaded and presented to you — follow it directly. Never use `read_file` / `smart_read` on skill files; they are meant to be discovered through `list_skills` first and then fetched via `get_skill` by name.
 
+## Interaction Rule — HARD GATE
+
+**You MUST use the `ask_user` tool for ALL questions directed at the user.**
+
+- ✅ Correct: Call `ask_user` with a `question` and `options` array → agent loop pauses → user sees an interactive widget
+- ❌ Wrong: Write the question as plain text in your response → agent loop does NOT pause → user cannot respond interactively
+
+This applies everywhere: brainstorming clarifications, design approvals, confirmation prompts, option selections — everything. There are no exceptions.
+
 ## Platform Adaptation
 
 The bundled reference table in `references/agent-engine-tools.md` maps every Claude Code tool alias you might still see in skill files to its agent-engine equivalent (e.g. `run_command`, `read_file`, `write_file`, `subagent`, `grep`, `glob`, `edit_file`, `todo_create` / `todo_update`, `web_fetch`, `web_search`, `get_skill`). If a skill mentions a name that doesn't match any registered tool, translate through that table before acting.

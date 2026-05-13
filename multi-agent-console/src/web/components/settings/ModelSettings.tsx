@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Input, Select, Button, App, Table, Space, Tag, Popconfirm } from 'antd'
-import { PlusOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons'
+import { PlusOutlined, DeleteOutlined, EditOutlined, SwapOutlined } from '@ant-design/icons'
 import { modelsApi } from '@core/api'
 import { useSettings } from './useSettings'
 import styles from './SettingsLayout.module.css'
@@ -50,12 +50,32 @@ export default function ModelSettings() {
     }
   }
 
+  const handleSwitchModel = async (record: any) => {
+    handleChange('LLM_PRIMARY_MODEL', record.modelId)
+    handleChange('LLM_PROVIDER', record.provider)
+    // 通过 overrides 参数绕过 React setState 批处理延迟，立即持久化到后端
+    await saveKeys(LLM_KEYS, `已切换默认模型为 ${record.displayName || record.modelId}`, {
+      LLM_PRIMARY_MODEL: record.modelId,
+      LLM_PROVIDER: record.provider,
+    })
+  }
+
+  const isDefaultModel = (modelId: string, provider: string) =>
+    modelId === settings.LLM_PRIMARY_MODEL && provider === settings.LLM_PROVIDER
+
   const columns = [
     {
       title: '模型名称',
       dataIndex: 'displayName',
       key: 'displayName',
-      render: (text: string, record: any) => text || record.modelId
+      render: (text: string, record: any) => (
+        <Space size={8}>
+          <span>{text || record.modelId}</span>
+          {isDefaultModel(record.modelId, record.provider) && (
+            <Tag color="processing">当前默认</Tag>
+          )}
+        </Space>
+      )
     },
     { title: '模型ID', dataIndex: 'modelId', key: 'modelId' },
     {
@@ -73,6 +93,23 @@ export default function ModelSettings() {
       key: 'action',
       render: (_: any, record: any) => (
         <Space size="small">
+          {!isDefaultModel(record.modelId, record.provider) ? (
+            <Popconfirm
+              title="确认切换默认模型？"
+              description={`将默认模型切换为 ${record.displayName || record.modelId}`}
+              onConfirm={() => handleSwitchModel(record)}
+              okText="确定"
+              cancelText="取消"
+            >
+              <Button type="text" icon={<SwapOutlined />} size="small">
+                切换
+              </Button>
+            </Popconfirm>
+          ) : (
+            <Button type="text" size="small" disabled style={{ color: '#52c41a' }}>
+              ✓ 当前默认
+            </Button>
+          )}
           <Button type="text" icon={<EditOutlined />} size="small" onClick={() => handleEditModel(record)} />
           <Popconfirm title="确定要删除这个模型吗？" onConfirm={() => handleDeleteModel(record.id)} okText="确定" cancelText="取消">
             <Button type="text" danger icon={<DeleteOutlined />} size="small" />
@@ -198,45 +235,6 @@ export default function ModelSettings() {
           </div>
         </div>
       )}
-
-      {/* ── DeepSeek 专属 API ── */}
-      <div className={styles.section}>
-        <div className={styles.sectionTitle}>🐋 DeepSeek 专属配置</div>
-        <div className={styles.card}>
-          <div className={styles.settingItem}>
-            <div className={styles.itemInfo}>
-              <div className={styles.itemTitle}>API Base URL</div>
-              <div className={styles.itemDescription}>
-                DeepSeek 接口地址 (DEEPSEEK_BASE_URL)，留空或默认时使用 https://api.deepseek.com
-              </div>
-            </div>
-            <div className={styles.itemControls}>
-              <Input
-                value={settings.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com'}
-                onChange={(e) => handleChange('DEEPSEEK_BASE_URL', e.target.value)}
-                style={inputStyle}
-              />
-            </div>
-          </div>
-          <div className={styles.settingItem}>
-            <div className={styles.itemInfo}>
-              <div className={styles.itemTitle}>API Key</div>
-              <div className={styles.itemDescription}>
-                DeepSeek 专属密钥 (DEEPSEEK_API_KEY)；留空时自动复用上方 OPENAI_API_KEY
-              </div>
-            </div>
-            <div className={styles.itemControls}>
-              <Input.Password
-                value={settings.DEEPSEEK_API_KEY ?? ''}
-                onChange={(e) => handleChange('DEEPSEEK_API_KEY', e.target.value)}
-                placeholder="留空则复用 OPENAI_API_KEY"
-                style={inputStyle}
-                autoComplete="new-password"
-              />
-            </div>
-          </div>
-        </div>
-      </div>
 
       <div style={{ marginTop: 20, textAlign: 'right', paddingRight: 4 }}>
         <Button type="primary" onClick={() => saveKeys(LLM_KEYS, '模型设置已保存')} loading={saving}>保存设置</Button>
