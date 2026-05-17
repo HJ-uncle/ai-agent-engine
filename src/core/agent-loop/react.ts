@@ -259,17 +259,105 @@ export class ReActStrategy implements LoopStrategy {
 
       ctx.logger.debug({ iteration, messageCount: messages.length }, 'ReAct iteration')
 
-      let response
+      let response: any = {
+        content: '',
+        reasoningContent: '',
+        toolCalls: [],
+        promptTokens: 0,
+        completionTokens: 0,
+        finishReason: 'stop',
+      }
+      
       try {
-        console.log('--- llm.complete started ---')
-        response = await this.llm.complete(messages, {
+        const stream = this.llm.stream(messages, {
           ...llmOptions,
-          // 传递 signal 给适配器以便支持中断
           ...(ctx.signal ? { signal: ctx.signal } : {}),
         } as LLMAdapterOptions & { signal?: AbortSignal })
-        console.log('--- llm.complete finished ---', response.content?.slice(0, 50))
+
+        const toolCallsMap = new Map<number, { id?: string; name?: string; args: string; started: boolean }>()
+
+        let bufferedContent = ''
+        for await (const chunk of stream) {
+          if (chunk.content) {
+            bufferedContent += chunk.content
+            // 注意：我们暂时不 yield chunk.content，因为它可能是“思考过程”也可能是“最终回答”
+            // 我们等到流结束，根据是否有 toolCalls 来决定将其作为 __thinking__ 还是普通文本。
+          }
+          if (chunk.reasoningContent) {
+            response.reasoningContent += chunk.reasoningContent
+            yield `\x00__thinking__${chunk.reasoningContent}`
+          }
+          if (chunk.toolCalls) {
+            for (const tc of chunk.toolCalls) {
+              const idx = (tc as any).index ?? 0
+              let existing = toolCallsMap.get(idx)
+              if (!existing) {
+                existing = { args: '', started: false }
+                toolCallsMap.set(idx, existing)
+              }
+              if (tc.id) existing.id = tc.id
+              if (tc.name) existing.name = tc.name
+              if (tc.args) existing.args += tc.args
+              
+              if (!existing.started && existing.id && existing.name) {
+                existing.started = true
+                yield `\x00__tool_start__${JSON.stringify({ name: existing.name, toolCallId: existing.id })}`
+              }
+              
+              if (tc.args && existing.id) {
+                yield `\x00__tool_args__${JSON.stringify({ toolCallId: existing.id, args: tc.args })}`
+              }
+            }
+          }
+          if (chunk.done) {
+            response.promptTokens = chunk.promptTokens ?? response.promptTokens
+            response.completionTokens = chunk.completionTokens ?? response.completionTokens
+            response.cacheHitTokens = chunk.cacheHitTokens
+            response.cacheMissTokens = chunk.cacheMissTokens
+            response.reasoningTokens = chunk.reasoningTokens
+            response.model = chunk.model
+          }
+        }
+
+        response.content = bufferedContent
+        
+        // ── 决定 content 的归属 ──
+        if (toolCallsMap.size > 0) {
+          // 如果有工具调用，那么本轮产生的 content 应当视为“思考过程”
+          if (response.content) {
+            yield `\x00__thinking__${response.content}`
+          }
+        } else {
+          // 如果没有工具调用，这就是最终回答，模拟流式输出以保持 UX
+          if (response.content) {
+            const chunkSize = 20
+            for (let i = 0; i < response.content.length; i += chunkSize) {
+              yield response.content.slice(i, i + chunkSize)
+              await new Promise(resolve => setTimeout(resolve, 5))
+            }
+          }
+        }
+
+        // Convert toolCallsMap back to response.toolCalls
+         response.toolCalls = Array.from(toolCallsMap.values()).map((tc: any) => {
+           let parsedArgs = {}
+           try {
+             parsedArgs = JSON.parse(tc.args || '{}')
+           } catch (e) {
+             ctx.logger.error({ err: e, args: tc.args }, 'Failed to parse tool arguments')
+           }
+           return {
+             id: tc.id || `call_${uuidv4()}`,
+             name: tc.name || '',
+             args: parsedArgs,
+           }
+         })
+        
+        if (response.toolCalls.length > 0) {
+          response.finishReason = 'tool_calls'
+        }
       } catch (err: any) {
-        if (err.name === 'AbortError') {
+        if (err.name === 'AbortError' || ctx.signal?.aborted) {
           ctx.logger.info('LLM call aborted')
           return
         }
@@ -379,20 +467,8 @@ export class ReActStrategy implements LoopStrategy {
 
       // Handle tool calls
     if (response.toolCalls && response.toolCalls.length > 0) {
-      // ── 思考过程：如果 AI 有思考文本，先流出 ─────────────────────────
-      // 对于 Deepseek R1，优先使用 reasoningContent 作为思考过程，如果没有则退回使用 content
-      const thinkingText = response.reasoningContent?.trim()
-      const fallbackThinking = response.content?.trim()
-      
-      if (thinkingText) {
-        yield `\x00__thinking__${thinkingText}`
-      } else if (fallbackThinking && response.toolCalls && response.toolCalls.length > 0) {
-        // 如果没有 reasoningContent 但有工具调用，旧模型通常把思考过程写在 content 里
-        yield `\x00__thinking__${fallbackThinking}`
-      }
-
       // Record which tools were used in this iteration (for next-iteration pruning)
-      lastUsedToolNames = new Set(response.toolCalls.map((tc) => tc.name))
+      lastUsedToolNames = new Set(response.toolCalls.map((tc: any) => tc.name))
 
       // Execute each tool call sequentially
       let consecutiveFailures = 0
@@ -521,21 +597,9 @@ export class ReActStrategy implements LoopStrategy {
       continue
     }
 
-      // ── 最终回答：直接返回 complete() 的结果，避免重复调用 API 导致 Token 翻倍计算 ──
-      // 如果有 reasoningContent，先流出思考过程
-      if (response.reasoningContent?.trim()) {
-        yield `\x00__thinking__${response.reasoningContent.trim()}`
-      }
-
-      // 将 response.content 切片模拟流式输出效果
-      if (response.content) {
-        const chunkSize = 10
-        for (let i = 0; i < response.content.length; i += chunkSize) {
-          yield response.content.slice(i, i + chunkSize)
-          // 可选：添加微小延迟模拟真实流式
-          await new Promise(resolve => setTimeout(resolve, 5))
-        }
-      }
+      // ── 最终回答 ──
+      // 注意：response.content 和 response.reasoningContent 已经在上面的流式循环中通过 yield 输出过了
+      // 此处只需持久化最终结果并发送 usage 帧即可。
 
       // Yield token usage breakdown as a special __usage__ frame (includes conversationId)
       const messageId = uuidv4()

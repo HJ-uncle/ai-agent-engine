@@ -660,16 +660,19 @@ ${workspaceInfo}
 
         const generator = pipeline.pipe(strategy.run(prompt, ctx))
         for await (const chunk of generator) {
-          if (chunk.startsWith('\x00__thinking__')) {
-            reasoningContent += chunk.replace('\x00__thinking__', '')
-          } else if (chunk.startsWith('\x00__usage__')) {
+          if (chunk.includes('\x00__thinking__')) {
+            reasoningContent += chunk.split('\x00__thinking__')[1]
+          } else if (chunk.includes('\x00__usage__')) {
             try {
-              const usageStr = chunk.replace('\x00__usage__', '')
+              const usageStr = chunk.split('\x00__usage__')[1]
               finalUsage = JSON.parse(usageStr)
             } catch (e) {
               reqLogger.error({ err: e, chunk }, 'Failed to parse usage chunk')
             }
-          } else if (!chunk.startsWith('\x00')) {
+          } else if (chunk.includes('\x00')) {
+            // 所有包含 \x00 的帧（控制帧）均视为元数据，不计入消息正文
+          } else {
+            // 只有纯净的文本块才累加到正文
             assistantResponse += chunk
           }
           yield chunk

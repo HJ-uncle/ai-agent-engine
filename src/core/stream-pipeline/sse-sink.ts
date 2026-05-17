@@ -28,17 +28,29 @@ export async function sseStream(
         continue
       }
       // ── __tool_start__ frame ─────────────────────────────────────────────
-      if (chunk.startsWith('\x00__tool_start__')) {
+      if (chunk.includes('\x00__tool_start__')) {
         try {
-          const tool = JSON.parse(chunk.slice('\x00__tool_start__'.length))
+          const tool = JSON.parse(chunk.split('\x00__tool_start__')[1])
           reply.raw.write(`data: ${JSON.stringify({ toolStart: tool })}\n\n`)
         } catch { /* ignore */ }
         continue
       }
-      // ── __tool_end__ frame ───────────────────────────────────────────────
-      if (chunk.startsWith('\x00__tool_end__')) {
+      // ── __tool_args__ frame ─────────────────────────────────────────────
+      if (chunk.includes('\x00__tool_args__')) {
         try {
-          const tool = JSON.parse(chunk.slice('\x00__tool_end__'.length))
+          const jsonStr = chunk.split('\x00__tool_args__')[1]
+          const tool = JSON.parse(jsonStr)
+          reply.raw.write(`data: ${JSON.stringify({ toolArgs: tool })}\n\n`)
+          continue
+        } catch (e) { 
+          console.error('Failed to parse __tool_args__ frame:', e, chunk);
+          continue 
+        }
+      }
+      // ── __tool_end__ frame ───────────────────────────────────────────────
+      if (chunk.includes('\x00__tool_end__')) {
+        try {
+          const tool = JSON.parse(chunk.split('\x00__tool_end__')[1])
           reply.raw.write(`data: ${JSON.stringify({ toolEnd: tool })}\n\n`)
         } catch { /* ignore */ }
         continue
@@ -100,6 +112,12 @@ export async function sseStream(
         continue
       }
       // ── 普通内容 ─────────────────────────────────────────────────────────
+      if (chunk.includes('\x00')) {
+        // 兜底逻辑：任何包含 \x00 的帧如果走到这里，说明没被上面的处理器识别或处理失败。
+        // 我们绝不能将其作为普通内容发送，否则会污染正文。
+        console.warn('Unhandled control frame in sseStream:', chunk);
+        continue;
+      }
       reply.raw.write(`data: ${JSON.stringify({ content: chunk })}\n\n`)
     }
     // Send done event

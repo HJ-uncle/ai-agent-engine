@@ -78,7 +78,7 @@ export interface ThinkingStep {
   text?: string
   toolName?: string
   toolCallId?: string
-  toolArgs?: Record<string, unknown>
+  toolArgs?: Record<string, unknown> | string
   outputPreview?: string
   success?: boolean
 }
@@ -122,6 +122,7 @@ export type SseEventType =
   | 'text_delta'
   | 'thinking'
   | 'tool_start'
+  | 'tool_args'
   | 'tool_end'
   | 'usage'
   | 'error'
@@ -136,6 +137,7 @@ export interface SseEvent {
   text?: string
   toolName?: string
   toolArgs?: Record<string, unknown>
+  args?: any
   toolCallId?: string
   output?: string
   outputPreview?: string

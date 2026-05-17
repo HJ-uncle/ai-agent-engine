@@ -806,6 +806,133 @@ const TOOL_NAME_MAP: Record<string, string> = {
   get_weather: "获取天气",
 };
 
+function ToolStepItem({
+  step,
+  i,
+  msgId,
+  isLast,
+  onToolReply,
+  renderTextWithFiles,
+}: {
+  step: ThinkingStep;
+  i: number;
+  msgId: string;
+  isLast?: boolean;
+  onToolReply?: (
+    msgId: string,
+    toolCallId: string,
+    toolName: string,
+    content: string,
+  ) => void;
+  renderTextWithFiles: (text: string) => React.ReactNode;
+}) {
+  const isAskUser = step.toolName === "ask_user";
+  const toolNameDisplay = TOOL_NAME_MAP[step.toolName || ""] || step.toolName;
+
+  // 默认折叠逻辑：
+  // 1. 如果工具还在运行 (success === undefined)，保持展开
+  // 2. 如果是 ask_user 且尚未回答，保持展开
+  // 3. 其他情况（执行完毕且不是活跃中的提问），默认折叠
+  const shouldDefaultExpand =
+    step.success === undefined || (isAskUser && !step.success);
+  const [isExpanded, setIsExpanded] = useState(shouldDefaultExpand);
+
+  // 当工具状态变为完成时，如果不是用户交互类工具，自动收起
+  useEffect(() => {
+    if (step.success !== undefined && !isAskUser) {
+      setIsExpanded(false);
+    }
+  }, [step.success, isAskUser]);
+
+  return (
+    <div key={i} className={styles.timelineItem}>
+      <div className={styles.timelineIcon}>
+        {step.success === true ? (
+          <CheckCircleFilled className={styles.resultSuccessIcon} />
+        ) : step.success === false ? (
+          <CloseCircleOutlined className={styles.resultErrorIcon} />
+        ) : (
+          <ToolOutlined className={styles.toolIcon} />
+        )}
+      </div>
+      <div className={styles.timelineContent}>
+        <div
+          className={styles.timelineTitle}
+          style={{
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            color:
+              step.success === false
+                ? "#f78166"
+                : step.success === true
+                  ? "#3fb950"
+                  : "#d29922",
+          }}
+          onClick={() => setIsExpanded(!isExpanded)}
+        >
+          {toolNameDisplay}
+          <span style={{ fontSize: 10, opacity: 0.5, marginLeft: "auto" }}>
+            {isExpanded ? <UpOutlined /> : <DownOutlined />}
+          </span>
+        </div>
+
+        {isExpanded && (
+          <div className={styles.toolDetails}>
+            {isAskUser && step.toolArgs ? (
+              <>
+                {!step.success ? (
+                  <InteractiveCard
+                    data={step.toolArgs as any}
+                    onReply={(content) =>
+                      onToolReply?.(
+                        msgId,
+                        step.toolCallId ?? "",
+                        "ask_user",
+                        content,
+                      )
+                    }
+                    disabled={!isLast}
+                  />
+                ) : (
+                  <div className={styles.askUserResult}>
+                    <div style={{ color: "#c9d1d9", marginBottom: 6 }}>
+                      <strong style={{ color: "#8b949e" }}>提问：</strong>
+                      {String((step.toolArgs as any)?.question || "")}
+                    </div>
+                    <div style={{ color: "#58a6ff" }}>
+                      <strong style={{ color: "#8b949e" }}>用户回复：</strong>
+                      {step.outputPreview?.replace("用户选择了: ", "")}
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                {step.toolArgs && (
+                  <div className={styles.toolArgsRaw}>
+                    {typeof step.toolArgs === "string"
+                      ? step.toolArgs
+                      : JSON.stringify(step.toolArgs)}
+                  </div>
+                )}
+                {step.outputPreview && (
+                  <div className={styles.toolResultCompact}>
+                    <span className={styles.resultText}>
+                      {renderTextWithFiles(step.outputPreview)}
+                    </span>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ThinkingPanelInner({
   msgId,
   steps,
@@ -948,98 +1075,16 @@ function ThinkingPanelInner({
                   </div>
                 );
               if (step.type === "tool_start") {
-                const isAskUser = step.toolName === "ask_user";
-                const toolNameDisplay =
-                  TOOL_NAME_MAP[step.toolName || ""] || step.toolName;
-
                 return (
-                  <div key={i} className={styles.timelineItem}>
-                    <div className={styles.timelineIcon}>
-                      {step.success === true ? (
-                        <CheckCircleFilled
-                          className={styles.resultSuccessIcon}
-                        />
-                      ) : step.success === false ? (
-                        <CloseCircleOutlined
-                          className={styles.resultErrorIcon}
-                        />
-                      ) : (
-                        <ToolOutlined className={styles.toolIcon} />
-                      )}
-                    </div>
-                    <div className={styles.timelineContent}>
-                      <div
-                        className={styles.timelineTitle}
-                        style={{
-                          color:
-                            step.success === false
-                              ? "#f78166"
-                              : step.success === true
-                                ? "#3fb950"
-                                : "#d29922",
-                        }}
-                      >
-                        {toolNameDisplay}
-                      </div>
-
-                      {isAskUser && step.toolArgs ? (
-                        <div className={styles.toolDetails}>
-                          {!step.success ? (
-                            <InteractiveCard
-                              data={step.toolArgs}
-                              onReply={(content) =>
-                                onToolReply?.(
-                                  msgId,
-                                  step.toolCallId ?? "",
-                                  "ask_user",
-                                  content,
-                                )
-                              }
-                              disabled={!isLast}
-                            />
-                          ) : (
-                            <div className={styles.askUserResult}>
-                              <div
-                                style={{ color: "#c9d1d9", marginBottom: 6 }}
-                              >
-                                <strong style={{ color: "#8b949e" }}>
-                                  提问：
-                                </strong>
-                                {String(step.toolArgs.question || "")}
-                              </div>
-                              <div style={{ color: "#58a6ff" }}>
-                                <strong style={{ color: "#8b949e" }}>
-                                  用户回复：
-                                </strong>
-                                {step.outputPreview?.replace(
-                                  "用户选择了: ",
-                                  "",
-                                )}
-                              </div>
-                            </div>
-                          )}
-                          <div className={styles.toolArgsRaw}>
-                            {JSON.stringify(step.toolArgs)}
-                          </div>
-                        </div>
-                      ) : (
-                        <div className={styles.toolDetails}>
-                          {step.toolArgs && (
-                            <div className={styles.toolArgsRaw}>
-                              {JSON.stringify(step.toolArgs)}
-                            </div>
-                          )}
-                          {step.outputPreview && (
-                            <div className={styles.toolResultCompact}>
-                              <span className={styles.resultText}>
-                                {renderTextWithFiles(step.outputPreview)}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                  <ToolStepItem
+                    key={i}
+                    step={step}
+                    i={i}
+                    msgId={msgId}
+                    isLast={isLast}
+                    onToolReply={onToolReply}
+                    renderTextWithFiles={renderTextWithFiles}
+                  />
                 );
               }
               if (step.type === "tool_end") {

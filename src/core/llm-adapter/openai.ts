@@ -537,12 +537,20 @@ export class OpenAIAdapter implements LLMAdapter {
       const delta = (chunk as any).choices?.[0]?.delta
       if (!delta) continue
 
-      if (delta.content || (options?.responseThinkingField ? (delta as any)[options.responseThinkingField] : (delta as any).reasoning_content)) {
+      if (delta.content || 
+          (options?.responseThinkingField ? (delta as any)[options.responseThinkingField] : (delta as any).reasoning_content) ||
+          delta.tool_calls) {
         yield { 
           content: delta.content as string, 
           reasoningContent: options?.responseThinkingField 
             ? (delta as any)[options.responseThinkingField] as string 
             : (delta as any).reasoning_content as string,
+          toolCalls: delta.tool_calls?.map((tc: any) => ({
+            id: tc.id,
+            name: tc.function?.name,
+            args: tc.function?.arguments, // 这里传的是 string delta
+            index: tc.index,
+          })),
           done: false 
         }
       }

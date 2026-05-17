@@ -387,6 +387,14 @@ async function parseSseStream(
             toolArgs: ts.args ?? ts.toolArgs ?? {},
             toolCallId: ts.toolCallId,
           }
+        } else if (parsed.toolArgs !== undefined) {
+          // 工具参数增量
+          const ta = parsed.toolArgs as { toolCallId: string; args: string }
+          event = {
+            type: 'tool_args',
+            toolCallId: ta.toolCallId,
+            args: ta.args,
+          }
         } else if (parsed.toolEnd !== undefined) {
           // 工具调用结束
           const te = parsed.toolEnd as { name?: string; output?: string; success?: boolean; error?: string; toolCallId?: string; outputPreview?: string }

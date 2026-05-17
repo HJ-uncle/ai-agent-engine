@@ -70,16 +70,46 @@ function driveAiMessage(
       finalContent += event.content ?? ''
       updateMessage(sid, aiMsgId, { content: finalContent, status: 'streaming' })
     } else if (event.type === 'thinking') {
-      thinkingSteps.push({ type: 'thinking', text: event.text ?? '' })
+      // ── Bug Fix: 支持思考过程流式输出 ──────────────────────────────────
+      const lastStep = thinkingSteps[thinkingSteps.length - 1]
+      if (lastStep && lastStep.type === 'thinking') {
+        // 如果上一个步骤也是 thinking，则追加内容而不是创建新步骤
+        lastStep.text += event.text ?? ''
+      } else {
+        thinkingSteps.push({ type: 'thinking', text: event.text ?? '' })
+      }
       updateMessage(sid, aiMsgId, { thinkingSteps: [...thinkingSteps] })
     } else if (event.type === 'tool_start') {
-      thinkingSteps.push({
-        type: 'tool_start',
-        toolName: event.toolName || event.name,
-        toolArgs: event.toolArgs || event.args,
-        toolCallId: event.toolCallId,
-      })
+      const existingIdx = event.toolCallId ? thinkingSteps.findIndex(s => s.type === 'tool_start' && s.toolCallId === event.toolCallId) : -1
+      if (existingIdx !== -1) {
+        thinkingSteps[existingIdx] = {
+          ...thinkingSteps[existingIdx],
+          toolName: event.toolName || event.name,
+          toolArgs: event.toolArgs || event.args || (thinkingSteps[existingIdx] as any).toolArgs,
+        }
+      } else {
+        thinkingSteps.push({
+          type: 'tool_start',
+          toolName: event.toolName || event.name,
+          toolArgs: event.toolArgs || event.args,
+          toolCallId: event.toolCallId,
+        })
+      }
       updateMessage(sid, aiMsgId, { thinkingSteps: [...thinkingSteps] })
+    } else if (event.type === 'tool_args') {
+      // ── Bug Fix: 支持工具参数流式输出 ──────────────────────────────────
+      const existingIdx = event.toolCallId ? thinkingSteps.findIndex(s => s.type === 'tool_start' && s.toolCallId === event.toolCallId) : -1
+      if (existingIdx !== -1) {
+        const step = thinkingSteps[existingIdx] as any
+        if (typeof event.args === 'string') {
+          // 如果是字符串 delta，追加到原来的参数字符串上（或者初始化）
+          step.toolArgs = (typeof step.toolArgs === 'string' ? step.toolArgs : '') + event.args
+        } else if (event.args) {
+          // 如果是对象，直接覆盖（兜底逻辑）
+          step.toolArgs = event.args
+        }
+        updateMessage(sid, aiMsgId, { thinkingSteps: [...thinkingSteps] })
+      }
     } else if (event.type === 'tool_end') {
       // 尝试合并到最近的一个正在运行的 tool_start 步骤中
       const lastToolIdx = [...thinkingSteps].reverse().findIndex(s => s.type === 'tool_start' && s.success === undefined && (event.toolCallId ? s.toolCallId === event.toolCallId : true))
@@ -97,6 +127,27 @@ function driveAiMessage(
           toolCallId: event.toolCallId,
           success: event.success,
           outputPreview: event.outputPreview ?? (event.output ?? '').slice(0, 500),
+        })
+      }
+      updateMessage(sid, aiMsgId, { thinkingSteps: [...thinkingSteps] })
+    } else if (event.type === 'ask_user') {
+      const tid = event.data?.toolCallId
+      const existingIdx = tid ? thinkingSteps.findIndex(s => s.type === 'tool_start' && s.toolCallId === tid) : -1
+      
+      if (existingIdx !== -1) {
+        // 更新已有的 tool_start 步骤为最终的交互数据
+        thinkingSteps[existingIdx] = {
+          ...thinkingSteps[existingIdx],
+          toolName: 'ask_user',
+          toolArgs: event.data,
+        }
+      } else {
+        // 如果不存在（可能是非流式或者之前的 start 帧丢失），则新增
+        thinkingSteps.push({
+          type: 'tool_start',
+          toolName: 'ask_user',
+          toolArgs: event.data,
+          toolCallId: tid,
         })
       }
       updateMessage(sid, aiMsgId, { thinkingSteps: [...thinkingSteps] })
