@@ -10,6 +10,7 @@ export interface StandardResponse<T = any> {
   message: string
   data: T | null
   pagination?: Pagination
+  metadata?: Record<string, any>
   timestamp: number
 }
 

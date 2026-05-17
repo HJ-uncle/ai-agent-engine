@@ -5,11 +5,17 @@ RUN --mount=type=cache,target=/var/cache/apk \
 
 FROM build-base AS base
 COPY package*.json ./
+# 修复：解决私有仓库 npm.nie.netease.com 无法访问的问题，将其替换为公共镜像源
+RUN sed -i 's|https://npm.nie.netease.com|https://registry.npmmirror.com|g' package-lock.json && \
+    npm config set registry https://registry.npmmirror.com
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --only=production --legacy-peer-deps
 
 FROM build-base AS builder
 COPY package*.json ./
+# 修复：解决私有仓库 npm.nie.netease.com 无法访问的问题
+RUN sed -i 's|https://npm.nie.netease.com|https://registry.npmmirror.com|g' package-lock.json && \
+    npm config set registry https://registry.npmmirror.com
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --legacy-peer-deps
 COPY . .
@@ -18,6 +24,9 @@ RUN npm run build
 FROM build-base AS frontend-builder
 WORKDIR /app
 COPY multi-agent-console/package*.json ./
+# 修复：解决私有仓库 npm.nie.netease.com 无法访问的问题
+RUN if [ -f package-lock.json ]; then sed -i 's|https://npm.nie.netease.com|https://registry.npmmirror.com|g' package-lock.json; fi && \
+    npm config set registry https://registry.npmmirror.com
 # Vite 构建需要 esbuild，在某些环境下需要显式安装以确保路径正确
 RUN --mount=type=cache,target=/root/.npm \
     npm install esbuild --legacy-peer-deps && \

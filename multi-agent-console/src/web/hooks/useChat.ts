@@ -104,28 +104,29 @@ function driveAiMessage(
       if (event.usage) {
         const durationMs = Date.now() - startTime
         const u = event.usage as TokenUsage
-        // Accumulate usage across multiple rounds (e.g. tool-call loops)
-        if (!accumulatedUsage) {
-          accumulatedUsage = { ...u }
-        } else {
-          accumulatedUsage = {
-            promptTokens: (accumulatedUsage.promptTokens ?? 0) + (u.promptTokens ?? 0),
-            completionTokens: (accumulatedUsage.completionTokens ?? 0) + (u.completionTokens ?? 0),
-            totalTokens: (accumulatedUsage.totalTokens ?? 0) + (u.totalTokens ?? 0),
-            systemPromptTokens: (accumulatedUsage.systemPromptTokens ?? 0) + (u.systemPromptTokens ?? 0),
-            messagesTokens: (accumulatedUsage.messagesTokens ?? 0) + (u.messagesTokens ?? 0),
-            skillTokens: (accumulatedUsage.skillTokens ?? 0) + (u.skillTokens ?? 0),
-            systemToolsTokens: (accumulatedUsage.systemToolsTokens ?? 0) + (u.systemToolsTokens ?? 0),
-            ragTokens: (accumulatedUsage.ragTokens ?? 0) + (u.ragTokens ?? 0),
-            builtinToolsTokens: (accumulatedUsage.builtinToolsTokens ?? 0) + (u.builtinToolsTokens ?? 0),
-            mcpToolsTokens: (accumulatedUsage.mcpToolsTokens ?? 0) + (u.mcpToolsTokens ?? 0),
-            toolResultsTokens: (accumulatedUsage.toolResultsTokens ?? 0) + (u.toolResultsTokens ?? 0),
-            // ── DeepSeek 专有累加 ─────────────────────────────────────
-            cacheHitTokens: (accumulatedUsage.cacheHitTokens ?? 0) + (u.cacheHitTokens ?? 0),
-            cacheMissTokens: (accumulatedUsage.cacheMissTokens ?? 0) + (u.cacheMissTokens ?? 0),
-            reasoningTokens: (accumulatedUsage.reasoningTokens ?? 0) + (u.reasoningTokens ?? 0),
-          }
+        
+        // ── Bug Fix: 解决 Token 叠加导致的显示虚高问题 ──────────────────────
+        // 后端发送的 u (cumulativeUsage) 已经是当前 Turn (一轮对话) 的全量累积值。
+        // 前端只需将其与 Turn 之前的全量 (previousUsage) 相加即可，不能直接累加 u 自身，
+        // 否则在 ReAct 多轮迭代中会导致 System Prompt 等固定分项被成倍计算。
+        accumulatedUsage = {
+          promptTokens: (previousUsage?.promptTokens ?? 0) + (u.promptTokens ?? 0),
+          completionTokens: (previousUsage?.completionTokens ?? 0) + (u.completionTokens ?? 0),
+          totalTokens: (previousUsage?.totalTokens ?? 0) + (u.totalTokens ?? 0),
+          systemPromptTokens: (previousUsage?.systemPromptTokens ?? 0) + (u.systemPromptTokens ?? 0),
+          messagesTokens: (previousUsage?.messagesTokens ?? 0) + (u.messagesTokens ?? 0),
+          skillTokens: (previousUsage?.skillTokens ?? 0) + (u.skillTokens ?? 0),
+          systemToolsTokens: (previousUsage?.systemToolsTokens ?? 0) + (u.systemToolsTokens ?? 0),
+          ragTokens: (previousUsage?.ragTokens ?? 0) + (u.ragTokens ?? 0),
+          builtinToolsTokens: (previousUsage?.builtinToolsTokens ?? 0) + (u.builtinToolsTokens ?? 0),
+          mcpToolsTokens: (previousUsage?.mcpToolsTokens ?? 0) + (u.mcpToolsTokens ?? 0),
+          toolResultsTokens: (previousUsage?.toolResultsTokens ?? 0) + (u.toolResultsTokens ?? 0),
+          userInputTokens: (previousUsage?.userInputTokens ?? 0) + (u.userInputTokens ?? 0),
+          cacheHitTokens: (previousUsage?.cacheHitTokens ?? 0) + (u.cacheHitTokens ?? 0),
+          cacheMissTokens: (previousUsage?.cacheMissTokens ?? 0) + (u.cacheMissTokens ?? 0),
+          reasoningTokens: (previousUsage?.reasoningTokens ?? 0) + (u.reasoningTokens ?? 0),
         }
+
         updateMessage(sid, aiMsgId, {
           usage: accumulatedUsage,
           durationMs,
@@ -145,6 +146,7 @@ function driveAiMessage(
           builtinToolsTokens: (accumulatedUsage.builtinToolsTokens ?? 0) - (lastReportedUsage?.builtinToolsTokens ?? 0),
           mcpToolsTokens: (accumulatedUsage.mcpToolsTokens ?? 0) - (lastReportedUsage?.mcpToolsTokens ?? 0),
           toolResultsTokens: (accumulatedUsage.toolResultsTokens ?? 0) - (lastReportedUsage?.toolResultsTokens ?? 0),
+          userInputTokens: (accumulatedUsage.userInputTokens ?? 0) - (lastReportedUsage?.userInputTokens ?? 0),
           // ── DeepSeek 专有 delta ──────────────────────────────────────
           cacheHitTokens: (accumulatedUsage.cacheHitTokens ?? 0) - (lastReportedUsage?.cacheHitTokens ?? 0),
           cacheMissTokens: (accumulatedUsage.cacheMissTokens ?? 0) - (lastReportedUsage?.cacheMissTokens ?? 0),
@@ -264,13 +266,13 @@ export function useChat() {
       }
 
       try {
-        const { list } = await conversationApi.getHistory(sid)
-
+        const { list, metadata } = await conversationApi.getHistory(sid)
+  
         // ★ 使用共用的 processHistoryMessages 工具函数解析历史消息
         //    合并 reasoningContent / toolCall / tool_role → thinkingSteps[]
         //    与移动端保持完全一致
-        const { messages: msgs, totalUsage } = processHistoryMessages(list)
-
+        const { messages: msgs, totalUsage } = processHistoryMessages(list, metadata?.sessionUsage)
+  
         setMessages(sid, msgs)
         useSessionStore.setState((state) => ({
           usageMap: { ...state.usageMap, [sid]: totalUsage }

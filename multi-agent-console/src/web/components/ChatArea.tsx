@@ -244,6 +244,11 @@ const TOKEN_META = [
     label: "历史消息",
   },
   {
+    key: "userInputTokens" as keyof TokenUsage,
+    color: "#6366f1",
+    label: "当前提问",
+  },
+  {
     key: "systemPromptTokens" as keyof TokenUsage,
     color: "#818cf8",
     label: "系统提示词",
@@ -648,31 +653,95 @@ function TokenDetailsContent({
           marginTop: 4,
           borderTop: "1px solid #21262d",
           fontSize: 11,
+          fontWeight: 600,
         }}
       >
         <span style={{ color: "#8b949e" }}>输入 (Prompt)</span>
-        <span style={{ color: "#e6edf3", fontWeight: 600 }}>
+        <span style={{ color: "#e6edf3" }}>
           {fmtToken(usage.promptTokens ?? 0)}
         </span>
       </div>
+
+      {/* ── DeepSeek KV Cache Sub-items ── */}
+      {((usage.cacheHitTokens ?? 0) > 0 || (usage.cacheMissTokens ?? 0) > 0) && (
+        <div style={{ paddingLeft: 12, marginTop: 2 }}>
+          {usage.cacheHitTokens !== undefined && usage.cacheHitTokens > 0 && (
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, marginBottom: 2 }}>
+              <span style={{ color: "#8b949e", display: "flex", alignItems: "center", gap: 4 }}>
+                <span style={{ width: 6, height: 6, borderRadius: 1, background: "#10b981" }} />
+                命中缓存
+              </span>
+              <span style={{ color: "#10b981" }}>{fmtToken(usage.cacheHitTokens)}</span>
+            </div>
+          )}
+          {usage.cacheMissTokens !== undefined && usage.cacheMissTokens > 0 && (
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, marginBottom: 2 }}>
+              <span style={{ color: "#8b949e", display: "flex", alignItems: "center", gap: 4 }}>
+                <span style={{ width: 6, height: 6, borderRadius: 1, background: "#f59e0b" }} />
+                未命中
+              </span>
+              <span style={{ color: "#8b949e" }}>{fmtToken(usage.cacheMissTokens)}</span>
+            </div>
+          )}
+          {/* 命中率小标签 */}
+          {(usage.cacheHitTokens ?? 0) > 0 && (usage.promptTokens ?? 0) > 0 && (() => {
+            const hit = usage.cacheHitTokens ?? 0;
+            const prompt = usage.promptTokens ?? 1;
+            const ratio = (hit / prompt) * 100;
+            const savings = getCacheHitSavings(hit);
+            return (
+              <div style={{ 
+                fontSize: 9, 
+                color: "#10b981", 
+                background: "rgba(16,185,129,0.06)", 
+                padding: "1px 4px", 
+                borderRadius: 3,
+                display: "inline-block",
+                marginTop: 2
+              }}>
+                命中率 {ratio.toFixed(1)}%
+                {savings != null && ` (省¥${savings.savedYuan.toFixed(4)})`}
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
       <div
         style={{
           display: "flex",
           justifyContent: "space-between",
-          paddingTop: 4,
+          paddingTop: 6,
           fontSize: 11,
+          fontWeight: 600,
         }}
       >
         <span style={{ color: "#8b949e" }}>输出 (Completion)</span>
-        <span style={{ color: "#e6edf3", fontWeight: 600 }}>
+        <span style={{ color: "#e6edf3" }}>
           {fmtToken(usage.completionTokens ?? 0)}
         </span>
       </div>
+
+      {/* ── DeepSeek Reasoning Sub-item ── */}
+      {(usage.reasoningTokens ?? 0) > 0 && (
+        <div style={{ paddingLeft: 12, marginTop: 2 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10 }}>
+            <span style={{ color: "#8b949e", display: "flex", alignItems: "center", gap: 4 }}>
+              <span style={{ width: 6, height: 6, borderRadius: 1, background: "#22d3ee" }} />
+              其中推理
+            </span>
+            <span style={{ color: "#22d3ee" }}>{fmtToken(usage.reasoningTokens ?? 0)}</span>
+          </div>
+        </div>
+      )}
+
       <div
         style={{
           display: "flex",
           justifyContent: "space-between",
-          paddingTop: 4,
+          paddingTop: 8,
+          marginTop: 4,
+          borderTop: "1px solid #21262d",
           fontWeight: 700,
           fontSize: 12,
         }}
@@ -680,129 +749,6 @@ function TokenDetailsContent({
         <span style={{ color: "#8b949e" }}>总计</span>
         <span style={{ color: "#3fb950" }}>{fmtToken(usage.totalTokens)}</span>
       </div>
-      {/* ── DeepSeek 专有指标面板（仅当存在 KV Cache 命中或推理 token 时显示）── */}
-      {((usage.cacheHitTokens ?? 0) > 0 || (usage.reasoningTokens ?? 0) > 0) && (
-        <div
-          style={{
-            marginTop: 10,
-            paddingTop: 8,
-            borderTop: "1px dashed #21262d",
-          }}
-        >
-          <div
-            style={{
-              fontSize: 11,
-              fontWeight: 700,
-              color: "#10b981",
-              marginBottom: 6,
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-            }}
-          >
-            <span style={{ fontSize: 13 }}>🐋</span> DeepSeek 专有
-          </div>
-          {DEEPSEEK_CACHE_META.map((m) => {
-            const v = (usage[m.key] as number) ?? 0;
-            if (v <= 0) return null;
-            return (
-              <div
-                key={m.key}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  marginBottom: 4,
-                  fontSize: 11,
-                }}
-              >
-                <span
-                  style={{
-                    color: "#8b949e",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 5,
-                  }}
-                  title={m.hint}
-                >
-                  <span
-                    style={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: 2,
-                      background: m.color,
-                      display: "inline-block",
-                    }}
-                  />
-                  {m.label}
-                </span>
-                <span style={{ color: "#e6edf3", fontWeight: 600 }}>
-                  {fmtToken(v)}
-                </span>
-              </div>
-            );
-          })}
-          {/* KV Cache 命中率与节省金额估算 */}
-          {(usage.cacheHitTokens ?? 0) > 0 && (usage.promptTokens ?? 0) > 0 && (() => {
-            const hit = usage.cacheHitTokens ?? 0;
-            const prompt = usage.promptTokens ?? 1;
-            const ratio = (hit / prompt) * 100;
-            const savings = getCacheHitSavings(hit);
-            return (
-              <div
-                style={{
-                  marginTop: 6,
-                  padding: "5px 8px",
-                  background: "rgba(16,185,129,0.08)",
-                  border: "1px solid rgba(16,185,129,0.25)",
-                  borderRadius: 5,
-                  fontSize: 11,
-                  color: "#10b981",
-                  lineHeight: 1.5,
-                }}
-              >
-                💰 命中率 <strong>{ratio.toFixed(1)}%</strong>
-                {savings != null && (
-                  <>，节省约<strong> ¥{savings.savedYuan.toFixed(5)}</strong></>
-                )}
-              </div>
-            );
-          })()}
-          {(usage.reasoningTokens ?? 0) > 0 && (
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                marginTop: 4,
-                fontSize: 11,
-              }}
-            >
-              <span
-                style={{
-                  color: "#8b949e",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 5,
-                }}
-                title="R1/V3 thinking 模式 reasoning_content 实际消耗的 token"
-              >
-                <span
-                  style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: 2,
-                    background: "#22d3ee",
-                    display: "inline-block",
-                  }}
-                />
-                推理 Tokens
-              </span>
-              <span style={{ color: "#22d3ee", fontWeight: 600 }}>
-                {fmtToken(usage.reasoningTokens ?? 0)}
-              </span>
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }

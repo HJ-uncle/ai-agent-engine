@@ -28,7 +28,12 @@ export async function conversationRoutes(fastify: FastifyInstance) {
       return reply.code(200).send(fail(40001, '参数验证失败：sessionId 不能为空'))
     }
     const messages = await history.getHistory({ tenantId, sessionId })
-    return reply.code(200).send(paginateArray(messages, current, pageSize))
+    const sessionUsage = await history.getSessionUsage({ tenantId, sessionId })
+    
+    const response = paginateArray(messages, current, pageSize)
+    response.metadata = { sessionUsage }
+    
+    return reply.code(200).send(response)
   })
 
   // DELETE /conversation/history?sessionId=xxx  — 清空 session 历史

@@ -64,6 +64,9 @@ export interface QALogEntry {
     builtinToolsTokens?: number
     mcpToolsTokens?: number
     toolResultsTokens?: number
+    cacheHitTokens?: number
+    cacheMissTokens?: number
+    reasoningTokens?: number
   }
   createdAt: number
 }
@@ -250,7 +253,10 @@ export class QALogger {
       md += `| 🟣 工具调用结果 | ${u.toolResultsTokens ?? 0} |\n`
       md += `| 🔴 生成内容 | ${u.completionTokens} |\n`
       md += `| **输入 (Prompt)** | **${u.promptTokens}** |\n`
+      if (u.cacheHitTokens !== undefined) md += `| &nbsp;&nbsp; └─ 🟢 命中缓存 | ${u.cacheHitTokens} |\n`
+      if (u.cacheMissTokens !== undefined) md += `| &nbsp;&nbsp; └─ 🟠 未命中 | ${u.cacheMissTokens} |\n`
       md += `| **输出 (Completion)** | **${u.completionTokens}** |\n`
+      if (u.reasoningTokens !== undefined) md += `| &nbsp;&nbsp; └─ 🧠 其中推理 | ${u.reasoningTokens} |\n`
       md += `| **总计** | **${u.totalTokens}** |\n`
     }
 

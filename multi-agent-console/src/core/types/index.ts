@@ -4,6 +4,7 @@ export interface StandardResponse<T = any> {
   message: string
   data: T | null
   pagination?: PaginationMeta
+  metadata?: any
   timestamp: number
 }
 
@@ -62,6 +63,7 @@ export interface TokenUsage {
   builtinToolsTokens?: number
   mcpToolsTokens?: number
   toolResultsTokens?: number
+  userInputTokens?: number
   // ── DeepSeek 专有指标 ──────────────────────────────────────────────────
   /** KV Cache 命中的 token 数（计费按 0.1元/百万） */
   cacheHitTokens?: number

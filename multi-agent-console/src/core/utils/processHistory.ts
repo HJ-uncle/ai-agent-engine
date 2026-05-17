@@ -31,13 +31,14 @@ function accumulateUsage(
     builtinToolsTokens: (acc.builtinToolsTokens ?? 0) + (u.builtinToolsTokens ?? 0),
     mcpToolsTokens: (acc.mcpToolsTokens ?? 0) + (u.mcpToolsTokens ?? 0),
     toolResultsTokens: (acc.toolResultsTokens ?? 0) + (u.toolResultsTokens ?? 0),
+    userInputTokens: (acc.userInputTokens ?? 0) + (u.userInputTokens ?? 0),
     cacheHitTokens: (acc.cacheHitTokens ?? 0) + (u.cacheHitTokens ?? 0),
     cacheMissTokens: (acc.cacheMissTokens ?? 0) + (u.cacheMissTokens ?? 0),
     reasoningTokens: (acc.reasoningTokens ?? 0) + (u.reasoningTokens ?? 0),
   }
 }
 
-export function processHistoryMessages(list: any[]): {
+export function processHistoryMessages(list: any[], precomputedUsage?: TokenUsage): {
   messages: Message[]
   totalUsage: TokenUsage
 } {
@@ -173,29 +174,34 @@ export function processHistoryMessages(list: any[]): {
   }
 
   // 汇总全部 usage
-  const totalUsage: TokenUsage = {
+  const totalUsage: TokenUsage = precomputedUsage || {
     promptTokens: 0, completionTokens: 0, totalTokens: 0,
     systemPromptTokens: 0, messagesTokens: 0, skillTokens: 0,
     systemToolsTokens: 0, ragTokens: 0, builtinToolsTokens: 0,
-    mcpToolsTokens: 0, toolResultsTokens: 0,
+    mcpToolsTokens: 0, toolResultsTokens: 0, userInputTokens: 0,
     cacheHitTokens: 0, cacheMissTokens: 0, reasoningTokens: 0,
   }
-  for (const m of list) {
-    if (m.usage) {
-      totalUsage.promptTokens! += m.usage.promptTokens || 0
-      totalUsage.completionTokens! += m.usage.completionTokens || 0
-      totalUsage.totalTokens += m.usage.totalTokens || 0
-      totalUsage.systemPromptTokens! += m.usage.systemPromptTokens || 0
-      totalUsage.messagesTokens! += m.usage.messagesTokens || 0
-      totalUsage.skillTokens! += m.usage.skillTokens || 0
-      totalUsage.systemToolsTokens! += m.usage.systemToolsTokens || 0
-      totalUsage.ragTokens! += m.usage.ragTokens || 0
-      totalUsage.builtinToolsTokens! += m.usage.builtinToolsTokens || 0
-      totalUsage.mcpToolsTokens! += m.usage.mcpToolsTokens || 0
-      totalUsage.toolResultsTokens! += m.usage.toolResultsTokens || 0
-      totalUsage.cacheHitTokens! += m.usage.cacheHitTokens || 0
-      totalUsage.cacheMissTokens! += m.usage.cacheMissTokens || 0
-      totalUsage.reasoningTokens! += m.usage.reasoningTokens || 0
+
+  // 如果没有预计算用量，则从列表中累加（兼容旧逻辑，但长会话窗口裁剪后会不准）
+  if (!precomputedUsage) {
+    for (const m of list) {
+      if (m.usage) {
+        totalUsage.promptTokens! += m.usage.promptTokens || 0
+        totalUsage.completionTokens! += m.usage.completionTokens || 0
+        totalUsage.totalTokens += m.usage.totalTokens || 0
+        totalUsage.systemPromptTokens! += m.usage.systemPromptTokens || 0
+        totalUsage.messagesTokens! += m.usage.messagesTokens || 0
+        totalUsage.skillTokens! += m.usage.skillTokens || 0
+        totalUsage.systemToolsTokens! += m.usage.systemToolsTokens || 0
+        totalUsage.ragTokens! += m.usage.ragTokens || 0
+        totalUsage.builtinToolsTokens! += m.usage.builtinToolsTokens || 0
+        totalUsage.mcpToolsTokens! += m.usage.mcpToolsTokens || 0
+        totalUsage.toolResultsTokens! += m.usage.toolResultsTokens || 0
+        totalUsage.userInputTokens! += m.usage.userInputTokens || 0
+        totalUsage.cacheHitTokens! += m.usage.cacheHitTokens || 0
+        totalUsage.cacheMissTokens! += m.usage.cacheMissTokens || 0
+        totalUsage.reasoningTokens! += m.usage.reasoningTokens || 0
+      }
     }
   }
 

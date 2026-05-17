@@ -308,6 +308,53 @@ export class SQLiteConversationHistory implements ConversationHistory {
     return [...systemPrefix, ...rest.slice(startIdx)]
   }
 
+  /**
+   * Returns the session-wide total usage (sum of all messages' token_usage JSON).
+   * This is used by the frontend to show the "lifetime" consumption of the session,
+   * even when some messages have been windowed out of the active context.
+   */
+  async getSessionUsage(ctx: Ctx): Promise<Record<string, number>> {
+    const db = getDb()
+    const rs = await db.execute({
+      sql: `SELECT SUM(CAST(json_extract(token_usage, '$.systemPromptTokens') AS INTEGER)) as system_prompt_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.systemToolsTokens') AS INTEGER)) as system_tools_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.messagesTokens') AS INTEGER)) as messages_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.skillTokens') AS INTEGER)) as skill_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.promptTokens') AS INTEGER)) as prompt_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.completionTokens') AS INTEGER)) as completion_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.totalTokens') AS INTEGER)) as total_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.ragTokens') AS INTEGER)) as rag_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.builtinToolsTokens') AS INTEGER)) as builtin_tools_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.mcpToolsTokens') AS INTEGER)) as mcp_tools_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.toolResultsTokens') AS INTEGER)) as tool_results_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.userInputTokens') AS INTEGER)) as user_input_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.cacheHitTokens') AS INTEGER)) as cache_hit_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.cacheMissTokens') AS INTEGER)) as cache_miss_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.reasoningTokens') AS INTEGER)) as reasoning_tokens
+            FROM conversations
+            WHERE tenant_id = ? AND session_id = ?`,
+      args: [ctx.tenantId, ctx.sessionId],
+    })
+    const row = rs.rows[0]
+    return {
+      systemPromptTokens: Number(row['system_prompt_tokens'] ?? 0),
+      systemToolsTokens: Number(row['system_tools_tokens'] ?? 0),
+      messagesTokens: Number(row['messages_tokens'] ?? 0),
+      skillTokens: Number(row['skill_tokens'] ?? 0),
+      promptTokens: Number(row['prompt_tokens'] ?? 0),
+      completionTokens: Number(row['completion_tokens'] ?? 0),
+      totalTokens: Number(row['total_tokens'] ?? 0),
+      ragTokens: Number(row['rag_tokens'] ?? 0),
+      builtinToolsTokens: Number(row['builtin_tools_tokens'] ?? 0),
+      mcpToolsTokens: Number(row['mcp_tools_tokens'] ?? 0),
+      toolResultsTokens: Number(row['tool_results_tokens'] ?? 0),
+      userInputTokens: Number(row['user_input_tokens'] ?? 0),
+      cacheHitTokens: Number(row['cache_hit_tokens'] ?? 0),
+      cacheMissTokens: Number(row['cache_miss_tokens'] ?? 0),
+      reasoningTokens: Number(row['reasoning_tokens'] ?? 0),
+    }
+  }
+
   async clear(ctx: Ctx): Promise<void> {
     const db = getDb()
     // 先设置墓碑：阻止后续 N 秒内的 append（防止正在跑的 SSE 流回写"复活"会话）
@@ -345,7 +392,11 @@ export class SQLiteConversationHistory implements ConversationHistory {
                    SUM(CAST(json_extract(token_usage, '$.ragTokens') AS INTEGER)) as rag_tokens,
                    SUM(CAST(json_extract(token_usage, '$.builtinToolsTokens') AS INTEGER)) as builtin_tools_tokens,
                    SUM(CAST(json_extract(token_usage, '$.mcpToolsTokens') AS INTEGER)) as mcp_tools_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.toolResultsTokens') AS INTEGER)) as tool_results_tokens
+                   SUM(CAST(json_extract(token_usage, '$.toolResultsTokens') AS INTEGER)) as tool_results_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.userInputTokens') AS INTEGER)) as user_input_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.cacheHitTokens') AS INTEGER)) as cache_hit_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.cacheMissTokens') AS INTEGER)) as cache_miss_tokens,
+                   SUM(CAST(json_extract(token_usage, '$.reasoningTokens') AS INTEGER)) as reasoning_tokens
             FROM conversations c
             WHERE tenant_id = ? AND role IN ('user','assistant')
             GROUP BY session_id
@@ -370,6 +421,10 @@ export class SQLiteConversationHistory implements ConversationHistory {
         builtinToolsTokens: Number(row['builtin_tools_tokens'] ?? 0),
         mcpToolsTokens: Number(row['mcp_tools_tokens'] ?? 0),
         toolResultsTokens: Number(row['tool_results_tokens'] ?? 0),
+        userInputTokens: Number(row['user_input_tokens'] ?? 0),
+        cacheHitTokens: Number(row['cache_hit_tokens'] ?? 0),
+        cacheMissTokens: Number(row['cache_miss_tokens'] ?? 0),
+        reasoningTokens: Number(row['reasoning_tokens'] ?? 0),
       }
     }))
   }

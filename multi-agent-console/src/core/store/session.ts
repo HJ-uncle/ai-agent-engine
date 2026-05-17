@@ -302,6 +302,7 @@ export const useSessionStore = create<SessionState>()(
             builtinToolsTokens: (prev?.builtinToolsTokens ?? 0) + (usage.builtinToolsTokens ?? 0),
             mcpToolsTokens: (prev?.mcpToolsTokens ?? 0) + (usage.mcpToolsTokens ?? 0),
             toolResultsTokens: (prev?.toolResultsTokens ?? 0) + (usage.toolResultsTokens ?? 0),
+            userInputTokens: (prev?.userInputTokens ?? 0) + (usage.userInputTokens ?? 0),
             // ── DeepSeek 专有累加 ────────────────────────────────────
             cacheHitTokens: (prev?.cacheHitTokens ?? 0) + (usage.cacheHitTokens ?? 0),
             cacheMissTokens: (prev?.cacheMissTokens ?? 0) + (usage.cacheMissTokens ?? 0),

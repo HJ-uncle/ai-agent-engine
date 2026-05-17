@@ -54,6 +54,8 @@ export interface TokenUsage {
   mcpToolsTokens: number
   /** Cumulative tokens from tool-call result messages in the ReAct loop */
   toolResultsTokens: number
+  /** Tokens from the current user message */
+  userInputTokens?: number
 
   // ── DeepSeek 专有 (KV Cache / Reasoning) ──────────────────────────────
   /** KV Cache 命中的 token 数（DeepSeek 计费 0.1元/百万） */
@@ -132,6 +134,18 @@ export class ReActStrategy implements LoopStrategy {
     let iter0ToolDefsTokens: number | null = null
     /** Cumulative token count of tool-call result messages across all iterations */
     let cumulativeToolResultsTokens = 0
+    // ── Token 跨轮次累加（用于匹配 DeepSeek 官网统计） ────────────────────────
+    let cumulativePromptTokens = 0
+    let cumulativeCompletionTokens = 0
+    let cumulativeSystemPromptTokens = 0
+    let cumulativeSystemToolsTokens = 0
+    let cumulativeSkillTokens = 0
+    let cumulativeRagTokens = 0
+    let cumulativeBuiltinToolsTokens = 0
+    let cumulativeMcpToolsTokens = 0
+    let cumulativeMessagesTokens = 0
+    let cumulativeUserInputTokens = 0
+
     // ── DeepSeek 专有 token 跨轮次累加 ────────────────────────────────────
     let cumulativeCacheHitTokens: number | undefined
     let cumulativeCacheMissTokens: number | undefined
@@ -289,21 +303,32 @@ export class ReActStrategy implements LoopStrategy {
     const apiPromptTokens = response.promptTokens  // LLM 返回的真实值（0 则降级用本地估算）
     const localEstimate = bd.systemPromptTokens + displayToolDefsTokens + bd.skillTokens + historyTokens
     const promptTokens = apiPromptTokens || localEstimate
-    // 用 API 真实 prompt 减去本地可确定的部分，得到更准确的 messagesTokens
-    const realMessagesTokens = apiPromptTokens
-      ? Math.max(0, apiPromptTokens - bd.systemPromptTokens - displayToolDefsTokens - bd.skillTokens)
-      : historyTokens
 
-    // ── DeepSeek 专有：KV Cache 命中 / 推理 token 跨轮次累加 ─────────────
-    if (response.cacheHitTokens != null) cumulativeCacheHitTokens = (cumulativeCacheHitTokens ?? 0) + response.cacheHitTokens
-    if (response.cacheMissTokens != null) cumulativeCacheMissTokens = (cumulativeCacheMissTokens ?? 0) + response.cacheMissTokens
-    if (response.reasoningTokens != null) cumulativeReasoningTokens = (cumulativeReasoningTokens ?? 0) + response.reasoningTokens
+    // ── 计算当前提问 (User Message) 的 Token 数 ────────────────────────
+    // 从 messages 数组中取出最后一条（即本次 User 消息）
+    const lastUserMsg = messages[messages.length - 1]
+    const userInputTokens = lastUserMsg?.role === 'user' ? estimateTokens(lastUserMsg.content) : 0
+
+    // 用 API 真实 prompt 减去本地可确定的部分，得到更准确的 messagesTokens (历史消息)
+    // 注意：必须减去所有已包含在 API prompt 中的部分（系统、工具、技能、RAG、前几轮结果、以及本次提问）
+    const realMessagesTokens = apiPromptTokens
+      ? Math.max(0, 
+          apiPromptTokens 
+          - bd.systemPromptTokens 
+          - displayToolDefsTokens 
+          - bd.skillTokens 
+          - ((bd as any).ragTokens ?? 0)
+          - (cumulativeToolResultsTokens ?? 0)
+          - userInputTokens
+        )
+      : Math.max(0, historyTokens - userInputTokens)
 
     const currentUsage: TokenUsage = {
       systemPromptTokens: bd.systemPromptTokens,
       systemToolsTokens: displayToolDefsTokens,
       skillTokens: bd.skillTokens,
       messagesTokens: realMessagesTokens,
+      userInputTokens, // 新增：本次提问消耗
       promptTokens,
       completionTokens,
       totalTokens: promptTokens + completionTokens,
@@ -311,7 +336,42 @@ export class ReActStrategy implements LoopStrategy {
       builtinToolsTokens: (bd as any).builtinToolsTokens ?? 0,
       mcpToolsTokens: (bd as any).mcpToolsTokens ?? 0,
       toolResultsTokens: cumulativeToolResultsTokens ?? 0,
-      // ── DeepSeek 专有：使用累计值（多轮工具调用时累加）─────────────
+      // ── DeepSeek 专有：本轮增量值 ─────────────────────────────────
+      ...(response.cacheHitTokens != null ? { cacheHitTokens: response.cacheHitTokens } : {}),
+      ...(response.cacheMissTokens != null ? { cacheMissTokens: response.cacheMissTokens } : {}),
+      ...(response.reasoningTokens != null ? { reasoningTokens: response.reasoningTokens } : {}),
+    }
+
+    // ── 跨轮次累加统计（用于实时 __usage__ 帧，向用户展示当前请求的总消耗） ──────────
+    cumulativePromptTokens += promptTokens
+    cumulativeCompletionTokens += completionTokens
+    cumulativeSystemPromptTokens += bd.systemPromptTokens
+    cumulativeSystemToolsTokens += displayToolDefsTokens
+    cumulativeSkillTokens += bd.skillTokens
+    cumulativeRagTokens += (bd as any).ragTokens ?? 0
+    cumulativeBuiltinToolsTokens += (bd as any).builtinToolsTokens ?? 0
+    cumulativeMcpToolsTokens += (bd as any).mcpToolsTokens ?? 0
+    cumulativeMessagesTokens += realMessagesTokens
+    cumulativeUserInputTokens = (cumulativeUserInputTokens ?? 0) + userInputTokens
+
+    // ── DeepSeek 专有：KV Cache 命中 / 推理 token 跨轮次累加 ─────────────
+    if (response.cacheHitTokens != null) cumulativeCacheHitTokens = (cumulativeCacheHitTokens ?? 0) + response.cacheHitTokens
+    if (response.cacheMissTokens != null) cumulativeCacheMissTokens = (cumulativeCacheMissTokens ?? 0) + response.cacheMissTokens
+    if (response.reasoningTokens != null) cumulativeReasoningTokens = (cumulativeReasoningTokens ?? 0) + response.reasoningTokens
+
+    const cumulativeUsage: TokenUsage = {
+      systemPromptTokens: cumulativeSystemPromptTokens,
+      systemToolsTokens: cumulativeSystemToolsTokens,
+      skillTokens: cumulativeSkillTokens,
+      messagesTokens: cumulativeMessagesTokens,
+      userInputTokens: cumulativeUserInputTokens,
+      promptTokens: cumulativePromptTokens,
+      completionTokens: cumulativeCompletionTokens,
+      totalTokens: cumulativePromptTokens + cumulativeCompletionTokens,
+      ragTokens: cumulativeRagTokens,
+      builtinToolsTokens: cumulativeBuiltinToolsTokens,
+      mcpToolsTokens: cumulativeMcpToolsTokens,
+      toolResultsTokens: cumulativeToolResultsTokens ?? 0,
       ...(cumulativeCacheHitTokens != null ? { cacheHitTokens: cumulativeCacheHitTokens } : {}),
       ...(cumulativeCacheMissTokens != null ? { cacheMissTokens: cumulativeCacheMissTokens } : {}),
       ...(cumulativeReasoningTokens != null ? { reasoningTokens: cumulativeReasoningTokens } : {}),
@@ -359,7 +419,7 @@ export class ReActStrategy implements LoopStrategy {
         
         // Only yield usage for the first message (to avoid duplicating tokens in the frontend)
         if (i === 0) {
-          yield `\x00__usage__${JSON.stringify({ ...currentUsage, conversationId: assistantMsgId })}`
+          yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, conversationId: assistantMsgId })}`
         }
 
         ctx.logger.info({ toolName: toolCall.name, args: toolCall.args }, 'Executing tool')
@@ -478,33 +538,6 @@ export class ReActStrategy implements LoopStrategy {
       }
 
       // Yield token usage breakdown as a special __usage__ frame (includes conversationId)
-      // 使用 displayToolDefsTokens（迭代 0 的值）而非当前迭代的 effectiveToolDefsTokens
-      // 确保最终回答的 usage 与工具调用阶段一致（Bug fix: 避免裁剪后数值异常偏低）
-      const finalCompletionTokens = response.completionTokens
-      const finalApiPrompt = response.promptTokens
-      const finalLocalEstimate = bd.systemPromptTokens + displayToolDefsTokens + bd.skillTokens + historyTokens
-      const finalPromptTokens = finalApiPrompt || finalLocalEstimate
-      const finalRealMessages = finalApiPrompt
-        ? Math.max(0, finalApiPrompt - bd.systemPromptTokens - displayToolDefsTokens - bd.skillTokens)
-        : historyTokens
-      const finalUsage: TokenUsage = {
-        systemPromptTokens: bd.systemPromptTokens,
-        systemToolsTokens: displayToolDefsTokens,
-        messagesTokens: finalRealMessages,
-        skillTokens: bd.skillTokens,
-        promptTokens: finalPromptTokens,
-        completionTokens: finalCompletionTokens,
-        totalTokens: finalPromptTokens + finalCompletionTokens,
-        ragTokens: (bd as any).ragTokens ?? 0,
-        builtinToolsTokens: (bd as any).builtinToolsTokens ?? 0,
-        mcpToolsTokens: (bd as any).mcpToolsTokens ?? 0,
-        toolResultsTokens: cumulativeToolResultsTokens,
-        // ── DeepSeek 专有：使用累计值 ─────────────────────────────────
-        ...(cumulativeCacheHitTokens != null ? { cacheHitTokens: cumulativeCacheHitTokens } : {}),
-        ...(cumulativeCacheMissTokens != null ? { cacheMissTokens: cumulativeCacheMissTokens } : {}),
-        ...(cumulativeReasoningTokens != null ? { reasoningTokens: cumulativeReasoningTokens } : {}),
-      }
-
       const messageId = uuidv4()
       const finalMsg: Message & { conversationId?: string } = {
         id: messageId,
@@ -512,14 +545,14 @@ export class ReActStrategy implements LoopStrategy {
         content: response.content || '',
         reasoningContent: response.reasoningContent,
         createdAt: Date.now(),
-        tokens: finalCompletionTokens,
-        usage: finalUsage as unknown as Record<string, number>, // Attach usage to the final message so it gets saved in the DB
+        tokens: completionTokens, // 使用本轮增量生成数
+        usage: currentUsage as unknown as Record<string, number>, // 存储本轮增量 Usage，防止 DB 统计累加
         modelId: response.model,
         ...(conversationId ? { conversationId } : {}),
       }
       await ctx.history.append(finalMsg, ctx)
 
-      yield `\x00__usage__${JSON.stringify({ ...finalUsage, conversationId: messageId })}`
+      yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, conversationId: messageId })}`
       return
     }
 

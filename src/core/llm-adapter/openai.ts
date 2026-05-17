@@ -447,11 +447,10 @@ export class OpenAIAdapter implements LLMAdapter {
       ? (message as any)[options.responseThinkingField] 
       : (message as any).reasoning_content
 
-    // 处理缓存token：OpenAI API在使用缓存时，prompt_tokens只包含未命中缓存的token
-    // 完整的输入token应该是：prompt_tokens + prompt_tokens_details.cached_tokens
+    // 处理缓存token：在 OpenAI / DeepSeek 协议中，usage.prompt_tokens 已经是总输入 token 数
+    //（包含了命中缓存的部分）。之前的代码错误地又加了一次 cached_tokens 导致重复计算。
     const usage = response.usage
-    const promptTokensFromCache = (usage as any)?.prompt_tokens_details?.cached_tokens ?? 0
-    const promptTokens = (usage?.prompt_tokens ?? 0) + promptTokensFromCache
+    const promptTokens = usage?.prompt_tokens ?? 0
 
     // ── DeepSeek 专有 usage 字段（其他 provider 自动为 undefined）──────────
     // 1. KV Cache 命中：prompt_cache_hit_tokens / prompt_cache_miss_tokens (旧)
@@ -464,7 +463,7 @@ export class OpenAIAdapter implements LLMAdapter {
     const cacheMissTokens =
       (usage as any)?.prompt_cache_miss_tokens ??
       (cacheHitTokens != null
-        ? Math.max(0, (usage?.prompt_tokens ?? 0) - 0)  // miss = prompt_tokens (因为 prompt_tokens 默认就是未命中部分)
+        ? Math.max(0, (usage?.prompt_tokens ?? 0) - (cacheHitTokens as number))
         : undefined)
     const reasoningTokens =
       (usage as any)?.completion_tokens_details?.reasoning_tokens ?? undefined
@@ -552,8 +551,7 @@ export class OpenAIAdapter implements LLMAdapter {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const finalMessage = await (stream as any).finalMessage()
     const finalUsage = finalMessage?.usage
-    const finalPromptTokensFromCache = (finalUsage as any)?.prompt_tokens_details?.cached_tokens ?? 0
-    const finalPromptTokens = (finalUsage?.prompt_tokens ?? 0) + finalPromptTokensFromCache
+    const finalPromptTokens = finalUsage?.prompt_tokens ?? 0
 
     // ── DeepSeek 私有 usage 字段透传 ───────────────────────────────────────
     const cacheHitTokens =

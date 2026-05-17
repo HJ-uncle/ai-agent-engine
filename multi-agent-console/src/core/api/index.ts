@@ -24,6 +24,7 @@ export interface StandardResponse<T = any> {
     total: number
     totalPages: number
   }
+  metadata?: any
   timestamp: number
 }
 
@@ -119,6 +120,7 @@ export const conversationApi = {
     return {
       list: (res.data ?? []) as any[],
       total: res.pagination?.total ?? (res.data as any[])?.length ?? 0,
+      metadata: res.metadata,
     }
   },
 
