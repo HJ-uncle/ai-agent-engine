@@ -6,6 +6,7 @@ import React, { useEffect, useRef, useCallback } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import { copyToClipboard } from '@core/utils/clipboard'
 import '@xterm/xterm/css/xterm.css'
 
 export interface XTerminalProps {
@@ -119,25 +120,6 @@ const XTerminal: React.FC<XTerminalProps> = ({
       term.write('\r\n\x1b[31m[WebSocket 错误]\x1b[0m\r\n')
     }
 
-    // ── 剪贴板工具函数 ────────────────────────────────────────────────────
-    /** 写入剪贴板（优先 Clipboard API，降级 execCommand） */
-    const copyText = (text: string) => {
-      if (navigator.clipboard?.writeText) {
-        navigator.clipboard.writeText(text).catch(() => fallbackCopy(text))
-      } else {
-        fallbackCopy(text)
-      }
-    }
-    const fallbackCopy = (text: string) => {
-      const ta = document.createElement('textarea')
-      ta.value = text
-      ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none'
-      document.body.appendChild(ta)
-      ta.focus(); ta.select()
-      try { document.execCommand('copy') } catch {}
-      document.body.removeChild(ta)
-    }
-
     // ── 自定义按键拦截（必须在 onData 之前注册）────────────────────────────
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true
@@ -146,7 +128,7 @@ const XTerminal: React.FC<XTerminalProps> = ({
       if (e.ctrlKey && e.key === 'c') {
         const sel = term.getSelection()
         if (sel) {
-          copyText(sel)
+          copyToClipboard(sel)
           term.clearSelection()
           return false   // 阻止 xterm 把 ^C 发给 PTY
         }

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react'
 import { App, Modal, Divider } from 'antd'
 import { workspaceApi } from '@core/api'
+import { copyToClipboard } from '@core/utils/clipboard'
 import { useExplorerStore } from '@core/store/explorer'
 import { useSessionStore } from '@core/store/session'
 import type { FileNode } from './FileTree'
@@ -106,7 +107,7 @@ export function ContextMenu({ state, sessionId, onClose, onRefresh, onStartRenam
   const handleCopyPath = () => {
     if (!node) return
     onClose()
-    navigator.clipboard.writeText(node.path).then(() => message.success('路径已复制'))
+    copyToClipboard(node.path).then(() => message.success('路径已复制'))
   }
 
   const handleCopyFullPath = async () => {
@@ -115,7 +116,7 @@ export function ContextMenu({ state, sessionId, onClose, onRefresh, onStartRenam
     try {
       const info = await workspaceApi.getFileInfo(sessionId, node.path)
       if (info?.workspacePath) {
-        await navigator.clipboard.writeText(info.workspacePath)
+        await copyToClipboard(info.workspacePath)
         message.success('完整路径已复制')
       } else {
         message.error('无法获取完整路径')

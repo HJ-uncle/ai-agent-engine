@@ -13,6 +13,7 @@ import {
   DeleteOutline,
 } from 'antd-mobile-icons'
 import type { Message, ThinkingStep } from '@core/types'
+import { copyToClipboard } from '@core/utils/clipboard'
 import { TokenStatsPopup } from './TokenStatsPopup'
 import styles from './MessageBubble.module.css'
 
@@ -87,15 +88,7 @@ function useCopyBtn() {
   const [copied, setCopied] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const copy = useCallback(async (text: string) => {
-    try { await navigator.clipboard.writeText(text) }
-    catch {
-      try {
-        const ta = document.createElement('textarea')
-        ta.value = text; ta.style.cssText = 'position:fixed;opacity:0;'
-        document.body.appendChild(ta); ta.select()
-        document.execCommand('copy'); document.body.removeChild(ta)
-      } catch { return }
-    }
+    await copyToClipboard(text)
     setCopied(true)
     if (timer.current) clearTimeout(timer.current)
     timer.current = setTimeout(() => setCopied(false), 1500)

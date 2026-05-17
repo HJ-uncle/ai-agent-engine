@@ -48,6 +48,7 @@ import "highlight.js/styles/github-dark.css";
 import { useSessionStore } from '@core/store/session';
 import { useAgentStore } from '@core/store/agents';
 import { useChat } from '@web/hooks/useChat';
+import { copyToClipboard } from '@core/utils/clipboard';
 import { modelsApi, settingsApi, workspaceApi } from '@core/api';
 import type { Message, TokenUsage, ThinkingStep } from '@core/types';
 import styles from "./ChatArea.module.css";
@@ -226,7 +227,7 @@ function CopyBtn({ text }: { text: string }) {
         }
         className={styles.iconBtn}
         onClick={() => {
-          navigator.clipboard.writeText(text);
+          copyToClipboard(text);
           setCopied(true);
           setTimeout(() => setCopied(false), 2000);
         }}
@@ -1293,7 +1294,7 @@ function MessageItemInner({
   };
 
   const handleCopyPath = (fileName: string) => {
-    navigator.clipboard.writeText(fileName);
+    copyToClipboard(fileName);
     message.success("路径已复制到剪贴板");
   };
 

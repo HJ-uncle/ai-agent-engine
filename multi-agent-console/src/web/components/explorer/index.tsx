@@ -13,6 +13,7 @@ import {
   CopyOutlined,
 } from '@ant-design/icons'
 import { workspaceApi } from '@core/api'
+import { copyToClipboard } from '@core/utils/clipboard'
 import { useSessionStore } from '@core/store/session'
 import { useExplorerStore } from '@core/store/explorer'
 import { useTerminalStore } from '@core/store/terminal'
@@ -226,7 +227,7 @@ export default function NewExplorerPanel() {
   const handleCopyWorkspacePath = (e: React.MouseEvent) => {
     e.stopPropagation()
     if (activeWorkspace?.path) {
-      navigator.clipboard.writeText(activeWorkspace.path)
+      copyToClipboard(activeWorkspace.path)
       message.success('工作区路径已复制')
     }
   }
