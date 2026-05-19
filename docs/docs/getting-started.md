@@ -11,9 +11,12 @@
 
 ## 2. 第一步：配置模型
 
-如果你是第一次使用，需要告诉系统使用哪个 AI 模型（如 DeepSeek, Claude, GPT-4）：
+如果你是第一次使用，需要告诉系统使用哪个 AI 模型（如 DeepSeek, Claude, GPT-4, Qwen）：
 1. 点击侧边栏的 **设置 (Settings)**。
 2. 输入你的 **API Key**。
+   - DeepSeek 模型：填入 `DEEPSEEK_API_KEY`
+   - Anthropic/Claude 模型：填入 `ANTHROPIC_API_KEY`（系统自动识别 `anthropic` provider 或含 `claude` 的模型名）
+   - OpenAI / Qwen / 自定义兼容接口：填入 `OPENAI_API_KEY`；若 Key 未设置，调用时会收到友好错误提示
 3. 选择一个 **主模型 (Primary Model)**。
 4. 点击保存。
 

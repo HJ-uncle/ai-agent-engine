@@ -39,12 +39,17 @@ export class SQLiteTaskQueue implements TaskQueue {
   private async recoverStaleJobs(): Promise<void> {
     const db = getDb()
     // Mark any running jobs as failed (service was restarted)
-    await db.execute({
-      sql: `UPDATE jobs 
+    // 捕获错误：首次启动时 jobs 表可能尚未创建（initDb 在 main() 里调用，晚于 ESM 顶层代码），静默忽略即可
+    await db
+      .execute({
+        sql: `UPDATE jobs 
             SET status = 'failed', error = 'Service restarted unexpectedly', updated_at = unixepoch()
             WHERE status = 'running'`,
-      args: [],
-    })
+        args: [],
+      })
+      .catch(() => {
+        // jobs 表不存在（首次启动/迁移尚未执行），忽略
+      })
   }
 
   async enqueue(job: Job): Promise<string> {

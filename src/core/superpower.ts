@@ -188,8 +188,8 @@ export function resolveSuperpowerMode(log: Logger = defaultLogger): SuperpowerMo
     return 'methodology'
   }
 
-  // 4. 默认 off（legacy=false / 未设置 / 任意其它字符串）
-  return 'off'
+  // 4. 默认 balanced（legacy=false / 未设置 / 任意其它字符串）
+  return 'balanced'
 }
 
 /**

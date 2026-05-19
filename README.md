@@ -6,7 +6,7 @@ AI Agent Engine 是一个具备**感知、思考、行动**能力的全栈 AI �
 
 ## 🌟 核心特性
 
-- **🧠 强大的推理心脏**：内置 ReAct (Thought -> Action -> Observation) 循环，支持 DeepSeek R1、Claude 3.7、GPT-4o 等主流模型及其“思考模式”。
+- **🧠 强大的推理心脏**：内置 ReAct (Thought -> Action -> Observation) 循环，支持 DeepSeek R1、Claude 3.7、GPT-4o、Qwen 等主流模型及其”思考模式”。
 - **🛠️ 丰富的工具系统**：
   - **内置工具**：文件管理、Shell 终端、网页抓取、图片解析 (`read_image`)。
   - **任务管理**：定时任务 (Cron) 及待办管理 (Todo)，支持 AI 自主排程。
@@ -69,7 +69,10 @@ git clone https://github.com/project/ai-agent-engine.git && cd ai-agent-engine &
 
 # 2. 配置环境
 cp .env.example .env 
-# 请在 .env 中填入你的 LLM API Key (如 OPENAI_API_KEY)
+# 请在 .env 中填入你的 LLM API Key
+# OpenAI/Qwen/自定义兼容接口: OPENAI_API_KEY
+# Anthropic/Claude:           ANTHROPIC_API_KEY
+# DeepSeek:                   DEEPSEEK_API_KEY
 
 # 3. 运行初始化并启动
 npm run db:migrate && npm run dev

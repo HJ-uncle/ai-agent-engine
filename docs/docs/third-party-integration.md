@@ -39,7 +39,7 @@ Agent Engine 是一个 **LLM Agent 运行时引擎**，提供 ReAct 循环、工
 | **会话管理** | 完整历史持久化、Token 统计、消息重生成 |
 | **工作区** | 隔离的物理工作目录，支持 VS Code 风格文件操作 |
 | **安全防护** | 命令注入检测 + SSRF 防护 + 审计日志三层防御 |
-| **Superpower 模式** | 四档能力档位（off/balanced/methodology/max），控制工具集、预算倍率和系统提示词注入 |
+| **Superpower 模式** | 四档能力档位（balanced/methodology/max/off），默认 `balanced`，控制工具集、预算倍率和系统提示词注入 |
 
 ---
 

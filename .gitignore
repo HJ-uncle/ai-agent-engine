@@ -4,6 +4,15 @@ node_modules/
 # Build output
 dist/
 
+# SDK sub-package — only generated artifacts, source code is tracked
+sdk-package/dist/
+sdk-package/bin/
+sdk-package/node_modules/
+sdk-package/*.tgz
+
+# Release artifacts
+release/
+
 deploy.sh
 
 

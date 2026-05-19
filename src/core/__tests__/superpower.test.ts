@@ -57,9 +57,9 @@ beforeEach(() => __resetSuperpowerWarnFlagsForTests())
 
 // ─────────────────────────────────────────────────────────────────────────
 describe('superpower / resolveSuperpowerMode', () => {
-  it('未配置任何 env → off（默认安全）', () => {
+  it('未配置任何 env → balanced（默认均衡）', () => {
     withEnv({ SUPERPOWER_MODE: undefined, SUPERPOWER_ENABLED: undefined }, () => {
-      expect(resolveSuperpowerMode()).toBe('off')
+      expect(resolveSuperpowerMode()).toBe('balanced')
     })
   })
 
@@ -75,11 +75,11 @@ describe('superpower / resolveSuperpowerMode', () => {
     })
   })
 
-  it('SUPERPOWER_MODE 非法值 → 降级到 legacy → off（legacy 缺失）', () => {
+  it('SUPERPOWER_MODE 非法值 → 降级到 legacy → balanced（legacy 缺失）', () => {
     const warn = vi.fn()
     const log = { warn, debug: vi.fn() } as any
     withEnv({ SUPERPOWER_MODE: 'turbo', SUPERPOWER_ENABLED: undefined }, () => {
-      expect(resolveSuperpowerMode(log)).toBe('off')
+      expect(resolveSuperpowerMode(log)).toBe('balanced')
     })
     expect(warn).toHaveBeenCalledTimes(1)
   })
@@ -94,11 +94,11 @@ describe('superpower / resolveSuperpowerMode', () => {
     withLegacy('true', () => expect(resolveSuperpowerMode()).toBe('methodology'))
   })
 
-  it('legacy 任意非 "true" 值 → off', () => {
-    withLegacy('false', () => expect(resolveSuperpowerMode()).toBe('off'))
-    withLegacy('1', () => expect(resolveSuperpowerMode()).toBe('off'))
-    withLegacy('yes', () => expect(resolveSuperpowerMode()).toBe('off'))
-    withLegacy('TRUE', () => expect(resolveSuperpowerMode()).toBe('off'))
+  it('legacy 任意非 "true" 值 → balanced', () => {
+    withLegacy('false', () => expect(resolveSuperpowerMode()).toBe('balanced'))
+    withLegacy('1', () => expect(resolveSuperpowerMode()).toBe('balanced'))
+    withLegacy('yes', () => expect(resolveSuperpowerMode()).toBe('balanced'))
+    withLegacy('TRUE', () => expect(resolveSuperpowerMode()).toBe('balanced'))
   })
 
   it('legacy=true 只打一次 deprecation warn（即使调用 N 次）', () => {

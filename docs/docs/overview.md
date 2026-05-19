@@ -22,7 +22,7 @@ graph TD
 
     subgraph Reasoning [AI 推理心脏]
         Loop[ReAct 思考循环]
-        Adapter[LLM 适配器: DeepSeek/Claude/GPT]
+        Adapter[LLM 适配器: DeepSeek/Claude/GPT/Qwen]
         SubAgent[多智能体协作网络]
     end
 

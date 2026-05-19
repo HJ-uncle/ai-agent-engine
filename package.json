@@ -16,7 +16,10 @@
     "typecheck": "tsc --noEmit",
     "test:conv": "tsx sdk/test-conversation-id.ts",
     "test:skills": "tsx sdk/test-skills.ts",
-    "test:knowledge": "tsx sdk/test-knowledge.ts"
+    "test:knowledge": "tsx sdk/test-knowledge.ts",
+    "build:sdk": "npm run build && cd sdk-package && npm run build:full",
+    "build:sdk:release": "npm run build && cd sdk-package && npm run build:release",
+    "build:cdn": "npm run build:sdk:release && cd sdk-package && npm run cdn:pack"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.20",
@@ -47,6 +50,7 @@
     "@typescript-eslint/parser": "7.6",
     "@vitest/coverage-v8": "^2.1.9",
     "eslint": "^8",
+    "javascript-obfuscator": "^5.4.2",
     "tsx": "^4",
     "typescript": "^5",
     "vitest": "^2.1.9"

@@ -39,11 +39,14 @@ function createBaseAdapter(provider: string, model: string, options?: CreateAdap
       return new AnthropicAdapter(model, options?.apiKey, options?.baseUrl)
     case 'ollama':
       return new OllamaAdapter(model, options?.baseUrl)
+    case 'qwen':
     case 'custom':
-      // 'custom' maps to OpenAI-compatible
+      // qwen / custom → OpenAI-compatible 接口（通义千问、大多数自定义代理均走 /v1/chat/completions）
       return new OpenAIAdapter(model, options?.apiKey, options?.baseUrl)
     default:
-      throw new Error(`Unknown LLM provider: ${provider}`)
+      // 未知 provider 不直接 throw，降级为 OpenAI-compatible，避免整个请求崩溃
+      // （用户可能配置了引擎尚未枚举的新 provider 名，如 "baichuan"、"mistral" 等）
+      return new OpenAIAdapter(model, options?.apiKey, options?.baseUrl)
   }
 }
 
@@ -79,6 +82,7 @@ export async function createLLMAdapterWithDbConfig(overrides?: CreateAdapterOpti
     dbProvider, dbModel, dbApiKey, dbBaseUrl,
     dsApiKey, dsBaseUrl,
     dsAutoThinking, dsThinkingEffort, dsDefaultJson, dsIncludeUsage, dsLogCache,
+    anthropicApiKey, anthropicBaseUrl,
   ] = await Promise.all([
     systemConfigStore.get('LLM_PROVIDER'),
     systemConfigStore.get('LLM_PRIMARY_MODEL'),
@@ -91,6 +95,8 @@ export async function createLLMAdapterWithDbConfig(overrides?: CreateAdapterOpti
     systemConfigStore.get('DEEPSEEK_DEFAULT_JSON_MODE'),
     systemConfigStore.get('DEEPSEEK_INCLUDE_STREAM_USAGE'),
     systemConfigStore.get('DEEPSEEK_LOG_CACHE_HITS'),
+    systemConfigStore.get('ANTHROPIC_API_KEY'),
+    systemConfigStore.get('ANTHROPIC_BASE_URL'),
   ])
 
   const provider = overrides?.provider ?? dbProvider ?? process.env.LLM_PROVIDER ?? 'openai'
@@ -98,13 +104,17 @@ export async function createLLMAdapterWithDbConfig(overrides?: CreateAdapterOpti
 
   // ── DeepSeek 通道自动检测 + 专有凭据优先 ─────────────────────────────────
   const isDs = shouldUseDeepSeek(provider, model, overrides?.baseUrl ?? dbBaseUrl ?? process.env.OPENAI_BASE_URL)
+  // ── Anthropic 通道检测 ────────────────────────────────────────────────────
+  const isAnthropic = provider === 'anthropic' || /claude/i.test(model)
 
   const apiKey = overrides?.apiKey
     ?? (isDs ? (dsApiKey ?? process.env.DEEPSEEK_API_KEY) : null)
+    ?? (isAnthropic ? (anthropicApiKey ?? process.env.ANTHROPIC_API_KEY) : null)
     ?? dbApiKey
     ?? process.env.OPENAI_API_KEY
   const baseUrl = overrides?.baseUrl
     ?? (isDs ? (dsBaseUrl ?? process.env.DEEPSEEK_BASE_URL) : null)
+    ?? (isAnthropic ? (anthropicBaseUrl ?? process.env.ANTHROPIC_BASE_URL) : null)
     ?? dbBaseUrl
     ?? process.env.OPENAI_BASE_URL
 

@@ -281,11 +281,12 @@
 
   | 字段 | 类型 | 分类 | 说明 |
   |------|------|------|------|
-  | `LLM_PROVIDER` | string | LLM | 当前 LLM 提供商 (`openai` / `anthropic` / `ollama`) |
+  | `LLM_PROVIDER` | string | LLM | 当前 LLM 提供商 (`openai` / `anthropic` / `deepseek` / `ollama` / `qwen` / `custom`，未知值自动降级为 OpenAI 兼容接口） |
   | `LLM_PRIMARY_MODEL` | string | LLM | 主模型名称 |
   | `OPENAI_API_KEY` | string | LLM | OpenAI 兼容 API Key（已加密存储，返回明文） |
   | `OPENAI_BASE_URL` | string | LLM | OpenAI 兼容 Base URL |
   | `ANTHROPIC_API_KEY` | string | LLM | Anthropic API Key（已加密存储，返回明文） |
+  | `ANTHROPIC_BASE_URL` | string | LLM | Anthropic 自定义 Base URL（代理/私有部署时使用） |
   | `OLLAMA_BASE_URL` | string | LLM | Ollama 服务地址 |
   | `MAX_ITERATIONS` | number | Agent | ReAct 循环最大迭代次数 |
   | `TOKEN_BUDGET` | number | Agent | Agent 上下文窗口 Token 预算 |

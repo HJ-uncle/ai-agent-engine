@@ -352,18 +352,35 @@ function stripToolCallBlocks(content: string): string {
   return content.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim()
 }
 
+/** 占位符：当 apiKey 未配置时传给 SDK，避免构造函数提前抛出。真正调用 API 前会做业务校验。 */
+const OPENAI_KEY_PLACEHOLDER = '__NOT_SET__'
+
 export class OpenAIAdapter implements LLMAdapter {
   readonly provider: string = 'openai'
   readonly supportsVision: boolean
   private client: OpenAI
+  /** 真实有效的 apiKey（不含占位符），用于调用前校验 */
+  private readonly resolvedApiKey: string | undefined
 
   constructor(readonly model: string = 'gpt-4o-mini', apiKey?: string, baseURL?: string) {
     const rawBaseURL = baseURL || process.env.OPENAI_BASE_URL
+    this.resolvedApiKey = apiKey || process.env.OPENAI_API_KEY || undefined
     this.client = new OpenAI({
-      apiKey: apiKey || process.env.OPENAI_API_KEY,
+      // 当 key 未设置时传占位符，绕过 SDK 构造函数的非空校验。
+      // 真正发起请求前会在 complete()/stream() 里做业务检查，给出更友好的错误。
+      apiKey: this.resolvedApiKey ?? OPENAI_KEY_PLACEHOLDER,
       baseURL: normalizeBaseURL(rawBaseURL), // supports custom OpenAI-compatible endpoints
     })
     this.supportsVision = this.detectVisionSupport(rawBaseURL)
+  }
+
+  /** 在调用 LLM API 之前检查 apiKey 是否已配置，未配置则抛出可读错误 */
+  private assertApiKey(): void {
+    if (!this.resolvedApiKey) {
+      throw new Error(
+        'OpenAI API Key 未配置。请在设置页面填写 API Key，或联系管理员在 system_config 中设置 OPENAI_API_KEY。'
+      )
+    }
   }
 
   private detectVisionSupport(baseURL?: string): boolean {
@@ -380,6 +397,7 @@ export class OpenAIAdapter implements LLMAdapter {
   }
 
   async complete(messages: Message[], options?: LLMAdapterOptions): Promise<LLMResponse> {
+    this.assertApiKey()
     const oaiMessages = messagesToOpenAI(messages, this.supportsVision)
     if (options?.systemPrompt) {
       oaiMessages.unshift({ role: 'system', content: options.systemPrompt })
@@ -485,6 +503,7 @@ export class OpenAIAdapter implements LLMAdapter {
   }
 
   async *stream(messages: Message[], options?: LLMAdapterOptions): AsyncIterable<LLMStreamChunk> {
+    this.assertApiKey()
     const oaiMessages = messagesToOpenAI(messages, this.supportsVision)
     if (options?.systemPrompt) {
       oaiMessages.unshift({ role: 'system', content: options.systemPrompt })
