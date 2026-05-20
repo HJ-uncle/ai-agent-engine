@@ -23,7 +23,7 @@ import {
 } from '../../../core/deepseek/pricing.js'
 
 // ── 模型列表内存缓存（5 分钟） ────────────────────────────────────────────────
-const BUILT_IN_MODELS = ['deepseek-chat', 'deepseek-reasoner']
+const BUILT_IN_MODELS = ['deepseek-chat', 'deepseek-reasoner', 'deepseek-v4-flash', 'deepseek-v4-pro']
 let modelsCache: { data: string[]; expiry: number } | null = null
 
 async function buildAdapter(): Promise<DeepSeekAdapter> {

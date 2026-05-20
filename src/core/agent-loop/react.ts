@@ -371,7 +371,7 @@ export class ReActStrategy implements LoopStrategy {
     ctx.tokenBudget -= response.completionTokens
 
     const bd = this.options.promptBreakdown ?? { systemPromptTokens: 0, systemToolsTokens: 0, skillTokens: 0, ragTokens: 0, builtinToolsTokens: 0, mcpToolsTokens: 0 }
-    const completionTokens = response.completionTokens
+    const completionTokens = response.completionTokens || estimateTokens(response.content || '')
 
     // ── 真实 Token 统计 ──────────────────────────────────────────────
     // 优先使用 LLM API 返回的 promptTokens（真实计费值）。
@@ -495,7 +495,11 @@ export class ReActStrategy implements LoopStrategy {
         
         // Only yield usage for the first message (to avoid duplicating tokens in the frontend)
         if (i === 0) {
-          yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, conversationId: assistantMsgId })}`
+          yield `\x00__usage__${JSON.stringify({ 
+            ...cumulativeUsage, 
+            conversationId: assistantMsgId,
+            modelId: response.model // 透传模型 ID 供前端计算价格
+          })}`
         }
 
         ctx.logger.info({ toolName: toolCall.name, args: toolCall.args }, 'Executing tool')
@@ -616,7 +620,11 @@ export class ReActStrategy implements LoopStrategy {
       }
       await ctx.history.append(finalMsg, ctx)
 
-      yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, conversationId: messageId })}`
+      yield `\x00__usage__${JSON.stringify({ 
+        ...cumulativeUsage, 
+        conversationId: messageId,
+        modelId: response.model // 透传模型 ID 供前端计算价格
+      })}`
       return
     }
 

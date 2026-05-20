@@ -247,7 +247,12 @@ export class AnthropicAdapter implements LLMAdapter {
 
     type CreateFn = (p: Record<string, unknown>) => Promise<{
       content: Array<{ type: string; text?: string; id?: string; name?: string; input?: unknown }>
-      usage: { input_tokens: number; output_tokens: number }
+      usage: { 
+        input_tokens: number; 
+        output_tokens: number;
+        cache_creation_input_tokens?: number;
+        cache_read_input_tokens?: number;
+      }
       stop_reason: string | null
     }>
     const response = await (this.client.messages.create as unknown as CreateFn)(params)
@@ -270,6 +275,9 @@ export class AnthropicAdapter implements LLMAdapter {
       }
     }
 
+    const cacheHitTokens = response.usage.cache_read_input_tokens
+    const cacheMissTokens = response.usage.cache_creation_input_tokens
+
     return {
       content,
       reasoningContent: reasoningContent || undefined,
@@ -279,6 +287,8 @@ export class AnthropicAdapter implements LLMAdapter {
       finishReason: response.stop_reason === 'tool_use' ? 'tool_calls' :
                     response.stop_reason === 'max_tokens' ? 'length' : 'stop',
       model: (response as any).model,
+      ...(cacheHitTokens != null ? { cacheHitTokens } : {}),
+      ...(cacheMissTokens != null ? { cacheMissTokens } : {}),
     }
   }
 
@@ -319,7 +329,12 @@ export class AnthropicAdapter implements LLMAdapter {
           delta?: { type: string; text?: string }
         }>
         finalMessage(): Promise<{
-          usage: { input_tokens: number; output_tokens: number }
+          usage: { 
+            input_tokens: number; 
+            output_tokens: number;
+            cache_creation_input_tokens?: number;
+            cache_read_input_tokens?: number;
+          }
           model: string
         }>
       }
@@ -336,11 +351,16 @@ export class AnthropicAdapter implements LLMAdapter {
     }
 
     const finalMessage = await stream.finalMessage()
+    const cacheHitTokens = finalMessage.usage.cache_read_input_tokens
+    const cacheMissTokens = finalMessage.usage.cache_creation_input_tokens
+
     yield {
       done: true,
       promptTokens: finalMessage.usage.input_tokens,
       completionTokens: finalMessage.usage.output_tokens,
       model: finalMessage.model,
+      ...(cacheHitTokens != null ? { cacheHitTokens } : {}),
+      ...(cacheMissTokens != null ? { cacheMissTokens } : {}),
     }
   }
 

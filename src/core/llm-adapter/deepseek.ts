@@ -50,6 +50,7 @@ const REASONER_MODEL_PATTERNS = [
   /deepseek-r1/i,
   /deepseek-v3.*think/i,
   /deepseek-v4-pro/i,    // V4 Pro 默认推理
+  /deepseek-v4-flash/i,  // V4 Flash 也支持推理
 ]
 
 export interface DeepSeekAdapterOptions {

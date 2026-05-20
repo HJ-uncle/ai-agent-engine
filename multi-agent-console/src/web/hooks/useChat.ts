@@ -181,8 +181,8 @@ function driveAiMessage(
         updateMessage(sid, aiMsgId, {
           usage: accumulatedUsage,
           durationMs,
-          backendMessageId: event.conversationId ?? null,
-          modelId: event.modelId || event.model, // Capture modelId
+          backendMessageId: (event.usage as any).conversationId ?? null,
+          modelId: (event.usage as any).modelId || (event.usage as any).model, // 从 usage 对象中提取 modelId
         })
         // 向 store 提交增量而非全量，避免 ask_user 恢复时重复累加固定部分
         const delta: TokenUsage = {

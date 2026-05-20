@@ -14,9 +14,12 @@ interface SessionState {
 
   /**
    * DeepSeek 动态价格配置（从服务端拉取，用于 ChatArea 成本估算）
-   * key: modelId（如 deepseek-chat），value: 有效价格 tier
+   * key: modelId（如 deepseek-chat），value: 包含有效价和原价的对象
    */
-  deepseekEffectivePrices: Record<string, { input: number; output: number; cacheHit: number; isDiscounted: boolean } | null>
+  deepseekEffectivePrices: Record<string, {
+    effective: { input: number; output: number; cacheHit: number; isDiscounted: boolean }
+    normal: { input: number; output: number; cacheHit: number }
+  } | null>
 
   /**
    * 当前正在流式生成中的会话 ID 集合（不持久化）。

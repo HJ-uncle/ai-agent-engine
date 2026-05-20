@@ -470,12 +470,10 @@ export class OpenAIAdapter implements LLMAdapter {
     const usage = response.usage
     const promptTokens = usage?.prompt_tokens ?? 0
 
-    // ── DeepSeek 专有 usage 字段（其他 provider 自动为 undefined）──────────
-    // 1. KV Cache 命中：prompt_cache_hit_tokens / prompt_cache_miss_tokens (旧)
-    //    或 prompt_tokens_details.cached_tokens (新, V4)
-    // 2. R1/V3 thinking：completion_tokens_details.reasoning_tokens
+    // ── DeepSeek / Moonshot / SiliconFlow 私有 usage 字段透传 ───────────────────
     const cacheHitTokens =
       (usage as any)?.prompt_cache_hit_tokens ??
+      (usage as any)?.cache_hit_tokens ??
       (usage as any)?.prompt_tokens_details?.cached_tokens ??
       undefined
     const cacheMissTokens =
@@ -484,7 +482,9 @@ export class OpenAIAdapter implements LLMAdapter {
         ? Math.max(0, (usage?.prompt_tokens ?? 0) - (cacheHitTokens as number))
         : undefined)
     const reasoningTokens =
-      (usage as any)?.completion_tokens_details?.reasoning_tokens ?? undefined
+      (usage as any)?.completion_tokens_details?.reasoning_tokens ?? 
+      (usage as any)?.reasoning_tokens ?? 
+      undefined
 
     return {
       content: cleanContent,
@@ -551,19 +551,32 @@ export class OpenAIAdapter implements LLMAdapter {
     const betaClient = this.client.beta as any
     const stream = betaClient.chat.completions.stream(params)
 
+    let manualUsage: any = null
+    let manualModel: string | undefined = undefined
+
     for await (const chunk of stream) {
+      // 1. 提取 usage（部分供应商在最后一个 chunk 的顶层或 usage 字段中返回）
+      const usage = (chunk as any).usage
+      if (usage) manualUsage = usage
+
+      // 2. 提取 model（用于展示真实调用的模型 ID）
+      if ((chunk as any).model) manualModel = (chunk as any).model
+
+      // 3. 提取 delta 内容
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const delta = (chunk as any).choices?.[0]?.delta
       if (!delta) continue
 
-      if (delta.content || 
-          (options?.responseThinkingField ? (delta as any)[options.responseThinkingField] : (delta as any).reasoning_content) ||
-          delta.tool_calls) {
+      // 尝试多字段提取推理内容（兼容 reasoning_content / thought / reasoning）
+      const rContent = (options?.responseThinkingField ? (delta as any)[options.responseThinkingField] : null) ||
+        (delta as any).reasoning_content ||
+        (delta as any).thought ||
+        (delta as any).reasoning
+
+      if (delta.content || rContent || delta.tool_calls) {
         yield { 
           content: delta.content as string, 
-          reasoningContent: options?.responseThinkingField 
-            ? (delta as any)[options.responseThinkingField] as string 
-            : (delta as any).reasoning_content as string,
+          reasoningContent: rContent as string,
           toolCalls: delta.tool_calls?.map((tc: any) => ({
             id: tc.id,
             name: tc.function?.name,
@@ -576,19 +589,23 @@ export class OpenAIAdapter implements LLMAdapter {
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const finalMessage = await (stream as any).finalMessage()
-    const finalUsage = finalMessage?.usage
+    const finalMessage = await (stream as any).finalMessage().catch(() => null)
+    const finalUsage = manualUsage || finalMessage?.usage
     const finalPromptTokens = finalUsage?.prompt_tokens ?? 0
 
-    // ── DeepSeek 私有 usage 字段透传 ───────────────────────────────────────
+    // ── DeepSeek / Moonshot / SiliconFlow 私有 usage 字段透传 ───────────────────
     const cacheHitTokens =
       (finalUsage as any)?.prompt_cache_hit_tokens ??
+      (finalUsage as any)?.cache_hit_tokens ??
       (finalUsage as any)?.prompt_tokens_details?.cached_tokens ??
       undefined
     const cacheMissTokens =
-      (finalUsage as any)?.prompt_cache_miss_tokens ?? undefined
+      (finalUsage as any)?.prompt_cache_miss_tokens ?? 
+      (cacheHitTokens != null ? Math.max(0, (finalUsage?.prompt_tokens ?? 0) - (cacheHitTokens as number)) : undefined)
     const reasoningTokens =
-      (finalUsage as any)?.completion_tokens_details?.reasoning_tokens ?? undefined
+      (finalUsage as any)?.completion_tokens_details?.reasoning_tokens ?? 
+      (finalUsage as any)?.reasoning_tokens ?? 
+      undefined
 
     yield {
       done: true,
@@ -597,7 +614,7 @@ export class OpenAIAdapter implements LLMAdapter {
       ...(cacheHitTokens != null ? { cacheHitTokens } : {}),
       ...(cacheMissTokens != null ? { cacheMissTokens } : {}),
       ...(reasoningTokens != null ? { reasoningTokens } : {}),
-      model: finalMessage?.model,
+      model: manualModel || finalMessage?.model,
     }
   }
 

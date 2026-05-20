@@ -54,34 +54,131 @@ export interface EffectiveModelPrice extends ModelPriceTier {
 
 export const DEFAULT_PRICES_CONFIG: DeepSeekPricesConfig = {
   lowBalanceThreshold: 10,
-  updatedAt: '2026-05-07T00:00:00+08:00',
+  updatedAt: '2026-05-20T00:00:00+08:00',
   models: [
     {
       modelId: 'deepseek-chat',
       normalPrice: {
-        input: 2,
-        output: 8,
-        cacheHit: 0.5,
+        input: 1,
+        output: 2,
+        cacheHit: 0.02,
       },
       discountPrice: {
         input: 1,
-        output: 4,
-        cacheHit: 0.1,
+        output: 2,
+        cacheHit: 0.02,
       },
-      // 折扣截止时间：由用户手动配置，默认留空（不确定官方活动时间）
       discountUntil: null,
     },
     {
       modelId: 'deepseek-reasoner',
+      normalPrice: {
+        input: 1,
+        output: 2,
+        cacheHit: 0.1,
+      },
+      discountPrice: {
+        input: 1,
+        output: 2,
+        cacheHit: 0.02,
+      },
+      discountUntil: null,
+    },
+    {
+      modelId: 'deepseek-v4-flash',
+      normalPrice: {
+        input: 1,
+        output: 2,
+        cacheHit: 0.02,
+      },
+      discountPrice: {
+        input: 1,
+        output: 2,
+        cacheHit: 0.02,
+      },
+      discountUntil: null,
+    },
+    {
+      modelId: 'deepseek-v4-pro',
+      normalPrice: {
+        input: 12,
+        output: 24,
+        cacheHit: 0.1,
+      },
+      discountPrice: {
+        input: 3,
+        output: 6,
+        cacheHit: 0.025,
+      },
+      discountUntil: '2026-05-31T23:59:00+08:00',
+    },
+    {
+      modelId: 'kimi-k2.6',
+      normalPrice: {
+        input: 6.5,
+        output: 27,
+        cacheHit: 1.1,
+      },
+      discountPrice: {
+        input: 6.5,
+        output: 27,
+        cacheHit: 1.1,
+      },
+      discountUntil: null,
+    },
+    {
+      modelId: 'kimi-k2.5',
+      normalPrice: {
+        input: 4,
+        output: 21,
+        cacheHit: 0.7,
+      },
+      discountPrice: {
+        input: 4,
+        output: 21,
+        cacheHit: 0.7,
+      },
+      discountUntil: null,
+    },
+    {
+      modelId: 'kimi-k2-0905',
       normalPrice: {
         input: 4,
         output: 16,
         cacheHit: 1,
       },
       discountPrice: {
-        input: 1,
-        output: 8,
-        cacheHit: 0.1,
+        input: 4,
+        output: 16,
+        cacheHit: 1,
+      },
+      discountUntil: null,
+    },
+    {
+      modelId: 'moonshot',
+      normalPrice: {
+        input: 4,
+        output: 21,
+        cacheHit: 0.7,
+      },
+      discountPrice: {
+        input: 4,
+        output: 21,
+        cacheHit: 0.7,
+      },
+      discountUntil: null,
+    },
+    {
+      modelId: 'kimi',
+      normalPrice: {
+        input: 4,
+        output: 21,
+        cacheHit: 0.7,
+      },
+      discountPrice: {
+        input: 4,
+        output: 21,
+        cacheHit: 0.7,
       },
       discountUntil: null,
     },
@@ -105,7 +202,25 @@ export function loadPricesConfig(): DeepSeekPricesConfig {
       return DEFAULT_PRICES_CONFIG
     }
     const raw = fs.readFileSync(PRICES_FILE, 'utf-8')
-    return JSON.parse(raw) as DeepSeekPricesConfig
+    const loaded = JSON.parse(raw) as DeepSeekPricesConfig
+    
+    // ── 智能合并逻辑 ─────────────────────────────────────────────────────
+    // 如果本地文件缺少 DEFAULT_PRICES_CONFIG 中的模型，则将其补全。
+    // 这解决了系统升级后新模型价格无法显示的问题。
+    const mergedModels = [...loaded.models]
+    let hasNew = false
+    for (const def of DEFAULT_PRICES_CONFIG.models) {
+      if (!mergedModels.some(m => m.modelId === def.modelId)) {
+        mergedModels.push(def)
+        hasNew = true
+      }
+    }
+    if (hasNew) {
+      const merged = { ...loaded, models: mergedModels }
+      savePricesConfig(merged)
+      return merged
+    }
+    return loaded
   } catch {
     return DEFAULT_PRICES_CONFIG
   }

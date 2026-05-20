@@ -301,7 +301,12 @@ export default function App() {
         if (data?.models) {
           const priceMap: Record<string, any> = {}
           for (const m of data.models) {
-            if (m.effectivePrice) priceMap[m.modelId] = m.effectivePrice
+            if (m.effectivePrice) {
+              priceMap[m.modelId] = {
+                effective: m.effectivePrice,
+                normal: m.normalPrice
+              }
+            }
           }
           useSessionStore.getState().setDeepSeekPrices(priceMap)
         }

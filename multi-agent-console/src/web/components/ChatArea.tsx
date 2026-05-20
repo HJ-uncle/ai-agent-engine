@@ -551,36 +551,70 @@ function TokenDetailsContent({
   // 从 store 读取 DeepSeek 有效价格（拉取失败则为 null，不显示估算）
   const deepseekPrices = useSessionStore((s) => s.deepseekEffectivePrices);
 
-  /** 根据模型 ID 获取当前有效的 cacheHit 差价（元/M），用于节省估算 */
+  /** 根据模型 ID 获取当前有效的 cacheHit 节省（元），用于估算 */
   const getCacheHitSavings = (hit: number): { savedYuan: number; priceDiff: number } | null => {
     if (!modelId) return null;
-    // 前缀匹配（如 deepseek-chat-0324 → deepseek-chat）
+    const midLower = modelId.toLowerCase();
+    // 前缀匹配
     const entry =
       deepseekPrices[modelId] ??
-      Object.entries(deepseekPrices).find(([k]) => modelId.startsWith(k))?.[1];
-    if (!entry) return null;
-    // normalCacheHit 需要从未折扣状态推导，此处取 entry 里的 cacheHit 作为有效价
-    // 差价 = 原价（0.5/1元/M） - 有效价（0.1元/M）
-    // 由于 store 只存有效价，差价需要额外知道原价；
-    // 退而求其次：仅在折扣中时显示节省（差价 = 当前有效 cacheHit，与原价对比需从 API 重取）
-    // 此处保留: 若 isDiscounted=true 则计算节省，否则显示"无折扣"
-    if (!entry.isDiscounted) return null;
-    // 原价 cacheHit 近似：deepseek-chat=0.5，deepseek-reasoner=1
-    const normalCacheHit = modelId.includes('reasoner') ? 1 : 0.5;
-    const priceDiff = normalCacheHit - entry.cacheHit;
+      deepseekPrices[midLower] ??
+      Object.entries(deepseekPrices).find(([k]) => midLower.startsWith(k.toLowerCase()))?.[1];
+    
+    if (!entry || !entry.effective || !entry.normal) return null;
+
+    // 节省金额 = 命中 tokens * (当前输入价 - 当前命中价) / 1,000,000
+    // 逻辑：如果没命中缓存，这部分 token 就要按 effective.input 计费
+    const priceDiff = entry.effective.input - entry.effective.cacheHit;
+    
     if (priceDiff <= 0) return null;
     return { savedYuan: (hit / 1_000_000) * priceDiff, priceDiff };
   };
 
+  /** 计算总消费 */
+  const getCostInfo = (): { totalCost: number; originalCost: number; savedCost: number } | null => {
+    if (!modelId) return null;
+    const midLower = modelId.toLowerCase();
+    const entry =
+      deepseekPrices[modelId] ??
+      deepseekPrices[midLower] ??
+      Object.entries(deepseekPrices).find(([k]) => midLower.startsWith(k.toLowerCase()))?.[1];
+
+    if (!entry || !entry.effective) return null;
+
+    const { input, output, cacheHit } = entry.effective;
+    const promptTokens = usage.promptTokens ?? 0;
+    const completionTokens = usage.completionTokens ?? 0;
+    const hitTokens = usage.cacheHitTokens ?? 0;
+    const missTokens = Math.max(0, promptTokens - hitTokens);
+
+    // 原价 = 全部输入按正常价 + 全部输出按正常价
+    const originalCost = (promptTokens * input + completionTokens * output) / 1_000_000;
+    // 实际消费 = (未命中输入 * 输入价 + 命中输入 * 命中价 + 输出 * 输出价) / 1,000,000
+    const totalCost = (missTokens * input + hitTokens * cacheHit + completionTokens * output) / 1_000_000;
+    const savedCost = Math.max(0, originalCost - totalCost);
+    
+    return { totalCost, originalCost, savedCost };
+  };
+
+  const costInfo = getCostInfo();
+
   return (
     <div style={{ width: 220, fontSize: 12 }}>
-      <div style={{ fontWeight: 700, marginBottom: 8, color: "#e6edf3" }}>
-        ⚡ {title}{" "}
-        {durationMs != null && (
-          <span style={{ fontSize: 11, color: "#3fb950", marginLeft: 8 }}>
-            {(durationMs / 1000).toFixed(1)}s
-          </span>
-        )}
+      <div style={{ fontWeight: 700, marginBottom: 8, color: "#e6edf3", display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span>⚡ {title}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {costInfo && (
+            <span style={{ fontSize: 11, color: "#e6edf3", opacity: 0.9 }}>
+              ¥{costInfo.totalCost.toFixed(4)}
+            </span>
+          )}
+          {durationMs != null && (
+            <span style={{ fontSize: 11, color: "#3fb950" }}>
+              {(durationMs / 1000).toFixed(1)}s
+            </span>
+          )}
+        </div>
       </div>
       {modelId && (
         <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 8, wordBreak: 'break-all', opacity: 0.8 }}>
@@ -671,7 +705,7 @@ function TokenDetailsContent({
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, marginBottom: 2 }}>
               <span style={{ color: "#8b949e", display: "flex", alignItems: "center", gap: 4 }}>
                 <span style={{ width: 6, height: 6, borderRadius: 1, background: "#10b981" }} />
-                命中缓存
+                缓存复用 (省钱内容)
               </span>
               <span style={{ color: "#10b981" }}>{fmtToken(usage.cacheHitTokens)}</span>
             </div>
@@ -680,7 +714,7 @@ function TokenDetailsContent({
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, marginBottom: 2 }}>
               <span style={{ color: "#8b949e", display: "flex", alignItems: "center", gap: 4 }}>
                 <span style={{ width: 6, height: 6, borderRadius: 1, background: "#f59e0b" }} />
-                未命中
+                新增输入 (全额计费)
               </span>
               <span style={{ color: "#8b949e" }}>{fmtToken(usage.cacheMissTokens)}</span>
             </div>
@@ -750,6 +784,35 @@ function TokenDetailsContent({
       >
         <span style={{ color: "#8b949e" }}>总计</span>
         <span style={{ color: "#3fb950" }}>{fmtToken(usage.totalTokens)}</span>
+      </div>
+
+      {/* Summary Footer */}
+      <div style={{ 
+        marginTop: 10, 
+        paddingTop: 8, 
+        borderTop: '1px solid #30363d',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4
+      }}>
+        {costInfo && (
+          <>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+              <span style={{ color: '#8b949e' }}>本条消息原价</span>
+              <span style={{ color: '#8b949e', textDecoration: 'line-through' }}>¥{costInfo.originalCost.toFixed(5)}</span>
+            </div>
+            {costInfo.savedCost > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+                <span style={{ color: '#8b949e' }}>缓存技术为您省下</span>
+                <span style={{ color: '#3fb950', fontWeight: 500 }}>-¥{costInfo.savedCost.toFixed(5)}</span>
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginTop: 2 }}>
+              <span style={{ color: '#e6edf3', fontWeight: 600 }}>实际支出 (折后)</span>
+              <span style={{ color: '#3fb950', fontWeight: 700, fontSize: 13 }}>¥{costInfo.totalCost.toFixed(5)}</span>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

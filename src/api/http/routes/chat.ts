@@ -512,10 +512,10 @@ export async function chatRoutes(fastify: FastifyInstance) {
         'DeepSeek 模型检测到，自动切换到 DeepSeek 专有通道（启用 KV Cache / 思考模式 / 流式 usage 等）',
       )
     }
-    // DeepSeek reasoner / R1 / V3-thinking / V4-Pro 自动启用思考模式
+    // DeepSeek reasoner / R1 / V3-thinking / V4-Pro / V4-Flash 自动启用思考模式
     const isDeepSeekReasoner =
       isDeepSeekModel &&
-      (/reasoner|r1|v4-pro/i.test(currentModelName) || /v3.*think/i.test(currentModelName))
+      (/reasoner|r1|v4-pro|v4-flash/i.test(currentModelName) || /v3.*think/i.test(currentModelName))
 
     if (thinkingMode) {
       if (isQwenModel) {
