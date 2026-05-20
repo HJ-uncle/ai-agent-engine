@@ -10,10 +10,10 @@ type SuperpowerMode = 'off' | 'balanced' | 'methodology' | 'max'
 const MODES: SuperpowerMode[] = ['off', 'balanced', 'methodology', 'max']
 
 const MODE_LABELS: Record<SuperpowerMode, string> = {
-  off: 'Off',
-  balanced: 'Balanced',
-  methodology: 'Methodology',
-  max: 'Max',
+  off: '低耗',
+  balanced: '均衡',
+  methodology: '专家',
+  max: '极限',
 }
 
 const MODE_TOOLTIPS: Record<SuperpowerMode, string> = {
@@ -49,13 +49,13 @@ export default function GeneralSettings() {
     // 进入 max 强制弹确认；其它模式直接切换
     if (next === 'max') {
       modal.confirm({
-        title: '确认切换到 Max 模式？',
+        title: '确认切换到 极限 模式？',
         icon: <ExclamationCircleOutlined style={{ color: '#faad14' }} />,
         width: 560,
         content: (
           <div style={{ lineHeight: 1.8 }}>
             <p style={{ marginBottom: 12 }}>
-              Max 模式是最重量级设定，适合长自治任务，非日常默认。启用后：
+              极限模式是最重量级设定，适合长自治任务，非日常默认。启用后：
             </p>
             <ul style={{ paddingLeft: 20, marginBottom: 12 }}>
               <li>Token 预算 × 5、迭代次数 × 4、工具输出上限 × 4、历史窗口 × 4</li>
@@ -67,11 +67,11 @@ export default function GeneralSettings() {
             </ul>
             <p style={{ color: '#d46b08', marginBottom: 0 }}>
               建议仅在受信任工作区 + 并发可控的环境启用。
-              如只要方法论但不想 ×5，选 <b>Methodology</b> 即可。
+              如只要方法论但不想 ×5，选 <b>专家 (Methodology)</b> 即可。
             </p>
           </div>
         ),
-        okText: '确认切换到 Max',
+        okText: '确认切换到 极限',
         cancelText: '取消',
         okButtonProps: { danger: true },
         onOk: () => persistMode('max'),
@@ -106,8 +106,7 @@ export default function GeneralSettings() {
               <div className={styles.itemTitle}>当前模式</div>
               <div className={styles.itemDescription}>
                 选择本节点的默认能力档位。悬停每档查看含义；
-                <b>Max</b> 会弹出风险确认。旧配置 <code>SUPERPOWER_ENABLED</code> 仍生效
-                （true → Methodology，false → Off），将在下个 minor 版本移除。
+                <b>极限 (Max)</b> 会弹出风险确认。
               </div>
             </div>
             <div className={styles.itemControls}>

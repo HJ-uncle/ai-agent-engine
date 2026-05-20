@@ -8,7 +8,7 @@ import React, {
   memo,
 } from "react";
 import { TodoPanel } from './TodoPanel';
-import { Button, Tooltip, Popconfirm, Input, Select, Switch, message, Modal, Image, Dropdown, Menu } from "antd";
+import { Button, Tooltip, Popconfirm, Input, Select, Switch, message, Modal, Image, Dropdown, Menu, App } from "antd";
 import {
   SendOutlined,
   ReloadOutlined,
@@ -1652,35 +1652,53 @@ export default function ChatArea() {
     setChatInputValue,
   } = useSessionStore();
 
+  const { modal, message: messageApi } = App.useApp();
+
   const handleSuperpowerChange = async (mode: any) => {
     if (mode === superpowerMode) return;
+
+    const MODE_CN: Record<string, string> = {
+      off: '低耗',
+      balanced: '均衡',
+      methodology: '专家',
+      max: '极限'
+    };
 
     const performUpdate = async () => {
       try {
         setSuperpowerMode(mode);
         await settingsApi.update({ SUPERPOWER_MODE: mode });
-        message.success(`已切换到 ${mode.charAt(0).toUpperCase() + mode.slice(1)} 模式`);
+        messageApi.success(`已切换到 ${MODE_CN[mode]} 模式`);
       } catch (err) {
-        message.error("保存失败，请重试");
+        messageApi.error("保存失败，请重试");
       }
     };
 
     if (mode === "max") {
-      Modal.confirm({
-        title: "确认切换到 Max 模式？",
+      modal.confirm({
+        title: "确认切换到 极限 模式？",
         icon: <ExclamationCircleOutlined style={{ color: "#faad14" }} />,
-        width: 500,
+        width: 560,
         content: (
-          <div style={{ lineHeight: 1.8, fontSize: 13 }}>
-            <p>Max 模式适合长自治任务，Token 预算和消耗将显著上升：</p>
-            <ul style={{ paddingLeft: 20 }}>
-              <li>Token 预算 × 5、迭代次数 × 4</li>
-              <li>全量高风险工具可用</li>
-              <li>自动注入方法论流程</li>
+          <div style={{ lineHeight: 1.8 }}>
+            <p style={{ marginBottom: 12 }}>
+              极限模式是最重量级设定，适合长自治任务，非日常默认。启用后：
+            </p>
+            <ul style={{ paddingLeft: 20, marginBottom: 12 }}>
+              <li>Token 预算 × 5、迭代次数 × 4、工具输出上限 × 4、历史窗口 × 4</li>
+              <li>全量工具可用（含 <code>run_command</code> / <code>delete_file</code> /
+                <code> web_fetch</code> / <code>http_request</code> / <code>install_package</code> /
+                <code> subagent</code> 等高风险工具）</li>
+              <li>压缩阈值放宽到 0.7，长会话 token 消耗显著上升</li>
+              <li>自动注入方法论 bootstrap，简单任务也会走 spec / plan / TDD 流程</li>
             </ul>
+            <p style={{ color: '#d46b08', marginBottom: 0 }}>
+              建议仅在受信任工作区 + 并发可控的环境启用。
+              如只要方法论但不想 ×5，选 <b>专家 (Methodology)</b> 即可。
+            </p>
           </div>
         ),
-        okText: "确认切换",
+        okText: "确认切换到 极限",
         cancelText: "取消",
         okButtonProps: { danger: true },
         onOk: performUpdate,
@@ -2771,10 +2789,10 @@ export default function ChatArea() {
                 trigger={['click']}
                 menu={{
                   items: [
-                    { key: 'off', label: 'Off - 核心工具，保守消耗' },
-                    { key: 'balanced', label: 'Balanced - 全量工具，日常工程' },
-                    { key: 'methodology', label: 'Methodology - 全量 + 方法论注入' },
-                    { key: 'max', label: 'Max - 极限性能，长自治任务' },
+                    { key: 'off', label: '低耗 - 核心工具，保守消耗' },
+                    { key: 'balanced', label: '均衡 - 全量工具，日常工程' },
+                    { key: 'methodology', label: '专家 - 全量工具 + 方法论注入' },
+                    { key: 'max', label: '极限 - 性能爆发，长自治任务' },
                   ],
                   onClick: ({ key }) => handleSuperpowerChange(key),
                   selectedKeys: [superpowerMode],
@@ -2810,7 +2828,10 @@ export default function ChatArea() {
                       userSelect: "none",
                     }}
                   >
-                    {superpowerMode === 'off' ? '增强模式' : `增强: ${superpowerMode.charAt(0).toUpperCase() + superpowerMode.slice(1)}`}
+                    {superpowerMode === 'off' ? '增强模式' : `模式: ${
+                      superpowerMode === 'balanced' ? '均衡' : 
+                      superpowerMode === 'methodology' ? '专家' : '极限'
+                    }`}
                   </span>
                 </div>
               </Dropdown>
