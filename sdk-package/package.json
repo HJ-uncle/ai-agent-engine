@@ -1,6 +1,6 @@
 {
   "name": "@wuzu/agent-engine-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "agent-engine 双模式 SDK（内嵌启动 / 远端连接）",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -15,9 +15,9 @@
     "pack": "npm run build && npm pack",
     "pack:full": "npm run build:full && npm pack",
     "cdn:pack": "node scripts/create-cdn-package.js",
-    "cdn:pack:win": "node scripts/create-cdn-package.js 0.1.0 win32-x64",
-    "cdn:pack:mac": "node scripts/create-cdn-package.js 0.1.0 darwin-arm64",
-    "cdn:pack:linux": "node scripts/create-cdn-package.js 0.1.0 linux-x64",
+    "cdn:pack:win": "node scripts/create-cdn-package.js 0.1.1 win32-x64",
+    "cdn:pack:mac": "node scripts/create-cdn-package.js 0.1.1 darwin-arm64",
+    "cdn:pack:linux": "node scripts/create-cdn-package.js 0.1.1 linux-x64",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

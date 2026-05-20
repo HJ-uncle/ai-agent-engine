@@ -6,15 +6,17 @@ AI Agent Engine 是一个具备**感知、思考、行动**能力的全栈 AI �
 
 ## 🌟 核心特性
 
-- **🧠 强大的推理心脏**：内置 ReAct (Thought -> Action -> Observation) 循环，支持 DeepSeek R1、Claude 3.7、GPT-4o、Qwen 等主流模型及其”思考模式”。
+- **🧠 强大的推理心脏**：内置 ReAct (Thought -> Action -> Observation) 循环，支持 DeepSeek R1、Claude 3.7、GPT-4o、Qwen 等主流模型及其”思考模式”；未知 Provider 自动降级为 OpenAI-compatible 接口。
 - **🛠️ 丰富的工具系统**：
   - **内置工具**：文件管理、Shell 终端、网页抓取、图片解析 (`read_image`)。
   - **任务管理**：定时任务 (Cron) 及待办管理 (Todo)，支持 AI 自主排程。
   - **扩展能力**：支持 MCP (Model Context Protocol) 协议及自定义 TypeScript/Python Skills。
+- **🔐 可选鉴权**：`POST /auth/user` 接口支持外部平台用户同步（token + userId），携带凭据时自动验证并多租户隔离，不携带时降级为默认租户，零配置即可启动。
 - **📂 隔离的工作区**：每个会话拥有独立的物理工作目录，支持 VS Code 风格的文件树管理、实时编辑及大文件上传 (100MB)。
 - **🤝 多智能体协作**：支持 Parent-Child Agent 模型，自动拆解复杂任务并分发给专业子智能体。
 - **🔌 开放协议支持**：完美适配 MCP (Model Context Protocol) 协议，支持通过 TypeScript/Python 编写自定义 Skills。
 - **🛡️ 安全沙箱**：基于命令注入检测与 SSRF 防护的执行环境，配合审计日志确保操作安全。
+- **⚡ Superpower 模式**：四档能力档位（`off` / `balanced` / `methodology` / `max`），默认 `balanced`，一键控制工具集、Token 预算倍率和方法论 Prompt 注入。
 - **📈 可观测性**：详细的 Token 分类统计（系统提示词、RAG、工具结果等）及性能监控指标。
 
 ---
@@ -111,6 +113,7 @@ docker-compose up -d
 
 | 类别 | 核心端点 | 描述 |
 |------|----------|------|
+| **用户** | `POST /auth/user` | 外部平台用户同步/注册（白名单，无需鉴权） |
 | **对话** | `POST /api/v1/chat` | 核心 SSE 流式交互接口 |
 | **存储** | `/api/v1/memory` | 键值对形式的持久化记忆管理 |
 | **工作区** | `/api/v1/workspace` | 文件上传、下载及目录管理 |

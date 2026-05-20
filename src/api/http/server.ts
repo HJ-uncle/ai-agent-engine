@@ -23,6 +23,7 @@ import { securityRoutes } from './routes/security.js'
 import { lspRoutes } from './routes/lsp.js'
 import { performanceRoutes } from './routes/performance.js'
 import { deepseekRoutes } from './routes/deepseek.js'
+import { authRoutes } from './routes/auth.js'
 import { cronScheduler } from '../../scheduler/cron-scheduler.js'
 import { globalRequestMiddleware, WHITELIST_PATHS } from './middleware.js'
 import fastifyWebsocket from '@fastify/websocket'
@@ -112,6 +113,8 @@ export async function buildServer() {
   // Health and metrics at root level
   await fastify.register(metricsRoutes)
   await fastify.register(modelsRoutes)
+  // Auth routes at root level (no /api/v1 prefix, whitelisted)
+  await fastify.register(authRoutes)
 
   // 启动定时任务调度器
   cronScheduler.start()

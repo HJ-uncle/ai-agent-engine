@@ -14,6 +14,7 @@ import { up as up9 } from './migrations/009_add_sessions.js'
 import { up as up10 } from './migrations/010_add_system_config.js'
 import { up as up11 } from './migrations/011_add_security_and_perf.js'
 import { up as up12 } from './migrations/012_add_message_model_id.js'
+import { up as up13 } from './migrations/013_add_user_name.js'
 
 let client: Client | null = null
 let initialized = false
@@ -110,6 +111,7 @@ export async function initDb(): Promise<void> {
   await up10(db)
   await up11(db)
   await up12(db)
+  await up13(db)
   // 兼容旧数据库：补充新列
   await db.execute('ALTER TABLE conversations ADD COLUMN tool_call_name TEXT').catch(() => {})
   await db.execute('ALTER TABLE conversations ADD COLUMN conversation_id TEXT').catch(() => {})

@@ -1,6 +1,6 @@
 # Agent Engine 第三方 AI 工具集成指南
 
-> **版本**：v1.0 | **最后更新**：2026-05-09  
+> **版本**：v1.1 | **最后更新**：2026-05-20  
 > 本文档面向第三方 AI 工具（如 wuzu-client、桌面客户端等），介绍如何通过标准 HTTP + SSE 协议调用 Agent Engine 的完整能力。
 
 ---
@@ -103,15 +103,78 @@ X-Request-ID: <uuid>          # 请求唯一追踪标识，建议 UUID v4
 X-Client-Version: <semver>    # 客户端版本号，如 "1.0.0"
 ```
 
-### 白名单接口（无需以上头）
+### 白名单接口（无需以上头、无需鉴权）
 
 - `GET /health`
 - `GET /openapi.json`
 - `GET /metrics`
+- `POST /auth/user`  ← 用户同步/注册接口
+
+### Token 鉴权（可选）
+
+引擎采用**可选鉴权**模式：
+
+- 请求携带凭据 → 验证，失败则 `400`
+- 请求不携带凭据 → 降级为默认租户 `"default"`，不报错
+
+**支持两种凭据格式：**
+
+```
+X-API-Key: <token>                  # 外部平台 token（推荐，对应 /auth/user 注册的 token）
+Authorization: Bearer <jwt>          # 内部 JWT（需配置 JWT_SECRET 环境变量）
+```
+
+### `POST /auth/user` — 用户同步/注册
+
+外部平台登录后，将用户信息同步到 Agent Engine。Token 以哈希方式存储，后续所有请求携带 `X-API-Key: <token>` 即可完成多租户隔离。
+
+```
+POST /auth/user
+Content-Type: application/json
+```
+
+**请求体：**
+
+```json
+{
+  "token":  "eyJhbGc...",    // 外部平台颁发的 token（必填）
+  "userId": "user_123",      // 外部平台的用户 ID（必填，作为 tenantId）
+  "name":   "张三",           // 显示名称（可选）
+  "email":  "user@example.com" // 邮箱（可选）
+}
+```
+
+**响应：**
+
+```json
+{
+  "code": 0,
+  "msg": "操作成功",
+  "data": {
+    "id":         "uuid-...",
+    "tenantId":   "user_123",
+    "name":       "张三",
+    "email":      "user@example.com",
+    "externalId": "user_123",
+    "createdAt":  1716192000
+  }
+}
+```
+
+> 幂等接口：同一 `userId` 多次调用会 UPDATE（刷新 token、name、email），不会重复创建。
+
+**完整鉴权流程：**
+
+```
+1. 外部平台登录 → 获得 token + userId
+2. POST /auth/user  { token, userId, name?, email? }
+3. 后续所有请求携带：X-API-Key: <token>
+4. Agent Engine 自动识别用户，数据按 tenantId 隔离
+```
 
 ### 多租户
 
-引擎支持多租户隔离（可选）。若启用认证中间件，租户 ID 从认证上下文中自动提取；否则默认为 `"default"`。
+引擎支持多租户隔离。携带有效凭据时，`tenantId` 从认证上下文自动提取；不携带凭据时默认为 `"default"`。
 
 ---
 

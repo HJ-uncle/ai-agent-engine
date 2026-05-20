@@ -75,6 +75,7 @@ graph TD
 - **Skills**：用户可以用 TypeScript/Python 编写自定义脚本，直接扩展 Agent 的能力。
 
 ### 5. 隔离与安全：多租户与工作区
+- **可选鉴权**：请求携带 `X-API-Key` 或 `Authorization: Bearer <jwt>` 时自动验证；不携带则降级为默认租户 `"default"`，零配置即可启动。外部平台通过 `POST /auth/user` 同步用户 token，后续请求自动隔离。
 - **多租户隔离**：每个用户（租户）的数据在数据库中逻辑隔离，在磁盘上通过独立的 **Workspace** 目录物理隔离。
 - **安全沙箱**：所有的 Shell 命令和网络请求都经过**安全策略引擎**的正则过滤和 SSRF 防护。
 
