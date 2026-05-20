@@ -11,7 +11,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - WORKSPACE_ROOT=/app/workspace
-      - DB_PATH=/app/data/agent.db
+      - DATA_DIR=/app/data/agent.db
       - AUTH_ENABLED=${AUTH_ENABLED:-false}
       - JWT_SECRET=${JWT_SECRET:-change-me}
       - PORT=12323

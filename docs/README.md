@@ -214,7 +214,7 @@ curl http://localhost:12323/metrics
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL |
 | `ANTHROPIC_API_KEY` | _(required for Anthropic)_ | Anthropic API key |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama base URL |
-| `DB_PATH` | `./agent.db` | SQLite database file path |
+| `DATA_DIR` | `./agent.db` | SQLite database file path |
 | `WORKSPACE_ROOT` | `./workspace` | Root directory for per-tenant workspaces |
 | `AUTH_ENABLED` | `true` | Enable JWT/API-key authentication (`false` for dev) |
 | `JWT_SECRET` | `dev-secret-change-in-production` | JWT signing secret (向后兼容，启用 OIDC 时不需要) |

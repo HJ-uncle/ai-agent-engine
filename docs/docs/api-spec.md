@@ -273,7 +273,7 @@
 
 ### 11. 系统设置 Settings (`/api/v1/settings`)
 
-> **存储机制变更**：`PUT /api/v1/settings` 不再写入 `.env` 文件，所有运行时配置均存储在 SQLite `system_config` 表（key-value UPSERT）。敏感字段（`OPENAI_API_KEY`、`ANTHROPIC_API_KEY`）使用 AES-256-GCM 加密存储。服务启动时会自动将数据库配置同步到 `process.env`，所有模块无需感知变化。`.env` 文件仅保留启动前必须确定的引导参数（`PORT`、`HOST`、`DB_PATH`、`ENCRYPTION_KEY`、`AUTH_ENABLED`、`LOG_LEVEL`）。
+> **存储机制变更**：`PUT /api/v1/settings` 不再写入 `.env` 文件，所有运行时配置均存储在 SQLite `system_config` 表（key-value UPSERT）。敏感字段（`OPENAI_API_KEY`、`ANTHROPIC_API_KEY`）使用 AES-256-GCM 加密存储。服务启动时会自动将数据库配置同步到 `process.env`，所有模块无需感知变化。`.env` 文件仅保留启动前必须确定的引导参数（`PORT`、`HOST`、`DATA_DIR`、`ENCRYPTION_KEY`、`AUTH_ENABLED`、`LOG_LEVEL`）。
 
 - `GET /api/v1/settings`: 获取当前系统运行时配置（从数据库读取，fallback 到 `process.env`，含 `webFetch` 安全配置）
 

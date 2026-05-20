@@ -2,7 +2,7 @@
 
 - [x] 1.1 初始化 Node.js + TypeScript 项目（package.json、tsconfig.json、eslint、prettier）
 - [x] 1.2 安装核心依赖（fastify、better-sqlite3、openai、@anthropic-ai/sdk、pino、jose、zod）
-- [x] 1.3 配置 .env 模板（LLM_PROVIDER、OPENAI_API_KEY、ANTHROPIC_API_KEY、WORKSPACE_ROOT、DB_PATH）
+- [x] 1.3 配置 .env 模板（LLM_PROVIDER、OPENAI_API_KEY、ANTHROPIC_API_KEY、WORKSPACE_ROOT、DATA_DIR）
 - [x] 1.4 创建 src/ 目录结构（core/、tools/、storage/、workspace/、security/、api/、skills/、observability/）
 - [x] 1.5 配置 vitest 单元测试框架，添加测试脚本
 - [x] 1.6 创建 Dockerfile 与 .dockerignore（开发用）

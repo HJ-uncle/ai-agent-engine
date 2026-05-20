@@ -171,7 +171,7 @@ export default function SystemSettings() {
         <div className={styles.card}>
           {[
             { label: 'PORT', value: '服务监听端口' },
-            { label: 'DB_PATH', value: '数据库文件路径' },
+            { label: 'DATA_DIR', value: '数据库文件路径' },
             { label: 'ENCRYPTION_KEY', value: '数据加密密钥（32 字节 hex）' },
             { label: 'JWT_SECRET', value: 'JWT 鉴权密钥' },
             { label: 'AUTH_ENABLED', value: '是否启用鉴权' },

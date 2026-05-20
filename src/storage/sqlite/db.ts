@@ -51,7 +51,7 @@ async function applyPerformancePragmas(db: Client): Promise<void> {
 export function getDb(): Client {
   if (client) return client
 
-  const dbPath = process.env.DB_PATH ?? './data/agent.db'
+  const dbPath = process.env.DATA_DIR ?? './data/agent.db'
   const dbDir = path.dirname(path.resolve(dbPath))
 
   if (!fs.existsSync(dbDir)) {
