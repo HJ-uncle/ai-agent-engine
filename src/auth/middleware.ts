@@ -11,28 +11,21 @@ export class DefaultAuthMiddleware implements AuthMiddleware {
   }
 
   async authenticate(request: { headers: Record<string, string | string[] | undefined> }): Promise<AuthContext> {
-    // 临时关闭 token 验证
-    // const authEnabled = process.env.AUTH_ENABLED !== 'false'
-    const authEnabled = false
-    
-    if (!authEnabled) {
-      return { tenantId: 'default', method: 'none' }
-    }
-
-    // Try API Key first
+    // Try API Key first — 有就验证，验证失败抛错
     const apiKey = request.headers['x-api-key']
     if (apiKey && typeof apiKey === 'string') {
       return this.authenticateApiKey(apiKey)
     }
 
-    // Try JWT Bearer token
+    // Try JWT Bearer token — 有就验证，验证失败抛错
     const authorization = request.headers['authorization']
     if (authorization && typeof authorization === 'string' && authorization.startsWith('Bearer ')) {
       const token = authorization.slice(7)
       return this.authenticateJWT(token)
     }
 
-    throw new Error('Authentication required: provide X-API-Key or Bearer token')
+    // 未传任何凭据 → 降级为默认租户，不报错
+    return { tenantId: 'default', method: 'none' }
   }
 
   private async authenticateApiKey(apiKey: string): Promise<AuthContext> {
