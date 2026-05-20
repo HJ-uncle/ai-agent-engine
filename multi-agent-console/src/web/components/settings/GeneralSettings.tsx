@@ -3,6 +3,7 @@ import { Input, Segmented, Tag, Tooltip, App } from 'antd'
 import { ThunderboltOutlined, ExclamationCircleOutlined, CheckCircleTwoTone } from '@ant-design/icons'
 import { useSettings } from './useSettings'
 import { settingsApi } from '@core/api'
+import { useSessionStore } from '@core/store/session'
 import styles from './SettingsLayout.module.css'
 
 type SuperpowerMode = 'off' | 'balanced' | 'methodology' | 'max'
@@ -22,37 +23,23 @@ const MODE_TOOLTIPS: Record<SuperpowerMode, string> = {
   max: '全量工具 + 数值 ×5/×4 + 方法论 bootstrap + 压缩阈值 0.7；长自治任务用；消耗高。',
 }
 
-/**
- * 把后端任意字段形态归一化为 SuperpowerMode。
- * 兼容两种来源：
- *   1. 新字段 SUPERPOWER_MODE：直接用
- *   2. 旧字段 SUPERPOWER_ENABLED：true→methodology，false/缺失→off
- * TODO(remove-in-next-minor): 下个 minor 移除 legacy 兼容。
- */
-function normalizeMode(settings: any): SuperpowerMode {
-  const raw = settings?.SUPERPOWER_MODE
-  if (raw && MODES.includes(raw as SuperpowerMode)) return raw as SuperpowerMode
-  const legacy = settings?.SUPERPOWER_ENABLED
-  if (legacy === true || legacy === 'true') return 'methodology'
-  return 'off'
-}
-
 export default function GeneralSettings() {
   const { settings, handleChange } = useSettings()
+  const { superpowerMode, setSuperpowerMode } = useSessionStore()
   const { message, modal } = App.useApp()
 
-  const currentMode: SuperpowerMode = normalizeMode(settings)
+  const currentMode = superpowerMode
   const methodologyActive = currentMode === 'methodology' || currentMode === 'max'
 
   const persistMode = async (mode: SuperpowerMode) => {
     const prev = currentMode
-    handleChange('SUPERPOWER_MODE', mode)
+    setSuperpowerMode(mode)
     try {
       await settingsApi.update({ SUPERPOWER_MODE: mode })
       message.success(`已切换到 ${MODE_LABELS[mode]} 模式`)
     } catch {
       message.error('保存失败，请重试')
-      handleChange('SUPERPOWER_MODE', prev)
+      setSuperpowerMode(prev)
     }
   }
 

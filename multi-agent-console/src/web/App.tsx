@@ -8,7 +8,7 @@ import zhCN from 'antd/locale/zh_CN'
 import ChatArea from './components/ChatArea'
 import SettingsModal from './components/SettingsModal'
 import { useSessionStore } from '@core/store/session'
-import { conversationApi, deepseekApi } from '@core/api'
+import { conversationApi, deepseekApi, settingsApi } from '@core/api'
 import styles from './App.module.css'
 import 'highlight.js/styles/vs2015.css'
 import EditorArea from './components/EditorArea'
@@ -306,6 +306,23 @@ export default function App() {
           useSessionStore.getState().setDeepSeekPrices(priceMap)
         }
       } catch { /* DeepSeek 未配置，忽略 */ }
+    })()
+  }, [])
+
+  // ── 启动时拉取增强模式设置 ──────────────────────────────────────────
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const settings = await settingsApi.get()
+        if (settings) {
+          let mode = settings.SUPERPOWER_MODE
+          if (!mode) {
+            const legacy = settings.SUPERPOWER_ENABLED
+            mode = (legacy === true || legacy === 'true') ? 'methodology' : 'off'
+          }
+          useSessionStore.getState().setSuperpowerMode(mode)
+        }
+      } catch { /* 忽略错误 */ }
     })()
   }, [])
 

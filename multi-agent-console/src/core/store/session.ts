@@ -32,11 +32,13 @@ interface SessionState {
   settingsTab: string
   maxAskUserCount: number
   thinkingMode: boolean
+  superpowerMode: 'off' | 'balanced' | 'methodology' | 'max'
   chatInputValues: Record<string, string> // New: map of sessionId to its chat input value
 
   // Actions
   setMaxAskUserCount: (max: number) => void
   setThinkingMode: (enabled: boolean) => void
+  setSuperpowerMode: (mode: 'off' | 'balanced' | 'methodology' | 'max') => void
   setChatInputValue: (sessionId: string, value: string) => void
   addSession: (agentId?: string) => string
   switchSession: (id: string) => void
@@ -118,9 +120,11 @@ export const useSessionStore = create<SessionState>()(
       settingsTab: 'general',
       maxAskUserCount: 5,
       thinkingMode: false,
+      superpowerMode: 'off',
 
       setMaxAskUserCount: (max) => set({ maxAskUserCount: max }),
       setThinkingMode: (enabled) => set({ thinkingMode: enabled }),
+      setSuperpowerMode: (mode) => set({ superpowerMode: mode }),
       setChatInputValue: (sessionId, value) => set((state) => ({
         chatInputValues: { ...(state.chatInputValues || {}), [sessionId]: value }
       })),
@@ -342,6 +346,7 @@ export const useSessionStore = create<SessionState>()(
         usageMap: state.usageMap,
         maxAskUserCount: state.maxAskUserCount,
         thinkingMode: state.thinkingMode,
+        superpowerMode: state.superpowerMode,
         // 注意：runningSessions 不持久化（页面刷新后所有运行视为终止）
       }),
     },

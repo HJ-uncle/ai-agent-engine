@@ -19,6 +19,17 @@ const JavaScriptObfuscator = require('javascript-obfuscator')
 // ==================== 混淆配置 ====================
 
 /**
+ * 排除混淆的目录名或文件名
+ */
+const SKIP_NAMES = new Set([
+  'public',           // 前端静态资源（通常已压缩，且包含浏览器端代码）
+  'node_modules',     // 第三方库
+  '__tests__',        // 测试代码
+  'test',
+  'tests',
+])
+
+/**
  * 混淆选项说明：
  *
  * - compact: true              — 压缩为单行（等效 minify）
@@ -90,6 +101,11 @@ function obfuscateDir(dir) {
 
   const entries = fs.readdirSync(dir)
   for (const entry of entries) {
+    if (SKIP_NAMES.has(entry)) {
+      console.log(`  - 跳过目录/文件: ${entry}`)
+      continue
+    }
+
     const fullPath = path.join(dir, entry)
     const stat = fs.statSync(fullPath)
 

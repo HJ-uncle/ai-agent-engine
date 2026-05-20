@@ -275,7 +275,7 @@ export default function SettingsModal() {
               activeKey={settingsTab || 'general'}
               onChange={(k) => openSettings(k)}
               items={items}
-              tabPosition="left"
+              tabPlacement="start"
               className={`${styles.settingsTabs} settings-modal-tabs`}
               style={{ height: '100%' }}
             />

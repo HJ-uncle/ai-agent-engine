@@ -751,7 +751,7 @@
   box-shadow: none !important;
   font-size: 13px;
   color: var(--vscode-input-foreground, #cccccc) !important;
-  resize: none;
+  resize: none !important;
   font-family: var(--vscode-font-family,
       -apple-system,
       BlinkMacSystemFont,
@@ -861,17 +861,17 @@
 /* ── Resize handle ────────────────────────────────────────────────────── */
 .resizeHandle {
   position: absolute;
-  top: -3px;
+  top: -4px;
   left: 50%;
   transform: translateX(-50%);
-  width: 40px;
-  height: 5px;
+  width: 50px;
+  height: 8px;
   cursor: ns-resize;
-  border-radius: 2px;
+  border-radius: 4px;
   opacity: 0;
-  transition: opacity 0.2s;
+  transition: all 0.2s;
   background: var(--vscode-focusBorder, #007fd4);
-  z-index: 10;
+  z-index: 20;
 }
 
 .inputWrapper:hover .resizeHandle,

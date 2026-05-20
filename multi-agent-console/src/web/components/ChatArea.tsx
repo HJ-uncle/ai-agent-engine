@@ -8,7 +8,7 @@ import React, {
   memo,
 } from "react";
 import { TodoPanel } from './TodoPanel';
-import { Button, Tooltip, Popconfirm, Input, Select, Switch, message, Modal, Image } from "antd";
+import { Button, Tooltip, Popconfirm, Input, Select, Switch, message, Modal, Image, Dropdown, Menu } from "antd";
 import {
   SendOutlined,
   ReloadOutlined,
@@ -37,6 +37,7 @@ import {
   DownloadOutlined,
   SettingOutlined,
   LinkOutlined,
+  ExclamationCircleOutlined,
 } from "@ant-design/icons";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -1644,10 +1645,50 @@ export default function ChatArea() {
     updateSession,
     thinkingMode,
     setThinkingMode,
+    superpowerMode,
+    setSuperpowerMode,
     triggerFilesRefresh,
     chatInputValues,
     setChatInputValue,
   } = useSessionStore();
+
+  const handleSuperpowerChange = async (mode: any) => {
+    if (mode === superpowerMode) return;
+
+    const performUpdate = async () => {
+      try {
+        setSuperpowerMode(mode);
+        await settingsApi.update({ SUPERPOWER_MODE: mode });
+        message.success(`已切换到 ${mode.charAt(0).toUpperCase() + mode.slice(1)} 模式`);
+      } catch (err) {
+        message.error("保存失败，请重试");
+      }
+    };
+
+    if (mode === "max") {
+      Modal.confirm({
+        title: "确认切换到 Max 模式？",
+        icon: <ExclamationCircleOutlined style={{ color: "#faad14" }} />,
+        width: 500,
+        content: (
+          <div style={{ lineHeight: 1.8, fontSize: 13 }}>
+            <p>Max 模式适合长自治任务，Token 预算和消耗将显著上升：</p>
+            <ul style={{ paddingLeft: 20 }}>
+              <li>Token 预算 × 5、迭代次数 × 4</li>
+              <li>全量高风险工具可用</li>
+              <li>自动注入方法论流程</li>
+            </ul>
+          </div>
+        ),
+        okText: "确认切换",
+        cancelText: "取消",
+        okButtonProps: { danger: true },
+        onOk: performUpdate,
+      });
+    } else {
+      performUpdate();
+    }
+  };
   const { agents } = useAgentStore();
   const {
     send,
@@ -1695,6 +1736,34 @@ export default function ChatArea() {
   const [attachments, setAttachments] = useState<File[]>([]);
   const [attachmentUrls, setAttachmentUrls] = useState<Map<number, string>>(new Map());
   const [showTodoPanel, setShowTodoPanel] = useState(false);
+  const [inputHeight, setInputHeight] = useState<number | undefined>(undefined);
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeStartYRef = useRef(0);
+  const resizeStartHeightRef = useRef(0);
+  const inputWrapperRef = useRef<HTMLDivElement>(null);
+
+  const handleInputResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+    resizeStartYRef.current = e.clientY;
+    resizeStartHeightRef.current = inputWrapperRef.current?.clientHeight || 0;
+
+    const onMouseMove = (ev: MouseEvent) => {
+      const deltaY = resizeStartYRef.current - ev.clientY;
+      const newHeight = Math.max(80, Math.min(600, resizeStartHeightRef.current + deltaY));
+      setInputHeight(newHeight);
+    };
+
+    const onMouseUp = () => {
+      setIsResizing(false);
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  }, []);
+
   // ── isStreaming 改为派生自全局 runningSessions ─────────────────────────────
   // 之前是局部 state，会话切换后状态错乱（A 流式中切到 B，B 显示 streaming）。
   // 现在以 store 中的 runningSessions[activeSessionId] 为准，跨会话切换始终准确。
@@ -2541,10 +2610,21 @@ export default function ChatArea() {
       {/* Input area */}
       <div className={styles.inputArea} onDrop={handleDrop} onDragOver={(e) => e.preventDefault()} style={{ position: "relative" }}>
         <div
+          ref={inputWrapperRef}
           className={styles.inputWrapper}
-          style={{ flexDirection: "column", alignItems: "stretch", position: "relative" }}
+          style={{ 
+            flexDirection: "column", 
+            alignItems: "stretch", 
+            position: "relative",
+            height: inputHeight ? `${inputHeight}px` : "auto",
+            minHeight: "100px",
+          }}
         >
-          <div className={styles.resizeHandle} />
+          <div 
+            className={styles.resizeHandle} 
+            onMouseDown={handleInputResizeMouseDown} 
+            style={{ opacity: isResizing ? 1 : undefined }}
+          />
           {attachments.length > 0 && (
             <div className={styles.attachmentPreview}>
               {attachments.map((file, index) => {
@@ -2608,9 +2688,14 @@ export default function ChatArea() {
             onChange={(e) => setInputValue(e.target.value)}
             onPaste={handlePaste}
             placeholder={placeholder}
-            autoSize={{ minRows: 1, maxRows: 8 }}
+            autoSize={inputHeight ? false : { minRows: 1, maxRows: 8 }}
             disabled={isInputDisabled}
             className={styles.input}
+            style={{ 
+              flex: 1,
+              height: inputHeight ? '100%' : undefined,
+              overflowY: 'auto' 
+            }}
             onCompositionStart={() => setIsComposing(true)}
             onCompositionEnd={() => setIsComposing(false)}
             onKeyDown={(e) => {
@@ -2649,6 +2734,11 @@ export default function ChatArea() {
                       gap: 4,
                       cursor: isInputDisabled ? "not-allowed" : "pointer",
                       opacity: isInputDisabled ? 0.5 : 1,
+                      padding: '2px 8px',
+                      borderRadius: 16,
+                      background: thinkingMode ? 'rgba(168, 85, 247, 0.1)' : 'transparent',
+                      border: `1px solid ${thinkingMode ? '#a855f7' : 'transparent'}`,
+                      transition: 'all 0.2s',
                     }}
                     onClick={() =>
                       !isInputDisabled && setThinkingMode(!thinkingMode)
@@ -2672,19 +2762,60 @@ export default function ChatArea() {
                     >
                       深度思考
                     </span>
-                    <Switch
-                      size="small"
-                      checked={thinkingMode}
-                      disabled={isInputDisabled}
-                      style={{
-                        background: thinkingMode ? "#a855f7" : undefined,
-                      }}
-                    />
                   </div>
                 </Tooltip>
               )}
 
-              <Tooltip title="添加附件 (支持所有文件格式；可拖拽或粘贴)">
+              <Dropdown
+                disabled={isInputDisabled}
+                trigger={['click']}
+                menu={{
+                  items: [
+                    { key: 'off', label: 'Off - 核心工具，保守消耗' },
+                    { key: 'balanced', label: 'Balanced - 全量工具，日常工程' },
+                    { key: 'methodology', label: 'Methodology - 全量 + 方法论注入' },
+                    { key: 'max', label: 'Max - 极限性能，长自治任务' },
+                  ],
+                  onClick: ({ key }) => handleSuperpowerChange(key),
+                  selectedKeys: [superpowerMode],
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
+                    cursor: isInputDisabled ? "not-allowed" : "pointer",
+                    opacity: isInputDisabled ? 0.5 : 1,
+                    padding: '2px 8px',
+                    borderRadius: 16,
+                    background: superpowerMode !== 'off' ? 'rgba(240, 192, 64, 0.1)' : 'transparent',
+                    border: `1px solid ${superpowerMode !== 'off' ? '#f0c040' : 'transparent'}`,
+                    transition: 'all 0.2s',
+                  }}
+                >
+                  <ThunderboltOutlined
+                    style={{
+                      color: superpowerMode !== 'off'
+                        ? "#f0c040"
+                        : "var(--vscode-icon-foreground, #8b949e)",
+                    }}
+                  />
+                  <span
+                    style={{
+                      fontSize: 12,
+                      color: superpowerMode !== 'off'
+                        ? "#f0c040"
+                        : "var(--vscode-icon-foreground, #8b949e)",
+                      userSelect: "none",
+                    }}
+                  >
+                    {superpowerMode === 'off' ? '增强模式' : `增强: ${superpowerMode.charAt(0).toUpperCase() + superpowerMode.slice(1)}`}
+                  </span>
+                </div>
+              </Dropdown>
+
+              <Tooltip title="添加附件 (可拖拽或粘贴)">
                 <Button
                   type="text"
                   icon={<PaperClipOutlined />}
