@@ -25,7 +25,8 @@
     "test:knowledge": "tsx sdk/test-knowledge.ts",
     "build:sdk": "npm run build && cd sdk-package && npm run build:full",
     "build:sdk:release": "npm run build && cd sdk-package && npm run build:release",
-    "build:cdn": "npm run build:sdk:release && cd sdk-package && npm run cdn:pack"
+    "build:cdn": "npm run build:sdk && cd sdk-package && npm run cdn:pack",
+    "build:cdn:release": "npm run build:sdk:release && cd sdk-package && npm run cdn:pack"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.20",

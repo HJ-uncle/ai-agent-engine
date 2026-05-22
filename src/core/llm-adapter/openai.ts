@@ -247,8 +247,9 @@ function messagesToOpenAI(
     const role = m.role
     const content = m.content
     if (Array.isArray(content)) {
-      const types = content.map((p: any) => p.type).join('+')
-      const hasImage = content.some((p: any) => p.type === 'image_url')
+      // nullish guard：content 数组中可能含 undefined 元素（第三方 API 返回异常格式）
+      const types = content.map((p: any) => p?.type ?? 'unknown').join('+')
+      const hasImage = content.some((p: any) => p?.type === 'image_url')
       return `[${i}] ${role}: [${types}]${hasImage ? ' ← IMAGE ✅' : ''}`
     }
     const preview = typeof content === 'string' ? content.slice(0, 60).replace(/\n/g, '\\n') : String(content).slice(0, 60)
@@ -527,9 +528,18 @@ export class OpenAIAdapter implements LLMAdapter {
       temperature: options?.temperature,
     }
 
-    // 默认开启 stream_options.include_usage（DeepSeek/OpenAI 均支持，
-    // 否则流式调用拿不到 usage / cached_tokens / reasoning_tokens）
-    if (options?.includeStreamUsage !== false) {
+    // stream_options.include_usage：DeepSeek/OpenAI 官方端点支持，
+    // 部分第三方 GPT 兼容代理（非标准 /v1 实现）不支持此字段，传了反而返回 400/422。
+    // 检测逻辑：
+    //   1. 显式传 includeStreamUsage=false → 跳过
+    //   2. baseURL 特征命中已知不兼容的代理模式 → 跳过
+    //   3. 其余（官方 OpenAI / DeepSeek / SiliconFlow 等已验证）→ 开启
+    const resolvedBaseURL = (this.client as any).baseURL as string | undefined
+    const isKnownIncompatibleProxy = resolvedBaseURL
+      ? /openrouter\.ai|groq\.com|together\.ai|fireworks\.ai|perplexity\.ai|novita\.ai|moonshot\.cn|api\.lingyi\.ai|api\.302\.ai|api-gw\.|gateway\.|proxy\./i.test(resolvedBaseURL)
+      : false
+
+    if (options?.includeStreamUsage !== false && !isKnownIncompatibleProxy) {
       params.stream_options = { include_usage: true }
     }
 
@@ -544,6 +554,7 @@ export class OpenAIAdapter implements LLMAdapter {
 
     if (options?.tools && options.tools.length > 0) {
       params.tools = options.tools.map(toolToOpenAI)
+      params.tool_choice = 'auto'
     }
 
     // beta.chat.completions.stream provides the streaming helper with finalMessage()
@@ -579,10 +590,11 @@ export class OpenAIAdapter implements LLMAdapter {
           reasoningContent: rContent as string,
           toolCalls: delta.tool_calls?.map((tc: any) => ({
             id: tc.id,
+            // 某些第三方 GPT 兼容 API 返回不完整 chunk，tc.function 可能是 undefined
             name: tc.function?.name,
-            args: tc.function?.arguments, // 这里传的是 string delta
-            index: tc.index,
-          })),
+            args: tc.function?.arguments, // string delta（流式增量字符串）
+            index: tc.index ?? 0,
+          })).filter((tc: any) => tc.name !== undefined || tc.id !== undefined || tc.args !== undefined),
           done: false 
         }
       }
