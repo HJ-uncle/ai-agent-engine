@@ -20,7 +20,29 @@ function getToolOutputMaxChars(): number {
   return applySuperpowerMultiplier('toolOutputMaxChars', base)
 }
 
+
+/**
+ * Truncate tool output that is too long.
+ *
+ * Special case: if the output is a JSON object that contains a `dataUrl` field
+ * (smart_read / read_image image result), do NOT truncate at all.  Truncating
+ * JSON mid-string corrupts the structure, causing JSON.parse to fail in the
+ * LLM adapter — which then passes garbled base64 as plain text to the model,
+ * leading to hallucination.  The base64 data is necessary for the adapter to
+ * inject an image_url message part so the vision model can actually see the image.
+ */
 function truncateToolOutput(output: string, maxChars: number = getToolOutputMaxChars()): string {
+  // Never truncate image JSON results — the adapter needs the full dataUrl intact.
+  if (output.includes('"dataUrl"') || output.includes('"hasDataUrl"')) {
+    try {
+      const parsed = JSON.parse(output)
+      if (parsed && typeof parsed === 'object' && (parsed.dataUrl || parsed.hasDataUrl)) {
+        return output  // pass through unchanged
+      }
+    } catch {
+      // Could not parse — fall through to normal truncation
+    }
+  }
   if (output.length <= maxChars) return output
   const half = Math.floor(maxChars / 2)
   const head = output.slice(0, half)
@@ -28,6 +50,7 @@ function truncateToolOutput(output: string, maxChars: number = getToolOutputMaxC
   const truncatedChars = output.length - maxChars
   return `${head}\n\n... [truncated ${truncatedChars} chars] ...\n\n${tail}`
 }
+
 
 export interface TokenUsage {
   /** Tokens in the system prompt (excluding RAG context) */
@@ -576,7 +599,9 @@ export class ReActStrategy implements LoopStrategy {
           consecutiveFailures = 0
         }
 
-        // Add tool result to history (truncate oversized output to save tokens)
+        // Add tool result to history (truncate oversized output to save tokens).
+        // Image JSON results (containing dataUrl) are exempt from truncation — see
+        // truncateToolOutput for details.
         const truncatedOutput = truncateToolOutput(String(toolResult.output))
         const toolResultTokenCount = estimateTokens(truncatedOutput)
         cumulativeToolResultsTokens += toolResultTokenCount

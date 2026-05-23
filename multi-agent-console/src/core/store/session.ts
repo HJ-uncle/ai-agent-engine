@@ -273,9 +273,18 @@ export const useSessionStore = create<SessionState>()(
 
       editUserMessage: (sessionId, messageId, newContent) =>
         set((state) => {
-          const msgs = (state.messageMap[sessionId] ?? []).map((m) =>
-            m.id === messageId && m.role === 'user' ? { ...m, content: newContent } : m,
-          )
+          const msgs = (state.messageMap[sessionId] ?? []).map((m) => {
+            if (m.id !== messageId || m.role !== 'user') return m
+            // If content is a multimodal array, only update the text item(s) and
+            // preserve all other parts (image_url, file, workspace_image, etc.)
+            if (Array.isArray(m.content)) {
+              const updated = m.content.map((part: any) =>
+                part.type === 'text' ? { ...part, text: newContent } : part,
+              )
+              return { ...m, content: updated }
+            }
+            return { ...m, content: newContent }
+          })
           return { messageMap: { ...state.messageMap, [sessionId]: msgs } }
         }),
 

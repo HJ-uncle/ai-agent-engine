@@ -520,6 +520,9 @@ export const smartReadFileTool: Tool = {
       }
       
       const stat = fs.statSync(safePath)
+      if (stat.isDirectory()) {
+        return { success: false, output: `Path is a directory, not a file: ${args.path}` }
+      }
       if (stat.size > MAX_FILE_SIZE) {
         return { success: false, output: `File too large (${stat.size} bytes, max ${MAX_FILE_SIZE} bytes)` }
       }

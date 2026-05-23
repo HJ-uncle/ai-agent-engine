@@ -145,6 +145,7 @@ function messagesToOpenAI(
         const parsed = JSON.parse(rawToolContent)
         console.log(`[openai.ts] read_image tool result parse attempt:`, {
           hasDataUrl: !!parsed?.dataUrl,
+          dataUrlStripped: !!parsed?.dataUrlStripped,
           dataUrlPrefix: parsed?.dataUrl ? String(parsed.dataUrl).slice(0, 30) : null,
           filename: parsed?.filename,
           mimeType: parsed?.mimeType,
@@ -175,11 +176,40 @@ function messagesToOpenAI(
             console.log(`[openai.ts] ⚠️ Model does not support vision, skipping image_url injection`)
           }
           imageInjected = true
+        } else if (parsed?.dataUrlStripped) {
+          // dataUrl was stripped before saving to history (too large); just emit a summary
+          result.push({
+            role: 'tool',
+            tool_call_id: tcId,
+            content: `Image "${parsed.filename ?? 'image'}" (${parsed.mimeType ?? ''}, ${parsed.size ?? 0} bytes) was read. The image content was delivered to the model via the vision channel in the previous turn.`,
+          })
+          imageInjected = true
+          console.log(`[openai.ts] ℹ️ dataUrl stripped in history for "${parsed.filename}", emitting summary tool result`)
         } else {
           console.log(`[openai.ts] ⚠️ tool result is NOT a read_image dataUrl, treating as plain text. keys:`, Object.keys(parsed ?? {}))
         }
       } catch (e) {
-        console.log(`[openai.ts] ⚠️ tool result JSON parse failed:`, (e as Error).message, 'raw prefix:', rawToolContent.slice(0, 100))
+        // JSON parse failed — likely the raw output was truncated mid-string (legacy path before
+        // stripDataUrl was introduced).  Emit a neutral summary so the LLM doesn't hallucinate
+        // from garbled base64 text.
+        const filenameMatch = rawToolContent.match(/"filename"\s*:\s*"([^"]+)"/)
+        const sizeMatch    = rawToolContent.match(/"size"\s*:\s*(\d+)/)
+        const mimeMatch    = rawToolContent.match(/"mimeType"\s*:\s*"([^"]+)"/)
+        const looksLikeImage = rawToolContent.includes('"dataUrl"') || rawToolContent.includes('data:image/')
+        if (looksLikeImage) {
+          const filename = filenameMatch?.[1] ?? 'image'
+          const size     = sizeMatch?.[1] ?? '?'
+          const mime     = mimeMatch?.[1] ?? 'image/?'
+          result.push({
+            role: 'tool',
+            tool_call_id: tcId,
+            content: `Image "${filename}" (${mime}, ${size} bytes) was read successfully. (Note: raw base64 payload omitted from history to save tokens.)`,
+          })
+          imageInjected = true
+          console.log(`[openai.ts] ⚠️ JSON parse failed but detected image result — emitting summary for "${filename}"`)
+        } else {
+          console.log(`[openai.ts] ⚠️ tool result JSON parse failed:`, (e as Error).message, 'raw prefix:', rawToolContent.slice(0, 100))
+        }
       }
       if (!imageInjected) {
         result.push({

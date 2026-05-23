@@ -1985,14 +1985,24 @@ export default function ChatArea() {
   const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
 
   const addFiles = useCallback((files: File[]) => {
-    const validFiles = files.filter(file => {
-      if (file.size > MAX_FILE_SIZE) {
-        message.error(`文件 ${file.name} 超过 100MB 限制`);
-        return false;
-      }
-      return true;
-    });
-    setAttachments(prev => [...prev, ...validFiles]);
+    const ts = Date.now();
+    const renamedFiles = files
+      .filter(file => {
+        if (file.size > MAX_FILE_SIZE) {
+          message.error(`文件 ${file.name} 超过 100MB 限制`);
+          return false;
+        }
+        return true;
+      })
+      .map((file, idx) => {
+        // 加时间戳避免同名文件互相覆盖（如粘贴多张截图都叫 image.png）
+        const dot = file.name.lastIndexOf('.');
+        const base = dot >= 0 ? file.name.slice(0, dot) : file.name;
+        const ext  = dot >= 0 ? file.name.slice(dot)    : '';
+        const newName = `${base}_${ts + idx}${ext}`;
+        return new File([file], newName, { type: file.type, lastModified: file.lastModified });
+      });
+    setAttachments(prev => [...prev, ...renamedFiles]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -2691,6 +2701,56 @@ export default function ChatArea() {
 
       {/* Input area */}
       <div className={styles.inputArea} onDrop={handleDrop} onDragOver={(e) => e.preventDefault()} style={{ position: "relative" }}>
+        {/* Attachment bar — displayed above the input box when files are attached */}
+        {attachments.length > 0 && (
+          <div className={styles.attachmentBar}>
+            {attachments.map((file, index) => {
+              if (file.type.startsWith("image/")) {
+                const imageUrl = attachmentUrls.get(index) || URL.createObjectURL(file);
+                if (!attachmentUrls.has(index)) {
+                  setAttachmentUrls(prev => new Map(prev).set(index, imageUrl));
+                }
+                return (
+                  <div key={index} className={styles.attachmentBarItemImage}>
+                    <CloseOutlined
+                      onClick={(e) => { e.stopPropagation(); removeAttachment(index); }}
+                      className={styles.removeAttachmentImage}
+                    />
+                    <Image
+                      src={imageUrl}
+                      alt={file.name}
+                      width={48}
+                      height={48}
+                      className={styles.attachmentThumb}
+                      preview={{ src: imageUrl }}
+                    />
+                    <span className={styles.attachmentBarName}>{file.name}</span>
+                  </div>
+                );
+              } else {
+                const getFileIcon = () => {
+                  if (file.type.includes('pdf')) return <FileTextOutlined style={{ color: '#f85149' }} />;
+                  if (file.type.includes('video')) return <FileOutlined style={{ color: '#34d399' }} />;
+                  if (file.type.includes('audio')) return <FileOutlined style={{ color: '#60a5fa' }} />;
+                  if (file.type.includes('zip') || file.type.includes('rar')) return <FileOutlined style={{ color: '#fbbf24' }} />;
+                  if (file.type.includes('text')) return <FileTextOutlined style={{ color: '#34d399' }} />;
+                  if (file.type.includes('code') || file.type.includes('json') || file.type.includes('xml')) return <FileTextOutlined style={{ color: '#a78bfa' }} />;
+                  return <FileOutlined style={{ color: '#0e639c' }} />;
+                };
+                return (
+                  <div key={index} className={styles.attachmentBarItem}>
+                    {getFileIcon()}
+                    <span className={styles.attachmentBarName}>{file.name}</span>
+                    <CloseOutlined
+                      onClick={() => removeAttachment(index)}
+                      className={styles.removeAttachmentIcon}
+                    />
+                  </div>
+                );
+              }
+            })}
+          </div>
+        )}
         <div
           ref={inputWrapperRef}
           className={styles.inputWrapper}
@@ -2707,64 +2767,6 @@ export default function ChatArea() {
             onMouseDown={handleInputResizeMouseDown} 
             style={{ opacity: isResizing ? 1 : undefined }}
           />
-          {attachments.length > 0 && (
-            <div className={styles.attachmentPreview}>
-              {attachments.map((file, index) => {
-                // 生成带时间戳的文件名
-                const ext = file.name.split('.').pop();
-                const baseName = file.name.replace(/\.[^/.]+$/, '');
-                const timestamp = Date.now();
-                const newFileName = `${baseName}_${timestamp}.${ext}`;
-
-                if (file.type.startsWith("image/")) {
-                  const imageUrl = attachmentUrls.get(index) || URL.createObjectURL(file);
-                  if (!attachmentUrls.has(index)) {
-                    setAttachmentUrls(prev => new Map(prev).set(index, imageUrl));
-                  }
-                  return (
-                    <div key={index} className={styles.attachmentItemImage}>
-                      <CloseOutlined
-                        onClick={(e) => { e.stopPropagation(); removeAttachment(index); }}
-                        className={styles.removeAttachmentImage}
-                      />
-                      <Image
-                        src={imageUrl}
-                        alt={newFileName}
-                        width={24}
-                        height={24}
-                        className={styles.attachmentThumb}
-                        preview={{
-                          src: imageUrl,
-                        }}
-                      />
-                    </div>
-                  );
-                } else {
-                  // 根据文件类型显示不同图标
-                  const getFileIcon = () => {
-                    if (file.type.includes('pdf')) return <FileTextOutlined style={{ color: '#f85149' }} />;
-                    if (file.type.includes('video')) return <FileOutlined style={{ color: '#34d399' }} />;
-                    if (file.type.includes('audio')) return <FileOutlined style={{ color: '#60a5fa' }} />;
-                    if (file.type.includes('zip') || file.type.includes('rar')) return <FileOutlined style={{ color: '#fbbf24' }} />;
-                    if (file.type.includes('text')) return <FileTextOutlined style={{ color: '#34d399' }} />;
-                    if (file.type.includes('code') || file.type.includes('json') || file.type.includes('xml')) return <FileTextOutlined style={{ color: '#a78bfa' }} />;
-                    return <FileOutlined style={{ color: '#0e639c' }} />;
-                  };
-
-                  return (
-                    <div key={index} className={styles.attachmentItem}>
-                      {getFileIcon()}
-                      <span className={styles.attachmentName}>{file.name}</span>
-                      <CloseOutlined
-                        onClick={() => removeAttachment(index)}
-                        className={styles.removeAttachmentIcon}
-                      />
-                    </div>
-                  );
-                }
-              })}
-            </div>
-          )}
           <Input.TextArea
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}

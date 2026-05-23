@@ -148,7 +148,11 @@ export async function autoProcessAttachments(
   }
 
   if (imageParts.length > 0) {
-    const multimodal: any[] = [{ type: 'text', text: messageText || '' }, ...imageParts]
+    const inlineNote = `\n\n[系统提示：以上图片内容已通过视觉能力直接内嵌到本消息中，你已经可以看到图片内容。无需再调用 smart_read / read_image 工具重复读取。]`
+    const multimodal: any[] = [
+      { type: 'text', text: (messageText || '') + inlineNote },
+      ...imageParts,
+    ]
     if (textBlocks.length > 0) {
       multimodal.push({ type: 'text', text: textBlocks.join('') })
     }

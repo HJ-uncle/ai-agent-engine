@@ -590,7 +590,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
 4. When providing a downloadable file to the user, ALWAYS present it as an HTTP download link using this exact Markdown format:
    [文件名](/api/v1/workspace/file/download?sessionId=${sessionId}&path=文件名)
    Use only the filename (not the full path) in the \`path\` parameter. Never use file:// URLs.
-${workspaceInfo}
+${workspaceInfo}${attachments && attachments.length > 0 ? `\n\n## 本次消息已附带以下文件（已上传到工作区，可直接用 smart_read 读取，无需先 list_files）：\n${attachments.map(a => `- ${a.name}`).join('\n')}` : ''}
 `
 
     // ── Estimate token counts for each injected prompt section ──────────

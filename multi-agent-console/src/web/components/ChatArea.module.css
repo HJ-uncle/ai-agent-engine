@@ -808,6 +808,63 @@
   white-space: nowrap;
 }
 
+/* ── Attachment bar (outside the input bubble) ───────────────────────── */
+.attachmentBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 4px;
+  margin-bottom: 6px;
+}
+
+.attachmentBarItemImage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  background: var(--vscode-editor-background, #1e1e1e);
+  border: 1px solid var(--vscode-panel-border, #2d2d2d);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  max-width: 80px;
+}
+
+.attachmentBarItemImage:hover {
+  border-color: var(--vscode-focusBorder, #007fd4);
+}
+
+.attachmentBarItem {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--vscode-editor-background, #1e1e1e);
+  border: 1px solid var(--vscode-panel-border, #2d2d2d);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--vscode-editor-foreground, #d4d4d4);
+  max-width: 200px;
+  transition: border-color 0.15s;
+}
+
+.attachmentBarItem:hover {
+  border-color: var(--vscode-focusBorder, #007fd4);
+}
+
+.attachmentBarName {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, #8b949e);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 70px;
+  text-align: center;
+}
+
 .attachmentItem {
   position: relative;
   display: flex;
