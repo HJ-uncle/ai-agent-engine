@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { ModelsStore } from '../../../storage/sqlite/models.js'
 import { success, fail } from '../response.js'
 import { createLLMAdapter } from '../../../core/llm-adapter/factory.js'
+import { resolveCapabilities, type ModelCapabilities } from '../../../core/model-capabilities/index.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
@@ -56,7 +57,7 @@ export async function modelsRoutes(fastify: FastifyInstance) {
   })
 
   // 3. POST /api/v1/models
-  fastify.post<{ Body: { provider: string; modelId: string; apiKey: string; baseUrl: string; displayName?: string; version?: string } }>(
+  fastify.post<{ Body: { provider: string; modelId: string; apiKey: string; baseUrl: string; displayName?: string; version?: string; capabilities?: ModelCapabilities } }>(
     '/api/v1/models',
     async (request, reply) => {
       const authContext = (request as any).authContext
@@ -64,7 +65,7 @@ export async function modelsRoutes(fastify: FastifyInstance) {
         return reply.code(403).send(fail(40300, 'Forbidden: Admin role required'))
       }
       const tenantId = getTenantId(request)
-      const { provider, modelId, apiKey, baseUrl, displayName, version } = request.body
+      const { provider, modelId, apiKey, baseUrl, displayName, version, capabilities } = request.body
 
       // Validation
       if (!isValidChatCompletionsEndpoint(baseUrl)) {
@@ -84,7 +85,8 @@ export async function modelsRoutes(fastify: FastifyInstance) {
           baseUrl,
           displayName,
           isEnabled: false,
-          version
+          version,
+          capabilities: capabilities ?? null,
         })
         return reply.code(200).send(success({
           ...newModel,
@@ -97,7 +99,7 @@ export async function modelsRoutes(fastify: FastifyInstance) {
   )
 
   // 4. PUT /api/v1/models/:id
-  fastify.put<{ Params: { id: string }, Body: { isEnabled?: boolean; apiKey?: string; baseUrl?: string; displayName?: string; version?: string } }>(
+  fastify.put<{ Params: { id: string }, Body: { isEnabled?: boolean; apiKey?: string; baseUrl?: string; displayName?: string; version?: string; capabilities?: ModelCapabilities | null } }>(
     '/api/v1/models/:id',
     async (request, reply) => {
       const authContext = (request as any).authContext
@@ -190,4 +192,43 @@ export async function modelsRoutes(fastify: FastifyInstance) {
       }))
     }
   })
+
+  // 7. POST /api/v1/models/detect-capabilities
+  // 基于内置规则推断模型能力（用于"添加模型"对话框预填）
+  fastify.post<{ Body: { provider?: string; modelId: string; baseUrl?: string } }>(
+    '/api/v1/models/detect-capabilities',
+    async (request, reply) => {
+      const { provider, modelId, baseUrl } = request.body
+      if (!modelId) return reply.code(400).send(fail(40001, 'modelId is required'))
+      const caps = resolveCapabilities({ model: modelId, baseUrl, provider })
+      return reply.code(200).send(success(caps))
+    }
+  )
+
+  // 8. GET /api/v1/models/capability-defs
+  // 能力元数据（key/label/desc/icon）—— 供前端渲染开关 UI
+  fastify.get('/api/v1/models/capability-defs', async (_req, reply) => {
+    return reply.code(200).send(success(CAPABILITY_DEFS))
+  })
 }
+
+/** 能力元数据：前端渲染开关时使用 */
+const CAPABILITY_DEFS: Array<{
+  key: keyof ModelCapabilities
+  label: string
+  description: string
+  icon: string
+  group: 'multimodal' | 'reasoning' | 'protocol' | 'optimization'
+}> = [
+  { key: 'vision',        label: '图像理解',     description: '支持 image_url 多模态输入（图片）', icon: '🖼️', group: 'multimodal' },
+  { key: 'video',         label: '视频理解',     description: '支持视频帧序列输入',                icon: '🎬', group: 'multimodal' },
+  { key: 'audio',         label: '音频理解',     description: '支持音频文件输入',                  icon: '🎙️', group: 'multimodal' },
+  { key: 'thinking',      label: '推理模式',     description: '支持 reasoning_content 推理内容输出', icon: '🧠', group: 'reasoning' },
+  { key: 'toolCalling',   label: '工具调用',     description: '支持 Function Calling / Tool Use', icon: '🔧', group: 'protocol' },
+  { key: 'parallelTools', label: '并行工具',     description: '单次响应内并行调用多个工具',        icon: '⚡', group: 'protocol' },
+  { key: 'jsonMode',      label: 'JSON 输出',    description: '支持 response_format=json_object', icon: '📦', group: 'protocol' },
+  { key: 'search',        label: '联网搜索',     description: '内置 enable_search 网络搜索能力',  icon: '🌐', group: 'protocol' },
+  { key: 'caching',       label: 'KV Cache',     description: '支持 prompt 缓存命中（计费折扣）', icon: '💾', group: 'optimization' },
+  { key: 'streamUsage',   label: '流式 Usage',   description: 'stream 时附带 usage 字段',         icon: '📊', group: 'optimization' },
+  { key: 'prefix',        label: '前缀续写',     description: '支持 assistant prefix 续写补全',   icon: '✍️', group: 'protocol' },
+]

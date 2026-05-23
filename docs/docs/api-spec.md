@@ -271,6 +271,41 @@
 - `DELETE /api/v1/models/:id`: 删除指定模型配置（需要 admin 角色）
 - `POST /api/v1/models/:id/test`: 测试模型连接（支持传入临时参数测试未保存的配置）
 
+### 10a. DeepSeek 动态定价 (`/api/deepseek/prices`)
+
+> 管理 DeepSeek 模型价格配置，支持折扣期自动切换。定价数据持久化于 `~/.agent-engine/deepseek-prices.json`，可通过 API 动态更新。
+
+- `GET /api/deepseek/prices`: 获取当前价格配置（含所有模型的原价、折扣价、折扣截止时间）
+- `PUT /api/deepseek/prices`: 更新价格配置（全量覆盖，自动计算 `updatedAt`）
+
+**GET 返回示例：**
+
+```json
+{
+  "code": 200,
+  "data": {
+    "lowBalanceThreshold": 10,
+    "updatedAt": "2026-05-20T00:00:00+08:00",
+    "models": [
+      {
+        "modelId": "deepseek-v4-flash",
+        "normalPrice": { "input": 1, "output": 2, "cacheHit": 0.02 },
+        "discountPrice": { "input": 1, "output": 2, "cacheHit": 0.02 },
+        "discountUntil": null
+      },
+      {
+        "modelId": "deepseek-v4-pro",
+        "normalPrice": { "input": 12, "output": 24, "cacheHit": 0.1 },
+        "discountPrice": { "input": 3, "output": 6, "cacheHit": 0.025 },
+        "discountUntil": "2026-05-31T23:59:00+08:00"
+      }
+    ]
+  }
+}
+```
+
+> 单位：元人民币 / 百万 tokens。`discountUntil` 为 `null` 时表示无折扣或永久折扣。
+
 ### 11. 系统设置 Settings (`/api/v1/settings`)
 
 > **存储机制变更**：`PUT /api/v1/settings` 不再写入 `.env` 文件，所有运行时配置均存储在 SQLite `system_config` 表（key-value UPSERT）。敏感字段（`OPENAI_API_KEY`、`ANTHROPIC_API_KEY`）使用 AES-256-GCM 加密存储。服务启动时会自动将数据库配置同步到 `process.env`，所有模块无需感知变化。`.env` 文件仅保留启动前必须确定的引导参数（`PORT`、`HOST`、`DATA_DIR`、`ENCRYPTION_KEY`、`AUTH_ENABLED`、`LOG_LEVEL`）。
@@ -497,6 +532,7 @@
   "agentId": "可选，指定使用的 Agent",
   "systemPrompt": "可选，自定义系统提示词",
   "maxAskUserCount": 5,
+  "includeStreamUsage": false,
   "thinkingMode": false,
   "toolResponse": {
     "toolCallId": "工具调用 ID",
@@ -514,9 +550,10 @@
 | `{ "thinking": "..." }` | thinking | 模型思考过程（DeepSeek R1 / Claude 3.7 Sonnet） |
 | `{ "toolStart": { "name": "...", "args": {...}, "toolCallId": "..." } }` | tool_start | 工具调用开始（旧版命名） |
 | `{ "toolEnd": { "name": "...", "toolCallId": "...", "success": true, "outputPreview": "..." } }` | tool_end | 工具调用结束（旧版命名） |
-| `{ "toolCall": { "toolName": "...", "args": {...}, "toolCallId": "...", "messageId": "..." } }` | tool_call | 工具调用开始（新版命名，wuzu-client 等下游） |
+| `{ "toolCall": { "toolName": "...", "args": {...}, "toolCallId": "...", "messageId": "..." } }` | tool_call | 工具调用开始（新版命名） |
 | `{ "toolResult": { "toolName": "...", "toolCallId": "...", "success": true, "output": "...", "durationMs": 12 } }` | tool_result | 工具调用结束（新版命名，含完整 output） |
-| `{ "usage": { "systemPromptTokens": ..., "ragTokens": ..., "skillTokens": ..., "builtinToolsTokens": ..., "mcpToolsTokens": ..., "messagesTokens": ..., "toolResultsTokens": ..., "completionTokens": ..., "promptTokens": ..., "totalTokens": ..., "systemToolsTokens": ..., "cacheHitTokens": ..., "cacheMissTokens": ..., "reasoningTokens": ... } }` | usage | Token 使用量统计（8 类精细分项 + 汇总 + DeepSeek 专有指标） |
+| `{ "toolArg": { "toolCallId": "...", "toolName": "...", "argsDelta": { "key": "value" } } }` | tool_arg | ⭐ 工具参数流式增量（流中逐 delta 输出，前端可实时渲染参数填写动画） |
+| `{ "usage": { "systemPromptTokens": ..., "ragTokens": ..., "skillTokens": ..., "builtinToolsTokens": ..., "mcpToolsTokens": ..., "messagesTokens": ..., "toolResultsTokens": ..., "completionTokens": ..., "promptTokens": ..., "totalTokens": ..., "systemToolsTokens": ..., "cacheHitTokens": ..., "cacheMissTokens": ..., "reasoningTokens": ..., "model": "deepseek-chat" } }` | usage | Token 使用量统计（8 类精细分项 + 汇总 + DeepSeek 专有指标 + model ID） |
 | `{ "ask_user": { "question": "...", "options": [...], "toolCallId": "..." } }` | ask_user | 向用户提问卡片（旧版命名） |
 | `{ "permissionRequest": { "requestId": "...", "toolName": "ask_user", "args": {...}, "sessionId": "...", "messageId": "...", "description": "..." } }` | permission_request | 权限/交互请求（新版命名，含 sessionId/requestId） |
 | `{ "userMsgId": "..." }` | user_msg_id | 用户消息已落库的后端 ID（首帧；同时支持 `__user_msg_id__` 与 `__userMsgId__` 两个后端别名） |

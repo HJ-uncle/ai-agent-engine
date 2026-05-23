@@ -1,8 +1,6 @@
 /**
  * Agent Engine HTTP Client（SDK 版）
  *
- * 从 wuzu-client agentEngineProvider/httpClient.ts 移植，
- * 去除对 Electron 主进程 logger 的依赖，改用 console.warn。
  * 使用 Node 18+ 内置 fetch，无需额外依赖。
  */
 

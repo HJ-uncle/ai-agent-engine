@@ -94,7 +94,26 @@ export interface ChatOptions {
   modelApiKey?: string
   modelBaseUrl?: string
   modelProvider?: string
-  /** wuzu 项目资源透传 */
+  /**
+   * 模型能力 override（最高优先级）
+   * 用于陌生模型，或 SDK 调用方明确告知模型能力。
+   * 例：{ vision: true, toolCalling: true, thinking: false }
+   * 未声明的能力会回退到内置规则 / db override。
+   */
+  capabilities?: {
+    vision?: boolean
+    video?: boolean
+    audio?: boolean
+    thinking?: boolean
+    toolCalling?: boolean
+    jsonMode?: boolean
+    search?: boolean
+    caching?: boolean
+    parallelTools?: boolean
+    streamUsage?: boolean
+    prefix?: boolean
+  }
+  /** 项目资源透传 */
   skills?: string[]
   mcpServers?: string[]
   knowledgeBases?: string[]

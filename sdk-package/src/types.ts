@@ -1,5 +1,5 @@
 /**
- * @wuzu/agent-engine-sdk 公开类型定义
+ * agent-engine-sdk 公开类型定义
  *
  * 包含 SDK 双模式配置、运行时选项、健康检查结果等所有对外暴露的类型。
  */

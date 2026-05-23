@@ -121,7 +121,7 @@ export class ReActStrategy implements LoopStrategy {
       const savedUserMsgId = await ctx.history.append(userMessage, ctx)
       // ★ 把后端 message_id 回传给前端，前端用它做删除/重发的准确定位
       yield `\x00__user_msg_id__${savedUserMsgId}`
-      // ★ 别名帧（新版协议，wuzu-client 等下游消费 camelCase 命名；不影响旧消费者）
+      // ★ 别名帧（新版协议，第三方项目 等下游消费 camelCase 命名；不影响旧消费者）
       yield `\x00__userMsgId__${savedUserMsgId}`
     }
 
@@ -389,7 +389,9 @@ export class ReActStrategy implements LoopStrategy {
     const displayToolDefsTokens = iter0ToolDefsTokens
 
     const apiPromptTokens = response.promptTokens  // LLM 返回的真实值（0 则降级用本地估算）
-    const localEstimate = bd.systemPromptTokens + displayToolDefsTokens + bd.skillTokens + historyTokens
+    // localEstimate 需要包含 toolResults / rag，保证降级路径与 API 路径分项一致
+    const localEstimate = bd.systemPromptTokens + displayToolDefsTokens + bd.skillTokens
+      + ((bd as any).ragTokens ?? 0) + (cumulativeToolResultsTokens ?? 0) + historyTokens
     const promptTokens = apiPromptTokens || localEstimate
 
     // ── 计算当前提问 (User Message) 的 Token 数 ────────────────────────
@@ -409,7 +411,7 @@ export class ReActStrategy implements LoopStrategy {
           - (cumulativeToolResultsTokens ?? 0)
           - userInputTokens
         )
-      : Math.max(0, historyTokens - userInputTokens)
+      : Math.max(0, historyTokens - userInputTokens - (cumulativeToolResultsTokens ?? 0))
 
     const currentUsage: TokenUsage = {
       systemPromptTokens: bd.systemPromptTokens,
@@ -506,7 +508,7 @@ export class ReActStrategy implements LoopStrategy {
 
         // ── 思考过程：通知前端正在调用哪个工具 ──────────────────────────
         yield `\x00__tool_start__${JSON.stringify({ name: toolCall.name, args: toolCall.args, toolCallId: toolCall.id })}`
-        // ★ 别名帧（新版协议，wuzu-client 等下游消费规范字段；不影响旧消费者）
+        // ★ 别名帧（新版协议，第三方项目 等下游消费规范字段；不影响旧消费者）
         yield `\x00__tool_call__${JSON.stringify({ toolName: toolCall.name, args: toolCall.args, toolCallId: toolCall.id, messageId: assistantMsgId })}`
 
         // SPECIAL CASE: ask_user tool pauses the agent loop

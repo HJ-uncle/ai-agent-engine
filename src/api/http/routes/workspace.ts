@@ -180,7 +180,7 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
       }
       const mime = mimeMap[ext] ?? 'application/octet-stream'
       const buffer = fs.readFileSync(safePath)
-      return reply.code(200).header('Content-Type', mime).header('Cache-Control', 'max-age=3600').send(buffer)
+      return reply.code(200).header('Content-Type', mime).header('Cache-Control', 'no-store').send(buffer)
     } catch (e: any) {
       return reply.code(500).send(`Failed to read image: ${e.message}`)
     }

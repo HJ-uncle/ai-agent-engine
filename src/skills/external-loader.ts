@@ -23,7 +23,7 @@ export interface ExternalSkill {
   /**
    * 内联 SKILL.md 内容（来自客户端 inlineSkills 透传）
    * 当此字段非空时，getSkillContent 优先返回它而不再读 skillMdPath。
-   * 用于 wuzu 桌面客户端把本地安装的 skill 透传到 agent-engine，
+   * 用于 桌面客户端把本地安装的 skill 透传到 agent-engine，
    * 让 agent-engine 即使本地 SKILLS_ROOT 没有同名 skill 也能让 LLM 看到完整说明。
    */
   inlineContent?: string

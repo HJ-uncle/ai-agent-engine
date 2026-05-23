@@ -18,12 +18,16 @@
    - Anthropic/Claude 模型：填入 `ANTHROPIC_API_KEY`（系统自动识别 `anthropic` provider 或含 `claude` 的模型名）
    - OpenAI / Qwen / 自定义兼容接口：填入 `OPENAI_API_KEY`；若 Key 未设置，调用时会收到友好错误提示
    - 其他未知 Provider：系统自动降级为 OpenAI-compatible 接口，无需额外配置
-3. 选择一个 **主模型 (Primary Model)**。
+3. 选择一个 **主模型 (Primary Model)**。推荐：
+   - 高性价比日常任务 → `deepseek-chat` / `deepseek-v4-flash`
+   - 深度推理复杂任务 → `deepseek-reasoner` (R1) / `deepseek-v4-pro`
+   - 多模态视觉理解 → `gpt-4o` / `qwen-*`
+   - Kimi 生态 → `kimi-k2.6` / `kimi-k2.5`
 4. 点击保存。
 
 ## 3. 第二步（可选）：注册用户 / 接入外部平台
 
-如果你的系统需要**多用户隔离**，或从外部平台（如 wuzu-client）接入，可以调用用户同步接口：
+如果你的系统需要**多用户隔离**，或从外部平台接入，可以调用用户同步接口：
 
 ```bash
 POST /auth/user
@@ -46,16 +50,24 @@ POST /auth/user
 4. 在 **系统提示词 (System Prompt)** 中告诉它你是谁，希望它怎么帮你。
 5. 勾选它需要的 **工具**（推荐全选，让它更强大）。
 
-> 💡 **Superpower 模式**：系统默认开启 `balanced` 档，工具全量可用，Token 预算 ×2。如需更强的方法论引导（自动创建 specs/plans/reviews 文档），可在环境变量中设置 `SUPERPOWER_MODE=methodology` 或 `max`。
+> 💡 **Superpower 模式（增强模式）**：系统默认开启 `balanced`（均衡）档，工具全量可用，Token 预算 ×2。可在聊天输入框左侧 **增强模式下拉菜单**（AI 图标）中实时切换：
+> - `off` — **关闭**：标准模式，无额外能力
+> - `balanced` — **均衡**（默认）：工具全开，预算 ×2
+> - `methodology` — **专家**：额外注入方法论 Prompt，自动创建 specs/plans/reviews 文档
+> - `max` — **极限**：最高能力档位，包含方法论 + 更多工具 + 更大预算；切换时有二次确认弹窗防止误触
+>
+> 也可在环境变量中设置 `SUPERPOWER_MODE=methodology` 或通过 `PUT /api/v1/settings` 运行时修改。
 
 ## 5. 第四步：开始对话
 
 1. 在聊天框输入你的第一个任务。例如：
    > “帮我用 React 写一个简单的待办事项网页，并把它保存在 `todo-app` 文件夹里。”
-2. **观察 AI 的思考**：你会看到聊天框上方出现“AI 正在思考...”以及它正在使用的工具卡片。
+2. **观察 AI 的思考**：你会看到聊天框上方出现”AI 正在思考...”以及它正在使用的工具卡片。
 3. **查看产出**：
    - 观察右侧的 **Explorer (文件浏览器)**，你会发现 `todo-app` 文件夹和代码文件已经自动生成了。
    - 点击文件，你可以在内置的 **编辑器** 中直接查看或修改代码。
+
+> 💡 **增强交互**：聊天输入框下边缘可**拖拽缩放高度**，适应长文本输入。增强模式下拉菜单位于输入框左侧，以 AI 图标 + 中文档位标签（增强模式 / 模式: 均衡 / 专家 / 极限）展示当前档位。
 
 ## 6. 进阶玩法
 
@@ -85,6 +97,8 @@ AI Agent Engine 提供移动端适配（`/m` 路由），你可以在手机上�
   - A: 检查你的安全策略设置，某些危险命令（如 `rm -rf /`）是被默认禁止的。
 - **Q: 如何更换 AI 模型？**
   - A: 在设置中修改 API Key 或主模型，系统会立即生效。
+- **Q: 使用第三方代理（OpenRouter / Groq 等）报 400/422 错误？**
+  - A: 引擎已内置代理自动检测。若 baseURL 匹配已知不兼容特征（`openrouter.ai`、`groq.com`、`together.ai` 等），会自动跳过 `stream_options.include_usage`。如仍有问题，请在 Chat 请求中显式传 `includeStreamUsage: false` 或在设置中调整 Base URL。
 - **Q: 我的文件去哪了？**
   - A: 每个会话都有独立的工作区，点击侧边栏的“历史记录”可以切换回之前的会话并找回文件。
 

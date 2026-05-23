@@ -141,6 +141,10 @@ export interface AgentContext {
   requestId?: string
   signal?: AbortSignal
   inheritContext?: boolean
+  /** 当前请求绑定的模型名（供工具按模型能力做不同处理） */
+  modelName?: string
+  /** 当前模型的能力集（来自 model-capabilities 注册表） */
+  modelCaps?: import('../model-capabilities/index.js').ModelCapabilities
 }
 
 // ─── AgentContext Factory Options ─────────────────────────────────────────────

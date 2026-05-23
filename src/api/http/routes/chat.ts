@@ -18,6 +18,7 @@ import { SessionStore } from '../../../storage/session/index.js'
 import { estimateTokens } from '../../../core/utils/tokens.js'
 import { searchChunks } from '../../../storage/knowledge/kb-repo.js'
 import { ModelsStore } from '../../../storage/sqlite/models.js'
+import { resolveCapabilities, loadDbCapabilityOverrides } from '../../../core/model-capabilities/index.js'
 
 interface ChatBody {
   message: string
@@ -48,9 +49,27 @@ interface ChatBody {
   modelBaseUrl?: string
   /** provider 短名：'deepseek' | 'openai' | 'qwen' | 'anthropic' | 'openrouter' | ... */
   modelProvider?: string
+  /**
+   * 模型能力 override（可选；最高优先级，覆盖内置规则和 db override）
+   * 用于陌生模型或 SDK/API 调用方明确告知模型能力。
+   * 例：{ vision: true, toolCalling: true, thinking: false }
+   */
+  capabilities?: {
+    vision?: boolean
+    video?: boolean
+    audio?: boolean
+    thinking?: boolean
+    toolCalling?: boolean
+    jsonMode?: boolean
+    search?: boolean
+    caching?: boolean
+    parallelTools?: boolean
+    streamUsage?: boolean
+    prefix?: boolean
+  }
 
   // ────────────────────────────────────────────────────────────────────────
-  // wuzu 项目资源透传（请求级；以最高优先级覆盖 agent-store / env 默认）
+  // 项目资源透传（请求级；以最高优先级覆盖 agent-store / env 默认）
   // 所有字段均可选，未传时走原有 agent-store / env fallback —— 旧调用方零影响。
   // ────────────────────────────────────────────────────────────────────────
   /** Skill ID 白名单：覆盖 agent.skills */
@@ -121,7 +140,7 @@ interface ChatBody {
   /**
    * 客户端透传的用户长期记忆 XML（已经是 <userMemories>...</userMemories> 形态）。
    * agent-engine 收到后整段拼接到 systemPrompt 末尾，
-   * 让 LLM 在跨引擎模式下也能看见用户在 wuzu 端积累的记忆。
+   * 让 LLM 在跨引擎模式下也能看见用户在 端积累的记忆。
    */
   inlineMemoriesXml?: string
 }
@@ -190,7 +209,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
   fastify.post<{ Body: ChatBody }>('/chat', async (request, reply) => {
     const requestId = uuidv4()
-    const { message, sessionId = uuidv4(), agentId, systemPrompt, maxAskUserCount, thinkingMode, inheritContext = true, workspacePaths, toolResponse, attachments, ragTopK = 3, model: requestedModel, modelApiKey: requestedApiKey, modelBaseUrl: requestedBaseUrl, modelProvider: requestedProvider, skills: requestedSkills, mcpServers: requestedMcpServers, knowledgeBases: requestedKnowledgeBases, allowedTools: requestedAllowedTools, inlineSkills: requestedInlineSkills, inlineMcpServers: requestedInlineMcpServers, inlineAgent: requestedInlineAgent, inlineKnowledgeBases: requestedInlineKnowledgeBases, inlineMemoriesXml: requestedInlineMemoriesXml } = request.body
+    const { message, sessionId = uuidv4(), agentId, systemPrompt, maxAskUserCount, thinkingMode, inheritContext = true, workspacePaths, toolResponse, attachments, ragTopK = 3, model: requestedModel, modelApiKey: requestedApiKey, modelBaseUrl: requestedBaseUrl, modelProvider: requestedProvider, capabilities: requestedCapabilities, skills: requestedSkills, mcpServers: requestedMcpServers, knowledgeBases: requestedKnowledgeBases, allowedTools: requestedAllowedTools, inlineSkills: requestedInlineSkills, inlineMcpServers: requestedInlineMcpServers, inlineAgent: requestedInlineAgent, inlineKnowledgeBases: requestedInlineKnowledgeBases, inlineMemoriesXml: requestedInlineMemoriesXml } = request.body
 
     // Get tenant from auth context (set by auth middleware)
     const tenantId = getTenantId(request)
@@ -264,7 +283,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
       )
     }
 
-    // ── wuzu 项目资源白名单：请求级覆盖 agent 配置（最高优先级）─────────────
+    // ── 项目资源白名单：请求级覆盖 agent 配置（最高优先级）─────────────
     // 仅当客户端显式传入数组（含空数组语义"明确禁用"）时才覆盖。
     if (Array.isArray(requestedSkills)) {
       allowedSkills = requestedSkills
@@ -302,7 +321,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     }
 
     // Build tool registry（统一工厂，含所有内置工具 + MCP + Skills）
-    // 把客户端透传的 inline 资源（wuzu 桌面端本地 skill / mcp）一并注入，
+    // 把客户端透传的 inline 资源（桌面端本地 skill / mcp）一并注入，
     // 让 list_skills / get_skill / MCP 工具都能即时看到 + 调用。
     const { registry, memory, externalSkills, toolCategories } = await createToolRegistry({
       allowedSkills,
@@ -462,7 +481,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     }
 
     // ── 请求级凭证覆盖（最高优先级）──────────────────────────────────────────
-    // 桌面客户端（如 wuzu-client）把自己 UI 上选中的 (apiKey/baseUrl/provider) 直接随
+    // 客户端把自己 UI 上选中的 (apiKey/baseUrl/provider) 直接随
     // 请求下发，agent-engine 以请求级凭证完全覆盖 DB / env，避免后端配置漂移导致 401。
     // 仅当传入字段为非空字符串时覆盖；任何字段缺失则保留 DB / env 的回退。
     if (typeof requestedApiKey === 'string' && requestedApiKey.trim()) {
@@ -494,52 +513,64 @@ export async function chatRoutes(fastify: FastifyInstance) {
       )
     }
 
-    // 判断是否是 Qwen 系列模型（通过模型名或 baseUrl 识别）
+    // ── 模型 provider 自动路由（仅决定走哪个 LLM Adapter） ──────────────────
     const effectiveBaseUrl = modelBaseUrl || process.env.OPENAI_BASE_URL || ''
     const isQwenModel =
       /qwen|qwq/i.test(currentModelName) ||
-      /qwen|qwq/i.test(effectiveBaseUrl)
-
-    // ── DeepSeek 通道自动检测：模型名/baseUrl 命中 deepseek 时自动启用 ────
-    // 用户无感知：只要选中的模型是 deepseek 的就走专有通道，
-    // factory.createLLMAdapterWithDbConfig 会根据 modelProvider/model 自动路由
+      /qwen|qwq|dashscope|aliyuncs/i.test(effectiveBaseUrl)
     const isDeepSeekModel =
       /deepseek/i.test(currentModelName) || /deepseek/i.test(effectiveBaseUrl)
+
     if (isDeepSeekModel && !modelProvider) {
       modelProvider = 'deepseek'
       reqLogger.info(
         { model: currentModelName, baseUrl: effectiveBaseUrl },
-        'DeepSeek 模型检测到，自动切换到 DeepSeek 专有通道（启用 KV Cache / 思考模式 / 流式 usage 等）',
+        'DeepSeek 模型检测到，自动切换到 DeepSeek 专有通道',
+      )
+    } else if (isQwenModel && !modelProvider) {
+      modelProvider = 'qwen'
+      reqLogger.info(
+        { model: currentModelName, baseUrl: effectiveBaseUrl },
+        'Qwen 模型检测到，自动切换到 Qwen 专有通道',
       )
     }
-    // DeepSeek reasoner / R1 / V3-thinking / V4-Pro / V4-Flash 自动启用思考模式
-    const isDeepSeekReasoner =
-      isDeepSeekModel &&
-      (/reasoner|r1|v4-pro|v4-flash/i.test(currentModelName) || /v3.*think/i.test(currentModelName))
 
-    if (thinkingMode) {
+    // ── 统一能力检测（vision/thinking/toolCalling/...） ────────────────────
+    // 优先级：request.capabilities > db (models 表 capabilities 列 + system_config) > 内置规则
+    const dbCapOverrides = modelInfo?.capabilities ?? await loadDbCapabilityOverrides(currentModelName)
+    const modelCaps = resolveCapabilities({
+      model: currentModelName,
+      baseUrl: effectiveBaseUrl,
+      provider: modelProvider,
+      overrides: requestedCapabilities ?? null,
+      dbOverrides: dbCapOverrides,
+    })
+    reqLogger.info({ model: currentModelName, caps: modelCaps }, '解析模型能力')
+
+    // 把模型名 + 能力注入 ctx，让下游工具（smart-read 等）按能力分支
+    ctx.modelName = currentModelName
+    ctx.modelCaps = modelCaps
+
+    // ── Thinking Mode 注入：根据能力 + 模型族 决定具体 thinking 参数 ────────
+    const wantThinking = thinkingMode === true || (thinkingMode !== false && modelCaps.thinking === true)
+    if (wantThinking && modelCaps.thinking) {
       if (isQwenModel) {
-        // Qwen 系列使用专用 thinking 参数
         finalThinkingConfig = { enable_thinking: true }
         finalResponseThinkingField = 'reasoning_content'
-        reqLogger.info({ model: currentModelName, baseUrl: effectiveBaseUrl }, 'Qwen model detected, using enable_thinking API')
+        reqLogger.info({ model: currentModelName }, 'Qwen 思考模式启用 (enable_thinking=true)')
       } else if (isDeepSeekModel) {
-        // DeepSeek 系列：thinking-mode 直接通过 reasoning_effort 控制
-        finalThinkingConfig = { reasoning_effort: 'high' }
+        finalThinkingConfig = { reasoning_effort: thinkingMode === true ? 'high' : 'medium' }
         finalResponseThinkingField = 'reasoning_content'
-        reqLogger.info({ model: currentModelName }, 'DeepSeek 模型启用思考模式 (reasoning_effort=high)')
+        reqLogger.info({ model: currentModelName, effort: finalThinkingConfig.reasoning_effort }, 'DeepSeek 思考模式启用')
       } else if (whitelistInfo && whitelistInfo.thinkingMode) {
         finalThinkingConfig = whitelistInfo.thinkingConfig
         finalResponseThinkingField = whitelistInfo.responseThinkingField
         reqLogger.info({ model: currentModelName, thinkingConfig: finalThinkingConfig }, 'Thinking mode enabled via whitelist')
       } else {
-        reqLogger.warn({ model: currentModelName }, 'Thinking mode requested but model not found in whitelist and not Qwen/DeepSeek, thinking disabled')
+        reqLogger.warn({ model: currentModelName }, 'Thinking mode requested 但当前模型族未实现具体注入逻辑，跳过')
       }
-    } else if (isDeepSeekReasoner) {
-      // 用户没显式开 thinkingMode，但模型本身就是推理模型 → 自动开启
-      finalThinkingConfig = { reasoning_effort: 'medium' }
-      finalResponseThinkingField = 'reasoning_content'
-      reqLogger.info({ model: currentModelName }, 'DeepSeek reasoner 模型，自动启用 thinking-mode (reasoning_effort=medium)')
+    } else if (thinkingMode === true && !modelCaps.thinking) {
+      reqLogger.warn({ model: currentModelName }, 'Thinking mode 已请求但能力注册表声明该模型不支持 thinking')
     }
 
     // 注入工作区路径信息，让 AI 知道所有绑定的工作区
@@ -618,16 +649,8 @@ ${workspaceInfo}
         // 提取消息中的纯文本部分（message 可能是数组格式）
         const messageText = extractPlainText(message)
 
-        // 判断当前模型是否支持视觉
-        const visionModels = [
-          'gpt-4v', 'gpt-4-vision', 'gpt-4-turbo', 'gpt-4o',
-          'claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku',
-          'gemini-pro-vision', 'gemini-1.5-pro', 'gemini-1.5-flash',
-          'llava', 'bakllava', 'qwen-vl', 'qwen2-vl'
-        ]
-        const isVisionModel = visionModels.some(vm =>
-          currentModelName.toLowerCase().includes(vm.toLowerCase())
-        )
+        // 视觉能力来自统一注册表（已在前面解析过）
+        const isVisionModel = modelCaps.vision === true
 
         let prompt: string | any[] | null = messageText || null
 

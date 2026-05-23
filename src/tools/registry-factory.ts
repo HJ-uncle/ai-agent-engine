@@ -35,7 +35,7 @@ export interface RegistryFactoryOptions {
   /** 允许的系统工具列表，undefined = 全部，[] = 全部，传入列表则只注册指定的工具 */
   allowedTools?: string[] | null
   /**
-   * 客户端透传的内联 Skill 列表（请求级；典型场景：wuzu 桌面客户端把
+   * 客户端透传的内联 Skill 列表（请求级；典型场景：桌面客户端把
    * 本地安装的 skill 在 chat 请求时一同下发）
    *
    * 行为：
@@ -56,7 +56,7 @@ export interface RegistryFactoryOptions {
    *
    * 行为：
    *   - 仅支持 http / sse / streamableHttp 三种远程协议（stdio 跳过——
-   *     wuzu 端启动的 stdio 子进程 agent-engine 接不到）
+   *     端启动的 stdio 子进程 agent-engine 接不到）
    *   - 在 mcp loader 已注册的 server 之外追加这些 inline server
    *   - 连接失败的 inline server 仅 warn，不阻断 chat 流程
    */

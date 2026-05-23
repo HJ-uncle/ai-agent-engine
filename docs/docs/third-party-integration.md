@@ -1,7 +1,7 @@
 # Agent Engine 第三方 AI 工具集成指南
 
 > **版本**：v1.1 | **最后更新**：2026-05-20  
-> 本文档面向第三方 AI 工具（如 wuzu-client、桌面客户端等），介绍如何通过标准 HTTP + SSE 协议调用 Agent Engine 的完整能力。
+> 本文档面向第三方 AI 工具，介绍如何通过标准 HTTP + SSE 协议调用 Agent Engine 的完整能力。
 
 ---
 
@@ -13,7 +13,7 @@
 4. [核心接口：Chat（SSE 流式）](#4-核心接口chatssr-流式)
 5. [SSE 事件类型详解](#5-sse-事件类型详解)
 6. [请求体完整参数](#6-请求体完整参数)
-7. [资源透传（wuzu 集成）](#7-资源透传wuzu-集成)
+7. [资源透传（集成）](#7-资源透传集成)
 8. [会话管理](#8-会话管理)
 9. [工具与技能系统](#9-工具与技能系统)
 10. [知识库（RAG）](#10-知识库rag)
@@ -32,9 +32,10 @@ Agent Engine 是一个 **LLM Agent 运行时引擎**，提供 ReAct 循环、工
 
 | 能力 | 说明 |
 |------|------|
-| **多模型支持** | OpenAI / Anthropic / DeepSeek / Ollama / Qwen 等，请求级可切换 |
+| **多模型支持** | OpenAI / Anthropic / DeepSeek / Ollama / Qwen / Kimi / Moonshot 等，请求级可切换 |
 | **ReAct 循环** | 思考 → 工具调用 → 观察 → 反思的完整代理循环 |
-| **工具系统** | 内置文件操作、Shell 命令、Web 搜索、代码编辑 + MCP 外部工具 |
+| **工具系统** | 内置文件操作、Shell 命令、Web 搜索、代码编辑 + MCP 外部工具；`tool_choice='auto'` 自动触发 |
+| **第三方代理兼容** | 自动检测 OpenRouter/Groq/Together 等 10+ 不兼容代理，关闭 `stream_options` 避免 400/422 |
 | **RAG 知识库** | 文档上传 → 向量检索 → 上下文注入，请求级 KB 白名单 |
 | **会话管理** | 完整历史持久化、Token 统计、消息重生成 |
 | **工作区** | 隔离的物理工作目录，支持 VS Code 风格文件操作 |
@@ -212,6 +213,49 @@ Content-Type: application/json
 [连接建立] → userMsgId → thinking/toolCall/toolResult/content... → usage → [DONE] → [连接关闭]
 ```
 
+### 第三方代理兼容性
+
+Agent Engine 针对常见的第三方 OpenAI-compatible 代理服务进行了兼容性适配，自动检测并规避不兼容特性。
+
+**已知不兼容代理自动检测列表：**
+
+当 `modelBaseUrl` 匹配以下特征时，引擎自动禁用 `stream_options.include_usage`，避免 400/422 错误：
+
+| 特征 | 匹配的服务/模式 |
+|------|----------------|
+| `openrouter.ai` | OpenRouter |
+| `groq.com` | Groq |
+| `together.ai` | Together AI |
+| `fireworks.ai` | Fireworks AI |
+| `perplexity.ai` | Perplexity |
+| `novita.ai` | Novita AI |
+| `moonshot.cn` | Moonshot (月之暗面) |
+| `api.lingyi.ai` | 零一万物 (Yi) |
+| `api.302.ai` | 302.AI |
+| `api-gw.*` / `gateway.*` / `proxy.*` | 通用网关/代理模式 |
+
+> 检测基于正则匹配，不区分大小写。非标准代理（不在上述列表）可显式传 `includeStreamUsage: false` 关闭该功能。
+
+**行为细则：**
+
+| 特性 | 默认值 | 兼容策略 |
+|------|:---:|------|
+| `stream_options.include_usage` | ✅ 开启 | 不兼容代理 → 自动关闭；可显式 `includeStreamUsage: false` 覆盖 |
+| `tool_choice` | `'auto'` | 始终启用，确保工具正常触发；多数代理兼容 |
+| Qwen/vLLM `<tool_call>` XML | 自动回退 | `tool_calls` 为空时回退解析 XML 文本块 |
+| `normalizeBaseURL` | 自动 | 用户误传 `/chat/completions` 等后缀时自动修正为 `/v1` |
+
+**显式覆盖（请求级）：**
+
+```json
+{
+  "message": "...",
+  "model": "custom-proxy-model",
+  "modelBaseUrl": "https://my-proxy.example.com",
+  "includeStreamUsage": false
+}
+```
+
 ---
 
 ## 5. SSE 事件类型详解
@@ -378,11 +422,12 @@ Content-Type: application/json
 | `promptTokens` | 总 prompt token（含 system / rag / skills / tools / messages 各分项） |
 | `completionTokens` | 模型输出 token |
 | `totalTokens` | prompt + completion |
-| `cacheHitTokens` | ⭐ DeepSeek KV Cache 命中 token 数 |
-| `cacheMissTokens` | ⭐ DeepSeek KV Cache 未命中 token 数 |
-| `reasoningTokens` | ⭐ DeepSeek R1 reasoning_content token 数 |
+| `cacheHitTokens` | ⭐ DeepSeek KV Cache 命中 token 数。端到端由 `prompt_cache_hit_tokens` / `cache_hit_tokens` / `prompt_tokens_details.cached_tokens` 多字段兜底提取 |
+| `cacheMissTokens` | ⭐ DeepSeek KV Cache 未命中 token 数，按 `promptTokens - cacheHitTokens` 计算 |
+| `reasoningTokens` | ⭐ DeepSeek R1 reasoning_content token 数。端到端由 `completion_tokens_details.reasoning_tokens` / `reasoning_tokens` 兜底提取 |
+| `model` | ⭐ 流式 response 中实际返回的模型 ID（末帧透传） |
 
-> 带 ⭐ 的字段仅在 DeepSeek 模型下出现，不存在时为 `undefined`。
+> 带 ⭐ 的字段仅在相关模型下出现，不存在时为 `undefined`。
 > **注意**：从 v1.1.0 开始，历史记录中的 `assistant` 消息会包含 `modelId` 字段，记录实际产生该响应的模型 ID。
 
 ---
@@ -441,6 +486,7 @@ interface ChatRequest {
 
   // ── 控制 ──
   maxAskUserCount?: number                  // 最大向用户提问次数（默认 5）
+  includeStreamUsage?: boolean              // ⭐ 流式 usage 开关（默认 true，第三方代理可设为 false 避免 400/422）
   toolResponse?: {                          // 回应用户交互
     toolCallId: string
     name: string
@@ -467,13 +513,13 @@ interface ChatRequest {
   modelBaseUrl?: string                     // Base URL
   modelProvider?: string                    // 提供商：openai | anthropic | deepseek | qwen | ...
 
-  // ── 资源白名单（wuzu 集成） ──
+  // ── 资源白名单（集成） ──
   skills?: string[]                         // Skill ID 白名单
   mcpServers?: string[]                     // MCP Server ID 白名单
   knowledgeBases?: string[]                 // 知识库 ID 白名单
   allowedTools?: string[]                   // 工具白名单
 
-  // ── 内联资源（wuzu 客户端透传） ──
+  // ── 内联资源（客户端透传） ──
   inlineSkills?: Array<{...}>               // Skill 内联 payload
   inlineMcpServers?: Array<{...}>           // MCP 内联配置
   inlineAgent?: {                           // Agent 内联配置
@@ -489,9 +535,9 @@ interface ChatRequest {
 
 ---
 
-## 7. 资源透传（wuzu 集成）
+## 7. 资源透传（集成）
 
-当第三方客户端（如 wuzu-client）需要在请求中透传自己的本地资源时，使用 `inline*` 系列字段：
+当第三方客户端需要在请求中透传自己的本地资源时，使用 `inline*` 系列字段：
 
 ### 优先级链（由高到低）
 
@@ -503,7 +549,7 @@ interface ChatRequest {
 
 ```
 ┌──────────────────┐
-│  wuzu-client     │
+│  第三方项目：     │
 │  本地 skill/mcp   │──── inlineSkills / inlineMcpServers / inlineKnowledgeBases ────┐
 │  本地 model 凭证  │──── modelApiKey / modelBaseUrl / modelProvider ──────────────┐│
 │  用户记忆 XML     │──── inlineMemoriesXml ──────────────────────────────────────┐││

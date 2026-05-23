@@ -22,7 +22,7 @@ graph TD
 
     subgraph Reasoning [AI 推理心脏]
         Loop[ReAct 思考循环]
-        Adapter[LLM 适配器: DeepSeek/Claude/GPT/Qwen]
+        Adapter[LLM 适配器: DeepSeek/Claude/GPT/Qwen/Kimi/Moonshot]
         SubAgent[多智能体协作网络]
     end
 
@@ -55,6 +55,34 @@ graph TD
 
 ---
 
+## 模型支持矩阵
+
+| 系列 | 模型 | 思考模式 | 视觉 | KV Cache | 备注 |
+|------|------|:---:|:---:|:---:|------|
+| **DeepSeek** | deepseek-chat (V3) | ❌ | ❌ | ✅ | 高性价比通用模型 |
+| | deepseek-reasoner (R1) | ✅ | ❌ | ✅ | 深度推理，thinking/reasoning_content |
+| | deepseek-v4-flash | ❌ | ❌ | ✅ | V4 系列轻量版，成本最低 |
+| | deepseek-v4-pro | ✅ | ❌ | ✅ | V4 系列旗舰版，折扣至 2026-05-31 |
+| **OpenAI** | gpt-4o / gpt-4o-mini | ❌ | ✅ | ❌ | 支持 image_url 视觉理解 |
+| **Anthropic** | claude-sonnet-4 / claude-3.7 | ✅ | ❌ | ❌ | Claude thinking 模式 |
+| **Qwen** | qwen-* | ✅ | ✅ | ❌ | 工具调用可能以 XML `<tool_call>` 回退 |
+| **Kimi** | kimi-k2.6 / kimi-k2.5 / kimi-k2-0905 / moonshot | ❌ | ❌ | ✅ | 经 DeepSeek 兼容层接入 |
+| **其他** | 任意 OpenAI-compatible 端点 | — | — | — | 自动降级，适配 normalizeBaseURL |
+
+> **第三方代理自动检测**：当 baseURL 匹配 `openrouter.ai | groq.com | together.ai | fireworks.ai | perplexity.ai | novita.ai | moonshot.cn | api.lingyi.ai | api.302.ai | api-gw.* | gateway.* | proxy.*` 时，引擎自动跳过 `stream_options.include_usage`，避免不兼容代理返回 400/422 错误。`tool_choice` 默认设为 `'auto'`，确保大多数代理正确触发工具调用。
+
+## 模型定价与成本监控
+
+引擎内置 DeepSeek 动态价格模块 (`src/core/deepseek/pricing.ts`)：
+
+- **本地持久化**：定价配置存储于 `~/.agent-engine/deepseek-prices.json`，首次启动自动写入默认值。
+- **智能合并**：系统升级新增模型时，自动补全到现有本地配置，无需手动迁移。
+- **折扣感知**：支持 `discountPrice + discountUntil`，到期自动切换回原价（如 deepseek-v4-pro 当前折扣价 3/6/0.025 元/百万 tokens）。
+- **KV Cache 节省计算**：`cacheHitTokens × (原价 - 折扣价) / 1,000,000` 实时展示缓存节省金额。
+- **API 动态更新**：`PUT /api/deepseek/prices` 可运行时修改定价，即时生效。
+
+---
+
 ## 核心关系网分析：它是如何运转的？
 
 ### 1. 意图与执行的闭环：API $\leftrightarrow$ ReAct $\leftrightarrow$ Tools
@@ -65,6 +93,7 @@ graph TD
 ### 2. 实时感知：SSE $\to$ 前端状态
 - 系统使用 **SSE (Server-Sent Events)** 技术。AI 每产生一个“念头”或执行一个“动作”，后端都会立即推送到前端。
 - **前端 Zustand Store** 像雷达一样捕捉这些信号，并实时更新 UI（如流式文字、工具执行动画、进度条），确保用户始终知道 AI 在做什么。
+- **流式工具参数**：工具调用参数以 `tool_arg` 事件类型逐 delta 增量输出，前端可实时渲染"正在填写参数..."动画。兼容 Qwen/vLLM 等以 XML `<tool_call>` 文本块而非标准 JSON `tool_calls` 返回工具调用的模型。
 
 ### 3. 多智能体协作：SubAgents 关系网
 - 系统支持 **Parent-Child Agent** 模型。一个复杂的任务（如“重构整个项目”）可以由一个主 Agent 拆分给多个专门的 **SubAgent**（如“代码审查专家”、“测试编写专家”）协同完成。

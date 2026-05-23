@@ -2,6 +2,7 @@ import { getDb } from './db.js'
 import { v4 as uuidv4 } from 'uuid'
 import { encrypt, decrypt } from '../../utils/encryption.js'
 import type { Row } from '@libsql/client'
+import type { ModelCapabilities } from '../../core/model-capabilities/index.js'
 
 export interface ModelConfig {
   id: string
@@ -13,6 +14,8 @@ export interface ModelConfig {
   displayName?: string
   isEnabled: boolean
   version?: string
+  /** 模型能力 override（JSON 持久化） */
+  capabilities?: ModelCapabilities | null
   createdAt: number
   updatedAt: number
 }
@@ -35,6 +38,17 @@ function mapModelRow(row: Row): ModelConfig {
     // Return empty string; user must re-enter the API key.
     apiKey = ''
   }
+
+  let capabilities: ModelCapabilities | null = null
+  const capsRaw = row['capabilities']
+  if (capsRaw && typeof capsRaw === 'string') {
+    try {
+      capabilities = JSON.parse(capsRaw) as ModelCapabilities
+    } catch {
+      capabilities = null
+    }
+  }
+
   return {
     id: row['id'] as string,
     tenantId: row['tenant_id'] as string,
@@ -45,6 +59,7 @@ function mapModelRow(row: Row): ModelConfig {
     displayName: row['display_name'] as string | undefined,
     isEnabled: Boolean(row['is_enabled']),
     version: row['version'] as string | undefined,
+    capabilities,
     createdAt: row['created_at'] as number,
     updatedAt: row['updated_at'] as number
   }
@@ -87,25 +102,26 @@ export class ModelsStore {
     const db = getDb()
     const id = uuidv4()
     const encryptedKey = encrypt(data.apiKey)
-    
+
     await db.execute({
-      sql: `INSERT INTO models (id, tenant_id, provider, model_id, api_key, base_url, display_name, is_enabled, version)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      sql: `INSERT INTO models (id, tenant_id, provider, model_id, api_key, base_url, display_name, is_enabled, version, capabilities)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         id, data.tenantId, data.provider, data.modelId, encryptedKey, data.baseUrl,
-        data.displayName || null, data.isEnabled ? 1 : 0, data.version || null
+        data.displayName || null, data.isEnabled ? 1 : 0, data.version || null,
+        data.capabilities ? JSON.stringify(data.capabilities) : null,
       ]
     })
-    
+
     return this.getModelById(id, data.tenantId) as Promise<ModelConfig>
   }
 
   async updateModel(id: string, tenantId: string, data: Partial<ModelConfig>): Promise<ModelConfig | null> {
     const db = getDb()
-    
+
     const updates: string[] = []
     const args: any[] = []
-    
+
     if (data.apiKey) {
       updates.push('api_key = ?')
       args.push(encrypt(data.apiKey))
@@ -126,17 +142,21 @@ export class ModelsStore {
       updates.push('version = ?')
       args.push(data.version)
     }
-    
+    if (data.capabilities !== undefined) {
+      updates.push('capabilities = ?')
+      args.push(data.capabilities ? JSON.stringify(data.capabilities) : null)
+    }
+
     if (updates.length === 0) return this.getModelById(id, tenantId)
-    
+
     updates.push('updated_at = (unixepoch())')
     args.push(id, tenantId)
-    
+
     await db.execute({
       sql: `UPDATE models SET ${updates.join(', ')} WHERE id = ? AND tenant_id = ?`,
       args
     })
-    
+
     return this.getModelById(id, tenantId)
   }
 

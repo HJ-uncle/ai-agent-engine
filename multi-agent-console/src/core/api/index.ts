@@ -918,6 +918,42 @@ export const modelsApi = {
     })
     return res.data
   },
+  // POST /models/detect-capabilities — 基于内置规则推断能力
+  detectCapabilities: async (data: { provider?: string; modelId: string; baseUrl?: string }): Promise<ModelCapabilities> => {
+    const res = await request<ModelCapabilities>('/models/detect-capabilities', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+    return res.data ?? {}
+  },
+  // GET /models/capability-defs — 能力元数据（label/desc/icon）
+  getCapabilityDefs: async (): Promise<CapabilityDef[]> => {
+    const res = await request<CapabilityDef[]>('/models/capability-defs')
+    return res.data ?? []
+  },
+}
+
+// ── Model Capabilities 类型 ───────────────────────────────────────────────────
+export interface ModelCapabilities {
+  vision?: boolean
+  video?: boolean
+  audio?: boolean
+  thinking?: boolean
+  toolCalling?: boolean
+  jsonMode?: boolean
+  search?: boolean
+  caching?: boolean
+  parallelTools?: boolean
+  streamUsage?: boolean
+  prefix?: boolean
+}
+
+export interface CapabilityDef {
+  key: keyof ModelCapabilities
+  label: string
+  description: string
+  icon: string
+  group: 'multimodal' | 'reasoning' | 'protocol' | 'optimization'
 }
 
 // ── Todo API ───────────────────────────────────────────────────────────────────

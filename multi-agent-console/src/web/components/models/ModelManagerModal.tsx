@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react'
-import { Modal, Form, Input, Button, Radio, Typography, message, Row, Col } from 'antd'
+import React, { useState, useEffect, useCallback } from 'react'
+import { Modal, Form, Input, Button, Radio, Typography, message, Row, Col, Switch, Tooltip, Tag, Divider } from 'antd'
+import { ThunderboltOutlined } from '@ant-design/icons'
 import { useForm, Controller } from 'react-hook-form'
 import { yupResolver } from '@hookform/resolvers/yup'
 import * as yup from 'yup'
 import { useTranslation } from 'react-i18next'
-import { modelsApi } from '@core/api'
+import { modelsApi, type ModelCapabilities, type CapabilityDef } from '@core/api'
 import '@core/i18n' // Ensure i18n is initialized
 
 const { Title, Text, Paragraph } = Typography
@@ -19,6 +20,7 @@ interface ModelManagerModalProps {
     modelId: string
     displayName?: string
     baseUrl?: string
+    capabilities?: ModelCapabilities | null
   } | null
 }
 
@@ -30,11 +32,22 @@ interface FormData {
   displayName?: string
 }
 
+const GROUP_LABELS: Record<CapabilityDef['group'], string> = {
+  multimodal: '多模态',
+  reasoning: '推理',
+  protocol: '协议',
+  optimization: '优化',
+}
+
 export default function ModelManagerModal({ open, onClose, onSuccess, editModel }: ModelManagerModalProps) {
   const { t, i18n } = useTranslation()
   const [testing, setTesting] = useState(false)
   const [testOk, setTestOk] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [capDefs, setCapDefs] = useState<CapabilityDef[]>([])
+  const [capabilities, setCapabilities] = useState<ModelCapabilities>({})
+  const [autoDetected, setAutoDetected] = useState(false)
+  const [detecting, setDetecting] = useState(false)
   const isEdit = !!editModel
 
   const schema = yup.object({
@@ -62,6 +75,13 @@ export default function ModelManagerModal({ open, onClose, onSuccess, editModel 
 
   const watchedValues = watch()
 
+  // 加载能力元数据（一次）
+  useEffect(() => {
+    if (open && capDefs.length === 0) {
+      modelsApi.getCapabilityDefs().then(setCapDefs).catch(() => setCapDefs([]))
+    }
+  }, [open, capDefs.length])
+
   useEffect(() => {
     setTestOk(false)
   }, [watchedValues.provider, watchedValues.modelId, watchedValues.apiKey, watchedValues.baseUrl])
@@ -77,10 +97,13 @@ export default function ModelManagerModal({ open, onClose, onSuccess, editModel 
           baseUrl: editModel.baseUrl || '',
           apiKey: '',
         })
-        // 编辑模式下允许不重新测试直接保存（apiKey 可能未变）
+        setCapabilities(editModel.capabilities ?? {})
+        setAutoDetected(false)
         setTestOk(false)
       } else {
         reset()
+        setCapabilities({})
+        setAutoDetected(false)
         setTestOk(false)
       }
     }
@@ -96,6 +119,35 @@ export default function ModelManagerModal({ open, onClose, onSuccess, editModel 
     } else {
       setValue('baseUrl', '')
     }
+  }
+
+  const handleAutoDetect = useCallback(async () => {
+    const values = watch()
+    if (!values.modelId) {
+      message.warning('请先填写模型 ID')
+      return
+    }
+    setDetecting(true)
+    try {
+      const detected = await modelsApi.detectCapabilities({
+        provider: values.provider,
+        modelId: values.modelId,
+        baseUrl: values.baseUrl,
+      })
+      setCapabilities(detected)
+      setAutoDetected(true)
+      const enabled = Object.entries(detected).filter(([_, v]) => v === true).length
+      message.success(`已识别 ${enabled} 项能力`)
+    } catch (err: any) {
+      message.error('能力检测失败：' + err.message)
+    } finally {
+      setDetecting(false)
+    }
+  }, [watch])
+
+  const handleCapToggle = (key: keyof ModelCapabilities, val: boolean) => {
+    setCapabilities((prev) => ({ ...prev, [key]: val }))
+    setAutoDetected(false) // 用户手动调整后取消"自动识别"标记
   }
 
   const handleTest = async () => {
@@ -115,6 +167,10 @@ export default function ModelManagerModal({ open, onClose, onSuccess, editModel 
       if (res?.success) {
         message.success(t('testSuccess') + (res.latency ? ` (${res.latency}ms)` : ''))
         setTestOk(true)
+        // 测试成功后，如果用户还没配置能力，自动触发一次检测
+        if (Object.keys(capabilities).length === 0) {
+          handleAutoDetect()
+        }
       } else {
         message.error(t('testFailed') + (res?.error ? `: ${res.error}` : ''))
         setTestOk(false)
@@ -133,6 +189,12 @@ export default function ModelManagerModal({ open, onClose, onSuccess, editModel 
       return
     }
 
+    // 只持久化用户明确设置过的能力（true/false 都保留，undefined 跳过）
+    const capsToSave: ModelCapabilities = {}
+    for (const [k, v] of Object.entries(capabilities)) {
+      if (typeof v === 'boolean') (capsToSave as any)[k] = v
+    }
+
     setSaving(true)
     try {
       if (isEdit && editModel) {
@@ -143,6 +205,7 @@ export default function ModelManagerModal({ open, onClose, onSuccess, editModel 
           apiKey: data.apiKey || undefined,  // 空则不更新
           baseUrl: data.baseUrl,
           displayName: data.displayName || data.modelId,
+          capabilities: Object.keys(capsToSave).length > 0 ? capsToSave : null,
         })
         message.success('模型更新成功')
       } else {
@@ -152,7 +215,8 @@ export default function ModelManagerModal({ open, onClose, onSuccess, editModel 
           apiKey: data.apiKey,
           baseUrl: data.baseUrl,
           displayName: data.displayName || data.modelId,
-          isEnabled: false
+          isEnabled: false,
+          capabilities: Object.keys(capsToSave).length > 0 ? capsToSave : undefined,
         })
         message.success(t('saveSuccess'))
       }
@@ -164,6 +228,12 @@ export default function ModelManagerModal({ open, onClose, onSuccess, editModel 
       setSaving(false)
     }
   }
+
+  // 按 group 分组渲染能力开关
+  const groupedDefs = capDefs.reduce<Record<string, CapabilityDef[]>>((acc, d) => {
+    (acc[d.group] = acc[d.group] || []).push(d)
+    return acc
+  }, {})
 
   return (
     <Modal
@@ -177,7 +247,7 @@ export default function ModelManagerModal({ open, onClose, onSuccess, editModel 
       }
       open={open}
       onCancel={onClose}
-      width={800}
+      width={900}
       footer={[
         <Button key="cancel" onClick={onClose}>
           {t('cancel')}
@@ -193,7 +263,7 @@ export default function ModelManagerModal({ open, onClose, onSuccess, editModel 
       <Form layout="vertical">
         <Row gutter={24}>
           {/* 左侧：平台选择 */}
-          <Col span={6} style={{ borderRight: '1px solid #f0f0f0' }}>
+          <Col span={6} style={{ borderRight: '1px solid rgba(255,255,255,0.08)' }}>
             <Title level={5}>{t('modelPlatform')}</Title>
             <Controller
               name="provider"
@@ -267,17 +337,90 @@ export default function ModelManagerModal({ open, onClose, onSuccess, editModel 
           {/* 右侧：帮助信息 */}
           <Col span={6}>
             <Title level={5}>{t('helpText')}</Title>
-            <Paragraph type="secondary">
+            <Paragraph type="secondary" style={{ fontSize: 12 }}>
               {t('helpTextDesc')}
             </Paragraph>
-            <Paragraph type="secondary">
-              <ul>
+            <Paragraph type="secondary" style={{ fontSize: 12 }}>
+              <ul style={{ paddingLeft: 16, margin: 0 }}>
                 <li>OpenAI 兼容接口请选择自定义平台</li>
                 <li>注意避免将内网 IP 作为请求地址</li>
+                <li>能力开关用于陌生模型；填好后点"自动识别"快速预填</li>
               </ul>
             </Paragraph>
           </Col>
         </Row>
+
+        {/* ── 能力配置区 ───────────────────────────────────────── */}
+        <Divider style={{ margin: '20px 0 12px', borderColor: 'rgba(255,255,255,0.1)' }}>
+          <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.55)' }}>模型能力</span>
+        </Divider>
+        <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Text style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)' }}>
+            配置模型支持哪些能力。优先级：API 请求 &gt; 此处配置 &gt; 内置规则。
+            {autoDetected && <Tag color="geekblue" style={{ marginLeft: 8, fontSize: 11 }}>已自动识别</Tag>}
+          </Text>
+          <Button
+            size="small"
+            icon={<ThunderboltOutlined />}
+            loading={detecting}
+            onClick={handleAutoDetect}
+            style={{ fontSize: 12 }}
+          >
+            自动识别
+          </Button>
+        </div>
+
+        {capDefs.length === 0 ? (
+          <Text style={{ color: 'rgba(255,255,255,0.35)', fontSize: 12 }}>加载能力定义中...</Text>
+        ) : (
+          <Row gutter={[12, 12]}>
+            {Object.entries(groupedDefs).map(([group, defs]) => (
+              <Col span={12} key={group}>
+                <div style={{
+                  padding: '10px 14px',
+                  background: 'rgba(255,255,255,0.04)',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                  borderRadius: 8,
+                }}>
+                  <div style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: 'rgba(255,255,255,0.4)',
+                    letterSpacing: 1,
+                    textTransform: 'uppercase',
+                    marginBottom: 8,
+                  }}>
+                    {GROUP_LABELS[group as CapabilityDef['group']]}
+                  </div>
+                  {defs.map((d, idx) => (
+                    <div
+                      key={d.key}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '5px 0',
+                        borderBottom: idx < defs.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none',
+                      }}
+                    >
+                      <Tooltip title={d.description} placement="left">
+                        <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.75)', cursor: 'default', display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ fontSize: 14, lineHeight: 1 }}>{d.icon}</span>
+                          {d.label}
+                        </span>
+                      </Tooltip>
+                      <Switch
+                        size="small"
+                        checked={!!capabilities[d.key]}
+                        onChange={(v) => handleCapToggle(d.key, v)}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </Col>
+            ))}
+          </Row>
+        )}
       </Form>
     </Modal>
   )

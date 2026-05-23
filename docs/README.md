@@ -9,7 +9,7 @@ A production-ready AI Agent Engine built with Node.js + TypeScript ESM. Supports
 | # | Feature |
 |---|---------|
 | 1 | ReAct (Reason + Act) agent loop |
-| 2 | Multi-provider LLM support (OpenAI, Anthropic, Ollama) |
+| 2 | Multi-provider LLM support (OpenAI, Anthropic, Ollama, DeepSeek, Qwen, Kimi, Moonshot) |
 | 3 | Automatic LLM retry with exponential backoff |
 | 4 | SSE streaming responses |
 | 5 | Tool registry with unified `Tool` interface |
@@ -59,6 +59,14 @@ A production-ready AI Agent Engine built with Node.js + TypeScript ESM. Supports
 | 49 | **Granular Token Breakdown** — 8-category Token usage: system prompt, RAG, skill prompt, builtin tools, MCP tools, history messages, tool results, completion |
 | 50 | **Tool Output Truncation** — Oversized tool outputs auto-truncated (head + tail) to prevent token budget explosion |
 | 51 | **OpenAI Base URL Auto-fix** — Automatically strips `/chat/completions` or other endpoint suffixes from `OPENAI_BASE_URL` |
+| 52 | **Third-Party Proxy Detection** — Auto-detects OpenRouter/Groq/Together/etc. and disables incompatible `stream_options.include_usage` |
+| 53 | **Streaming Tool Args** — Tool call parameters stream incrementally (`tool_arg` events); compatible with Qwen/vLLM XML `<tool_call>` fallback parsing |
+| 54 | **DeepSeek V4 Flash/Pro** — Support for latest DeepSeek V4 models with dynamic discount-aware pricing |
+| 55 | **Kimi & Moonshot** — Support for kimi-k2.6/k2.5/k2-0905 and moonshot via DeepSeek-compatible layer |
+| 56 | **Superpower Mode i18n** — Four-tier mode switch (off/balanced/methodology/max) with Chinese labels in enhanced mode dropdown |
+| 57 | **Resizable Chat Input** — Drag-to-resize chat input area for longer text composition |
+| 58 | **Dynamic Pricing Module** — DeepSeek model pricing persisted in `~/.agent-engine/deepseek-prices.json` with smart merge on upgrade and API-driven updates |
+| 59 | **SDK Package** — `agent-engine` npm package with Embedded/Remote dual modes covering 22 API namespaces |
 
 ---
 

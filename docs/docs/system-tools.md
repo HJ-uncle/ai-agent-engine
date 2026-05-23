@@ -45,6 +45,12 @@ Agent Engine 内置一套**系统级工具**，让 AI Agent 具备任务管理�
 | `code_diagnose` | LSP | 对工作区文件运行 TypeScript/ESLint 诊断 |
 
 > **注：** DeepSeek 专有功能（FIM、Prefix Completion、JSON Mode）通过 `/api/v1/deepseek/*` REST 接口暴露，不作为 Agent 工具注册；DeepSeek KV Cache / Reasoning 指标由 `DeepSeekAdapter` 自动采集，在 Token Badge 中可视化展示。
+>
+> **工具调用语义：** Agent Engine 默认设置 `tool_choice='auto'`，模型可根据上下文自主决定是否调用工具。对于不遵循标准 OpenAI `tool_calls` JSON 协议的模型（如 Qwen、vLLM），引擎内置 **XML `<tool_call>` 回退解析器**：
+> - 当 API 返回的 `tool_calls` 为空时，自动扫描 `content` 文本中的 `<tool_call>...</tool_call>` 块
+> - 支持两种内部格式：JSON `{"name":"...","arguments":{...}}` 和 XML `<function=toolName><parameter=key>value</parameter></function>`
+> - 当 `<function=>` name 为空时，根据参数键名推断工具名（如 `{command}` → `run_skill_script`、`{query}` → `search_memory` 等）
+> - 解析成功后，`<tool_call>` 块从可见内容中自动剥离，确保用户看到的是干净文本
 
 ---
 

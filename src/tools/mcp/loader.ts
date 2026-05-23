@@ -4,7 +4,7 @@ import { logger } from '../../observability/index.js'
 import { listServers } from '../../storage/mcp/mcp-config.js'
 
 /**
- * 内联 MCP server 配置（来自客户端请求级透传，如 wuzu 桌面客户端）
+ * 内联 MCP server 配置（来自客户端请求级透传，如 桌面客户端）
  * 仅作"运行时临时挂载"，不会写入 mcp.config.json。
  */
 interface InlineMcpServer {
@@ -25,7 +25,7 @@ interface InlineMcpServer {
  *
  * @param inlineServers - 客户端透传的临时 MCP server 列表（可选）。
  *   仅追加 http/sse/streamableHttp 三种远程协议；stdio 跳过（agent-engine
- *   无法接管 wuzu 客户端启动的 stdio 子进程）。inline server 通过 id 与
+ *   无法接管 客户端启动的 stdio 子进程）。inline server 通过 id 与
  *   本地 mcp.config.json 中的 server 去重，本地优先。
  */
 export async function registerMCPTools(

@@ -70,7 +70,7 @@ export async function sseStream(
         reply.raw.write(`data: ${JSON.stringify({ userMsgId: id })}\n\n`)
         continue
       }
-      // ── 新版协议别名帧（不破坏旧消费者，仅供 wuzu-client 等下游使用） ──
+      // ── 新版协议别名帧（不破坏旧消费者，仅供 第三方项目 等下游使用） ──
       //
       // 命名规范：__userMsgId__ / __tool_call__ / __tool_result__ / __permission_request__
       // JSON envelope 字段：userMsgId / toolCall / toolResult / permissionRequest

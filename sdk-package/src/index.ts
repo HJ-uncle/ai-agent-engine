@@ -1,5 +1,5 @@
 /**
- * @wuzu/agent-engine-sdk 主入口
+ * agent-engine-sdk 主入口
  *
  * AgentEngineSdk 封装双模式（embedded / remote）的 agent-engine 接入：
  *

@@ -5,9 +5,14 @@
     "version": "1.0.0",
     "description": "用于与 AI Agent 引擎交互、管理智能体、知识库、MCP、记忆、任务和对话的标准化 API。"
   },
-  "servers": [
+    "servers": [
     {
-      "url": "http://localhost:12323/api/v1"
+      "url": "http://localhost:12323/api/v1",
+      "description": "核心 API（带 /api/v1 前缀）"
+    },
+    {
+      "url": "http://localhost:12323",
+      "description": "根路径（白名单接口：/auth/user、/health、/openapi.json、/metrics）"
     }
   ],
   "components": {
@@ -120,6 +125,60 @@
       }
     }
   },
+    "/auth/user": {
+      "post": {
+        "summary": "外部平台用户同步/注册（白名单，无需鉴权）",
+        "description": "外部平台登录后将用户 token 以 SHA-256 哈希存储，后续请求携带 X-API-Key: <token> 即可鉴权。同一 userId 多次调用为幂等 UPSERT。",
+        "tags": ["Auth"],
+        "servers": [{ "url": "http://localhost:12323" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token":  { "type": "string", "description": "外部平台颁发的 token（必填）" },
+                  "userId": { "type": "string", "description": "外部平台的用户 ID（必填，作为 tenantId）" },
+                  "name":   { "type": "string", "description": "显示名称（可选）" },
+                  "email":  { "type": "string", "description": "邮箱（可选）" }
+                },
+                "required": ["token", "userId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/StandardResponse" },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "id":         { "type": "string" },
+                            "tenantId":   { "type": "string", "example": "user_123" },
+                            "name":       { "type": "string", "nullable": true },
+                            "email":      { "type": "string", "nullable": true },
+                            "externalId": { "type": "string", "example": "user_123" },
+                            "createdAt":  { "type": "integer", "example": 1716192000 }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/chat": {
       "post": {
         "summary": "发送消息（SSE 流式响应）",
@@ -135,6 +194,7 @@
                   "agentId": { "type": "string" },
                   "systemPrompt": { "type": "string" },
                   "maxAskUserCount": { "type": "integer" },
+                  "includeStreamUsage": { "type": "boolean", "description": "流式 usage 开关（默认 true，第三方代理可设为 false 避免 400/422）" },
                   "thinkingMode": { "type": "boolean" },
                   "toolResponse": {
                     "type": "object",
@@ -153,6 +213,217 @@
         "responses": {
           "200": {
             "description": "SSE 流式响应（text/event-stream）"
+          }
+        }
+      }
+    },
+    "/chat/cancel": {
+      "post": {
+        "summary": "主动取消正在进行的 SSE 流式生成",
+        "tags": ["Chat"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionId": { "type": "string", "description": "要取消的会话 ID" }
+                },
+                "required": ["sessionId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cron": {
+      "post": {
+        "summary": "创建定时任务",
+        "tags": ["Cron"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name":        { "type": "string", "example": "每日日报" },
+                  "cronExpr":    { "type": "string", "example": "0 9 * * 1-5", "description": "5 字段 cron 表达式：分 时 日 月 周" },
+                  "message":     { "type": "string", "example": "请总结昨日工作进展" },
+                  "sessionId":   { "type": "string", "example": "my-session" },
+                  "agentId":     { "type": "string", "description": "可选，指定 Agent ID" },
+                  "description": { "type": "string" },
+                  "enabled":     { "type": "boolean", "default": true }
+                },
+                "required": ["name", "cronExpr", "message"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
+          }
+        }
+      },
+      "get": {
+        "summary": "获取定时任务列表",
+        "tags": ["Cron"],
+        "parameters": [
+          { "name": "current",  "in": "query", "schema": { "type": "integer" } },
+          { "name": "pageSize", "in": "query", "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedResponse" } } }
+          }
+        }
+      }
+    },
+    "/cron/{id}": {
+      "put": {
+        "summary": "更新定时任务",
+        "tags": ["Cron"],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除定时任务",
+        "tags": ["Cron"],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
+          }
+        }
+      }
+    },
+    "/cron/{id}/enable": {
+      "post": {
+        "summary": "启用定时任务",
+        "tags": ["Cron"],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
+          }
+        }
+      }
+    },
+    "/cron/{id}/disable": {
+      "post": {
+        "summary": "禁用定时任务",
+        "tags": ["Cron"],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
+          }
+        }
+      }
+    },
+    "/deepseek/prices": {
+      "get": {
+        "summary": "获取 DeepSeek 动态价格配置",
+        "description": "返回所有模型的当前定价（含原价、折扣价、折扣截止时间）。配置持久化于 ~/.agent-engine/deepseek-prices.json。",
+        "tags": ["DeepSeek"],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "更新 DeepSeek 价格配置（全量覆盖）",
+        "description": "持久化用户自定义价格配置，自动计算 updatedAt。合并逻辑：系统升级新增的模型会自动补全到本地配置。",
+        "tags": ["DeepSeek"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "lowBalanceThreshold": { "type": "number", "example": 10 },
+                  "models": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "modelId": { "type": "string" },
+                        "normalPrice": {
+                          "type": "object",
+                          "properties": {
+                            "input": { "type": "number" },
+                            "output": { "type": "number" },
+                            "cacheHit": { "type": "number" }
+                          }
+                        },
+                        "discountPrice": {
+                          "type": "object",
+                          "properties": {
+                            "input": { "type": "number" },
+                            "output": { "type": "number" },
+                            "cacheHit": { "type": "number" }
+                          }
+                        },
+                        "discountUntil": { "type": "string", "nullable": true, "description": "ISO 8601 折扣截止时间，null 表示永久/无折扣" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -337,6 +608,42 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/{sessionId}/binding": {
+      "get": {
+        "summary": "查询会话 Agent 绑定状态",
+        "description": "返回 `started` (是否已锁定)、`agentId`、`agent` 信息。首次发送消息后 Agent 锁定，后续无论传什么 agentId 均被忽略。绑定仅在硬删除会话时解除。",
+        "tags": ["Session"],
+        "parameters": [
+          { "name": "sessionId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应，data.started=false 表示未锁定",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/StandardResponse" },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "started": { "type": "boolean" },
+                            "agentId": { "type": "string", "nullable": true },
+                            "agent":   { "type": "object", "nullable": true }
+                          }
+                        }
+                      }
+                    }
+                  ]
                 }
               }
             }
@@ -807,6 +1114,97 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/todos": {
+      "post": {
+        "summary": "创建待办任务",
+        "tags": ["Todo"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title":       { "type": "string", "example": "Review PR #42" },
+                  "description": { "type": "string" },
+                  "priority":    { "type": "string", "enum": ["low", "medium", "high"], "default": "medium" },
+                  "dueAt":       { "type": "string", "example": "2026-05-01T18:00:00", "description": "ISO 8601 截止时间" },
+                  "sessionId":   { "type": "string", "example": "my-session" }
+                },
+                "required": ["title"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
+          }
+        }
+      },
+      "get": {
+        "summary": "获取待办列表",
+        "tags": ["Todo"],
+        "parameters": [
+          { "name": "sessionId", "in": "query", "schema": { "type": "string" } },
+          { "name": "status",    "in": "query", "schema": { "type": "string", "enum": ["pending", "in_progress", "done", "cancelled"] } },
+          { "name": "current",   "in": "query", "schema": { "type": "integer" } },
+          { "name": "pageSize",  "in": "query", "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedResponse" } } }
+          }
+        }
+      }
+    },
+    "/todos/{id}": {
+      "put": {
+        "summary": "更新待办任务",
+        "tags": ["Todo"],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title":       { "type": "string" },
+                  "description": { "type": "string" },
+                  "priority":    { "type": "string", "enum": ["low", "medium", "high"] },
+                  "status":      { "type": "string", "enum": ["pending", "in_progress", "done", "cancelled"] },
+                  "dueAt":       { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除待办任务",
+        "tags": ["Todo"],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
           }
         }
       }
@@ -1421,6 +1819,8 @@
                             "OPENAI_API_KEY":           { "type": "string",  "example": "sk-..." },
                             "OPENAI_BASE_URL":          { "type": "string",  "example": "https://api.openai.com/v1" },
                             "ANTHROPIC_API_KEY":        { "type": "string",  "example": "" },
+                            "ANTHROPIC_BASE_URL":       { "type": "string",  "example": "https://api.anthropic.com", "description": "Anthropic 自定义 Base URL（代理/私有部署时使用）" },
+                            "DEEPSEEK_API_KEY":         { "type": "string",  "example": "" },
                             "OLLAMA_BASE_URL":          { "type": "string",  "example": "http://localhost:11434" },
                             "MAX_ITERATIONS":           { "type": "integer", "example": 50 },
                             "TOKEN_BUDGET":             { "type": "integer", "example": 80000 },
@@ -1472,6 +1872,8 @@
                   "OPENAI_API_KEY":           { "type": "string" },
                   "OPENAI_BASE_URL":          { "type": "string" },
                   "ANTHROPIC_API_KEY":        { "type": "string" },
+                  "ANTHROPIC_BASE_URL":       { "type": "string", "description": "Anthropic 自定义 Base URL" },
+                  "DEEPSEEK_API_KEY":         { "type": "string" },
                   "OLLAMA_BASE_URL":          { "type": "string" },
                   "MAX_ITERATIONS":           { "type": "integer" },
                   "TOKEN_BUDGET":             { "type": "integer" },

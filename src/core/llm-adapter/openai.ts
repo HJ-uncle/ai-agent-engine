@@ -89,6 +89,8 @@ function messagesToOpenAI(
     if (Array.isArray(content)) {
       const texts: string[] = []
       for (const part of content) {
+        // null guard：第三方 API 返回的历史消息 content 数组可能含 null/undefined 元素
+        if (part == null) continue
         if (part.type === 'text') texts.push(part.text ?? '')
         else if (part.type === 'image_url') texts.push('[Image]')
         // workspace_image/workspace_file 已在消息入口处自动处理，此处仅作为历史消息兼容
@@ -105,6 +107,8 @@ function messagesToOpenAI(
     const parts: OpenAI.Chat.ChatCompletionContentPart[] = []
 
     for (const part of content) {
+      // null guard：第三方 API 返回的历史消息 content 数组可能含 null/undefined 元素
+      if (part == null) continue
       if (part.type === 'text') {
         parts.push({ type: 'text', text: part.text ?? '' })
       } else if (part.type === 'image_url') {
@@ -389,7 +393,7 @@ export class OpenAIAdapter implements LLMAdapter {
     const modelLower = this.model.toLowerCase()
     if (url.includes('anthropic')) return false
     if (url.includes('ollama')) return false
-    if (url.includes('qwen')) return false
+    // Qwen 视觉支持由 QwenAdapter 通过 TEXT_ONLY_MODEL_PATTERNS 精确控制，此处不再拦截
     if (url.includes('moonshot')) return false
     if (url.includes('zhipu')) return false
     if (url.includes('deepseek')) return false
@@ -557,10 +561,17 @@ export class OpenAIAdapter implements LLMAdapter {
       params.tool_choice = 'auto'
     }
 
-    // beta.chat.completions.stream provides the streaming helper with finalMessage()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const betaClient = this.client.beta as any
-    const stream = betaClient.chat.completions.stream(params)
+    // 使用原生 chat.completions.create({ stream: true }) 代替 beta.chat.completions.stream。
+    // beta stream helper 内部会把 SSE chunk 解析为类型化 event 对象，第三方 GPT 兼容 API
+    // 返回不标准的 chunk（缺少 object 字段或 choices 结构异常）时，SDK 内部尝试读取
+    // undefined 对象的 .type 字段导致崩溃（"Cannot read properties of undefined (reading 'type')"）。
+    // 原生 API 只做基础 JSON parse，由我们自己处理 delta，兼容性最佳。
+    // 注意：将 params 断言为 ChatCompletionCreateParamsStreaming 以触发流式重载，
+    // 返回值为 Stream<ChatCompletionChunk>，实现了 AsyncIterable<ChatCompletionChunk>。
+    const stream = await this.client.chat.completions.create(
+      params as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
+      { signal: options?.signal }
+    )
 
     let manualUsage: any = null
     let manualModel: string | undefined = undefined
@@ -574,8 +585,7 @@ export class OpenAIAdapter implements LLMAdapter {
       if ((chunk as any).model) manualModel = (chunk as any).model
 
       // 3. 提取 delta 内容
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const delta = (chunk as any).choices?.[0]?.delta
+      const delta = chunk.choices?.[0]?.delta
       if (!delta) continue
 
       // 尝试多字段提取推理内容（兼容 reasoning_content / thought / reasoning）
@@ -600,10 +610,13 @@ export class OpenAIAdapter implements LLMAdapter {
       }
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const finalMessage = await (stream as any).finalMessage().catch(() => null)
-    const finalUsage = manualUsage || finalMessage?.usage
-    const finalPromptTokens = finalUsage?.prompt_tokens ?? 0
+    // 原生 stream 没有 finalMessage()，usage 从 chunk 中累积
+    const finalUsage = manualUsage
+    // 兼容 Qwen dashscope：streaming usage 字段为 input_tokens 而非 prompt_tokens
+    const finalPromptTokens =
+      finalUsage?.prompt_tokens ??
+      (finalUsage as any)?.input_tokens ??
+      0
 
     // ── DeepSeek / Moonshot / SiliconFlow 私有 usage 字段透传 ───────────────────
     const cacheHitTokens =
@@ -626,7 +639,7 @@ export class OpenAIAdapter implements LLMAdapter {
       ...(cacheHitTokens != null ? { cacheHitTokens } : {}),
       ...(cacheMissTokens != null ? { cacheMissTokens } : {}),
       ...(reasoningTokens != null ? { reasoningTokens } : {}),
-      model: manualModel || finalMessage?.model,
+      model: manualModel,
     }
   }
 

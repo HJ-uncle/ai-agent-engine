@@ -2293,11 +2293,12 @@ export default function ChatArea() {
 
               if (isImage) {
                 // 图片已上传到 workspace，用 workspace URL 而非 base64，避免消息体过大
+                // 加 t= 时间戳防止同名文件覆盖后浏览器命中缓存
                 userContentParts.push({
                   type: "workspace_image",
                   name: file.name,
                   sessionId: activeSessionId,
-                  url: `/api/v1/workspace/image?sessionId=${encodeURIComponent(activeSessionId)}&path=${encodeURIComponent(file.name)}`,
+                  url: `/api/v1/workspace/image?sessionId=${encodeURIComponent(activeSessionId)}&path=${encodeURIComponent(file.name)}&t=${Date.now()}`,
                 });
               } else {
                 // 文档只存文件名引用（不内嵌内容），和图片一样只显示卡片

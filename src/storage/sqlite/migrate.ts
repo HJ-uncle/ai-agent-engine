@@ -12,6 +12,7 @@ import { up as up010 } from './migrations/010_add_system_config.js'
 import { up as up011 } from './migrations/011_add_security_and_perf.js'
 import { up as up012 } from './migrations/012_add_message_model_id.js'
 import { up as up013 } from './migrations/013_add_user_name.js'
+import { up as up014 } from './migrations/014_add_model_capabilities.js'
 
 const BUILTIN_TEMPLATES = [
   {
@@ -142,6 +143,13 @@ async function migrate() {
       console.log('✓ Migration 013_add_user_name complete')
     } catch (err: any) {
       console.log('✓ Migration 013_add_user_name skipped:', err.message)
+    }
+
+    try {
+      await up014(db)
+      console.log('✓ Migration 014_add_model_capabilities complete')
+    } catch (err: any) {
+      console.log('✓ Migration 014_add_model_capabilities skipped:', err.message)
     }
 
     // Seed built-in prompt templates

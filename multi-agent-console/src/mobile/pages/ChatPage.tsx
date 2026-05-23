@@ -322,7 +322,8 @@ export default function ChatPage() {
           messageContent.push({
             type: 'image_url',
             image_url: {
-              url: `/api/v1/workspace/image?sessionId=${encodeURIComponent(activeSessionId)}&path=${encodeURIComponent(att.file.name)}`,
+              // 加 t= 时间戳防止同名文件覆盖后浏览器命中缓存
+              url: `/api/v1/workspace/image?sessionId=${encodeURIComponent(activeSessionId)}&path=${encodeURIComponent(att.file.name)}&t=${Date.now()}`,
               alt: att.file.name,
             },
           })

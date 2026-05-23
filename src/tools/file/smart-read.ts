@@ -300,15 +300,25 @@ const IMAGE_MAGIC_BYTES: { ext: string; signature: number[] }[] = [
 ]
 
 function isVisionModelAvailable(ctx: AgentContext): boolean {
-  const modelName = (ctx as any).modelName || process.env.MODEL_NAME || ''
+  // 优先从能力注册表读取（chat.ts 在创建 ctx 时已注入 modelCaps）
+  if (ctx.modelCaps?.vision === true) return true
+  if (ctx.modelCaps?.vision === false) return false
+
+  // 兜底：从模型名字符串识别（兼容未注入 modelCaps 的旧调用方）
+  const modelName = ctx.modelName || (ctx as any).modelName || process.env.MODEL_NAME || ''
+  const lowerModel = modelName.toLowerCase()
+
+  const textOnlyPatterns = [/qwen-long/, /qwen-math/, /qwen-audio/, /qwen-code/]
+  if (textOnlyPatterns.some((re) => re.test(lowerModel))) return false
+
+  if (lowerModel.includes('qwen') || lowerModel.includes('qwq')) return true
+
   const visionModels = [
     'gpt-4v', 'gpt-4-vision', 'gpt-4-turbo', 'gpt-4o',
-    'claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku',
-    'gemini-pro-vision', 'gemini-1.5-pro', 'gemini-1.5-flash',
-    'llava', 'bakllava', 'qwen-vl', 'qwen2-vl'
+    'claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku', 'claude-3-5', 'claude-3-7',
+    'gemini-pro-vision', 'gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-2',
+    'llava', 'bakllava',
   ]
-  
-  const lowerModel = modelName.toLowerCase()
   return visionModels.some(vm => lowerModel.includes(vm.toLowerCase()))
 }
 

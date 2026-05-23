@@ -1,5 +1,5 @@
 {
-  "name": "@wuzu/agent-engine-sdk",
+  "name": "agent-engine-sdk",
   "version": "0.1.1",
   "description": "agent-engine 双模式 SDK（内嵌启动 / 远端连接）",
   "main": "dist/index.js",
