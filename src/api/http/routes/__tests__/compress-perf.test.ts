@@ -30,7 +30,10 @@ describe('Conversation Compression API Performance', () => {
   beforeEach(async () => {
     history = new SQLiteConversationHistory()
     fastify = Fastify()
-    fastify.decorateRequest('authContext', { tenantId: 'perf-tenant' })
+    fastify.decorateRequest('authContext', null)
+    fastify.addHook('onRequest', async (req) => {
+      ;(req as any).authContext = { tenantId: 'perf-tenant' }
+    })
     await fastify.register(conversationRoutes)
   })
 

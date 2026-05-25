@@ -76,7 +76,7 @@ export default function AuditLogViewer() {
     {
       title: '详情', dataIndex: 'details', key: 'details', width: 80,
       render: (v: any) => v
-        ? <Button type="link" size="small" onClick={() => Modal.info({
+        ? <Button type="link" size="small" onClick={() => modal.info({
             title: '审计详情',
             width: 600,
             content: <pre style={{ background: '#1e1e1e', padding: 12, color: '#ccc', maxHeight: 400, overflow: 'auto' }}>{JSON.stringify(v, null, 2)}</pre>,

@@ -5,13 +5,13 @@
  * 渲染函数 `renderSidebarPanel` 接收当前激活的 PanelKey，返回对应组件。
  */
 import React, { useCallback, useEffect, useState } from 'react'
-import { Tooltip, App as AntdApp } from 'antd'
+import { Tooltip, App as AntdApp, Modal, Select, Input } from 'antd'
 import {
   MessageOutlined, RobotOutlined,
   ApiOutlined, DatabaseOutlined,
   FolderOutlined, ThunderboltOutlined, ToolOutlined,
   CheckSquareOutlined, ReloadOutlined, DeleteOutlined,
-  FunctionOutlined,
+  FunctionOutlined, EditOutlined, LinkOutlined, ClockCircleOutlined
 } from '@ant-design/icons'
 import SessionList from '../SessionList'
 import AgentPanel from '../AgentPanel'
@@ -210,6 +210,8 @@ export function ToolsPanel() {
   )
 }
 
+import { MemoryGraphPanel } from './MemoryGraphPanel'
+
 // ── Memory Panel ─────────────────────────────────────────────────────
 const inputStyle: React.CSSProperties = {
   width: '100%', background: 'rgba(255,255,255,.04)', border: '1px solid #272727',
@@ -218,12 +220,23 @@ const inputStyle: React.CSSProperties = {
 }
 
 export function MemoryPanel() {
-  const { message: antMsg } = AntdApp.useApp()
+  const { message: antMsg, modal: antModal } = AntdApp.useApp()
   const [entries, setEntries] = useState<MemoryEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [key, setKey] = useState('')
   const [value, setValue] = useState('')
   const [saving, setSaving] = useState(false)
+  
+  // 编辑状态
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editValue, setEditValue] = useState('')
+
+  // 连线状态
+  const [linkModalVisible, setLinkModalVisible] = useState(false)
+  const [linkSource, setLinkSource] = useState<MemoryEntry | null>(null)
+  const [linkTargetId, setLinkTargetId] = useState<string>('')
+  const [linkType, setLinkType] = useState<string>('similar_to')
+  const [linkDesc, setLinkDesc] = useState('')
 
   const fetchData = () => {
     setLoading(true)
@@ -239,26 +252,107 @@ export function MemoryPanel() {
       setEntries((e) => [entry, ...e.filter((x) => x.key !== entry.key)])
       setKey(''); setValue('')
       antMsg.success('已记忆')
+      // 如果需要刷新图谱，这里目前没有直接通知兄弟组件的方法，可以加个事件或状态，暂时忽略
     } catch (err: any) { antMsg.error(err.message) }
     finally { setSaving(false) }
   }
 
   const handleDelete = async (id: string) => {
-    try { await memoryApi.delete(id); setEntries((e) => e.filter((x) => x.id !== id)) }
+    try { await memoryApi.delete(id); setEntries((e) => e.filter((x) => x.id !== id)); antMsg.success('已删除') }
     catch (err: any) { antMsg.error(err.message) }
+  }
+
+  const handleUpdate = async (id: string) => {
+    try { 
+      await memoryApi.update(id, { summary: editValue })
+      setEntries((e) => e.map(x => x.id === id ? { ...x, value: editValue } : x))
+      setEditingId(null)
+      antMsg.success('已更新')
+    } catch (err: any) { antMsg.error(err.message) }
+  }
+
+  const handleLinkSubmit = async () => {
+    if (!linkSource || !linkTargetId) return
+    try {
+      await memoryApi.link(linkSource.id, linkTargetId, linkType, linkDesc)
+      antMsg.success('关联已建立，请刷新图谱查看')
+      setLinkModalVisible(false)
+    } catch (err: any) { antMsg.error(err.message) }
+  }
+
+  const handleConsolidate = async () => {
+    setLoading(true)
+    try {
+      const res = await memoryApi.consolidate()
+      if (!res) return
+      
+      if (res.forgottenCandidates && res.forgottenCandidates.length > 0) {
+        antModal.confirm({
+          title: '反思整理完成：发现可遗忘记忆',
+          className: 'dark-modal',
+          content: (
+            <div style={{ color: '#d4d4d4' }}>
+              <p style={{ marginBottom: 12 }}>所有记忆节点的强度已根据时间成功衰减。</p>
+              <p>系统发现以下 <strong style={{ color: '#4fc1ff' }}>{res.forgottenCandidates.length}</strong> 条记忆的强度已跌破遗忘阈值，是否将它们彻底清理？</p>
+              <ul style={{ fontSize: 12, color: '#8b949e', paddingLeft: 16, marginTop: 8, maxHeight: 150, overflowY: 'auto' }}>
+                {res.forgottenCandidates.map((c: any) => (
+                  <li key={c.id}>{c.summary.slice(0, 40)}{c.summary.length > 40 ? '...' : ''}</li>
+                ))}
+              </ul>
+            </div>
+          ),
+          onOk: async () => {
+            for (const c of res.forgottenCandidates) {
+              await memoryApi.delete(c.id)
+            }
+            fetchData()
+            antMsg.success('已清理低权重记忆')
+          },
+          okText: '确认遗忘',
+          cancelText: '暂保留'
+        })
+      } else {
+        antModal.info({
+          title: '反思整理完成',
+          className: 'dark-modal',
+          content: (
+            <div style={{ color: '#d4d4d4' }}>
+              <p style={{ marginTop: 8 }}>所有记忆节点的强度已根据时间成功衰减。</p>
+              <p style={{ marginTop: 8, color: '#8b949e', fontSize: 13 }}>当前没有任何记忆节点的强度跌破遗忘阈值（暂无待遗忘记忆）。</p>
+            </div>
+          ),
+          okText: '知道了'
+        })
+      }
+      fetchData()
+    } catch (err: any) { antMsg.error(err.message) }
+    finally { setLoading(false) }
+  }
+
+  const openLinkModal = (entry: MemoryEntry) => {
+    setLinkSource(entry)
+    setLinkTargetId('')
+    setLinkType('similar_to')
+    setLinkDesc('')
+    setLinkModalVisible(true)
   }
 
   return (
     <div style={panelBase}>
-      {panelHeader('记忆存储', entries.length, iconBtn('刷新', <ReloadOutlined />, fetchData))}
+      {panelHeader('记忆存储', entries.length, (
+        <div style={{ display: 'flex', gap: 4 }}>
+          {iconBtn('反思整理 (衰减与遗忘模拟)', <ClockCircleOutlined />, handleConsolidate)}
+          {iconBtn('刷新', <ReloadOutlined />, fetchData)}
+        </div>
+      ))}
 
-      <div style={{ padding: '10px 12px', borderBottom: '1px solid #1f1f1f', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ padding: '10px 12px', borderBottom: '1px solid #3c3c3c', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
         <input
           value={key} onChange={e => setKey(e.target.value)}
           placeholder="Key（标识符）"
           style={inputStyle}
           onFocus={e => (e.target.style.borderColor = '#0e639c')}
-          onBlur={e => (e.target.style.borderColor = '#272727')}
+          onBlur={e => (e.target.style.borderColor = '#3c3c3c')}
         />
         <div style={{ display: 'flex', gap: 6 }}>
           <input
@@ -267,12 +361,12 @@ export function MemoryPanel() {
             placeholder="Value（内容）"
             style={{ ...inputStyle, flex: 1 }}
             onFocus={e => (e.target.style.borderColor = '#0e639c')}
-            onBlur={e => (e.target.style.borderColor = '#272727')}
+            onBlur={e => (e.target.style.borderColor = '#3c3c3c')}
           />
           <button
             onClick={handleSave}
             disabled={saving || !key.trim() || !value.trim()}
-            style={{ padding: '0 14px', borderRadius: 6, background: key.trim() && value.trim() ? '#0e639c' : '#1e1e1e', border: '1px solid #272727', color: key.trim() && value.trim() ? '#fff' : '#444', cursor: 'pointer', fontSize: 12, flexShrink: 0, transition: 'all 0.15s' }}
+            style={{ padding: '0 14px', borderRadius: 6, background: key.trim() && value.trim() ? '#0e639c' : '#3c3c3c', border: '1px solid #3c3c3c', color: key.trim() && value.trim() ? '#ffffff' : '#d4d4d4', cursor: 'pointer', fontSize: 12, flexShrink: 0, transition: 'all 0.15s' }}
           >存入</button>
         </div>
       </div>
@@ -283,16 +377,93 @@ export function MemoryPanel() {
             <ReloadOutlined spin style={{ color: '#333', fontSize: 18 }} />
           </div>
         ) : entries.length === 0 ? emptyState('暂无记忆条目') : entries.map((e) => (
-          <div key={e.id} style={{ marginBottom: 4, borderRadius: 6, border: '1px solid #252525', background: 'rgba(255,255,255,0.025)', overflow: 'hidden' }}>
+          <div key={e.id} style={{ marginBottom: 4, borderRadius: 6, border: '1px solid #3c3c3c', background: '#252526', overflow: 'hidden' }}>
             <div style={{ display: 'flex', alignItems: 'center', padding: '7px 10px 4px', gap: 8 }}>
               <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#0e639c', flexShrink: 0 }} />
-              <span style={{ flex: 1, fontSize: 11, fontWeight: 600, color: '#4e9be6', fontFamily: 'Consolas,monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.key}</span>
+              <span style={{ flex: 1, fontSize: 11, fontWeight: 600, color: '#4fc1ff', fontFamily: 'Consolas,monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.key}</span>
+              {iconBtn('建立关联', <LinkOutlined />, () => openLinkModal(e))}
+              {iconBtn('编辑', <EditOutlined />, () => { setEditingId(e.id); setEditValue(e.value) })}
               {iconBtn('删除', <DeleteOutlined />, () => handleDelete(e.id), true)}
             </div>
-            <div style={{ padding: '0 10px 8px 24px', fontSize: 12, color: '#8b949e', lineHeight: 1.6, wordBreak: 'break-all' }}>{e.value}</div>
+            {editingId === e.id ? (
+              <div style={{ padding: '0 10px 8px 24px' }}>
+                <Input.TextArea 
+                  value={editValue} 
+                  onChange={ev => setEditValue(ev.target.value)} 
+                  style={{ background: '#3c3c3c', color: '#d4d4d4', border: '1px solid #3c3c3c', fontSize: 12, marginBottom: 8 }} 
+                  autoSize={{ minRows: 2, maxRows: 6 }}
+                />
+                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                  <button onClick={() => setEditingId(null)} style={{ background: 'transparent', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: 12 }}>取消</button>
+                  <button onClick={() => handleUpdate(e.id)} style={{ background: '#0e639c', border: 'none', color: '#ffffff', padding: '2px 8px', borderRadius: 4, cursor: 'pointer', fontSize: 12 }}>保存</button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ padding: '0 10px 8px 24px', fontSize: 12, color: '#d4d4d4', lineHeight: 1.6, wordBreak: 'break-all' }}>{e.value}</div>
+            )}
           </div>
         ))}
       </div>
+      
+      {/* 下半部分展示记忆图谱 */}
+      <div style={{ height: '40%', flexShrink: 0, borderTop: '1px solid #3c3c3c' }}>
+        <MemoryGraphPanel />
+      </div>
+
+      {/* 连线弹窗 */}
+      <Modal
+        title="建立记忆关联"
+        open={linkModalVisible}
+        onOk={handleLinkSubmit}
+        onCancel={() => setLinkModalVisible(false)}
+        okText="建立连线"
+        cancelText="取消"
+        width={400}
+        styles={{ body: { paddingTop: 16 } }}
+        className="dark-modal"
+      >
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 12, color: '#8b949e', marginBottom: 4 }}>源节点 (Source):</div>
+          <div style={{ background: '#3c3c3c', padding: '6px 10px', borderRadius: 4, fontSize: 12, color: '#d4d4d4', border: '1px solid #444' }}>
+            {linkSource?.value.slice(0, 40)}{linkSource?.value.length && linkSource.value.length > 40 ? '...' : ''}
+          </div>
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 12, color: '#8b949e', marginBottom: 4 }}>目标节点 (Target):</div>
+          <Select
+            style={{ width: '100%' }}
+            value={linkTargetId}
+            onChange={setLinkTargetId}
+            options={entries.filter(e => e.id !== linkSource?.id).map(e => ({ value: e.id, label: e.value }))}
+            placeholder="请选择要关联的记忆节点"
+          />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 12, color: '#8b949e', marginBottom: 4 }}>关联类型 (Type):</div>
+          <Select
+            style={{ width: '100%' }}
+            value={linkType}
+            onChange={setLinkType}
+            options={[
+              { value: 'similar_to', label: '相似 (similar_to)' },
+              { value: 'reinforces', label: '强化 (reinforces)' },
+              { value: 'contradicts', label: '矛盾 (contradicts)' },
+              { value: 'part_of', label: '组成部分 (part_of)' },
+              { value: 'leads_to', label: '导致 (leads_to)' }
+            ]}
+          />
+        </div>
+        <div>
+          <div style={{ fontSize: 12, color: '#8b949e', marginBottom: 4 }}>关联原因 (可选):</div>
+          <Input.TextArea
+            value={linkDesc}
+            onChange={e => setLinkDesc(e.target.value)}
+            placeholder="描述为什么建立这个关联..."
+            rows={2}
+            style={{ background: '#3c3c3c', color: '#d4d4d4', border: '1px solid #444' }}
+          />
+        </div>
+      </Modal>
     </div>
   )
 }

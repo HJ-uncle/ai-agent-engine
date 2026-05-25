@@ -1,7 +1,9 @@
 /**
+ * @vitest-environment jsdom
  * explorerStore unit tests
  * Run: npm test -- --testPathPattern=explorer.store
  */
+import { describe, test, expect, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { useExplorerStore } from '../explorer'
 

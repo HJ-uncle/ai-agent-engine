@@ -352,7 +352,13 @@ export default function App() {
           Button: { borderRadius: 4 },
           Input: { colorBgContainer: '#3c3c3c', colorBorder: '#3c3c3c', colorText: '#cccccc' },
           Select: { colorBgContainer: '#3c3c3c', colorBgElevated: '#252526', colorBorder: '#3c3c3c' },
-          Modal: { colorBgElevated: '#1e1e1e' },
+          Modal: { 
+            colorBgElevated: '#252526', 
+            colorText: '#d4d4d4', 
+            colorTextHeading: '#ffffff',
+            headerBg: '#252526',
+            contentBg: '#252526'
+          },
           Slider: { colorPrimaryBorder: '#0e639c', colorPrimary: '#0e639c' },
         },
       }}

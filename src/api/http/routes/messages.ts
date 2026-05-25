@@ -126,13 +126,12 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     const reqLogger = createRequestLogger(requestId, tenantId, sessionId)
 
     // Build tool registry（统一工厂，含所有内置工具 + MCP + Skills）
-    const { registry, memory, externalSkills, toolCategories } = await createToolRegistry()
+    const { registry, externalSkills, toolCategories } = await createToolRegistry()
 
     const ctx = createAgentContext({
       sessionId,
       tenantId,
       tools: registry,
-      memory,
       history,
       logger: reqLogger,
       requestId,

@@ -39,6 +39,8 @@ export default function AgentSettings() {
     'HISTORY_MAX_TOKENS',
     'TOOL_OUTPUT_MAX_CHARS',
     'COMPRESS_THRESHOLD_RATIO',
+    'MEMORY_CONSOLIDATION_INTERVAL_HOURS',
+    'MEMORY_DECAY_THRESHOLD',
   ]
 
   return (
@@ -129,6 +131,38 @@ export default function AgentSettings() {
               onChange={(v) => handleChange('TOOL_OUTPUT_MAX_CHARS', v)}
               style={{ width: 120, ...INPUT_STYLE }}
               formatter={(v) => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+            />
+          </SettingRow>
+        </div>
+      </div>
+
+      {/* ── 记忆生命周期 ── */}
+      <div className={styles.section}>
+        <div className={styles.sectionTitle}>记忆生命周期 (Consolidation)</div>
+        <div className={styles.card}>
+          <SettingRow
+            title="自动反思间隔 (小时)"
+            desc="后台守护进程自动扫描并衰减长期未激活记忆的时间间隔 (MEMORY_CONSOLIDATION_INTERVAL_HOURS)"
+            envKey="MEMORY_CONSOLIDATION_INTERVAL_HOURS"
+          >
+            <InputNumber
+              min={1} max={720} step={1}
+              value={settings.MEMORY_CONSOLIDATION_INTERVAL_HOURS || 24}
+              onChange={(v) => handleChange('MEMORY_CONSOLIDATION_INTERVAL_HOURS', v)}
+              style={{ width: 120, ...INPUT_STYLE }}
+            />
+          </SettingRow>
+
+          <SettingRow
+            title="记忆遗忘阈值"
+            desc="当节点强度(strength)衰减至该值及以下时，会被纳入待遗忘清单 (MEMORY_DECAY_THRESHOLD)"
+            envKey="MEMORY_DECAY_THRESHOLD"
+          >
+            <InputNumber
+              min={0.01} max={0.5} step={0.01}
+              value={settings.MEMORY_DECAY_THRESHOLD || 0.05}
+              onChange={(v) => handleChange('MEMORY_DECAY_THRESHOLD', v)}
+              style={{ width: 120, ...INPUT_STYLE }}
             />
           </SettingRow>
         </div>

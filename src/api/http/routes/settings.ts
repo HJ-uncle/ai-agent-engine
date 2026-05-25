@@ -68,6 +68,9 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       // ── Observability ────────────────────────────────────────────────────
       QA_LOG_ENABLED: getStr('QA_LOG_ENABLED', 'false') === 'true',
       QA_LOG_DIR:     getStr('QA_LOG_DIR',     './logs/qa'),
+      // ── Memory ───────────────────────────────────────────────────────────
+      MEMORY_CONSOLIDATION_INTERVAL_HOURS: parseInt(getStr('MEMORY_CONSOLIDATION_INTERVAL_HOURS', '24'), 10),
+      MEMORY_DECAY_THRESHOLD: parseFloat(getStr('MEMORY_DECAY_THRESHOLD', '0.05')),
       // ── Performance ──────────────────────────────────────────────────────
       TOOL_CONCURRENCY_LIMIT: parseInt(getStr('TOOL_CONCURRENCY_LIMIT', '8'),      10),
       SQLITE_CACHE_KB:        parseInt(getStr('SQLITE_CACHE_KB',        '20000'),  10),

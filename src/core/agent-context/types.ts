@@ -89,13 +89,6 @@ export interface Tool {
 
 // ─── Storage Interfaces (forward declarations) ────────────────────────────────
 
-export interface MemoryStore {
-  remember(key: string, value: string, ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<void>
-  recall(key: string, ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<string | null>
-  list(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<any[]>
-  forget(key: string, ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<void>
-}
-
 export interface ConversationHistory {
   append(message: Message, ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<string>
   getHistory(ctx: Pick<AgentContext, 'tenantId' | 'sessionId' | 'inheritContext'>): Promise<Message[]>
@@ -134,7 +127,6 @@ export interface AgentContext {
   workspaceDir: string
   workspacePaths?: string[] // 自定义工作区路径列表
   tools: IToolRegistry
-  memory: MemoryStore
   history: ConversationHistory
   logger: Logger
   tokenBudget: number
@@ -154,7 +146,6 @@ export interface CreateAgentContextOptions {
   tenantId?: string
   workspacePaths?: string[] // 自定义工作区路径列表
   tools: IToolRegistry
-  memory: MemoryStore
   history: ConversationHistory
   logger: Logger
   tokenBudget?: number

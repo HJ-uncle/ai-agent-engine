@@ -52,7 +52,6 @@ export function createAgentContext(options: CreateAgentContextOptions): AgentCon
     workspaceDir,
     workspacePaths: options.workspacePaths,
     tools: options.tools,
-    memory: options.memory,
     history: options.history,
     logger: options.logger.child({ tenantId, sessionId: options.sessionId }),
     tokenBudget,

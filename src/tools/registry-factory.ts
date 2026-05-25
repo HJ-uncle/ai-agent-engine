@@ -5,7 +5,6 @@
  * 新增或移除工具只需修改这一处。
  */
 import { ToolRegistry } from '../core/tool-registry/index.js'
-import { SQLiteMemoryStore } from '../storage/memory-store/index.js'
 import { registerBuiltinSkills, skillsRegistry } from '../skills/index.js'
 import { fileTools, smartReadFileTool } from './file/index.js'
 import { cmdTool } from './cmd/index.js'
@@ -84,12 +83,10 @@ export interface ToolCategories {
 
 export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Promise<{
   registry: ToolRegistry
-  memory: SQLiteMemoryStore
   externalSkills: ExternalSkill[]
   toolCategories: ToolCategories
 }> {
   const registry = new ToolRegistry()
-  const memory = new SQLiteMemoryStore()
 
   // ── Tool category tracking ────────────────────────────────────────────
   const builtinTools: string[] = []
@@ -165,10 +162,12 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   // 4. 向用户提问工具 - 始终注册，交互需要
   registerBuiltin(askUserTool)
 
-  // 5. 记忆工具（remember / recall / search_memory）
-  if (shouldRegister('remember')) createMemoryTools(memory).filter(t => t.name === 'remember').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('recall')) createMemoryTools(memory).filter(t => t.name === 'recall').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('search_memory')) createMemoryTools(memory).filter(t => t.name === 'search_memory').forEach((t) => registerBuiltin(t))
+  // 5. 记忆工具（remember / recall / search_memory / list_memories / forget）
+  const memTools = createMemoryTools()
+  if (shouldRegister('remember')) memTools.filter(t => t.name === 'remember').forEach((t) => registerBuiltin(t))
+  if (shouldRegister('recall')) memTools.filter(t => t.name === 'recall').forEach((t) => registerBuiltin(t))
+  if (shouldRegister('list_memories')) memTools.filter(t => t.name === 'list_memories').forEach((t) => registerBuiltin(t))
+  if (shouldRegister('forget')) memTools.filter(t => t.name === 'forget').forEach((t) => registerBuiltin(t))
 
   // 6. 外部 Skill 工具（按 allowedSkills 过滤；合并 inlineSkills）
   let externalSkills = skillsRegistry.getSkills()
@@ -265,5 +264,5 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   }
 
   const toolCategories: ToolCategories = { builtinTools, mcpTools, skillTools }
-  return { registry, memory, externalSkills, toolCategories }
+  return { registry, externalSkills, toolCategories }
 }

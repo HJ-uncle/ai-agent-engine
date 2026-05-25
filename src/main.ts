@@ -30,6 +30,7 @@ import { buildServer } from './api/http/index.js'
 import { logger } from './observability/index.js'
 import { skillsRegistry } from './skills/index.js'
 import { initDb } from './storage/sqlite/db.js'
+import { initMemoryDb, closeMemoryDb, MEMORY_SCHEMA, MemoryConsolidator } from './storage/memory/index.js'
 import { systemConfigStore } from './storage/sqlite/system-config.js'
 import { networkInterfaces } from 'node:os'
 
@@ -40,6 +41,14 @@ async function main() {
   try {
     // 初始化数据库（建表、补列，幂等）
     await initDb()
+
+    // 初始化独立记忆数据库（幂等）
+    await initMemoryDb(MEMORY_SCHEMA)
+    logger.info('Memory database initialized')
+    
+    // 启动记忆反思整理 (Consolidation) 定时任务
+    const consolidator = new MemoryConsolidator()
+    consolidator.startDaemon('default')
 
     // 将数据库中的 system_config 同步到 process.env（DB 优先）
     // 这样所有直接读取 process.env 的模块（react.ts、history.ts 等）
@@ -89,7 +98,9 @@ async function main() {
     // 优雅关闭：停止文件监听
     const shutdown = async (signal: string) => {
       logger.info({ signal }, 'Shutting down...')
+      consolidator.stopDaemon()
       skillsRegistry.stop()
+      closeMemoryDb()
       await server.close()
       process.exit(0)
     }

@@ -16,6 +16,7 @@
     "start:win": "chcp 65001 && node dist/main.js",
     "start": "node dist/main.js",
     "db:migrate": "tsx src/storage/sqlite/migrate.ts",
+    "memory:migrate": "tsx src/storage/memory/migrate.ts",
     "test": "vitest",
     "test:coverage": "vitest --coverage",
     "lint": "eslint src/",
@@ -58,6 +59,7 @@
     "@vitest/coverage-v8": "^2.1.9",
     "eslint": "^8",
     "javascript-obfuscator": "^5.4.2",
+    "jsdom": "^29.1.1",
     "tsx": "^4",
     "typescript": "^5",
     "vitest": "^2.1.9"

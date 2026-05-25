@@ -19,6 +19,7 @@ import { estimateTokens } from '../../../core/utils/tokens.js'
 import { searchChunks } from '../../../storage/knowledge/kb-repo.js'
 import { ModelsStore } from '../../../storage/sqlite/models.js'
 import { resolveCapabilities, loadDbCapabilityOverrides } from '../../../core/model-capabilities/index.js'
+import { extractAndStoreMemories, buildMemoryRecallBlock } from '../../../middleware/memory/index.js'
 
 interface ChatBody {
   message: string
@@ -323,7 +324,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     // Build tool registry（统一工厂，含所有内置工具 + MCP + Skills）
     // 把客户端透传的 inline 资源（桌面端本地 skill / mcp）一并注入，
     // 让 list_skills / get_skill / MCP 工具都能即时看到 + 调用。
-    const { registry, memory, externalSkills, toolCategories } = await createToolRegistry({
+    const { registry, externalSkills, toolCategories } = await createToolRegistry({
       allowedSkills,
       allowedTools,
       inlineSkills: requestedInlineSkills,
@@ -354,7 +355,6 @@ export async function chatRoutes(fastify: FastifyInstance) {
       tenantId,
       workspacePaths,
       tools: registry,
-      memory,
       history: new SQLiteConversationHistory(),
       logger: reqLogger,
       requestId,
@@ -580,7 +580,14 @@ export async function chatRoutes(fastify: FastifyInstance) {
       ? `\n\n当前会话绑定了以下工作区路径：\n${allWorkspacePaths.map((p, i) => `  ${i === 0 ? '主工作区' : '自定义工作区'}: ${p}`).join('\n')}\n调用 \`list_files\` 工具（不传参数）可查看所有工作区内容。`
       : `\n\n当前工作区路径：${allWorkspacePaths[0]}`
 
-    const fullSystemPrompt = baseSystemPrompt + ragPrompt + `
+    const memoryRecallBlock = await buildMemoryRecallBlock(tenantId, plainTextQuery, {
+      model: resolvedModel,
+      apiKey: modelApiKey,
+      baseUrl: modelBaseUrl,
+      provider: modelProvider,
+    })
+
+    const fullSystemPrompt = baseSystemPrompt + ragPrompt + memoryRecallBlock + `
 ---
 # Rules
 1. **ALWAYS use the \`ask_user\` tool** to ask questions, clarify intent, or confirm actions — NEVER output questions as plain text. Plain-text questions do not pause the agent loop and cannot be interacted with by the user. This is a hard rule with no exceptions.
@@ -595,7 +602,7 @@ ${workspaceInfo}${attachments && attachments.length > 0 ? `\n\n## 本次消息�
 
     // ── Estimate token counts for each injected prompt section ──────────
     // systemPromptTokens: pure system prompt (excluding RAG context)
-    const pureSystemPrompt = baseSystemPrompt + `
+    const pureSystemPrompt = baseSystemPrompt + memoryRecallBlock + `
 ---
 # Rules
 1. **ALWAYS use the \`ask_user\` tool** to ask questions, clarify intent, or confirm actions — NEVER output questions as plain text. Plain-text questions do not pause the agent loop and cannot be interacted with by the user. This is a hard rule with no exceptions.
@@ -748,6 +755,33 @@ ${workspaceInfo}
           toolCalls,
           usage: finalUsage,
           createdAt: Date.now()
+        })
+
+        setImmediate(() => {
+          extractAndStoreMemories({
+            messages: fullHistory.map((m: any) => ({
+              role: m.role as string,
+              content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+            })),
+            sessionId,
+            tenantId,
+            llm: {
+              model: resolvedModel,
+              apiKey: modelApiKey,
+              baseUrl: modelBaseUrl,
+              provider: modelProvider,
+            },
+            minImportance: 0.3,
+          }).then((res) => {
+            if (res.stored > 0) {
+              reqLogger.info({ extracted: res.extracted, stored: res.stored }, 'Memories auto-extracted')
+            }
+            if (res.errors.length > 0) {
+              reqLogger.warn({ errors: res.errors }, 'Memory extraction had errors')
+            }
+          }).catch((err) => {
+            reqLogger.warn({ err: (err as Error)?.message }, 'Memory extraction failed silently')
+          })
         })
       } catch (err: any) {
         reqLogger.error({ err, agentId }, 'Agent execution error')

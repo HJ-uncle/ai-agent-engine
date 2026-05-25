@@ -28,7 +28,7 @@ interface MenuItemDef {
 }
 
 export function ContextMenu({ state, sessionId, onClose, onRefresh, onStartRename }: ContextMenuProps) {
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const openTab = useExplorerStore(s => s.openTab)
   const pushLog = useExplorerStore(s => s.pushLog)
   const clipboard = useExplorerStore(s => s.clipboard)
@@ -85,7 +85,7 @@ export function ContextMenu({ state, sessionId, onClose, onRefresh, onStartRenam
   const handleDelete = () => {
     if (!node) return
     onClose()
-    Modal.confirm({
+    modal.confirm({
       title: `确定删除 "${node.name}" 吗？`,
       content: '文件将移至系统回收站，可在操作日志中撤销。',
       okText: '删除',

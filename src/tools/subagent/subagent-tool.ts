@@ -99,7 +99,7 @@ export const subagentTool: Tool = {
       ctx.logger.info(`[Subagent] 子会话 ID: ${subSessionId}`)
 
       // 创建子代理的工具注册表
-      const { registry: subRegistry, memory: subMemory, externalSkills } = await createToolRegistry()
+      const { registry: subRegistry, externalSkills } = await createToolRegistry()
 
       // ── 构建子代理的系统提示词 ────────────────────────────────────────
       // 优先级：
@@ -142,7 +142,6 @@ export const subagentTool: Tool = {
         sessionId: subSessionId,
         tenantId: ctx.tenantId,
         tools: subRegistry,
-        memory: subMemory,
         history: new SQLiteConversationHistory(),
         logger: ctx.logger.child({ subSessionId }),
         tokenBudget: ctx.tokenBudget,
@@ -164,12 +163,6 @@ export const subagentTool: Tool = {
         { role: 'user', content: task }
       ], subCtx)) {
         result += chunk
-      }
-
-      // 清理子代理内存（使用 forget 方法清理）
-      const memories = await subMemory.list({ tenantId: subCtx.tenantId, sessionId: subCtx.sessionId })
-      for (const memory of memories) {
-        await subMemory.forget(memory.key, { tenantId: subCtx.tenantId, sessionId: subCtx.sessionId })
       }
 
       ctx.logger.info(`[Subagent] 任务执行完成，结果长度: ${result.length}`)

@@ -57,11 +57,16 @@ export interface LLMAdapterOptions {
   includeStreamUsage?: boolean
 }
 
+export interface EmbedOptions {
+  model?: string
+}
+
 export interface LLMAdapter {
   readonly provider: string
   readonly model: string
   complete(messages: Message[], options?: LLMAdapterOptions): Promise<LLMResponse>
   stream(messages: Message[], options?: LLMAdapterOptions): AsyncIterable<LLMStreamChunk>
+  embed?(text: string | string[], options?: EmbedOptions): Promise<number[][]>
   countTokens(text: string): number
 }
 

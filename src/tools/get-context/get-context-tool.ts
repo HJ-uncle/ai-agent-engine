@@ -71,14 +71,13 @@ export const getCurrentContextTool: Tool = {
       contextInfo.push(``)
       contextInfo.push(`### 记忆信息`)
       try {
-        const memories = await ctx.memory.list({ tenantId: ctx.tenantId, sessionId: ctx.sessionId })
-        contextInfo.push(`**已存储 ${memories.length} 条记忆**\n`)
-        for (const mem of memories.slice(0, 5)) {
-          const value = typeof mem.value === 'string' ? mem.value.slice(0, 80) : JSON.stringify(mem.value).slice(0, 80)
-          contextInfo.push(`- **${mem.key}**: ${value}${value.length >= 80 ? '...' : ''}`)
-        }
-        if (memories.length > 5) {
-          contextInfo.push(`- ...还有 ${memories.length - 5} 条记忆`)
+        const { SQLiteMemoryManager } = await import('../../storage/memory/memory-manager.js')
+        const manager = new SQLiteMemoryManager()
+        const memories = await manager.listNodes({ limit: 5, orderBy: 'timestamp', orderDir: 'DESC' }, { tenantId: ctx.tenantId, sessionId: ctx.sessionId })
+        contextInfo.push(`**已存储近期记忆**\n`)
+        for (const mem of memories) {
+          const value = typeof mem.summary === 'string' ? mem.summary.slice(0, 80) : ''
+          contextInfo.push(`- **[${mem.type}]**: ${value}${value.length >= 80 ? '...' : ''}`)
         }
       } catch (e) {
         contextInfo.push(`*无法获取记忆信息: ${(e as Error).message}*`)

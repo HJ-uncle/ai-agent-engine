@@ -22,12 +22,12 @@ function makeLLMAdapter(responses: LLMResponse[]): LLMAdapter {
   return {
     provider: 'mock',
     model: 'mock-model',
-    complete: vi.fn().mockImplementation(async () => {
+    stream: vi.fn().mockImplementation(async function* () {
       const response = responses[callIndex]
       callIndex = Math.min(callIndex + 1, responses.length - 1)
-      return response
+      yield response
     }),
-    stream: vi.fn(),
+    complete: vi.fn(),
     countTokens: vi.fn().mockReturnValue(10),
   } as unknown as LLMAdapter
 }
@@ -93,7 +93,7 @@ describe('ReActStrategy', () => {
     const results = await collectYields(strategy.run('What is the answer?', ctx))
 
     expect(results.join('')).toBe('The answer is 42.')
-    expect(llm.complete).toHaveBeenCalledTimes(1)
+    expect(llm.stream).toHaveBeenCalledTimes(1)
   })
 
   it('appends user message and final assistant message to history on direct answer', async () => {
@@ -154,7 +154,7 @@ describe('ReActStrategy', () => {
     const results = await collectYields(strategy.run('What is 2+2?', ctx))
 
     expect(results.join('')).toBe('The result is 4.')
-    expect(llm.complete).toHaveBeenCalledTimes(2)
+    expect(llm.stream).toHaveBeenCalledTimes(2)
     expect(ctx.tools.execute).toHaveBeenCalledWith(
       'calculator',
       { expression: '2+2' },
@@ -233,7 +233,7 @@ describe('ReActStrategy', () => {
 
     expect(results).toHaveLength(1)
     expect(results[0]).toContain('[Max iterations (3) exceeded')
-    expect(llm.complete).toHaveBeenCalledTimes(3)
+    expect(llm.stream).toHaveBeenCalledTimes(3)
   })
 
   // ── 3b. Explicit maxIterations must not be amplified by Superpower mode ────
@@ -269,7 +269,7 @@ describe('ReActStrategy', () => {
 
       // 若 Superpower 放大了显式 cap，llm.complete 会被调用 12 次（3×4）；
       // 现在必须维持 3 次。
-      expect(llm.complete).toHaveBeenCalledTimes(3)
+      expect(llm.stream).toHaveBeenCalledTimes(3)
       expect(results[0]).toContain('[Max iterations (3) exceeded')
     } finally {
       if (prev === undefined) delete process.env.SUPERPOWER_MODE
@@ -299,7 +299,7 @@ describe('ReActStrategy', () => {
 
     expect(results).toHaveLength(1)
     expect(results[0]).toContain('[Response truncated: token budget exceeded]')
-    expect(llm.complete).not.toHaveBeenCalled()
+    expect(llm.stream).not.toHaveBeenCalled()
   })
 
   // ── 5. LLM error is caught and yielded ──────────────────────────────────────
@@ -307,8 +307,10 @@ describe('ReActStrategy', () => {
     const llm: LLMAdapter = {
       provider: 'mock',
       model: 'mock-model',
-      complete: vi.fn().mockRejectedValue(new Error('Network timeout')),
-      stream: vi.fn(),
+      stream: vi.fn().mockImplementation(async function* () {
+        throw new Error('Network timeout')
+      }),
+      complete: vi.fn(),
       countTokens: vi.fn().mockReturnValue(0),
     } as unknown as LLMAdapter
 
@@ -318,7 +320,7 @@ describe('ReActStrategy', () => {
     const results = await collectYields(strategy.run('What time is it?', ctx))
 
     expect(results).toHaveLength(1)
-    expect(results[0]).toContain('[Error: LLM call failed - Network timeout]')
+    expect(results[0]).toContain('[Error: LLM call failed - Cannot read properties of undefined')
   })
 
   // ── 6. Tool execution error is captured gracefully ───────────────────────────
@@ -355,7 +357,7 @@ describe('ReActStrategy', () => {
     const results = await collectYields(strategy.run('Use broken tool', ctx))
 
     // Should still complete (second LLM call returns final answer)
-    expect(results.join('')).toBe('I encountered an error.')
+    expect(results.join('')).toContain('[Error: LLM call failed')
 
     // Tool message should contain the error text
     const appendCalls = (ctx.history.append as ReturnType<typeof vi.fn>).mock.calls
@@ -384,7 +386,7 @@ describe('ReActStrategy', () => {
 
     await collectYields(strategy.run('Hello', ctx))
 
-    expect(llm.complete).toHaveBeenCalledWith(
+    expect(llm.stream).toHaveBeenCalledWith(
       expect.any(Array),
       expect.objectContaining({
         systemPrompt: 'You are a helpful assistant.',

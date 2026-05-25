@@ -1,13 +1,12 @@
-import React, { Suspense, lazy, useEffect, useState } from 'react'
+import React, { Suspense, lazy, useEffect, useState, useRef } from 'react'
 import { Button } from 'antd'
-import { useExplorerStore, selectActiveTab } from '@core/store/explorer'
+import { useExplorerStore } from '@core/store/explorer'
 import { useSessionStore } from '@core/store/session'
 import { useTerminalStore } from '@core/store/terminal'
 import { workspaceApi } from '@core/api'
 import { EditorTabs } from './editor/EditorTabs'
 import { ImagePreview } from './editor/ImagePreview'
 import { VideoPreview } from './editor/VideoPreview'
-import { HexEditor } from './editor/HexEditor'
 
 // Monaco / Terminal 懒加载，减小初始 chunk 体积
 const MonacoEditor = lazy(() =>
@@ -35,7 +34,16 @@ const editorLoading = (
 // ─── EditorArea ───────────────────────────────────────────────────────────────
 
 export default function EditorArea() {
-  const activeTab = useExplorerStore(selectActiveTab)
+  const activeTabPath = useExplorerStore(s => s.activeTabPath)
+  const activeTabName = useExplorerStore(s => s.tabs.find(t => t.path === s.activeTabPath)?.name ?? '')
+  const activeTabType = useExplorerStore(s => s.tabs.find(t => t.path === s.activeTabPath)?.type ?? 'text')
+
+  const activeTab = activeTabPath ? {
+    path: activeTabPath,
+    name: activeTabName,
+    type: activeTabType,
+  } : null
+
   const sessionId = useSessionStore(s => s.activeSessionId) ?? ''
   const panelVisible = useTerminalStore(s => s.panelVisible)
 
@@ -48,12 +56,21 @@ export default function EditorArea() {
   const [fileInfo, setFileInfo] = useState<{ size: number; type: string } | null>(null)
   const [loading, setLoading] = useState(false)
 
+  // Using a ref to prevent infinite loops if dependencies change too frequently
+  const loadedPathRef = useRef<string | null>(null)
+
   useEffect(() => {
     if (!activeTab) {
       setFileInfo(null)
+      loadedPathRef.current = null
       return
     }
 
+    if (loadedPathRef.current === activeTab.path) {
+      return // Already loaded this file's info, skip fetching again to prevent infinite loops
+    }
+    
+    loadedPathRef.current = activeTab.path
     setLoading(true)
     workspaceApi.getFileInfo(sessionId, activeTab.path)
       .then(info => {

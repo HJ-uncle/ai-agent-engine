@@ -51,6 +51,33 @@ function truncateToolOutput(output: string, maxChars: number = getToolOutputMaxC
   return `${head}\n\n... [truncated ${truncatedChars} chars] ...\n\n${tail}`
 }
 
+/**
+ * 尝试修复 LLM 生成的破损 JSON（如字符串内部未转义的双引号、尾随逗号、换行符等）
+ */
+function repairJson(str: string): string {
+  if (!str || str.trim() === '') return '{}'
+  try {
+    JSON.parse(str)
+    return str
+  } catch (e) {}
+
+  let repaired = str
+  
+  // 1. 修复中文字符/常规字符之间的未转义双引号 (例如: "description": "能"看见"死灵")
+  // 匹配前后都不是 JSON 结构字符(如 { } [ ] : , 和空白符)的双引号
+  repaired = repaired.replace(/(?<=[^\{\}\[\]:, \n\r\t])"(?=[^\{\}\[\]:, \n\r\t])/g, '\\"')
+  try { JSON.parse(repaired); return repaired } catch (e) {}
+
+  // 2. 移除对象或数组末尾的多余逗号
+  repaired = repaired.replace(/,\s*([}\]])/g, '$1')
+  try { JSON.parse(repaired); return repaired } catch (e) {}
+
+  // 3. 转义未转义的换行符
+  repaired = repaired.replace(/\n/g, '\\n').replace(/\r/g, '\\r')
+  try { JSON.parse(repaired); return repaired } catch (e) {}
+
+  return str // 如果实在修不好，返回原字符串让 JSON.parse 抛错
+}
 
 export interface TokenUsage {
   /** Tokens in the system prompt (excluding RAG context) */
@@ -232,7 +259,7 @@ export class ReActStrategy implements LoopStrategy {
         })
       }
 
-      // 2. 压缩后重新取 windowed messages（applyTokenWindow 会截断超大消息）
+      // 2. 压缩后重新取 windowed messages（applyTokenWindow 加截断超大消息）
       let messages = await ctx.history.getHistory(ctx)
 
       // ★ 修复：当设置了 displayContent（前端原始格式）时，历史存的是 displayContent，
@@ -364,15 +391,19 @@ export class ReActStrategy implements LoopStrategy {
         // Convert toolCallsMap back to response.toolCalls
          response.toolCalls = Array.from(toolCallsMap.values()).map((tc: any) => {
            let parsedArgs = {}
+           let parseError: string | undefined
            try {
-             parsedArgs = JSON.parse(tc.args || '{}')
+             parsedArgs = JSON.parse(repairJson(tc.args || '{}'))
            } catch (e) {
              ctx.logger.error({ err: e, args: tc.args }, 'Failed to parse tool arguments')
+             parseError = e instanceof Error ? e.message : String(e)
            }
            return {
              id: tc.id || `call_${uuidv4()}`,
              name: tc.name || '',
              args: parsedArgs,
+             _rawArgs: tc.args,
+             _parseError: parseError,
            }
          })
         
@@ -535,7 +566,7 @@ export class ReActStrategy implements LoopStrategy {
         yield `\x00__tool_call__${JSON.stringify({ toolName: toolCall.name, args: toolCall.args, toolCallId: toolCall.id, messageId: assistantMsgId })}`
 
         // SPECIAL CASE: ask_user tool pauses the agent loop
-        if (toolCall.name === 'ask_user') {
+        if (toolCall.name === 'ask_user' && !toolCall._parseError) {
           // Output the interactive card
           yield `\x00__ask_user__${JSON.stringify({ ...toolCall.args, toolCallId: toolCall.id })}`
           // ★ 别名帧（新版协议）：携带 sessionId / requestId 以便外部下游做权限关联
@@ -557,22 +588,29 @@ export class ReActStrategy implements LoopStrategy {
         }
 
         let toolResult
-        try {
-          // 工具执行前再次检查 abort，避免长时间运行的工具浪费资源
-          if (ctx.signal?.aborted) {
-            ctx.logger.info({ toolName: toolCall.name }, 'Aborted before tool execution')
-            return
-          }
-          toolResult = await ctx.tools.execute(toolCall.name, toolCall.args, ctx)
-        } catch (err) {
-          // 区分主动 abort 与真正的工具错误
-          if ((err as any)?.name === 'AbortError' || ctx.signal?.aborted) {
-            ctx.logger.info({ toolName: toolCall.name }, 'Tool execution aborted')
-            return
-          }
+        if (toolCall._parseError) {
           toolResult = {
             success: false,
-            output: `Tool error: ${err instanceof Error ? err.message : 'unknown error'}`,
+            output: `Tool error: SyntaxError in arguments JSON: ${toolCall._parseError}\nPlease ensure your tool arguments are strictly valid JSON (e.g. properly escape internal quotes). Raw args: ${toolCall._rawArgs}`,
+          }
+        } else {
+          try {
+            // 工具执行前再次检查 abort，避免长时间运行的工具浪费资源
+            if (ctx.signal?.aborted) {
+              ctx.logger.info({ toolName: toolCall.name }, 'Aborted before tool execution')
+              return
+            }
+            toolResult = await ctx.tools.execute(toolCall.name, toolCall.args, ctx)
+          } catch (err) {
+            // 区分主动 abort 与真正的工具错误
+            if ((err as any)?.name === 'AbortError' || ctx.signal?.aborted) {
+              ctx.logger.info({ toolName: toolCall.name }, 'Tool execution aborted')
+              return
+            }
+            toolResult = {
+              success: false,
+              output: `Tool error: ${err instanceof Error ? err.message : 'unknown error'}`,
+            }
           }
         }
 

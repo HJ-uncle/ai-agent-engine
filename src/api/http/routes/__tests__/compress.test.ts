@@ -26,7 +26,10 @@ describe('Conversation Compression API', () => {
   beforeEach(async () => {
     history = new SQLiteConversationHistory()
     fastify = Fastify()
-    fastify.decorateRequest('authContext', { tenantId: 'test-tenant' })
+    fastify.decorateRequest('authContext', null)
+    fastify.addHook('onRequest', async (req) => {
+      ;(req as any).authContext = { tenantId: 'test-tenant' }
+    })
     await fastify.register(conversationRoutes)
   })
 

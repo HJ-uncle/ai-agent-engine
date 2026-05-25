@@ -71,7 +71,7 @@ describe('WorkspaceManager.resolveSafePath', () => {
 
   it('throws on absolute path attack "/etc/passwd"', () => {
     expect(() => manager.resolveSafePath(ctx, '/etc/passwd')).toThrow(
-      /Path traversal detected/,
+      /outside any bound workspace|Path traversal detected/,
     )
   })
 })

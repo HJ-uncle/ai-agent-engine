@@ -65,6 +65,13 @@ export class RetryingAdapter implements LLMAdapter {
   countTokens(text: string): number {
     return this.inner.countTokens(text)
   }
+
+  async embed(text: string | string[], options?: any): Promise<number[][]> {
+    if (this.inner.embed) {
+      return withRetry(() => this.inner.embed!(text, options), this.retryOptions)
+    }
+    throw new Error('Embed not supported by underlying adapter')
+  }
 }
 
 export class FallbackAdapter implements LLMAdapter {
@@ -98,5 +105,20 @@ export class FallbackAdapter implements LLMAdapter {
 
   countTokens(text: string): number {
     return this.adapters[0].countTokens(text)
+  }
+
+  async embed(text: string | string[], options?: any): Promise<number[][]> {
+    let lastError: unknown
+    for (const adapter of this.adapters) {
+      if (adapter.embed) {
+        try {
+          return await adapter.embed(text, options)
+        } catch (err) {
+          lastError = err
+          console.warn(`LLM embed adapter ${adapter.provider}/${adapter.model} failed, trying fallback...`)
+        }
+      }
+    }
+    throw lastError || new Error('Embed not supported by any fallback adapter')
   }
 }

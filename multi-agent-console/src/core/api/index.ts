@@ -585,9 +585,43 @@ export const memoryApi = {
     }
   },
 
+  // GET /memory/graph?sessionId=xxx
+  getGraph: async (sessionId?: string) => {
+    const qs = new URLSearchParams()
+    if (sessionId) qs.set('sessionId', sessionId)
+    const res = await request<{ nodes: any[], edges: any[] }>(`/memory/graph?${qs}`)
+    return res.data!
+  },
+
   // DELETE /memory/:id
   delete: async (id: string) => {
     const res = await request<{ success: boolean }>(`/memory/${id}`, { method: 'DELETE' })
+    return res.data
+  },
+
+  // PUT /memory/:id
+  update: async (id: string, data: { summary?: string; type?: string; importance?: number }) => {
+    const res = await request<{ success: boolean }>(`/memory/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    })
+    return res.data
+  },
+
+  // POST /memory/link
+  link: async (sourceId: string, targetId: string, type: string, description?: string) => {
+    const res = await request<{ success: boolean; id: string }>('/memory/link', {
+      method: 'POST',
+      body: JSON.stringify({ sourceId, targetId, type, description }),
+    })
+    return res.data
+  },
+
+  // POST /memory/consolidate
+  consolidate: async () => {
+    const res = await request<{ success: boolean; message: string; forgottenCandidates: any[] }>('/memory/consolidate', {
+      method: 'POST',
+    })
     return res.data
   },
 }
