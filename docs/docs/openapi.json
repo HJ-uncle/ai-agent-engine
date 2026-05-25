@@ -950,91 +950,160 @@
     },
     "/memory/remember": {
       "post": {
-        "summary": "保存键值对记忆",
+        "summary": "保存记忆节点",
+        "description": "支持兼容格式 (key, value) 或完整格式 (content, type, tags, emotionalValence)。",
+        "tags": ["Memory"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionId": { "type": "string" },
+                  "key": { "type": "string", "description": "兼容模式：键" },
+                  "value": { "type": "string", "description": "兼容模式：值" },
+                  "content": { "type": "string", "description": "完整模式：记忆内容" },
+                  "type": { "type": "string", "enum": ["fact", "preference", "decision", "lesson", "narrative", "milestone"] },
+                  "tags": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["sessionId"]
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "成功响应",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StandardResponse"
-                }
-              }
-            }
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
           }
         }
       }
     },
-    "/memory/recall": {
+    "/memory/recall/{key}": {
       "get": {
-        "summary": "根据键读取记忆",
+        "summary": "根据键或标签读取记忆",
+        "tags": ["Memory"],
+        "parameters": [
+          { "name": "key", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "sessionId", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
         "responses": {
           "200": {
             "description": "成功响应",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StandardResponse"
-                }
-              }
-            }
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
           }
         }
       }
     },
     "/memory/list": {
       "get": {
-        "summary": "获取记忆键列表",
+        "summary": "获取记忆节点列表",
+        "tags": ["Memory"],
         "parameters": [
-          {
-            "name": "sessionId",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "current",
-            "in": "query",
-            "schema": {
-              "type": "integer"
-            }
-          },
-          {
-            "name": "pageSize",
-            "in": "query",
-            "schema": {
-              "type": "integer"
-            }
-          }
+          { "name": "sessionId", "in": "query", "schema": { "type": "string" } },
+          { "name": "current", "in": "query", "schema": { "type": "integer" } },
+          { "name": "pageSize", "in": "query", "schema": { "type": "integer" } }
         ],
         "responses": {
           "200": {
             "description": "成功响应",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PaginatedResponse"
-                }
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedResponse" } } }
+          }
+        }
+      }
+    },
+    "/memory/graph": {
+      "get": {
+        "summary": "获取记忆图谱数据",
+        "description": "返回节点和边，用于 ECharts 图谱可视化。",
+        "tags": ["Memory"],
+        "parameters": [
+          { "name": "sessionId", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
+          }
+        }
+      }
+    },
+    "/memory/link": {
+      "post": {
+        "summary": "手动建立记忆关联",
+        "tags": ["Memory"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sourceId": { "type": "string" },
+                  "targetId": { "type": "string" },
+                  "type": { "type": "string", "enum": ["reinforces", "contradicts", "leads_to", "part_of", "similar_to", "tagged_with"] },
+                  "description": { "type": "string" }
+                },
+                "required": ["sourceId", "targetId", "type"]
               }
             }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应"
+          }
+        }
+      }
+    },
+    "/memory/consolidate": {
+      "post": {
+        "summary": "触发记忆反思与整理",
+        "tags": ["Memory"],
+        "responses": {
+          "200": {
+            "description": "成功响应"
           }
         }
       }
     },
     "/memory/{id}": {
       "delete": {
-        "summary": "删除记忆",
+        "summary": "删除记忆节点",
+        "tags": ["Memory"],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
         "responses": {
           "200": {
-            "description": "成功响应",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StandardResponse"
+            "description": "成功响应"
+          }
+        }
+      },
+      "put": {
+        "summary": "更新记忆节点",
+        "tags": ["Memory"],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "summary": { "type": "string" },
+                  "type": { "type": "string" },
+                  "importance": { "type": "number" }
                 }
               }
             }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应"
           }
         }
       }

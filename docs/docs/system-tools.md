@@ -34,9 +34,11 @@ Agent Engine 内置一套**系统级工具**，让 AI Agent 具备任务管理�
 | `delete_file` | File | 删除文件或目录 |
 | `create_dir` | File | 创建目录 |
 | `read_image` | File | 读取并解析图片 |
-| `remember` | Memory | 存储记忆条目 |
-| `recall` | Memory | 根据 Key 回忆记忆 |
-| `search_memory` | Memory | 搜索记忆内容 |
+| `remember` | Memory | 记录语义记忆条目（含类型、标签、情感等） |
+| `recall` | Memory | 通过标签检索相关记忆节点 |
+| `list_memories` | Memory | 列出近期更新的记忆节点 |
+| `forget` | Memory | 根据 ID 删除记忆节点 |
+| `link_memories` | Memory | 在两个记忆节点之间建立关联（如矛盾、相似等） |
 | `run_command` | System | 执行 Shell 命令（经安全策略引擎校验） |
 | `ask_user` | Interaction | 向用户提问 |
 | `list_skills` | Skill | 列出可用技能 |
@@ -535,6 +537,109 @@ src/tools/search/grep-tool.ts:14:async function hasRipgrep(): Promise<boolean> {
 
 - 只能分析工作区内的文件，不能访问工作区外路径
 - 分析过程完全在服务器本地执行，不向外部发送代码
+
+---
+
+## Memory 工具
+
+Agent Engine 采用基于三脑架构的**语义记忆网络 (Semantic Memory Network)**，将碎片化信息存储为认知图谱中的节点，并支持通过关联边（Edges）建立逻辑联系。
+
+### `remember`
+
+记录一条重要的信息、偏好、经验或决策到语义记忆体中。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `content` | string | ✅ | 记忆的内容，建议使用简洁完整的陈述句 |
+| `type` | string | ✅ | 记忆类型：`fact` (事实) / `preference` (偏好) / `decision` (决策) / `lesson` (经验) / `narrative` (叙述) / `milestone` (里程碑) |
+| `tags` | array | ✅ | 3-5 个分类标签，用于后续检索 |
+| `emotionalValence` | number | 否 | 情感效价 (-1.0 到 1.0)，-1 为极度负面，1 为极度正面，默认 0 |
+| `emotionalTrigger` | string | 否 | 激发该情绪的具体事物或情境 |
+
+**示例**
+
+```
+记住用户喜欢用暗色主题，并且对代码缩进有 2 空格的强迫症
+→ 调用 remember({
+    content: "用户偏好暗色主题和 2 空格缩进",
+    type: "preference",
+    tags: ["UI", "coding-style", "indentation"],
+    emotionalValence: 0.5
+  })
+```
+
+---
+
+### `recall`
+
+通过标签在语义记忆网络中检索相关的记忆节点。系统会自动计算标签匹配度并返回最相关的结果。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `tags` | array | ✅ | 用于检索的标签列表 |
+
+**示例**
+
+```
+帮我查一下关于代码缩进的用户偏好
+→ 调用 recall({ tags: ["indentation", "coding-style"] })
+```
+
+---
+
+### `link_memories`
+
+在两个已有的记忆节点之间建立逻辑关联边，用于构建复杂的认知图谱。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `sourceId` | string | ✅ | 源记忆节点的 ID |
+| `targetId` | string | ✅ | 目标记忆节点的 ID |
+| `type` | string | ✅ | 关联类型：`reinforces` (强化) / `contradicts` (矛盾) / `leads_to` (导致) / `part_of` (组成部分) / `similar_to` (相似) / `tagged_with` (共享标签) |
+| `description` | string | ✅ | 描述这种关联的具体原因或理解 |
+| `strength` | number | 否 | 关联强度 (0.0 到 1.0)，默认 0.5 |
+
+**示例**
+
+```
+将刚记录的缩进偏好与之前的 UI 偏好关联起来，说明它们属于同一类习惯
+→ 调用 link_memories({
+    sourceId: "MEM-123",
+    targetId: "MEM-456",
+    type: "part_of",
+    description: "缩进习惯是用户整体 UI 偏好的一部分"
+  })
+```
+
+---
+
+### `list_memories`
+
+列出记忆体中最近更新或创建的记忆节点。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `limit` | number | 否 | 返回数量限制，默认 10 |
+
+---
+
+### `forget`
+
+根据记忆 ID 从记忆体中永久删除节点及其关联的边。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `id` | string | ✅ | 要删除的记忆节点 ID |
 
 ---
 

@@ -147,10 +147,14 @@
 - `POST /api/v1/mcp/servers/:name/restart`: 重启指定运行中的 MCP 服务器
 
 ### 6. 记忆存储 Memory (`/api/v1/memory`)
-- `POST /api/v1/memory/remember`: 保存新的键值对记忆条目
-- `GET /api/v1/memory/recall?sessionId=xxx`: 根据 Key 回忆/读取记忆
-- `GET /api/v1/memory/list`: 获取所有的记忆 Key 列表 (支持可选参数 `?sessionId=xxx` 和分页)
-- `DELETE /api/v1/memory/:id`: 删除指定的记忆条目
+- `POST /api/v1/memory/remember`: 保存新的记忆节点（支持 `key`/`value` 兼容格式或 `content`/`type` 完整格式）
+- `GET /api/v1/memory/recall/:key?sessionId=xxx`: 根据标签/关键字回忆记忆
+- `GET /api/v1/memory/list`: 获取记忆节点列表 (支持分页和 `?sessionId=xxx`)
+- `GET /api/v1/memory/graph?sessionId=xxx`: 获取记忆图谱数据（包含节点和边，用于可视化）
+- `DELETE /api/v1/memory/:id`: 删除指定的记忆节点
+- `PUT /api/v1/memory/:id`: 更新记忆节点内容、类型或重要度
+- `POST /api/v1/memory/link`: 手动建立两个记忆节点之间的关联边
+- `POST /api/v1/memory/consolidate`: 手动触发记忆反思、整理与衰减模拟
 
 ### 7. 任务调度 Tasks (`/api/v1/tasks`)
 - `POST /api/v1/tasks`: 创建新的异步任务或工作流

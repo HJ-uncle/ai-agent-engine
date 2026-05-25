@@ -7,7 +7,8 @@ AI Agent Engine 是一个具备**感知、思考、行动**能力的全栈 AI �
 ## 🌟 核心特性
 
 - **🧠 强大的推理心脏**：内置 ReAct (Thought -> Action -> Observation) 循环，支持 DeepSeek V4 Flash/Pro/R1、Claude 3.7、GPT-4o、Qwen、Kimi k2.6/k2.5/k2-0905、Moonshot 等主流模型及其”思考模式”；未知 Provider 自动降级为 OpenAI-compatible 接口；自动检测第三方代理（OpenRouter/Groq/Together 等）并关闭不兼容特性。
-- **🛠️ 丰富的工具系统**：
+- **�️ 语义记忆网络**：基于图结构的长期记忆系统，支持自动提取重要信息、建立跨会话关联（相似、矛盾、因果等）以及模拟人类记忆的遗忘/衰减机制，让 Agent 真正具备“成长的灵魂”。
+- **�🛠️ 丰富的工具系统**：
   - **内置工具**：文件管理、Shell 终端、网页抓取、图片解析 (`read_image`)。
   - **任务管理**：定时任务 (Cron) 及待办管理 (Todo)，支持 AI 自主排程。
   - **扩展能力**：支持 MCP (Model Context Protocol) 协议及自定义 TypeScript/Python Skills。

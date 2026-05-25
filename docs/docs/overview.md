@@ -99,7 +99,13 @@ graph TD
 - 系统支持 **Parent-Child Agent** 模型。一个复杂的任务（如“重构整个项目”）可以由一个主 Agent 拆分给多个专门的 **SubAgent**（如“代码审查专家”、“测试编写专家”）协同完成。
 - 每个子 Agent 拥有独立的上下文，但共享同一个 **Workspace**，确保产出物的一致性。
 
-### 4. 开放协议：MCP 与 Skills
+### 4. 认知与记忆：语义记忆网络 (Semantic Memory Network)
+- **图结构存储**：记忆不再是孤立的键值对，而是认知图谱中的节点，通过边（Edges）建立联系。
+- **自动提取**：对话结束后，系统会自动异步提取关键事实、用户偏好和决策，存入长期记忆。
+- **关联推理**：支持 `reinforces` (强化)、`contradicts` (矛盾)、`leads_to` (导致) 等多种关联类型，帮助 Agent 构建逻辑一致的世界观。
+- **记忆衰减**：模拟人类遗忘机制，根据时间、访问频率和重要度自动计算记忆权重，确保存储空间的有效利用。
+
+### 5. 开放协议：MCP 与 Skills
 - **MCP (Model Context Protocol)**：允许系统接入外部数据源（如 GitHub、Google Drive）或外部工具。
 - **Skills**：用户可以用 TypeScript/Python 编写自定义脚本，直接扩展 Agent 的能力。
 

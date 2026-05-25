@@ -40,6 +40,7 @@ Agent Engine 是一个 **LLM Agent 运行时引擎**，提供 ReAct 循环、工
 | **会话管理** | 完整历史持久化、Token 统计、消息重生成 |
 | **工作区** | 隔离的物理工作目录，支持 VS Code 风格文件操作 |
 | **安全防护** | 命令注入检测 + SSRF 防护 + 审计日志三层防御 |
+| **语义记忆网络** | 基于图结构的长期记忆，支持关联推理、自动提取与记忆衰减，跨会话保留上下文。 |
 | **Superpower 模式** | 四档能力档位（balanced/methodology/max/off），默认 `balanced`，控制工具集、预算倍率和系统提示词注入 |
 
 ---
@@ -786,6 +787,16 @@ Content-Type: application/json
 |------|------|------|
 | GET | `/api/v1/settings` | 运行时配置 |
 | PUT | `/api/v1/settings` | 更新配置 |
+
+### 12.6 记忆管理 Memory
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/memory/list` | 记忆节点列表 |
+| GET | `/api/v1/memory/graph` | 获取记忆图谱（节点+边） |
+| POST | `/api/v1/memory/remember` | 手动保存记忆 |
+| POST | `/api/v1/memory/link` | 建立记忆关联 |
+| DELETE | `/api/v1/memory/:id` | 删除记忆节点 |
 
 ---
 
