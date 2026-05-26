@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { AgentContext } from '../../../core/agent-context/index.js'
 import { workspaceManager } from '../../../workspace/index.js'
-import { smartReadFileTool, readImageTool } from '../../../tools/file/smart-read.js'
+import { readFileTool } from '../../../tools/file/index.js'
 
 interface ImageUrlPart {
   type: 'image_url'
@@ -70,7 +70,7 @@ const imageHandler: FileHandler = {
       }
     }
 
-    const ocrResult = await readImageTool.execute(
+    const ocrResult = await readFileTool.execute(
       { path: fileName, mode: 'ocr', language: 'eng+chi_sim' },
       ctx
     )
@@ -82,7 +82,7 @@ const imageHandler: FileHandler = {
 const smartReadHandler: FileHandler = {
   match: () => true,
   process: async (ctx, fileName) => {
-    const result = await smartReadFileTool.execute({ path: fileName, mode: 'auto' }, ctx)
+    const result = await readFileTool.execute({ path: fileName, mode: 'auto' }, ctx)
     if (!result.success) return null
     const cleanOutput = result.output.replace(/^\[读取监控\][^\n]*\n\n?/gm, '')
     return { text: cleanOutput }

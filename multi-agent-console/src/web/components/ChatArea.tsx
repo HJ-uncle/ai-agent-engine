@@ -2902,7 +2902,7 @@ export default function ChatArea() {
                 </div>
               </Dropdown>
 
-              <Tooltip title="添加附件 (可拖拽或粘贴)">
+              <Tooltip title="添加附件 (可拖拽或粘贴)，支持 PDF、Word、Excel、文本、代码及图片">
                 <Button
                   type="text"
                   icon={<PaperClipOutlined />}

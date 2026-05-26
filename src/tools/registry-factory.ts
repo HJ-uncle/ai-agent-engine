@@ -6,7 +6,13 @@
  */
 import { ToolRegistry } from '../core/tool-registry/index.js'
 import { registerBuiltinSkills, skillsRegistry } from '../skills/index.js'
-import { fileTools, smartReadFileTool } from './file/index.js'
+import {
+  listFilesTool,
+  deleteFileTool,
+  createDirTool,
+  readFileTool,
+  writeFileTool,
+} from './file/index.js'
 import { cmdTool } from './cmd/index.js'
 import { askUserTool } from './ask-user/index.js'
 import { createMemoryTools } from './memory/index.js'
@@ -147,14 +153,18 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   // list_skills / get_skill are skill-infrastructure tools → track as skill
   skillTools.push('list_skills', 'get_skill')
 
-  // 2. 文件工具（smart_read 万能读取 / read_file 原始读取 / write_file / list_files / delete_file / create_dir）
-  //    smart_read 已内置图片识别，无需单独注册 read_image
-  if (shouldRegister('smart_read')) registerBuiltin(smartReadFileTool)
-  if (shouldRegister('read_file')) fileTools.filter(t => t.name === 'read_file').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('write_file')) fileTools.filter(t => t.name === 'write_file').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('list_files')) fileTools.filter(t => t.name === 'list_files').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('delete_file')) fileTools.filter(t => t.name === 'delete_file').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('create_dir')) fileTools.filter(t => t.name === 'create_dir').forEach((t) => registerBuiltin(t))
+  // 2. 文件工具（read_file / write_file / list_files / delete_file / create_dir）
+  // 支持格式：JSON, CSV, XLSX, XLS, PDF, DOC, DOCX, 代码, 文本
+  const fileTools = [
+    readFileTool,
+    writeFileTool,
+    listFilesTool,
+    deleteFileTool,
+    createDirTool,
+  ]
+  fileTools.forEach(t => {
+    if (shouldRegister(t.name)) registerBuiltin(t)
+  })
 
   // 3. 命令行工具
   if (shouldRegister('run_command')) registerBuiltin(cmdTool)
@@ -163,11 +173,9 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   registerBuiltin(askUserTool)
 
   // 5. 记忆工具（remember / recall / search_memory / list_memories / forget）
-  const memTools = createMemoryTools()
-  if (shouldRegister('remember')) memTools.filter(t => t.name === 'remember').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('recall')) memTools.filter(t => t.name === 'recall').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('list_memories')) memTools.filter(t => t.name === 'list_memories').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('forget')) memTools.filter(t => t.name === 'forget').forEach((t) => registerBuiltin(t))
+  createMemoryTools().forEach(t => {
+    if (shouldRegister(t.name)) registerBuiltin(t)
+  })
 
   // 6. 外部 Skill 工具（按 allowedSkills 过滤；合并 inlineSkills）
   let externalSkills = skillsRegistry.getSkills()
@@ -202,21 +210,19 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   if (shouldRegister('grep')) registerBuiltin(grepTool)
 
   // 8. 待办任务工具（todo_list / todo_create / todo_update / todo_delete）
-  if (shouldRegister('todo_list')) todoTools.filter(t => t.name === 'todo_list').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('todo_create')) todoTools.filter(t => t.name === 'todo_create').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('todo_update')) todoTools.filter(t => t.name === 'todo_update').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('todo_delete')) todoTools.filter(t => t.name === 'todo_delete').forEach((t) => registerBuiltin(t))
+  todoTools.forEach(t => {
+    if (shouldRegister(t.name)) registerBuiltin(t)
+  })
 
   // 9. 定时任务工具（cron_list / cron_create / cron_update / cron_delete）
-  if (shouldRegister('cron_list')) cronTools.filter(t => t.name === 'cron_list').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('cron_create')) cronTools.filter(t => t.name === 'cron_create').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('cron_update')) cronTools.filter(t => t.name === 'cron_update').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('cron_delete')) cronTools.filter(t => t.name === 'cron_delete').forEach((t) => registerBuiltin(t))
+  cronTools.forEach(t => {
+    if (shouldRegister(t.name)) registerBuiltin(t)
+  })
 
   // 10. 后台任务控制工具（task_list / task_cancel / task_status）
-  if (shouldRegister('task_list')) taskControlTools.filter(t => t.name === 'task_list').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('task_cancel')) taskControlTools.filter(t => t.name === 'task_cancel').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('task_status')) taskControlTools.filter(t => t.name === 'task_status').forEach((t) => registerBuiltin(t))
+  taskControlTools.forEach(t => {
+    if (shouldRegister(t.name)) registerBuiltin(t)
+  })
 
   // 11. Subagent 工具
   if (shouldRegister('subagent')) subagentTools.forEach((t) => registerBuiltin(t))
@@ -242,14 +248,9 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   )
 
   // 17. Agent 系统工具 - 按 allowedTools 过滤
-  if (shouldRegister('agent_list')) agentTools.filter(t => t.name === 'agent_list').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('agent_get')) agentTools.filter(t => t.name === 'agent_get').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('agent_create')) agentTools.filter(t => t.name === 'agent_create').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('agent_do_create')) agentTools.filter(t => t.name === 'agent_do_create').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('agent_update')) agentTools.filter(t => t.name === 'agent_update').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('agent_do_update')) agentTools.filter(t => t.name === 'agent_do_update').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('agent_delete')) agentTools.filter(t => t.name === 'agent_delete').forEach((t) => registerBuiltin(t))
-  if (shouldRegister('agent_do_delete')) agentTools.filter(t => t.name === 'agent_do_delete').forEach((t) => registerBuiltin(t))
+  agentTools.forEach(t => {
+    if (shouldRegister(t.name)) registerBuiltin(t)
+  })
 
   // 18. 代码诊断工具（LSP：tsc + eslint），用于 AI 自动检查/修复代码
   if (shouldRegister('code_diagnose')) registerBuiltin(lspDiagnoseTool)
