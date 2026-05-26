@@ -2,7 +2,9 @@ import ExcelJS from 'exceljs'
 import * as XLSX from 'xlsx'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { readCsvAsJson, saveAsCsv } from 'jtcsv'
+import { createRequire } from 'node:module'
+const require = createRequire(import.meta.url)
+const { readCsvAsJson, saveAsCsv } = require('jtcsv')
 import type { AgentContext } from '../../../core/agent-context/index.js'
 import type { FileHandler, ReadOptions, ReadResult } from './interface.js'
 import { cellValueToString } from '../utils.js'
