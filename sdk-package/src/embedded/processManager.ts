@@ -20,7 +20,7 @@ export interface StartProcessOptions {
   binPath: string
   /** 监听端口，注入为 PORT 环境变量 */
   port: number
-  /** 数据目录，注入为 AGENT_ENGINE_DATA_DIR 环境变量 */
+  /** 数据目录，注入为 DATA_DIR 环境变量 */
   dataDir?: string
   /** 额外环境变量（优先级高于 process.env） */
   env?: Record<string, string>
@@ -56,8 +56,8 @@ export function startProcess(opts: StartProcessOptions): ProcessHandle {
     // 禁用 pino-pretty 颜色（避免 Electron 控制台乱码）
     FORCE_COLOR: '0',
     NO_COLOR: '1',
-    // 使用主包识别的 AGENT_ENGINE_DATA_DIR，而非旧的 DATA_DIR
-    ...(opts.dataDir ? { AGENT_ENGINE_DATA_DIR: opts.dataDir } : {}),
+    // 使用主包识别的 DATA_DIR 
+    ...(opts.dataDir ? { DATA_DIR: opts.dataDir } : {}),
     ...(opts.env ?? {})
   }
 

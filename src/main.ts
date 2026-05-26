@@ -26,6 +26,7 @@ try {
   // .env file not present — rely on environment variables already set
 }
 
+
 import { buildServer } from './api/http/index.js'
 import { logger } from './observability/index.js'
 import { skillsRegistry } from './skills/index.js'
