@@ -6,6 +6,28 @@ if (process.platform === 'win32') {
   process.env.PYTHONIOENCODING = 'utf-8'
 }
 
+// --- Polyfills for pdfjs-dist in Node 20 ---
+if (typeof globalThis.DOMMatrix === 'undefined') {
+  globalThis.DOMMatrix = class DOMMatrix {} as any
+}
+if (typeof globalThis.ImageData === 'undefined') {
+  globalThis.ImageData = class ImageData {} as any
+}
+if (typeof (globalThis as any).Path2D === 'undefined') {
+  (globalThis as any).Path2D = class Path2D {} as any
+}
+if (typeof (Promise as any).withResolvers === 'undefined') {
+  (Promise as any).withResolvers = function () {
+    let resolve, reject
+    const promise = new Promise((res, rej) => {
+      resolve = res
+      reject = rej
+    })
+    return { promise, resolve, reject }
+  }
+}
+// -------------------------------------------
+
 // Load .env file manually (no dotenv dependency required)
 import { readFileSync } from 'node:fs'
 
