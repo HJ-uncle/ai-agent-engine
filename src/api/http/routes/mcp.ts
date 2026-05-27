@@ -155,7 +155,7 @@ export async function mcpRoutes(fastify: FastifyInstance) {
       if (!server.url) {
         return reply.code(200).send(fail(40001, 'Server has no URL configured'))
       }
-      const client = new HTTPMCPClient({ name: server.id, url: server.url, headers: server.headers })
+      const client = new HTTPMCPClient({ name: server.name || server.id, url: server.url, headers: server.headers })
       const tools = await client.toTools()
       return reply.code(200).send(success({
         success: true,

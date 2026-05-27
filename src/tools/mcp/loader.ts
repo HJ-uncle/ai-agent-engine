@@ -79,7 +79,7 @@ export async function registerMCPTools(
       }
 
       const client = new HTTPMCPClient({
-        name: server.id,
+        name: server.name || server.id,
         url: server.url,
         headers: server.headers,
       })
@@ -104,7 +104,7 @@ export async function registerMCPTools(
   await Promise.allSettled(
     validInlineServers.map(async (server) => {
       const client = new HTTPMCPClient({
-        name: server.id,
+        name: server.name || server.id,
         url: server.url!,
         headers: server.headers,
       })
