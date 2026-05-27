@@ -101,16 +101,16 @@ export const DEFAULT_PRICES_CONFIG: DeepSeekPricesConfig = {
     {
       modelId: 'deepseek-v4-pro',
       normalPrice: {
-        input: 12,
-        output: 24,
-        cacheHit: 0.1,
+        input: 3,
+        output: 6,
+        cacheHit: 0.025,
       },
       discountPrice: {
         input: 3,
         output: 6,
         cacheHit: 0.025,
       },
-      discountUntil: '2026-05-31T23:59:00+08:00',
+      discountUntil: '3026-05-31T23:59:00+08:00',
     },
     {
       modelId: 'kimi-k2.6',
