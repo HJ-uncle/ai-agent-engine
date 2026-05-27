@@ -123,7 +123,7 @@ export class ExcelHandler implements FileHandler {
   }
 
   async write(filePath: string, data: any, _ctx: AgentContext): Promise<void> {
-    const ext = filePath.toLowerCase().slice(filePath.lastIndexOf('.'))
+    const ext = path.extname(filePath).toLowerCase()
     
     if (ext === '.csv') {
       let rows = data
@@ -144,16 +144,129 @@ export class ExcelHandler implements FileHandler {
     }
 
     const workbook = new ExcelJS.Workbook()
-    const sheet = workbook.addWorksheet(data.sheetName || 'Sheet1')
     
-    if (Array.isArray(data.rows)) {
-      data.rows.forEach((row: any[]) => {
-        sheet.addRow(row)
-      })
-    } else if (Array.isArray(data)) {
-      data.forEach((row: any[]) => {
-        sheet.addRow(row)
-      })
+    // 支持多 Sheet 写入
+    const sheetsData = data.sheets || (Array.isArray(data) ? [{ rows: data }] : [data])
+    
+    for (const sheetData of sheetsData) {
+      const sheet = workbook.addWorksheet(sheetData.name || sheetData.sheetName || `Sheet${workbook.worksheets.length + 1}`)
+      
+      // 样式配置：AI 显式传入 > 预设 theme > 默认
+      const config = {
+        headerBg: sheetData.headerBg || data.headerBg || (sheetData.theme === 'business' || data.theme === 'business' ? '1E3A8A' : undefined),
+        headerColor: sheetData.headerColor || data.headerColor || (sheetData.theme === 'business' || data.theme === 'business' ? 'FFFFFF' : '000000'),
+        rowAlternateBg: sheetData.rowAlternateBg || data.rowAlternateBg || (sheetData.theme === 'business' || data.theme === 'business' ? 'F9FAFB' : undefined),
+        defaultHeight: sheetData.defaultHeight || data.defaultHeight || (sheetData.theme === 'business' || data.theme === 'business' ? 25 : undefined),
+        autoWidth: sheetData.autoWidth || data.autoWidth || false
+      }
+      
+      // 设置列信息 (支持 width)
+      if (Array.isArray(sheetData.columns)) {
+        sheet.columns = sheetData.columns.map((col: any) => ({
+          header: col.header,
+          key: col.key,
+          width: col.width || (config.headerBg ? 15 : undefined),
+          style: col.style
+        }))
+      }
+
+      // 写入行数据
+      const rows = sheetData.rows || (Array.isArray(sheetData) ? sheetData : [])
+      if (Array.isArray(rows)) {
+        rows.forEach((row: any, index: number) => {
+          const addedRow = sheet.addRow(row)
+          // 设置行高
+          if (row && typeof row === 'object' && !Array.isArray(row) && row._height) {
+            addedRow.height = row._height
+          } else if (config.defaultHeight) {
+            addedRow.height = config.defaultHeight
+          }
+
+          // 自动应用斑马纹和基本对齐 (如果有配置)
+          addedRow.eachCell((cell) => {
+            cell.alignment = cell.alignment || { vertical: 'middle', horizontal: 'center' }
+            if (config.rowAlternateBg && index % 2 === 1) {
+              cell.fill = cell.fill || { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + config.rowAlternateBg.replace('#', '') } }
+            }
+          })
+
+          // 如果行数据中有样式定义 (优先级最高)
+          if (row && typeof row === 'object' && !Array.isArray(row) && row._styles) {
+            Object.keys(row._styles).forEach(cellKey => {
+              const cell = addedRow.getCell(cellKey)
+              Object.assign(cell, row._styles[cellKey])
+            })
+          }
+        })
+      }
+
+      // 美化表头 (如果有配置)
+      if (config.headerBg) {
+        const headerRow = sheet.getRow(1)
+        headerRow.height = headerRow.height || 30
+        headerRow.eachCell((cell) => {
+          cell.font = { bold: true, color: { argb: 'FF' + config.headerColor.replace('#', '') }, size: 12 }
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + config.headerBg.replace('#', '') } }
+          cell.alignment = { vertical: 'middle', horizontal: 'center' }
+        })
+      }
+
+      // 自动列宽
+      if (config.autoWidth) {
+        sheet.columns.forEach(column => {
+          let maxColumnLength = 0
+          if (column.header) maxColumnLength = column.header.toString().length
+          sheet.eachRow({ includeEmpty: true }, (row) => {
+            const cellValue = row.getCell(column.key!).value
+            if (cellValue) {
+              const cellLength = cellValue.toString().length
+              if (cellLength > maxColumnLength) maxColumnLength = cellLength
+            }
+          })
+          column.width = Math.min(50, maxColumnLength + 5)
+        })
+      }
+
+      // 插入图片支持
+      const images = sheetData.images || data.images
+      if (Array.isArray(images)) {
+        for (const img of images) {
+          try {
+            const imageId = workbook.addImage({
+              filename: img.path,
+              extension: path.extname(img.path).slice(1) as any,
+            })
+            sheet.addImage(imageId, img.range || 'A1:C5')
+          } catch (e) {
+            _ctx.logger.error(`Failed to add image to Excel: ${e}`)
+          }
+        }
+      }
+
+      // 合并单元格支持
+      if (Array.isArray(sheetData.merges)) {
+        sheetData.merges.forEach((merge: string | [string, string]) => {
+          if (typeof merge === 'string') {
+            sheet.mergeCells(merge)
+          } else if (Array.isArray(merge) && merge.length === 2) {
+            sheet.mergeCells(merge[0], merge[1])
+          }
+        })
+      }
+
+      // 批量样式设置
+      if (Array.isArray(sheetData.styles)) {
+        sheetData.styles.forEach((styleDef: any) => {
+          if (styleDef.cell || styleDef.range) {
+            const target = sheet.getCell(styleDef.cell || styleDef.range)
+            if (styleDef.font) target.font = styleDef.font
+            if (styleDef.fill) target.fill = styleDef.fill
+            if (styleDef.alignment) target.alignment = styleDef.alignment
+            if (styleDef.border) target.border = styleDef.border
+            if (styleDef.numFmt) target.numFmt = styleDef.numFmt
+          }
+        })
+      }
     }
 
     await workbook.xlsx.writeFile(filePath)

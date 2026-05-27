@@ -1,6 +1,6 @@
 {
   "name": "ai-agent-engine",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "files": [
     "dist/**",
@@ -38,6 +38,7 @@
     "@fastify/swagger-ui": "^4",
     "@fastify/websocket": "^11.2.0",
     "@libsql/client": "^0.17.3",
+    "docx": "^9.7.0",
     "exceljs": "^4.4.0",
     "fastify": "^5",
     "jose": "^5",

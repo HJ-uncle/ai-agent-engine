@@ -115,14 +115,25 @@ export const readFileTool: Tool = {
 export const writeFileTool: Tool = {
   name: 'write_file',
   displayName: '写入文件',
-  description: '将数据写入指定格式的文件。自动根据扩展名选择序列化方式。',
+  description: '将数据写入指定格式的文件。支持文本、JSON、Excel (xlsx) 和 Word (docx)。\n\n### 🎨 万能美化指南 (AI 必读)\n- **完全样式开放**: 你可以通过 `headerBg`, `primaryColor`, `font`, `rowAlternateBg` 等参数完全控制文档配色。如果用户说“我要亮紫色风格”，请大胆设置这些颜色。\n- **图片支持**: 支持在 Excel (`images`) 或 Word (`children` 中传 `type: "image"`) 插入图片。只需提供图片路径。\n- **默认专业度**: 如果用户没给指定颜色，默认使用 `theme: "business"` 即可获得深蓝商务风。',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: '要写入的文件路径，扩展名决定格式' },
+      path: { type: 'string', description: '文件路径。报告类任务强制使用 .docx，报表类任务强制使用 .xlsx。' },
       data: { 
         type: ['string', 'object', 'array', 'number', 'boolean', 'null'],
-        description: '要写入的数据。对于文本，直接传字符串；对于 JSON，传对象或数组；对于表格，传 { sheetName: "Sheet1", rows: [[]] }'
+        description: `写入数据。
+- **Excel (.xlsx) - 全控模板**: 
+  \`{ theme: "business", autoWidth: true, headerBg: "6B21A8", headerColor: "FFFFFF", images: [{path: "path/to/logo.png", range: "A1:B2"}], sheets: [...] }\`
+  - \`headerBg/headerColor/rowAlternateBg\`: 十六进制颜色码（不带#）。
+  - \`autoWidth\`: 自动适配列宽。
+  - \`images\`: 插入图片，指定路径和单元格范围。
+- **Word (.docx) - 全控模板**: 
+  \`{ theme: "business", primaryColor: "6B21A8", font: "楷体", sections: [{ children: [{ type: "paragraph", children: [{ type: "image", path: "img.png", width: 100, height: 100 }] }] }] }\`
+  - \`primaryColor\`: 控制标题、表头背景色。
+  - \`font\`: 字体名称。
+  - \`margin\`: 页边距对象 {top, right, bottom, left}（单位：缇，1440=1英寸）。
+  - \`image\`: 在段落中插入图片。`
       } as any,
     },
     required: ['path', 'data'],
