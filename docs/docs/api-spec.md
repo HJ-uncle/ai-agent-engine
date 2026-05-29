@@ -424,6 +424,28 @@
 ### 16. 安全策略 Security (`/api/v1/security`)
 
 > 三层纵深防御：命令注入检测（policy-engine）+ SSRF 防护（network-policy）+ 审计日志（audit-log）。
+> 支持三种安全模式会话级切换：`safe`（安全）、`standard`（标准）、`full-access`（完全访问）。
+
+- `GET /api/v1/security/mode?sessionId=xxx`: 获取当前会话安全模式
+
+  **返回：**
+  ```json
+  { "code": 200, "data": { "sessionId": "abc", "mode": "safe" } }
+  ```
+
+- `PUT /api/v1/security/mode`: 切换会话安全模式
+
+  **请求体：**
+  ```json
+  { "sessionId": "abc", "mode": "standard" }
+  ```
+
+  **模式说明：**
+  | 模式 | 行为 |
+  |------|------|
+  | `safe` | 默认。白名单 + 完整策略检查，高危命令需确认 |
+  | `standard` | 仅 deny 规则拦截，ask 规则自动放行，跳过白名单 |
+  | `full-access` | 跳过所有检查，命令/网络直接放行。审计日志仍记录 |
 
 - `GET /api/v1/security/policies`: 获取所有命令安全策略列表
 

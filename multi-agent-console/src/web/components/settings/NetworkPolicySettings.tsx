@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useCallback } from 'react'
-import { App, Button, Divider, Form, Input, InputNumber, Space, Switch, Tag, Typography } from 'antd'
+import { Alert, App, Button, Divider, Form, Input, InputNumber, Space, Switch, Tag, Typography } from 'antd'
 import { PlusOutlined, SaveOutlined, ReloadOutlined } from '@ant-design/icons'
 import { securityApi, type NetworkPolicy } from '@core/api'
+import { useSessionStore } from '@core/store/session'
 import styles from './SettingsLayout.module.css'
 
 const { Title, Text } = Typography
@@ -21,6 +22,7 @@ const DEFAULT_POLICY: NetworkPolicy = {
 
 export default function NetworkPolicySettings() {
   const { message } = App.useApp()
+  const securityMode = useSessionStore((s) => s.securityMode)
   const [form] = Form.useForm<NetworkPolicy>()
   const [loading, setLoading] = useState(false)
   const [denyDomains, setDenyDomains] = useState<string[]>([])
@@ -97,6 +99,18 @@ export default function NetworkPolicySettings() {
 
   return (
     <Form form={form} className={styles.settingsContainer}>
+      {securityMode !== 'safe' && (
+        <Alert
+          type={securityMode === 'full-access' ? 'error' : 'info'}
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={
+            securityMode === 'full-access'
+              ? '当前为「完全访问」模式 — 以下网络策略不生效，所有出站请求直接放行'
+              : '当前为「标准」模式 — 私有 IP (SSRF) 检测已跳过，其余规则仍生效'
+          }
+        />
+      )}
       <Title level={4} className={styles.sectionTitle}>网络访问策略（防 SSRF / 数据泄漏）</Title>
       <Text type="secondary" className={styles.sectionDescription}>
         统一作用于 <code>web_fetch</code> 和 <code>http_request</code> 工具。所有决策都会写入审计日志。

@@ -1,8 +1,16 @@
 import { spawn } from 'node:child_process'
+import os from 'node:os'
 import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
 import { isCommandAllowed, getCmdWhitelist } from '../../security/cmd-whitelist.js'
-import { policyEngine } from '../../security/policy-engine.js'
+import { policyEngine, getSecurityMode } from '../../security/policy-engine.js'
 import { workspaceManager } from '../../workspace/index.js'
+
+// Windows cmd.exe 内建命令（不存在独立 .exe，必须通过 cmd /c 调用）
+const WIN_BUILTINS = new Set([
+  'dir', 'type', 'copy', 'move', 'del', 'rd', 'md', 'mkdir', 'rmdir',
+  'ren', 'rename', 'cls', 'echo', 'set', 'cd', 'pushd', 'popd',
+  'title', 'ver', 'vol', 'path', 'assoc', 'ftype', 'mklink',
+])
 
 export interface CMDToolOptions {
   timeoutMs?: number
@@ -57,8 +65,9 @@ export const cmdTool: Tool = {
       }
     }
 
-    // 2) 兼容旧白名单（默认 allow 的命令必须同时在白名单里，双保险）
-    if (!isCommandAllowed(command)) {
+    // 2) 兼容旧白名单（safe 模式下双保险；standard / full-access 跳过白名单）
+    const mode = getSecurityMode(ctx.tenantId, ctx.sessionId)
+    if (mode === 'safe' && !isCommandAllowed(command)) {
       return {
         success: false,
         output: `Command "${command}" is not allowed. Permitted commands: ${Array.from(getCmdWhitelist()).join(', ')}`,
@@ -74,13 +83,23 @@ export const cmdTool: Tool = {
       let stderr = ''
       let timedOut = false
 
-      const child = spawn(command, cmdArgs, {
+      // Windows 内建命令需通过 cmd.exe /c 调用（dir/type/copy 等无独立 .exe）
+      let spawnCmd = command
+      let spawnArgs = cmdArgs
+      if (os.platform() === 'win32' && WIN_BUILTINS.has(command.toLowerCase())) {
+        spawnCmd = 'cmd.exe'
+        spawnArgs = ['/c', command, ...cmdArgs]
+      }
+
+      const child = spawn(spawnCmd, spawnArgs, {
         cwd,
         shell: false, // NEVER use shell:true — prevents injection
         timeout,
         env: {
           PATH: process.env.PATH,
           HOME: cwd, // Restrict HOME to workspace
+          SystemRoot: process.env.SystemRoot, // Windows 需要此变量让 cmd.exe 正常工作
+          COMSPEC: process.env.COMSPEC,
         },
       })
 

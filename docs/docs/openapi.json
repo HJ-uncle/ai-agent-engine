@@ -2139,6 +2139,80 @@
         }
       }
     },
+    "/security/mode": {
+      "get": {
+        "summary": "获取当前会话的安全模式",
+        "description": "返回指定 session 的安全模式（safe / standard / full-access）。未设置时默认 safe。",
+        "tags": ["Security"],
+        "parameters": [
+          { "name": "sessionId", "in": "query", "required": true, "schema": { "type": "string" }, "description": "会话 ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": { "type": "integer", "example": 200 },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "sessionId": { "type": "string" },
+                        "mode": { "type": "string", "enum": ["safe", "standard", "full-access"] }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "切换会话安全模式",
+        "description": "设置指定 session 的安全模式。切换会写入审计日志。三种模式：safe（安全，默认）、standard（标准，跳过 ask 确认）、full-access（完全访问，跳过所有检查）。",
+        "tags": ["Security"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["sessionId", "mode"],
+                "properties": {
+                  "sessionId": { "type": "string", "description": "会话 ID" },
+                  "mode": { "type": "string", "enum": ["safe", "standard", "full-access"], "description": "目标安全模式" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "切换成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": { "type": "integer", "example": 200 },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "sessionId": { "type": "string" },
+                        "mode": { "type": "string", "enum": ["safe", "standard", "full-access"] }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/lsp/diagnostics": {
       "get": {
         "summary": "获取 LSP 诊断配置",

@@ -17,7 +17,7 @@ AI Agent Engine 是一个具备**感知、思考、行动**能力的全栈 AI �
 - **📂 隔离的工作区**：每个会话拥有独立的物理工作目录，支持 VS Code 风格的文件树管理、实时编辑及大文件上传 (100MB)。
 - **🤝 多智能体协作**：支持 Parent-Child Agent 模型，自动拆解复杂任务并分发给专业子智能体。
 - **🔌 开放协议支持**：完美适配 MCP (Model Context Protocol) 协议，支持通过 TypeScript/Python 编写自定义 Skills。
-- **🛡️ 安全沙箱**：基于命令注入检测与 SSRF 防护的执行环境，配合审计日志确保操作安全。
+- **🛡️ 安全沙箱**：基于命令注入检测与 SSRF 防护的执行环境，配合审计日志确保操作安全。支持三种安全模式（安全 / 标准 / 完全访问），会话级切换，前端输入框可一键选择。
 - **⚡ Superpower 模式**：四档能力档位（`off` 关闭 / `balanced` 均衡 / `methodology` 专家 / `max` 极限），默认 `balanced`，一键控制工具集、Token 预算倍率和方法论 Prompt 注入。前端增强模式下拉菜单支持简体中文 i18n 切换，聊天输入框可拖拽调整高度。
 - **📈 可观测性**：详细的 Token 分类统计（系统提示词、RAG、工具结果等）及性能监控指标。
 - **💎 增强交互**：聊天输入框支持拖拽缩放高度，增强模式下拉菜单（AI 图标 + 中文档位标签），Max 模式操作前二次确认防误触。
@@ -121,6 +121,7 @@ docker-compose up -d
 | **存储** | `/api/v1/memory` | 键值对形式的持久化记忆管理 |
 | **工作区** | `/api/v1/workspace` | 文件上传、下载及目录管理 |
 | **自动化** | `/api/v1/cron` / `/api/v1/todos` | 定时任务与待办事项管理 |
+| **安全** | `/api/v1/security/mode` | 会话级安全模式切换（safe / standard / full-access） |
 | **管理** | `/api/v1/agents` / `/api/v1/models` | 智能体配置与模型 Key 管理 |
 | **SDK** | `agent-engine` npm 包 | Embedded / Remote 双模式，22 组 API namespace |
 

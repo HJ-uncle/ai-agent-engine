@@ -1,6 +1,7 @@
 import path from 'node:path'
 import fs from 'node:fs'
 import type { AgentContext } from '../core/agent-context/index.js'
+import { getSecurityMode } from '../security/policy-engine.js'
 
 type CtxLike = Pick<AgentContext, 'tenantId' | 'sessionId' | 'workspacePaths'>
 
@@ -31,7 +32,21 @@ export class WorkspaceManager {
   }
 
   // Resolve a user-provided path safely within any of the bound workspaces
+  // In standard/full-access mode: skip boundary checks, return resolved path directly
   resolveSafePath(ctx: CtxLike, userPath: string): string {
+    const mode = getSecurityMode(ctx.tenantId, ctx.sessionId)
+
+    // standard / full-access 模式：跳过 workspace 边界检查，直接返回路径
+    if (mode !== 'safe') {
+      if (path.isAbsolute(userPath)) {
+        return userPath
+      }
+      // 相对路径：基于第一个 workspace 解析
+      const primaryBase = this.getPaths(ctx)[0]
+      return path.resolve(primaryBase, userPath)
+    }
+
+    // ── safe 模式：严格边界检查 ──
     const bases = this.getPaths(ctx)
     
     // 如果是绝对路径，检查是否在任何一个 base 中

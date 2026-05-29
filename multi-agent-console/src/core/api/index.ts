@@ -1153,6 +1153,8 @@ export interface NetworkPolicy {
   timeoutMs: number
 }
 
+export type SecurityMode = 'safe' | 'standard' | 'full-access'
+
 export const securityApi = {
   // ── Policies ─────────────────────────────────────────────────────────────
   listPolicies: async (params?: { current?: number; pageSize?: number }) => {
@@ -1215,6 +1217,18 @@ export const securityApi = {
   resetNetworkPolicy: async () => {
     const res = await request<NetworkPolicy>('/security/network-policy/reset', { method: 'POST' })
     return res.data as NetworkPolicy
+  },
+
+  // ── Security Mode (会话级) ────────────────────────────────────────────────
+  getSecurityMode: async (sessionId: string) => {
+    const res = await request<{ sessionId: string; mode: SecurityMode }>(`/security/mode?sessionId=${sessionId}`)
+    return (res.data as any)?.mode as SecurityMode ?? 'safe'
+  },
+  setSecurityMode: async (sessionId: string, mode: SecurityMode) => {
+    const res = await request<{ sessionId: string; mode: SecurityMode }>('/security/mode', {
+      method: 'PUT', body: JSON.stringify({ sessionId, mode }),
+    })
+    return (res.data as any)?.mode as SecurityMode ?? mode
   },
 }
 

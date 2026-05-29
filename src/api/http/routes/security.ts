@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { success, fail, paginateArray } from '../response.js'
-import { policyEngine, type PolicyRule } from '../../../security/policy-engine.js'
+import { policyEngine, type PolicyRule, type SecurityMode, getSecurityMode, setSecurityMode } from '../../../security/policy-engine.js'
 import { auditLogStore, type AuditCategory, type AuditDecision } from '../../../security/audit-log.js'
 import {
   loadNetworkPolicy, saveNetworkPolicy, DEFAULT_NETWORK_POLICY, type NetworkPolicy,
@@ -108,5 +108,36 @@ export async function securityRoutes(fastify: FastifyInstance) {
   fastify.post('/security/network-policy/reset', async (_request, reply) => {
     await saveNetworkPolicy({ ...DEFAULT_NETWORK_POLICY })
     return reply.code(200).send(success(DEFAULT_NETWORK_POLICY))
+  })
+
+  // ── Security Mode (会话级) ─────────────────────────────────────────
+  const VALID_MODES: SecurityMode[] = ['safe', 'standard', 'full-access']
+
+  fastify.get<{ Querystring: { sessionId: string } }>('/security/mode', async (request, reply) => {
+    const tenantId = getTenantId(request)
+    const sessionId = request.query.sessionId
+    if (!sessionId) return reply.code(200).send(fail(40001, 'sessionId is required'))
+    const mode = getSecurityMode(tenantId, sessionId)
+    return reply.code(200).send(success({ sessionId, mode }))
+  })
+
+  fastify.put<{ Body: { sessionId: string; mode: SecurityMode } }>('/security/mode', async (request, reply) => {
+    const tenantId = getTenantId(request)
+    const { sessionId, mode } = request.body ?? {} as any
+    if (!sessionId) return reply.code(200).send(fail(40001, 'sessionId is required'))
+    if (!mode || !VALID_MODES.includes(mode)) {
+      return reply.code(200).send(fail(40001, `mode must be one of: ${VALID_MODES.join(', ')}`))
+    }
+    setSecurityMode(tenantId, sessionId, mode)
+    await auditLogStore.append({
+      tenantId,
+      sessionId,
+      category: 'cmd',
+      target: 'security-mode-change',
+      decision: 'allow',
+      reason: `安全模式切换为: ${mode}`,
+      details: { newMode: mode },
+    })
+    return reply.code(200).send(success({ sessionId, mode }))
   })
 }

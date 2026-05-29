@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { Session, Message, TokenUsage } from '@core/types'
+import type { SecurityMode } from '@core/api'
 
 interface SessionState {
   sessions: Session[]
@@ -36,12 +37,14 @@ interface SessionState {
   maxAskUserCount: number
   thinkingMode: boolean
   superpowerMode: 'off' | 'balanced' | 'methodology' | 'max'
+  securityMode: SecurityMode
   chatInputValues: Record<string, string> // New: map of sessionId to its chat input value
 
   // Actions
   setMaxAskUserCount: (max: number) => void
   setThinkingMode: (enabled: boolean) => void
   setSuperpowerMode: (mode: 'off' | 'balanced' | 'methodology' | 'max') => void
+  setSecurityMode: (mode: SecurityMode) => void
   setChatInputValue: (sessionId: string, value: string) => void
   addSession: (agentId?: string) => string
   switchSession: (id: string) => void
@@ -124,10 +127,12 @@ export const useSessionStore = create<SessionState>()(
       maxAskUserCount: 5,
       thinkingMode: false,
       superpowerMode: 'off',
+      securityMode: 'safe' as SecurityMode,
 
       setMaxAskUserCount: (max) => set({ maxAskUserCount: max }),
       setThinkingMode: (enabled) => set({ thinkingMode: enabled }),
       setSuperpowerMode: (mode) => set({ superpowerMode: mode }),
+      setSecurityMode: (mode) => set({ securityMode: mode }),
       setChatInputValue: (sessionId, value) => set((state) => ({
         chatInputValues: { ...(state.chatInputValues || {}), [sessionId]: value }
       })),

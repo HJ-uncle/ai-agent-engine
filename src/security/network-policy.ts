@@ -2,6 +2,7 @@ import dns from 'node:dns/promises'
 import net from 'node:net'
 import { getDb } from '../storage/sqlite/db.js'
 import { auditLogStore } from './audit-log.js'
+import { getSecurityMode } from './policy-engine.js'
 
 export interface NetworkPolicy {
   /** 允许的协议列表，如 ['https:', 'http:'] */
@@ -158,6 +159,7 @@ export interface NetworkCheckResult {
 export async function checkNetworkAccess(input: NetworkCheckInput): Promise<NetworkCheckResult> {
   const policy = await loadNetworkPolicy()
   const base = { maxResponseBytes: policy.maxResponseBytes, timeoutMs: policy.timeoutMs }
+  const mode = getSecurityMode(input.tenantId ?? 'default', input.sessionId ?? '')
 
   const audit = async (allowed: boolean, reason: string, resolvedIp?: string) => {
     await auditLogStore.append({
@@ -167,8 +169,14 @@ export async function checkNetworkAccess(input: NetworkCheckInput): Promise<Netw
       target: input.url,
       decision: allowed ? 'allow' : 'deny',
       reason,
-      details: { source: input.source, resolvedIp },
+      details: { source: input.source, resolvedIp, securityMode: mode },
     })
+  }
+
+  // ── full-access 模式：跳过所有网络检查，仅审计 ──
+  if (mode === 'full-access') {
+    await audit(true, '安全模式: full-access，跳过网络策略检查')
+    return { allowed: true, ...base }
   }
 
   let parsed: URL
@@ -228,7 +236,7 @@ export async function checkNetworkAccess(input: NetworkCheckInput): Promise<Netw
     return { allowed: false, reason, ...base }
   }
 
-  if (policy.blockPrivateIP) {
+  if (policy.blockPrivateIP && mode !== 'standard') {
     for (const ip of ips) {
       if (isPrivateIP(ip)) {
         const reason = `目标 IP ${ip} 属于私有/保留网段（SSRF 防护）`

@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
-import { Modal, Input, Button, Form, App, Table, Space, Popconfirm, Select, Upload } from 'antd'
+import { Alert, Modal, Input, Button, Form, App, Table, Space, Popconfirm, Select, Upload } from 'antd'
 import { UploadOutlined, DownloadOutlined, PlusOutlined, DeleteOutlined } from '@ant-design/icons'
+import { useSessionStore } from '@core/store/session'
 import styles from './SettingsLayout.module.css'
 
 interface WhitelistItem {
@@ -19,6 +20,7 @@ const DEFAULT_WHITELIST: WhitelistItem[] = [
 
 export default function WhitelistManager() {
   const { message } = App.useApp()
+  const securityMode = useSessionStore((s) => s.securityMode)
   const [items, setItems] = useState<WhitelistItem[]>(DEFAULT_WHITELIST)
   const [search, setSearch] = useState('')
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
@@ -116,6 +118,18 @@ export default function WhitelistManager() {
   return (
     <div className={styles.settingsContainer}>
       <div className={styles.section}>
+        {securityMode !== 'safe' && (
+          <Alert
+            type={securityMode === 'full-access' ? 'error' : 'info'}
+            showIcon
+            style={{ marginBottom: 12 }}
+            message={
+              securityMode === 'full-access'
+                ? '当前为「完全访问」模式 — 命令白名单不生效，所有命令可执行'
+                : '当前为「标准」模式 — 命令白名单不生效，仅 deny 规则拦截'
+            }
+          />
+        )}
         <div className={styles.sectionTitle}>命令访问控制</div>
         <div className={styles.card} style={{ padding: 16 }}>
           <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>

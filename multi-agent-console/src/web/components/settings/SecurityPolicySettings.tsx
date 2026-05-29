@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useCallback } from 'react'
-import { Button, Table, Space, Tag, Modal, Form, Input, Select, InputNumber, Switch, Popconfirm, App, Tooltip } from 'antd'
+import { Button, Table, Space, Tag, Modal, Form, Input, Select, InputNumber, Switch, Popconfirm, App, Tooltip, Alert } from 'antd'
 import { PlusOutlined, ReloadOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import { securityApi, type PolicyRule } from '@core/api'
+import { useSessionStore } from '@core/store/session'
 import styles from './SettingsLayout.module.css'
 
 const ACTION_COLORS: Record<string, string> = {
@@ -29,6 +30,7 @@ const CODE_STYLE: React.CSSProperties = {
 
 export default function SecurityPolicySettings() {
   const { message, modal } = App.useApp()
+  const securityMode = useSessionStore((s) => s.securityMode)
   const [rules, setRules] = useState<PolicyRule[]>([])
   const [loading, setLoading] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
@@ -217,6 +219,18 @@ export default function SecurityPolicySettings() {
   return (
     <div className={styles.settingsContainer}>
       <div className={styles.section}>
+        {securityMode !== 'safe' && (
+          <Alert
+            type={securityMode === 'full-access' ? 'error' : 'info'}
+            showIcon
+            style={{ marginBottom: 12 }}
+            message={
+              securityMode === 'full-access'
+                ? '当前为「完全访问」模式 — 以下策略规则不生效，所有命令直接放行'
+                : '当前为「标准」模式 — deny 规则仍生效，ask 规则自动放行无需确认'
+            }
+          />
+        )}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
           <div className={styles.sectionTitle} style={{ marginBottom: 0 }}>命令安全策略</div>
           <span style={{ color: '#555', fontSize: 11 }}>优先级越小越优先 · allow / ask / deny</span>

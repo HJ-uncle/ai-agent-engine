@@ -3,6 +3,34 @@ import { auditLogStore } from './audit-log.js'
 
 export type PolicyAction = 'allow' | 'ask' | 'deny'
 
+// ─── 安全模式 ──────────────────────────────────────────────────────────────
+/**
+ * 三种安全模式（会话级别）：
+ * - safe:        安全模式（默认）。白名单 + 策略引擎完整检查，高危命令 deny/ask。
+ * - standard:    标准模式。只对 deny 级别命令拦截，其余命令直接放行（跳过 ask 确认）。
+ * - full-access: 完全访问模式。跳过策略引擎和白名单检查，所有命令/网络直接放行。仍写审计日志。
+ */
+export type SecurityMode = 'safe' | 'standard' | 'full-access'
+
+// 会话级安全模式存储（内存 Map；持久化可选）
+const sessionSecurityModes = new Map<string, SecurityMode>()
+
+function sessionKey(tenantId: string, sessionId: string): string {
+  return `${tenantId}:${sessionId}`
+}
+
+export function getSecurityMode(tenantId: string, sessionId: string): SecurityMode {
+  return sessionSecurityModes.get(sessionKey(tenantId, sessionId)) ?? 'safe'
+}
+
+export function setSecurityMode(tenantId: string, sessionId: string, mode: SecurityMode): void {
+  sessionSecurityModes.set(sessionKey(tenantId, sessionId), mode)
+}
+
+export function clearSecurityMode(tenantId: string, sessionId: string): void {
+  sessionSecurityModes.delete(sessionKey(tenantId, sessionId))
+}
+
 export interface PolicyRule {
   id?: number
   name: string
@@ -180,6 +208,7 @@ export class PolicyEngine {
 
   /**
    * 核心：评估一次命令调用，返回 allow/ask/deny。
+   * - 尊重会话级安全模式（full-access 直接放行，standard 跳过 ask）
    * - 命中注入模式直接拒绝并审计
    * - 否则按 priority 升序匹配第一条规则
    */
@@ -187,8 +216,27 @@ export class PolicyEngine {
     await seedDefaultsIfEmpty()
     const cmd  = baseName(input.command).toLowerCase()
     const args = input.args ?? []
+    const mode = getSecurityMode(input.tenantId ?? 'default', input.sessionId ?? '')
 
-    // 1) 注入检测（最高优先级，直接 deny）
+    // ── full-access 模式：全部放行，仅记审计 ──
+    if (mode === 'full-access') {
+      const decision: PolicyDecision = {
+        action: 'allow',
+        reason: '安全模式: full-access，跳过策略检查',
+      }
+      await auditLogStore.append({
+        tenantId: input.tenantId,
+        sessionId: input.sessionId,
+        category: 'cmd',
+        target: [cmd, ...args].join(' '),
+        decision: 'allow',
+        reason: decision.reason,
+        details: { securityMode: 'full-access' },
+      })
+      return decision
+    }
+
+    // 1) 注入检测（最高优先级，直接 deny —— 任何模式下都执行）
     const injections = detectInjection(args)
     if (injections.length > 0) {
       const decision: PolicyDecision = {
@@ -203,14 +251,16 @@ export class PolicyEngine {
         target: [cmd, ...args].join(' '),
         decision: 'deny',
         reason: decision.reason,
-        details: { injections },
+        details: { injections, securityMode: mode },
       })
       return decision
     }
     const traversal = detectPathTraversal(args)
     if (traversal.length > 0) {
+      // standard 模式下路径穿越降为 allow（用户自己承担风险）
+      const action: PolicyAction = mode === 'standard' ? 'allow' : 'ask'
       const decision: PolicyDecision = {
-        action: 'ask',
+        action,
         reason: `参数疑似路径穿越: ${traversal.join(' | ')}`,
       }
       await auditLogStore.append({
@@ -218,9 +268,9 @@ export class PolicyEngine {
         sessionId: input.sessionId,
         category: 'cmd',
         target: [cmd, ...args].join(' '),
-        decision: 'ask',
+        decision: action,
         reason: decision.reason,
-        details: { traversal },
+        details: { traversal, securityMode: mode },
       })
       return decision
     }
@@ -240,20 +290,28 @@ export class PolicyEngine {
           continue
         }
       }
+
+      let finalAction = r.action
+      // ── standard 模式：ask → allow（deny 仍保留） ──
+      if (mode === 'standard' && finalAction === 'ask') {
+        finalAction = 'allow'
+      }
+
       const decision: PolicyDecision = {
-        action: r.action,
+        action: finalAction,
         ruleId: r.id,
         ruleName: r.name,
-        reason: `命中规则 #${r.id} ${r.name}`,
+        reason: `命中规则 #${r.id} ${r.name}${mode === 'standard' && r.action === 'ask' ? ' (standard 自动放行)' : ''}`,
       }
       await auditLogStore.append({
         tenantId: input.tenantId,
         sessionId: input.sessionId,
         category: 'cmd',
         target: [cmd, ...args].join(' '),
-        decision: r.action,
+        decision: finalAction,
         ruleId: r.id ?? null,
         reason: decision.reason,
+        details: { securityMode: mode },
       })
       return decision
     }

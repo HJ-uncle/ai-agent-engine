@@ -1,6 +1,7 @@
 import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
 import { loadSecurityConfig, checkDomainAllowed } from './security-config.js'
 import { checkNetworkAccess } from '../../security/network-policy.js'
+import { getSecurityMode } from '../../security/policy-engine.js'
 
 /**
  * Web Fetch 工具
@@ -32,8 +33,9 @@ export const webFetchTool: Tool = {
         return { success: false, output: `❌ 无效的 URL 格式: ${url}` }
       }
 
-      // 安全检查（除非绕过）
-      if (!bypassSecurityCheck) {
+      // 安全检查（非 safe 模式或明确绕过时跳过旧版检查）
+      const secMode = getSecurityMode(ctx.tenantId, ctx.sessionId)
+      if (!bypassSecurityCheck && secMode === 'safe') {
         const config = loadSecurityConfig().webFetch
         
         // 检查工具是否启用

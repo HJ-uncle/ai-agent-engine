@@ -38,6 +38,7 @@ import {
   SettingOutlined,
   LinkOutlined,
   ExclamationCircleOutlined,
+  SafetyOutlined,
 } from "@ant-design/icons";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -50,7 +51,7 @@ import { useSessionStore } from '@core/store/session';
 import { useAgentStore } from '@core/store/agents';
 import { useChat } from '@web/hooks/useChat';
 import { copyToClipboard } from '@core/utils/clipboard';
-import { modelsApi, settingsApi, workspaceApi } from '@core/api';
+import { modelsApi, settingsApi, workspaceApi, securityApi, type SecurityMode } from '@core/api';
 import type { Message, TokenUsage, ThinkingStep } from '@core/types';
 import styles from "./ChatArea.module.css";
 import dayjs from "dayjs";
@@ -1710,6 +1711,8 @@ export default function ChatArea() {
     setThinkingMode,
     superpowerMode,
     setSuperpowerMode,
+    securityMode,
+    setSecurityMode,
     triggerFilesRefresh,
     chatInputValues,
     setChatInputValue,
@@ -1770,6 +1773,71 @@ export default function ChatArea() {
       performUpdate();
     }
   };
+
+  const SECURITY_MODE_CN: Record<SecurityMode, string> = {
+    safe: '安全',
+    standard: '标准',
+    'full-access': '完全访问',
+  };
+
+  const SECURITY_MODE_COLORS: Record<SecurityMode, string> = {
+    safe: '#52c41a',
+    standard: '#1677ff',
+    'full-access': '#f5222d',
+  };
+
+  const handleSecurityModeChange = async (mode: SecurityMode) => {
+    if (mode === securityMode) return;
+
+    const performModeSwitch = async () => {
+      try {
+        await securityApi.setSecurityMode(activeSessionId, mode);
+        setSecurityMode(mode);
+        messageApi.success(`安全模式已切换为: ${SECURITY_MODE_CN[mode]}`);
+      } catch {
+        messageApi.error('切换安全模式失败');
+      }
+    };
+
+    if (mode === 'full-access') {
+      modal.confirm({
+        title: '确认切换到 完全访问 模式？',
+        icon: <ExclamationCircleOutlined style={{ color: '#f5222d' }} />,
+        width: 480,
+        content: (
+          <div style={{ lineHeight: 1.8 }}>
+            <p style={{ marginBottom: 12 }}>
+              完全访问模式将跳过所有安全策略检查：
+            </p>
+            <ul style={{ paddingLeft: 20, marginBottom: 12 }}>
+              <li>所有命令均可直接执行，无需确认</li>
+              <li>网络请求不受 SSRF 防护限制</li>
+              <li>命令白名单不再生效</li>
+            </ul>
+            <p style={{ color: '#cf1322', marginBottom: 0 }}>
+              操作仍会记录审计日志。建议仅在受信任环境下短时使用。
+            </p>
+          </div>
+        ),
+        okText: '确认切换',
+        cancelText: '取消',
+        okButtonProps: { danger: true },
+        onOk: performModeSwitch,
+      });
+    } else {
+      performModeSwitch();
+    }
+  };
+
+  // 初始化：切换会话时拉取当前会话的安全模式
+  useEffect(() => {
+    if (activeSessionId) {
+      securityApi.getSecurityMode(activeSessionId).then((mode) => {
+        setSecurityMode(mode);
+      }).catch(() => {});
+    }
+  }, [activeSessionId]);
+
   const { agents } = useAgentStore();
   const {
     send,
@@ -2898,6 +2966,50 @@ export default function ChatArea() {
                       superpowerMode === 'balanced' ? '均衡' : 
                       superpowerMode === 'methodology' ? '专家' : '极限'
                     }`}
+                  </span>
+                </div>
+              </Dropdown>
+
+              <Dropdown
+                disabled={isInputDisabled}
+                trigger={['click']}
+                menu={{
+                  items: [
+                    { key: 'safe', label: '安全 - 严格白名单，高危操作需确认' },
+                    { key: 'standard', label: '标准 - 仅拦截危险命令，常规操作自动放行' },
+                    { key: 'full-access', label: '完全访问 - 跳过所有安全检查（慎用）' },
+                  ],
+                  onClick: ({ key }) => handleSecurityModeChange(key as SecurityMode),
+                  selectedKeys: [securityMode],
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
+                    cursor: isInputDisabled ? "not-allowed" : "pointer",
+                    opacity: isInputDisabled ? 0.5 : 1,
+                    padding: '2px 8px',
+                    borderRadius: 16,
+                    background: securityMode !== 'safe' ? `${SECURITY_MODE_COLORS[securityMode]}11` : 'transparent',
+                    border: `1px solid ${securityMode !== 'safe' ? SECURITY_MODE_COLORS[securityMode] : 'transparent'}`,
+                    transition: 'all 0.2s',
+                  }}
+                >
+                  <SafetyOutlined
+                    style={{
+                      color: SECURITY_MODE_COLORS[securityMode] ?? "var(--vscode-icon-foreground, #8b949e)",
+                    }}
+                  />
+                  <span
+                    style={{
+                      fontSize: 12,
+                      color: SECURITY_MODE_COLORS[securityMode] ?? "var(--vscode-icon-foreground, #8b949e)",
+                      userSelect: "none",
+                    }}
+                  >
+                    {SECURITY_MODE_CN[securityMode]}
                   </span>
                 </div>
               </Dropdown>
