@@ -1,3 +1,6 @@
+// 1. 必须最先加载环境变量，确保后续导入的模块（如加密、数据库）能正确读取配置
+import './env.js'
+
 // Fix Windows console UTF-8 encoding (prevent garbled Chinese/emoji output)
 if (process.platform === 'win32') {
   process.stdout.setEncoding('utf8')
@@ -28,27 +31,6 @@ if (typeof (Promise as any).withResolvers === 'undefined') {
 }
 // -------------------------------------------
 
-// Load .env file manually (no dotenv dependency required)
-import { readFileSync } from 'node:fs'
-
-try {
-  const env = readFileSync('.env', 'utf8')
-  for (const line of env.split('\n')) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-    const eqIdx = trimmed.indexOf('=')
-    if (eqIdx === -1) continue
-    const key = trimmed.slice(0, eqIdx).trim()
-    const val = trimmed.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, '')
-    if (key && !(key in process.env)) {
-      process.env[key] = val
-    }
-  }
-} catch {
-  // .env file not present — rely on environment variables already set
-}
-
-
 import { buildServer } from './api/http/index.js'
 import { logger } from './observability/index.js'
 import { skillsRegistry } from './skills/index.js'
@@ -62,30 +44,35 @@ const HOST = process.env.HOST ?? '0.0.0.0'
 
 async function main() {
   try {
-    // 初始化数据库（建表、补列，幂等）
-    await initDb()
-
-    // 初始化独立记忆数据库（幂等）
-    await initMemoryDb(MEMORY_SCHEMA)
-    logger.info('Memory database initialized')
+    // 1. 并行初始化核心组件：主数据库、记忆数据库、插件注册表
+    // 这些操作互不依赖，可以并发执行以缩短总启动时间
+    await Promise.all([
+      initDb().then(() => {
+        logger.info('Main database initialized')
+      }),
+      initMemoryDb(MEMORY_SCHEMA).then(() => {
+        logger.info('Memory database initialized')
+      }),
+      (async () => {
+        skillsRegistry.start()
+      })()
+    ])
     
-    // 启动记忆反思整理 (Consolidation) 定时任务
+    // 2. 数据库就绪后，继续执行后续步骤
+    // 启动记忆整理守护进程（它会自动处理延迟执行，不阻塞）
     const consolidator = new MemoryConsolidator()
     consolidator.startDaemon('default')
 
-    // 将数据库中的 system_config 同步到 process.env（DB 优先）
-    // 这样所有直接读取 process.env 的模块（react.ts、history.ts 等）
-    // 在运行时都能自动获取用户在 UI 配置的值
+    // 3. 串行获取系统配置和构建服务器（确保构建前 process.env 已注入最新配置）
     const dbConfig = await systemConfigStore.getAll()
+
+    // 将数据库中的 system_config 同步到 process.env
     for (const [key, value] of Object.entries(dbConfig)) {
       if (value !== null) {
         process.env[key] = value
       }
     }
     logger.info({ keys: Object.keys(dbConfig).length }, 'Synced system_config from DB to process.env')
-
-    // 启动技能注册表（扫描 + 热监听 SKILLS_ROOT）
-    skillsRegistry.start()
 
     const server = await buildServer()
     await server.listen({ port: PORT, host: HOST })

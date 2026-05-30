@@ -68,18 +68,34 @@ export async function initMemoryDb(schemaStatements: string[]): Promise<void> {
   const db = getMemoryDb()
 
   // PRAGMA 非关键，失败忽略
-  await db.execute('PRAGMA journal_mode = WAL').catch(() => {})
-  await db.execute('PRAGMA synchronous = NORMAL').catch(() => {})
-  await db.execute('PRAGMA foreign_keys = ON').catch(() => {})
+  await Promise.all([
+    db.execute('PRAGMA journal_mode = WAL').catch(() => {}),
+    db.execute('PRAGMA synchronous = NORMAL').catch(() => {}),
+    db.execute('PRAGMA foreign_keys = ON').catch(() => {}),
+  ])
+
+  // 将语句分为「普通」和「需回退」两类
+  const normalStatements: string[] = []
+  const fallbackStatements: string[] = []
 
   for (const sql of schemaStatements) {
     if (sql.toUpperCase().includes('F32_BLOB') || sql.toUpperCase().includes('LIBSQL_VECTOR_IDX')) {
-      await tryExecuteWithF32BlobFallback(db, sql)
+      fallbackStatements.push(sql)
     } else {
-      await db.execute(sql).catch((err) => {
-        console.warn('[memory-db] schema statement warning:', (err as Error)?.message)
-      })
+      normalStatements.push(sql)
     }
+  }
+
+  // 1. 普通语句批量执行（效率最高）
+  if (normalStatements.length > 0) {
+    await db.batch(normalStatements.map(sql => ({ sql })), 'write').catch((err) => {
+      console.warn('[memory-db] batch schema warning:', (err as Error)?.message)
+    })
+  }
+
+  // 2. 需回退语句逐条执行
+  for (const sql of fallbackStatements) {
+    await tryExecuteWithF32BlobFallback(db, sql)
   }
 
   console.log('[memory-db] Schema initialization complete')
