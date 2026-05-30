@@ -1,7 +1,8 @@
 import type { FastifyReply } from 'fastify'
+import type { SseEventPayload } from './stream-bus.js'
 
 export async function sseStream(
-  source: AsyncIterable<string>,
+  source: AsyncIterable<SseEventPayload | string>,
   reply: FastifyReply,
 ): Promise<void> {
   console.log('--- sseStream started ---')
@@ -11,27 +12,30 @@ export async function sseStream(
   reply.raw.setHeader('X-Accel-Buffering', 'no')
 
   try {
-    for await (const chunk of source) {
+    for await (const item of source) {
+      const chunk = typeof item === 'string' ? item : item.chunk
+      const idStr = typeof item === 'string' || !item.id ? '' : `id: ${item.id}\n`
+      
       console.log('--- sseStream chunk ---', chunk.slice(0, 50))
       // ── __usage__ frame ──────────────────────────────────────────────────
       if (chunk.startsWith('\x00__usage__')) {
         try {
           const usage = JSON.parse(chunk.slice('\x00__usage__'.length))
-          reply.raw.write(`data: ${JSON.stringify({ usage })}\n\n`)
+          reply.raw.write(`${idStr}data: ${JSON.stringify({ usage })}\n\n`)
         } catch { /* ignore */ }
         continue
       }
       // ── __thinking__ frame (AI 思考文字，调用工具前) ─────────────────────
       if (chunk.startsWith('\x00__thinking__')) {
         const text = chunk.slice('\x00__thinking__'.length)
-        reply.raw.write(`data: ${JSON.stringify({ thinking: text })}\n\n`)
+        reply.raw.write(`${idStr}data: ${JSON.stringify({ thinking: text })}\n\n`)
         continue
       }
       // ── __tool_start__ frame ─────────────────────────────────────────────
       if (chunk.includes('\x00__tool_start__')) {
         try {
           const tool = JSON.parse(chunk.split('\x00__tool_start__')[1])
-          reply.raw.write(`data: ${JSON.stringify({ toolStart: tool })}\n\n`)
+          reply.raw.write(`${idStr}data: ${JSON.stringify({ toolStart: tool })}\n\n`)
         } catch { /* ignore */ }
         continue
       }
@@ -40,7 +44,7 @@ export async function sseStream(
         try {
           const jsonStr = chunk.split('\x00__tool_args__')[1]
           const tool = JSON.parse(jsonStr)
-          reply.raw.write(`data: ${JSON.stringify({ toolArgs: tool })}\n\n`)
+          reply.raw.write(`${idStr}data: ${JSON.stringify({ toolArgs: tool })}\n\n`)
           continue
         } catch (e) { 
           console.error('Failed to parse __tool_args__ frame:', e, chunk);
@@ -51,7 +55,7 @@ export async function sseStream(
       if (chunk.includes('\x00__tool_end__')) {
         try {
           const tool = JSON.parse(chunk.split('\x00__tool_end__')[1])
-          reply.raw.write(`data: ${JSON.stringify({ toolEnd: tool })}\n\n`)
+          reply.raw.write(`${idStr}data: ${JSON.stringify({ toolEnd: tool })}\n\n`)
         } catch { /* ignore */ }
         continue
       }
@@ -59,7 +63,7 @@ export async function sseStream(
       if (chunk.startsWith('\x00__ask_user__')) {
         try {
           const data = JSON.parse(chunk.slice('\x00__ask_user__'.length))
-          reply.raw.write(`data: ${JSON.stringify({ ask_user: data })}\n\n`)
+          reply.raw.write(`${idStr}data: ${JSON.stringify({ ask_user: data })}\n\n`)
         } catch { /* ignore */ }
         continue
       }
@@ -67,7 +71,7 @@ export async function sseStream(
       // 通知前端：用户消息已落库，携带后端 message_id，前端凭此 ID 做删除/重发
       if (chunk.startsWith('\x00__user_msg_id__')) {
         const id = chunk.slice('\x00__user_msg_id__'.length)
-        reply.raw.write(`data: ${JSON.stringify({ userMsgId: id })}\n\n`)
+        reply.raw.write(`${idStr}data: ${JSON.stringify({ userMsgId: id })}\n\n`)
         continue
       }
       // ── 新版协议别名帧（不破坏旧消费者，仅供 第三方项目 等下游使用） ──
@@ -78,27 +82,27 @@ export async function sseStream(
       if (chunk.startsWith('\x00__userMsgId__')) {
         // alias of __user_msg_id__；envelope 字段相同（userMsgId）
         const id = chunk.slice('\x00__userMsgId__'.length)
-        reply.raw.write(`data: ${JSON.stringify({ userMsgId: id })}\n\n`)
+        reply.raw.write(`${idStr}data: ${JSON.stringify({ userMsgId: id })}\n\n`)
         continue
       }
       if (chunk.startsWith('\x00__tool_call__')) {
         try {
           const tool = JSON.parse(chunk.slice('\x00__tool_call__'.length))
-          reply.raw.write(`data: ${JSON.stringify({ toolCall: tool })}\n\n`)
+          reply.raw.write(`${idStr}data: ${JSON.stringify({ toolCall: tool })}\n\n`)
         } catch { /* ignore */ }
         continue
       }
       if (chunk.startsWith('\x00__tool_result__')) {
         try {
           const tool = JSON.parse(chunk.slice('\x00__tool_result__'.length))
-          reply.raw.write(`data: ${JSON.stringify({ toolResult: tool })}\n\n`)
+          reply.raw.write(`${idStr}data: ${JSON.stringify({ toolResult: tool })}\n\n`)
         } catch { /* ignore */ }
         continue
       }
       if (chunk.startsWith('\x00__permission_request__')) {
         try {
           const data = JSON.parse(chunk.slice('\x00__permission_request__'.length))
-          reply.raw.write(`data: ${JSON.stringify({ permissionRequest: data })}\n\n`)
+          reply.raw.write(`${idStr}data: ${JSON.stringify({ permissionRequest: data })}\n\n`)
         } catch { /* ignore */ }
         continue
       }
@@ -107,7 +111,7 @@ export async function sseStream(
       if (chunk.startsWith('\x00__message_block__')) {
         try {
           const data = JSON.parse(chunk.slice('\x00__message_block__'.length))
-          reply.raw.write(`data: ${JSON.stringify({ messageBlock: data })}\n\n`)
+          reply.raw.write(`${idStr}data: ${JSON.stringify({ messageBlock: data })}\n\n`)
         } catch { /* ignore */ }
         continue
       }
@@ -118,10 +122,10 @@ export async function sseStream(
         console.warn('Unhandled control frame in sseStream:', chunk);
         continue;
       }
-      reply.raw.write(`data: ${JSON.stringify({ content: chunk })}\n\n`)
+      reply.raw.write(`${idStr}data: ${JSON.stringify({ content: chunk })}\n\n`)
     }
     // Send done event
-    reply.raw.write('data: [DONE]\n\n')
+    reply.raw.write('event: done\ndata: [DONE]\n\n')
   } finally {
     reply.raw.end()
   }

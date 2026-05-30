@@ -1841,6 +1841,7 @@ export default function ChatArea() {
   const { agents } = useAgentStore();
   const {
     send,
+    resume,
     regenerate,
     editAndResend,
     fetchHistory,
@@ -2229,12 +2230,33 @@ export default function ChatArea() {
   if (isStreaming) placeholder = "正在生成回复...";
   else if (isWaitingForUser) placeholder = "请先回复上方 Agent 的提问...";
 
-  // Fetch history on session change
+  // Fetch history and handle resume on session change
   useEffect(() => {
     if (activeSessionId) {
-      fetchHistory(activeSessionId);
+      const hasLastId = sessionStorage.getItem(`sse_last_${activeSessionId}`);
+      const msgs = useSessionStore.getState().messageMap[activeSessionId] ?? [];
+      const isStreamingInStore = msgs.some((m) => m.status === "streaming");
+
+      if (isStreamingInStore && hasLastId) {
+        // Attempt to resume if there's a cached stream
+        resume(activeSessionId).catch(() => fetchHistory(activeSessionId));
+      } else {
+        // Clean up orphaned streaming messages if no resume ID exists
+        if (isStreamingInStore) {
+          msgs.forEach((m) => {
+            if (m.status === "streaming") {
+              useSessionStore.getState().updateMessage(activeSessionId, m.id, {
+                status: "error",
+                content: m.content + "\n\n[流式连接已断开，请重试]",
+              });
+              useSessionStore.getState().markSessionDone(activeSessionId);
+            }
+          });
+        }
+        fetchHistory(activeSessionId);
+      }
     }
-  }, [activeSessionId, fetchHistory]);
+  }, [activeSessionId, fetchHistory, resume]);
 
   // Scroll logic
   // 消息数量变化时刷新导航按钮可见性

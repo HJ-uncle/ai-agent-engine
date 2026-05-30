@@ -1,6 +1,6 @@
 import { useCallback, useRef } from 'react'
 import { message as antMessage } from 'antd'
-import { chatStream, regenerateStream, editMessageStream, conversationApi, cancelChat, messagesApi } from '@core/api'
+import { chatStream, regenerateStream, editMessageStream, conversationApi, cancelChat, messagesApi, resumeStream } from '@core/api'
 import { useSessionStore } from '@core/store/session'
 import type { Message, ThinkingStep, TokenUsage } from '@core/types'
 import { processHistoryMessages } from '@core/utils/processHistory'
@@ -66,6 +66,10 @@ function driveAiMessage(
   let lastReportedUsage: TokenUsage | null = previousUsage ? { ...previousUsage } : null
 
   const onEvent = (event: any) => {
+    if (event.lastEventId) {
+      sessionStorage.setItem(`sse_last_${sid}`, event.lastEventId)
+    }
+
     if (event.type === 'text_delta') {
       finalContent += event.content ?? ''
       updateMessage(sid, aiMsgId, { content: finalContent, status: 'streaming' })
@@ -229,6 +233,7 @@ function driveAiMessage(
   }
 
   const handleDone = () => {
+    sessionStorage.removeItem(`sse_last_${sid}`)
     const durationMs = Date.now() - startTime
     // 检查是否包含 DeepSeek 特有错误标记，触发分级提示
     const cleanedContent = handleDeepSeekErrorInContent(finalContent)
@@ -246,6 +251,7 @@ function driveAiMessage(
   }
 
   const handleError = (err: Error) => {
+    sessionStorage.removeItem(`sse_last_${sid}`)
     const durationMs = Date.now() - startTime
     updateMessage(sid, aiMsgId, {
       status: 'error',
@@ -333,6 +339,55 @@ export function useChat() {
       }
     },
     [activeSessionId, setMessages],
+  )
+
+  /**
+   * 恢复断开的流（页面刷新后续接）
+   */
+  const resume = useCallback(
+    async (sessionId?: string) => {
+      const sid = sessionId ?? activeSessionId
+      const lastId = sessionStorage.getItem(`sse_last_${sid}`)
+      if (!lastId) return
+
+      const msgs = useSessionStore.getState().messageMap[sid] ?? []
+      const aiMsg = msgs.find((m) => m.status === 'streaming')
+      if (!aiMsg) return
+
+      const ctrl = startStream(sid)
+      // Restore runningSession state when resuming
+      useSessionStore.getState().markSessionRunning(sid)
+
+      const { onEvent, handleDone, handleError } = driveAiMessage(
+        sid,
+        aiMsg.id,
+        updateMessage,
+        updateUsage,
+        Date.now(),
+        typeof aiMsg.content === 'string' ? aiMsg.content : '',
+        aiMsg.thinkingSteps ?? [],
+        () => finishStream(sid, ctrl),
+        () => finishStream(sid, ctrl),
+        aiMsg.usage as any,
+      )
+
+      try {
+        await resumeStream({
+          sessionId: sid,
+          lastEventId: lastId,
+          signal: ctrl.signal,
+          onEvent,
+          onDone: handleDone,
+          onError: handleError,
+        })
+      } catch (err: any) {
+        if (err.name === 'AbortError') return
+        handleError(err)
+      } finally {
+        finishStream(sid, ctrl)
+      }
+    },
+    [activeSessionId, updateMessage, updateUsage, startStream, finishStream],
   )
 
   /** 新消息发送 */
@@ -759,5 +814,5 @@ export function useChat() {
     [],
   )
 
-  return { send, regenerate, editAndResend, fetchHistory, cancel, sendToolResponse, deleteMessage: deleteMessageAndPersist }
+  return { send, resume, regenerate, editAndResend, fetchHistory, cancel, sendToolResponse, deleteMessage: deleteMessageAndPersist }
 }

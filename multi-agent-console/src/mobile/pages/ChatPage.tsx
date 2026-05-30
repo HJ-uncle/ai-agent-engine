@@ -171,6 +171,7 @@ export default function ChatPage() {
 
   const {
     send,
+    resume,
     regenerate,
     fetchHistory,
     cancel,
@@ -191,10 +192,27 @@ export default function ChatPage() {
   useEffect(() => {
     if (!activeSessionId) return
     setHistoryLoading(true)
-    fetchHistory(activeSessionId)
-      .finally(() => setHistoryLoading(false))
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSessionId])
+    const hasLastId = sessionStorage.getItem(`sse_last_${activeSessionId}`)
+    const msgs = useSessionStore.getState().messageMap[activeSessionId] ?? []
+    const isStreamingInStore = msgs.some((m) => m.status === 'streaming')
+
+    if (isStreamingInStore && hasLastId) {
+      resume(activeSessionId).catch(() => fetchHistory(activeSessionId)).finally(() => setHistoryLoading(false))
+    } else {
+      if (isStreamingInStore) {
+        msgs.forEach((m) => {
+          if (m.status === 'streaming') {
+            useSessionStore.getState().updateMessage(activeSessionId, m.id, {
+              status: 'error',
+              content: m.content + '\n\n[流式连接已断开，请重试]',
+            })
+            useSessionStore.getState().markSessionDone(activeSessionId)
+          }
+        })
+      }
+      fetchHistory(activeSessionId).finally(() => setHistoryLoading(false))
+    }
+  }, [activeSessionId, fetchHistory, resume])
 
   // ── UI 状态 ────────────────────────────────────────────────────────────────
   const [drawerOpen, setDrawerOpen] = useState(false)

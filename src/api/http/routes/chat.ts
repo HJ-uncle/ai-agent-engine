@@ -147,6 +147,8 @@ interface ChatBody {
   inlineMemoriesXml?: string
 }
 
+import { StreamBus, activeStreams, busToIterable } from '../../../core/stream-pipeline/stream-bus.js'
+
 // ── 全局会话级 AbortController 注册表 ──────────────────────────────────────────
 // 用于支持前端通过 POST /chat/cancel 主动终止某个会话的流式生成。
 // key = `${tenantId}:${sessionId}`，value = 当前正在运行的 AbortController。
@@ -333,19 +335,20 @@ export async function chatRoutes(fastify: FastifyInstance) {
     })
 
     const abortController = new AbortController()
-    // 注册到全局表，使 POST /chat/cancel 能找到并终止
-    registerActiveChat(tenantId, sessionId, abortController)
 
-    // ── 客户端断开检测：去掉 destroyed 守卫，close 事件触发即视为断开 ───────
-    // 之前的 `if (request.raw.destroyed)` 守卫导致部分场景（如 fetch.abort()）
-    // 不会触发 abort，后端继续跑导致用户 token 浪费。
+    const streamBus = new StreamBus(abortController)
+    activeStreams.set(sessionId, streamBus)
+
+    // ── 客户端断开检测：给予重连宽限期 ───────────────────────────────────────
     let aborted = false
     const onClientClose = () => {
       if (aborted) return
       aborted = true
-      reqLogger.info({ sessionId }, 'Client connection closed, aborting agent execution')
-      try { abortController.abort(new Error('Client disconnected')) } catch { /* noop */ }
-      unregisterActiveChat(tenantId, sessionId, abortController)
+      reqLogger.info({ sessionId }, 'Client connection closed, entering grace period')
+      streamBus.disconnectTimeout = setTimeout(() => {
+        try { abortController.abort(new Error('Client disconnected timeout')) } catch { /* noop */ }
+        activeStreams.delete(sessionId)
+      }, 15000) // 15s grace period
     }
     request.raw.on('close', onClientClose)
     request.raw.on('aborted', onClientClose)
@@ -802,12 +805,62 @@ ${workspaceInfo}
 
     reqLogger.info({ message: typeof message === 'string' ? message.slice(0, 100) : 'Multimodal message', agentId }, 'Chat request received')
 
+    // 后台运行 Agent
+    ;(async () => {
+      registerActiveChat(tenantId, sessionId, abortController)
+      try {
+        for await (const chunk of runAgent()) {
+          streamBus.push(chunk)
+        }
+        streamBus.end()
+      } catch (err) {
+        streamBus.error(err)
+      } finally {
+        unregisterActiveChat(tenantId, sessionId, abortController)
+        setTimeout(() => activeStreams.delete(sessionId), 60000) // 运行结束后保留 1 分钟
+      }
+    })()
+
     try {
-      await sseStream(runAgent(), reply)
+      await sseStream(busToIterable(streamBus), reply)
     } finally {
-      // 流结束（正常完成 / 出错 / abort）都要从注册表清理
-      unregisterActiveChat(tenantId, sessionId, abortController)
+      // 这里的 finally 只代表请求结束，不清理 activeChatAborters
     }
+    return reply
+  })
+
+  // ── 恢复断开的流 ──────────────────────────────────────────────────────────
+  fastify.get<{ Querystring: { sessionId: string; lastEventId?: string } }>('/chat/stream', async (request, reply) => {
+    const { sessionId, lastEventId } = request.query
+    if (!sessionId) {
+      return reply.code(400).send({ code: 40001, message: 'sessionId is required' })
+    }
+
+    const streamBus = activeStreams.get(sessionId)
+    if (!streamBus) {
+      reply.raw.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+      reply.raw.write('event: done\ndata: [DONE]\n\n')
+      return reply.raw.end()
+    }
+
+    if (streamBus.disconnectTimeout) {
+      clearTimeout(streamBus.disconnectTimeout)
+      streamBus.disconnectTimeout = null
+    }
+
+    let aborted = false
+    const onClientClose = () => {
+      if (aborted) return
+      aborted = true
+      streamBus.disconnectTimeout = setTimeout(() => {
+        try { streamBus.abortController.abort(new Error('Client disconnected timeout')) } catch {}
+        activeStreams.delete(sessionId)
+      }, 15000)
+    }
+    request.raw.on('close', onClientClose)
+    request.raw.on('aborted', onClientClose)
+
+    await sseStream(busToIterable(streamBus, lastEventId), reply)
     return reply
   })
 }

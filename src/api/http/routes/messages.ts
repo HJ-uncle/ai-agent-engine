@@ -32,6 +32,8 @@ const RegenerateSchema = z.object({
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
 
+import { StreamBus, activeStreams, busToIterable } from '../../../core/stream-pipeline/stream-bus.js'
+
 export async function messagesRoutes(fastify: FastifyInstance) {
   const history = new SQLiteConversationHistory()
 
@@ -220,8 +222,24 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     // If newMessageContent is not provided, we pass null to avoid appending a new user message
     const prompt = newMessageContent ?? null
 
+    const abortController = new AbortController()
+    const streamBus = new StreamBus(abortController)
+    activeStreams.set(sessionId, streamBus)
+
+    // ── 客户端断开检测：给予重连宽限期 ───────────────────────────────────────
+    let aborted = false
+    const onClientClose = () => {
+      if (aborted) return
+      aborted = true
+      streamBus.disconnectTimeout = setTimeout(() => {
+        try { abortController.abort(new Error('Client disconnected timeout')) } catch { /* noop */ }
+        activeStreams.delete(sessionId)
+      }, 15000) // 15s grace period
+    }
+    reply.raw.on('close', onClientClose)
+    reply.raw.on('aborted', onClientClose)
+
     async function* runAgent(): AsyncIterable<string> {
-      const abortController = new AbortController()
       // ★ 注册到全局 cancel 表，使 POST /chat/cancel 能中止此流（regenerate/edit 场景）
       registerActiveChat(tenantId, sessionId, abortController)
       try {
@@ -256,7 +274,21 @@ export async function messagesRoutes(fastify: FastifyInstance) {
       }
     }
 
-    await sseStream(runAgent(), reply)
+    // 后台运行 Agent
+    ;(async () => {
+      try {
+        for await (const chunk of runAgent()) {
+          streamBus.push(chunk)
+        }
+        streamBus.end()
+      } catch (err) {
+        streamBus.error(err)
+      } finally {
+        setTimeout(() => activeStreams.delete(sessionId), 60000)
+      }
+    })()
+
+    await sseStream(busToIterable(streamBus), reply)
   }
 
   // 3. 编辑用户消息并重新生成响应

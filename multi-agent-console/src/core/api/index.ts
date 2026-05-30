@@ -324,6 +324,49 @@ export async function editMessageStream(options: EditMessageOptions): Promise<vo
   }
 }
 
+export interface ResumeStreamOptions {
+  sessionId: string
+  lastEventId?: string
+  signal?: AbortSignal
+  onEvent: (event: SseEvent) => void
+  onDone?: () => void
+  onError?: (err: Error) => void
+}
+
+export async function resumeStream(options: ResumeStreamOptions): Promise<void> {
+  const { sessionId, lastEventId, signal, onEvent, onDone, onError } = options
+  const tenantId = 'default'
+
+  try {
+    const url = new URL(`${API_PREFIX}/chat/stream`, window.location.origin)
+    url.searchParams.set('sessionId', sessionId)
+    if (lastEventId) {
+      url.searchParams.set('lastEventId', lastEventId)
+    }
+
+    const res = await fetch(url.toString(), {
+      method: 'GET',
+      headers: {
+        'x-tenant-id': tenantId,
+      },
+      signal,
+    })
+
+    if (!res.ok) {
+      throw new Error(`Failed to resume stream: ${res.status} ${res.statusText}`)
+    }
+
+    if (!res.body) {
+      throw new Error('Response body is null')
+    }
+
+    await parseSseStream(res.body, onEvent, onDone)
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === 'AbortError') return
+    onError?.(err instanceof Error ? err : new Error(String(err)))
+  }
+}
+
 // ── Shared SSE parser ─────────────────────────────────────────────────────────
 // 后端 sse-sink.ts 实际发送的格式：
 //   普通文本:  data: {"content":"..."}
@@ -352,7 +395,13 @@ async function parseSseStream(
       const lines = buffer.split('\n')
       buffer = lines.pop() ?? ''
 
+      let currentEventId: string | undefined = undefined
+
       for (const line of lines) {
+        if (line.startsWith('id: ')) {
+          currentEventId = line.slice(4).trim()
+          continue
+        }
         if (!line.startsWith('data: ')) continue
         const raw = line.slice(6).trim()
 
@@ -420,6 +469,9 @@ async function parseSseStream(
         }
 
         if (event) {
+          if (currentEventId) {
+            (event as any).lastEventId = currentEventId
+          }
           onEvent(event)
           if (event.type === 'done') onDone?.()
         }
