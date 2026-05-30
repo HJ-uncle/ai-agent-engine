@@ -1,7 +1,7 @@
 import path from 'node:path'
 import fs from 'node:fs'
 import type { AgentContext, CreateAgentContextOptions } from './types.js'
-import { applySuperpowerMultiplier, resolveSuperpowerMode, SUPERPOWER_MODE_CONFIG } from '../superpower.js'
+import { applyOSMMultiplier, resolveOSMMode, OSM_MODE_CONFIG } from '../osm.js'
 
 export function createAgentContext(options: CreateAgentContextOptions): AgentContext {
   const tenantId = options.tenantId ?? 'default'
@@ -13,23 +13,19 @@ export function createAgentContext(options: CreateAgentContextOptions): AgentCon
     fs.mkdirSync(workspaceDir, { recursive: true })
   }
 
-  // ── Superpower 方法论 artifact 目录 ──────────────────────────────────────
-  // 当模式为 methodology / max 时，创建 docs/superpower/{specs,plans,reviews}/
-  // 让方法论技能无需先 `create_dir` 就可以直接写文件。
-  // 失败只 warn，不 throw（只读 workspace 也要能跑）。
-  const mode = resolveSuperpowerMode(options.logger)
-  if (SUPERPOWER_MODE_CONFIG[mode].artifactDirs) {
-    const triad = ['specs', 'plans', 'reviews']
-    for (const sub of triad) {
-      const p = path.join(workspaceDir, 'docs', 'superpower', sub)
-      try {
-        fs.mkdirSync(p, { recursive: true })
-      } catch (err) {
-        options.logger.warn(
-          { path: p, err: (err as Error)?.message ?? String(err) },
-          'superpower: failed to create artifact directory',
-        )
-      }
+  // ── OSM 方法论 artifact 目录 ──────────────────────────────────────
+  // 当模式为 methodology / max 时，确保 .openspec/ 根目录存在。
+  // 具体的 feature 目录由技能（如 brainstorming）在运行时根据任务名创建。
+  const mode = resolveOSMMode(options.logger)
+  if (OSM_MODE_CONFIG[mode].artifactDirs) {
+    const p = path.join(workspaceDir, '.openspec', 'changes')
+    try {
+      fs.mkdirSync(p, { recursive: true })
+    } catch (err) {
+      options.logger.warn(
+        { path: p, err: (err as Error)?.message ?? String(err) },
+        'OSM: failed to create .openspec directory',
+      )
     }
   }
 
@@ -44,7 +40,7 @@ export function createAgentContext(options: CreateAgentContextOptions): AgentCon
   const envDefaultBudget = parseInt(process.env.TOKEN_BUDGET ?? '60000', 10)
   const tokenBudget = hasExplicitBudget
     ? (options.tokenBudget as number)
-    : applySuperpowerMultiplier('tokenBudget', envDefaultBudget)
+    : applyOSMMultiplier('tokenBudget', envDefaultBudget)
 
   return {
     tenantId,

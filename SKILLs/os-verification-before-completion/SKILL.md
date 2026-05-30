@@ -1,9 +1,9 @@
 ---
-name: superpower-verification-before-completion
-description: Use when about to claim work is complete, fixed, or passing, before committing or creating PRs - requires running verification commands and confirming output before making any success claims; evidence before assertions always
+name: os-verification-before-completion
+description: Use when about to claim work is complete, before committing. Part of OpenSpec Methodology.
 ---
 
-# Verification Before Completion
+# Verification Before Completion (OSM)
 
 ## Overview
 
@@ -29,12 +29,14 @@ BEFORE claiming any status or expressing satisfaction:
 1. IDENTIFY: What command proves this claim?
 2. RUN: Execute the FULL command (fresh, complete)
 3. READ: Full output, check exit code, count failures
-4. VERIFY: Does output confirm the claim?
+4. COMPLIANCE: Compare implementation against OpenSpec `.openspec/changes/<feature-name>/spec.md` and `proposal.md`.
+   - Does every "New Capability" exist?
+   - Are all "Impacted" areas verified?
+   - Does the code follow all technical requirements in `spec.md`?
+5. VERIFY: Does output and compliance check confirm the claim?
    - If NO: State actual status with evidence
    - If YES: State claim WITH evidence
-5. ONLY THEN: Make the claim
-
-Skip any step = lying, not verifying
+6. ONLY THEN: Make the claim
 ```
 
 ## Common Failures

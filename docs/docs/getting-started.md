@@ -50,13 +50,13 @@ POST /auth/user
 4. 在 **系统提示词 (System Prompt)** 中告诉它你是谁，希望它怎么帮你。
 5. 勾选它需要的 **工具**（推荐全选，让它更强大）。
 
-> 💡 **Superpower 模式（增强模式）**：系统默认开启 `balanced`（均衡）档，工具全量可用，Token 预算 ×2。可在聊天输入框左侧 **增强模式下拉菜单**（AI 图标）中实时切换：
+> 💡 **OSM 增强模式**：系统默认开启 `balanced`（均衡）档，工具全量可用，Token 预算 ×2。可在聊天输入框左侧 **增强模式下拉菜单**（AI 图标）中实时切换：
 > - `off` — **关闭**：标准模式，无额外能力
 > - `balanced` — **均衡**（默认）：工具全开，预算 ×2
 > - `methodology` — **专家**：额外注入方法论 Prompt，自动创建 specs/plans/reviews 文档
 > - `max` — **极限**：最高能力档位，包含方法论 + 更多工具 + 更大预算；切换时有二次确认弹窗防止误触
 >
-> 也可在环境变量中设置 `SUPERPOWER_MODE=methodology` 或通过 `PUT /api/v1/settings` 运行时修改。
+> 也可在环境变量中设置 `OSM_MODE=methodology` 或通过 `PUT /api/v1/settings` 运行时修改。
 
 ## 5. 第四步：开始对话
 

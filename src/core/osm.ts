@@ -1,42 +1,45 @@
 /**
- * Superpower 增强模式（四档）
+ * OpenSpec Methodology (OSM)
  *
- * Layer 2 —— 从单布尔 `SUPERPOWER_ENABLED` 升级为四档 `SUPERPOWER_MODE`：
+ * Layer 2 —— 从单布尔 `SUPERPOWER_ENABLED` 升级为四档 `OSM_MODE`：
  *
  *   off          — 关闭：仅 CORE 工具集，基准数值，无方法论注入
  *   balanced     — 均衡：全量工具，倍率 ×2，无方法论注入
- *   methodology  — 方法论：全量工具，倍率 ×2，注入 bootstrap，创建 artifact 目录
- *   max          — 极致：全量工具，倍率 ×5，注入 bootstrap，artifact 目录，压缩阈值放宽到 0.7
+ *   methodology  — OpenSpec 方法论：全量工具，倍率 ×2，注入 bootstrap，创建 artifact 目录
+ *   max          — OpenSpec 极致：全量工具，倍率 ×5，注入 bootstrap，artifact 目录，压缩阈值放宽到 0.7
  *
- * 所有细节由下方 `SUPERPOWER_MODE_CONFIG` 单一真相表驱动；辅助函数
- * （`applySuperpowerMultiplier` / `getSuperpowerCompressRatio` /
+ * 所有细节由下方 `OSM_MODE_CONFIG` 单一真相表驱动；辅助函数
+ * （`applyOSMMultiplier` / `getOSMCompressRatio` /
  *  `resolveDefaultAllowedTools`）均通过它派发逻辑，避免散落。
  *
  * 兼容层：`SUPERPOWER_ENABLED` 仍作为 soft alias 存在一个 minor 周期：
  *   - true  → methodology（首次解析时打一次 deprecation warn）
  *   - false → off
- *   `SUPERPOWER_MODE` 一旦被识别为合法值即优先使用。
+ *   `OSM_MODE` 一旦被识别为合法值即优先使用。
  *
  * 方法论骨架（brainstorm / TDD / review 流程）由 Layer 2 的
- * superpower-* 技能包 + `superpower-bootstrap.ts` 的系统提示词前置注入 承担。
+ * os-* 技能包 + `superpower-bootstrap.ts` 的系统提示词前置注入 承担。
  */
 
 import type { Logger } from 'pino'
 import { logger as defaultLogger } from '../observability/index.js'
 
 // ── 模式枚举 ─────────────────────────────────────────────────────────────
-export type SuperpowerMode = 'off' | 'balanced' | 'methodology' | 'max'
+export type OSMMode = 'off' | 'balanced' | 'methodology' | 'max'
 
-const SUPERPOWER_MODES: readonly SuperpowerMode[] = [
+/** @deprecated Use OSMMode */
+export type SuperpowerMode = OSMMode
+
+const OSM_MODES: readonly OSMMode[] = [
   'off', 'balanced', 'methodology', 'max',
 ] as const
 
-function isValidMode(v: unknown): v is SuperpowerMode {
-  return typeof v === 'string' && (SUPERPOWER_MODES as readonly string[]).includes(v)
+export function isValidMode(v: unknown): v is OSMMode {
+  return typeof v === 'string' && (OSM_MODES as readonly string[]).includes(v)
 }
 
 // ── 核心工具（日常必需，始终可用；off 模式下收敛到这个集合）─────────────
-export const SUPERPOWER_CORE_TOOLS: ReadonlySet<string> = new Set([
+export const OSM_CORE_TOOLS: ReadonlySet<string> = new Set([
   // 文件操作（基础）
   'smart_read', 'read_file', 'write_file', 'list_files', 'create_dir',
   // 用户交互
@@ -54,7 +57,7 @@ export const SUPERPOWER_CORE_TOOLS: ReadonlySet<string> = new Set([
 ])
 
 // ── 增强工具（仅在 balanced/methodology/max 可用，用于一致性自检）───────
-export const SUPERPOWER_ONLY_TOOLS: ReadonlySet<string> = new Set([
+export const OSM_ONLY_TOOLS: ReadonlySet<string> = new Set([
   // 破坏性操作
   'delete_file',
   // 命令执行（高风险）
@@ -77,22 +80,25 @@ export const SUPERPOWER_ONLY_TOOLS: ReadonlySet<string> = new Set([
 ])
 
 // ── 倍率字段 & 多档配置表 ────────────────────────────────────────────────
-export type SuperpowerMultiplierField =
+export type OSMMultiplierField =
   | 'tokenBudget'
   | 'maxIterations'
   | 'toolOutputMaxChars'
   | 'historyMaxTokens'
 
-interface SuperpowerModeConfig {
+/** @deprecated Use OSMMultiplierField */
+export type SuperpowerMultiplierField = OSMMultiplierField
+
+interface OSMModeConfig {
   /** 是否放开全量工具（false 表示会收敛到 CORE 集合） */
   allowAllTools: boolean
   /** 数值字段倍率 */
-  multipliers: Readonly<Record<SuperpowerMultiplierField, number>>
+  multipliers: Readonly<Record<OSMMultiplierField, number>>
   /** 压缩阈值：undefined 表示遵从调用方 baseRatio，数字则直接覆盖 */
   compressRatio?: number
   /** 是否注入方法论 bootstrap */
   methodology: boolean
-  /** 是否在 workspace 自动创建 docs/superpower 三件目录 */
+  /** 是否在 workspace 自动创建 .openspec/ 变更目录骨架 */
   artifactDirs: boolean
 }
 
@@ -100,7 +106,7 @@ interface SuperpowerModeConfig {
  * 单一真相表：所有 helper 都通过它派发。
  * 新增 knob 只需增加一列，无需散落到其它文件。
  */
-export const SUPERPOWER_MODE_CONFIG: Readonly<Record<SuperpowerMode, SuperpowerModeConfig>> = {
+export const OSM_MODE_CONFIG: Readonly<Record<OSMMode, OSMModeConfig>> = {
   off: {
     allowAllTools: false,
     multipliers: { tokenBudget: 1, maxIterations: 1, toolOutputMaxChars: 1, historyMaxTokens: 1 },
@@ -139,17 +145,17 @@ let __invalidModeWarned = false
  * 测试辅助：重置一次性告警状态（仅供 test 使用，不对外导出稳定 API）。
  * 生产代码请勿调用。
  */
-export function __resetSuperpowerWarnFlagsForTests(): void {
+export function __resetOSMWarnFlagsForTests(): void {
   __legacyWarned = false
   __invalidModeWarned = false
 }
 
 /**
- * 解析当前 superpower 模式。
+ * 解析当前 OSM 模式。
  *
  * 优先级：
- *   1. `SUPERPOWER_MODE` 取值合法 → 使用它
- *   2. 否则若 `SUPERPOWER_MODE` 有值但非法 → warn 一次并降级到 legacy
+ *   1. `OSM_MODE` 取值合法 → 使用它
+ *   2. 否则若 `OSM_MODE` 有值但非法 → warn 一次并降级到 legacy
  *   3. legacy `SUPERPOWER_ENABLED=true` → methodology（打 deprecation）
  *   4. legacy `SUPERPOWER_ENABLED=false` 或未设置 → off
  *
@@ -157,8 +163,8 @@ export function __resetSuperpowerWarnFlagsForTests(): void {
  *
  * TODO(remove-in-next-minor): 下个 minor 版本移除 `SUPERPOWER_ENABLED` 分支。
  */
-export function resolveSuperpowerMode(log: Logger = defaultLogger): SuperpowerMode {
-  const rawMode = process.env.SUPERPOWER_MODE
+export function resolveOSMMode(log: Logger = defaultLogger): OSMMode {
+  const rawMode = process.env.OSM_MODE || process.env.SUPERPOWER_MODE
   const rawLegacy = process.env.SUPERPOWER_ENABLED
 
   // 1. MODE 合法 → 直接使用
@@ -170,8 +176,8 @@ export function resolveSuperpowerMode(log: Logger = defaultLogger): SuperpowerMo
   if (rawMode && !isValidMode(rawMode) && !__invalidModeWarned) {
     __invalidModeWarned = true
     log.warn(
-      { value: rawMode, validValues: SUPERPOWER_MODES },
-      'superpower: SUPERPOWER_MODE has an unrecognised value — falling back to legacy / off',
+      { value: rawMode, validValues: OSM_MODES },
+      'OSM: OSM_MODE has an unrecognised value — falling back to legacy / off',
     )
   }
 
@@ -181,7 +187,7 @@ export function resolveSuperpowerMode(log: Logger = defaultLogger): SuperpowerMo
       __legacyWarned = true
       log.warn(
         {},
-        'DEPRECATION: SUPERPOWER_ENABLED is deprecated; use SUPERPOWER_MODE (off|balanced|methodology|max). ' +
+        'DEPRECATION: SUPERPOWER_ENABLED is deprecated; use OSM_MODE (off|balanced|methodology|max). ' +
         'Mapping: true→methodology, false→off. Will be removed in the next minor release.',
       )
     }
@@ -192,40 +198,52 @@ export function resolveSuperpowerMode(log: Logger = defaultLogger): SuperpowerMo
   return 'balanced'
 }
 
-/**
- * @deprecated 使用 `resolveSuperpowerMode()`，本函数仅为保持旧 call-site 不崩溃。
- * 将在下个 minor 版本移除。
- */
-export function isSuperpowerEnabled(): boolean {
-  return resolveSuperpowerMode() !== 'off'
-}
+/** @deprecated Use resolveOSMMode */
+export const resolveSuperpowerMode = resolveOSMMode
 
 /**
- * 对指定整数字段应用 superpower 倍率。
- * `Math.floor(base * M)`，其中 M 从 `SUPERPOWER_MODE_CONFIG[mode].multipliers` 查表。
+ * @deprecated 使用 `resolveOSMMode()`，本函数仅为保持旧 call-site 不崩溃。
+ * 将在下个 minor 版本移除。
  */
-export function applySuperpowerMultiplier(
-  field: SuperpowerMultiplierField,
+export function isOSMEnabled(): boolean {
+  return resolveOSMMode() !== 'off'
+}
+
+/** @deprecated Use isOSMEnabled */
+export const isSuperpowerEnabled = isOSMEnabled
+
+/**
+ * 对指定整数字段应用 OSM 倍率。
+ * `Math.floor(base * M)`，其中 M 从 `OSM_MODE_CONFIG[mode].multipliers` 查表。
+ */
+export function applyOSMMultiplier(
+  field: OSMMultiplierField,
   base: number,
 ): number {
-  const mode = resolveSuperpowerMode()
-  const mult = SUPERPOWER_MODE_CONFIG[mode].multipliers[field]
+  const mode = resolveOSMMode()
+  const mult = OSM_MODE_CONFIG[mode].multipliers[field]
   return Math.floor(base * mult)
 }
+
+/** @deprecated Use applyOSMMultiplier */
+export const applySuperpowerMultiplier = applyOSMMultiplier
 
 /**
  * 获取当前模式下的压缩阈值比率。
  *   max → 0.7（宽松，留更多上下文）
  *   off / balanced / methodology → 返回传入的 baseRatio 不变
  */
-export function getSuperpowerCompressRatio(baseRatio: number): number {
-  const mode = resolveSuperpowerMode()
-  const override = SUPERPOWER_MODE_CONFIG[mode].compressRatio
+export function getOSMCompressRatio(baseRatio: number): number {
+  const mode = resolveOSMMode()
+  const override = OSM_MODE_CONFIG[mode].compressRatio
   return override !== undefined ? override : baseRatio
 }
 
+/** @deprecated Use getOSMCompressRatio */
+export const getSuperpowerCompressRatio = getOSMCompressRatio
+
 /**
- * 根据 superpower 开关计算最终的工具白名单。
+ * 根据 OSM 开关计算最终的工具白名单。
  *
  * 开启全量工具的模式（balanced / methodology / max）：
  *   完全尊重显式配置，不做任何干预（undefined = 全量）
@@ -241,8 +259,8 @@ export function getSuperpowerCompressRatio(baseRatio: number): number {
 export function resolveDefaultAllowedTools(
   explicitAllowedTools: string[] | undefined | null,
 ): string[] | undefined {
-  const mode = resolveSuperpowerMode()
-  const cfg = SUPERPOWER_MODE_CONFIG[mode]
+  const mode = resolveOSMMode()
+  const cfg = OSM_MODE_CONFIG[mode]
 
   // 全量工具模式 → 完全尊重传入值
   if (cfg.allowAllTools) {
@@ -252,14 +270,14 @@ export function resolveDefaultAllowedTools(
   // ── off 模式：收敛到 CORE ──────────────────────────────────────────────
   // 未配置 → 仅核心工具
   if (explicitAllowedTools == null) {
-    return [...SUPERPOWER_CORE_TOOLS]
+    return [...OSM_CORE_TOOLS]
   }
   // Agent 明确禁用全部工具（[] 语义）→ 保持不变
   if (explicitAllowedTools.length === 0) return []
   // Agent 有显式工具列表 → 与核心工具取交集（剔除增强工具，保留安全工具）
-  const intersected = explicitAllowedTools.filter(t => SUPERPOWER_CORE_TOOLS.has(t))
+  const intersected = explicitAllowedTools.filter(t => OSM_CORE_TOOLS.has(t))
   // 交集为空时退化为核心工具集（避免 Agent 完全失去工具）
-  return intersected.length > 0 ? intersected : [...SUPERPOWER_CORE_TOOLS]
+  return intersected.length > 0 ? intersected : [...OSM_CORE_TOOLS]
 }
 
 // ── 启动期自检 ────────────────────────────────────────────────────────────
@@ -274,29 +292,32 @@ export interface ToolRegistryHandle {
   list?: () => Array<{ name: string }>
 }
 
-export interface SuperpowerSelfCheckResult {
+export interface OSMSelfCheckResult {
   /** 同时出现在 CORE 和 ONLY 中的工具名（配置互斥违规） */
   disjointViolations: string[]
   /** CORE 声明但 registry 没注册的工具名（OFF 模式会静默失去能力） */
   missingInRegistry: string[]
-  /** registry 有但 CORE/ONLY 都没分类的工具名（仅提示） */
+  /** registry 有 but CORE/ONLY 都没分类的工具名（仅提示） */
   unknownTools: string[]
 }
 
+/** @deprecated Use OSMSelfCheckResult */
+export type SuperpowerSelfCheckResult = OSMSelfCheckResult
+
 /**
- * 运行 superpower 配置的一致性自检。
+ * 运行 OSM 配置的一致性自检。
  * 结果为纯数据，允许调用方决定是 log / throw / 上报监控。
  */
-export function runSuperpowerSelfCheck(registry: ToolRegistryHandle): SuperpowerSelfCheckResult {
+export function runOSMSelfCheck(registry: ToolRegistryHandle): OSMSelfCheckResult {
   const disjointViolations: string[] = []
-  for (const name of SUPERPOWER_CORE_TOOLS) {
-    if (SUPERPOWER_ONLY_TOOLS.has(name)) disjointViolations.push(name)
+  for (const name of OSM_CORE_TOOLS) {
+    if (OSM_ONLY_TOOLS.has(name)) disjointViolations.push(name)
   }
 
   const missingInRegistry: string[] = []
   const has = typeof registry.has === 'function' ? registry.has.bind(registry) : null
   if (has) {
-    for (const name of SUPERPOWER_CORE_TOOLS) {
+    for (const name of OSM_CORE_TOOLS) {
       if (!has(name)) missingInRegistry.push(name)
     }
   }
@@ -308,7 +329,7 @@ export function runSuperpowerSelfCheck(registry: ToolRegistryHandle): Superpower
       for (const tool of list()) {
         const n = tool?.name
         if (!n) continue
-        if (!SUPERPOWER_CORE_TOOLS.has(n) && !SUPERPOWER_ONLY_TOOLS.has(n)) {
+        if (!OSM_CORE_TOOLS.has(n) && !OSM_ONLY_TOOLS.has(n)) {
           unknownTools.push(n)
         }
       }
@@ -318,24 +339,30 @@ export function runSuperpowerSelfCheck(registry: ToolRegistryHandle): Superpower
   return { disjointViolations, missingInRegistry, unknownTools }
 }
 
+/** @deprecated Use runOSMSelfCheck */
+export const runSuperpowerSelfCheck = runOSMSelfCheck
+
 /** 把自检结果打到 logger（warn 级别，不中断启动）。 */
-export function logSuperpowerSelfCheck(logger: Logger, result: SuperpowerSelfCheckResult): void {
+export function logOSMSelfCheck(logger: Logger, result: OSMSelfCheckResult): void {
   if (result.disjointViolations.length) {
     logger.warn(
       { tools: result.disjointViolations },
-      'superpower: tools listed in BOTH CORE and ONLY — please keep sets disjoint',
+      'OSM: tools listed in BOTH CORE and ONLY — please keep sets disjoint',
     )
   }
   if (result.missingInRegistry.length) {
     logger.warn(
       { tools: result.missingInRegistry },
-      'superpower: CORE tools not found in registry — Agent may silently lose these capabilities in OFF mode',
+      'OSM: CORE tools not found in registry — Agent may silently lose these capabilities in OFF mode',
     )
   }
   if (result.unknownTools.length) {
     logger.debug(
       { tools: result.unknownTools, count: result.unknownTools.length },
-      'superpower: tools registered but not classified (neither CORE nor ONLY) — consider adding to SUPERPOWER_ONLY_TOOLS',
+      'OSM: tools registered but not classified (neither CORE nor ONLY) — consider adding to OSM_ONLY_TOOLS',
     )
   }
 }
+
+/** @deprecated Use logOSMSelfCheck */
+export const logSuperpowerSelfCheck = logOSMSelfCheck

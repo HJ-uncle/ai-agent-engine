@@ -1,6 +1,6 @@
 ---
-name: superpower-tdd
-description: RED / GREEN / REFACTOR enforcement. No production code without a failing test first. Uses run_command for tests and code_diagnose for linting.
+name: os-tdd
+description: RED / GREEN / REFACTOR enforcement. Part of OpenSpec Methodology.
 order: 30
 official: true
 version: 1.0.0

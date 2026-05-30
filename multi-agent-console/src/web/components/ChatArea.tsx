@@ -1709,8 +1709,8 @@ export default function ChatArea() {
     updateSession,
     thinkingMode,
     setThinkingMode,
-    superpowerMode,
-    setSuperpowerMode,
+    osmMode,
+    setOsmMode,
     securityMode,
     setSecurityMode,
     triggerFilesRefresh,
@@ -1720,20 +1720,20 @@ export default function ChatArea() {
 
   const { modal, message: messageApi } = App.useApp();
 
-  const handleSuperpowerChange = async (mode: any) => {
-    if (mode === superpowerMode) return;
+  const handleOSMModeChange = async (mode: any) => {
+    if (mode === osmMode) return;
 
     const MODE_CN: Record<string, string> = {
       off: '低耗',
       balanced: '均衡',
-      methodology: '专家',
-      max: '极限'
+      methodology: '方法论',
+      max: '极致'
     };
 
     const performUpdate = async () => {
       try {
-        setSuperpowerMode(mode);
-        await settingsApi.update({ SUPERPOWER_MODE: mode });
+        setOsmMode(mode);
+        await settingsApi.update({ OSM_MODE: mode });
         messageApi.success(`已切换到 ${MODE_CN[mode]} 模式`);
       } catch (err) {
         messageApi.error("保存失败，请重试");
@@ -1742,13 +1742,13 @@ export default function ChatArea() {
 
     if (mode === "max") {
       modal.confirm({
-        title: "确认切换到 极限 模式？",
+        title: "确认切换到 极致 模式？",
         icon: <ExclamationCircleOutlined style={{ color: "#faad14" }} />,
         width: 560,
         content: (
           <div style={{ lineHeight: 1.8 }}>
             <p style={{ marginBottom: 12 }}>
-              极限模式是最重量级设定，适合长自治任务，非日常默认。启用后：
+              极致模式是最重量级设定，适合长自治任务，非日常默认。启用后：
             </p>
             <ul style={{ paddingLeft: 20, marginBottom: 12 }}>
               <li>Token 预算 × 5、迭代次数 × 4、工具输出上限 × 4、历史窗口 × 4</li>
@@ -1756,15 +1756,15 @@ export default function ChatArea() {
                 <code> web_fetch</code> / <code>http_request</code> / <code>install_package</code> /
                 <code> subagent</code> 等高风险工具）</li>
               <li>压缩阈值放宽到 0.7，长会话 token 消耗显著上升</li>
-              <li>自动注入方法论 bootstrap，简单任务也会走 spec / plan / TDD 流程</li>
+              <li>自动注入 OpenSpec 方法论 (OSM)，简单任务也会走提案 / 设计 / TDD 流程</li>
             </ul>
             <p style={{ color: '#d46b08', marginBottom: 0 }}>
               建议仅在受信任工作区 + 并发可控的环境启用。
-              如只要方法论但不想 ×5，选 <b>专家 (Methodology)</b> 即可。
+              如只要方法论但不想 ×5，选 <b>方法论 (Methodology)</b> 即可。
             </p>
           </div>
         ),
-        okText: "确认切换到 极限",
+        okText: "确认切换到 极致",
         cancelText: "取消",
         okButtonProps: { danger: true },
         onOk: performUpdate,
@@ -2925,11 +2925,11 @@ export default function ChatArea() {
                   items: [
                     { key: 'off', label: '低耗 - 核心工具，保守消耗' },
                     { key: 'balanced', label: '均衡 - 全量工具，日常工程' },
-                    { key: 'methodology', label: '专家 - 全量工具 + 方法论注入' },
-                    { key: 'max', label: '极限 - 性能爆发，长自治任务' },
+                    { key: 'methodology', label: '方法论 - 全量工具 + OSM 注入' },
+                    { key: 'max', label: '极致 - 性能爆发，长自治任务' },
                   ],
-                  onClick: ({ key }) => handleSuperpowerChange(key),
-                  selectedKeys: [superpowerMode],
+                  onClick: ({ key }) => handleOSMModeChange(key),
+                  selectedKeys: [osmMode],
                 }}
               >
                 <div
@@ -2941,14 +2941,14 @@ export default function ChatArea() {
                     opacity: isInputDisabled ? 0.5 : 1,
                     padding: '2px 8px',
                     borderRadius: 16,
-                    background: superpowerMode !== 'off' ? 'rgba(240, 192, 64, 0.1)' : 'transparent',
-                    border: `1px solid ${superpowerMode !== 'off' ? '#f0c040' : 'transparent'}`,
+                    background: osmMode !== 'off' ? 'rgba(240, 192, 64, 0.1)' : 'transparent',
+                    border: `1px solid ${osmMode !== 'off' ? '#f0c040' : 'transparent'}`,
                     transition: 'all 0.2s',
                   }}
                 >
                   <ThunderboltOutlined
                     style={{
-                      color: superpowerMode !== 'off'
+                      color: osmMode !== 'off'
                         ? "#f0c040"
                         : "var(--vscode-icon-foreground, #8b949e)",
                     }}
@@ -2956,15 +2956,15 @@ export default function ChatArea() {
                   <span
                     style={{
                       fontSize: 12,
-                      color: superpowerMode !== 'off'
+                      color: osmMode !== 'off'
                         ? "#f0c040"
                         : "var(--vscode-icon-foreground, #8b949e)",
                       userSelect: "none",
                     }}
                   >
-                    {superpowerMode === 'off' ? '增强模式' : `模式: ${
-                      superpowerMode === 'balanced' ? '均衡' : 
-                      superpowerMode === 'methodology' ? '专家' : '极限'
+                    {osmMode === 'off' ? 'OSM 方法论' : `模式: ${
+                      osmMode === 'balanced' ? '均衡' : 
+                      osmMode === 'methodology' ? '方法论' : '极致'
                     }`}
                   </span>
                 </div>

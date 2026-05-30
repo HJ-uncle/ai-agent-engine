@@ -8,7 +8,7 @@ import { createToolRegistry } from '../registry-factory.js'
 import { createAgentContext } from '../../core/agent-context/factory.js'
 import { SQLiteConversationHistory } from '../../storage/conversation/index.js'
 import { skillsRegistry } from '../../skills/index.js'
-import { resolveSuperpowerMode, SUPERPOWER_MODE_CONFIG } from '../../core/superpower.js'
+import { resolveOSMMode, OSM_MODE_CONFIG } from '../../core/osm.js'
 
 /**
  * Subagent 工具
@@ -20,17 +20,17 @@ import { resolveSuperpowerMode, SUPERPOWER_MODE_CONFIG } from '../../core/superp
  *   - `implementer`          — 执行 TDD 实现
  *   - `spec-reviewer`        — 对照 spec 审查实现
  *   - `code-quality-reviewer`— 代码质量审查
- * 设置 role 时会自动加载 `SKILLs/superpower-subagent-driven-dev/<role>-prompt.md`
+ * 设置 role 时会自动加载 `SKILLs/os-subagent-driven-dev/<role>-prompt.md`
  * 作为默认系统提示词基底；调用方如另外给了 `systemPrompt` 则 append 到其后。
  */
 export const ROLE_VALUES = ['implementer', 'spec-reviewer', 'code-quality-reviewer'] as const
 export type SubagentRole = typeof ROLE_VALUES[number]
 
-const ROLE_SKILL_DIR = 'superpower-subagent-driven-dev'
+const ROLE_SKILL_DIR = 'os-subagent-driven-dev'
 
 /**
  * 根据 role 名加载对应的 prompt 模板。
- * 定位路径：skillsRegistry 中 `superpower-subagent-driven-dev` 技能 SKILL.md
+ * 定位路径：skillsRegistry 中 `os-subagent-driven-dev` 技能 SKILL.md
  *           所在目录下的 `<role>-prompt.md`。
  * 找不到时返回 null（调用方会 warn + 回退默认行为）。
  */
@@ -59,7 +59,7 @@ export const subagentTool: Tool = {
   displayName: '子代理',
   description:
     '创建子代理执行任务；可选 role 参数（implementer / spec-reviewer / code-quality-reviewer）'
-    + ' 会自动加载 superpower-subagent-driven-dev 技能下的对应 prompt 模板作为系统提示词基底。',
+    + ' 会自动加载 os-subagent-driven-dev 技能下的对应 prompt 模板作为系统提示词基底。',
   parameters: {
     type: 'object',
     properties: {
@@ -108,10 +108,10 @@ export const subagentTool: Tool = {
       //   2. 调用方 systemPrompt（如果 role 存在则 append 到模板之后）
       //   3. 内置默认
       // skill 索引附加在末尾（保留原行为）。
-      const mode = resolveSuperpowerMode(ctx.logger)
+      const mode = resolveOSMMode(ctx.logger)
       let rolePreamble = ''
       if (role) {
-        if (!SUPERPOWER_MODE_CONFIG[mode].methodology) {
+        if (!OSM_MODE_CONFIG[mode].methodology) {
           ctx.logger.warn(
             { role, mode },
             '[Subagent] role 参数仅在 methodology/max 模式下生效，当前模式降级为默认行为',

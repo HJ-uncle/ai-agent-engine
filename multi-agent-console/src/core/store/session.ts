@@ -36,14 +36,14 @@ interface SessionState {
   settingsTab: string
   maxAskUserCount: number
   thinkingMode: boolean
-  superpowerMode: 'off' | 'balanced' | 'methodology' | 'max'
+  osmMode: 'off' | 'balanced' | 'methodology' | 'max'
   securityMode: SecurityMode
   chatInputValues: Record<string, string> // New: map of sessionId to its chat input value
 
   // Actions
   setMaxAskUserCount: (max: number) => void
   setThinkingMode: (enabled: boolean) => void
-  setSuperpowerMode: (mode: 'off' | 'balanced' | 'methodology' | 'max') => void
+  setOsmMode: (mode: 'off' | 'balanced' | 'methodology' | 'max') => void
   setSecurityMode: (mode: SecurityMode) => void
   setChatInputValue: (sessionId: string, value: string) => void
   addSession: (agentId?: string) => string
@@ -126,12 +126,12 @@ export const useSessionStore = create<SessionState>()(
       settingsTab: 'general',
       maxAskUserCount: 5,
       thinkingMode: false,
-      superpowerMode: 'off',
+      osmMode: 'off',
       securityMode: 'safe' as SecurityMode,
 
       setMaxAskUserCount: (max) => set({ maxAskUserCount: max }),
       setThinkingMode: (enabled) => set({ thinkingMode: enabled }),
-      setSuperpowerMode: (mode) => set({ superpowerMode: mode }),
+      setOsmMode: (mode) => set({ osmMode: mode }),
       setSecurityMode: (mode) => set({ securityMode: mode }),
       setChatInputValue: (sessionId, value) => set((state) => ({
         chatInputValues: { ...(state.chatInputValues || {}), [sessionId]: value }

@@ -1,27 +1,23 @@
 ---
-name: superpower-subagent-driven-dev
-description: Delegate implementation / spec review / code quality review to fresh subagents with role-specific prompt templates. Dual-review gating before merge.
+name: os-subagent-driven-dev
+description: Delegate implementation / OpenSpec review / code quality review to fresh subagents.
 order: 50
 official: true
 version: 1.0.0
 ---
 
-# Subagent-Driven Development
+# Subagent-Driven Development (OSM)
 
 ## Chinese 预读
 
 大任务分到干净子代理里做：一个专职 implementer 写代码，一个 spec-reviewer
-对照 spec 审，一个 code-quality-reviewer 审代码质量。三者意见一致才算过。
-通过 `subagent` 工具的 `role` 参数加载对应模板。
+对照 OpenSpec 审，一个 code-quality-reviewer 审代码质量。三者意见一致才算过。
+**严禁跳过评审环节。**
 
 ## When to use
 
-- Any task whose plan has **≥ 3 RED/GREEN cycles** or touches
-  **≥ 2 production files**.
-- Any change that the user marked "important" or that crosses
-  trust boundaries (auth, payments, PII, external APIs).
-
-Small fixes / typos → just do them yourself, don't over-ceremony.
+- **MANDATORY** for any task in a Superpower plan.
+- Small fixes / typos → only exception for direct implementation.
 
 ## The three roles
 
@@ -52,10 +48,9 @@ subagent({
 
 ```
 subagent({
-  task: "Review the changes in <files touched> against the spec at\n
-         docs/superpower/specs/<topic>.md and plan at\n
-         docs/superpower/plans/<topic>.md. Report gaps, deviations,\n
-         and missing acceptance criteria.",
+  task: "Review the changes in <files touched> against the OpenSpec at\n
+         .openspec/changes/<feature-name>/proposal.md and design.md.\n
+         Report gaps, deviations, and missing acceptance criteria.",
   role: "spec-reviewer",
   maxSteps: 12
 })
@@ -78,8 +73,9 @@ subagent({
 A task is only complete when:
 
 1. implementer subagent reports **GREEN** with full suite passing.
-2. spec-reviewer reports **no gaps**.
+2. spec-reviewer reports **no gaps** (confirmed against OpenSpec).
 3. code-quality-reviewer reports **no blocking findings**.
+4. **OpenSpec task status** is updated to `completed` in `.openspec/changes/<feature-name>/tasks.md`.
 
 If any reviewer flags something:
 

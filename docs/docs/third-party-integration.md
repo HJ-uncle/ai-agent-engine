@@ -41,7 +41,7 @@ Agent Engine 是一个 **LLM Agent 运行时引擎**，提供 ReAct 循环、工
 | **工作区** | 隔离的物理工作目录，支持 VS Code 风格文件操作 |
 | **安全防护** | 命令注入检测 + SSRF 防护 + 审计日志三层防御 |
 | **语义记忆网络** | 基于图结构的长期记忆，支持关联推理、自动提取与记忆衰减，跨会话保留上下文。 |
-| **Superpower 模式** | 四档能力档位（balanced/methodology/max/off），默认 `balanced`，控制工具集、预算倍率和系统提示词注入 |
+| **OpenSpec 方法论 (OSM)** | 四档能力档位（off/balanced/methodology/max），默认 `balanced`，控制工具集、预算倍率和系统提示词注入 |
 
 ---
 

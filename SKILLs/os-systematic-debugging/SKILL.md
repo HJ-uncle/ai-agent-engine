@@ -1,9 +1,9 @@
 ---
-name: superpower-systematic-debugging
-description: Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes
+name: os-systematic-debugging
+description: Use when encountering any bug, test failure, or unexpected behavior. Part of OpenSpec Methodology.
 ---
 
-# Systematic Debugging
+# Systematic Debugging (OSM)
 
 ## Overview
 

@@ -344,7 +344,7 @@ export async function buildMemoryRecallBlock(
       return `- [${typeLabel[n.type] || n.type}] ${n.summary}${tagStr}`
     })
 
-    return `\n\n---\n# 长期记忆（Memory Graph）\n\n以下是从历史对话中自动提取的关于当前用户的已知信息，请在回答时参考：\n\n${lines.join('\n')}\n\n---`
+    return `\n\n---\n# 用户上下文档案（User Context）\n\n以下是你在过往交互中了解到的关于该用户的背景信息。请在回答时自然地参考这些信息，**绝对不要**生硬地说“根据我的记忆库”、“让我想起”或“从提取的信息中”等机械话术。就像老朋友一样，直接在对话中体现你对他的了解。\n\n${lines.join('\n')}\n\n---`
   } catch {
     return ''
   }

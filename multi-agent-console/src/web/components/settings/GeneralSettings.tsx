@@ -6,56 +6,56 @@ import { settingsApi } from '@core/api'
 import { useSessionStore } from '@core/store/session'
 import styles from './SettingsLayout.module.css'
 
-type SuperpowerMode = 'off' | 'balanced' | 'methodology' | 'max'
-const MODES: SuperpowerMode[] = ['off', 'balanced', 'methodology', 'max']
+type OSMMode = 'off' | 'balanced' | 'methodology' | 'max'
+const MODES: OSMMode[] = ['off', 'balanced', 'methodology', 'max']
 
-const MODE_LABELS: Record<SuperpowerMode, string> = {
+const MODE_LABELS: Record<OSMMode, string> = {
   off: '低耗',
   balanced: '均衡',
-  methodology: '专家',
-  max: '极限',
+  methodology: '方法论',
+  max: '极致',
 }
 
-const MODE_TOOLTIPS: Record<SuperpowerMode, string> = {
+const MODE_TOOLTIPS: Record<OSMMode, string> = {
   off: '仅核心工具（读写/记忆/搜索/任务/技能/交互）；数值保守；24×7 常驻安全。',
   balanced: '全量工具可用；数值 ×2；不注入方法论；适合日常工程任务。',
-  methodology: '全量工具 + 数值 ×2 + 自动注入方法论 bootstrap；自动建 docs/superpower/ 目录；严肃项目推荐。',
-  max: '全量工具 + 数值 ×5/×4 + 方法论 bootstrap + 压缩阈值 0.7；长自治任务用；消耗高。',
+  methodology: '全量工具 + 数值 ×2 + 自动注入 OSM 注入；自动建 .openspec/ 目录；严肃项目推荐。',
+  max: '全量工具 + 数值 ×5/×4 + OSM 注入 + 压缩阈值 0.7；长自治任务用；消耗高。',
 }
 
 export default function GeneralSettings() {
   const { settings, handleChange } = useSettings()
-  const { superpowerMode, setSuperpowerMode } = useSessionStore()
+  const { osmMode, setOsmMode } = useSessionStore()
   const { message, modal } = App.useApp()
 
-  const currentMode = superpowerMode
+  const currentMode = osmMode
   const methodologyActive = currentMode === 'methodology' || currentMode === 'max'
 
-  const persistMode = async (mode: SuperpowerMode) => {
+  const persistMode = async (mode: OSMMode) => {
     const prev = currentMode
-    setSuperpowerMode(mode)
+    setOsmMode(mode)
     try {
-      await settingsApi.update({ SUPERPOWER_MODE: mode })
+      await settingsApi.update({ OSM_MODE: mode })
       message.success(`已切换到 ${MODE_LABELS[mode]} 模式`)
     } catch {
       message.error('保存失败，请重试')
-      setSuperpowerMode(prev)
+      setOsmMode(prev)
     }
   }
 
   const onModeChange = (v: string | number) => {
-    const next = String(v) as SuperpowerMode
+    const next = String(v) as OSMMode
     if (next === currentMode) return
     // 进入 max 强制弹确认；其它模式直接切换
     if (next === 'max') {
       modal.confirm({
-        title: '确认切换到 极限 模式？',
+        title: '确认切换到 极致 模式？',
         icon: <ExclamationCircleOutlined style={{ color: '#faad14' }} />,
         width: 560,
         content: (
           <div style={{ lineHeight: 1.8 }}>
             <p style={{ marginBottom: 12 }}>
-              极限模式是最重量级设定，适合长自治任务，非日常默认。启用后：
+              极致模式是最重量级设定，适合长自治任务，非日常默认。启用后：
             </p>
             <ul style={{ paddingLeft: 20, marginBottom: 12 }}>
               <li>Token 预算 × 5、迭代次数 × 4、工具输出上限 × 4、历史窗口 × 4</li>
@@ -63,15 +63,15 @@ export default function GeneralSettings() {
                 <code> web_fetch</code> / <code>http_request</code> / <code>install_package</code> /
                 <code> subagent</code> 等高风险工具）</li>
               <li>压缩阈值放宽到 0.7，长会话 token 消耗显著上升</li>
-              <li>自动注入方法论 bootstrap，简单任务也会走 spec / plan / TDD 流程</li>
+              <li>自动注入 OpenSpec 方法论 (OSM)，简单任务也会走提案 / 设计 / TDD 流程</li>
             </ul>
             <p style={{ color: '#d46b08', marginBottom: 0 }}>
               建议仅在受信任工作区 + 并发可控的环境启用。
-              如只要方法论但不想 ×5，选 <b>专家 (Methodology)</b> 即可。
+              如只要方法论但不想 ×5，选 <b>方法论 (Methodology)</b> 即可。
             </p>
           </div>
         ),
-        okText: '确认切换到 极限',
+        okText: '确认切换到 极致',
         cancelText: '取消',
         okButtonProps: { danger: true },
         onOk: () => persistMode('max'),
@@ -83,20 +83,20 @@ export default function GeneralSettings() {
 
   return (
     <div className={styles.settingsContainer}>
-      {/* ── Superpower 模式 ── */}
+      {/* ── OSM 模式 ── */}
       <div className={styles.section}>
         <div className={styles.sectionTitle}>
           <ThunderboltOutlined
             style={{ marginRight: 6, color: currentMode === 'off' ? '#888' : '#f0c040' }}
           />
-          增强模式 (Superpower)
+          OpenSpec 方法论 (OSM)
           {methodologyActive && (
             <Tag
               color="gold"
               icon={<CheckCircleTwoTone twoToneColor="#f0c040" />}
               style={{ marginLeft: 10 }}
             >
-              Methodology active
+              OSM Methodology active
             </Tag>
           )}
         </div>

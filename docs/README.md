@@ -63,7 +63,7 @@ A production-ready AI Agent Engine built with Node.js + TypeScript ESM. Supports
 | 53 | **Streaming Tool Args** — Tool call parameters stream incrementally (`tool_arg` events); compatible with Qwen/vLLM XML `<tool_call>` fallback parsing |
 | 54 | **DeepSeek V4 Flash/Pro** — Support for latest DeepSeek V4 models with dynamic discount-aware pricing |
 | 55 | **Kimi & Moonshot** — Support for kimi-k2.6/k2.5/k2-0905 and moonshot via DeepSeek-compatible layer |
-| 56 | **Superpower Mode i18n** — Four-tier mode switch (off/balanced/methodology/max) with Chinese labels in enhanced mode dropdown |
+| 56 | **OSM 方法论 i18n** — Four-tier mode switch (off/balanced/methodology/max) with Chinese labels in enhanced mode dropdown |
 | 57 | **Resizable Chat Input** — Drag-to-resize chat input area for longer text composition |
 | 58 | **Dynamic Pricing Module** — DeepSeek model pricing persisted in `~/.agent-engine/deepseek-prices.json` with smart merge on upgrade and API-driven updates |
 | 59 | **SDK Package** — `agent-engine` npm package with Embedded/Remote dual modes covering 22 API namespaces |

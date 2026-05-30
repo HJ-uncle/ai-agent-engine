@@ -3,7 +3,7 @@ import { getDb } from '../sqlite/db.js'
 import type { Row } from '@libsql/client'
 import { v4 as uuidv4 } from 'uuid'
 import { estimateTokens } from '../../core/utils/tokens.js'
-import { applySuperpowerMultiplier } from '../../core/superpower.js'
+import { applyOSMMultiplier } from '../../core/osm.js'
 
 type Ctx = { tenantId: string; sessionId: string }
 
@@ -77,15 +77,15 @@ function rowToMessage(row: Row): Message & { conversationId?: string } {
   return msg
 }
 
-// 默认历史窗口：每次实例化时动态读取 env + 应用 Superpower 倍率，
-// 保证 PUT /settings 热更新（SUPERPOWER_MODE 切换 / HISTORY_MAX_TOKENS 修改）
+// 默认历史窗口：每次实例化时动态读取 env + 应用 OSM 倍率，
+// 保证 PUT /settings 热更新（OSM_MODE 切换 / HISTORY_MAX_TOKENS 修改）
 // 能在下一个请求立即生效，而不需要重启进程。
 // 与 react.ts 的 getToolOutputMaxChars() 策略完全对齐。
 //
 // 注意：若调用方显式传入 maxTokens（例如单元测试固定 cap），则不走此函数。
 function getDefaultHistoryMaxTokens(): number {
   const base = parseInt(process.env.HISTORY_MAX_TOKENS ?? '20000', 10)
-  return applySuperpowerMultiplier('historyMaxTokens', base)
+  return applyOSMMultiplier('historyMaxTokens', base)
 }
 
 // ============================================================================

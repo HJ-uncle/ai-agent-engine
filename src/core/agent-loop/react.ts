@@ -4,7 +4,7 @@ import type { LLMAdapter, LLMAdapterOptions } from '../llm-adapter/index.js'
 import type { Message } from '../agent-context/index.js'
 import { estimateTokens } from '../utils/tokens.js'
 import { v4 as uuidv4 } from 'uuid'
-import { applySuperpowerMultiplier, getSuperpowerCompressRatio } from '../superpower.js'
+import { applyOSMMultiplier, getOSMCompressRatio } from '../osm.js'
 
 /**
  * 截断过大的工具输出，避免历史消息膨胀。
@@ -17,7 +17,7 @@ import { applySuperpowerMultiplier, getSuperpowerCompressRatio } from '../superp
  */
 function getToolOutputMaxChars(): number {
   const base = parseInt(process.env.TOOL_OUTPUT_MAX_CHARS ?? '4000', 10)
-  return applySuperpowerMultiplier('toolOutputMaxChars', base)
+  return applyOSMMultiplier('toolOutputMaxChars', base)
 }
 
 
@@ -151,7 +151,7 @@ export class ReActStrategy implements LoopStrategy {
       parseInt(process.env.MAX_ITERATIONS ?? '50', 10)
     const maxIterations = hasExplicitIterations
       ? baseMaxIterations
-      : applySuperpowerMultiplier('maxIterations', baseMaxIterations)
+      : applyOSMMultiplier('maxIterations', baseMaxIterations)
 
     const maxAskUserCount = this.options.maxAskUserCount ?? 5
     const conversationId = this.options.conversationId
@@ -228,7 +228,7 @@ export class ReActStrategy implements LoopStrategy {
       // 1. 先检查是否需要压缩（用 raw token count，不受 window 限制）
       // 对 24/7 Agent，使用更激进的阈值（0.5）以尽早触发压缩
       // superpower 模式下阈值放宽到 0.7，留更多上下文空间
-      const compressRatio = getSuperpowerCompressRatio(
+      const compressRatio = getOSMCompressRatio(
         parseFloat(process.env.COMPRESS_THRESHOLD_RATIO ?? '0.5'))
       const compressThreshold = Math.floor(ctx.tokenBudget * compressRatio)
       const rawTokens = await ctx.history.getRawTokenCount(ctx)

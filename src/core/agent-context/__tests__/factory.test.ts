@@ -3,7 +3,7 @@ import os from 'node:os'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createAgentContext } from '../factory.js'
-import { __resetSuperpowerWarnFlagsForTests } from '../../superpower.js'
+import { __resetOSMWarnFlagsForTests } from '../../osm.js'
 
 /**
  * Agent-context factory 测试
@@ -48,7 +48,7 @@ const deps = () => ({
 })
 
 beforeEach(() => {
-  __resetSuperpowerWarnFlagsForTests()
+  __resetOSMWarnFlagsForTests()
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ctx-test-'))
   process.env.WORKSPACE_ROOT = tmpRoot
 })
@@ -59,39 +59,37 @@ afterEach(() => {
 })
 
 describe('createAgentContext / artifact directories', () => {
-  it('methodology 模式 → 创建 docs/superpower 三件目录', () => {
+  it('methodology 模式 → 创建 .openspec/changes 目录', () => {
     withEnv({ SUPERPOWER_MODE: 'methodology', SUPERPOWER_ENABLED: undefined }, () => {
       const d = deps()
       const ctx = createAgentContext(d)
-      for (const sub of ['specs', 'plans', 'reviews']) {
-        const p = path.join(ctx.workspaceDir, 'docs', 'superpower', sub)
-        expect(fs.existsSync(p)).toBe(true)
-        expect(fs.statSync(p).isDirectory()).toBe(true)
-      }
+      const p = path.join(ctx.workspaceDir, '.openspec', 'changes')
+      expect(fs.existsSync(p)).toBe(true)
+      expect(fs.statSync(p).isDirectory()).toBe(true)
     })
   })
 
-  it('max 模式 → 同样创建三件目录', () => {
+  it('max 模式 → 同样创建目录', () => {
     withEnv({ SUPERPOWER_MODE: 'max', SUPERPOWER_ENABLED: undefined }, () => {
       const d = deps()
       const ctx = createAgentContext(d)
-      expect(fs.existsSync(path.join(ctx.workspaceDir, 'docs', 'superpower', 'reviews'))).toBe(true)
+      expect(fs.existsSync(path.join(ctx.workspaceDir, '.openspec', 'changes'))).toBe(true)
     })
   })
 
-  it('balanced 模式 → 不创建 docs/superpower', () => {
+  it('balanced 模式 → 不创建 .openspec/changes', () => {
     withEnv({ SUPERPOWER_MODE: 'balanced', SUPERPOWER_ENABLED: undefined }, () => {
       const d = deps()
       const ctx = createAgentContext(d)
-      expect(fs.existsSync(path.join(ctx.workspaceDir, 'docs', 'superpower'))).toBe(false)
+      expect(fs.existsSync(path.join(ctx.workspaceDir, '.openspec', 'changes'))).toBe(false)
     })
   })
 
-  it('off 模式 → 不创建 docs/superpower', () => {
+  it('off 模式 → 不创建 .openspec/changes', () => {
     withEnv({ SUPERPOWER_MODE: 'off', SUPERPOWER_ENABLED: undefined }, () => {
       const d = deps()
       const ctx = createAgentContext(d)
-      expect(fs.existsSync(path.join(ctx.workspaceDir, 'docs', 'superpower'))).toBe(false)
+      expect(fs.existsSync(path.join(ctx.workspaceDir, '.openspec', 'changes'))).toBe(false)
     })
   })
 
@@ -99,7 +97,7 @@ describe('createAgentContext / artifact directories', () => {
     withEnv({ SUPERPOWER_MODE: 'methodology', SUPERPOWER_ENABLED: undefined }, () => {
       const d = deps()
       // 预先创建并写入哨兵文件
-      const pre = path.join(tmpRoot, 'default', d.sessionId, 'docs', 'superpower', 'specs')
+      const pre = path.join(tmpRoot, 'default', d.sessionId, '.openspec', 'changes')
       fs.mkdirSync(pre, { recursive: true })
       const sentinel = path.join(pre, 'keep-me.md')
       fs.writeFileSync(sentinel, 'preserved')

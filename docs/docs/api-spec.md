@@ -332,8 +332,9 @@
   | `HISTORY_MAX_TOKENS` | number | Agent | 历史消息最大 Token 窗口（超出则丢弃旧消息） |
   | `TOOL_OUTPUT_MAX_CHARS` | number | Agent | 工具输出最大字符数（超出则头尾截断） |
   | `COMPRESS_THRESHOLD_RATIO` | number | Agent | 压缩触发阈值（占 `TOKEN_BUDGET` 的比例） |
-  | `SUPERPOWER_MODE` | string | Agent | 增强模式档位：`off` / `balanced` / `methodology` / `max`（从 `process.env` 实时读取） |
-  | `SUPERPOWER_ENABLED` | boolean | Agent | ⚠️ 已废弃：旧版布尔开关（`true`→Methodology，`false`→Off）；下个 minor 移除 |
+  | `OSM_MODE` | string | Agent | OSM 方法论档位：`off` / `balanced` / `methodology` / `max`（从 `process.env` 实时读取） |
+  | `OSM_ENABLED` | boolean | Agent | ⚠️ 已废弃：旧版布尔开关（`true`→Methodology，`false`→Off）；下个 minor 移除 |
+  | `SUPERPOWER_MODE` | string | Agent | ⚠️ 已废弃：OSM_MODE 的别名；下个 minor 移除 |
   | `SKILLS_ROOT` | string | Skills | 自定义技能目录路径 |
   | `BASH_PATH` | string | Skills | Bash 可执行文件路径（Windows 需配置） |
   | `CMD_TIMEOUT_MS` | number | Tools | Shell 命令执行超时时间（毫秒） |
@@ -347,12 +348,12 @@
 
 - `PUT /api/v1/settings`: 更新系统运行时配置（写入 SQLite `system_config` 表，并同步到 `process.env` 立即生效）
 
-  **Superpower 模式更新：**
+  **OSM 方法论更新：**
 
-  使用 `SUPERPOWER_MODE` 字段设置增强档位，可选值为 `off` / `balanced` / `methodology` / `max`。⚠️ **不可同时传入 `SUPERPOWER_MODE` 和 `SUPERPOWER_ENABLED`**（旧版字段），同时写入会返回 `400` 错误。推荐仅使用 `SUPERPOWER_MODE`，旧版 `SUPERPOWER_ENABLED` 将在下个 minor 版本移除。
+  使用 `OSM_MODE` 字段设置增强档位，可选值为 `off` / `balanced` / `methodology` / `max`。⚠️ **不可同时传入 `OSM_MODE` 和 `SUPERPOWER_ENABLED`**（旧版字段），同时写入会返回 `400` 错误。推荐仅使用 `OSM_MODE`，旧版 `SUPERPOWER_ENABLED` 将在下个 minor 版本移除。
 
   ```json
-  { "SUPERPOWER_MODE": "methodology" }
+  { "OSM_MODE": "methodology" }
   ```
 
   **webFetch 安全配置说明**（仍存储于 `config/security.json` 文件，因结构较复杂不适合 KV 存储）

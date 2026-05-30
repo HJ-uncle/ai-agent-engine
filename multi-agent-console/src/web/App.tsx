@@ -314,18 +314,18 @@ export default function App() {
     })()
   }, [])
 
-  // ── 启动时拉取增强模式设置 ──────────────────────────────────────────
+  // ── 启动时拉取 OSM 设置 ──────────────────────────────────────────
   useEffect(() => {
     ;(async () => {
       try {
         const settings = await settingsApi.get()
         if (settings) {
-          let mode = settings.SUPERPOWER_MODE
+          let mode = settings.OSM_MODE || settings.SUPERPOWER_MODE
           if (!mode) {
             const legacy = settings.SUPERPOWER_ENABLED
             mode = (legacy === true || legacy === 'true') ? 'methodology' : 'off'
           }
-          useSessionStore.getState().setSuperpowerMode(mode)
+          useSessionStore.getState().setOsmMode(mode)
         }
       } catch { /* 忽略错误 */ }
     })()

@@ -1,9 +1,9 @@
 ---
-name: superpower-writing-plans
-description: Use when you have a spec or requirements for a multi-step task, before touching code
+name: os-writing-plans
+description: Use when you have an OpenSpec or requirements for a multi-step task, before touching code
 ---
 
-# Writing Plans
+# Writing Plans (OpenSpec Methodology)
 
 ## Overview
 
@@ -11,12 +11,12 @@ Write comprehensive implementation plans assuming the engineer has zero context 
 
 Assume they are a skilled developer, but know almost nothing about our toolset or problem domain. Assume they don't know good test design very well.
 
-**Announce at start:** "I'm using the writing-plans skill to create the implementation plan."
+**Announce at start:** "I'm using the writing-plans skill to create the implementation plan and OpenSpec tasks."
 
 **Context:** If working in an isolated worktree, it should have been created via the `superpowers:using-git-worktrees` skill at execution time.
 
-**Save plans to:** `docs/superpowers/plans/YYYY-MM-DD-<feature-name>.md`
-- (User preferences for plan location override this default)
+**Save plans to:** `.openspec/changes/<feature-name>/tasks.md`
+- (This replaces the legacy `docs/superpowers/plans/` location to align with OpenSpec architecture)
 
 ## Scope Check
 
@@ -62,6 +62,8 @@ This structure informs the task decomposition. Each task should produce self-con
 
 ## Task Structure
 
+**Every task MUST be mapped to a section in `.openspec/changes/<feature-name>/tasks.md`.**
+
 ````markdown
 ### Task N: [Component Name]
 
@@ -71,37 +73,13 @@ This structure informs the task decomposition. Each task should produce self-con
 - Test: `tests/exact/path/to/test.py`
 
 - [ ] **Step 1: Write the failing test**
-
-```python
-def test_specific_behavior():
-    result = function(input)
-    assert result == expected
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `pytest tests/path/test.py::test_name -v`
-Expected: FAIL with "function not defined"
-
-- [ ] **Step 3: Write minimal implementation**
-
-```python
-def function(input):
-    return expected
-```
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `pytest tests/path/test.py::test_name -v`
-Expected: PASS
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add tests/path/test.py src/path/file.py
-git commit -m "feat: add specific feature"
-```
+...
 ````
+
+**Auto-Sync Rule:**
+1. After completing a task via a subagent or inline, you MUST immediately read the `tasks.md` file.
+2. Update the corresponding checkbox to `- [x]`.
+3. Do NOT proceed to the next task until the `tasks.md` on disk reflects the current progress.
 
 ## No Placeholders
 
@@ -135,9 +113,9 @@ If you find issues, fix them inline. No need to re-review — just fix and move 
 
 After saving the plan, offer execution choice:
 
-**"Plan complete and saved to `docs/superpowers/plans/<filename>.md`. Two execution options:**
+**"Plan complete and saved to `.openspec/changes/<feature-name>/tasks.md`. Two execution options:**
 
-**1. Subagent-Driven (recommended)** - I dispatch a fresh subagent per task, review between tasks, fast iteration
+**1. Subagent-Driven (recommended)** - I dispatch a fresh subagent per task, review between tasks, and **automatically update the OpenSpec task status** upon completion.
 
 **2. Inline Execution** - Execute tasks in this session using executing-plans, batch execution with checkpoints
 

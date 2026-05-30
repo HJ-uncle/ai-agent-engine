@@ -3,17 +3,12 @@ import { success, fail } from '../response.js'
 import { loadSecurityConfig, saveSecurityConfig, WebFetchConfig } from '../../../tools/web-fetch/security-config.js'
 import { systemConfigStore, SECRET_KEYS } from '../../../storage/sqlite/system-config.js'
 import { setGlobalToolPoolLimit } from '../../../core/utils/concurrency-pool.js'
-import { resolveSuperpowerMode } from '../../../core/superpower.js'
+import { resolveOSMMode, isValidMode, OSM_MODES } from '../../../core/osm.js'
 import { logger as engineLogger } from '../../../observability/index.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
 
-const SUPERPOWER_MODES = ['off', 'balanced', 'methodology', 'max'] as const
-type SuperpowerModeLiteral = typeof SUPERPOWER_MODES[number]
-function isValidSuperpowerMode(v: unknown): v is SuperpowerModeLiteral {
-  return typeof v === 'string' && (SUPERPOWER_MODES as readonly string[]).includes(v)
-}
 
 let __legacyWriteWarned = false
 
@@ -76,10 +71,12 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       SQLITE_CACHE_KB:        parseInt(getStr('SQLITE_CACHE_KB',        '20000'),  10),
       SQLITE_MMAP_BYTES:      parseInt(getStr('SQLITE_MMAP_BYTES',      '268435456'), 10),
       SQLITE_BUSY_TIMEOUT_MS: parseInt(getStr('SQLITE_BUSY_TIMEOUT_MS', '5000'),   10),
-      // ── Superpower 增强模式 ──────────────────────────────────────────────
-      // 新字段（推荐）：SUPERPOWER_MODE。值由 resolveSuperpowerMode() 统一决议，
+// ── OSM 增强模式 ──────────────────────────────────────────────
+      // 新字段（推荐）：OSM_MODE。值由 resolveOSMMode() 统一决议，
       // 即使只存了 legacy SUPERPOWER_ENABLED 也能翻译过来返回。
-      SUPERPOWER_MODE: resolveSuperpowerMode(engineLogger),
+      OSM_MODE: resolveOSMMode(engineLogger),
+      // 兼容字段，便于旧前端切换
+      SUPERPOWER_MODE: resolveOSMMode(engineLogger),
       // 保留 legacy 只读字段一个 minor 周期，便于旧前端兼容；不再是 source of truth。
       // TODO(remove-in-next-minor): 下个 minor 版本移除。
       SUPERPOWER_ENABLED: getStr('SUPERPOWER_ENABLED', 'false') === 'true',
@@ -93,20 +90,21 @@ export async function settingsRoutes(fastify: FastifyInstance) {
   fastify.put<{ Body: Record<string, string | number | boolean | WebFetchConfig> }>('/settings', async (request, reply) => {
     const updates = request.body
 
-    // ── Superpower 校验 ────────────────────────────────────────────────────
-    // 同时传入 SUPERPOWER_MODE 和 SUPERPOWER_ENABLED 视为冲突，防止语义歧义。
-    const hasMode = Object.prototype.hasOwnProperty.call(updates, 'SUPERPOWER_MODE')
+    // ── OSM 校验 ────────────────────────────────────────────────────
+    // 同时传入 OSM_MODE 和 SUPERPOWER_ENABLED 视为冲突，防止语义歧义。
+    const hasMode = Object.prototype.hasOwnProperty.call(updates, 'OSM_MODE') || Object.prototype.hasOwnProperty.call(updates, 'SUPERPOWER_MODE')
     const hasLegacy = Object.prototype.hasOwnProperty.call(updates, 'SUPERPOWER_ENABLED')
     if (hasMode && hasLegacy) {
       return reply.code(400).send(fail(
         400,
-        'SUPERPOWER_MODE 与 SUPERPOWER_ENABLED 不能同时写入；请只使用 SUPERPOWER_MODE（legacy 字段已 deprecated）',
+        'OSM_MODE 与 SUPERPOWER_ENABLED 不能同时写入；请只使用 OSM_MODE（legacy 字段已 deprecated）',
       ))
     }
-    if (hasMode && !isValidSuperpowerMode(updates['SUPERPOWER_MODE'])) {
+    const modeValue = updates['OSM_MODE'] || updates['SUPERPOWER_MODE']
+    if (hasMode && !isValidMode(modeValue)) {
       return reply.code(400).send(fail(
         400,
-        `SUPERPOWER_MODE 非法值；可选: ${SUPERPOWER_MODES.join(' | ')}`,
+        `OSM_MODE 非法值；可选: ${OSM_MODES.join(' | ')}`,
       ))
     }
     if (hasLegacy && !__legacyWriteWarned) {

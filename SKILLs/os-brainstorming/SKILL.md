@@ -1,6 +1,6 @@
 ---
-name: superpower-brainstorming
-description: "You MUST use this before any creative work - creating features, building components, adding functionality, or modifying behavior. Explores user intent, requirements and design before implementation."
+name: os-brainstorming
+description: "You MUST use this before any creative work - creating features, building components, adding functionality, or modifying behavior. Explores user intent, requirements and design before implementation using OpenSpec Methodology."
 ---
 
 # Brainstorming Ideas Into Designs
@@ -28,10 +28,13 @@ You MUST create a task for each of these items and complete them in order:
 3. **Ask clarifying questions** — one at a time, understand purpose/constraints/success criteria
 4. **Propose 2-3 approaches** — with trade-offs and your recommendation
 5. **Present design** — in sections scaled to their complexity, get user approval after each section
-6. **Write design doc** — save to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` and commit
+6. **Write OpenSpec documents** — save to `.openspec/changes/<feature-name>/` directory.
+   - `proposal.md`: Why, What, Capabilities, Impact.
+   - `design.md`: Context, Goals, Decisions (D1, D2...), Risks.
+   - `specs/<sub-module>/spec.md`: Detailed technical requirements.
 7. **Spec self-review** — quick inline check for placeholders, contradictions, ambiguity, scope (see below)
-8. **User reviews written spec** — ask user to review the spec file before proceeding
-9. **Transition to implementation** — invoke writing-plans skill to create implementation plan
+8. **User reviews written OpenSpec** — ask user to review the proposal/design before proceeding
+9. **Transition to implementation** — invoke writing-plans skill to create implementation plan and `tasks.md`
 
 ## Process Flow
 
@@ -44,9 +47,9 @@ digraph brainstorming {
     "Propose 2-3 approaches" [shape=box];
     "Present design sections" [shape=box];
     "User approves design?" [shape=diamond];
-    "Write design doc" [shape=box];
+    "Write OpenSpec docs" [shape=box];
     "Spec self-review\n(fix inline)" [shape=box];
-    "User reviews spec?" [shape=diamond];
+    "User reviews OpenSpec?" [shape=diamond];
     "Invoke writing-plans skill" [shape=doublecircle];
 
     "Explore project context" -> "Visual questions ahead?";
@@ -57,11 +60,11 @@ digraph brainstorming {
     "Propose 2-3 approaches" -> "Present design sections";
     "Present design sections" -> "User approves design?";
     "User approves design?" -> "Present design sections" [label="no, revise"];
-    "User approves design?" -> "Write design doc" [label="yes"];
-    "Write design doc" -> "Spec self-review\n(fix inline)";
-    "Spec self-review\n(fix inline)" -> "User reviews spec?";
-    "User reviews spec?" -> "Write design doc" [label="changes requested"];
-    "User reviews spec?" -> "Invoke writing-plans skill" [label="approved"];
+    "User approves design?" -> "Write OpenSpec docs" [label="yes"];
+    "Write OpenSpec docs" -> "Spec self-review\n(fix inline)";
+    "Spec self-review\n(fix inline)" -> "User reviews OpenSpec?";
+    "User reviews OpenSpec?" -> "Write OpenSpec docs" [label="changes requested"];
+    "User reviews OpenSpec?" -> "Invoke writing-plans skill" [label="approved"];
 }
 ```
 
@@ -117,25 +120,27 @@ digraph brainstorming {
 
 **Documentation:**
 
-- Write the validated design (spec) to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`
-  - (User preferences for spec location override this default)
+- Write the validated design to `.openspec/changes/<feature-name>/`
+  - `proposal.md`: Summary of Why/What/Impact
+  - `design.md`: Technical decisions and architecture
+  - `specs/<sub-module>/spec.md`: Formal requirements
 - Use elements-of-style:writing-clearly-and-concisely skill if available
-- Commit the design document to git
+- Commit the OpenSpec directory to git
 
 **Spec Self-Review:**
-After writing the spec document, look at it with fresh eyes:
+After writing the OpenSpec documents, look at them with fresh eyes:
 
 1. **Placeholder scan:** Any "TBD", "TODO", incomplete sections, or vague requirements? Fix them.
-2. **Internal consistency:** Do any sections contradict each other? Does the architecture match the feature descriptions?
+2. **Internal consistency:** Do any sections (e.g., Design vs Spec) contradict each other?
 3. **Scope check:** Is this focused enough for a single implementation plan, or does it need decomposition?
 4. **Ambiguity check:** Could any requirement be interpreted two different ways? If so, pick one and make it explicit.
 
 Fix any issues inline. No need to re-review — just fix and move on.
 
 **User Review Gate:**
-After the spec review loop passes, ask the user to review the written spec before proceeding:
+After the spec review loop passes, ask the user to review the written OpenSpec before proceeding:
 
-> "Spec written and committed to `<path>`. Please review it and let me know if you want to make any changes before we start writing out the implementation plan."
+> "OpenSpec documents written and committed to `.openspec/changes/<feature-name>/`. Please review the proposal and design, and let me know if you want to make any changes before we start writing out the implementation plan and `tasks.md`."
 
 Wait for the user's response. If they request changes, make them and re-run the spec review loop. Only proceed once the user approves.
 

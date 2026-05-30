@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
-  getSuperpowerBootstrapBlock,
+  getOSMBootstrapBlock,
   prependBootstrapToSystemPrompt,
-  SUPERPOWER_BOOTSTRAP_SKILL_NAME,
+  OSM_BOOTSTRAP_SKILL_NAME,
   __resetBootstrapWarnFlagForTests,
-} from '../superpower-bootstrap.js'
-import { __resetSuperpowerWarnFlagsForTests } from '../superpower.js'
+} from '../osm-bootstrap.js'
+import { __resetOSMWarnFlagsForTests } from '../osm.js'
 import { skillsRegistry } from '../../skills/index.js'
 
 /**
@@ -13,7 +13,7 @@ import { skillsRegistry } from '../../skills/index.js'
  *
  * 关注点：
  *   1. mode ∈ {off, balanced}      → 空块，无注入
- *   2. mode ∈ {methodology, max}   → 返回带 <SUPERPOWER-ACTIVE> 哨兵的全文
+ *   2. mode ∈ {methodology, max}   → 返回带 <OSM-ACTIVE> 哨兵的全文
  *   3. 缺失 bootstrap skill        → 返回空块，只打一次 warn
  *   4. 分隔符只在非空时插入
  *   5. skillsRegistry 更新后下次调用能取到新内容（热重载）
@@ -23,19 +23,19 @@ import { skillsRegistry } from '../../skills/index.js'
  */
 
 function setEnv(mode: string | undefined) {
-  if (mode === undefined) delete process.env.SUPERPOWER_MODE
-  else process.env.SUPERPOWER_MODE = mode
+  if (mode === undefined) delete process.env.OSM_MODE
+  else process.env.OSM_MODE = mode
   delete process.env.SUPERPOWER_ENABLED
 }
 
-const FAKE_SKILL_CONTENT = '# Using Superpowers\n\n<EXTREMELY-IMPORTANT>iron laws here</EXTREMELY-IMPORTANT>'
+const FAKE_SKILL_CONTENT = '# Using OSM\n\n<EXTREMELY-IMPORTANT>iron laws here</EXTREMELY-IMPORTANT>'
 
 function mockBootstrapSkill(content: string | null) {
   vi.spyOn(skillsRegistry, 'getSkills').mockReturnValue(
     content === null
       ? []
       : [{
-          name: SUPERPOWER_BOOTSTRAP_SKILL_NAME,
+          name: OSM_BOOTSTRAP_SKILL_NAME,
           description: 'test',
           skillMdPath: '',
           order: 1,
@@ -47,39 +47,39 @@ function mockBootstrapSkill(content: string | null) {
 
 beforeEach(() => {
   __resetBootstrapWarnFlagForTests()
-  __resetSuperpowerWarnFlagsForTests()
+  __resetOSMWarnFlagsForTests()
   vi.restoreAllMocks()
 })
 
-describe('superpower-bootstrap / getSuperpowerBootstrapBlock', () => {
+describe('osm-bootstrap / getOSMBootstrapBlock', () => {
   it('off 模式 → 空字符串', () => {
     setEnv('off')
     mockBootstrapSkill(FAKE_SKILL_CONTENT)
-    expect(getSuperpowerBootstrapBlock()).toBe('')
+    expect(getOSMBootstrapBlock()).toBe('')
   })
 
   it('balanced 模式 → 空字符串', () => {
     setEnv('balanced')
     mockBootstrapSkill(FAKE_SKILL_CONTENT)
-    expect(getSuperpowerBootstrapBlock()).toBe('')
+    expect(getOSMBootstrapBlock()).toBe('')
   })
 
   it('methodology 模式 → 带哨兵的技能全文', () => {
     setEnv('methodology')
     mockBootstrapSkill(FAKE_SKILL_CONTENT)
-    const block = getSuperpowerBootstrapBlock()
-    expect(block).toContain('<SUPERPOWER-ACTIVE>')
-    expect(block).toContain('</SUPERPOWER-ACTIVE>')
-    expect(block).toContain('Using Superpowers')
+    const block = getOSMBootstrapBlock()
+    expect(block).toContain('<OSM-ACTIVE>')
+    expect(block).toContain('</OSM-ACTIVE>')
+    expect(block).toContain('Using OSM')
     expect(block).toContain('iron laws here')
   })
 
   it('max 模式 → 带哨兵的技能全文（与 methodology 同格式）', () => {
     setEnv('max')
     mockBootstrapSkill(FAKE_SKILL_CONTENT)
-    const block = getSuperpowerBootstrapBlock()
-    expect(block).toContain('<SUPERPOWER-ACTIVE>')
-    expect(block).toContain('Using Superpowers')
+    const block = getOSMBootstrapBlock()
+    expect(block).toContain('<OSM-ACTIVE>')
+    expect(block).toContain('Using OSM')
   })
 
   it('bootstrap skill 缺失时返回空 + 首次打 warn', () => {
@@ -87,7 +87,7 @@ describe('superpower-bootstrap / getSuperpowerBootstrapBlock', () => {
     const log = { warn, debug: vi.fn() } as any
     setEnv('methodology')
     mockBootstrapSkill(null)
-    const block = getSuperpowerBootstrapBlock(log)
+    const block = getOSMBootstrapBlock(log)
     expect(block).toBe('')
     expect(warn).toHaveBeenCalledTimes(1)
   })
@@ -97,25 +97,25 @@ describe('superpower-bootstrap / getSuperpowerBootstrapBlock', () => {
     const log = { warn, debug: vi.fn() } as any
     setEnv('methodology')
     mockBootstrapSkill(null)
-    for (let i = 0; i < 5; i++) getSuperpowerBootstrapBlock(log)
+    for (let i = 0; i < 5; i++) getOSMBootstrapBlock(log)
     expect(warn).toHaveBeenCalledTimes(1)
   })
 
   it('skillsRegistry 热更新 → 下次调用取到新内容', () => {
     setEnv('methodology')
     mockBootstrapSkill('v1 content')
-    const b1 = getSuperpowerBootstrapBlock()
+    const b1 = getOSMBootstrapBlock()
     expect(b1).toContain('v1 content')
 
     vi.restoreAllMocks()
     mockBootstrapSkill('v2 content')
-    const b2 = getSuperpowerBootstrapBlock()
+    const b2 = getOSMBootstrapBlock()
     expect(b2).toContain('v2 content')
     expect(b2).not.toContain('v1 content')
   })
 })
 
-describe('superpower-bootstrap / prependBootstrapToSystemPrompt', () => {
+describe('osm-bootstrap / prependBootstrapToSystemPrompt', () => {
   it('bootstrap 为空时 → 返回 base 原样（无多余分隔符）', () => {
     setEnv('off')
     mockBootstrapSkill(FAKE_SKILL_CONTENT)
@@ -128,7 +128,7 @@ describe('superpower-bootstrap / prependBootstrapToSystemPrompt', () => {
     mockBootstrapSkill(FAKE_SKILL_CONTENT)
     const base = 'You are a helpful assistant.'
     const out = prependBootstrapToSystemPrompt(base)
-    expect(out.startsWith('<SUPERPOWER-ACTIVE>')).toBe(true)
+    expect(out.startsWith('<OSM-ACTIVE>')).toBe(true)
     expect(out.endsWith(base)).toBe(true)
     expect(out).toContain('\n\n---\n\n')
     // base 在分隔符之后出现
@@ -141,7 +141,7 @@ describe('superpower-bootstrap / prependBootstrapToSystemPrompt', () => {
     setEnv('max')
     mockBootstrapSkill(FAKE_SKILL_CONTENT)
     const out = prependBootstrapToSystemPrompt('')
-    expect(out).toContain('<SUPERPOWER-ACTIVE>')
+    expect(out).toContain('<OSM-ACTIVE>')
     expect(out.endsWith('\n\n---\n\n')).toBe(true)
   })
 })

@@ -1,6 +1,6 @@
 ---
-name: superpower-using-superpowers
-description: Use when starting any conversation - establishes how to find and use skills, requiring get_skill tool invocation before ANY response including clarifying questions
+name: os-using-superpowers
+description: Use when starting any conversation - establishes OpenSpec Methodology (OSM) for skill discovery and execution.
 ---
 
 <SUBAGENT-STOP>
@@ -11,16 +11,14 @@ If you were dispatched as a subagent to execute a specific task, skip this skill
 If you think there is even a 1% chance a skill might apply to what you are doing, you ABSOLUTELY MUST invoke the skill.
 
 IF A SKILL APPLIES TO YOUR TASK, YOU DO NOT HAVE A CHOICE. YOU MUST USE IT.
-
-This is not negotiable. This is not optional. You cannot rationalize your way out of this.
 </EXTREMELY-IMPORTANT>
 
 ## Instruction Priority
 
-Superpowers skills override default system prompt behavior, but **user instructions always take precedence**:
+OpenSpec Methodology skills override default system prompt behavior, but **user instructions always take precedence**:
 
 1. **User's explicit instructions** (CLAUDE.md, GEMINI.md, AGENTS.md, direct requests) — highest priority
-2. **Superpowers skills** — override default system behavior where they conflict
+2. **OSM skills** — override default system behavior where they conflict
 3. **Default system prompt** — lowest priority
 
 If CLAUDE.md, GEMINI.md, or AGENTS.md says "don't use TDD" and a skill says "always use TDD," follow the user's instructions. The user is in control.
@@ -29,14 +27,14 @@ If CLAUDE.md, GEMINI.md, or AGENTS.md says "don't use TDD" and a skill says "alw
 
 **On agent-engine (this host):** Use the `get_skill` tool (powered by `skillsRegistry`). When you invoke a skill, its content is loaded and presented to you — follow it directly. Never use `read_file` / `smart_read` on skill files; they are meant to be discovered through `list_skills` first and then fetched via `get_skill` by name.
 
-## Interaction Rule — HARD GATE
+## Interaction Rule — EXTREMELY IMPORTANT
 
-**You MUST use the `ask_user` tool for ALL questions directed at the user.**
+**You MUST use the `ask_user` tool with `options` for ALL questions directed at the user. NO PLAIN TEXT QUESTIONS.**
 
-- ✅ Correct: Call `ask_user` with a `question` and `options` array → agent loop pauses → user sees an interactive widget
-- ❌ Wrong: Write the question as plain text in your response → agent loop does NOT pause → user cannot respond interactively
-
-This applies everywhere: brainstorming clarifications, design approvals, confirmation prompts, option selections — everything. There are no exceptions.
+- ✅ **Correct**: Call `ask_user({ question: "...", options: [{label: "...", description: "..."}, ...] })`. This pops up an interactive card.
+- ❌ **Forbidden**: Writing "Do you want X or Y?" as plain text in your response. This forces the user to type manually and breaks the OSM flow.
+- **Rule**: If a question has even two possible answers, provide them as `options`. Only use empty options for pure text input (like naming a project), but even then, it MUST be via the `ask_user` tool.
+- **Wait**: After calling `ask_user`, you MUST stop and wait. Do not provide implementation details or next steps in the same turn.
 
 ## Platform Adaptation
 

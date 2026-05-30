@@ -31,7 +31,13 @@ import { installPackageTool, listPackagesTool } from './install-package/install-
 import { agentTools } from './agent/index.js'
 import { lspDiagnoseTool } from './lsp/index.js'
 import type { ExternalSkill } from '../skills/external-loader.js'
-import { resolveDefaultAllowedTools, runSuperpowerSelfCheck, logSuperpowerSelfCheck } from '../core/superpower.js'
+import {
+  resolveDefaultAllowedTools,
+  runOSMSelfCheck,
+  logOSMSelfCheck,
+  resolveOSMMode,
+  OSM_MODE_CONFIG
+} from '../core/osm.js'
 import { logger } from '../observability/index.js'
 
 export interface RegistryFactoryOptions {
@@ -179,6 +185,15 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
 
   // 6. 外部 Skill 工具（按 allowedSkills 过滤；合并 inlineSkills）
   let externalSkills = skillsRegistry.getSkills()
+
+  // ── OSM 方法论 过滤 ──────────────────────────────────────────
+  // 如果当前模式未开启 methodology，则隐藏所有 os- 打头的内置方法论技能，
+  // 避免在 Balanced/Off 模式下干扰 Agent 或浪费 Token。
+  const mode = resolveOSMMode()
+  if (!OSM_MODE_CONFIG[mode].methodology) {
+    externalSkills = externalSkills.filter(s => !s.name.startsWith('os-'))
+  }
+
   // ── 合并客户端透传的 inline skill ────────────────────────────────────────
   // 策略：本地 SKILLS_ROOT 已有的 name 优先（保留 .skill 包的真实文件实现），
   // 仅当本地没有同名 skill 时才把 inline 版本追加进去（虚拟 skill，仅做能力可见）。
@@ -260,8 +275,8 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   // 因工具名变更而"静默失去能力"。只在注册最多的完整场景（allowedTools
   // 为 undefined，即本次 registry 理论上应包含所有内置工具）触发。
   if (effectiveAllowedTools === undefined) {
-    const result = runSuperpowerSelfCheck(registry)
-    logSuperpowerSelfCheck(logger, result)
+    const result = runOSMSelfCheck(registry)
+    logOSMSelfCheck(logger, result)
   }
 
   const toolCategories: ToolCategories = { builtinTools, mcpTools, skillTools }
