@@ -30,7 +30,7 @@ export type OSMMode = 'off' | 'balanced' | 'methodology' | 'max'
 /** @deprecated Use OSMMode */
 export type SuperpowerMode = OSMMode
 
-const OSM_MODES: readonly OSMMode[] = [
+export const OSM_MODES: readonly OSMMode[] = [
   'off', 'balanced', 'methodology', 'max',
 ] as const
 
