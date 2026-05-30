@@ -542,7 +542,7 @@ src/tools/search/grep-tool.ts:14:async function hasRipgrep(): Promise<boolean> {
 
 ## Memory 工具
 
-Agent Engine 采用基于三脑架构的**语义记忆网络 (Semantic Memory Network)**，将碎片化信息存储为认知图谱中的节点，并支持通过关联边（Edges）建立逻辑联系。
+Agent Engine 采用基于**三脑协同架构（Three-Brain Architecture）**的语义记忆网络，将碎片化信息存储为认知图谱中的节点，并支持通过关联边（Edges）建立逻辑联系。系统内置 **AI 意图路由**，在检索时自动优化关键词以达到最高召回率。
 
 ### `remember`
 
@@ -554,7 +554,7 @@ Agent Engine 采用基于三脑架构的**语义记忆网络 (Semantic Memory Ne
 |------|------|------|------|
 | `content` | string | ✅ | 记忆的内容，建议使用简洁完整的陈述句 |
 | `type` | string | ✅ | 记忆类型：`fact` (事实) / `preference` (偏好) / `decision` (决策) / `lesson` (经验) / `narrative` (叙述) / `milestone` (里程碑) |
-| `tags` | array | ✅ | 3-5 个分类标签，用于后续检索 |
+| `tags` | array | ✅ | **动态标签**：AI 会基于上下文自主生成 3-5 个分类标签（无预设库），用于跨维度检索。 |
 | `emotionalValence` | number | 否 | 情感效价 (-1.0 到 1.0)，-1 为极度负面，1 为极度正面，默认 0 |
 | `emotionalTrigger` | string | 否 | 激发该情绪的具体事物或情境 |
 

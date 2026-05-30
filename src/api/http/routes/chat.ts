@@ -422,23 +422,8 @@ export async function chatRoutes(fastify: FastifyInstance) {
       return ''
     }
 
-    // RAG
-    let ragChunks: any[] = []
     const plainTextQuery = extractPlainText(message)
-    if (boundKnowledgeBases && boundKnowledgeBases.length > 0) {
-      // Search only in bound KBs
-      ragChunks = await searchChunks(tenantId, plainTextQuery, ragTopK)
-    } else {
-      ragChunks = await searchChunks(tenantId, plainTextQuery, ragTopK)
-    }
-    
-    let ragPrompt = ''
-    if (ragChunks.length > 0) {
-      const context = ragChunks
-        .map((c, i) => `[${i + 1}] (from: ${c.filename})\n${c.content}`)
-        .join('\n\n')
-      ragPrompt = `\n\n---\n# Relevant Knowledge Base Context\n\nUse the following retrieved context to answer the user's question:\n\n${context}\n---`
-    }
+
     const currentModelName = effectiveModel ?? process.env.LLM_PRIMARY_MODEL ?? process.env.LLM_MODEL ?? '当前配置 of AI'
     
     // Check thinking mode support
@@ -573,6 +558,32 @@ export async function chatRoutes(fastify: FastifyInstance) {
       reqLogger.warn({ model: currentModelName }, 'Thinking mode 已请求但能力注册表声明该模型不支持 thinking')
     }
 
+    // 并行执行 RAG 和 记忆检索
+    const [ragChunks, memoryRecallBlock] = await Promise.all([
+      (async () => {
+        if (boundKnowledgeBases && boundKnowledgeBases.length > 0) {
+          // Search only in bound KBs
+          return await searchChunks(tenantId, plainTextQuery, ragTopK)
+        } else {
+          return await searchChunks(tenantId, plainTextQuery, ragTopK)
+        }
+      })(),
+      buildMemoryRecallBlock(tenantId, plainTextQuery, {
+        model: resolvedModel,
+        apiKey: modelApiKey,
+        baseUrl: modelBaseUrl,
+        provider: modelProvider,
+      })
+    ])
+    
+    let ragPrompt = ''
+    if (ragChunks.length > 0) {
+      const context = ragChunks
+        .map((c, i) => `[${i + 1}] (from: ${c.filename})\n${c.content}`)
+        .join('\n\n')
+      ragPrompt = `\n\n---\n# Relevant Knowledge Base Context\n\nUse the following retrieved context to answer the user's question:\n\n${context}\n---`
+    }
+
     // 注入工作区路径信息，让 AI 知道所有绑定的工作区
     const { workspaceManager } = await import('../../../workspace/index.js')
     const allWorkspacePaths = workspaceManager.getPaths({ tenantId, sessionId, workspacePaths })
@@ -580,18 +591,11 @@ export async function chatRoutes(fastify: FastifyInstance) {
       ? `\n\n当前会话绑定了以下工作区路径：\n${allWorkspacePaths.map((p, i) => `  ${i === 0 ? '主工作区' : '自定义工作区'}: ${p}`).join('\n')}\n调用 \`list_files\` 工具（不传参数）可查看所有工作区内容。`
       : `\n\n当前工作区路径：${allWorkspacePaths[0]}`
 
-    const memoryRecallBlock = await buildMemoryRecallBlock(tenantId, plainTextQuery, {
-      model: resolvedModel,
-      apiKey: modelApiKey,
-      baseUrl: modelBaseUrl,
-      provider: modelProvider,
-    })
-
     const fullSystemPrompt = baseSystemPrompt + ragPrompt + memoryRecallBlock + `
 ---
 # Rules
-1. **ALWAYS use the \`ask_user\` tool** to ask questions, clarify intent, or confirm actions — NEVER output questions as plain text. Plain-text questions do not pause the agent loop and cannot be interacted with by the user. This is a hard rule with no exceptions.
-1a. When calling \`ask_user\`, you MUST provide **at least 2 meaningful, specific options**. NEVER call it with only one option (e.g. only "其他"). If you cannot think of at least 2 concrete choices, skip the tool call entirely and ask in your next plain-text reply.
+1. **Use the \`ask_user\` tool ONLY** when you need the user to make a critical decision among specific options to continue a complex task. For normal conversational questions, open-ended clarifications, or when chatting naturally, DO NOT use the \`ask_user\` tool — just output your question as plain text.
+1a. When calling \`ask_user\`, you MUST provide **at least 2 meaningful, specific options**. NEVER call it with only one option (e.g. only "其他").
 2. Use Chinese tool names in replies (e.g. 写入文件, not write_file).
 3. You are ${currentModelName}.
 4. When providing a downloadable file to the user, ALWAYS present it as an HTTP download link using this exact Markdown format:
@@ -605,8 +609,8 @@ ${workspaceInfo}${attachments && attachments.length > 0 ? `\n\n## 本次消息�
     const pureSystemPrompt = baseSystemPrompt + memoryRecallBlock + `
 ---
 # Rules
-1. **ALWAYS use the \`ask_user\` tool** to ask questions, clarify intent, or confirm actions — NEVER output questions as plain text. Plain-text questions do not pause the agent loop and cannot be interacted with by the user. This is a hard rule with no exceptions.
-1a. When calling \`ask_user\`, you MUST provide **at least 2 meaningful, specific options**. NEVER call it with only one option (e.g. only "其他"). If you cannot think of at least 2 concrete choices, skip the tool call entirely and ask in your next plain-text reply.
+1. **Use the \`ask_user\` tool ONLY** when you need the user to make a critical decision among specific options to continue a complex task. For normal conversational questions, open-ended clarifications, or when chatting naturally, DO NOT use the \`ask_user\` tool — just output your question as plain text.
+1a. When calling \`ask_user\`, you MUST provide **at least 2 meaningful, specific options**. NEVER call it with only one option (e.g. only "其他").
 2. Use Chinese tool names in replies (e.g. 写入文件, not write_file).
 3. You are ${currentModelName}.
 4. When providing a downloadable file to the user, ALWAYS present it as an HTTP download link using this exact Markdown format:

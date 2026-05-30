@@ -3,6 +3,11 @@ import { createLLMAdapterWithDbConfig, type LLMAdapter, type LLMAdapterOptions }
 import type { ExtractedMemory, LLMCredentials } from './types.js'
 import type { Message } from '../../core/agent-context/index.js'
 
+// ============================================================================
+// Types & Constants
+// ============================================================================
+const VALID_TYPES = new Set(['fact', 'preference', 'decision', 'lesson', 'narrative', 'milestone'])
+
 const EXTRACTION_SYSTEM_PROMPT = `你是一个记忆提取助手。从以下对话中提取有价值的记忆信息。
 
 请以 JSON 数组格式输出，每个元素包含：
@@ -27,6 +32,19 @@ const EXTRACTION_SYSTEM_PROMPT = `你是一个记忆提取助手。从以下对�
 - 避免提取临时性、一次性、无长期价值的内容
 - 如果没有有价值的记忆可以提取，返回空数组 []`
 
+const ROUTER_SYSTEM_PROMPT = `作为一个记忆检索路由，请根据用户的输入，决定需要从记忆体中检索什么。
+规则：
+1. 如果用户只是简单寒暄（如"你好","在吗"、"哈喽"）、或者当前的对话完全不需要参考历史，严格回复: NONE
+2. 如果用户问关于自己的身份、过去交互等问题（如"你是谁"、"你认识我吗"），请输出通用检索词：用户 名字 叫什么 身份 职业 偏好 设定 经历。
+3. 其他情况，提取1-3个核心名词作为关键词，空格分隔。
+切记：只返回核心检索词或 NONE，绝不输出任何其他解释文本。
+
+用户输入: "{query}"
+输出:`
+
+// ============================================================================
+// Utilities
+// ============================================================================
 function formatMessages(messages: Array<{ role: string; content: string }>): string {
   return messages
     .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -34,19 +52,12 @@ function formatMessages(messages: Array<{ role: string; content: string }>): str
     .join('\n\n')
 }
 
-export { formatMessages }
-
 function buildExtractionPrompt(historyText: string): string {
   return `${EXTRACTION_SYSTEM_PROMPT}\n\n--- 对话历史开始 ---\n${historyText}\n--- 对话历史结束 ---\n\n请提取记忆，以 JSON 数组格式输出：`
 }
 
-export { buildExtractionPrompt }
-
-const VALID_TYPES = new Set(['fact', 'preference', 'decision', 'lesson', 'narrative', 'milestone'])
-
 function parseMemories(raw: string): ExtractedMemory[] {
   let jsonStr = raw.trim()
-
   const fenced = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/)
   if (fenced) {
     jsonStr = fenced[1].trim()
@@ -72,8 +83,15 @@ function parseMemories(raw: string): ExtractedMemory[] {
   })
 }
 
-export { parseMemories }
+export { formatMessages, buildExtractionPrompt, parseMemories }
 
+// ============================================================================
+// Core Functions
+// ============================================================================
+
+/**
+ * 提取对话历史中的记忆并存入数据库
+ */
 export async function extractAndStoreMemories(opts: {
   messages: Array<{ role: string; content: string }>
   sessionId: string
@@ -202,51 +220,118 @@ export async function extractAndStoreMemories(opts: {
   return result
 }
 
+/**
+ * 核心检索路由：通过大模型分析用户输入，并构建三脑架构所需的查询上下文
+ */
+async function analyzeQueryIntent(query: string, adapter: LLMAdapter): Promise<string> {
+  const prompt = ROUTER_SYSTEM_PROMPT.replace('{query}', query)
+  try {
+    const res = await adapter.complete(
+      [{ role: 'user', content: prompt, createdAt: Date.now() }], 
+      { model: adapter.model, temperature: 0.1, maxTokens: 100 }
+    )
+    return res.content.trim()
+  } catch (err) {
+    // 降级：如果大模型路由失败，直接将原查询作为关键词
+    return query 
+  }
+}
+
+/**
+ * 组装记忆召回块，利用三脑架构（向量、关系、图）综合提取记忆节点
+ */
 export async function buildMemoryRecallBlock(
   tenantId: string,
   query?: string,
   llm?: LLMCredentials,
 ): Promise<string> {
   try {
-    const manager = new SQLiteMemoryManager()
-    let nodes: any[] = []
+    if (!query || !llm) return ''
 
-    if (query && llm) {
+    const manager = new SQLiteMemoryManager()
+    let aiQuery = ''
+    let adapter: LLMAdapter | null = null
+    
+    try {
+      adapter = await createLLMAdapterWithDbConfig({
+        model: llm.model,
+        apiKey: llm.apiKey,
+        baseUrl: llm.baseUrl,
+        provider: llm.provider,
+      })
+      aiQuery = await analyzeQueryIntent(query, adapter)
+    } catch (err) {
+      aiQuery = query
+    }
+
+    if (aiQuery === 'NONE') {
+      return '' // 简单寒暄，不需要记忆
+    }
+
+    // ==================================================
+    // 三脑协同架构 (Three-Brain Architecture) 检索
+    // ==================================================
+    const nodeMap = new Map<string, any>()
+    let anchorIds: string[] = []
+    const ctx = { tenantId, sessionId: '' }
+
+    // 1. 向量数据库 (海马体) - 语义直觉与模糊联想
+    if (adapter?.embed && aiQuery) {
       try {
-        const adapter = await createLLMAdapterWithDbConfig({
-          model: llm.model,
-          apiKey: llm.apiKey,
-          baseUrl: llm.baseUrl,
-          provider: llm.provider,
-        })
-        if (adapter.embed) {
-          const embeds = await adapter.embed(query)
-          if (embeds && embeds.length > 0) {
-            const similarNodes = await manager.recallSimilar(embeds[0], 20, { tenantId, sessionId: '' })
-            nodes = similarNodes
+        const embeds = await adapter.embed(aiQuery)
+        if (embeds && embeds.length > 0) {
+          const similarNodes = await manager.recallSimilar(embeds[0], 10, ctx, 0.65)
+          for (const n of similarNodes) {
+            nodeMap.set(n.id, n)
+            anchorIds.push(n.id)
           }
         }
       } catch (err) {
-        console.warn(`[Memory] Vector recall failed: ${(err as Error).message}, falling back to listNodes`)
+        // ignore vector failure, proceed to keyword fallback
       }
     }
 
-    if (nodes.length === 0) {
-      nodes = await manager.listNodes(
+    // 2. 关系型数据库 (皮层) - 兜底与字面量精确匹配
+    if (anchorIds.length < 5 && aiQuery) {
+      const kwNodes = await manager.listNodes(
         {
-          minImportance: 0.3,
-          minStrength: 0.15,
+          keyword: aiQuery,
           orderBy: 'importance',
           orderDir: 'DESC',
-          limit: 30,
+          limit: 50, // 扩大匹配池，防高权噪音截断
         },
-        { tenantId, sessionId: '' },
+        ctx
       )
+      for (const n of kwNodes) {
+        if (!nodeMap.has(n.id)) {
+          nodeMap.set(n.id, n)
+          anchorIds.push(n.id)
+        }
+        if (anchorIds.length >= 15) break // 控制锚点规模
+      }
+    }
+    
+    // 3. 图数据库模拟 (联络图) - 深度关联与高阶认知
+    if (anchorIds.length > 0) {
+      try {
+        const relatedNodes = await manager.getRelatedNodes(anchorIds, undefined, ctx)
+        for (const n of relatedNodes) {
+          if (!nodeMap.has(n.id)) {
+            nodeMap.set(n.id, n)
+          }
+        }
+      } catch (err) {
+        // ignore graph traversal failure
+      }
     }
 
-    if (nodes.length === 0) return ''
+    const contextualNodes = Array.from(nodeMap.values())
+    if (contextualNodes.length === 0) return ''
 
-    const lines = nodes.map((n) => {
+    // 排序：先按重要性，再按强度
+    contextualNodes.sort((a, b) => (b.importance - a.importance) || (b.strength - a.strength))
+
+    const lines = contextualNodes.map((n) => {
       const typeLabel: Record<string, string> = {
         preference: '偏好',
         decision: '决定',

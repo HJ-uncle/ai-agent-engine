@@ -213,6 +213,24 @@ export class SQLiteMemoryManager implements MemoryManager {
       args.push(filter.sessionId)
     }
 
+    if (filter.keyword) {
+      const words = filter.keyword
+        .split(/[\s,，.。?？!！;；、]+/)
+        .map(w => w.trim())
+        .filter(w => w.length > 1) // 忽略单字
+
+      if (words.length > 0) {
+        const wordConditions = words.map(() => '(summary LIKE ? OR detail LIKE ?)')
+        conditions.push(`(${wordConditions.join(' OR ')})`)
+        for (const w of words) {
+          args.push(`%${w}%`, `%${w}%`)
+        }
+      } else {
+        conditions.push('(summary LIKE ? OR detail LIKE ?)')
+        args.push(`%${filter.keyword}%`, `%${filter.keyword}%`)
+      }
+    }
+
     if (filter.tags && filter.tags.length > 0) {
       const placeholders = filter.tags.map(() => '?').join(',')
       conditions.push(`id IN (
@@ -265,15 +283,16 @@ export class SQLiteMemoryManager implements MemoryManager {
     return this.listNodes({ sessionId, orderBy: 'timestamp', limit: 100 }, ctx)
   }
 
-  async recallSimilar(embedding: number[], limit: number, ctx: MemoryContext): Promise<MemoryNode[]> {
+  async recallSimilar(embedding: number[], limit: number, ctx: MemoryContext, maxDistance?: number): Promise<MemoryNode[]> {
     const db = getMemoryDb()
+    const distanceThreshold = maxDistance ?? 0.4
     const result = await db.execute({
       sql: `SELECT *, vector_distance_cos(embedding, vector32(?)) as distance
             FROM memory_nodes
-            WHERE tenant_id = ?
+            WHERE tenant_id = ? AND vector_distance_cos(embedding, vector32(?)) <= ?
             ORDER BY distance ASC
             LIMIT ?`,
-      args: [JSON.stringify(embedding), ctx.tenantId, limit],
+      args: [JSON.stringify(embedding), ctx.tenantId, JSON.stringify(embedding), distanceThreshold, limit],
     })
 
     const nodes = result.rows.map((r) => mapNodeRow(r as unknown as Record<string, unknown>))

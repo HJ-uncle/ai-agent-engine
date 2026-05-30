@@ -114,6 +114,7 @@ export interface MemoryNodeFilter {
   minImportance?: number
   tags?: string[]
   sessionId?: string
+  keyword?: string
   orderBy?: 'timestamp' | 'strength' | 'importance' | 'last_accessed'
   orderDir?: 'ASC' | 'DESC'
   limit?: number
@@ -140,7 +141,7 @@ export interface MemoryManager {
   recallRecent(limit: number, ctx: MemoryContext): Promise<MemoryNode[]>
   recallImportant(minImportance: number, ctx: MemoryContext): Promise<MemoryNode[]>
   recallBySession(sessionId: string, ctx: MemoryContext): Promise<MemoryNode[]>
-  recallSimilar(embedding: number[], limit: number, ctx: MemoryContext): Promise<MemoryNode[]>
+  recallSimilar(embedding: number[], limit: number, ctx: MemoryContext, maxDistance?: number): Promise<MemoryNode[]>
 
   // Edge CRUD
   createEdge(input: CreateMemoryEdgeInput, ctx: MemoryContext): Promise<MemoryEdge>
