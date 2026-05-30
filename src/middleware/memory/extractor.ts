@@ -16,7 +16,7 @@ const EXTRACTION_SYSTEM_PROMPT = `你是一个记忆提取助手。从以下对�
 - importance: 重要性 0-1（0.9+极重要，0.7+重要，0.5+一般，0.3+轻微）
 - emotion: 情绪效价 -1~1（-1消极，0中性，1积极）
 - tags: 标签数组（如 ["用户信息","技术栈","项目偏好"]）
-- relatedTo: 指向本次提取中另一条记忆的 content 关键词（可选）
+- relatedTo: 指向本次提取中另一条记忆的 content 关键词，或者指向已知旧记忆的关键词（可选）
 
 提取规则：
 1. 事实类（fact）：明确的、可验证的信息
@@ -27,6 +27,8 @@ const EXTRACTION_SYSTEM_PROMPT = `你是一个记忆提取助手。从以下对�
 6. 里程碑类（milestone）：重要的进展或节点
 
 注意：
+- 识别层级：如果新信息是某个大主题（如“小说创作”、“职业背景”）的子项，请在 content 中体现所属关系。
+- 关联旧记忆：如果新信息补充或修正了已知旧信息，请在 tags 中加入旧记忆的关键词。
 - 只提取有价值的、非显而易见的记忆
 - 偏好、决策、经验教训类比事实类更值得提取
 - 避免提取临时性、一次性、无长期价值的内容
@@ -200,17 +202,44 @@ export async function extractAndStoreMemories(opts: {
               {
                 sourceNodeId: sourceId,
                 targetNodeId: targetId,
-                type: 'similar_to',
-                strength: 0.7,
-                description: `自动关联：${memory.content.slice(0, 30)} ↔ ${targetContent.slice(0, 30)}`,
+                type: 'part_of', // 改为更具层级感的 part_of
+                strength: 0.9,
+                description: `自动层级关联：${memory.content.slice(0, 30)}`,
               },
               ctx,
             )
           } catch {
-            // 建边失败不影响整体
+            // ignore
           }
           break
         }
+      }
+      
+      // 跨会话巩固：寻找已有记忆中的相似节点并建立联系
+      try {
+        let embedding: number[] | undefined
+        if (adapter.embed) {
+          const embeds = await adapter.embed(memory.content)
+          if (embeds && embeds.length > 0) embedding = embeds[0]
+        }
+        
+        if (embedding) {
+          const existingNodes = await manager.recallSimilar(embedding, 3, ctx, 0.3) // 寻找极高相似度的旧记忆
+          for (const oldNode of existingNodes) {
+            const sourceId = nodeMap.get(memory.content)
+            if (sourceId && oldNode.id !== sourceId) {
+              await manager.createEdge({
+                sourceNodeId: sourceId,
+                targetNodeId: oldNode.id,
+                type: 'reinforces',
+                strength: 0.6,
+                description: '跨会话自动巩固关联',
+              }, ctx)
+            }
+          }
+        }
+      } catch {
+        // ignore consolidation errors
       }
     }
   } catch (err) {
@@ -314,10 +343,21 @@ export async function buildMemoryRecallBlock(
     // 3. 图数据库模拟 (联络图) - 深度关联与高阶认知
     if (anchorIds.length > 0) {
       try {
-        const relatedNodes = await manager.getRelatedNodes(anchorIds, undefined, ctx)
+        // 扩展联想深度至 2 跳，实现深层记忆激活
+        const relatedNodes = await manager.traversePath(anchorIds[0], 2, undefined, ctx)
         for (const n of relatedNodes) {
           if (!nodeMap.has(n.id)) {
             nodeMap.set(n.id, n)
+          }
+        }
+        
+        // 如果锚点较多，对其他锚点也进行 1 跳补充（平衡深度与广度）
+        if (anchorIds.length > 1) {
+          const secondaryRelated = await manager.getRelatedNodes(anchorIds.slice(1), undefined, ctx)
+          for (const n of secondaryRelated) {
+            if (!nodeMap.has(n.id)) {
+              nodeMap.set(n.id, n)
+            }
           }
         }
       } catch (err) {
