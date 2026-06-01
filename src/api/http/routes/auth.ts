@@ -30,19 +30,25 @@ import { success, fail } from '../response.js'
  *  }
  */
 export async function authRoutes(fastify: FastifyInstance) {
-  fastify.post('/auth/user', async (request, reply) => {
+  fastify.post('/auth/user', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['token', 'userId'],
+        properties: {
+          token: { type: 'string', minLength: 1 },
+          userId: { type: 'string', minLength: 1 },
+          name: { type: 'string' },
+          email: { type: 'string' },
+        },
+      },
+    },
+  }, async (request, reply) => {
     const { token, userId, name, email } = request.body as {
-      token?: string
-      userId?: string
+      token: string
+      userId: string
       name?: string
       email?: string
-    }
-
-    if (!token || typeof token !== 'string' || !token.trim()) {
-      return reply.code(200).send(fail(40001, 'token 不能为空'))
-    }
-    if (!userId || typeof userId !== 'string' || !userId.trim()) {
-      return reply.code(200).send(fail(40002, 'userId 不能为空'))
     }
 
     const db = getDb()

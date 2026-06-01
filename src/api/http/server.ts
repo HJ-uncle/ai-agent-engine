@@ -26,7 +26,7 @@ import { deepseekRoutes } from './routes/deepseek.js'
 import { authRoutes } from './routes/auth.js'
 import { tenantRoutes } from './routes/tenant.js'
 import { cronScheduler } from '../../scheduler/cron-scheduler.js'
-import { globalRequestMiddleware, WHITELIST_PATHS } from './middleware.js'
+import { globalRequestMiddleware, loggingMiddleware, authMiddlewareHook, WHITELIST_PATHS } from './middleware.js'
 import fastifyWebsocket from '@fastify/websocket'
 import fastifyMultipart from '@fastify/multipart'
 import fastifyStatic from '@fastify/static'
@@ -41,32 +41,10 @@ export async function buildServer() {
     bodyLimit: 100 * 1024 * 1024, // 100MB，支持大文件上传
   })
 
-  const authMiddleware = createAuthMiddleware()
-
-  // Apply unified request header validation and whitelist
+  // Apply unified request header validation, logging and auth
   fastify.addHook('onRequest', globalRequestMiddleware)
-
-  // Request logging and auth hook
-  fastify.addHook('onRequest', async (request, reply) => {
-    // skip auth if in whitelist
-    if (WHITELIST_PATHS.includes(request.url)) return
-
-    const reqLogger = logger.child({ requestId: request.id })
-    reqLogger.info({ method: request.method, url: request.url }, 'Incoming request')
-
-    // Authenticate
-    try {
-      const authContext = await authMiddleware.authenticate({
-        headers: request.headers as Record<string, string | string[] | undefined>,
-      })
-      ;(request as unknown as { authContext: typeof authContext }).authContext = authContext
-    } catch (err) {
-      // Only reject if auth is enabled
-      if (process.env.AUTH_ENABLED !== 'false') {
-        await reply.code(200).send(fail(40100, err instanceof Error ? err.message : 'Unauthorized'))
-      }
-    }
-  })
+  fastify.addHook('onRequest', loggingMiddleware)
+  fastify.addHook('onRequest', authMiddlewareHook)
 
   // Global error handler
   fastify.setErrorHandler(async (error, request, reply) => {

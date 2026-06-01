@@ -173,7 +173,7 @@ const DEFAULT_RULES: CapabilityRule[] = [
   },
   {
     id: 'moonshot:vision',
-    match: { model: [/moonshot.*vision/i, /kimi.*vision/i, /kimi-vl/i] },
+    match: { model: [/moonshot.*vision/i, /kimi.*vision/i, /kimi-vl/i, /k2\.5/i] },
     caps: { vision: true },
   },
 

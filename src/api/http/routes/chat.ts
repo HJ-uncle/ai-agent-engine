@@ -203,11 +203,18 @@ export async function chatRoutes(fastify: FastifyInstance) {
   // ── 取消正在运行的会话 ────────────────────────────────────────────────────
   // POST /chat/cancel  body: { sessionId }
   // 即使前端 SSE 连接异常未触发 close，前端也可主动调用此接口终止后端运行。
-  fastify.post<{ Body: { sessionId?: string } }>('/chat/cancel', async (request, reply) => {
-    const { sessionId } = request.body ?? {}
-    if (!sessionId) {
-      return reply.code(400).send({ code: 40001, message: 'sessionId is required', data: null, timestamp: Date.now() })
-    }
+  fastify.post<{ Body: { sessionId: string } }>('/chat/cancel', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['sessionId'],
+        properties: {
+          sessionId: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const { sessionId } = request.body
     const tenantId = getTenantId(request)
     const cancelled = abortActiveChat(tenantId, sessionId, 'Cancelled by user via /chat/cancel')
     return reply.code(200).send({
@@ -218,7 +225,50 @@ export async function chatRoutes(fastify: FastifyInstance) {
     })
   })
 
-  fastify.post<{ Body: ChatBody }>('/chat', async (request, reply) => {
+  fastify.post<{ Body: ChatBody }>('/chat', {
+    schema: {
+      body: {
+        type: 'object',
+        // message 不再强制要求 minLength: 1，因为在 toolResponse 场景下可能为空
+        properties: {
+          message: { type: ['string', 'null', 'array'] },
+          sessionId: { type: 'string' },
+          agentId: { type: 'string' },
+          systemPrompt: { type: 'string' },
+          maxAskUserCount: { type: 'number' },
+          thinkingMode: { type: 'boolean' },
+          inheritContext: { type: 'boolean' },
+          workspacePaths: { type: 'array', items: { type: 'string' } },
+          ragTopK: { type: 'number' },
+          model: { type: 'string' },
+          modelApiKey: { type: 'string' },
+          modelBaseUrl: { type: 'string' },
+          modelProvider: { type: 'string' },
+          toolResponse: {
+            type: 'object',
+            properties: {
+              toolCallId: { type: 'string' },
+              name: { type: 'string' },
+              output: { type: 'string' }
+            }
+          },
+          attachments: { type: 'array' },
+          capabilities: { type: 'object' },
+          skills: { type: 'array' },
+          mcpServers: { type: 'array' },
+          knowledgeBases: { type: 'array' },
+          allowedTools: { type: 'array' },
+          inlineSkills: { type: 'array' },
+          inlineMcpServers: { type: 'array' },
+          inlineAgent: { type: 'object' },
+          inlineKnowledgeBases: { type: 'array' },
+          inlineMemoriesXml: { type: 'string' },
+          metadata: { type: 'object' }
+        },
+        additionalProperties: true, // 允许扩展字段
+      },
+    },
+  }, async (request, reply) => {
     const requestId = uuidv4()
     const { 
       message, 
@@ -726,7 +776,8 @@ ${workspaceInfo}
           model: resolvedModel,   // agent model 优先；DB 配置不可用时回退 env primaryModel
           apiKey: modelApiKey, 
           baseUrl: modelBaseUrl, 
-          provider: modelProvider 
+          provider: modelProvider,
+          capabilities: modelCaps, // 传入已解析的模型能力，确保 vision 等功能正常
         })
         const strategy = new ReActStrategy(llm, {
           systemPrompt: fullSystemPrompt || undefined,
@@ -871,21 +922,29 @@ ${workspaceInfo}
     } finally {
       // 这里的 finally 只代表请求结束，不清理 activeChatAborters
     }
-    return reply
   })
 
   // ── 恢复断开的流 ──────────────────────────────────────────────────────────
-  fastify.get<{ Querystring: { sessionId: string; lastEventId?: string } }>('/chat/stream', async (request, reply) => {
+  fastify.get<{ Querystring: { sessionId: string; lastEventId?: string } }>('/chat/stream', {
+    schema: {
+      querystring: {
+        type: 'object',
+        required: ['sessionId'],
+        properties: {
+          sessionId: { type: 'string', minLength: 1 },
+          lastEventId: { type: 'string' },
+        },
+      },
+    },
+  }, async (request, reply) => {
     const { sessionId, lastEventId } = request.query
-    if (!sessionId) {
-      return reply.code(400).send({ code: 40001, message: 'sessionId is required' })
-    }
 
     const streamBus = activeStreams.get(sessionId)
     if (!streamBus) {
       reply.raw.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
       reply.raw.write('event: done\ndata: [DONE]\n\n')
-      return reply.raw.end()
+      reply.raw.end()
+      return
     }
 
     if (streamBus.disconnectTimeout) {
@@ -906,6 +965,5 @@ ${workspaceInfo}
     request.raw.on('aborted', onClientClose)
 
     await sseStream(busToIterable(streamBus, lastEventId), reply)
-    return reply
   })
 }

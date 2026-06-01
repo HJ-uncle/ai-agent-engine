@@ -1,5 +1,5 @@
 import { getMemoryDb } from './db.js'
-import type { InValue } from '@libsql/client'
+import type { InValue, Transaction } from '@libsql/client'
 import type {
   MemoryManager,
   MemoryNode,
@@ -14,6 +14,10 @@ import type {
   CreateMemoryEdgeInput,
 } from './types.js'
 import { v4 as uuidv4 } from 'uuid'
+
+type Executor = {
+  execute(stmt: { sql: string; args: InValue[] }): Promise<any>
+}
 
 function mapNodeRow(row: Record<string, unknown>): MemoryNode {
   return {
@@ -61,8 +65,12 @@ function mapEdgeRow(row: Record<string, unknown>): MemoryEdge {
 export class SQLiteMemoryManager implements MemoryManager {
   // ── Node CRUD ──────────────────────────────────────────────────────────
 
-  async createNode(input: CreateMemoryNodeInput, ctx: MemoryContext): Promise<MemoryNode> {
-    const db = getMemoryDb()
+  async createNode(
+    input: CreateMemoryNodeInput,
+    ctx: MemoryContext,
+    executor?: Executor,
+  ): Promise<MemoryNode> {
+    const db = executor ?? getMemoryDb()
     const id = uuidv4()
     const now = Math.floor(Date.now() / 1000)
     const timestamp = input.timestamp ?? now
@@ -116,14 +124,14 @@ export class SQLiteMemoryManager implements MemoryManager {
     })
 
     if (input.tags && input.tags.length > 0) {
-      await this._attachTags(id, input.tags, ctx)
+      await this._attachTags(id, input.tags, ctx, db)
     }
 
-    return (await this.getNode(id, ctx))!
+    return (await this.getNode(id, ctx, db))!
   }
 
-  async getNode(id: string, ctx: MemoryContext): Promise<MemoryNode | null> {
-    const db = getMemoryDb()
+  async getNode(id: string, ctx: MemoryContext, executor?: Executor): Promise<MemoryNode | null> {
+    const db = executor ?? getMemoryDb()
     const result = await db.execute({
       sql: 'SELECT * FROM memory_nodes WHERE id = ? AND tenant_id = ?',
       args: [id, ctx.tenantId],
@@ -131,7 +139,7 @@ export class SQLiteMemoryManager implements MemoryManager {
     if (result.rows.length === 0) return null
 
     const node = mapNodeRow(result.rows[0] as unknown as Record<string, unknown>)
-    node.tags = await this._readTags(id, ctx)
+    node.tags = await this._readTags(id, ctx, db)
     return node
   }
 
@@ -261,8 +269,11 @@ export class SQLiteMemoryManager implements MemoryManager {
     })
 
     const nodes = result.rows.map((r) => mapNodeRow(r as unknown as Record<string, unknown>))
-    for (const node of nodes) {
-      node.tags = await this._readTags(node.id, ctx)
+    if (nodes.length > 0) {
+      const tagMap = await this._readTagsBatch(nodes.map(n => n.id), ctx)
+      for (const node of nodes) {
+        node.tags = tagMap[node.id] || []
+      }
     }
     return nodes
   }
@@ -287,25 +298,36 @@ export class SQLiteMemoryManager implements MemoryManager {
     const db = getMemoryDb()
     const distanceThreshold = maxDistance ?? 0.4
     const result = await db.execute({
-      sql: `SELECT *, vector_distance_cos(embedding, vector32(?)) as distance
-            FROM memory_nodes
-            WHERE tenant_id = ? AND vector_distance_cos(embedding, vector32(?)) <= ?
+      sql: `WITH ranked AS (
+              SELECT *, vector_distance_cos(embedding, vector32(?)) as distance
+              FROM memory_nodes
+              WHERE tenant_id = ?
+            )
+            SELECT * FROM ranked
+            WHERE distance <= ?
             ORDER BY distance ASC
             LIMIT ?`,
-      args: [JSON.stringify(embedding), ctx.tenantId, JSON.stringify(embedding), distanceThreshold, limit],
+      args: [JSON.stringify(embedding), ctx.tenantId, distanceThreshold, limit],
     })
 
     const nodes = result.rows.map((r) => mapNodeRow(r as unknown as Record<string, unknown>))
-    for (const node of nodes) {
-      node.tags = await this._readTags(node.id, ctx)
+    if (nodes.length > 0) {
+      const tagMap = await this._readTagsBatch(nodes.map(n => n.id), ctx)
+      for (const node of nodes) {
+        node.tags = tagMap[node.id] || []
+      }
     }
     return nodes
   }
 
   // ── Edge CRUD ──────────────────────────────────────────────────────────
 
-  async createEdge(input: CreateMemoryEdgeInput, ctx: MemoryContext): Promise<MemoryEdge> {
-    const db = getMemoryDb()
+  async createEdge(
+    input: CreateMemoryEdgeInput,
+    ctx: MemoryContext,
+    executor?: Executor,
+  ): Promise<MemoryEdge> {
+    const db = executor ?? getMemoryDb()
     const id = uuidv4()
     const now = Math.floor(Date.now() / 1000)
 
@@ -378,8 +400,11 @@ export class SQLiteMemoryManager implements MemoryManager {
     })
 
     const nodes = result.rows.map((r) => mapNodeRow(r as unknown as Record<string, unknown>))
-    for (const node of nodes) {
-      node.tags = await this._readTags(node.id, { tenantId, sessionId: '' })
+    if (nodes.length > 0) {
+      const tagMap = await this._readTagsBatch(nodes.map(n => n.id), { tenantId, sessionId: '' })
+      for (const node of nodes) {
+        node.tags = tagMap[node.id] || []
+      }
     }
     return nodes
   }
@@ -422,8 +447,11 @@ export class SQLiteMemoryManager implements MemoryManager {
 
     const result = await db.execute({ sql, args })
     const nodes = result.rows.map((r) => mapNodeRow(r as unknown as Record<string, unknown>))
-    for (const node of nodes) {
-      node.tags = await this._readTags(node.id, { tenantId, sessionId: '' })
+    if (nodes.length > 0) {
+      const tagMap = await this._readTagsBatch(nodes.map(n => n.id), { tenantId, sessionId: '' })
+      for (const node of nodes) {
+        node.tags = tagMap[node.id] || []
+      }
     }
     return nodes
   }
@@ -463,8 +491,11 @@ export class SQLiteMemoryManager implements MemoryManager {
     })
 
     const nodes = result.rows.map((r) => mapNodeRow(r as unknown as Record<string, unknown>))
-    for (const node of nodes) {
-      node.tags = await this._readTags(node.id, { tenantId, sessionId: '' })
+    if (nodes.length > 0) {
+      const tagMap = await this._readTagsBatch(nodes.map(n => n.id), { tenantId, sessionId: '' })
+      for (const node of nodes) {
+        node.tags = tagMap[node.id] || []
+      }
     }
     return nodes
   }
@@ -472,25 +503,7 @@ export class SQLiteMemoryManager implements MemoryManager {
   // ── Tags ───────────────────────────────────────────────────────────────
 
   async addTag(nodeId: string, tag: string, ctx: MemoryContext): Promise<void> {
-    const db = getMemoryDb()
-
-    await db.execute({
-      sql: 'INSERT OR IGNORE INTO memory_tags (tenant_id, name) VALUES (?, ?)',
-      args: [ctx.tenantId, tag],
-    })
-
-    const tagResult = await db.execute({
-      sql: 'SELECT id FROM memory_tags WHERE tenant_id = ? AND name = ?',
-      args: [ctx.tenantId, tag],
-    })
-    if (tagResult.rows.length === 0) return
-
-    const tagId = tagResult.rows[0]['id'] as number
-
-    await db.execute({
-      sql: 'INSERT OR IGNORE INTO memory_node_tags (node_id, tag_id) VALUES (?, ?)',
-      args: [nodeId, tagId],
-    })
+    await this._attachTags(nodeId, [tag], ctx)
   }
 
   async removeTag(nodeId: string, tag: string, ctx: MemoryContext): Promise<void> {
@@ -601,39 +614,100 @@ export class SQLiteMemoryManager implements MemoryManager {
     edges: CreateMemoryEdgeInput[],
     ctx: MemoryContext,
   ): Promise<{ nodes: MemoryNode[]; edges: MemoryEdge[] }> {
-    const createdNodes: MemoryNode[] = []
-    for (const nodeInput of nodes) {
-      createdNodes.push(await this.createNode(nodeInput, ctx))
-    }
+    const db = getMemoryDb()
+    const tx = await db.transaction('write')
+    try {
+      const createdNodes: MemoryNode[] = []
+      for (const nodeInput of nodes) {
+        // We need a way to pass tx to createNode, or just inline the logic here.
+        // For simplicity and to avoid a huge refactor, I'll keep the loop but use tx.execute
+        // if I can. However, createNode is a method on this class.
+        // Let's refactor createNode to accept an optional transaction.
+        createdNodes.push(await this.createNode(nodeInput, ctx, tx))
+      }
 
-    const createdEdges: MemoryEdge[] = []
-    for (const edgeInput of edges) {
-      createdEdges.push(await this.createEdge(edgeInput, ctx))
-    }
+      const createdEdges: MemoryEdge[] = []
+      for (const edgeInput of edges) {
+        createdEdges.push(await this.createEdge(edgeInput, ctx, tx))
+      }
 
-    return { nodes: createdNodes, edges: createdEdges }
+      await tx.commit()
+      return { nodes: createdNodes, edges: createdEdges }
+    } catch (e) {
+      await tx.rollback()
+      throw e
+    }
   }
 
   // ── Private Helpers ────────────────────────────────────────────────────
 
-  private async _readTags(nodeId: string, ctx: MemoryContext): Promise<string[]> {
+  private async _readTagsBatch(
+    nodeIds: string[],
+    ctx: MemoryContext,
+  ): Promise<Record<string, string[]>> {
+    if (nodeIds.length === 0) return {}
     const db = getMemoryDb()
+    const placeholders = nodeIds.map(() => '?').join(',')
+    const result = await db.execute({
+      sql: `SELECT mnt.node_id, mt.name FROM memory_tags mt
+            JOIN memory_node_tags mnt ON mnt.tag_id = mt.id
+            WHERE mnt.node_id IN (${placeholders}) AND mt.tenant_id = ?`,
+      args: [...nodeIds, ctx.tenantId],
+    })
+
+    const tagMap: Record<string, string[]> = {}
+    for (const r of result.rows) {
+      const nodeId = r['node_id'] as string
+      const tagName = r['name'] as string
+      if (!tagMap[nodeId]) tagMap[nodeId] = []
+      tagMap[nodeId].push(tagName)
+    }
+    return tagMap
+  }
+
+  private async _readTags(nodeId: string, ctx: MemoryContext, executor?: Executor): Promise<string[]> {
+    const db = executor ?? getMemoryDb()
     const result = await db.execute({
       sql: `SELECT mt.name FROM memory_tags mt
             JOIN memory_node_tags mnt ON mnt.tag_id = mt.id
             WHERE mnt.node_id = ? AND mt.tenant_id = ?`,
       args: [nodeId, ctx.tenantId],
     })
-    return result.rows.map((r) => r['name'] as string)
+    return result.rows.map((r: any) => r['name'] as string)
   }
 
   private async _attachTags(
     nodeId: string,
     tags: string[],
     ctx: MemoryContext,
+    executor?: Executor,
   ): Promise<void> {
+    if (tags.length === 0) return
+    const db = executor ?? getMemoryDb()
+
+    // 1. Ensure all tags exist
     for (const tag of tags) {
-      await this.addTag(nodeId, tag, ctx)
+      await db.execute({
+        sql: 'INSERT OR IGNORE INTO memory_tags (tenant_id, name) VALUES (?, ?)',
+        args: [ctx.tenantId, tag],
+      })
+    }
+
+    // 2. Get IDs for all tags
+    const placeholders = tags.map(() => '?').join(',')
+    const tagResult = await db.execute({
+      sql: `SELECT id FROM memory_tags WHERE tenant_id = ? AND name IN (${placeholders})`,
+      args: [ctx.tenantId, ...tags],
+    })
+
+    const tagIds = tagResult.rows.map((r: any) => r['id'] as number)
+
+    // 3. Link tags to node
+    for (const tagId of tagIds) {
+      await db.execute({
+        sql: 'INSERT OR IGNORE INTO memory_node_tags (node_id, tag_id) VALUES (?, ?)',
+        args: [nodeId, tagId],
+      })
     }
   }
 }

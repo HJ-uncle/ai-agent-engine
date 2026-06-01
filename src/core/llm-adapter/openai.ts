@@ -2,6 +2,7 @@ import OpenAI from 'openai'
 import type { LLMAdapter, LLMResponse, LLMAdapterOptions, LLMStreamChunk, EmbedOptions } from './types.js'
 import type { Message, Tool } from '../agent-context/index.js'
 import { estimateTokens } from '../utils/tokens.js'
+import { repairJson } from '../utils/json.js'
 
 /**
  * Normalize a base URL for use with the OpenAI SDK.
@@ -400,7 +401,7 @@ export class OpenAIAdapter implements LLMAdapter {
   /** 真实有效的 apiKey（不含占位符），用于调用前校验 */
   private readonly resolvedApiKey: string | undefined
 
-  constructor(readonly model: string = 'gpt-4o-mini', apiKey?: string, baseURL?: string) {
+  constructor(readonly model: string = 'gpt-4o-mini', apiKey?: string, baseURL?: string, supportsVision?: boolean) {
     const rawBaseURL = baseURL || process.env.OPENAI_BASE_URL
     this.resolvedApiKey = apiKey || process.env.OPENAI_API_KEY || undefined
     this.client = new OpenAI({
@@ -409,7 +410,7 @@ export class OpenAIAdapter implements LLMAdapter {
       apiKey: this.resolvedApiKey ?? OPENAI_KEY_PLACEHOLDER,
       baseURL: normalizeBaseURL(rawBaseURL), // supports custom OpenAI-compatible endpoints
     })
-    this.supportsVision = this.detectVisionSupport(rawBaseURL)
+    this.supportsVision = supportsVision ?? this.detectVisionSupport(rawBaseURL)
   }
 
   /** 在调用 LLM API 之前检查 apiKey 是否已配置，未配置则抛出可读错误 */
@@ -427,6 +428,11 @@ export class OpenAIAdapter implements LLMAdapter {
     if (url.includes('anthropic')) return false
     if (url.includes('ollama')) return false
     // Qwen 视觉支持由 QwenAdapter 通过 TEXT_ONLY_MODEL_PATTERNS 精确控制，此处不再拦截
+    
+    // 如果是已知支持视觉的模型前缀，直接返回 true，无视域名黑名单
+    if (modelLower.startsWith('gpt-4o') || modelLower.startsWith('gpt-4-turbo') || modelLower.includes('vision')) return true
+    if (modelLower.includes('k2.5')) return true // Kimi k2.5 默认支持视觉
+
     if (url.includes('moonshot')) return false
     if (url.includes('zhipu')) return false
     if (url.includes('deepseek')) return false
@@ -482,7 +488,7 @@ export class OpenAIAdapter implements LLMAdapter {
     let toolCalls = message.tool_calls?.map((tc) => ({
       id: tc.id,
       name: tc.function.name,
-      args: JSON.parse(tc.function.arguments) as Record<string, unknown>,
+      args: JSON.parse(repairJson(tc.function.arguments)) as Record<string, unknown>,
     }))
 
     // Fallback: Qwen/vLLM may embed tool calls as <tool_call> XML in content
@@ -573,7 +579,7 @@ export class OpenAIAdapter implements LLMAdapter {
     //   3. 其余（官方 OpenAI / DeepSeek / SiliconFlow 等已验证）→ 开启
     const resolvedBaseURL = (this.client as any).baseURL as string | undefined
     const isKnownIncompatibleProxy = resolvedBaseURL
-      ? /openrouter\.ai|groq\.com|together\.ai|fireworks\.ai|perplexity\.ai|novita\.ai|moonshot\.cn|api\.lingyi\.ai|api\.302\.ai|api-gw\.|gateway\.|proxy\./i.test(resolvedBaseURL)
+      ? /groq\.com|together\.ai|fireworks\.ai|perplexity\.ai|novita\.ai|api\.302\.ai|api-gw\.|gateway\.|proxy\./i.test(resolvedBaseURL)
       : false
 
     if (options?.includeStreamUsage !== false && !isKnownIncompatibleProxy) {

@@ -12,6 +12,11 @@ export interface CreateAdapterOptions {
   model?: string
   apiKey?: string
   baseUrl?: string
+  /** 显式指定模型能力，优先级最高 */
+  capabilities?: {
+    vision?: boolean
+    thinking?: boolean
+  }
   /** DeepSeek 专有选项；仅在路由到 DeepSeek 通道时生效 */
   deepseek?: DeepSeekAdapterOptions
   /** Qwen 专有选项；仅在路由到 Qwen 通道时生效 */
@@ -53,17 +58,17 @@ function createBaseAdapter(provider: string, model: string, options?: CreateAdap
 
   switch (provider) {
     case 'openai':
-      return new OpenAIAdapter(model, options?.apiKey, options?.baseUrl)
+      return new OpenAIAdapter(model, options?.apiKey, options?.baseUrl, options?.capabilities?.vision)
     case 'anthropic':
       return new AnthropicAdapter(model, options?.apiKey, options?.baseUrl)
     case 'ollama':
       return new OllamaAdapter(model, options?.baseUrl)
     case 'custom':
-      return new OpenAIAdapter(model, options?.apiKey, options?.baseUrl)
+      return new OpenAIAdapter(model, options?.apiKey, options?.baseUrl, options?.capabilities?.vision)
     default:
       // 未知 provider 不直接 throw，降级为 OpenAI-compatible，避免整个请求崩溃
       // （用户可能配置了引擎尚未枚举的新 provider 名，如 "baichuan"、"mistral" 等）
-      return new OpenAIAdapter(model, options?.apiKey, options?.baseUrl)
+      return new OpenAIAdapter(model, options?.apiKey, options?.baseUrl, options?.capabilities?.vision)
   }
 }
 

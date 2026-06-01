@@ -5,6 +5,7 @@ import type { Message } from '../agent-context/index.js'
 import { estimateTokens } from '../utils/tokens.js'
 import { v4 as uuidv4 } from 'uuid'
 import { applyOSMMultiplier, getOSMCompressRatio } from '../osm.js'
+import { repairJson } from '../utils/json.js'
 
 /**
  * 截断过大的工具输出，避免历史消息膨胀。
@@ -49,34 +50,6 @@ function truncateToolOutput(output: string, maxChars: number = getToolOutputMaxC
   const tail = output.slice(-half)
   const truncatedChars = output.length - maxChars
   return `${head}\n\n... [truncated ${truncatedChars} chars] ...\n\n${tail}`
-}
-
-/**
- * 尝试修复 LLM 生成的破损 JSON（如字符串内部未转义的双引号、尾随逗号、换行符等）
- */
-function repairJson(str: string): string {
-  if (!str || str.trim() === '') return '{}'
-  try {
-    JSON.parse(str)
-    return str
-  } catch (e) {}
-
-  let repaired = str
-  
-  // 1. 修复中文字符/常规字符之间的未转义双引号 (例如: "description": "能"看见"死灵")
-  // 匹配前后都不是 JSON 结构字符(如 { } [ ] : , 和空白符)的双引号
-  repaired = repaired.replace(/(?<=[^\{\}\[\]:, \n\r\t])"(?=[^\{\}\[\]:, \n\r\t])/g, '\\"')
-  try { JSON.parse(repaired); return repaired } catch (e) {}
-
-  // 2. 移除对象或数组末尾的多余逗号
-  repaired = repaired.replace(/,\s*([}\]])/g, '$1')
-  try { JSON.parse(repaired); return repaired } catch (e) {}
-
-  // 3. 转义未转义的换行符
-  repaired = repaired.replace(/\n/g, '\\n').replace(/\r/g, '\\r')
-  try { JSON.parse(repaired); return repaired } catch (e) {}
-
-  return str // 如果实在修不好，返回原字符串让 JSON.parse 抛错
 }
 
 export interface TokenUsage {
@@ -193,19 +166,18 @@ export class ReActStrategy implements LoopStrategy {
     // ── Token 跨轮次累加（用于匹配 DeepSeek 官网统计） ────────────────────────
     let cumulativePromptTokens = 0
     let cumulativeCompletionTokens = 0
+    let cumulativeCacheHitTokens: number | undefined = undefined
+    let cumulativeCacheMissTokens: number | undefined = undefined
+    let cumulativeReasoningTokens: number | undefined = undefined
     let cumulativeSystemPromptTokens = 0
     let cumulativeSystemToolsTokens = 0
     let cumulativeSkillTokens = 0
     let cumulativeRagTokens = 0
     let cumulativeBuiltinToolsTokens = 0
     let cumulativeMcpToolsTokens = 0
-    let cumulativeMessagesTokens = 0
     let cumulativeUserInputTokens = 0
-
-    // ── DeepSeek 专有 token 跨轮次累加 ────────────────────────────────────
-    let cumulativeCacheHitTokens: number | undefined
-    let cumulativeCacheMissTokens: number | undefined
-    let cumulativeReasoningTokens: number | undefined
+    let cumulativeMessagesTokens = 0
+    let cumulativeToolResultsTokensTotal = 0
 
     let askUserCount = 0
     try {
@@ -222,6 +194,11 @@ export class ReActStrategy implements LoopStrategy {
     } catch (err) {
       ctx.logger.warn({ err }, 'Failed to count ask_user occurrences')
     }
+
+    /** 记录连续失败次数，防止进入死循环。包含全局失败计数和重复调用检测。 */
+    let globalConsecutiveFailures = 0
+    /** 记录工具调用的指纹（name + args），用于检测重复调用 */
+    let lastToolFingerprints: string[] = []
 
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       // ── 每轮迭代开始时检查 abort signal，确保用户中止能及时生效 ──────────────
@@ -241,13 +218,24 @@ export class ReActStrategy implements LoopStrategy {
       if (rawTokens > compressThreshold) {
         ctx.logger.info({ rawTokens, threshold: compressThreshold }, 'Compressing conversation history')
         await ctx.history.compress(ctx, async (msgs) => {
-          // 超大消息（base64 图片等）压缩时只取前 200 字符作为摘要输入
+          // 压缩历史记录时，只提取文本内容作为摘要输入，忽略图片等二进制数据
           const content = msgs
             .map((m) => {
               const tokens = m.tokens ?? estimateTokens(m.content)
-              const text = typeof m.content === 'string'
-                ? (tokens > 1000 ? m.content.slice(0, 200) + `...[truncated, ~${tokens} tokens]` : m.content)
-                : '[Multimodal content]'
+              let text = ''
+              if (typeof m.content === 'string') {
+                // 如果是普通文本，超过 1000 tokens 则截断以节省摘要提示词空间
+                text = tokens > 1000 ? m.content.slice(0, 500) + `... [truncated]` : m.content
+              } else if (Array.isArray(m.content)) {
+                // 如果是多模态数组，只提取文本部分进行摘要
+                text = m.content
+                  .filter((part: any) => part.type === 'text' && part.text)
+                  .map((part: any) => part.text)
+                  .join(' ')
+                if (text.length > 500) text = text.slice(0, 500) + '... [truncated]'
+              } else {
+                text = '[Non-text content]'
+              }
               return `${m.role}: ${text}`
             })
             .join('\n')
@@ -269,10 +257,10 @@ export class ReActStrategy implements LoopStrategy {
       let messages = await ctx.history.getHistory(ctx)
 
       // ★ 修复：当设置了 displayContent（前端原始格式）时，历史存的是 displayContent，
-      //   但 LLM 需要看到处理后的 input（含 OCR/文件内容）。此处将本轮 user 消息的
-      //   content 替换为真正的 LLM prompt，前端刷新时仍从 DB 读到原始格式。
-      if (this.options.displayContent !== undefined && this.options.displayContent !== null &&
-          input && iteration === 0) {
+      //   但 LLM 需要看到处理后的 input（含 OCR/图片/文件内容）。
+      //   此处在每一轮迭代中都将本轮 user 消息的 content 替换为真正的 LLM prompt，
+      //   确保多轮工具调用后 LLM 依然能看到处理后的多模态/长文本内容。
+      if (this.options.displayContent !== undefined && this.options.displayContent !== null && input) {
         const processedInput = input as string | any[]
         for (let i = messages.length - 1; i >= 0; i--) {
           if (messages[i].role === 'user') {
@@ -282,11 +270,13 @@ export class ReActStrategy implements LoopStrategy {
         }
       }
 
-      // 3. 计算 windowed token count，检查是否超 budget
+      // 3. 计算 windowed token count，检查是否超 budget。
+      // 使用 1.1 的系数作为安全余量，防止本地估算与 API 实际计量的偏差。
       const historyTokens = messages.reduce((sum, m) => sum + (m.tokens ?? estimateTokens(m.content)), 0)
+      const conservativeHistoryTokens = Math.ceil(historyTokens * 1.1)
 
-      if (historyTokens >= ctx.tokenBudget) {
-        ctx.logger.warn({ historyTokens, tokenBudget: ctx.tokenBudget }, 'Token budget exhausted')
+      if (conservativeHistoryTokens >= ctx.tokenBudget) {
+        ctx.logger.warn({ historyTokens, conservativeHistoryTokens, tokenBudget: ctx.tokenBudget }, 'Token budget exhausted')
         yield '\n\n[Response truncated: token budget exceeded]'
         return
       }
@@ -450,7 +440,18 @@ export class ReActStrategy implements LoopStrategy {
 
     const apiPromptTokens = response.promptTokens  // LLM 返回的真实值（0 则降级用本地估算）
     // localEstimate 需要包含 toolResults / rag，保证降级路径与 API 路径分项一致
-    const localEstimate = bd.systemPromptTokens + displayToolDefsTokens + bd.skillTokens
+    const builtinToolsTokensRaw = (bd as any).builtinToolsTokens ?? 0
+    const mcpToolsTokensRaw = (bd as any).mcpToolsTokens ?? 0
+    
+    // 如果上游没传细分或者细分和不等于总数，我们做个兼容兜底
+    let effectiveBuiltin = builtinToolsTokensRaw
+    let effectiveMcp = mcpToolsTokensRaw
+    if (effectiveBuiltin + effectiveMcp === 0) {
+      effectiveBuiltin = displayToolDefsTokens
+      effectiveMcp = 0
+    }
+
+    const localEstimate = bd.systemPromptTokens + effectiveBuiltin + effectiveMcp + bd.skillTokens
       + ((bd as any).ragTokens ?? 0) + (cumulativeToolResultsTokens ?? 0) + historyTokens
     const promptTokens = apiPromptTokens || localEstimate
 
@@ -458,34 +459,68 @@ export class ReActStrategy implements LoopStrategy {
     // 从 messages 数组中取出最后一条（即本次 User 消息）
     const lastUserMsg = messages[messages.length - 1]
     const userInputTokens = lastUserMsg?.role === 'user' ? estimateTokens(lastUserMsg.content) : 0
+    // 注意：historyTokens 包含了 userInputTokens，但不包含工具调用的结果。
+    // 因此，rawMessagesTokens = 历史总和 - 当前提问
+    const rawMessagesTokens = Math.max(0, historyTokens - userInputTokens)
 
-    // 用 API 真实 prompt 减去本地可确定的部分，得到更准确的 messagesTokens (历史消息)
-    // 注意：必须减去所有已包含在 API prompt 中的部分（系统、工具、技能、RAG、前几轮结果、以及本次提问）
-    const realMessagesTokens = apiPromptTokens
-      ? Math.max(0, 
-          apiPromptTokens 
-          - bd.systemPromptTokens 
-          - displayToolDefsTokens 
-          - bd.skillTokens 
-          - ((bd as any).ragTokens ?? 0)
-          - (cumulativeToolResultsTokens ?? 0)
-          - userInputTokens
-        )
-      : Math.max(0, historyTokens - userInputTokens - (cumulativeToolResultsTokens ?? 0))
+    // ── 基于真实 Token 消耗推算倍率 ──────────────────────────────
+    let finalSystemPromptTokens = bd.systemPromptTokens
+    let finalSystemToolsTokens = effectiveBuiltin + effectiveMcp
+    let finalSkillTokens = bd.skillTokens
+    let finalRagTokens = (bd as any).ragTokens ?? 0
+    let finalBuiltinToolsTokens = effectiveBuiltin
+    let finalMcpToolsTokens = effectiveMcp
+    let finalToolResultsTokens = cumulativeToolResultsTokens ?? 0
+    let finalUserInputTokens = userInputTokens
+    let finalMessagesTokens = rawMessagesTokens
+
+    if (apiPromptTokens && localEstimate > 0) {
+      // 真实总数中如果包含 cacheHitTokens，我们需要把它减去，
+      // 因为 cacheHitTokens 通常代表已经缓存的系统提示词或历史消息。
+      // 我们基于“未命中的部分 (cacheMiss) + 命中的部分 (cacheHit)”来做整体等比放大
+      // 对于计费来说，cache hit 是便宜的，但这里我们要在前端展示“它到底占了多大比例”
+      const ratio = apiPromptTokens / localEstimate
+      finalSystemPromptTokens = Math.round(bd.systemPromptTokens * ratio)
+      
+      // 如果工具消耗为 0，避免出现 0 / 0 = NaN 的情况
+      if (effectiveBuiltin + effectiveMcp > 0) {
+        finalSystemToolsTokens = Math.round((effectiveBuiltin + effectiveMcp) * ratio)
+        const builtinRatio = effectiveBuiltin / (effectiveBuiltin + effectiveMcp)
+        finalBuiltinToolsTokens = Math.round(finalSystemToolsTokens * builtinRatio)
+        finalMcpToolsTokens = finalSystemToolsTokens - finalBuiltinToolsTokens
+      } else {
+        finalSystemToolsTokens = 0
+        finalBuiltinToolsTokens = 0
+        finalMcpToolsTokens = 0
+      }
+
+      finalSkillTokens = Math.round(bd.skillTokens * ratio)
+      finalRagTokens = Math.round(((bd as any).ragTokens ?? 0) * ratio)
+      
+      const cumulativeToolResultsTokensLocal = cumulativeToolResultsTokens ?? 0
+      finalToolResultsTokens = Math.round(cumulativeToolResultsTokensLocal * ratio)
+      finalUserInputTokens = Math.round(userInputTokens * ratio)
+      
+      // 最后一个分项用减法，保证总和绝对等于 apiPromptTokens，避免 Math.round 产生的舍入误差
+      finalMessagesTokens = Math.max(0, apiPromptTokens - finalSystemPromptTokens - finalSystemToolsTokens - finalSkillTokens - finalRagTokens - finalToolResultsTokens - finalUserInputTokens)
+    } else if (apiPromptTokens) {
+      // 极端情况：localEstimate 为 0 但有 apiPromptTokens，全算作历史消息
+      finalMessagesTokens = apiPromptTokens
+    }
 
     const currentUsage: TokenUsage = {
-      systemPromptTokens: bd.systemPromptTokens,
-      systemToolsTokens: displayToolDefsTokens,
-      skillTokens: bd.skillTokens,
-      messagesTokens: realMessagesTokens,
-      userInputTokens, // 新增：本次提问消耗
+      systemPromptTokens: finalSystemPromptTokens,
+      systemToolsTokens: finalSystemToolsTokens,
+      skillTokens: finalSkillTokens,
+      messagesTokens: finalMessagesTokens,
+      userInputTokens: finalUserInputTokens,
       promptTokens,
       completionTokens,
       totalTokens: promptTokens + completionTokens,
-      ragTokens: (bd as any).ragTokens ?? 0,
-      builtinToolsTokens: (bd as any).builtinToolsTokens ?? 0,
-      mcpToolsTokens: (bd as any).mcpToolsTokens ?? 0,
-      toolResultsTokens: cumulativeToolResultsTokens ?? 0,
+      ragTokens: finalRagTokens,
+      builtinToolsTokens: finalBuiltinToolsTokens,
+      mcpToolsTokens: finalMcpToolsTokens,
+      toolResultsTokens: finalToolResultsTokens,
       // ── DeepSeek 专有：本轮增量值 ─────────────────────────────────
       ...(response.cacheHitTokens != null ? { cacheHitTokens: response.cacheHitTokens } : {}),
       ...(response.cacheMissTokens != null ? { cacheMissTokens: response.cacheMissTokens } : {}),
@@ -493,21 +528,41 @@ export class ReActStrategy implements LoopStrategy {
     }
 
     // ── 跨轮次累加统计（用于实时 __usage__ 帧，向用户展示当前请求的总消耗） ──────────
+    // 注意：为了与模型供应商的计费（Billing）保持一致，我们将每一轮迭代的输入和输出 Token 进行累加。
+    // 虽然每一轮的 promptTokens 都包含了前几轮的历史，但供应商是对每一次 API 调用单独计费的。
     cumulativePromptTokens += promptTokens
     cumulativeCompletionTokens += completionTokens
-    cumulativeSystemPromptTokens += bd.systemPromptTokens
-    cumulativeSystemToolsTokens += displayToolDefsTokens
-    cumulativeSkillTokens += bd.skillTokens
-    cumulativeRagTokens += (bd as any).ragTokens ?? 0
-    cumulativeBuiltinToolsTokens += (bd as any).builtinToolsTokens ?? 0
-    cumulativeMcpToolsTokens += (bd as any).mcpToolsTokens ?? 0
-    cumulativeMessagesTokens += realMessagesTokens
-    cumulativeUserInputTokens = (cumulativeUserInputTokens ?? 0) + userInputTokens
+    
+    // 累加各项基数（基于本轮推算的分项值）
+    // 每一轮的 promptTokens 包含了系统提示词、工具定义、历史消息、当前提问以及本轮之前所有的工具结果。
+    // 我们将每一轮的这些分项“计费值”累加起来，最终的总和将严格等于 cumulativePromptTokens。
+    cumulativeSystemPromptTokens += finalSystemPromptTokens
+    cumulativeSystemToolsTokens += finalSystemToolsTokens
+    cumulativeSkillTokens += finalSkillTokens
+    cumulativeRagTokens += finalRagTokens
+    cumulativeBuiltinToolsTokens += finalBuiltinToolsTokens
+    cumulativeMcpToolsTokens += finalMcpToolsTokens
+    cumulativeUserInputTokens += finalUserInputTokens
+    cumulativeMessagesTokens += finalMessagesTokens
+    cumulativeToolResultsTokensTotal += finalToolResultsTokens
 
     // ── DeepSeek 专有：KV Cache 命中 / 推理 token 跨轮次累加 ─────────────
-    if (response.cacheHitTokens != null) cumulativeCacheHitTokens = (cumulativeCacheHitTokens ?? 0) + response.cacheHitTokens
-    if (response.cacheMissTokens != null) cumulativeCacheMissTokens = (cumulativeCacheMissTokens ?? 0) + response.cacheMissTokens
-    if (response.reasoningTokens != null) cumulativeReasoningTokens = (cumulativeReasoningTokens ?? 0) + response.reasoningTokens
+    // 在多轮迭代中，如果某次 API 调用返回了 cacheHitTokens 等字段，我们需要更新累积值。
+    // 与 promptTokens 类似，这些字段也是按轮次计费的，因此使用 += 累加。
+    
+    if (response.cacheHitTokens != null) {
+      cumulativeCacheHitTokens = (cumulativeCacheHitTokens ?? 0) + response.cacheHitTokens
+    }
+    
+    if (response.cacheMissTokens != null) {
+      cumulativeCacheMissTokens = (cumulativeCacheMissTokens ?? 0) + response.cacheMissTokens
+    }
+    
+    // reasoningTokens 是模型“思考”过程输出的 Token，属于真实的生成增量。
+    // 只要当前响应有值，就必须用 += 累加到总和里。
+    if (response.reasoningTokens != null) {
+      cumulativeReasoningTokens = (cumulativeReasoningTokens ?? 0) + response.reasoningTokens
+    }
 
     const cumulativeUsage: TokenUsage = {
       systemPromptTokens: cumulativeSystemPromptTokens,
@@ -515,13 +570,13 @@ export class ReActStrategy implements LoopStrategy {
       skillTokens: cumulativeSkillTokens,
       messagesTokens: cumulativeMessagesTokens,
       userInputTokens: cumulativeUserInputTokens,
-      promptTokens: cumulativePromptTokens,
+      promptTokens: cumulativePromptTokens, // UI 展示多轮累加的输入消耗
       completionTokens: cumulativeCompletionTokens,
       totalTokens: cumulativePromptTokens + cumulativeCompletionTokens,
       ragTokens: cumulativeRagTokens,
       builtinToolsTokens: cumulativeBuiltinToolsTokens,
       mcpToolsTokens: cumulativeMcpToolsTokens,
-      toolResultsTokens: cumulativeToolResultsTokens ?? 0,
+      toolResultsTokens: cumulativeToolResultsTokensTotal,
       ...(cumulativeCacheHitTokens != null ? { cacheHitTokens: cumulativeCacheHitTokens } : {}),
       ...(cumulativeCacheMissTokens != null ? { cacheMissTokens: cumulativeCacheMissTokens } : {}),
       ...(cumulativeReasoningTokens != null ? { reasoningTokens: cumulativeReasoningTokens } : {}),
@@ -533,7 +588,16 @@ export class ReActStrategy implements LoopStrategy {
       lastUsedToolNames = new Set(response.toolCalls.map((tc: any) => tc.name))
 
       // Execute each tool call sequentially
-      let consecutiveFailures = 0
+      const currentToolFingerprints = response.toolCalls.map((tc: any) => `${tc.name}:${JSON.stringify(tc.args)}`)
+      const isRepeating = currentToolFingerprints.length > 0 && 
+        currentToolFingerprints.every((f: string) => lastToolFingerprints.includes(f))
+      
+      if (isRepeating) {
+        globalConsecutiveFailures++
+        ctx.logger.warn({ currentToolFingerprints }, 'Repeating tool calls detected')
+      }
+      lastToolFingerprints = currentToolFingerprints
+
       for (let i = 0; i < response.toolCalls.length; i++) {
         const toolCall = response.toolCalls[i]
 
@@ -637,10 +701,11 @@ export class ReActStrategy implements LoopStrategy {
         })}`
 
         if (!toolResult.success) {
-          consecutiveFailures++
-          ctx.logger.warn({ toolName: toolCall.name, failures: consecutiveFailures }, 'Tool call failed')
-        } else {
-          consecutiveFailures = 0
+          globalConsecutiveFailures++
+          ctx.logger.warn({ toolName: toolCall.name, globalFailures: globalConsecutiveFailures }, 'Tool call failed')
+        } else if (!isRepeating) {
+          // 只有当工具执行成功且不是重复调用时，才重置连续失败计数
+          globalConsecutiveFailures = 0
         }
 
         // Add tool result to history (truncate oversized output to save tokens).
@@ -660,10 +725,10 @@ export class ReActStrategy implements LoopStrategy {
         }
         await ctx.history.append(toolMsg, ctx)
 
-        // Bail out if the same tool fails 3 times in a row (prevents infinite loops)
-        if (consecutiveFailures >= 3) {
-          ctx.logger.error({ toolName: toolCall.name }, 'Tool failed 3 consecutive times, stopping')
-          yield `\n\n[Tool \`${toolCall.name}\` failed repeatedly. Last error: ${toolResult.output}]`
+        // Bail out if tools fail 3 times in a row or repeat 3 times (prevents infinite loops)
+        if (globalConsecutiveFailures >= 3) {
+          ctx.logger.error({ toolName: toolCall.name, globalConsecutiveFailures }, 'Consecutive failures or repetitions exceeded limit, stopping')
+          yield `\n\n[Loop detected or tool \`${toolCall.name}\` failed repeatedly. Stopping to prevent token waste.]`
           return
         }
       }

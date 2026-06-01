@@ -16,11 +16,22 @@ export async function terminalRoutes(fastify: FastifyInstance) {
   // ── POST /terminal/create ────────────────────────────────────────────────
   fastify.post<{
     Body: { sessionId: string; cwd?: string; cols?: number; rows?: number }
-  }>('/terminal/create', async (request, reply) => {
+  }>('/terminal/create', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['sessionId'],
+        properties: {
+          sessionId: { type: 'string', minLength: 1 },
+          cwd: { type: 'string' },
+          cols: { type: 'number', default: 120 },
+          rows: { type: 'number', default: 30 },
+        },
+      },
+    },
+  }, async (request, reply) => {
     const tenantId = getTenantId(request)
     const { sessionId, cwd: cwdOverride, cols = 120, rows = 30 } = request.body
-
-    if (!sessionId) return reply.code(200).send(fail(40001, 'sessionId is required'))
 
     // 默认 cwd 为 workspace 根目录；允许调用方传入子目录（相对路径）
     const workspaceRoot = workspaceManager.getPath({ tenantId, sessionId })
