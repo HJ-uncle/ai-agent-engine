@@ -14,6 +14,9 @@ AI Agent Engine 是一个具备**感知、思考、行动**能力的全栈 AI �
   - **扩展能力**：支持 MCP (Model Context Protocol) 协议及自定义 TypeScript/Python Skills。
   - **流式工具参数**：工具调用参数以流式增量 (`tool_arg`) 实时展示，配合 Qwen/vLLM `<tool_call>` XML 回退解析，覆盖更多模型的工具调用语义。
 - **🔐 可选鉴权**：`POST /auth/user` 接口支持外部平台用户同步（token + userId），携带凭据时自动验证并多租户隔离，不携带时降级为默认租户，零配置即可启动。
+- **🎨 业务深度订制**：
+  - **元数据支持**：通过 `metadata` 字段透传业务 ID（如 `userId`, `appId`），随会话和消息持久化。
+  - **专属默认身份**：租户可设置全局 `default_identity`，自动作为 Base Identity 注入该租户下的所有会话。
 - **📂 隔离的工作区**：每个会话拥有独立的物理工作目录，支持 VS Code 风格的文件树管理、实时编辑及大文件上传 (100MB)。
 - **🤝 多智能体协作**：支持 Parent-Child Agent 模型，自动拆解复杂任务并分发给专业子智能体。
 - **🔌 开放协议支持**：完美适配 MCP (Model Context Protocol) 协议，支持通过 TypeScript/Python 编写自定义 Skills。

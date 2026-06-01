@@ -122,6 +122,21 @@
           "reason":    { "type": "string" },
           "createdAt": { "type": "integer" }
         }
+      },
+      "Message": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "role": { "type": "string", "enum": ["user", "assistant", "tool", "system"] },
+          "content": { "type": "string" },
+          "reasoningContent": { "type": "string" },
+          "toolCallId": { "type": "string" },
+          "toolName": { "type": "string" },
+          "tokens": { "type": "integer" },
+          "modelId": { "type": "string" },
+          "metadata": { "type": "object" },
+          "createdAt": { "type": "integer" }
+        }
       }
     }
   },
@@ -196,6 +211,7 @@
                   "maxAskUserCount": { "type": "integer" },
                   "includeStreamUsage": { "type": "boolean", "description": "流式 usage 开关（默认 true，第三方代理可设为 false 避免 400/422）" },
                   "thinkingMode": { "type": "boolean" },
+                  "metadata": { "type": "object", "description": "业务元数据，随会话和消息持久化" },
                   "toolResponse": {
                     "type": "object",
                     "properties": {
@@ -523,16 +539,105 @@
         }
       }
     },
-    "/conversation/sessions": {
+    "/tenant/identity": {
       "get": {
-        "summary": "获取会话列表",
+        "summary": "获取租户专属默认身份",
+        "tags": ["Tenant"],
         "responses": {
           "200": {
             "description": "成功响应",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PaginatedResponse"
+                  "allOf": [
+                    { "$ref": "#/components/schemas/StandardResponse" },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "identity": { "type": "string" }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "更新租户专属默认身份",
+        "tags": ["Tenant"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "identity": { "type": "string" }
+                },
+                "required": ["identity"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
+          }
+        }
+      },
+      "delete": {
+        "summary": "清除租户专属默认身份",
+        "tags": ["Tenant"],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } }
+          }
+        }
+      }
+    },
+    "/conversation/sessions": {
+      "get": {
+        "summary": "获取会话列表",
+        "tags": ["Conversation"],
+        "parameters": [
+          { "name": "current", "in": "query", "schema": { "type": "integer" } },
+          { "name": "pageSize", "in": "query", "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/PaginatedResponse" },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "sessionId": { "type": "string" },
+                              "agentId": { "type": "string", "nullable": true },
+                              "metadata": { "type": "object", "nullable": true },
+                              "lastMessage": { "type": "string" },
+                              "lastAt": { "type": "integer" },
+                              "messageCount": { "type": "integer" }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
                 }
               }
             }
@@ -543,13 +648,29 @@
     "/conversation/history": {
       "get": {
         "summary": "获取会话历史",
+        "tags": ["Conversation"],
+        "parameters": [
+          { "name": "sessionId", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "current", "in": "query", "schema": { "type": "integer" } },
+          { "name": "pageSize", "in": "query", "schema": { "type": "integer" } }
+        ],
         "responses": {
           "200": {
             "description": "成功响应",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PaginatedResponse"
+                  "allOf": [
+                    { "$ref": "#/components/schemas/PaginatedResponse" },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": { "$ref": "#/components/schemas/Message" }
+                        }
+                      }
+                    }
+                  ]
                 }
               }
             }
@@ -575,13 +696,29 @@
     "/conversations/{conversationId}": {
       "get": {
         "summary": "根据 ID 获取单轮对话",
+        "tags": ["Conversation"],
+        "parameters": [
+          { "name": "conversationId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "current", "in": "query", "schema": { "type": "integer" } },
+          { "name": "pageSize", "in": "query", "schema": { "type": "integer" } }
+        ],
         "responses": {
           "200": {
             "description": "成功响应",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PaginatedResponse"
+                  "allOf": [
+                    { "$ref": "#/components/schemas/PaginatedResponse" },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": { "$ref": "#/components/schemas/Message" }
+                        }
+                      }
+                    }
+                  ]
                 }
               }
             }
@@ -638,6 +775,7 @@
                           "properties": {
                             "started": { "type": "boolean" },
                             "agentId": { "type": "string", "nullable": true },
+                            "metadata": { "type": "object", "nullable": true },
                             "agent":   { "type": "object", "nullable": true }
                           }
                         }
@@ -688,6 +826,28 @@
     "/messages/{messageId}": {
       "put": {
         "summary": "编辑并重新生成",
+        "tags": ["Messages"],
+        "parameters": [
+          { "name": "messageId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "content": { "type": "string" },
+                  "systemPrompt": { "type": "string" },
+                  "maxAskUserCount": { "type": "integer" },
+                  "thinkingMode": { "type": "boolean" },
+                  "metadata": { "type": "object" }
+                },
+                "required": ["content"]
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "流式响应"
@@ -713,6 +873,26 @@
     "/messages/{messageId}/regenerate": {
       "post": {
         "summary": "重新生成 AI 响应",
+        "tags": ["Messages"],
+        "parameters": [
+          { "name": "messageId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "systemPrompt": { "type": "string" },
+                  "maxAskUserCount": { "type": "integer" },
+                  "thinkingMode": { "type": "boolean" },
+                  "metadata": { "type": "object" }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "流式响应"

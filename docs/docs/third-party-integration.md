@@ -239,7 +239,7 @@ Agent Engine 针对常见的第三方 OpenAI-compatible 代理服务进行了兼
 
 **行为细则：**
 
-| 特性 | 默认值 | 兼容策略 |
+| 属性 | 默认值 | 兼容策略 |
 |------|:---:|------|
 | `stream_options.include_usage` | ✅ 开启 | 不兼容代理 → 自动关闭；可显式 `includeStreamUsage: false` 覆盖 |
 | `tool_choice` | `'auto'` | 始终启用，确保工具正常触发；多数代理兼容 |
@@ -256,6 +256,15 @@ Agent Engine 针对常见的第三方 OpenAI-compatible 代理服务进行了兼
   "includeStreamUsage": false
 }
 ```
+
+### 业务订制化参数
+
+为了支持第三方引擎更深度地集成业务逻辑，我们在请求和会话管理中引入了以下订制化参数：
+
+| 参数 | 类型 | 描述 |
+| :--- | :--- | :--- |
+| **`metadata`** | `JSON` | **业务元数据**。随会话（Session）和消息（Message）持久化。可用于透传业务字段（如 `userId`, `appId`, `traceId`）。 |
+| **`tenantIdentity`** | `String` | **租户专属身份**。通过 `PUT /api/v1/tenant/identity` 设置后，将作为该租户下所有请求的 **Base System Prompt** 自动注入。 |
 
 ---
 

@@ -94,14 +94,20 @@
 - `PUT /api/v1/agents/:id`: 更新 Agent
 - `DELETE /api/v1/agents/:id`: 删除 Agent
 
-### 2. 会话与历史 Conversation (`/api/v1/conversation` & `/api/v1/sessions`)
-- `GET /api/v1/conversation/sessions`: 获取有对话的会话列表 (支持分页)
-- `GET /api/v1/conversation/history?sessionId=xxx`: 查询指定会话的所有历史消息 (支持分页)。返回的 `Message` 对象包含 `id`, `role`, `content`, `tokens`, `usage`, `modelId` 等字段。
+### 2. 租户与专属身份 Tenant (`/api/v1/tenant`)
+- `GET /api/v1/tenant/identity`: 获取租户专属默认身份（Base Identity）
+- `PUT /api/v1/tenant/identity`: 设置/更新租户专属默认身份。请求体：`{ "identity": "身份定义文本" }`
+- `DELETE /api/v1/tenant/identity`: 清除租户专属默认身份
+
+### 3. 会话与历史 Conversation (`/api/v1/conversation` & `/api/v1/sessions`)
+- `GET /api/v1/conversation/sessions`: 获取有对话的会话列表 (支持分页)。返回对象包含 `sessionId`, `agentId`, `metadata`, `lastMessage`, `lastAt` 等。
+- `GET /api/v1/conversation/history?sessionId=xxx`: 查询指定会话的**完整**历史消息 (支持分页)。返回的 `Message` 对象包含 `id`, `role`, `content`, `tokens`, `usage`, `modelId`, `metadata` 等字段。
 - `DELETE /api/v1/conversation/history?sessionId=xxx`: 清空指定会话的历史消息记录（**不**解除 Agent 绑定，绑定与会话生命周期一致）
 - `GET /api/v1/conversations/:conversationId`: 按 conversationId 查询单轮对话消息 (支持分页)
 - `DELETE /api/v1/sessions/:sessionId`: 硬删除整个会话记录及关联 (可选参数 `?keepWorkspace=true` 仅删除记录保留物理工作区文件)
+- `GET /api/v1/sessions/:sessionId/binding`: 获取会话绑定状态。返回对象包含 `started` (是否锁定), `agentId`, `metadata` (会话级业务字段)。
 
-### 3. 用户消息管理 Messages (`/api/v1/messages`)
+### 4. 用户消息管理 Messages (`/api/v1/messages`)
 - `GET /api/v1/messages/:messageId/tokens`: 获取单条消息的 Token 使用量
 - `GET /api/v1/sessions/:sessionId/tokens`: 获取指定会话的总 Token 消耗 (包含已删除消息)
 - `DELETE /api/v1/messages/:messageId`: 硬删除单条消息 (不影响全局 Token 统计)
@@ -113,7 +119,8 @@
     "content": "修改后的消息内容",
     "systemPrompt": "可选，自定义系统提示词",
     "maxAskUserCount": 5,
-    "thinkingMode": false
+    "thinkingMode": false,
+    "metadata": { "userId": "123", "biz_field": "..." }
   }
   ```
 
@@ -124,7 +131,8 @@
   {
     "systemPrompt": "可选，自定义系统提示词",
     "maxAskUserCount": 5,
-    "thinkingMode": false
+    "thinkingMode": false,
+    "metadata": { "biz_field": "..." }
   }
   ```
 
