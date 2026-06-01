@@ -16,6 +16,7 @@ import { resolveOSMMode } from '../../../core/osm.js'
 import { prependBootstrapToSystemPrompt } from '../../../core/osm-bootstrap.js'
 import { SQLiteAgentStore } from '../../../storage/agent/index.js'
 import { SessionStore } from '../../../storage/session/index.js'
+import { tenantConfigStore } from '../../../storage/sqlite/tenant-config.js'
 import { estimateTokens } from '../../../core/utils/tokens.js'
 import { searchChunks } from '../../../storage/knowledge/kb-repo.js'
 import { ModelsStore } from '../../../storage/sqlite/models.js'
@@ -337,6 +338,16 @@ export async function chatRoutes(fastify: FastifyInstance) {
     if (Array.isArray(requestedAllowedTools)) {
       allowedTools = requestedAllowedTools
       reqLogger.info({ count: requestedAllowedTools.length }, 'Request-level allowedTools whitelist applied')
+    }
+
+    // ── 租户专属默认身份注入 ────────────────────────────────────────────────────
+    // 如果租户配置了专属默认身份（default_identity），则将其前置到系统提示词中。
+    const tenantIdentity = await tenantConfigStore.get(tenantId, 'default_identity')
+    if (tenantIdentity) {
+      effectiveSystemPrompt = effectiveSystemPrompt 
+        ? `${tenantIdentity}\n\n${effectiveSystemPrompt}`
+        : tenantIdentity
+      reqLogger.info('Tenant-level default identity applied')
     }
 
     // ── inlineMcpServers 诊断日志（Phase 1：仅记录，Phase 2 计划支持运行时挂载）─

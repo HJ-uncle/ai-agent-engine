@@ -24,6 +24,7 @@ import { lspRoutes } from './routes/lsp.js'
 import { performanceRoutes } from './routes/performance.js'
 import { deepseekRoutes } from './routes/deepseek.js'
 import { authRoutes } from './routes/auth.js'
+import { tenantRoutes } from './routes/tenant.js'
 import { cronScheduler } from '../../scheduler/cron-scheduler.js'
 import { globalRequestMiddleware, WHITELIST_PATHS } from './middleware.js'
 import fastifyWebsocket from '@fastify/websocket'
@@ -104,6 +105,7 @@ export async function buildServer() {
     await api.register(todoRoutes)
     await api.register(cronRoutes)
     await api.register(sessionRoutes)
+    await api.register(tenantRoutes)
     await api.register(securityRoutes)
     await api.register(lspRoutes)
     await api.register(performanceRoutes)

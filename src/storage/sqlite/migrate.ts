@@ -14,6 +14,7 @@ import { up as up012 } from './migrations/012_add_message_model_id.js'
 import { up as up013 } from './migrations/013_add_user_name.js'
 import { up as up014 } from './migrations/014_add_model_capabilities.js'
 import { up as up015 } from './migrations/015_add_metadata.js'
+import { up as up016 } from './migrations/016_add_tenant_configs.js'
 
 const BUILTIN_TEMPLATES = [
   {
@@ -158,6 +159,13 @@ async function migrate() {
       console.log('✓ Migration 015_add_metadata complete')
     } catch (err: any) {
       console.log('✓ Migration 015_add_metadata skipped:', err.message)
+    }
+
+    try {
+      await up016(db)
+      console.log('✓ Migration 016_add_tenant_configs complete')
+    } catch (err: any) {
+      console.log('✓ Migration 016_add_tenant_configs skipped:', err.message)
     }
 
     // Seed built-in prompt templates

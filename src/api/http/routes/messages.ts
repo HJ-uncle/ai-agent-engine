@@ -7,8 +7,9 @@ import { createLLMAdapterWithDbConfig } from '../../../core/llm-adapter/index.js
 import { createRequestLogger } from '../../../observability/index.js'
 import { buildSkillsSystemPrompt } from '../../../skills/index.js'
 import { createToolRegistry } from '../../../tools/registry-factory.js'
-import { resolveOSMMode } from '../../../core/osm.js'
+import { resolveOSMMode, isValidMode, OSM_MODES } from '../../../core/osm.js'
 import { prependBootstrapToSystemPrompt } from '../../../core/osm-bootstrap.js'
+import { tenantConfigStore } from '../../../storage/sqlite/tenant-config.js'
 import { estimateTokens } from '../../../core/utils/tokens.js'
 import { v4 as uuidv4 } from 'uuid'
 import { success, fail } from '../response.js'
@@ -131,6 +132,15 @@ export async function messagesRoutes(fastify: FastifyInstance) {
   ) {
     const reqLogger = createRequestLogger(requestId, tenantId, sessionId)
 
+    // ── 租户专属默认身份注入 ────────────────────────────────────────────────────
+    const tenantIdentity = await tenantConfigStore.get(tenantId, 'default_identity')
+    let effectiveSystemPrompt = systemPrompt
+    if (tenantIdentity) {
+      effectiveSystemPrompt = effectiveSystemPrompt 
+        ? `${tenantIdentity}\n\n${effectiveSystemPrompt}`
+        : tenantIdentity
+    }
+
     // Build tool registry（统一工厂，含所有内置工具 + MCP + Skills）
     const { registry, externalSkills, toolCategories } = await createToolRegistry()
 
@@ -145,7 +155,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 
     const skillsPrompt = buildSkillsSystemPrompt(externalSkills)
     const finalSystemPrompt = prependBootstrapToSystemPrompt(
-      [systemPrompt, skillsPrompt].filter(Boolean).join('\n\n'),
+      [effectiveSystemPrompt, skillsPrompt].filter(Boolean).join('\n\n'),
       reqLogger,
     )
 
