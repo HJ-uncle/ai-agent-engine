@@ -91,7 +91,10 @@ export interface Tool {
 
 export interface ConversationHistory {
   append(message: Message, ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<string>
+  /** Returns windowed messages for LLM context (applying token window). */
   getHistory(ctx: Pick<AgentContext, 'tenantId' | 'sessionId' | 'inheritContext'>): Promise<Message[]>
+  /** Returns ALL stored messages without any windowing/truncation. */
+  getFullHistory(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<Message[]>
   clear(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<void>
   summarize(ctx: AgentContext): Promise<void>
   /** Returns the windowed token count (tokens in the messages returned by getHistory). */

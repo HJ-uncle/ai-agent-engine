@@ -171,43 +171,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
   }
 
   async getHistory(ctx: Ctx & { inheritContext?: boolean }): Promise<Message[]> {
-    const db = getDb()
-    const result = await db.execute({
-      sql: `SELECT id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id, model_id
-            FROM conversations
-            WHERE tenant_id = ? AND session_id = ?
-            ORDER BY created_at ASC, id ASC`,
-      args: [ctx.tenantId, ctx.sessionId],
-    })
-    const allRows = result.rows
-    const allMessages = allRows.map(rowToMessage)
-    
-    // ── 清理孤立数据：找第一条 user 消息，其之前的所有 non-user 行直接删除 ────
-    // 原因：某些场景（ask_user 子 session、被中断的 regenerate）会留下没有 user 消息
-    // 开头的孤立 tool/assistant 行，fetchHistory 会把它们渲染成幽灵块，删不掉。
-    const firstUserIdx = allRows.findIndex((r) => r['role'] === 'user')
-    if (firstUserIdx === -1 && allRows.length > 0) {
-      // 整个 session 没有任何 user 消息：全是孤立数据，异步清空
-      db.execute({
-        sql: `DELETE FROM conversations WHERE tenant_id = ? AND session_id = ?`,
-        args: [ctx.tenantId, ctx.sessionId],
-      }).catch(() => {})
-      return []
-    }
-    if (firstUserIdx > 0) {
-      // 有 user 消息但前面有孤立行：删掉那些孤立前置行
-      const orphanIds = allRows.slice(0, firstUserIdx).map((r) => r['id'] as number)
-      Promise.all(
-        orphanIds.map((id) =>
-          db.execute({
-            sql: `DELETE FROM conversations WHERE id = ? AND tenant_id = ?`,
-            args: [id, ctx.tenantId],
-          }).catch(() => {})
-        )
-      ).catch(() => {})
-    }
-    // 去掉孤立前置行（只留 firstUserIdx 开始的数据）
-    const cleanMessages = firstUserIdx > 0 ? allMessages.slice(firstUserIdx) : allMessages
+    const cleanMessages = await this.getRawMessages(ctx)
     
     // If inheritContext is false, only return the most recent user message (current new message)
     // This ensures the AI doesn't see previous conversation history
@@ -222,6 +186,45 @@ export class SQLiteConversationHistory implements ConversationHistory {
     }
     
     return this.applyTokenWindow(cleanMessages)
+  }
+
+  async getFullHistory(ctx: Ctx): Promise<Message[]> {
+    return this.getRawMessages(ctx)
+  }
+
+  private async getRawMessages(ctx: Ctx): Promise<Message[]> {
+    const db = getDb()
+    const result = await db.execute({
+      sql: `SELECT id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id, model_id
+            FROM conversations
+            WHERE tenant_id = ? AND session_id = ?
+            ORDER BY created_at ASC, id ASC`,
+      args: [ctx.tenantId, ctx.sessionId],
+    })
+    const allRows = result.rows
+    const allMessages = allRows.map(rowToMessage)
+    
+    // ── 清理孤立数据：找第一条 user 消息，其之前的所有 non-user 行直接删除 ────
+    const firstUserIdx = allRows.findIndex((r) => r['role'] === 'user')
+    if (firstUserIdx === -1 && allRows.length > 0) {
+      db.execute({
+        sql: `DELETE FROM conversations WHERE tenant_id = ? AND session_id = ?`,
+        args: [ctx.tenantId, ctx.sessionId],
+      }).catch(() => {})
+      return []
+    }
+    if (firstUserIdx > 0) {
+      const orphanIds = allRows.slice(0, firstUserIdx).map((r) => r['id'] as number)
+      Promise.all(
+        orphanIds.map((id) =>
+          db.execute({
+            sql: `DELETE FROM conversations WHERE id = ? AND tenant_id = ?`,
+            args: [id, ctx.tenantId],
+          }).catch(() => {})
+        )
+      ).catch(() => {})
+    }
+    return firstUserIdx > 0 ? allMessages.slice(firstUserIdx) : allMessages
   }
 
   /** 按 conversationId 查询单轮对话的所有消息 */
@@ -400,8 +403,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
             FROM conversations c
             WHERE tenant_id = ? AND role IN ('user','assistant')
             GROUP BY session_id
-            ORDER BY last_at DESC
-            LIMIT 100`,
+            ORDER BY last_at DESC`,
       args: [tenantId],
     })
     return rs.rows.map((row) => ({

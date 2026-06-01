@@ -27,7 +27,7 @@ export async function conversationRoutes(fastify: FastifyInstance) {
     if (!sessionId) {
       return reply.code(200).send(fail(40001, '参数验证失败：sessionId 不能为空'))
     }
-    const messages = await history.getHistory({ tenantId, sessionId })
+    const messages = await history.getFullHistory({ tenantId, sessionId })
     const sessionUsage = await history.getSessionUsage({ tenantId, sessionId })
     
     const response = paginateArray(messages, current, pageSize)
