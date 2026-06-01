@@ -34,6 +34,7 @@ function rowToMessage(row: Row): Message & { conversationId?: string } {
   const message_id = row['message_id'] as string | null
   const reasoning_content = row['reasoning_content'] as string | null
   const model_id = row['model_id'] as string | null
+  const metadata_raw = row['metadata'] as string | null
 
   const msg: Message & { conversationId?: string } = {
     ...(message_id ? { id: message_id } : {}),
@@ -44,6 +45,14 @@ function rowToMessage(row: Row): Message & { conversationId?: string } {
     createdAt: created_at != null ? Number(created_at) * 1000 : 0,
     ...(conversation_id ? { conversationId: conversation_id } : {}),
     ...(model_id ? { modelId: model_id } : {}),
+  }
+
+  if (metadata_raw) {
+    try {
+      msg.metadata = JSON.parse(metadata_raw)
+    } catch {
+      /* ignore */
+    }
   }
   if (token_usage) {
     try {
@@ -148,8 +157,8 @@ export class SQLiteConversationHistory implements ConversationHistory {
     const messageId = message.id ?? uuidv4()
     await db.execute({
       sql: `INSERT INTO conversations
-              (tenant_id, session_id, conversation_id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, model_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              (tenant_id, session_id, conversation_id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, model_id, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         ctx.tenantId,
         ctx.sessionId,
@@ -165,6 +174,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
         message.tokens ?? 0,
         message.usage ? JSON.stringify(message.usage) : null,
         message.modelId ?? null,
+        message.metadata ? JSON.stringify(message.metadata) : null,
       ],
     })
     return messageId
@@ -195,7 +205,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
   private async getRawMessages(ctx: Ctx): Promise<Message[]> {
     const db = getDb()
     const result = await db.execute({
-      sql: `SELECT id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id, model_id
+      sql: `SELECT id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id, model_id, metadata
             FROM conversations
             WHERE tenant_id = ? AND session_id = ?
             ORDER BY created_at ASC, id ASC`,
@@ -231,7 +241,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
   async getByConversationId(conversationId: string, tenantId: string): Promise<(Message & { conversationId?: string })[]> {
     const db = getDb()
     const result = await db.execute({
-      sql: `SELECT message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id
+      sql: `SELECT message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id, metadata
             FROM conversations
             WHERE conversation_id = ? AND tenant_id = ?
             ORDER BY created_at ASC, id ASC`,
@@ -244,7 +254,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
   async getMessageById(messageId: string, tenantId: string): Promise<(Message & { conversationId?: string; dbId: number }) | null> {
     const db = getDb()
     const result = await db.execute({
-      sql: `SELECT id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id
+      sql: `SELECT id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id, metadata
             FROM conversations
             WHERE message_id = ? AND tenant_id = ?`,
       args: [messageId, tenantId],
@@ -263,12 +273,18 @@ export class SQLiteConversationHistory implements ConversationHistory {
     })
   }
 
-  /** 更新消息内容和 token */
-  async updateMessageContent(messageId: string, tenantId: string, content: string, tokens: number): Promise<void> {
+  /** 更新消息内容（用于编辑功能） */
+  async updateMessageContent(messageId: string, tenantId: string, content: string | any[], tokens: number, metadata?: any): Promise<void> {
     const db = getDb()
     await db.execute({
-      sql: `UPDATE conversations SET content = ?, tokens = ? WHERE message_id = ? AND tenant_id = ?`,
-      args: [content, tokens, messageId, tenantId],
+      sql: `UPDATE conversations SET content = ?, tokens = ?, metadata = ? WHERE message_id = ? AND tenant_id = ?`,
+      args: [
+        typeof content === 'string' ? content : JSON.stringify(content), 
+        tokens, 
+        metadata ? JSON.stringify(metadata) : null,
+        messageId, 
+        tenantId
+      ],
     })
   }
 
@@ -374,13 +390,17 @@ export class SQLiteConversationHistory implements ConversationHistory {
     lastMessage: string; 
     lastAt: number; 
     messageCount: number;
+    agentId?: string | null;
+    metadata?: any;
     totalUsage?: Record<string, number>;
   }>> {
     const db = getDb()
     const rs = await db.execute({
-      sql: `SELECT session_id,
+      sql: `SELECT c.session_id,
+                   s.agent_id,
+                   s.metadata,
                    COUNT(*) as cnt,
-                   MAX(created_at) as last_at,
+                   MAX(c.created_at) as last_at,
                    (SELECT content FROM conversations c2
                     WHERE c2.tenant_id = c.tenant_id AND c2.session_id = c.session_id
                       AND c2.role IN ('user','assistant')
@@ -401,34 +421,46 @@ export class SQLiteConversationHistory implements ConversationHistory {
                    SUM(CAST(json_extract(token_usage, '$.cacheMissTokens') AS INTEGER)) as cache_miss_tokens,
                    SUM(CAST(json_extract(token_usage, '$.reasoningTokens') AS INTEGER)) as reasoning_tokens
             FROM conversations c
-            WHERE tenant_id = ? AND role IN ('user','assistant')
-            GROUP BY session_id
+            LEFT JOIN sessions s ON s.session_id = c.session_id AND s.tenant_id = c.tenant_id
+            WHERE c.tenant_id = ? AND c.role IN ('user','assistant')
+            GROUP BY c.session_id
             ORDER BY last_at DESC`,
       args: [tenantId],
     })
-    return rs.rows.map((row) => ({
-      sessionId:    String(row['session_id']),
-      lastMessage:  String(row['last_msg'] ?? '').slice(0, 50),
-      lastAt:       Number(row['last_at']) * 1000,
-      messageCount: Number(row['cnt']),
-      totalUsage: {
-        systemPromptTokens: Number(row['system_prompt_tokens'] ?? 0),
-        systemToolsTokens: Number(row['system_tools_tokens'] ?? 0),
-        messagesTokens: Number(row['messages_tokens'] ?? 0),
-        skillTokens: Number(row['skill_tokens'] ?? 0),
-        promptTokens: Number(row['prompt_tokens'] ?? 0),
-        completionTokens: Number(row['completion_tokens'] ?? 0),
-        totalTokens: Number(row['total_tokens'] ?? 0),
-        ragTokens: Number(row['rag_tokens'] ?? 0),
-        builtinToolsTokens: Number(row['builtin_tools_tokens'] ?? 0),
-        mcpToolsTokens: Number(row['mcp_tools_tokens'] ?? 0),
-        toolResultsTokens: Number(row['tool_results_tokens'] ?? 0),
-        userInputTokens: Number(row['user_input_tokens'] ?? 0),
-        cacheHitTokens: Number(row['cache_hit_tokens'] ?? 0),
-        cacheMissTokens: Number(row['cache_miss_tokens'] ?? 0),
-        reasoningTokens: Number(row['reasoning_tokens'] ?? 0),
+    return rs.rows.map((row) => {
+      let metadata = undefined
+      if (row['metadata']) {
+        try {
+          metadata = JSON.parse(String(row['metadata']))
+        } catch { /* ignore */ }
       }
-    }))
+
+      return {
+        sessionId:    String(row['session_id']),
+        agentId:      row['agent_id'] ? String(row['agent_id']) : null,
+        metadata:     metadata,
+        lastMessage:  String(row['last_msg'] ?? '').slice(0, 50),
+        lastAt:       Number(row['last_at']) * 1000,
+        messageCount: Number(row['cnt']),
+        totalUsage: {
+          systemPromptTokens: Number(row['system_prompt_tokens'] ?? 0),
+          systemToolsTokens: Number(row['system_tools_tokens'] ?? 0),
+          messagesTokens: Number(row['messages_tokens'] ?? 0),
+          skillTokens: Number(row['skill_tokens'] ?? 0),
+          promptTokens: Number(row['prompt_tokens'] ?? 0),
+          completionTokens: Number(row['completion_tokens'] ?? 0),
+          totalTokens: Number(row['total_tokens'] ?? 0),
+          ragTokens: Number(row['rag_tokens'] ?? 0),
+          builtinToolsTokens: Number(row['builtin_tools_tokens'] ?? 0),
+          mcpToolsTokens: Number(row['mcp_tools_tokens'] ?? 0),
+          toolResultsTokens: Number(row['tool_results_tokens'] ?? 0),
+          userInputTokens: Number(row['user_input_tokens'] ?? 0),
+          cacheHitTokens: Number(row['cache_hit_tokens'] ?? 0),
+          cacheMissTokens: Number(row['cache_miss_tokens'] ?? 0),
+          reasoningTokens: Number(row['reasoning_tokens'] ?? 0),
+        }
+      }
+    })
   }
 
   /**

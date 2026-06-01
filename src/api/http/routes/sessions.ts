@@ -21,22 +21,23 @@ export async function sessionRoutes(fastify: FastifyInstance) {
     const { sessionId } = request.params
     const tenantId = getTenantId(request)
 
-    const boundAgentId = await sessionStore.getBoundAgentId(sessionId, tenantId)
+    const binding = await sessionStore.getBinding(sessionId, tenantId)
 
-    if (boundAgentId === undefined) {
+    if (binding === undefined) {
       // sessions 表中无记录 → 会话尚未开始
       return reply.code(200).send(success({
         started: false,
         agentId: null,
+        metadata: null,
         agent: null,
       }))
     }
 
     // 有记录 → 会话已开始，返回绑定信息
     let agent = null
-    if (boundAgentId) {
+    if (binding.agentId) {
       try {
-        agent = await agentStore.getById(boundAgentId, tenantId)
+        agent = await agentStore.getById(binding.agentId, tenantId)
       } catch {
         // agent 已被删除，返回 null
       }
@@ -44,7 +45,8 @@ export async function sessionRoutes(fastify: FastifyInstance) {
 
     return reply.code(200).send(success({
       started: true,
-      agentId: boundAgentId,
+      agentId: binding.agentId,
+      metadata: binding.metadata,
       agent: agent ? {
         id: agent.id,
         name: agent.name,

@@ -21,12 +21,14 @@ const UpdateMessageSchema = z.object({
   systemPrompt: z.string().optional(),
   maxAskUserCount: z.number().optional(),
   thinkingMode: z.boolean().optional(),
+  metadata: z.any().optional(),
 })
 
 const RegenerateSchema = z.object({
   systemPrompt: z.string().optional(),
   maxAskUserCount: z.number().optional(),
   thinkingMode: z.boolean().optional(),
+  metadata: z.any().optional(),
 })
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -124,7 +126,8 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     maxAskUserCount: number | undefined,
     newMessageContent?: string,
     thinkingMode?: boolean,
-    effectiveModel?: string
+    effectiveModel?: string,
+    metadata?: any
   ) {
     const reqLogger = createRequestLogger(requestId, tenantId, sessionId)
 
@@ -256,6 +259,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
           promptBreakdown: { systemPromptTokens, systemToolsTokens, skillTokens, ragTokens, builtinToolsTokens, mcpToolsTokens },
           thinkingConfig: finalThinkingConfig,
           responseThinkingField: finalResponseThinkingField,
+          metadata: metadata,
         })
         const pipeline = createPipeline([])
         // ★ 把 ctx 的 signal 替换为受 cancel 控制的 abortController.signal
@@ -302,7 +306,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
       return reply.code(200).send(fail(40001, `参数验证失败：${firstError.message}`))
     }
 
-    const { content, systemPrompt, maxAskUserCount, thinkingMode } = result.data
+    const { content, systemPrompt, maxAskUserCount, thinkingMode, metadata } = result.data
 
     const message = await history.getMessageById(messageId, tenantId)
     if (!message) {
@@ -324,16 +328,16 @@ export async function messagesRoutes(fastify: FastifyInstance) {
       return reply.code(200).send(fail(50000, 'Session not found for message'))
     }
 
-    // 更新消息内容，重置 tokens（此处简单估算，或后续被精确更新）
+    // 更新消息内容，重置 tokens，更新 metadata（如果有）
     const estimatedTokens = estimateTokens(content)
-    await history.updateMessageContent(messageId, tenantId, content, estimatedTokens)
+    await history.updateMessageContent(messageId, tenantId, content, estimatedTokens, metadata ?? message.metadata)
 
     // 硬删除该消息之后的所有消息
     await history.deleteMessagesAfterId(message.dbId, sessionId, tenantId)
 
     // Then run AI to generate a response for the updated history
     const requestId = uuidv4()
-    await runAIForSession(sessionId, tenantId, requestId, systemPrompt, reply, maxAskUserCount, content, thinkingMode)
+    await runAIForSession(sessionId, tenantId, requestId, systemPrompt, reply, maxAskUserCount, content, thinkingMode, undefined, metadata ?? message.metadata)
   })
 
   // 4. 重新生成最后一条 AI 回复
@@ -347,7 +351,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
       return reply.code(200).send(fail(40001, `参数验证失败：${firstError.message}`))
     }
 
-    const { systemPrompt, maxAskUserCount, thinkingMode } = result.data
+    const { systemPrompt, maxAskUserCount, thinkingMode, metadata } = result.data
 
     const message = await history.getMessageById(messageId, tenantId)
     if (!message) {
@@ -382,7 +386,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 
     const requestId = uuidv4()
     
-    await runAIForSession(sessionId, tenantId, requestId, systemPrompt, reply, maxAskUserCount, undefined, thinkingMode)
+    await runAIForSession(sessionId, tenantId, requestId, systemPrompt, reply, maxAskUserCount, undefined, thinkingMode, undefined, metadata)
     return reply
   })
 }

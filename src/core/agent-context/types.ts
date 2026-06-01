@@ -34,6 +34,7 @@ export interface Message {
   usage?: Record<string, number> | null
   createdAt?: number
   modelId?: string      // real model name used for this message
+  metadata?: any        // extra business metadata
 }
 
 // ─── Tool Types ────────────────────────────────────────────────────────────────
@@ -97,6 +98,12 @@ export interface ConversationHistory {
   getFullHistory(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<Message[]>
   clear(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<void>
   summarize(ctx: AgentContext): Promise<void>
+  /** 物理删除某条消息（及其对应的数据库行） */
+  deleteMessage(messageId: string, tenantId: string): Promise<void>
+  /** 更新消息内容（用于编辑） */
+  updateMessageContent(messageId: string, tenantId: string, content: string | any[], tokens: number, metadata?: any): Promise<void>
+  /** 删除某个 ID 之后的所有消息（用于回滚） */
+  deleteMessagesAfterId(dbId: number, sessionId: string, tenantId: string): Promise<void>
   /** Returns the windowed token count (tokens in the messages returned by getHistory). */
   getTokenCount(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<number>
   /** Returns the raw total token count across ALL stored messages (before windowing). */

@@ -141,10 +141,16 @@ interface ChatBody {
   }>
   /**
    * 客户端透传的用户长期记忆 XML（已经是 <userMemories>...</userMemories> 形态）。
-   * agent-engine 收到后整段拼接到 systemPrompt 末尾，
+   * agent-engine* 收到后整段拼接到 systemPrompt 末尾，
    * 让 LLM 在跨引擎模式下也能看见用户在 端积累的记忆。
    */
   inlineMemoriesXml?: string
+  /**
+   * 业务元数据（可选）
+   * 存储在 sessions（初次对话时）和 conversations（每条消息）中。
+   * 用于第三方引擎透传业务字段，如 userId, appId, traceId 等。
+   */
+  metadata?: any
 }
 
 import { StreamBus, activeStreams, busToIterable } from '../../../core/stream-pipeline/stream-bus.js'
@@ -213,7 +219,34 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
   fastify.post<{ Body: ChatBody }>('/chat', async (request, reply) => {
     const requestId = uuidv4()
-    const { message, sessionId = uuidv4(), agentId, systemPrompt, maxAskUserCount, thinkingMode, inheritContext = true, workspacePaths, toolResponse, attachments, ragTopK = 3, model: requestedModel, modelApiKey: requestedApiKey, modelBaseUrl: requestedBaseUrl, modelProvider: requestedProvider, capabilities: requestedCapabilities, skills: requestedSkills, mcpServers: requestedMcpServers, knowledgeBases: requestedKnowledgeBases, allowedTools: requestedAllowedTools, inlineSkills: requestedInlineSkills, inlineMcpServers: requestedInlineMcpServers, inlineAgent: requestedInlineAgent, inlineKnowledgeBases: requestedInlineKnowledgeBases, inlineMemoriesXml: requestedInlineMemoriesXml } = request.body
+    const { 
+      message, 
+      sessionId = uuidv4(), 
+      agentId, 
+      systemPrompt, 
+      maxAskUserCount, 
+      thinkingMode, 
+      inheritContext = true, 
+      workspacePaths, 
+      toolResponse, 
+      attachments, 
+      ragTopK = 3, 
+      model: requestedModel, 
+      modelApiKey: requestedApiKey, 
+      modelBaseUrl: requestedBaseUrl, 
+      modelProvider: requestedProvider, 
+      capabilities: requestedCapabilities, 
+      skills: requestedSkills, 
+      mcpServers: requestedMcpServers, 
+      knowledgeBases: requestedKnowledgeBases, 
+      allowedTools: requestedAllowedTools, 
+      inlineSkills: requestedInlineSkills, 
+      inlineMcpServers: requestedInlineMcpServers, 
+      inlineAgent: requestedInlineAgent, 
+      inlineKnowledgeBases: requestedInlineKnowledgeBases, 
+      inlineMemoriesXml: requestedInlineMemoriesXml,
+      metadata: requestedMetadata
+    } = request.body
 
     // Get tenant from auth context (set by auth middleware)
     const tenantId = getTenantId(request)
@@ -222,23 +255,23 @@ export async function chatRoutes(fastify: FastifyInstance) {
     // ── 会话 Agent 锁定校验 ────────────────────────────────────────────────────
     // 会话一旦发送过第一条消息，就锁定绑定的 agentId，后续不允许切换。
     const sessionStore = new SessionStore()
-    const boundAgentId = await sessionStore.getBoundAgentId(sessionId, tenantId)
+    const binding = await sessionStore.getBinding(sessionId, tenantId)
 
     let effectiveAgentId = agentId ?? null
 
-    if (boundAgentId === undefined) {
-      // 首次请求：绑定当前 agentId（可为 null）
-      await sessionStore.bindAgent(sessionId, tenantId, effectiveAgentId)
+    if (binding === undefined) {
+      // 首次请求：绑定当前 agentId（可为 null）及元数据
+      await sessionStore.bindAgent(sessionId, tenantId, effectiveAgentId, requestedMetadata)
       reqLogger.info({ sessionId, agentId: effectiveAgentId }, 'Session agent binding created')
     } else {
       // 已有绑定记录：强制使用绑定的 agentId，忽略请求中的 agentId
-      if (boundAgentId !== effectiveAgentId) {
+      if (binding.agentId !== effectiveAgentId) {
         reqLogger.warn(
-          { sessionId, requestedAgentId: effectiveAgentId, boundAgentId },
+          { sessionId, requestedAgentId: effectiveAgentId, boundAgentId: binding.agentId },
           'Agent switch rejected: session already bound to an agent. Using bound agentId.'
         )
       }
-      effectiveAgentId = boundAgentId
+      effectiveAgentId = binding.agentId
     }
 
     // Apply agent configuration if provided
@@ -693,6 +726,7 @@ ${workspaceInfo}
           thinkingConfig: finalThinkingConfig,
           responseThinkingField: finalResponseThinkingField,
           displayContent: message || null,
+          metadata: requestedMetadata,
         })
         const pipeline = createPipeline([])
 

@@ -12,29 +12,45 @@ export class SessionStore {
   private db = getDb()
 
   /**
-   * 获取会话已绑定的 agentId。
-   * 返回 undefined 表示该会话尚无记录（首次请求）。
-   * 返回 null 表示该会话绑定了"无 Agent"（裸对话）。
-   * 返回字符串表示已绑定具体 Agent。
+   * 获取会话已绑定的 agentId 和元数据。
    */
-  async getBoundAgentId(sessionId: string, tenantId: string): Promise<string | null | undefined> {
+  async getBinding(sessionId: string, tenantId: string): Promise<{ agentId: string | null; metadata?: any } | undefined> {
     const result = await this.db.execute({
-      sql: `SELECT agent_id FROM sessions WHERE session_id = ? AND tenant_id = ? LIMIT 1`,
+      sql: `SELECT agent_id, metadata FROM sessions WHERE session_id = ? AND tenant_id = ? LIMIT 1`,
       args: [sessionId, tenantId],
     })
     if (result.rows.length === 0) return undefined
     const row = result.rows[0]
     const agentId = row['agent_id']
-    return agentId === null ? null : String(agentId)
+    const metadataRaw = row['metadata'] as string | null
+    
+    let metadata: any = undefined
+    if (metadataRaw) {
+      try {
+        metadata = JSON.parse(metadataRaw)
+      } catch {
+        /* ignore */
+      }
+    }
+
+    return {
+      agentId: agentId === null ? null : String(agentId),
+      metadata
+    }
   }
 
   /**
    * 首次绑定会话与 agentId（INSERT OR IGNORE，保证只写一次）。
    */
-  async bindAgent(sessionId: string, tenantId: string, agentId: string | null): Promise<void> {
+  async bindAgent(sessionId: string, tenantId: string, agentId: string | null, metadata?: any): Promise<void> {
     await this.db.execute({
-      sql: `INSERT OR IGNORE INTO sessions (session_id, tenant_id, agent_id) VALUES (?, ?, ?)`,
-      args: [sessionId, tenantId, agentId ?? null],
+      sql: `INSERT OR IGNORE INTO sessions (session_id, tenant_id, agent_id, metadata) VALUES (?, ?, ?, ?)`,
+      args: [
+        sessionId, 
+        tenantId, 
+        agentId ?? null,
+        metadata ? JSON.stringify(metadata) : null
+      ],
     })
   }
 

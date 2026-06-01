@@ -132,6 +132,11 @@ export interface ReActOptions {
    * 与 input（LLM prompt）分离：LLM 看到文本化的 prompt，DB/UI 保留原始格式。
    */
   displayContent?: string | any[] | null
+  /**
+   * 业务元数据（可选）
+   * 随 user 消息存入历史 DB。
+   */
+  metadata?: any
 }
 
 export class ReActStrategy implements LoopStrategy {
@@ -167,6 +172,7 @@ export class ReActStrategy implements LoopStrategy {
         createdAt: Date.now(),
         tokens: estimateTokens(historyContent),
         ...(conversationId ? { conversationId } : {}),
+        metadata: this.options.metadata,
       }
       const savedUserMsgId = await ctx.history.append(userMessage, ctx)
       // ★ 把后端 message_id 回传给前端，前端用它做删除/重发的准确定位

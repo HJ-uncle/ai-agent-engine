@@ -136,6 +136,11 @@ export interface ChatOptions {
     env?: Record<string, string>
     headers?: Record<string, string>
   }>
+  /**
+   * 业务元数据（可选）
+   * 随会话和消息持久化，用于透传业务字段。
+   */
+  metadata?: any
 }
 
 export interface ChatResult {
@@ -155,6 +160,7 @@ export interface Message {
   conversationId?: string
   dbId?: number
   createdAt?: number
+  metadata?: any
 }
 
 export interface ConversationDetail {
@@ -200,6 +206,7 @@ export type UpdateAgentInput = Partial<CreateAgentInput>
 export interface SessionBinding {
   started: boolean
   agentId: string | null
+  metadata?: any
   agent: {
     id: string
     name: string
@@ -1002,7 +1009,7 @@ export class AgentClient {
       async *edit(
         messageId: string,
         content: string,
-        opts?: { systemPrompt?: string; maxAskUserCount?: number; thinkingMode?: boolean },
+        opts?: { systemPrompt?: string; maxAskUserCount?: number; thinkingMode?: boolean; metadata?: any },
       ): AsyncIterable<string> {
         const url = `${self.baseUrl}/api/v1/messages/${encodeURIComponent(messageId)}`
         const headers: Record<string, string> = { ...self.headers }
@@ -1051,7 +1058,7 @@ export class AgentClient {
        */
       async *regenerate(
         messageId: string,
-        opts?: { systemPrompt?: string; maxAskUserCount?: number; thinkingMode?: boolean },
+        opts?: { systemPrompt?: string; maxAskUserCount?: number; thinkingMode?: boolean; metadata?: any },
       ): AsyncIterable<string> {
         const url = `${self.baseUrl}/api/v1/messages/${encodeURIComponent(messageId)}/regenerate`
         const headers: Record<string, string> = { ...self.headers }
