@@ -16,6 +16,8 @@ import { up as up11 } from './migrations/011_add_security_and_perf.js'
 import { up as up12 } from './migrations/012_add_message_model_id.js'
 import { up as up13 } from './migrations/013_add_user_name.js'
 import { up as up14 } from './migrations/014_add_model_capabilities.js'
+import { up as up15 } from './migrations/015_add_metadata.js'
+import { up as up16 } from './migrations/016_add_tenant_configs.js'
 
 let client: Client | null = null
 let initialized = false
@@ -114,6 +116,8 @@ export async function initDb(): Promise<void> {
   await up12(db)
   await up13(db)
   await up14(db)
+  await up15(db)
+  await up16(db)
   // 兼容旧数据库：补充新列
   // 必须串行执行并单独捕获异常。SQLite 不支持 ALTER TABLE ADD COLUMN IF NOT EXISTS，
   // 若使用 batch 批量执行，当遇到已存在的列时会抛出异常，导致事务回滚并中断后续的列补充，引发严重的数据不一致隐患。
@@ -121,6 +125,9 @@ export async function initDb(): Promise<void> {
   await db.execute('ALTER TABLE conversations ADD COLUMN conversation_id TEXT').catch(() => {})
   await db.execute('ALTER TABLE conversations ADD COLUMN token_usage TEXT').catch(() => {})
   await db.execute('ALTER TABLE conversations ADD COLUMN reasoning_content TEXT').catch(() => {})
+  await db.execute('ALTER TABLE conversations ADD COLUMN model_id TEXT').catch(() => {})
+  await db.execute('ALTER TABLE conversations ADD COLUMN metadata TEXT').catch(() => {})
+  await db.execute('ALTER TABLE sessions ADD COLUMN metadata TEXT').catch(() => {})
 
   // 在列补充完成后再建索引（避免旧库 CREATE TABLE IF NOT EXISTS 跳过时列还不存在）
   await db.execute(
