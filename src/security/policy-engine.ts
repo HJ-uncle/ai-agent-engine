@@ -64,21 +64,37 @@ export interface PolicyDecision {
 }
 
 // ─── 内置规则（落库前作为默认策略，用户可覆盖） ───────────────────────────
+/**
+ * 规则语义说明（各模式下的最终行为）：
+ *
+ *  action  │ safe          │ standard              │ full-access
+ * ─────────┼───────────────┼───────────────────────┼─────────────
+ *  allow   │ 直接放行      │ 直接放行              │ 直接放行
+ *  ask     │ 弹出确认对话框 │ 自动升为 allow（放行）│ 直接放行
+ *  deny    │ 硬拒绝报错    │ 降级为 ask（用户确认）│ 直接放行
+ *
+ * 结论：
+ *  - standard 模式：能放行就放行，无法确定的统统交用户点击确认，不会出现硬报错。
+ *  - safe 模式：白名单严格检查，高危命令 deny。
+ *  - full-access 模式：跳过所有策略，全部放行。
+ */
 const DEFAULT_RULES: PolicyRule[] = [
-  // 高危命令直接 ask 确认
-  { name: 'ask-rm', command: 'rm', action: 'ask', priority: 10, enabled: true, description: '删除文件需确认' },
-  { name: 'ask-del', command: 'del', action: 'ask', priority: 10, enabled: true, description: '删除文件（Windows）需确认' },
-  { name: 'ask-sudo', command: 'sudo', action: 'deny', priority: 5, enabled: true, description: '禁止 sudo 提权' },
-  { name: 'ask-shutdown', command: 'shutdown', action: 'deny', priority: 5, enabled: true, description: '禁止关机' },
-  { name: 'ask-reboot', command: 'reboot', action: 'deny', priority: 5, enabled: true, description: '禁止重启' },
-  { name: 'ask-kill', command: 'kill', action: 'ask', priority: 20, enabled: true, description: '终止进程需确认' },
-  { name: 'ask-taskkill', command: 'taskkill', action: 'ask', priority: 20, enabled: true, description: '终止进程需确认（Windows）' },
-  { name: 'ask-format', command: 'format', action: 'deny', priority: 5, enabled: true, description: '禁止格式化磁盘' },
-  { name: 'ask-mkfs', command: 'mkfs', action: 'deny', priority: 5, enabled: true, description: '禁止格式化磁盘' },
-  { name: 'ask-chmod', command: 'chmod', action: 'ask', priority: 30, enabled: true, description: '修改权限需确认' },
-  { name: 'ask-chown', command: 'chown', action: 'ask', priority: 30, enabled: true, description: '修改属主需确认' },
+  // ── 高危操作：safe 下 deny，standard 下降为 ask 让用户自决 ──
+  { name: 'ask-sudo',     command: 'sudo',     action: 'deny', priority: 5,  enabled: true, description: 'sudo 提权（safe:拒绝 / standard:需确认）' },
+  { name: 'ask-shutdown', command: 'shutdown', action: 'deny', priority: 5,  enabled: true, description: '关机命令（safe:拒绝 / standard:需确认）' },
+  { name: 'ask-reboot',   command: 'reboot',   action: 'deny', priority: 5,  enabled: true, description: '重启命令（safe:拒绝 / standard:需确认）' },
+  { name: 'ask-format',   command: 'format',   action: 'deny', priority: 5,  enabled: true, description: '格式化磁盘（safe:拒绝 / standard:需确认）' },
+  { name: 'ask-mkfs',     command: 'mkfs',     action: 'deny', priority: 5,  enabled: true, description: '格式化磁盘（safe:拒绝 / standard:需确认）' },
 
-  // 常用命令默认放行（在白名单内的）
+  // ── 危险但可逆：safe 下 ask，standard 下自动放行 ──
+  { name: 'ask-rm',       command: 'rm',       action: 'ask',  priority: 10, enabled: true, description: '删除文件（safe:需确认 / standard:自动放行）' },
+  { name: 'ask-del',      command: 'del',      action: 'ask',  priority: 10, enabled: true, description: '删除文件 Windows（safe:需确认 / standard:自动放行）' },
+  { name: 'ask-kill',     command: 'kill',     action: 'ask',  priority: 20, enabled: true, description: '终止进程（safe:需确认 / standard:自动放行）' },
+  { name: 'ask-taskkill', command: 'taskkill', action: 'ask',  priority: 20, enabled: true, description: '终止进程 Windows（safe:需确认 / standard:自动放行）' },
+  { name: 'ask-chmod',    command: 'chmod',    action: 'ask',  priority: 30, enabled: true, description: '修改权限（safe:需确认 / standard:自动放行）' },
+  { name: 'ask-chown',    command: 'chown',    action: 'ask',  priority: 30, enabled: true, description: '修改属主（safe:需确认 / standard:自动放行）' },
+
+  // ── 常用命令：所有模式直接放行 ──
   { name: 'allow-ls',    command: 'ls',    action: 'allow', priority: 200, enabled: true },
   { name: 'allow-dir',   command: 'dir',   action: 'allow', priority: 200, enabled: true },
   { name: 'allow-cat',   command: 'cat',   action: 'allow', priority: 200, enabled: true },
@@ -89,8 +105,8 @@ const DEFAULT_RULES: PolicyRule[] = [
   { name: 'allow-npm',   command: 'npm',   action: 'allow', priority: 200, enabled: true },
   { name: 'allow-npx',   command: 'npx',   action: 'allow', priority: 200, enabled: true },
 
-  // 兜底：未知命令统一 ask
-  { name: 'default-ask', command: '*', action: 'ask', priority: 999, enabled: true, description: '未匹配任何规则时，默认询问用户' },
+  // ── 兜底：safe 下 ask 确认，standard 下自动升为 allow（陌生命令直接跑） ──
+  { name: 'default-ask', command: '*', action: 'ask', priority: 999, enabled: true, description: '兜底：safe=询问用户 / standard=自动放行' },
 ]
 
 // ─── 命令注入 / 路径穿越 静态检测 ─────────────────────────────────────────
@@ -208,9 +224,12 @@ export class PolicyEngine {
 
   /**
    * 核心：评估一次命令调用，返回 allow/ask/deny。
-   * - 尊重会话级安全模式（full-access 直接放行，standard 跳过 ask）
-   * - 命中注入模式直接拒绝并审计
-   * - 否则按 priority 升序匹配第一条规则
+   *
+   * 各模式最终行为：
+   *  - safe:        完整策略 + 注入检测 deny；高危命令 deny；未知命令 ask。
+   *  - standard:    注入检测降为 ask（让用户自决）；deny 规则降为 ask；ask 规则升为 allow。
+   *                 效果：能放行的全放行，不确定的弹确认框，零硬报错。
+   *  - full-access: 跳过所有检查，全部放行，仅写审计日志。
    */
   async evaluate(input: PolicyDecisionInput): Promise<PolicyDecision> {
     await seedDefaultsIfEmpty()
@@ -236,11 +255,14 @@ export class PolicyEngine {
       return decision
     }
 
-    // 1) 注入检测（最高优先级，直接 deny —— 任何模式下都执行）
+    // 1) 注入检测
+    //    safe 模式：直接 deny（硬拒绝）
+    //    standard 模式：降级为 ask，让用户自行判断是否继续
     const injections = detectInjection(args)
     if (injections.length > 0) {
+      const action: PolicyAction = mode === 'standard' ? 'ask' : 'deny'
       const decision: PolicyDecision = {
-        action: 'deny',
+        action,
         reason: `检测到 shell 元字符/命令注入: ${injections.join(' | ')}`,
         injectionMatches: injections,
       }
@@ -249,15 +271,18 @@ export class PolicyEngine {
         sessionId: input.sessionId,
         category: 'cmd',
         target: [cmd, ...args].join(' '),
-        decision: 'deny',
+        decision: action,
         reason: decision.reason,
         details: { injections, securityMode: mode },
       })
       return decision
     }
+
+    // 2) 路径穿越检测
+    //    safe 模式：ask 确认
+    //    standard 模式：直接放行（用户自己承担风险）
     const traversal = detectPathTraversal(args)
     if (traversal.length > 0) {
-      // standard 模式下路径穿越降为 allow（用户自己承担风险）
       const action: PolicyAction = mode === 'standard' ? 'allow' : 'ask'
       const decision: PolicyDecision = {
         action,
@@ -275,7 +300,7 @@ export class PolicyEngine {
       return decision
     }
 
-    // 2) 按 priority 匹配规则
+    // 3) 按 priority 升序匹配规则
     const rules = await this.listRules()
     const argStr = args.join(' ')
     for (const r of rules) {
@@ -292,16 +317,24 @@ export class PolicyEngine {
       }
 
       let finalAction = r.action
-      // ── standard 模式：ask → allow（deny 仍保留） ──
-      if (mode === 'standard' && finalAction === 'ask') {
-        finalAction = 'allow'
+      if (mode === 'standard') {
+        // standard 模式：
+        //   deny  → ask  （不硬报错，交用户确认）
+        //   ask   → allow（常规操作自动放行）
+        if (finalAction === 'deny') finalAction = 'ask'
+        else if (finalAction === 'ask') finalAction = 'allow'
+      }
+
+      let reasonSuffix = ''
+      if (mode === 'standard' && r.action !== finalAction) {
+        reasonSuffix = ` (standard: ${r.action}→${finalAction})`
       }
 
       const decision: PolicyDecision = {
         action: finalAction,
         ruleId: r.id,
         ruleName: r.name,
-        reason: `命中规则 #${r.id} ${r.name}${mode === 'standard' && r.action === 'ask' ? ' (standard 自动放行)' : ''}`,
+        reason: `命中规则 #${r.id} ${r.name}${reasonSuffix}`,
       }
       await auditLogStore.append({
         tenantId: input.tenantId,
@@ -316,14 +349,16 @@ export class PolicyEngine {
       return decision
     }
 
-    // 3) 无规则兜底（实际 DEFAULT_RULES 已经注入 "default-ask"，这里基本不会到达）
-    const decision: PolicyDecision = { action: 'ask', reason: '未命中任何策略，默认询问' }
+    // 4) 无规则兜底（DEFAULT_RULES 已注入 default-ask，正常不会到达）
+    //    standard 下直接放行，safe 下 ask
+    const fallbackAction: PolicyAction = mode === 'standard' ? 'allow' : 'ask'
+    const decision: PolicyDecision = { action: fallbackAction, reason: `未命中任何策略，${mode === 'standard' ? '自动放行' : '默认询问'}` }
     await auditLogStore.append({
       tenantId: input.tenantId,
       sessionId: input.sessionId,
       category: 'cmd',
       target: [cmd, ...args].join(' '),
-      decision: 'ask',
+      decision: fallbackAction,
       reason: decision.reason,
     })
     return decision

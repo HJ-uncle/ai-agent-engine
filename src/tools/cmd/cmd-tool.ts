@@ -26,13 +26,14 @@ export const cmdTool: Tool = {
     properties: {
       command: { type: 'string' },
       args: { type: 'array', items: { type: 'string' } },
+      cwd: { type: 'string', description: '工作目录（full-access 模式下可为任意绝对路径）' },
     },
     required: ['command'],
   },
 
   async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
-    const args = rawArgs as { command: string; args?: string[] }
-    const { command, args: cmdArgs = [] } = args
+    const args = rawArgs as { command: string; args?: string[]; cwd?: string }
+    const { command, args: cmdArgs = [], cwd: cwdArg } = args
     const startTime = Date.now()
 
     // 1) 策略引擎裁决（含注入检测 + 审计日志）
@@ -75,32 +76,46 @@ export const cmdTool: Tool = {
     }
 
     // Ensure workspace exists
-    const cwd = workspaceManager.init(ctx)
-    const timeout = parseInt(process.env.CMD_TIMEOUT_MS ?? '5000', 10)
+    const workspaceCwd = workspaceManager.init(ctx)
+    // full-access 模式下允许调用方指定任意 cwd，否则锁定到 workspace 沙箱
+    const cwd = (mode === 'full-access' && cwdArg) ? cwdArg : workspaceCwd
+    // full-access 模式下默认超时 120s，避免长命令被 5s 硬截断
+    const defaultTimeout = mode === 'full-access' ? 120000 : 30000
+    const timeout = parseInt(process.env.CMD_TIMEOUT_MS ?? String(defaultTimeout), 10)
 
     return new Promise((resolve) => {
       let stdout = ''
       let stderr = ''
       let timedOut = false
 
-      // Windows 内建命令需通过 cmd.exe /c 调用（dir/type/copy 等无独立 .exe）
+      // Windows：内建命令 或 .cmd/.bat 文件 需通过 cmd.exe /c 调用
       let spawnCmd = command
       let spawnArgs = cmdArgs
-      if (os.platform() === 'win32' && WIN_BUILTINS.has(command.toLowerCase())) {
-        spawnCmd = 'cmd.exe'
-        spawnArgs = ['/c', command, ...cmdArgs]
+      if (os.platform() === 'win32') {
+        const cmdLower = command.toLowerCase()
+        const isBuiltin = WIN_BUILTINS.has(cmdLower)
+        const isScriptFile = cmdLower.endsWith('.cmd') || cmdLower.endsWith('.bat')
+        if (isBuiltin || isScriptFile) {
+          spawnCmd = 'cmd.exe'
+          spawnArgs = ['/c', command, ...cmdArgs]
+        }
       }
+
+      // full-access 模式下透传完整环境变量，保证 node/npm 等工具正常工作
+      const spawnEnv = mode === 'full-access'
+        ? { ...process.env }
+        : {
+            PATH: process.env.PATH,
+            HOME: cwd, // Restrict HOME to workspace
+            SystemRoot: process.env.SystemRoot, // Windows 需要此变量让 cmd.exe 正常工作
+            COMSPEC: process.env.COMSPEC,
+          }
 
       const child = spawn(spawnCmd, spawnArgs, {
         cwd,
         shell: false, // NEVER use shell:true — prevents injection
         timeout,
-        env: {
-          PATH: process.env.PATH,
-          HOME: cwd, // Restrict HOME to workspace
-          SystemRoot: process.env.SystemRoot, // Windows 需要此变量让 cmd.exe 正常工作
-          COMSPEC: process.env.COMSPEC,
-        },
+        env: spawnEnv,
       })
 
       const timer = setTimeout(() => {

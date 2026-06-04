@@ -725,8 +725,8 @@ export class ReActStrategy implements LoopStrategy {
         }
         await ctx.history.append(toolMsg, ctx)
 
-        // Bail out if tools fail 3 times in a row or repeat 3 times (prevents infinite loops)
-        if (globalConsecutiveFailures >= 3) {
+        // Bail out if tools fail 20 times in a row or repeat 20 times (prevents infinite loops)
+        if (globalConsecutiveFailures >= 20) {
           ctx.logger.error({ toolName: toolCall.name, globalConsecutiveFailures }, 'Consecutive failures or repetitions exceeded limit, stopping')
           yield `\n\n[Loop detected or tool \`${toolCall.name}\` failed repeatedly. Stopping to prevent token waste.]`
           return

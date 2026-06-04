@@ -1,5 +1,6 @@
 import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
 import { checkNetworkAccess } from '../../security/network-policy.js'
+import { getSecurityMode } from '../../security/policy-engine.js'
 
 export interface AuthConfig {
   type: 'basic' | 'bearer' | 'apikey' | 'digest' | 'oauth2' | 'custom'
@@ -123,7 +124,9 @@ export const httpRequestTool: Tool = {
           }
         }
 
-        const maxLength = 50000
+        // full-access 模式下不截断，其他模式限制 50000 字符
+        const mode = getSecurityMode(ctx.tenantId, ctx.sessionId)
+        const maxLength = mode === 'full-access' ? Infinity : 50000
         if (responseBody.length > maxLength) {
           responseBody = responseBody.slice(0, maxLength) + `\n\n... [响应已截断，原长度: ${responseBody.length} 字符]`
         }
