@@ -214,27 +214,47 @@ export class SQLiteConversationHistory implements ConversationHistory {
     const allRows = result.rows
     const allMessages = allRows.map(rowToMessage)
     
-    // ── 清理孤立数据：找第一条 user 消息，其之前的所有 non-user 行直接删除 ────
+    // ── 清理孤立数据：找第一条 user 消息，其之前的非 system 行直接删除 ──────────
+    // 孤立数据场景：assistant/tool 消息先于首条 user 写入（异步竞态、崩溃重启等）。
+    // system 消息（如 compress 写入的摘要）出现在 user 之前是合法的，不应删除。
     const firstUserIdx = allRows.findIndex((r) => r['role'] === 'user')
     if (firstUserIdx === -1 && allRows.length > 0) {
-      db.execute({
-        sql: `DELETE FROM conversations WHERE tenant_id = ? AND session_id = ?`,
-        args: [ctx.tenantId, ctx.sessionId],
-      }).catch(() => {})
-      return []
+      // 无 user 消息：若全为 system 则保留（compress 只写了摘要还未写 recent），
+      // 若含非 system 行则属于孤立脏数据，全部删除。
+      const hasOnlySystem = allRows.every((r) => r['role'] === 'system')
+      if (!hasOnlySystem) {
+        db.execute({
+          sql: `DELETE FROM conversations WHERE tenant_id = ? AND session_id = ?`,
+          args: [ctx.tenantId, ctx.sessionId],
+        }).catch(() => {})
+        return []
+      }
+      // 全部为 system 消息：直接返回（后续 append 会补齐 recent 消息）
+      return allMessages
     }
     if (firstUserIdx > 0) {
-      const orphanIds = allRows.slice(0, firstUserIdx).map((r) => r['id'] as number)
-      Promise.all(
-        orphanIds.map((id) =>
-          db.execute({
-            sql: `DELETE FROM conversations WHERE id = ? AND tenant_id = ?`,
-            args: [id, ctx.tenantId],
-          }).catch(() => {})
-        )
-      ).catch(() => {})
+      // 仅删除 assistant/tool 类型的前缀孤立行；system 摘要合法保留
+      const orphanIds = allRows
+        .slice(0, firstUserIdx)
+        .filter((r) => r['role'] !== 'system')
+        .map((r) => r['id'] as number)
+      if (orphanIds.length > 0) {
+        Promise.all(
+          orphanIds.map((id) =>
+            db.execute({
+              sql: `DELETE FROM conversations WHERE id = ? AND tenant_id = ?`,
+              args: [id, ctx.tenantId],
+            }).catch(() => {})
+          )
+        ).catch(() => {})
+      }
     }
-    return firstUserIdx > 0 ? allMessages.slice(firstUserIdx) : allMessages
+    // 过滤掉 firstUserIdx 之前的 assistant/tool 孤立行，保留 system 前缀
+    if (firstUserIdx > 0) {
+      const systemPrefix = allMessages.slice(0, firstUserIdx).filter((m) => m.role === 'system')
+      return [...systemPrefix, ...allMessages.slice(firstUserIdx)]
+    }
+    return allMessages
   }
 
   /** 按 conversationId 查询单轮对话的所有消息 */
@@ -521,8 +541,13 @@ export class SQLiteConversationHistory implements ConversationHistory {
     const summaryContent = await summarizeFn(olderMessages)
     const summaryTokens = estimateTokens(summaryContent)
 
-    // Replace DB contents: clear → summary system msg → recent msgs
-    await this.clear(ctx)
+    // Replace DB contents: 直接 DELETE（不走 clear()，避免设置墓碑导致后续 append 被拦截）
+    // clear() 的墓碑机制是为「用户主动删除会话」设计的，compress 是引擎内部维护行为，
+    // 不应触发墓碑，否则紧随其后的摘要/最近消息写入会被静默丢弃，导致历史清空为空。
+    await db.execute({
+      sql: 'DELETE FROM conversations WHERE tenant_id = ? AND session_id = ?',
+      args: [ctx.tenantId, ctx.sessionId],
+    })
 
     await this.append(
       { role: 'system', content: summaryContent, tokens: summaryTokens },
@@ -551,7 +576,12 @@ export class SQLiteConversationHistory implements ConversationHistory {
     // Callers that want a proper LLM-based summary should override this method.
     const summaryContent = `[Previous conversation summary: ${toSummarize.length} messages exchanged covering: ${toSummarize.map((m) => m.content.slice(0, 50)).join('; ')}]`
 
-    await this.clear(ctx)
+    // 同 compress()：直接 DELETE 不走 clear()，避免墓碑拦截后续 append
+    const db = getDb()
+    await db.execute({
+      sql: 'DELETE FROM conversations WHERE tenant_id = ? AND session_id = ?',
+      args: [ctx.tenantId, ctx.sessionId],
+    })
 
     await this.append({
       role: 'system',

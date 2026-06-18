@@ -60,9 +60,194 @@ function normalizeBaseURL(url: string | undefined): string | undefined {
  * - Drop any tool-result messages whose tool_call_id has no matching assistant tool_call
  * This prevents "unexpected tool_use_id" errors from Claude-via-OpenAI-proxy adapters.
  */
+/**
+ * thinking-mode 占位文本：部分网关（如网易 AIGW deepseek-v4-pro）要求带 tool_calls
+ * 的 assistant 消息在回传时必须包含【非空】reasoning_content，否则返回
+ * 400 "The reasoning_content in the thinking mode must be passed back to the API."
+ * 历史消息缺失 / 空值时用此占位补齐，保证多轮工具调用不被网关拒绝。
+ */
+const THINKING_PLACEHOLDER = '(reasoning omitted)'
+
+/**
+ * @description 计算 assistant 消息回传时应使用的 reasoning_content。
+ *   仅在 thinking mode（ensureReasoning=true）下兜底为非空占位。
+ * @param raw 原始 reasoningContent（可能为 undefined / 空串）
+ * @param ensureReasoning 是否强制保证非空（thinking mode 开启时为 true）
+ * @returns 需要回传的字段对象（不需要回传时为空对象）
+ */
+function buildReasoningField(
+  raw: unknown,
+  ensureReasoning: boolean,
+): { reasoning_content?: string } {
+  const text = typeof raw === 'string' ? raw : raw != null ? String(raw) : ''
+  if (text.trim()) return { reasoning_content: text }
+  if (ensureReasoning) return { reasoning_content: THINKING_PLACEHOLDER }
+  return {}
+}
+
+/**
+ * @description 判断当前请求是否启用了 thinking mode。
+ *   依据 thinkingConfig 或 responseThinkingField 是否存在。
+ */
+function isThinkingMode(options?: LLMAdapterOptions): boolean {
+  return !!(options?.thinkingConfig || options?.responseThinkingField)
+}
+
+/**
+ * @description 判断指定模型是否【不支持】自定义 temperature 参数。
+ *   OpenAI 推理系（o1 / o3 / o4 / gpt-5 及其变体）只接受默认 temperature，
+ *   显式传入会返回 400 "Unsupported parameter: 'temperature' is not supported with this model."
+ *   命中时调用方应从请求体中省略 temperature。
+ * @param model 实际请求的模型 ID
+ */
+function modelRejectsTemperature(model?: string): boolean {
+  if (!model) return false
+  return /^(o1|o3|o4|gpt-5)([.\-]|$)/i.test(model) || /(^|[\/-])(o1|o3|o4|gpt-5)([.\-]|$)/i.test(model)
+}
+
+/**
+ * @description 判断指定模型是否使用 max_completion_tokens 取代 max_tokens。
+ *   与 modelRejectsTemperature 同源（OpenAI 推理系），二者约束一致。
+ * @param model 实际请求的模型 ID
+ */
+function modelUsesMaxCompletionTokens(model?: string): boolean {
+  return modelRejectsTemperature(model)
+}
+
+/**
+ * @description 按模型能力组装通用采样参数（temperature / max_tokens）。
+ *   推理系模型省略 temperature，并将 max_tokens 改写为 max_completion_tokens。
+ * @param model 实际请求的模型 ID
+ * @param temperature 调用方期望的 temperature（可能为 undefined）
+ * @param maxTokens 调用方期望的 max_tokens（可能为 undefined）
+ */
+function buildSamplingParams(
+  model: string | undefined,
+  temperature: number | undefined,
+  maxTokens: number | undefined,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (!modelRejectsTemperature(model) && temperature != null) {
+    out.temperature = temperature
+  }
+  if (maxTokens != null) {
+    if (modelUsesMaxCompletionTokens(model)) out.max_completion_tokens = maxTokens
+    else out.max_tokens = maxTokens
+  }
+  return out
+}
+
+/**
+ * @description 从供应商 400 错误信息中识别「不支持的参数名」，用于自动剔除后重试。
+ *   兼容多种网关措辞：
+ *     - "Unsupported parameter: 'temperature' is not supported with this model."
+ *     - "'top_p' is not supported with this model"
+ *     - "Unknown parameter: 'frequency_penalty'."
+ *   仅当能定位到 params 中真实存在的字段时才返回，避免误删。
+ * @param message 供应商返回的错误文本
+ * @param params 当前请求参数（用于校验字段确实存在）
+ * @returns 可剔除的参数名；无法识别时返回 null
+ */
+function detectUnsupportedParam(message: string, params: Record<string, unknown>): string | null {
+  if (!message) return null
+  const patterns = [
+    /unsupported parameter:\s*['"`]?([a-z0-9_.]+)['"`]?/i,
+    /unknown parameter:\s*['"`]?([a-z0-9_.]+)['"`]?/i,
+    /['"`]([a-z0-9_.]+)['"`]\s+is not supported/i,
+    /parameter\s+['"`]?([a-z0-9_.]+)['"`]?\s+is not supported/i
+  ]
+  for (const re of patterns) {
+    const m = message.match(re)
+    const name = m?.[1]
+    if (name && Object.prototype.hasOwnProperty.call(params, name)) {
+      return name
+    }
+  }
+  return null
+}
+
+/**
+ * @description 包裹 chat.completions.create 调用，遇到「不支持的参数」类 400 时
+ *   自动剔除该参数并重试，直至无可剔除参数或成功。不依赖模型名硬编码，
+ *   覆盖各网关对 temperature / top_p / penalty 等参数的差异化限制。
+ *   注意：reasoning_content 缺失类 400（"must be passed back"）无法靠删参解决，
+ *   detectUnsupportedParam 不会命中，会原样抛出由上层处理。
+ * @param client OpenAI SDK 实例
+ * @param params 请求参数（会按需克隆删字段）
+ * @param requestOptions create 的第二参（signal 等）
+ */
+async function createWithParamFallback<T>(
+  client: OpenAI,
+  params: Record<string, unknown>,
+  requestOptions: { signal?: AbortSignal },
+): Promise<T> {
+  let current = { ...params }
+  const dropped = new Set<string>()
+  // 最多重试参数个数次，防御性上限避免死循环
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try {
+      return (await client.chat.completions.create(current as any, requestOptions)) as T
+    } catch (error: any) {
+      const status = error?.status ?? error?.response?.status
+      if (status !== 400) throw error
+      const msg: string =
+        error?.error?.message ?? error?.response?.data?.error?.message ?? error?.message ?? ''
+      const bad = detectUnsupportedParam(msg, current)
+      if (!bad || dropped.has(bad)) throw error
+      dropped.add(bad)
+      const next = { ...current }
+      delete next[bad]
+      current = next
+    }
+  }
+  // 兜底：再尝试一次（理论不可达）
+  return (await client.chat.completions.create(current as any, requestOptions)) as T
+}
+
+/**
+ * @description createWithParamFallback 的流式版本：建立 SSE 连接阶段遇到
+ *   「不支持的参数」类 400 时，自动剔除该参数重试。错误在 await create 阶段抛出，
+ *   不影响后续 chunk 迭代。
+ * @param client OpenAI SDK 实例
+ * @param params 请求参数（含 stream:true，会按需克隆删字段）
+ * @param requestOptions create 的第二参（signal 等）
+ */
+async function streamWithParamFallback(
+  client: OpenAI,
+  params: Record<string, unknown>,
+  requestOptions: { signal?: AbortSignal },
+): Promise<AsyncIterable<OpenAI.Chat.ChatCompletionChunk>> {
+  let current = { ...params }
+  const dropped = new Set<string>()
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try {
+      return await client.chat.completions.create(
+        current as unknown as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
+        requestOptions,
+      )
+    } catch (error: any) {
+      const status = error?.status ?? error?.response?.status
+      if (status !== 400) throw error
+      const msg: string =
+        error?.error?.message ?? error?.response?.data?.error?.message ?? error?.message ?? ''
+      const bad = detectUnsupportedParam(msg, current)
+      if (!bad || dropped.has(bad)) throw error
+      dropped.add(bad)
+      const next = { ...current }
+      delete next[bad]
+      current = next
+    }
+  }
+  return await client.chat.completions.create(
+    current as unknown as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
+    requestOptions,
+  )
+}
+
 function messagesToOpenAI(
   messages: Message[],
   supportsVision: boolean = true,
+  ensureReasoning: boolean = false,
 ): OpenAI.Chat.ChatCompletionMessageParam[] {
   // First pass: collect all valid tool_call IDs (with non-empty id & name)
   // AND collect all tool result IDs from tool messages
@@ -247,7 +432,7 @@ function messagesToOpenAI(
       result.push({
         role: 'assistant',
         content: contentToString(msg.content ?? null),
-        ...((msg as any).reasoningContent != null ? { reasoning_content: (msg as any).reasoningContent } : {}),
+        ...buildReasoningField((msg as any).reasoningContent, ensureReasoning),
         tool_calls: [{
           id,
           type: 'function',
@@ -442,7 +627,7 @@ export class OpenAIAdapter implements LLMAdapter {
 
   async complete(messages: Message[], options?: LLMAdapterOptions): Promise<LLMResponse> {
     this.assertApiKey()
-    const oaiMessages = messagesToOpenAI(messages, this.supportsVision)
+    const oaiMessages = messagesToOpenAI(messages, this.supportsVision, isThinkingMode(options))
     if (options?.systemPrompt) {
       oaiMessages.unshift({ role: 'system', content: options.systemPrompt })
     }
@@ -461,8 +646,7 @@ export class OpenAIAdapter implements LLMAdapter {
     const params: any = {
       model: options?.model ?? this.model,
       messages: oaiMessages,
-      max_tokens: options?.maxTokens,
-      temperature: options?.temperature,
+      ...buildSamplingParams(options?.model ?? this.model, options?.temperature, options?.maxTokens),
     }
 
     // ── DeepSeek JSON Mode（OpenAI 也兼容此协议） ──────────────────────────
@@ -478,9 +662,11 @@ export class OpenAIAdapter implements LLMAdapter {
       params.tools = options.tools.map(toolToOpenAI)
       params.tool_choice = 'auto'
     }
-    const response = await this.client.chat.completions.create(params, {
-      signal: options?.signal,
-    })
+    const response = await createWithParamFallback<OpenAI.Chat.ChatCompletion>(
+      this.client,
+      params,
+      { signal: options?.signal },
+    )
     const choice = response.choices[0]
     const message = choice.message
 
@@ -548,7 +734,7 @@ export class OpenAIAdapter implements LLMAdapter {
 
   async *stream(messages: Message[], options?: LLMAdapterOptions): AsyncIterable<LLMStreamChunk> {
     this.assertApiKey()
-    const oaiMessages = messagesToOpenAI(messages, this.supportsVision)
+    const oaiMessages = messagesToOpenAI(messages, this.supportsVision, isThinkingMode(options))
     if (options?.systemPrompt) {
       oaiMessages.unshift({ role: 'system', content: options.systemPrompt })
     }
@@ -567,8 +753,7 @@ export class OpenAIAdapter implements LLMAdapter {
       model: options?.model ?? this.model,
       messages: oaiMessages,
       stream: true,
-      max_tokens: options?.maxTokens,
-      temperature: options?.temperature,
+      ...buildSamplingParams(options?.model ?? this.model, options?.temperature, options?.maxTokens),
     }
 
     // stream_options.include_usage：DeepSeek/OpenAI 官方端点支持，
@@ -607,45 +792,57 @@ export class OpenAIAdapter implements LLMAdapter {
     // 原生 API 只做基础 JSON parse，由我们自己处理 delta，兼容性最佳。
     // 注意：将 params 断言为 ChatCompletionCreateParamsStreaming 以触发流式重载，
     // 返回值为 Stream<ChatCompletionChunk>，实现了 AsyncIterable<ChatCompletionChunk>。
-    const stream = await this.client.chat.completions.create(
-      params as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
+    const stream = await streamWithParamFallback(
+      this.client,
+      params,
       { signal: options?.signal }
     )
 
     let manualUsage: any = null
     let manualModel: string | undefined = undefined
+    let abortedBySignal = false
 
-    for await (const chunk of stream) {
-      // 1. 提取 usage（部分供应商在最后一个 chunk 的顶层或 usage 字段中返回）
-      const usage = (chunk as any).usage
-      if (usage) manualUsage = usage
+    try {
+      for await (const chunk of stream) {
+        // 1. 提取 usage（部分供应商在最后一个 chunk 的顶层或 usage 字段中返回）
+        const usage = (chunk as any).usage
+        if (usage) manualUsage = usage
 
-      // 2. 提取 model（用于展示真实调用的模型 ID）
-      if ((chunk as any).model) manualModel = (chunk as any).model
+        // 2. 提取 model（用于展示真实调用的模型 ID）
+        if ((chunk as any).model) manualModel = (chunk as any).model
 
-      // 3. 提取 delta 内容
-      const delta = chunk.choices?.[0]?.delta
-      if (!delta) continue
+        // 3. 提取 delta 内容
+        const delta = chunk.choices?.[0]?.delta
+        if (!delta) continue
 
-      // 尝试多字段提取推理内容（兼容 reasoning_content / thought / reasoning）
-      const rContent = (options?.responseThinkingField ? (delta as any)[options.responseThinkingField] : null) ||
-        (delta as any).reasoning_content ||
-        (delta as any).thought ||
-        (delta as any).reasoning
+        // 尝试多字段提取推理内容（兼容 reasoning_content / thought / reasoning）
+        const rContent = (options?.responseThinkingField ? (delta as any)[options.responseThinkingField] : null) ||
+          (delta as any).reasoning_content ||
+          (delta as any).thought ||
+          (delta as any).reasoning
 
-      if (delta.content || rContent || delta.tool_calls) {
-        yield { 
-          content: delta.content as string, 
-          reasoningContent: rContent as string,
-          toolCalls: delta.tool_calls?.map((tc: any) => ({
-            id: tc.id,
-            // 某些第三方 GPT 兼容 API 返回不完整 chunk，tc.function 可能是 undefined
-            name: tc.function?.name,
-            args: tc.function?.arguments, // string delta（流式增量字符串）
-            index: tc.index ?? 0,
-          })).filter((tc: any) => tc.name !== undefined || tc.id !== undefined || tc.args !== undefined),
-          done: false 
+        if (delta.content || rContent || delta.tool_calls) {
+          yield { 
+            content: delta.content as string, 
+            reasoningContent: rContent as string,
+            toolCalls: delta.tool_calls?.map((tc: any) => ({
+              id: tc.id,
+              // 某些第三方 GPT 兼容 API 返回不完整 chunk，tc.function 可能是 undefined
+              name: tc.function?.name,
+              args: tc.function?.arguments, // string delta（流式增量字符串）
+              index: tc.index ?? 0,
+            })).filter((tc: any) => tc.name !== undefined || tc.id !== undefined || tc.args !== undefined),
+            done: false 
+          }
         }
+      }
+    } catch (err: any) {
+      if (err?.name === 'AbortError' || options?.signal?.aborted) {
+        // 用户主动中止：即使没拿到完整 usage，也 yield done:true 让上层能发 __usage__
+        // 这样 stopSession 时 state.lastUsage 不为 null，计费信息得以保留。
+        abortedBySignal = true
+      } else {
+        throw err
       }
     }
 
