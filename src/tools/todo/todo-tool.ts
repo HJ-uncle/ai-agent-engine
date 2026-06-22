@@ -19,7 +19,7 @@ export const todoTools: Tool[] = [
         if (status) todos = todos.filter(t => t.status === status)
         if (todos.length === 0) return { success: true, output: '暂无待办任务' }
         const lines = todos.map(t =>
-          `[${t.id.slice(0,8)}] [${t.priority}] [${t.status}] ${t.title}${t.dueAt ? ` (截止: ${new Date(t.dueAt).toLocaleString('zh-CN')})` : ''}`
+          `[${t.id}] [${t.priority}] [${t.status}] ${t.title}${t.dueAt ? ` (截止: ${new Date(t.dueAt).toLocaleString('zh-CN')})` : ''}`
         )
         return { success: true, output: `共 ${todos.length} 条待办:\n${lines.join('\n')}` }
       } catch (err) { return { success: false, output: String(err) } }
@@ -42,7 +42,7 @@ export const todoTools: Tool[] = [
           title, description, priority, sessionId: ctx.sessionId,
           dueAt: dueAt ? new Date(dueAt).getTime() : undefined,
         })
-        return { success: true, output: `✅ 已创建待办 [${todo.id.slice(0,8)}]: ${todo.title}` }
+        return { success: true, output: `✅ 已创建待办 [${todo.id}]: ${todo.title}` }
       } catch (err) { return { success: false, output: String(err) } }
     },
   },
@@ -68,7 +68,7 @@ export const todoTools: Tool[] = [
           ...updates,
           dueAt: updates.dueAt ? new Date(updates.dueAt).getTime() : undefined,
         })
-        return { success: true, output: `✅ 已更新待办 [${todo.id.slice(0,8)}]: ${updated?.title}` }
+        return { success: true, output: `✅ 已更新待办 [${todo.id}]: ${updated?.title}` }
       } catch (err) { return { success: false, output: String(err) } }
     },
   },

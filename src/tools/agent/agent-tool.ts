@@ -43,7 +43,7 @@ export const agentTools: Tool[] = [
         const lines = filtered.map(a => {
           const skills = a.skills.length > 0 ? ` [技能: ${a.skills.join(', ')}]` : ''
           const desc = a.description ? ` - ${a.description}` : ''
-          return `[${a.id.slice(0, 8)}] **${a.name}**${desc}${skills}`
+          return `[${a.id}] **${a.name}**${desc}${skills}`
         })
         return { success: true, output: `共 ${filtered.length} 个 Agent:\n\n${lines.join('\n')}` }
       } catch (err) {
@@ -167,7 +167,7 @@ export const agentTools: Tool[] = [
           knowledgeBases: args.knowledgeBases || [],
           allowedTools: args.allowedTools || [],
         })
-        return { success: true, output: `✅ Agent "${agent.name}" 创建成功 (ID: ${agent.id.slice(0, 8)})` }
+        return { success: true, output: `✅ Agent "${agent.name}" 创建成功 (ID: ${agent.id})` }
       } catch (err) {
         return { success: false, output: `创建 Agent 失败: ${String(err)}` }
       }
@@ -198,7 +198,7 @@ export const agentTools: Tool[] = [
         }
         return {
           success: true,
-          output: `📋 Agent 更新预览\n\n即将更新 **${existing.name}** (${existing.id.slice(0, 8)}...)，变更如下：\n\`\`\`json\n${JSON.stringify(updates, null, 2)}\n\`\`\`\n\n请先调用 ask_user 工具请求用户确认。`,
+          output: `📋 Agent 更新预览\n\n即将更新 **${existing.name}** (${existing.id}...)，变更如下：\n\`\`\`json\n${JSON.stringify(updates, null, 2)}\n\`\`\`\n\n请先调用 ask_user 工具请求用户确认。`,
           pendingAction: {
             type: 'agent_update',
             id: existing.id,
@@ -274,7 +274,7 @@ export const agentTools: Tool[] = [
         }
         return {
           success: true,
-          output: `⚠️ 删除确认\n\n确定要删除 Agent **${existing.name}** (${existing.id.slice(0, 8)}...) 吗？\n\n此操作不可恢复！\n\n请先调用 ask_user 工具请求用户确认。`,
+          output: `⚠️ 删除确认\n\n确定要删除 Agent **${existing.name}** (${existing.id}...) 吗？\n\n此操作不可恢复！\n\n请先调用 ask_user 工具请求用户确认。`,
           pendingAction: {
             type: 'agent_delete',
             id: existing.id,
@@ -328,7 +328,7 @@ export async function executePendingAgentAction(
           knowledgeBases: action.input.knowledgeBases || [],
           allowedTools: action.input.allowedTools || [],
         })
-        return { success: true, output: `✅ Agent "${agent.name}" 创建成功 (ID: ${agent.id.slice(0, 8)})` }
+        return { success: true, output: `✅ Agent "${agent.name}" 创建成功 (ID: ${agent.id})` }
       }
       case 'agent_update': {
         const updated = await store.update(action.id!, ctx.tenantId, action.input)

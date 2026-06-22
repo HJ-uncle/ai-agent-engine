@@ -27,7 +27,7 @@ export const taskControlTools: Tool[] = [
         jobs = jobs.slice(0, limit)
         if (jobs.length === 0) return { success: true, output: '暂无后台任务' }
         const lines = jobs.map((j: any) =>
-          `[${j.id.slice(0,8)}] [${j.status}] type="${j.type}" 创建: ${new Date(j.createdAt).toLocaleString('zh-CN')}`
+          `[${j.id}] [${j.status}] type="${j.type}" 创建: ${new Date(j.createdAt).toLocaleString('zh-CN')}`
         )
         return { success: true, output: `共 ${jobs.length} 个后台任务:\n${lines.join('\n')}` }
       } catch (err) { return { success: false, output: String(err) } }
@@ -54,7 +54,7 @@ export const taskControlTools: Tool[] = [
         const job = jobs.find((j: any) => j.id === id || j.id.startsWith(id))
         if (!job) return { success: false, output: `任务 "${id}" 不存在` }
         const cancelled = await queue.cancel(job.id)
-        return { success: true, output: cancelled ? `✅ 已取消任务 [${job.id.slice(0,8)}]` : `⚠️ 任务 "${id}" 无法取消（可能已完成或正在运行）` }
+        return { success: true, output: cancelled ? `✅ 已取消任务 [${job.id}]` : `⚠️ 任务 "${id}" 无法取消（可能已完成或正在运行）` }
       } catch (err) { return { success: false, output: String(err) } }
     },
   },

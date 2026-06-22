@@ -139,7 +139,7 @@ export const httpRequestTool: Tool = {
           `- 方法: ${method}`,
           `- 认证方式: ${auth?.type || '无'}`,
           `- 请求头: ${JSON.stringify(headers, null, 2)}`,
-          body ? `- 请求体: ${body.slice(0, 200)}${body.length > 200 ? '...' : ''}` : '',
+          body ? `- 请求体: ${body.slice(0, 2000)}${body.length > 2000 ? '...' : ''}` : '',
           ``,
           `**响应信息**`,
           `- 状态码: ${response.status} ${statusText}`,

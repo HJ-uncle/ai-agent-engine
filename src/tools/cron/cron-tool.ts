@@ -14,7 +14,7 @@ export const cronTools: Tool[] = [
         const jobs = await store.list(ctx.tenantId)
         if (jobs.length === 0) return { success: true, output: '暂无定时任务' }
         const lines = jobs.map(j =>
-          `[${j.id.slice(0,8)}] [${j.enabled ? '启用' : '禁用'}] "${j.name}" cron="${j.cronExpr}" 消息="${j.message.slice(0,30)}" 上次运行: ${j.lastRunAt ? new Date(j.lastRunAt).toLocaleString('zh-CN') : '从未'}`
+          `[${j.id}] [${j.enabled ? '启用' : '禁用'}] "${j.name}" cron="${j.cronExpr}" 消息="${j.message.slice(0,30)}" 上次运行: ${j.lastRunAt ? new Date(j.lastRunAt).toLocaleString('zh-CN') : '从未'}`
         )
         return { success: true, output: `共 ${jobs.length} 个定时任务:\n${lines.join('\n')}` }
       } catch (err) { return { success: false, output: String(err) } }
@@ -43,7 +43,7 @@ export const cronTools: Tool[] = [
           name, cronExpr, message, description, agentId,
           sessionId: sessionId || ctx.sessionId,
         })
-        return { success: true, output: `✅ 已创建定时任务 [${job.id.slice(0,8)}]: "${job.name}" (${job.cronExpr})` }
+        return { success: true, output: `✅ 已创建定时任务 [${job.id}]: "${job.name}" (${job.cronExpr})` }
       } catch (err) { return { success: false, output: String(err) } }
     },
   },
@@ -70,7 +70,7 @@ export const cronTools: Tool[] = [
         const job = all.find(j => j.id === id || j.id.startsWith(id))
         if (!job) return { success: false, output: `定时任务 "${id}" 不存在` }
         const updated = await store.update(job.id, ctx.tenantId, updates)
-        return { success: true, output: `✅ 已更新定时任务 [${job.id.slice(0,8)}]: "${updated?.name}"${updates.enabled !== undefined ? ` → ${updates.enabled ? '启用' : '禁用'}` : ''}` }
+        return { success: true, output: `✅ 已更新定时任务 [${job.id}]: "${updated?.name}"${updates.enabled !== undefined ? ` → ${updates.enabled ? '启用' : '禁用'}` : ''}` }
       } catch (err) { return { success: false, output: String(err) } }
     },
   },
