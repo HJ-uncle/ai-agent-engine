@@ -27,6 +27,27 @@ const DELIMITER = '\n\n---\n\n'
 const SENTINEL_OPEN = '<OSM-ACTIVE>'
 const SENTINEL_CLOSE = '</OSM-ACTIVE>'
 
+/**
+ * 静态兜底提示词（参考 lobster OSM_METHODOLOGY_PROMPT 设计）。
+ *
+ * 当 os-using-superpowers/SKILL.md 不存在时，注入此轻量骨架保证方法论约束不完全哑火。
+ * 正文仍可通过 get_skill 按需拉取各子技能。
+ */
+const OSM_STATIC_FALLBACK_PROMPT = `<openspec-methodology mode="active">
+OpenSpec Methodology (OSM) 已启用。请先调用
+\`get_skill({ name: "os-using-superpowers" })\` 获取完整方法论入口指引。
+
+核心纪律（先规划后执行，证据先于结论）：
+1. 创建/构建/修改前 → get_skill({ name: "os-brainstorming" }) 形成设计并经用户确认。
+2. 多步实现 → get_skill({ name: "os-writing-plans" }) 拆出 bite-sized 计划。
+3. 写生产代码 → get_skill({ name: "os-tdd" }) 遵循 RED/GREEN/REFACTOR。
+4. 遇到 bug / 测试失败 → get_skill({ name: "os-systematic-debugging" }) 先定位根因再修。
+5. 宣称完成前 → get_skill({ name: "os-verification-before-completion" }) 用新鲜证据佐证。
+6. 大任务可委派 → get_skill({ name: "os-subagent-driven-dev" }) 用 Task 子代理实现+评审。
+
+用户的显式指令始终优先于本方法论。
+</openspec-methodology>`
+
 let __missingWarned = false
 
 /**
@@ -59,10 +80,11 @@ export function getOSMBootstrapBlock(log: Logger = defaultLogger): string {
       __missingWarned = true
       log.warn(
         { skill: OSM_BOOTSTRAP_SKILL_NAME, mode },
-        'OSM: bootstrap SKILL.md not found — methodology mode degraded to plain system prompt',
+        'OSM: bootstrap SKILL.md not found — falling back to static methodology prompt',
       )
     }
-    return ''
+    // 静态 fallback：保证 methodology / max 档有最低限度的方法论约束
+    return `${SENTINEL_OPEN}\n${OSM_STATIC_FALLBACK_PROMPT.trim()}\n${SENTINEL_CLOSE}`
   }
 
   return `${SENTINEL_OPEN}\n${content.trim()}\n${SENTINEL_CLOSE}`

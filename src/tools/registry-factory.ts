@@ -36,7 +36,8 @@ import {
   runOSMSelfCheck,
   logOSMSelfCheck,
   resolveOSMMode,
-  OSM_MODE_CONFIG
+  OSM_MODE_CONFIG,
+  isOsmSkillVisible,
 } from '../core/osm.js'
 import { logger } from '../observability/index.js'
 
@@ -187,11 +188,12 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   let externalSkills = skillsRegistry.getSkills()
 
   // ── OSM 方法论 过滤 ──────────────────────────────────────────
-  // 如果当前模式未开启 methodology，则隐藏所有 os- 打头的内置方法论技能，
+  // methodology / max 档以外，隐藏所有方法论技能（os-* 系列），
   // 避免在 Balanced/Off 模式下干扰 Agent 或浪费 Token。
+  // 使用 isOsmSkillVisible() 精确匹配，不依赖命名约定。
   const mode = resolveOSMMode()
   if (!OSM_MODE_CONFIG[mode].methodology) {
-    externalSkills = externalSkills.filter(s => !s.name.startsWith('os-'))
+    externalSkills = externalSkills.filter(s => isOsmSkillVisible(s.name, mode))
   }
 
   // ── 合并客户端透传的 inline skill ────────────────────────────────────────

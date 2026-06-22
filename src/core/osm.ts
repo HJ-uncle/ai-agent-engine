@@ -280,8 +280,43 @@ export function resolveDefaultAllowedTools(
   return intersected.length > 0 ? intersected : [...OSM_CORE_TOOLS]
 }
 
+// ── OSM 方法论技能集合 ────────────────────────────────────────────────────
+
+/**
+ * OpenSpec 方法论技能集合（精确匹配，不依赖命名约定）。
+ *
+ * 仅在 methodology / max 档可见；off / balanced 档将这些技能从
+ * `list_skills` / `get_skill` 可见列表中过滤掉，避免干扰模型或浪费 Token。
+ *
+ * 维护规则：新增 os-* 技能时在此集合中同步添加；技能重命名时更新此处，
+ * 而无需搜索散落的 `startsWith('os-')` 调用。
+ */
+export const OSM_METHODOLOGY_SKILL_IDS: ReadonlySet<string> = new Set([
+  'os-using-superpowers',
+  'os-brainstorming',
+  'os-writing-plans',
+  'os-tdd',
+  'os-systematic-debugging',
+  'os-subagent-driven-dev',
+  'os-verification-before-completion',
+])
+
+/**
+ * 判断某技能在当前（或指定）OSM 模式下是否应向 Agent 暴露。
+ *
+ * - 非方法论技能（不在 OSM_METHODOLOGY_SKILL_IDS 中）→ 恒为 `true`
+ * - 方法论技能 → 仅 `methodology` / `max` 返回 `true`
+ *
+ * @param skillName 技能名称（与 ExternalSkill.name 一致）
+ * @param mode      目标档位（省略时实时读取 process.env）
+ */
+export function isOsmSkillVisible(skillName: string, mode?: OSMMode): boolean {
+  if (!OSM_METHODOLOGY_SKILL_IDS.has(skillName)) return true
+  const m = mode !== undefined ? mode : resolveOSMMode()
+  return OSM_MODE_CONFIG[m].methodology
+}
+
 // ── 启动期自检 ────────────────────────────────────────────────────────────
-// 目的：
 //   1. CORE ∩ ONLY = ∅（一个工具不能既是"基础"又是"增强"）
 //   2. CORE 集合内的工具名在实际 registry 中必须全部存在，
 //      否则 OFF 模式下 Agent 会静默失去能力。
