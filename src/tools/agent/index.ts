@@ -1,1 +1,2 @@
-export { agentTools, executePendingAgentAction } from './agent-tool.js'
+export { agentTools, createAgentTools, executePendingAgentAction } from './agent-tool.js'
+export type { InlineAgent } from './agent-tool.js'

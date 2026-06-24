@@ -22,10 +22,17 @@ class SkillsRegistry {
 
   /** 初始化并启动文件监听 */
   start(skillsRoot?: string): void {
-    const rawRoot = skillsRoot ?? process.env.SKILLS_ROOT ?? ''
+    // 优先级：参数 > 环境变量 > cwd/SKILLs 自动探测（兼容 Wuzu Client 无 SKILLS_ROOT 场景）
+    let rawRoot = skillsRoot ?? process.env.SKILLS_ROOT ?? ''
     if (!rawRoot) {
-      logger.warn('SkillsRegistry: SKILLS_ROOT not set, skills hot-reload disabled')
-      return
+      const cwdSkills = path.join(process.cwd(), 'SKILLs')
+      if (fs.existsSync(cwdSkills)) {
+        rawRoot = cwdSkills
+        logger.info({ root: rawRoot }, 'SkillsRegistry: SKILLS_ROOT not set, auto-detected cwd/SKILLs')
+      } else {
+        logger.warn('SkillsRegistry: SKILLS_ROOT not set and cwd/SKILLs not found, skills disabled')
+        return
+      }
     }
 
     this.skillsRoot = path.resolve(process.cwd(), rawRoot)

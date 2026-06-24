@@ -15,15 +15,21 @@ import path from 'node:path'
 import { logger } from '../observability/index.js'
 
 export interface ExternalSkill {
+  /**
+   * Skill 唯一 ID（与用户端 inlineSkills.id 对应，通常是目录名）。
+   * 本地 SKILLS_ROOT 扫描的 skill 此字段为 undefined（历史兼容）；
+   * 用户客户端透传的 inline skill 会显式写入，供 allowedSkills 白名单按 ID 匹配。
+   */
+  id?: string
   name: string
   description: string
   skillMdPath: string  // SKILL.md 文件的绝对路径（按需读取全文）
   order: number
   enabled: boolean
   /**
-   * 内联 SKILL.md 内容（来自客户端 inlineSkills 透传）
+   * 内联 SKILL.md 内容（来自用户端 inlineSkills 透传）
    * 当此字段非空时，getSkillContent 优先返回它而不再读 skillMdPath。
-   * 用于 桌面客户端把本地安装的 skill 透传到 agent-engine，
+   * 用于 用户客户端把本地安装的 skill 透传到 agent-engine，
    * 让 agent-engine 即使本地 SKILLS_ROOT 没有同名 skill 也能让 LLM 看到完整说明。
    */
   inlineContent?: string

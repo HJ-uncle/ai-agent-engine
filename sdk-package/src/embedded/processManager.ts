@@ -9,6 +9,7 @@
  * - 子进程监听 stdin close 事件，父进程异常退出时自行退出（需 agent-engine 侧配合）
  */
 import { spawn, ChildProcess } from 'child_process'
+import * as fs from 'fs'
 import * as path from 'path'
 
 // ==================== 类型 ====================
@@ -49,6 +50,27 @@ export function startProcess(opts: StartProcessOptions): ProcessHandle {
   const nodePath = opts.nodePath ?? process.execPath
   const binDir = path.dirname(opts.binPath)
 
+  // SKILLS_ROOT 默认指向包含 SKILLs/ 的目录（打包时由 copy-bin.js 复制进来）。
+  // binPath 可能是 <pkg>/main.js 或 <pkg>/dist/main.js，SKILLs/ 始终在 <pkg>/ 下，
+  // 因此向上遍历最多 3 级，找到第一个包含 SKILLs/ 子目录的位置。
+  // 仅当调用方未通过 opts.env 显式传入时才注入，保留外部覆盖能力。
+  function resolveSkillsRoot(startDir: string): string {
+    let dir = startDir
+    for (let i = 0; i < 3; i++) {
+      const candidate = path.join(dir, 'SKILLs')
+      if (fs.existsSync(candidate)) return candidate
+      const parent = path.dirname(dir)
+      if (parent === dir) break  // 到达根目录
+      dir = parent
+    }
+    // 找不到则回退到 binDir/SKILLs（原始行为，保留日志可见性）
+    return path.join(startDir, 'SKILLs')
+  }
+  const defaultSkillsRoot = resolveSkillsRoot(binDir)
+  const callerEnv = opts.env ?? {}
+  const skillsRootEnv: Record<string, string> =
+    callerEnv['SKILLS_ROOT'] ? {} : { SKILLS_ROOT: defaultSkillsRoot }
+
   const env: Record<string, string> = {
     ...process.env as Record<string, string>,
     PORT: String(opts.port),
@@ -56,9 +78,10 @@ export function startProcess(opts: StartProcessOptions): ProcessHandle {
     // 禁用 pino-pretty 颜色（避免 Electron 控制台乱码）
     FORCE_COLOR: '0',
     NO_COLOR: '1',
-    // 使用主包识别的 DATA_DIR 
+    // 使用主包识别的 DATA_DIR
     ...(opts.dataDir ? { DATA_DIR: opts.dataDir } : {}),
-    ...(opts.env ?? {})
+    ...skillsRootEnv,
+    ...callerEnv
   }
 
   const child = spawn(nodePath, ['main.js'], {

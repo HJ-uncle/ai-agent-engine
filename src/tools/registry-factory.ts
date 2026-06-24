@@ -28,7 +28,8 @@ import { webFetchTool } from './web-fetch/index.js'
 import { httpRequestTool } from './http-request/index.js'
 import { getCurrentContextTool } from './get-context/index.js'
 import { installPackageTool, listPackagesTool } from './install-package/install-package-tool.js'
-import { agentTools } from './agent/index.js'
+import { createAgentTools } from './agent/index.js'
+import type { InlineAgent } from './agent/index.js'
 import { lspDiagnoseTool } from './lsp/index.js'
 import type { ExternalSkill } from '../skills/external-loader.js'
 import {
@@ -82,6 +83,15 @@ export interface RegistryFactoryOptions {
     url?: string
     headers?: Record<string, string>
   }>
+  /**
+   * 客户端透传的内联 Agent 列表（请求级；用户端把用户 agent 列表随请求下发）。
+   *
+   * 行为：
+   *   - agent_list / agent_get 工具合并本地 DB agents 与 inlineAgents 一起返回
+   *   - 本地 DB agent 优先（按 id 去重）
+   *   - inline agents 为只读，不参与写操作（agent_create 等仍写本地 DB）
+   */
+  inlineAgents?: InlineAgent[]
 }
 
 /**
@@ -113,13 +123,16 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
 
   // 技能工具名称（需要随自定义技能自动添加）
   const skillToolNames = ['list_skills', 'get_skill', 'run_skill_script']
-  // 获取所有自定义技能名称（含本地 SKILLS_ROOT 与客户端透传的 inlineSkills）
+  // 获取所有自定义技能名称/ID（含本地 SKILLS_ROOT 与客户端透传的 inlineSkills）
+  // 注意：allowedSkills 白名单里可能是 skill 目录名/ID，也可能是显示名。
+  // 为支持两种匹配方式，这里同时收集 name 和 id。
   const externalSkillNames = skillsRegistry.getSkills().map(s => s.name)
-  const inlineSkillNames = Array.isArray(opts.inlineSkills)
-    ? opts.inlineSkills.filter(s => s && s.name).map(s => s.name)
+  const inlineSkillNamesAndIds = Array.isArray(opts.inlineSkills)
+    ? opts.inlineSkills.filter(s => s && s.name).flatMap(s => s.id ? [s.name, s.id] : [s.name])
     : []
-  const allSkillNames = [...externalSkillNames, ...inlineSkillNames]
+  const allSkillNames = [...externalSkillNames, ...inlineSkillNamesAndIds]
   // 检查是否选择了自定义技能（本地或客户端 inline）
+  // allowedSkills 元素可能是 skill name 或 skill id，两者都需要匹配
   const hasExternalSkill = opts.allowedSkills && opts.allowedSkills.length > 0 &&
     opts.allowedSkills.some(s => allSkillNames.includes(s))
 
@@ -204,6 +217,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
     const inlineSkillsAsExternal: ExternalSkill[] = opts.inlineSkills
       .filter(s => s && s.name && !existingNames.has(s.name.toLowerCase()))
       .map((s, i) => ({
+        id: s.id,  // 保留客户端 ID，供 allowedSkills 按 ID 匹配
         name: s.name,
         description: s.description ?? `Skill: ${s.name}${s.version ? ` (v${s.version})` : ''}`,
         skillMdPath: '', // 无本地文件，依赖 inlineContent
@@ -216,7 +230,10 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
     }
   }
   if (opts.allowedSkills && opts.allowedSkills.length > 0) {
-    externalSkills = externalSkills.filter((s) => opts.allowedSkills!.includes(s.name))
+    // allowedSkills 可能是 skill name 或 skill id（客户端传的是目录名/ID），两者都接受
+    externalSkills = externalSkills.filter((s) =>
+      opts.allowedSkills!.includes(s.name) || (s.id != null && opts.allowedSkills!.includes(s.id))
+    )
   }
 
   createSkillTools(externalSkills).forEach((t) => { registry.register(t); skillTools.push(t.name) })
@@ -264,8 +281,8 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
     opts.inlineMcpServers
   )
 
-  // 17. Agent 系统工具 - 按 allowedTools 过滤
-  agentTools.forEach(t => {
+  // 17. Agent 系统工具 - 按 allowedTools 过滤；注入 inlineAgents 供查询
+  createAgentTools(opts.inlineAgents ?? []).forEach(t => {
     if (shouldRegister(t.name)) registerBuiltin(t)
   })
 

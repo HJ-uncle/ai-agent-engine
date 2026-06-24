@@ -198,10 +198,23 @@ export class AnthropicAdapter implements LLMAdapter {
   private client: Anthropic
 
   constructor(readonly model: string = 'claude-3-5-sonnet-20241022', apiKey?: string, baseURL?: string, defaultHeaders?: Record<string, string>) {
+    const hasTokenAuth = defaultHeaders && 'X-Access-Token' in defaultHeaders
     this.client = new Anthropic({
       apiKey: apiKey || process.env.ANTHROPIC_API_KEY,
       baseURL: baseURL || process.env.ANTHROPIC_BASE_URL,
-      ...(defaultHeaders && Object.keys(defaultHeaders).length ? { defaultHeaders } : {})
+      // X-Access-Token 鉴权：通过自定义 fetch 移除 SDK 自动生成的 X-API-Key 头，
+      // 并手动注入全部自定义头，避免上游报 "duplicated valid auth method"。
+      ...(hasTokenAuth ? {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        fetch: (async (url: any, init?: any) => {
+          const headers = new Headers(init?.headers)
+          headers.delete('X-API-Key')
+          for (const [k, v] of Object.entries(defaultHeaders!)) {
+            headers.set(k, v)
+          }
+          return globalThis.fetch(url as RequestInfo | URL, { ...init, headers })
+        }) as any
+      } : (defaultHeaders && Object.keys(defaultHeaders).length ? { defaultHeaders } : {}))
     })
   }
 

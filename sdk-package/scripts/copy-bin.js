@@ -113,6 +113,17 @@ for (const pkg of packages) {
 
 console.log(`[copy-bin] node_modules 完成：${copied} 个包已复制，${skipped} 个 dev 包已跳过`)
 
+// ==================== 复制 SKILLs/ 目录 ====================
+
+const skillsSrc = path.join(agentEngineRoot, 'SKILLs')
+const skillsDst = path.join(binDir, 'SKILLs')
+if (fs.existsSync(skillsSrc)) {
+  console.log(`[copy-bin] 复制 SKILLs/ → bin/SKILLs/`)
+  copyDirRecursive(skillsSrc, skillsDst, [])
+} else {
+  console.warn(`[copy-bin] 警告：SKILLs/ 目录不存在，跳过（${skillsSrc}）`)
+}
+
 // ==================== 复制配置文件（.env.example 等） ====================
 
 const configFiles = ['.env.example', 'config']

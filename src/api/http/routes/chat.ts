@@ -114,6 +114,23 @@ interface ChatBody {
     headers?: Record<string, string>
   }>
   /**
+   * 客户端透传的用户 Agent 列表（请求级）。
+   * agent_list / agent_get 工具会将这些 agent 与引擎本地 DB 中的 agent 合并返回，
+   * 让 AI 可通过工具查询到客户端侧的所有 agent（无需在引擎 DB 中预注册）。
+   * 本地 DB agent 优先（按 id 去重）；inline agents 为只读，不参与写操作。
+   */
+  inlineAgents?: Array<{
+    id: string
+    name: string
+    description?: string
+    model?: string
+    systemPrompt?: string
+    skills?: string[]
+    mcpServers?: string[]
+    knowledgeBases?: string[]
+    allowedTools?: string[]
+  }>
+  /**
    * Agent 完整内联配置
    * 当 agentId 未在 agent-engine DB 中找到（或客户端不希望预注册）时，
    * 用 inlineAgent 提供 name / systemPrompt / variables / knowledgeBaseIds 即时生效。
@@ -265,6 +282,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
           allowedTools: { type: 'array' },
           inlineSkills: { type: 'array' },
           inlineMcpServers: { type: 'array' },
+          inlineAgents: { type: 'array' },
           inlineAgent: { type: 'object' },
           inlineKnowledgeBases: { type: 'array' },
           inlineMemoriesXml: { type: 'string' },
@@ -299,6 +317,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
       allowedTools: requestedAllowedTools, 
       inlineSkills: requestedInlineSkills, 
       inlineMcpServers: requestedInlineMcpServers, 
+      inlineAgents: requestedInlineAgents,
       inlineAgent: requestedInlineAgent, 
       inlineKnowledgeBases: requestedInlineKnowledgeBases, 
       inlineMemoriesXml: requestedInlineMemoriesXml,
@@ -407,6 +426,30 @@ export async function chatRoutes(fastify: FastifyInstance) {
       reqLogger.info('Tenant-level default identity applied')
     }
 
+    // ── inlineAgents 诊断日志 ─────────────────────────────────────────────────
+    if (Array.isArray(requestedInlineAgents) && requestedInlineAgents.length > 0) {
+      reqLogger.info(
+        {
+          count: requestedInlineAgents.length,
+          ids: requestedInlineAgents.map(a => a.id),
+          names: requestedInlineAgents.map(a => a.name)
+        },
+        'Inline agents received from client'
+      )
+    }
+
+    // ── inlineSkills 诊断日志 ──────────────────────────────────────────────────
+    if (Array.isArray(requestedInlineSkills) && requestedInlineSkills.length > 0) {
+      reqLogger.info(
+        {
+          count: requestedInlineSkills.length,
+          ids: requestedInlineSkills.map(s => s.id),
+          names: requestedInlineSkills.map(s => s.name)
+        },
+        'Inline skills received from client'
+      )
+    }
+
     // ── inlineMcpServers 诊断日志（Phase 1：仅记录，Phase 2 计划支持运行时挂载）─
     if (Array.isArray(requestedInlineMcpServers) && requestedInlineMcpServers.length > 0) {
       reqLogger.info(
@@ -432,7 +475,8 @@ export async function chatRoutes(fastify: FastifyInstance) {
       allowedSkills,
       allowedTools,
       inlineSkills: requestedInlineSkills,
-      inlineMcpServers: requestedInlineMcpServers
+      inlineMcpServers: requestedInlineMcpServers,
+      inlineAgents: requestedInlineAgents
     })
 
     const abortController = new AbortController()

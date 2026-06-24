@@ -589,12 +589,27 @@ export class OpenAIAdapter implements LLMAdapter {
   constructor(readonly model: string = 'gpt-4o-mini', apiKey?: string, baseURL?: string, supportsVision?: boolean, defaultHeaders?: Record<string, string>) {
     const rawBaseURL = baseURL || process.env.OPENAI_BASE_URL
     this.resolvedApiKey = apiKey || process.env.OPENAI_API_KEY || undefined
+
+    const hasTokenAuth = defaultHeaders && 'X-Access-Token' in defaultHeaders
     this.client = new OpenAI({
       // 当 key 未设置时传占位符，绕过 SDK 构造函数的非空校验。
       // 真正发起请求前会在 complete()/stream() 里做业务检查，给出更友好的错误。
       apiKey: this.resolvedApiKey ?? OPENAI_KEY_PLACEHOLDER,
       baseURL: normalizeBaseURL(rawBaseURL), // supports custom OpenAI-compatible endpoints
-      ...(defaultHeaders && Object.keys(defaultHeaders).length ? { defaultHeaders } : {})
+      // X-Access-Token 鉴权：通过自定义 fetch 移除 SDK 自动生成的 Authorization 头，
+      // 并手动注入全部自定义头，避免上游报 "duplicated valid auth method"。
+      // 其他场景：直接用 defaultHeaders 即可。
+      ...(hasTokenAuth ? {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        fetch: (async (url: any, init?: any) => {
+          const headers = new Headers(init?.headers)
+          headers.delete('Authorization')
+          for (const [k, v] of Object.entries(defaultHeaders!)) {
+            headers.set(k, v)
+          }
+          return globalThis.fetch(url as RequestInfo | URL, { ...init, headers })
+        }) as any
+      } : (defaultHeaders && Object.keys(defaultHeaders).length ? { defaultHeaders } : {}))
     })
     this.supportsVision = supportsVision ?? this.detectVisionSupport(rawBaseURL)
   }
