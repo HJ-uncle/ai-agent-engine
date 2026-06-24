@@ -74,6 +74,7 @@ export class QwenAdapter extends OpenAIAdapter {
     apiKey?: string,
     baseURL?: string,
     options: QwenAdapterOptions = {},
+    defaultHeaders?: Record<string, string>,
   ) {
     super(
       model,
@@ -81,6 +82,8 @@ export class QwenAdapter extends OpenAIAdapter {
         || process.env.DASHSCOPE_API_KEY
         || process.env.QWEN_API_KEY,
       baseURL || process.env.QWEN_BASE_URL || DEFAULT_QWEN_BASE_URL,
+      undefined,
+      defaultHeaders,
     )
     // 大多数 Qwen 模型支持视觉；只有明确的纯文本专用型号才关闭
     // openai.ts 的 detectVisionSupport 遇到 qwen URL 会返回 false，此处强制覆盖

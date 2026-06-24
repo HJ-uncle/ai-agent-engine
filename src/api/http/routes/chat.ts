@@ -152,6 +152,11 @@ interface ChatBody {
    * 用于第三方引擎透传业务字段，如 userId, appId, traceId 等。
    */
   metadata?: any
+  /**
+   * 透传给上游 LLM 请求的自定义 HTTP 头（可选）。
+   * 由调用方按需注入，agent-engine 通过 SDK defaultHeaders 携带到实际 LLM 请求。
+   */
+  extraHeaders?: Record<string, string>
 }
 
 import { StreamBus, activeStreams, busToIterable } from '../../../core/stream-pipeline/stream-bus.js'
@@ -263,7 +268,8 @@ export async function chatRoutes(fastify: FastifyInstance) {
           inlineAgent: { type: 'object' },
           inlineKnowledgeBases: { type: 'array' },
           inlineMemoriesXml: { type: 'string' },
-          metadata: { type: 'object' }
+          metadata: { type: 'object' },
+          extraHeaders: { type: 'object' }
         },
         additionalProperties: true, // 允许扩展字段
       },
@@ -296,7 +302,8 @@ export async function chatRoutes(fastify: FastifyInstance) {
       inlineAgent: requestedInlineAgent, 
       inlineKnowledgeBases: requestedInlineKnowledgeBases, 
       inlineMemoriesXml: requestedInlineMemoriesXml,
-      metadata: requestedMetadata
+      metadata: requestedMetadata,
+      extraHeaders: requestedExtraHeaders
     } = request.body
 
     // Get tenant from auth context (set by auth middleware)
@@ -778,6 +785,7 @@ ${workspaceInfo}
           baseUrl: modelBaseUrl, 
           provider: modelProvider,
           capabilities: modelCaps, // 传入已解析的模型能力，确保 vision 等功能正常
+          extraHeaders: requestedExtraHeaders,
         })
         const strategy = new ReActStrategy(llm, {
           systemPrompt: fullSystemPrompt || undefined,

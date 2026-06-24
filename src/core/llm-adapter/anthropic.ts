@@ -197,10 +197,11 @@ export class AnthropicAdapter implements LLMAdapter {
   readonly provider = 'anthropic'
   private client: Anthropic
 
-  constructor(readonly model: string = 'claude-3-5-sonnet-20241022', apiKey?: string, baseURL?: string) {
+  constructor(readonly model: string = 'claude-3-5-sonnet-20241022', apiKey?: string, baseURL?: string, defaultHeaders?: Record<string, string>) {
     this.client = new Anthropic({
       apiKey: apiKey || process.env.ANTHROPIC_API_KEY,
       baseURL: baseURL || process.env.ANTHROPIC_BASE_URL,
+      ...(defaultHeaders && Object.keys(defaultHeaders).length ? { defaultHeaders } : {})
     })
   }
 

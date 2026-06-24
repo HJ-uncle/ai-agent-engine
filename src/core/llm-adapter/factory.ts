@@ -21,6 +21,8 @@ export interface CreateAdapterOptions {
   deepseek?: DeepSeekAdapterOptions
   /** Qwen 专有选项；仅在路由到 Qwen 通道时生效 */
   qwen?: QwenAdapterOptions
+  /** 透传给上游 LLM 请求的自定义 HTTP 头，adapter 通过 SDK defaultHeaders 携带 */
+  extraHeaders?: Record<string, string>
 }
 
 /**
@@ -46,29 +48,28 @@ function shouldUseQwen(provider: string, model: string, baseUrl?: string): boole
 }
 
 function createBaseAdapter(provider: string, model: string, options?: CreateAdapterOptions): LLMAdapter {
+  const eh = options?.extraHeaders
   // DeepSeek 自动路由（最高优先级，避免 qwen 误判）
   if (shouldUseDeepSeek(provider, model, options?.baseUrl)) {
-    return new DeepSeekAdapter(model, options?.apiKey, options?.baseUrl, options?.deepseek)
+    return new DeepSeekAdapter(model, options?.apiKey, options?.baseUrl, options?.deepseek, eh)
   }
 
   // Qwen 自动路由
   if (shouldUseQwen(provider, model, options?.baseUrl)) {
-    return new QwenAdapter(model, options?.apiKey, options?.baseUrl, options?.qwen)
+    return new QwenAdapter(model, options?.apiKey, options?.baseUrl, options?.qwen, eh)
   }
 
   switch (provider) {
     case 'openai':
-      return new OpenAIAdapter(model, options?.apiKey, options?.baseUrl, options?.capabilities?.vision)
+      return new OpenAIAdapter(model, options?.apiKey, options?.baseUrl, options?.capabilities?.vision, eh)
     case 'anthropic':
-      return new AnthropicAdapter(model, options?.apiKey, options?.baseUrl)
+      return new AnthropicAdapter(model, options?.apiKey, options?.baseUrl, eh)
     case 'ollama':
       return new OllamaAdapter(model, options?.baseUrl)
     case 'custom':
-      return new OpenAIAdapter(model, options?.apiKey, options?.baseUrl, options?.capabilities?.vision)
+      return new OpenAIAdapter(model, options?.apiKey, options?.baseUrl, options?.capabilities?.vision, eh)
     default:
-      // 未知 provider 不直接 throw，降级为 OpenAI-compatible，避免整个请求崩溃
-      // （用户可能配置了引擎尚未枚举的新 provider 名，如 "baichuan"、"mistral" 等）
-      return new OpenAIAdapter(model, options?.apiKey, options?.baseUrl, options?.capabilities?.vision)
+      return new OpenAIAdapter(model, options?.apiKey, options?.baseUrl, options?.capabilities?.vision, eh)
   }
 }
 
@@ -176,7 +177,7 @@ export async function createLLMAdapterWithDbConfig(overrides?: CreateAdapterOpti
     ...(overrides?.qwen ?? {}),
   }
 
-  const effectiveOptions: CreateAdapterOptions = { provider, model, apiKey, baseUrl, deepseek: deepseekOptions, qwen: qwenOptions }
+  const effectiveOptions: CreateAdapterOptions = { provider, model, apiKey, baseUrl, deepseek: deepseekOptions, qwen: qwenOptions, extraHeaders: overrides?.extraHeaders }
   const primary = new RetryingAdapter(createBaseAdapter(provider, model, effectiveOptions))
 
   if (fallbackModel) {

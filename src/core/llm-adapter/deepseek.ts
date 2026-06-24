@@ -76,11 +76,14 @@ export class DeepSeekAdapter extends OpenAIAdapter {
     apiKey?: string,
     baseURL?: string,
     options: DeepSeekAdapterOptions = {},
+    defaultHeaders?: Record<string, string>,
   ) {
     super(
       model,
       apiKey || process.env.DEEPSEEK_API_KEY,
       baseURL || process.env.DEEPSEEK_BASE_URL || DEFAULT_DEEPSEEK_BASE_URL,
+      undefined,
+      defaultHeaders,
     )
     this.dsOptions = {
       autoThinking: options.autoThinking ?? true,

@@ -586,7 +586,7 @@ export class OpenAIAdapter implements LLMAdapter {
   /** 真实有效的 apiKey（不含占位符），用于调用前校验 */
   private readonly resolvedApiKey: string | undefined
 
-  constructor(readonly model: string = 'gpt-4o-mini', apiKey?: string, baseURL?: string, supportsVision?: boolean) {
+  constructor(readonly model: string = 'gpt-4o-mini', apiKey?: string, baseURL?: string, supportsVision?: boolean, defaultHeaders?: Record<string, string>) {
     const rawBaseURL = baseURL || process.env.OPENAI_BASE_URL
     this.resolvedApiKey = apiKey || process.env.OPENAI_API_KEY || undefined
     this.client = new OpenAI({
@@ -594,6 +594,7 @@ export class OpenAIAdapter implements LLMAdapter {
       // 真正发起请求前会在 complete()/stream() 里做业务检查，给出更友好的错误。
       apiKey: this.resolvedApiKey ?? OPENAI_KEY_PLACEHOLDER,
       baseURL: normalizeBaseURL(rawBaseURL), // supports custom OpenAI-compatible endpoints
+      ...(defaultHeaders && Object.keys(defaultHeaders).length ? { defaultHeaders } : {})
     })
     this.supportsVision = supportsVision ?? this.detectVisionSupport(rawBaseURL)
   }
