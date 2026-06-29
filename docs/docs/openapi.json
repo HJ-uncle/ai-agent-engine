@@ -369,6 +369,104 @@
         }
       }
     },
+    "/flows/run": {
+      "post": {
+        "summary": "提交 Flow 定义并启动 DAG 执行（SSE 流式返回执行事件）",
+        "description": "确定性 DAG 调度：拓扑分层 → 逐层推进 → 层内 Promise.all 并发。每节点起一个 ephemeral 子会话（ID 前缀 flow-<runId>-<nodeId>，不进入可见会话列表）。失败语义：同层失败不阻断本层兄弟节点，本层结算后存在失败则阻断后续层。环检测在执行前提前完成。",
+        "tags": ["Flow"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["flowId", "nodes", "edges"],
+                "properties": {
+                  "flowId": { "type": "string" },
+                  "flowName": { "type": "string" },
+                  "nodes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["nodeId", "label", "nodeType"],
+                      "properties": {
+                        "nodeId": { "type": "string" },
+                        "label": { "type": "string" },
+                        "nodeType": { "type": "string" },
+                        "prompt": { "type": "string" },
+                        "systemPrompt": { "type": "string" },
+                        "activeSkillIds": { "type": "array", "items": { "type": "string" } },
+                        "activeMcpServerIds": { "type": "array", "items": { "type": "string" } },
+                        "knowledgeBases": { "type": "array", "items": { "type": "string" } },
+                        "model": { "type": "string", "description": "每节点独立模型（请求级隔离）" },
+                        "agentId": { "type": "string" },
+                        "upstreamNodeIds": { "type": "array", "items": { "type": "string" } },
+                        "config": { "type": "object" }
+                      }
+                    }
+                  },
+                  "edges": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["id", "source", "target"],
+                      "properties": {
+                        "id": { "type": "string" },
+                        "source": { "type": "string" },
+                        "target": { "type": "string" }
+                      }
+                    }
+                  },
+                  "userInput": { "type": "string" },
+                  "cwd": { "type": "string" },
+                  "executionMode": { "type": "string", "enum": ["auto", "local", "sandbox", "workspace", "fullAccess", "yolo"] },
+                  "securityMode": { "type": "string", "enum": ["safe", "standard", "full-access"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SSE 流式响应，事件由 __flow__ 控制帧承载，envelope 字段为 flow，按 flow.type 分发（flow_started / node_start / node_delta / node_done / node_error / flow_done / flow_error / flow_cancelled）"
+          }
+        }
+      }
+    },
+    "/flows/{runId}/stop": {
+      "post": {
+        "summary": "停止正在执行的 Flow",
+        "tags": ["Flow"],
+        "parameters": [
+          { "name": "runId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应（不存在或已结束时 cancelled=false）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/StandardResponse" },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "runId": { "type": "string" },
+                            "cancelled": { "type": "boolean" }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/deepseek/prices": {
       "get": {
         "summary": "获取 DeepSeek 动态价格配置",

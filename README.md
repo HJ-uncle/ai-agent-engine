@@ -19,6 +19,7 @@ AI Agent Engine 是一个具备**感知、思考、行动**能力的全栈 AI �
   - **专属默认身份**：租户可设置全局 `default_identity`，自动作为 Base Identity 注入该租户下的所有会话。
 - **📂 隔离的工作区**：每个会话拥有独立的物理工作目录，支持 VS Code 风格的文件树管理、实时编辑及大文件上传 (100MB)。
 - **🤝 多智能体协作**：支持 Parent-Child Agent 模型，自动拆解复杂任务并分发给专业子智能体。
+- **🔀 Flow DAG 编排**：`POST /api/v1/flows/run` 提交节点+边定义，确定性拓扑分层调度（同层并行），每节点起独立 ephemeral 子会话跑 ReAct，SSE 流式推送 `flow_started` / `node_start` / `node_delta` / `node_done` / `flow_done` 等事件，支持 `POST /flows/:runId/stop` 中止。
 - **🔌 开放协议支持**：完美适配 MCP (Model Context Protocol) 协议，支持通过 TypeScript/Python 编写自定义 Skills。
 - **🛡️ 安全沙箱**：基于命令注入检测与 SSRF 防护的执行环境，配合审计日志确保操作安全。支持三种安全模式（安全 / 标准 / 完全访问），会话级切换，前端输入框可一键选择。
 - **⚡ OpenSpec 方法论 (OSM)**：四档能力档位（`off` 关闭 / `balanced` 均衡 / `methodology` 专家 / `max` 极限），默认 `balanced`，一键控制工具集、Token 预算倍率和方法论 Prompt 注入。前端 OSM 模式下拉菜单支持简体中文 i18n 切换，聊天输入框可拖拽调整高度。
@@ -124,6 +125,7 @@ docker-compose up -d
 | **存储** | `/api/v1/memory` | 键值对形式的持久化记忆管理 |
 | **工作区** | `/api/v1/workspace` | 文件上传、下载及目录管理 |
 | **自动化** | `/api/v1/cron` / `/api/v1/todos` | 定时任务与待办事项管理 |
+| **Flow** | `/api/v1/flows/run` · `/api/v1/flows/:runId/stop` | DAG 编排执行：拓扑分层 + 同层并行 + ephemeral 子会话，SSE 流式返回节点级执行事件 |
 | **安全** | `/api/v1/security/mode` | 会话级安全模式切换（safe / standard / full-access） |
 | **管理** | `/api/v1/agents` / `/api/v1/models` | 智能体配置与模型 Key 管理 |
 | **SDK** | `agent-engine` npm 包 | Embedded / Remote 双模式，22 组 API namespace |

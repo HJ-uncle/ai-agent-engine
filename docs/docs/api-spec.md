@@ -593,6 +593,7 @@
 | `{ "permissionRequest": { "requestId": "...", "toolName": "ask_user", "args": {...}, "sessionId": "...", "messageId": "...", "description": "..." } }` | permission_request | 权限/交互请求（新版命名，含 sessionId/requestId） |
 | `{ "userMsgId": "..." }` | user_msg_id | 用户消息已落库的后端 ID（首帧；同时支持 `__user_msg_id__` 与 `__userMsgId__` 两个后端别名） |
 | `{ "messageBlock": { "messageId": "...", "role": "assistant", "content": "..." } }` | message_block | 单条消息边界标记（可选；用于流中持久化锚点） |
+| `{ "flow": { "type": "node_delta", "runId": "...", "nodeId": "...", "content": "...", "timestamp": ... } }` | flow | Flow DAG 执行事件（由 `flow-executor` 经 `FlowEventBus` 推送，`__flow__` 控制帧承载，见 `/api/v1/flows` 接口） |
 | `[DONE]` | done | 流式响应结束 |
 
 > **协议版本说明**：旧版字段（`toolStart` / `toolEnd` / `ask_user`）与新版字段（`toolCall` / `toolResult` / `permissionRequest`）会**同时**发送。前端可任选其一消费，二者携带的 `toolCallId` 相同，可去重。新版 envelope 命名遵循 camelCase，并补充 `sessionId` / `messageId` / `durationMs` 等元数据。
@@ -647,7 +648,64 @@
 
 > 仅在配置了 DeepSeek API Key（`DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY`）时可用。所有接口复用已配置的密钥，不需要前端额外传递。
 
-### 19. DeepSeek 通道 (`/api/v1/deepseek`)
+### 19. Flow DAG 执行 (`/api/v1/flows`)
+
+> 确定性 DAG 调度：拓扑分层 → 逐层推进 → 层内 `Promise.all` 并发。每节点起一个 ephemeral 子会话（ID 前缀 `flow-<runId>-<nodeId>`，不进入可见会话列表），复用 ReAct + 工具注册表。失败语义：同层失败不阻断本层兄弟节点，本层结算后存在失败则阻断后续层并标记 flow 失败。
+
+- `POST /api/v1/flows/run`: 提交 Flow 定义，SSE 流式返回执行事件
+
+  **请求体：**
+  ```json
+  {
+    "flowId": "flow-001",
+    "flowName": "可选",
+    "nodes": [
+      {
+        "nodeId": "n1",
+        "label": "输入节点",
+        "nodeType": "input",
+        "prompt": "可选，支持 {{input}} / {{output}} / {{nodeId}} 模板",
+        "systemPrompt": "可选",
+        "activeSkillIds": ["可选"],
+        "activeMcpServerIds": ["可选"],
+        "knowledgeBases": ["可选"],
+        "model": "可选，每节点独立模型（请求级隔离）",
+        "agentId": "可选",
+        "upstreamNodeIds": ["可选"],
+        "config": {}
+      }
+    ],
+    "edges": [
+      { "id": "e1", "source": "n1", "target": "n2" }
+    ],
+    "userInput": "可选",
+    "cwd": "可选",
+    "executionMode": "可选：auto | local | sandbox | workspace | fullAccess | yolo",
+    "securityMode": "可选：safe | standard | full-access"
+  }
+  ```
+
+  **SSE 事件类型：**
+
+  | 事件字段 | 类型 | 说明 |
+  |---------|------|------|
+  | `{ "flow": { "type": "flow_started", "runId": "...", "flowId": "...", "timestamp": ... } }` | flow_started | Flow 执行开始 |
+  | `{ "flow": { "type": "node_start", "runId": "...", "flowId": "...", "nodeId": "n1", "timestamp": ... } }` | node_start | 节点开始执行 |
+  | `{ "flow": { "type": "node_delta", "runId": "...", "nodeId": "n1", "content": "增量内容", "timestamp": ... } }` | node_delta | 节点内容增量 |
+  | `{ "flow": { "type": "node_done", "runId": "...", "nodeId": "n1", "content": "完整输出", "timestamp": ... } }` | node_done | 节点执行完成 |
+  | `{ "flow": { "type": "node_error", "runId": "...", "nodeId": "n1", "error": "...", "timestamp": ... } }` | node_error | 节点执行错误 |
+  | `{ "flow": { "type": "flow_done", "runId": "...", "flowId": "...", "finalOutput": "...", "timestamp": ... } }` | flow_done | Flow 执行完成 |
+  | `{ "flow": { "type": "flow_error", "runId": "...", "flowId": "...", "error": "...", "timestamp": ... } }` | flow_error | Flow 执行失败 |
+  | `{ "flow": { "type": "flow_cancelled", "runId": "...", "flowId": "...", "timestamp": ... } }` | flow_cancelled | Flow 执行被取消 |
+  | `[DONE]` | done | SSE 流结束 |
+
+  > Flow 事件通过 SSE 控制帧 `\x00__flow__` 承载，客户端 envelope 字段为 `flow`，按 `flow.type` 分发。环检测在执行前提前完成（`topologicalLevels` 抛 `Flow graph contains a cycle`）。
+
+- `POST /api/v1/flows/:runId/stop`: 停止正在执行的 Flow
+
+  **返回：** `{ "runId": "...", "cancelled": true }`（不存在或已结束时 `cancelled: false`）
+
+### 20. DeepSeek 通道 (`/api/v1/deepseek`)
 
 - `GET /api/v1/deepseek/status`: 通道探针，返回当前 DeepSeek 通道状态
 

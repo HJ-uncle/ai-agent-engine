@@ -139,6 +139,16 @@ export async function sseStream(
         }
         continue
       }
+      // ── __flow__ frame（Flow 执行事件，由 flow-executor 经 FlowEventBus 推送）──
+      if (chunk.startsWith('\x00__flow__')) {
+        try {
+          const data = JSON.parse(chunk.slice('\x00__flow__'.length))
+          await writeData(`${idStr}data: ${JSON.stringify({ flow: data })}\n\n`)
+        } catch (e) {
+          console.error('Failed to parse __flow__ frame:', e, chunk)
+        }
+        continue
+      }
       // ── 普通内容 ─────────────────────────────────────────────────────────
       if (chunk.includes('\x00')) {
         // 兜底逻辑：任何包含 \x00 的帧如果走到这里，说明没被上面的处理器识别或处理失败。

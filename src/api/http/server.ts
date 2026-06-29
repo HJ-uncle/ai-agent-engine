@@ -25,6 +25,7 @@ import { performanceRoutes } from './routes/performance.js'
 import { deepseekRoutes } from './routes/deepseek.js'
 import { authRoutes } from './routes/auth.js'
 import { tenantRoutes } from './routes/tenant.js'
+import { flowRoutes } from './routes/flows/index.js'
 import { cronScheduler } from '../../scheduler/cron-scheduler.js'
 import { globalRequestMiddleware, loggingMiddleware, authMiddlewareHook, WHITELIST_PATHS } from './middleware.js'
 import fastifyWebsocket from '@fastify/websocket'
@@ -88,6 +89,7 @@ export async function buildServer() {
     await api.register(lspRoutes)
     await api.register(performanceRoutes)
     await api.register(deepseekRoutes)
+    await api.register(flowRoutes)
   }, { prefix: '/api/v1' })
 
   // Health and metrics at root level
