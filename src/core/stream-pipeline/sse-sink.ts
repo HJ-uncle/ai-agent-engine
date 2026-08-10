@@ -1,6 +1,13 @@
 import type { FastifyReply } from 'fastify'
 import type { SseEventPayload } from './stream-bus.js'
 
+/**
+ * 默认心跳间隔（毫秒）。
+ * - 1Panel 的 OpenResty 默认 proxy_read_timeout = 60s，保守取 15s 发一次。
+ * - 若客户端使用原生 EventSource，这也是它"看起来还活着"的最低保障。
+ */
+const HEARTBEAT_INTERVAL_MS = 15000
+
 export async function sseStream(
   source: AsyncIterable<SseEventPayload | string>,
   reply: FastifyReply,
@@ -11,19 +18,79 @@ export async function sseStream(
   reply.raw.setHeader('Connection', 'keep-alive')
   reply.raw.setHeader('X-Accel-Buffering', 'no')
 
+  // 告诉 Nginx/反代 这条连接上允许长时间无业务数据；
+  // 真实的 keep-alive 还是依赖下面的 heartbeat 定时器。
+  reply.raw.setTimeout(0)
+
+  let heartbeatTimer: ReturnType<typeof setTimeout> | null = null
+  let heartbeatStopped = false
+  let clientGone = false
+
+  const scheduleHeartbeat = () => {
+    if (heartbeatStopped || clientGone) return
+    heartbeatTimer = setTimeout(() => {
+      if (heartbeatStopped || clientGone) return
+      try {
+        // SSE 注释帧：以 `:` 开头的行会被浏览器忽略，不触发 onmessage；
+        // 但会让 TCP/Nginx/反代 认为连接上仍有字节流动，从而不掐断。
+        const ok = reply.raw.write(`: ping ${Date.now()}\n\n`)
+        if (!ok) {
+          // 写缓冲区已满，等 drain 再继续发心跳（不需要 resolve，只是"尽力而为"）
+          reply.raw.once('drain', () => {})
+        }
+      } catch {
+        // 写入失败（例如 socket 已经关闭），不再排程
+        return
+      }
+      scheduleHeartbeat()
+    }, HEARTBEAT_INTERVAL_MS)
+  }
+
+  const stopHeartbeat = () => {
+    heartbeatStopped = true
+    if (heartbeatTimer) {
+      clearTimeout(heartbeatTimer)
+      heartbeatTimer = null
+    }
+  }
+
+  const onClientError = () => {
+    clientGone = true
+    stopHeartbeat()
+  }
+
+  reply.raw.once('error', onClientError)
+  reply.raw.once('close', onClientError)
+
+  // 在写任何业务数据之前先排好心跳；避免 "LLM 还在第一句生成的 30s 空窗 + Nginx 60s" 临界时被断。
+  scheduleHeartbeat()
+
   try {
     for await (const item of source) {
+      if (clientGone) break
       const chunk = typeof item === 'string' ? item : item.chunk
       const idStr = typeof item === 'string' || !item.id ? '' : `id: ${item.id}\n`
-      
+
       console.log('--- sseStream chunk ---', chunk.slice(0, 50))
 
-      const writeData = (data: string) => {
+      const writeData = async (data: string): Promise<void> => {
+        if (clientGone) return
         const result = reply.raw.write(data)
         if (!result) {
-          return new Promise<void>((resolve) => reply.raw.once('drain', resolve))
+          await new Promise<void>((resolve) => {
+            const onDrain = () => {
+              reply.raw.off('error', onErr)
+              resolve()
+            }
+            const onErr = () => {
+              clientGone = true
+              reply.raw.off('drain', onDrain)
+              resolve()
+            }
+            reply.raw.once('drain', onDrain)
+            reply.raw.once('error', onErr)
+          })
         }
-        return Promise.resolve()
       }
 
       // ── __usage__ frame ──────────────────────────────────────────────────
@@ -58,10 +125,10 @@ export async function sseStream(
           const jsonStr = chunk.slice('\x00__tool_args__'.length)
           const tool = JSON.parse(jsonStr)
           await writeData(`${idStr}data: ${JSON.stringify({ toolArgs: tool })}\n\n`)
-        } catch (e) { 
+        } catch (e) {
           console.error('Failed to parse __tool_args__ frame:', e, chunk);
         }
-        continue 
+        continue
       }
       // ── __tool_end__ frame ───────────────────────────────────────────────
       if (chunk.startsWith('\x00__tool_end__')) {
@@ -84,19 +151,13 @@ export async function sseStream(
         continue
       }
       // ── __user_msg_id__ frame ──────────────────────────────────────────
-      // 通知前端：用户消息已落库，携带后端 message_id，前端凭此 ID 做删除/重发
       if (chunk.startsWith('\x00__user_msg_id__')) {
         const id = chunk.slice('\x00__user_msg_id__'.length)
         await writeData(`${idStr}data: ${JSON.stringify({ userMsgId: id })}\n\n`)
         continue
       }
-      // ── 新版协议别名帧（不破坏旧消费者，仅供 第三方项目 等下游使用） ──
-      //
-      // 命名规范：__userMsgId__ / __tool_call__ / __tool_result__ / __permission_request__
-      // JSON envelope 字段：userMsgId / toolCall / toolResult / permissionRequest
-      // 与上方 __user_msg_id__ / __tool_start__ / __tool_end__ / __ask_user__ 共存。
+      // ── 新版协议别名帧 ────────────────────────────────────────────────
       if (chunk.startsWith('\x00__userMsgId__')) {
-        // alias of __user_msg_id__；envelope 字段相同（userMsgId）
         const id = chunk.slice('\x00__userMsgId__'.length)
         await writeData(`${idStr}data: ${JSON.stringify({ userMsgId: id })}\n\n`)
         continue
@@ -128,8 +189,6 @@ export async function sseStream(
         }
         continue
       }
-      // TODO: __message_block__ 消费端已就绪，生产者（react.ts 等）尚未 yield 该帧
-      //       待上游实现后即可启用，当前为前向兼容预留。
       if (chunk.startsWith('\x00__message_block__')) {
         try {
           const data = JSON.parse(chunk.slice('\x00__message_block__'.length))
@@ -139,7 +198,7 @@ export async function sseStream(
         }
         continue
       }
-      // ── __flow__ frame（Flow 执行事件，由 flow-executor 经 FlowEventBus 推送）──
+      // ── __flow__ frame ────────────────────────────────────────────────
       if (chunk.startsWith('\x00__flow__')) {
         try {
           const data = JSON.parse(chunk.slice('\x00__flow__'.length))
@@ -151,16 +210,19 @@ export async function sseStream(
       }
       // ── 普通内容 ─────────────────────────────────────────────────────────
       if (chunk.includes('\x00')) {
-        // 兜底逻辑：任何包含 \x00 的帧如果走到这里，说明没被上面的处理器识别或处理失败。
-        // 我们绝不能将其作为普通内容发送，否则会污染正文。
         console.warn('Unhandled control frame in sseStream:', chunk);
         continue;
       }
       await writeData(`${idStr}data: ${JSON.stringify({ content: chunk })}\n\n`)
     }
     // Send done event
-    reply.raw.write('event: done\ndata: [DONE]\n\n')
+    if (!clientGone) {
+      try { reply.raw.write('event: done\ndata: [DONE]\n\n') } catch { /* noop */ }
+    }
   } finally {
-    reply.raw.end()
+    stopHeartbeat()
+    reply.raw.off('error', onClientError)
+    reply.raw.off('close', onClientError)
+    try { reply.raw.end() } catch { /* noop */ }
   }
 }
