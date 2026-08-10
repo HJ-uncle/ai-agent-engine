@@ -65,6 +65,40 @@ function driveAiMessage(
   /** 跟踪上一次提交给 store 的累积值，用于计算增量 */
   let lastReportedUsage: TokenUsage | null = previousUsage ? { ...previousUsage } : null
 
+  // ── rAF 批量更新：将高频 token/thinking 更新合并为一帧一次 store 写入 ──
+  // AI 每秒可输出 30-80 个 token，每个 token 都触发 updateMessage → set() →
+  // 所有订阅者重渲染。用 rAF 合并后降至每帧最多一次（~60次/秒），大幅降低渲染压力。
+  let pendingContent: string | null = null
+  let pendingSteps: ThinkingStep[] | null = null
+  let rafId: number | null = null
+
+  const flushPending = () => {
+    if (pendingContent === null && pendingSteps === null) return
+    const updates: Partial<Message> = { status: 'streaming' }
+    if (pendingContent !== null) updates.content = pendingContent
+    if (pendingSteps !== null) updates.thinkingSteps = pendingSteps
+    pendingContent = null
+    pendingSteps = null
+    updateMessage(sid, aiMsgId, updates)
+  }
+
+  const scheduleFlush = () => {
+    if (rafId !== null) return
+    rafId = requestAnimationFrame(() => {
+      rafId = null
+      flushPending()
+    })
+  }
+
+  /** 立即刷新待处理的更新（用于低频事件前确保数据一致） */
+  const flushNow = () => {
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId)
+      rafId = null
+    }
+    flushPending()
+  }
+
   const onEvent = (event: any) => {
     if (event.lastEventId) {
       sessionStorage.setItem(`sse_last_${sid}`, event.lastEventId)
@@ -72,7 +106,8 @@ function driveAiMessage(
 
     if (event.type === 'text_delta') {
       finalContent += event.content ?? ''
-      updateMessage(sid, aiMsgId, { content: finalContent, status: 'streaming' })
+      pendingContent = finalContent
+      scheduleFlush()
     } else if (event.type === 'thinking') {
       // ── Bug Fix: 支持思考过程流式输出 ──────────────────────────────────
       const lastStep = thinkingSteps[thinkingSteps.length - 1]
@@ -82,8 +117,10 @@ function driveAiMessage(
       } else {
         thinkingSteps.push({ type: 'thinking', text: event.text ?? '' })
       }
-      updateMessage(sid, aiMsgId, { thinkingSteps: [...thinkingSteps] })
+      pendingSteps = [...thinkingSteps]
+      scheduleFlush()
     } else if (event.type === 'tool_start') {
+      flushNow()
       const existingIdx = event.toolCallId ? thinkingSteps.findIndex(s => s.type === 'tool_start' && s.toolCallId === event.toolCallId) : -1
       if (existingIdx !== -1) {
         thinkingSteps[existingIdx] = {
@@ -101,6 +138,7 @@ function driveAiMessage(
       }
       updateMessage(sid, aiMsgId, { thinkingSteps: [...thinkingSteps] })
     } else if (event.type === 'tool_args') {
+      flushNow()
       // ── Bug Fix: 支持工具参数流式输出 ──────────────────────────────────
       const existingIdx = event.toolCallId ? thinkingSteps.findIndex(s => s.type === 'tool_start' && s.toolCallId === event.toolCallId) : -1
       if (existingIdx !== -1) {
@@ -115,6 +153,7 @@ function driveAiMessage(
         updateMessage(sid, aiMsgId, { thinkingSteps: [...thinkingSteps] })
       }
     } else if (event.type === 'tool_end') {
+      flushNow()
       // 尝试合并到最近的一个正在运行的 tool_start 步骤中
       const lastToolIdx = [...thinkingSteps].reverse().findIndex(s => s.type === 'tool_start' && s.success === undefined && (event.toolCallId ? s.toolCallId === event.toolCallId : true))
       if (lastToolIdx !== -1) {
@@ -135,6 +174,7 @@ function driveAiMessage(
       }
       updateMessage(sid, aiMsgId, { thinkingSteps: [...thinkingSteps] })
     } else if (event.type === 'ask_user') {
+      flushNow()
       const tid = event.data?.toolCallId
       const existingIdx = tid ? thinkingSteps.findIndex(s => s.type === 'tool_start' && s.toolCallId === tid) : -1
       
@@ -156,6 +196,7 @@ function driveAiMessage(
       }
       updateMessage(sid, aiMsgId, { thinkingSteps: [...thinkingSteps] })
     } else if (event.type === 'usage' || event.type === 'token_usage') {
+      flushNow()
       if (event.usage) {
         const durationMs = Date.now() - startTime
         const u = event.usage as TokenUsage
@@ -211,6 +252,7 @@ function driveAiMessage(
         updateUsage(sid, delta)
       }
     } else if (event.type === 'done') {
+      flushNow()
       const durationMs = Date.now() - startTime
       updateMessage(sid, aiMsgId, {
         status: 'done',
@@ -221,6 +263,7 @@ function driveAiMessage(
         ...(accumulatedUsage ? { usage: accumulatedUsage } : {}),
       })
     } else if (event.type === 'error') {
+      flushNow()
       const durationMs = Date.now() - startTime
       updateMessage(sid, aiMsgId, {
         status: 'error',
@@ -233,6 +276,7 @@ function driveAiMessage(
   }
 
   const handleDone = () => {
+    flushNow()
     sessionStorage.removeItem(`sse_last_${sid}`)
     const durationMs = Date.now() - startTime
     // 检查是否包含 DeepSeek 特有错误标记，触发分级提示
@@ -251,6 +295,7 @@ function driveAiMessage(
   }
 
   const handleError = (err: Error) => {
+    flushNow()
     sessionStorage.removeItem(`sse_last_${sid}`)
     const durationMs = Date.now() - startTime
     updateMessage(sid, aiMsgId, {

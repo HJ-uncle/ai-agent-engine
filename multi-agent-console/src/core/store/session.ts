@@ -359,11 +359,12 @@ export const useSessionStore = create<SessionState>()(
       partialize: (state) => ({
         sessions: state.sessions,
         activeSessionId: state.activeSessionId,
-        messageMap: state.messageMap,
+        // messageMap 不持久化：数百会话 × 全量消息会导致每次 token 更新都
+        // JSON.stringify 整个 messageMap，阻塞主线程并触发 localStorage 配额崩溃。
+        // 消息历史改为从后端按需拉取（getHistory）。
         usageMap: state.usageMap,
         maxAskUserCount: state.maxAskUserCount,
         thinkingMode: state.thinkingMode,
-        superpowerMode: state.superpowerMode,
         // 注意：runningSessions 不持久化（页面刷新后所有运行视为终止）
       }),
     },

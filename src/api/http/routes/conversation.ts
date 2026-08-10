@@ -133,8 +133,8 @@ ${messages.map((m) => `[${m.role}]: ${m.content}`).join('\n\n')}`
         systemPrompt: '你是一个专业的上下文压缩和摘要助手，擅长在保留核心语义和关键信息的前提下极大地缩减文本长度。',
       })
 
-      // 覆盖历史
-      await history.clear({ tenantId, sessionId })
+      // 覆盖历史（主动重建，不使用墓碑，否则紧随的 append 会被静默丢弃）
+      await history.clear({ tenantId, sessionId }, { tombstone: false })
       const summaryMsg = {
         role: 'system' as const,
         content: `【历史上下文摘要】\n${response.content}`,

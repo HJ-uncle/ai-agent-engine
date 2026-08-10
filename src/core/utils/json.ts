@@ -28,8 +28,10 @@ export function repairJson(str: string): string {
   } catch (e) {}
 
   // 2. 修复中文字符/常规字符之间的未转义双引号 (例如: "description": "能"看见"死灵")
-  // 匹配前后都不是 JSON 结构字符(如 { } [ ] : , 和空白符)的双引号
-  repaired = repaired.replace(/(?<=[^\{\}\[\]:, \n\r\t])"(?=[^\{\}\[\]:, \n\r\t])/g, '\\"')
+  // 匹配前后都不是 JSON 结构字符(如 { } [ ] : , 和空白符)的双引号。
+  // 关键：排除已经被反斜杠转义的引号（前一个字符是 \），否则 `\"` 会被二次转义成 `\\"`，
+  // 直接破坏 JSON 结构导致解析失败（曾导致长文本 write_file 工具调用崩溃）。
+  repaired = repaired.replace(/(?<![\\\{\}\[\]:, \n\r\t])"(?![\\\{\}\[\]:, \n\r\t])/g, '\\"')
   try { JSON.parse(repaired); return repaired } catch (e) {}
 
   // 3. 移除对象或数组末尾的多余逗号

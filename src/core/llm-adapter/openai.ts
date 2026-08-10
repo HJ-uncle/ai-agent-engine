@@ -7,23 +7,26 @@ import { repairJson } from '../utils/json.js'
 /**
  * Normalize a base URL for use with the OpenAI SDK.
  * The OpenAI SDK appends `/chat/completions` to the baseURL, so the URL
- * must end with `/v1` (or a versioned path). This function:
+ * should end with `/v1` (or a versioned path) for the official API. This
+ * function:
  *   1. Strips trailing slashes
  *   2. Strips known SDK-appended suffixes like `/chat/completions`,
  *      `/embeddings`, `/completions`, `/models` etc. so users can paste
  *      a full endpoint URL and it still works.
- *   3. Appends `/v1` if no version segment is present.
+ *
+ * ⚠️ 不再强制追加 `/v1`：很多第三方代理/中转站（one-api、new-api、各类
+ * OpenAI-compatible 网关）提供的 baseUrl 本身就是完整可用的路由（可能没有
+ * `/v1` 段，甚至不是标准路径）。SDK 会直接在其后拼接 `/chat/completions`，
+ * 因此用户填什么地址就用什么地址，避免强制补 `/v1` 导致 404 无法接入。
  *
  * Examples:
- *   https://api.example.com                          → https://api.example.com/v1
- *   https://api.example.com/                         → https://api.example.com/v1
- *   https://api.example.com/v1                       → https://api.example.com/v1  (unchanged)
- *   https://api.example.com/v1/                      → https://api.example.com/v1  (trailing slash removed)
- *   https://api.example.com/v1/chat/completions      → https://api.example.com/v1  (suffix stripped)
- *   https://api.example.com/v1/chat/completions/     → https://api.example.com/v1  (suffix stripped)
- *   https://api.example.com/v2                       → https://api.example.com/v2  (unchanged)
- *   https://api.example.com/api/v1                   → https://api.example.com/api/v1 (unchanged)
- *   https://api.example.com/v1/embeddings            → https://api.example.com/v1  (suffix stripped)
+ *   https://api.example.com/v1                     → https://api.example.com/v1  (unchanged)
+ *   https://api.example.com/v1/                    → https://api.example.com/v1  (trailing slash removed)
+ *   https://api.example.com/v1/chat/completions    → https://api.example.com/v1  (suffix stripped)
+ *   https://api.example.com/api/v1                 → https://api.example.com/api/v1 (unchanged)
+ *   https://api.example.com/v1/embeddings          → https://api.example.com/v1  (suffix stripped)
+ *   https://api.example.com                        → https://api.example.com  (left as-is, no forced /v1)
+ *   https://proxy.example.com/proxy               → https://proxy.example.com/proxy (left as-is)
  */
 function normalizeBaseURL(url: string | undefined): string | undefined {
   if (!url) return url
@@ -47,11 +50,7 @@ function normalizeBaseURL(url: string | undefined): string | undefined {
     }
   }
   // Remove any trailing slash left after stripping
-  trimmed = trimmed.replace(/\/+$/, '')
-  // If already ends with a version segment like /v1, /v2, /v3 … leave it as-is
-  if (/\/v\d+$/.test(trimmed)) return trimmed
-  // Otherwise append /v1
-  return `${trimmed}/v1`
+  return trimmed.replace(/\/+$/, '')
 }
 
 /**
@@ -896,9 +895,42 @@ export class OpenAIAdapter implements LLMAdapter {
   }
 
   async embed(text: string | string[], options?: EmbedOptions): Promise<number[][]> {
-    this.assertApiKey()
-    const response = await this.client.embeddings.create({
-      model: options?.model || 'text-embedding-3-small',
+    // ── 独立 Embedding 服务配置（可选）────────────────────────────────────
+    // 若设置了 EMBEDDING_BASE_URL / EMBEDDING_MODEL / EMBEDDING_API_KEY，
+    // 则使用独立的 embedding 服务（很多 OpenAI 兼容网关/本地模型提供专用向量端点）。
+    // 未设置时回退到当前 LLM client。
+    const embedBaseUrl = process.env.EMBEDDING_BASE_URL
+    const embedModel = options?.model || process.env.EMBEDDING_MODEL || 'text-embedding-3-small'
+    const embedApiKey = process.env.EMBEDDING_API_KEY || this.resolvedApiKey
+
+    const currentBaseUrl = (this.client as any).baseURL as string | undefined
+
+    // ── 已知不支持 embeddings 的通道（DeepSeek 官方 API 无 /embeddings 端点）────
+    // 若未配置独立 embedding 服务，直接返回空数组（调用方按"无向量"处理），
+    // 避免每次记忆提取都向不存在的端点发请求导致 404 刷屏。
+    if (!embedBaseUrl && currentBaseUrl && /deepseek/i.test(currentBaseUrl)) {
+      return []
+    }
+
+    const embedClient = embedBaseUrl
+      ? new OpenAI({
+          apiKey: embedApiKey ?? OPENAI_KEY_PLACEHOLDER,
+          baseURL: normalizeBaseURL(embedBaseUrl),
+        })
+      : this.client
+
+    // 独立 embedding 服务检查自己的 key；否则校验当前 LLM key
+    if (embedBaseUrl) {
+      if (!embedApiKey) {
+        throw new Error(
+          'EMBEDDING_API_KEY 未配置。请在 .env 或设置页面配置独立 Embedding 服务的 API Key（或让 EMBEDDING_API_KEY 复用 LLM key）。'
+        )
+      }
+    } else {
+      this.assertApiKey()
+    }
+    const response = await embedClient.embeddings.create({
+      model: embedModel,
       input: text,
     })
     return response.data.map(d => d.embedding)

@@ -895,20 +895,16 @@ function ToolStepItem({
   const isAskUser = step.toolName === "ask_user";
   const toolNameDisplay = TOOL_NAME_MAP[step.toolName || ""] || step.toolName;
 
-  // 默认折叠逻辑：
-  // 1. 如果工具还在运行 (success === undefined)，保持展开
-  // 2. 如果是 ask_user 且尚未回答，保持展开
-  // 3. 其他情况（执行完毕且不是活跃中的提问），默认折叠
-  const shouldDefaultExpand =
-    step.success === undefined || (isAskUser && !step.success);
+  // 默认折叠：仅 ask_user 未回答时展开（需要用户交互），其余一律折叠
+  const shouldDefaultExpand = isAskUser && step.success === undefined;
   const [isExpanded, setIsExpanded] = useState(shouldDefaultExpand);
 
-  // 当工具状态变为完成时，如果不是用户交互类工具，自动收起
+  // 工具完成后自动收起（含 ask_user 回答后）
   useEffect(() => {
-    if (step.success !== undefined && !isAskUser) {
+    if (step.success !== undefined) {
       setIsExpanded(false);
     }
-  }, [step.success, isAskUser]);
+  }, [step.success]);
 
   return (
     <div key={i} className={styles.timelineItem}>
@@ -948,20 +944,8 @@ function ToolStepItem({
           <div className={styles.toolDetails}>
             {isAskUser && step.toolArgs ? (
               <>
-                {!step.success ? (
-                  <InteractiveCard
-                    data={step.toolArgs as any}
-                    onReply={(content) =>
-                      onToolReply?.(
-                        msgId,
-                        step.toolCallId ?? "",
-                        "ask_user",
-                        content,
-                      )
-                    }
-                    disabled={!isLast}
-                  />
-                ) : (
+                {/* 待回答的 ask_user 已提取到消息气泡外层渲染，这里只显示已回答的结果 */}
+                {step.success ? (
                   <div className={styles.askUserResult}>
                     <div style={{ color: "#c9d1d9", marginBottom: 6 }}>
                       <strong style={{ color: "#8b949e" }}>提问：</strong>
@@ -971,6 +955,11 @@ function ToolStepItem({
                       <strong style={{ color: "#8b949e" }}>用户回复：</strong>
                       {step.outputPreview?.replace("用户选择了: ", "")}
                     </div>
+                  </div>
+                ) : (
+                  /* 待回答状态在 ThinkingPanel 内仅显示简略提示 */
+                  <div style={{ color: "#d29922", fontSize: 12 }}>
+                    ⏳ 等待用户回复（请在下方交互区域操作）
                   </div>
                 )}
               </>
@@ -992,6 +981,70 @@ function ToolStepItem({
                 )}
               </>
             )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── 思考步骤项：与 ToolStepItem 同级，支持折叠/展开、限高滚动、展开时自动滚到底部 ──
+function ThinkingStepItem({
+  text,
+  isLast,
+}: {
+  text: string;
+  isLast?: boolean;
+}) {
+  // 最后一个步骤默认展开；后面出现新步骤时（isLast 变 false）自动收起
+  const [isExpanded, setIsExpanded] = useState(isLast ?? false);
+  useEffect(() => {
+    setIsExpanded(isLast ?? false);
+  }, [isLast]);
+
+  // 展开时自动滚动到底部（rAF 节流）
+  const textRef = useRef<HTMLDivElement>(null);
+  const textRafRef = useRef(0);
+  useEffect(() => {
+    if (!isExpanded || !textRef.current) return;
+    if (textRafRef.current) return;
+    textRafRef.current = requestAnimationFrame(() => {
+      textRafRef.current = 0;
+      if (textRef.current) textRef.current.scrollTop = textRef.current.scrollHeight;
+    });
+    return () => {
+      if (textRafRef.current) {
+        cancelAnimationFrame(textRafRef.current);
+        textRafRef.current = 0;
+      }
+    };
+  }, [isExpanded, text]);
+
+  return (
+    <div className={styles.timelineItem}>
+      <div className={styles.timelineIcon}>
+        <BulbOutlined style={{ color: "#a855f7" }} />
+      </div>
+      <div className={styles.timelineContent}>
+        <div
+          className={styles.timelineTitle}
+          style={{
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            color: "#a855f7",
+          }}
+          onClick={() => setIsExpanded(!isExpanded)}
+        >
+          思考
+          <span style={{ fontSize: 10, opacity: 0.5, marginLeft: "auto" }}>
+            {isExpanded ? <UpOutlined /> : <DownOutlined />}
+          </span>
+        </div>
+        {isExpanded && (
+          <div className={styles.thinkTextWrapper} ref={textRef}>
+            <div className={styles.thinkText}>{text}</div>
           </div>
         )}
       </div>
@@ -1038,29 +1091,56 @@ function ThinkingPanelInner({
       s.success === undefined,
   );
 
-  // 当会话进入活动状态（正在思考/处理）时，默认展开；完成后自动收起
-  // 如果需要用户交互（如 ask_user 未完成），也强制保持展开
+  // ── 思考完成自动收起 / 思考开始自动展开 ──
+  // 用 useEffect 而非渲染期间 setState，避免流式高频更新时触发 Maximum update depth
+  // 状态驱动展开/收起：思考中/需交互时展开，否则收起
   useEffect(() => {
-    if (needsUserInput) {
+    if (needsUserInput || isActive) {
       setExpanded(true);
     } else {
-      setExpanded(isActive ?? false);
+      setExpanded(false);
     }
-  }, [isActive, needsUserInput]);
+  }, [isActive, needsUserInput, setExpanded]);
 
-  const toolCount = steps.filter((s) => s.type === "tool_start").length;
-  const toolNames = Array.from(
-    new Set(
-      steps
-        .filter((s) => s.type === "tool_start")
-        .map((s) => TOOL_NAME_MAP[s.toolName || ""] || s.toolName),
-    ),
+  // ── 展开时及流式更新时自动滚动到底部（rAF 节流，避免每 token 同步布局）──
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const bodyRafRef = useRef(0);
+  useEffect(() => {
+    if (!expanded || !bodyRef.current) return;
+    if (bodyRafRef.current) return;
+    bodyRafRef.current = requestAnimationFrame(() => {
+      bodyRafRef.current = 0;
+      if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+    });
+    return () => {
+      if (bodyRafRef.current) {
+        cancelAnimationFrame(bodyRafRef.current);
+        bodyRafRef.current = 0;
+      }
+    };
+  }, [expanded, steps, isActive]);
+
+  const toolCount = useMemo(
+    () => steps.filter((s) => s.type === "tool_start").length,
+    [steps],
   );
-  const hasFailure = steps.some(
-    (s) => s.type === "tool_end" && s.success === false,
+  const toolNames = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          steps
+            .filter((s) => s.type === "tool_start")
+            .map((s) => TOOL_NAME_MAP[s.toolName || ""] || s.toolName),
+        ),
+      ),
+    [steps],
+  );
+  const hasFailure = useMemo(
+    () => steps.some((s) => s.type === "tool_end" && s.success === false),
+    [steps],
   );
 
-  const renderTextWithFiles = (text: string) => {
+  const renderTextWithFiles = useCallback((text: string) => {
     if (!text) return null;
     // 简单的文件名匹配逻辑：寻找可能是文件名的部分
     // 这里我们遍历已知的 files，如果在 text 中匹配到了，就渲染为链接
@@ -1084,7 +1164,7 @@ function ThinkingPanelInner({
     }
 
     return text;
-  };
+  }, [filesSetInner, filesBaseMapInner, setActiveFile]);
 
   if (steps.length === 0 && !isActive) return null;
 
@@ -1118,27 +1198,16 @@ function ThinkingPanelInner({
         </div>
       </div>
       {expanded && (
-        <div className={styles.thinkingBody}>
+        <div className={styles.thinkingBody} ref={bodyRef}>
           <div className={styles.timelineContainer}>
             {steps.map((step, i) => {
               if (step.type === "thinking")
                 return (
-                  <div key={i} className={styles.timelineItem}>
-                    <div className={styles.timelineIcon}>
-                      <BulbOutlined style={{ color: "#a855f7" }} />
-                    </div>
-                    <div className={styles.timelineContent}>
-                      <div
-                        className={styles.timelineTitle}
-                        style={{ color: "#a855f7" }}
-                      >
-                        思考
-                      </div>
-                      <div className={styles.thinkTextWrapper}>
-                        <div className={styles.thinkText}>{step.text}</div>
-                      </div>
-                    </div>
-                  </div>
+                  <ThinkingStepItem
+                    key={i}
+                    text={step.text || ""}
+                    isLast={i === steps.length - 1}
+                  />
                 );
               if (step.type === "tool_start") {
                 return (
@@ -1285,6 +1354,31 @@ function WelcomeScreen({
   );
 }
 
+// ── 模块级常量：避免每次渲染重建数组/对象，防止 ReactMarkdown 误判 props 变化 ──
+const REMARK_PLUGINS = [remarkGfm, remarkMath];
+const REHYPE_PLUGINS = [rehypeRaw, rehypeKatex, rehypeHighlight];
+const PRE_WRAP_STYLE: React.CSSProperties = { whiteSpace: "pre-wrap" };
+const ARRAY_CONTENT_STYLE: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 8 };
+const IMAGE_STYLE: React.CSSProperties = {
+  maxWidth: "100%",
+  maxHeight: 400,
+  borderRadius: 4,
+  border: "1px solid #30363d",
+  cursor: "zoom-in",
+};
+
+/** 纯函数：从 message.content 提取纯文本，无需组件内重建 */
+function getMessageText(content: string | any[]): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((item) => item.type === "text")
+      .map((item) => item.text)
+      .join("\n");
+  }
+  return "";
+}
+
 // ── Message item ───────────────────────────────────────────────────────────────
 function MessageItemInner({
   msg,
@@ -1306,16 +1400,28 @@ function MessageItemInner({
   ) => void;
   onDelete?: (messageId: string) => void | Promise<void>;
 }) {
-  const {
-    activeSessionId,
-    deleteMessage,
-    files,
-    setActiveFile,
-  } = useSessionStore();
+  // ── 细粒度 selector：只订阅 files（影响文件链接渲染），其余用 getState() 按需读取 ──
+  const files = useSessionStore((s) => s.files);
+  const setActiveFile = useSessionStore((s) => s.setActiveFile);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const isUser = msg.role === "user";
   const isStreaming = msg.status === "streaming";
+
+  // ── 流式 markdown 节流：80ms 更新一次显示内容，避免每个 token 触发 ReactMarkdown 全量重解析 ──
+  const stringContent = typeof msg.content === "string" ? msg.content : "";
+  const [displayContent, setDisplayContent] = useState(stringContent);
+  useEffect(() => {
+    if (typeof msg.content !== "string") return;
+    if (!isStreaming) {
+      // 非流式：立即同步最终内容
+      setDisplayContent(msg.content);
+      return;
+    }
+    // 流式：节流更新，减少 rehypeHighlight / remarkMath 的重解析频率
+    const timer = setTimeout(() => setDisplayContent(msg.content as string), 80);
+    return () => clearTimeout(timer);
+  }, [msg.content, isStreaming]);
 
   const timeStr = dayjs(msg.createdAt).format("YYYY-MM-DD HH:mm:ss");
 
@@ -1335,17 +1441,6 @@ function MessageItemInner({
     if (filesSet.has(content)) return content
     return filesBaseMap.get(content)
   }, [filesSet, filesBaseMap])
-
-  const getMessageText = (content: string | any[]): string => {
-    if (typeof content === "string") return content;
-    if (Array.isArray(content)) {
-      return content
-        .filter((item) => item.type === "text")
-        .map((item) => item.text)
-        .join("\n");
-    }
-    return "";
-  };
 
   const startEdit = () => {
     setDraft(getMessageText(msg.content));
@@ -1426,32 +1521,32 @@ function MessageItemInner({
   const renderContent = () => {
     if (typeof msg.content === "string") {
       return isUser ? (
-        <span style={{ whiteSpace: "pre-wrap" }}>{msg.content}</span>
+        <span style={PRE_WRAP_STYLE}>{msg.content}</span>
       ) : (
         <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkMath]}
-          rehypePlugins={[rehypeRaw, rehypeKatex, rehypeHighlight]}
+          remarkPlugins={REMARK_PLUGINS}
+          rehypePlugins={REHYPE_PLUGINS}
           components={markdownComponents}
         >
-          {msg.content || (isStreaming ? "▌" : "")}
+          {displayContent || (isStreaming ? "▌" : "")}
         </ReactMarkdown>
       );
     }
 
     if (Array.isArray(msg.content)) {
       return (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={ARRAY_CONTENT_STYLE}>
           {msg.content.map((item, i) => {
             if (item.type === "text") {
               return isUser ? (
-                <span key={i} style={{ whiteSpace: "pre-wrap" }}>
+                <span key={i} style={PRE_WRAP_STYLE}>
                   {item.text}
                 </span>
               ) : (
                 <ReactMarkdown
                   key={i}
-                  remarkPlugins={[remarkGfm, remarkMath]}
-                  rehypePlugins={[rehypeRaw, rehypeKatex, rehypeHighlight]}
+                  remarkPlugins={REMARK_PLUGINS}
+                  rehypePlugins={REHYPE_PLUGINS}
                   components={markdownComponents}
                 >
                   {item.text}
@@ -1464,13 +1559,7 @@ function MessageItemInner({
                   <img
                     src={item.image_url.url}
                     alt="attachment"
-                    style={{
-                      maxWidth: "100%",
-                      maxHeight: 400,
-                      borderRadius: 4,
-                      border: "1px solid #30363d",
-                      cursor: "zoom-in",
-                    }}
+                    style={IMAGE_STYLE}
                     onClick={() => window.open(item.image_url.url, "_blank")}
                   />
                   {item.metadata?.name && (
@@ -1487,13 +1576,7 @@ function MessageItemInner({
                   <img
                     src={item.url}
                     alt={item.name}
-                    style={{
-                      maxWidth: "100%",
-                      maxHeight: 400,
-                      borderRadius: 4,
-                      border: "1px solid #30363d",
-                      cursor: "zoom-in",
-                    }}
+                    style={IMAGE_STYLE}
                     onClick={() => window.open(item.url, "_blank")}
                   />
                   <div style={{ fontSize: 11, color: '#8b949e', marginTop: 4 }}>
@@ -1556,6 +1639,40 @@ function MessageItemInner({
         {!isUser && isStreaming && (msg.thinkingSteps?.length ?? 0) === 0 && (
           <ThinkingPanel msgId={msg.id} steps={[]} isActive />
         )}
+
+        {/* ask_user 交互卡片 — 提取到 ThinkingPanel 外层，避免被折叠隐藏 */}
+        {!isUser &&
+          msg.thinkingSteps?.some(
+            (s) => s.type === "tool_start" && s.toolName === "ask_user" && s.success === undefined,
+          ) &&
+          (() => {
+            const pendingStep = msg.thinkingSteps!.find(
+              (s) => s.type === "tool_start" && s.toolName === "ask_user" && s.success === undefined,
+            )!;
+            return (
+              <div
+                style={{
+                  margin: "8px 0",
+                  padding: 16,
+                  background: "#161b22",
+                  border: "1px solid #d29922",
+                  borderRadius: 8,
+                  boxShadow: "0 0 0 1px rgba(210, 153, 34, 0.2)",
+                }}
+              >
+                <div style={{ color: "#d29922", fontSize: 13, marginBottom: 8, fontWeight: 600 }}>
+                  💬 AI 需要你的回复
+                </div>
+                <InteractiveCard
+                  data={pendingStep.toolArgs as any}
+                  onReply={(content) =>
+                    onToolReply?.(msg.id, pendingStep.toolCallId ?? "", "ask_user", content)
+                  }
+                  disabled={!isLast}
+                />
+              </div>
+            );
+          })()}
 
         {/* Content */}
         {editing ? (
@@ -1658,6 +1775,7 @@ function MessageItemInner({
                       return
                     }
                   } else {
+                    const { activeSessionId, deleteMessage } = useSessionStore.getState();
                     deleteMessage(activeSessionId, msg.id)
                   }
                 }}
@@ -1696,27 +1814,60 @@ const MessageItem = memo(MessageItemInner, (prev, next) => {
   )
 })
 
+// ── 稳定的空数组引用，避免 selector 每次返回新的 [] 触发重渲染 ──
+const EMPTY_MESSAGES: Message[] = [];
+
+// ── memo 化消息行（含外层 div）：仅比较 msg 引用和 isLast ──
+// handler 回调通过 ChatArea 中的 ref 稳定化（stableOn*），引用永不变，无需比较。
+// onRegenerate 仅 isLast=true 时传入、onEdit 仅 user 消息传入——二者变化已由 isLast / msg 覆盖。
+const MessageRow = memo(
+  ({
+    msg,
+    isLast,
+    onRegenerate,
+    onEdit,
+    onToolReply,
+    onDelete,
+  }: {
+    msg: Message;
+    isLast: boolean;
+    onRegenerate?: () => void;
+    onEdit?: (msgId: string, newContent: string) => void;
+    onToolReply?: (msgId: string, toolCallId: string, toolName: string, content: string) => void;
+    onDelete?: (messageId: string) => void | Promise<void>;
+  }) => (
+    <div data-msg-role={msg.role}>
+      <MessageItem
+        msg={msg}
+        isLast={isLast}
+        onRegenerate={onRegenerate}
+        onEdit={onEdit}
+        onToolReply={onToolReply}
+        onDelete={onDelete}
+      />
+    </div>
+  ),
+  (prev, next) => prev.msg === next.msg && prev.isLast === next.isLast,
+);
+
 // ── Main ChatArea ──────────────────────────────────────────────────────────────
 export default function ChatArea() {
-  const {
-    activeSessionId,
-    sessions,
-    messageMap,
-    usageMap,
-    clearMessages,
-    updateSessionAgent,
-    setInheritContext,
-    updateSession,
-    thinkingMode,
-    setThinkingMode,
-    osmMode,
-    setOsmMode,
-    securityMode,
-    setSecurityMode,
-    triggerFilesRefresh,
-    chatInputValues,
-    setChatInputValue,
-  } = useSessionStore();
+  // ── 细粒度 selector 订阅：避免无关 state 变化（files/activeFile 等）触发整组件重渲染 ──
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const sessions = useSessionStore((s) => s.sessions);
+  const thinkingMode = useSessionStore((s) => s.thinkingMode);
+  const osmMode = useSessionStore((s) => s.osmMode);
+  const securityMode = useSessionStore((s) => s.securityMode);
+  // actions 是稳定引用（store 创建时定义），不会触发重渲染
+  const clearMessages = useSessionStore((s) => s.clearMessages);
+  const updateSessionAgent = useSessionStore((s) => s.updateSessionAgent);
+  const setInheritContext = useSessionStore((s) => s.setInheritContext);
+  const updateSession = useSessionStore((s) => s.updateSession);
+  const setThinkingMode = useSessionStore((s) => s.setThinkingMode);
+  const setOsmMode = useSessionStore((s) => s.setOsmMode);
+  const setSecurityMode = useSessionStore((s) => s.setSecurityMode);
+  const triggerFilesRefresh = useSessionStore((s) => s.triggerFilesRefresh);
+  const setChatInputValue = useSessionStore((s) => s.setChatInputValue);
 
   const { modal, message: messageApi } = App.useApp();
 
@@ -1867,12 +2018,31 @@ export default function ChatArea() {
       .catch(console.error);
   }, []);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const messages = React.useMemo(
-    () => messageMap[activeSessionId] ?? [],
-    [messageMap, activeSessionId],
-  );
-  const sessionUsage = usageMap[activeSessionId];
+  // ── 只订阅当前会话的消息切片：其他会话的 token 更新不会触发本组件重渲染 ──
+  const messages = useSessionStore((s) => s.messageMap[activeSessionId] ?? EMPTY_MESSAGES);
+
+  // ── 虚拟分页：按"轮次"分页，一轮 = 用户提问 + AI 回复 ──
+  // 单条 AI 回复可能含大量 thinking/工具/markdown，按条数分页 DOM 量不可控
+  const ROUNDS_PER_PAGE = 2;
+  const INITIAL_ROUNDS = 1;
+  const [visibleRounds, setVisibleRounds] = useState(INITIAL_ROUNDS);
+  // 切换会话时重置
+  useEffect(() => { setVisibleRounds(INITIAL_ROUNDS); }, [activeSessionId]);
+
+  // 计算可见消息：找到倒数第 visibleRounds 个 user 消息的位置，从那里开始切片
+  const { visibleMessages, hasMore, totalRounds } = useMemo(() => {
+    if (messages.length === 0) return { visibleMessages: [] as typeof messages, hasMore: false, totalRounds: 0 };
+    // 找所有 user 消息的索引（每轮的起始）
+    const userIndices: number[] = [];
+    messages.forEach((m, i) => { if (m.role === 'user') userIndices.push(i); });
+    const totalRounds = userIndices.length || 1;
+    if (userIndices.length <= visibleRounds) {
+      return { visibleMessages: messages, hasMore: false, totalRounds };
+    }
+    const startIdx = userIndices[userIndices.length - visibleRounds];
+    return { visibleMessages: messages.slice(startIdx), hasMore: true, totalRounds };
+  }, [messages, visibleRounds]);
+  const sessionUsage = useSessionStore((s) => s.usageMap[activeSessionId]);
   const session = sessions.find((s) => s.id === activeSessionId);
   const currentAgent = session?.agentId
     ? agents.find((a) => a.id === session.agentId)
@@ -1881,7 +2051,9 @@ export default function ChatArea() {
   const activeModelId = currentAgent?.model || primaryModel;
   const isThinkingSupported = supportedModels.includes(activeModelId);
 
-  const inputValue = (chatInputValues && chatInputValues[activeSessionId]) || "";
+  const inputValue = useSessionStore(
+    (s) => (s.chatInputValues && s.chatInputValues[activeSessionId]) || "",
+  );
   const setInputValue = (val: string) => setChatInputValue(activeSessionId, val);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [attachmentUrls, setAttachmentUrls] = useState<Map<number, string>>(new Map());
@@ -1914,11 +2086,22 @@ export default function ChatArea() {
     window.addEventListener("mouseup", onMouseUp);
   }, []);
 
-  // ── isStreaming 改为派生自全局 runningSessions ─────────────────────────────
-  // 之前是局部 state，会话切换后状态错乱（A 流式中切到 B，B 显示 streaming）。
-  // 现在以 store 中的 runningSessions[activeSessionId] 为准，跨会话切换始终准确。
-  const runningSessions = useSessionStore((s) => s.runningSessions);
-  const isStreaming = Boolean(runningSessions[activeSessionId]);
+  // ── isStreaming：只订阅当前会话的运行状态，其他会话 start/done 不触发重渲染 ──
+  const isStreaming = useSessionStore((s) => Boolean(s.runningSessions[activeSessionId]));
+
+  // 流式结束后重置为最近 1 轮，释放已加载的多轮历史 DOM
+  const prevStreamingRef = useRef(false);
+  useEffect(() => {
+    if (prevStreamingRef.current && !isStreaming) {
+      setVisibleRounds(INITIAL_ROUNDS);
+      // 重置后滚到底部，确保最新回复可见
+      requestAnimationFrame(() => {
+        if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      });
+    }
+    prevStreamingRef.current = isStreaming;
+  }, [isStreaming]);
+
   const [isCompressing, setIsCompressing] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -2239,7 +2422,7 @@ export default function ChatArea() {
 
       if (isStreamingInStore && hasLastId) {
         // Attempt to resume if there's a cached stream
-        resume(activeSessionId).catch(() => fetchHistory(activeSessionId));
+        resume(activeSessionId).catch(() => fetchHistory(activeSessionId).then(scrollAfterLoad));
       } else {
         // Clean up orphaned streaming messages if no resume ID exists
         if (isStreamingInStore) {
@@ -2253,8 +2436,17 @@ export default function ChatArea() {
             }
           });
         }
-        fetchHistory(activeSessionId);
+        fetchHistory(activeSessionId).then(scrollAfterLoad);
       }
+    }
+    // ── fetchHistory 完成后滚动到底部（消息异步加载，初始 scroll 可能在空容器上执行） ──
+    function scrollAfterLoad() {
+      requestAnimationFrame(() => {
+        if (scrollRef.current) {
+          scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+          atBottomRef.current = true;
+        }
+      });
     }
   }, [activeSessionId, fetchHistory, resume]);
 
@@ -2269,17 +2461,14 @@ export default function ChatArea() {
       });
     }
   }, [messages.length]);
+  // ── 用 scrollTop 替代 scrollIntoView：后者强制同步布局，在大量 DOM 节点下每 token 触发会导致主线程冻结 ──
   const scrollToBottom = useCallback((smooth = false) => {
+    const el = scrollRef.current;
+    if (!el) return;
     if (smooth) {
-      messagesEndRef.current?.scrollIntoView({
-        behavior: "smooth",
-        block: "end",
-      });
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     } else {
-      messagesEndRef.current?.scrollIntoView({
-        behavior: "auto",
-        block: "end",
-      });
+      el.scrollTop = el.scrollHeight;
     }
   }, []);
 
@@ -2297,12 +2486,38 @@ export default function ChatArea() {
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
 
-  // 使用 useLayoutEffect 确保在 DOM 更新后、重绘前同步滚动位置
-  // 流式输出时使用 auto 滚动，因为高频更新下 smooth 会导致动画冲突和“跳动”
-  useLayoutEffect(() => {
-    if (isStreaming && atBottomRef.current) {
-      scrollToBottom(false);
-    }
+  // ── 滚动到顶部加载更多历史消息（按轮次） ──
+  const loadMore = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || !hasMore) return;
+    // 记录加载前的滚动位置，加载后恢复，避免视觉跳动
+    const prevScrollHeight = el.scrollHeight;
+    const prevScrollTop = el.scrollTop;
+    setVisibleRounds((r) => r + ROUNDS_PER_PAGE);
+    // DOM 更新后恢复滚动位置
+    requestAnimationFrame(() => {
+      if (scrollRef.current) {
+        const delta = scrollRef.current.scrollHeight - prevScrollHeight;
+        scrollRef.current.scrollTop = prevScrollTop + delta;
+      }
+    });
+  }, [hasMore]);
+
+  // ── 流式滚动：用 rAF 节流，避免每 token 都触发同步布局 ──
+  const scrollRafRef = useRef(0);
+  useEffect(() => {
+    if (!isStreaming || !atBottomRef.current) return;
+    if (scrollRafRef.current) return; // 已有待执行帧，跳过
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = 0;
+      if (atBottomRef.current) scrollToBottom(false);
+    });
+    return () => {
+      if (scrollRafRef.current) {
+        cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = 0;
+      }
+    };
   }, [messages, isStreaming, scrollToBottom]);
 
   // 切换会话时可以使用平滑滚动
@@ -2494,6 +2709,36 @@ export default function ChatArea() {
       }
     },
     [activeSessionId, sendToolResponse, scrollToBottom],
+  );
+
+  // ── 稳定回调：通过 ref 读取最新 handler，引用永远不变 ──
+  // 避免 isStreaming / activeSessionId 变化导致 handler 引用变化，进而触发 MessageRow 级联重渲染。
+  // stableOn* 始终是同一引用 → MessageRow memo 中 handler 比较永远通过 → 只有 msg / isLast 变化才重渲染。
+  const handlersRef = useRef<{
+    onRegenerate?: () => void;
+    onEdit?: (msgId: string, newContent: string) => void;
+    onToolReply?: (msgId: string, toolCallId: string, toolName: string, content: string) => void;
+    onDelete?: (messageId: string) => void | Promise<void>;
+  }>({});
+  handlersRef.current = {
+    onRegenerate: handleRegenerate,
+    onEdit: handleEditMessage,
+    onToolReply: handleToolReply,
+    onDelete: handleDeleteMessage,
+  };
+  const stableOnRegenerate = useCallback(() => handlersRef.current.onRegenerate?.(), []);
+  const stableOnEdit = useCallback(
+    (msgId: string, newContent: string) => handlersRef.current.onEdit?.(msgId, newContent),
+    [],
+  );
+  const stableOnToolReply = useCallback(
+    (msgId: string, toolCallId: string, toolName: string, content: string) =>
+      handlersRef.current.onToolReply?.(msgId, toolCallId, toolName, content),
+    [],
+  );
+  const stableOnDelete = useCallback(
+    (messageId: string) => handlersRef.current.onDelete?.(messageId),
+    [],
   );
 
   return (
@@ -2702,22 +2947,46 @@ export default function ChatArea() {
             />
           ) : (
             <>
-              {messages.map((msg, idx) => (
+              {hasMore && (
                 <div
-                  key={msg.id}
-                  data-msg-role={msg.role}
+                  style={{
+                    textAlign: "center",
+                    padding: "10px 16px",
+                    margin: "8px auto",
+                    maxWidth: 360,
+                    color: "#58a6ff",
+                    fontSize: 13,
+                    cursor: "pointer",
+                    background: "#161b22",
+                    border: "1px solid #30363d",
+                    borderRadius: 6,
+                    transition: "border-color 0.2s, background 0.2s",
+                  }}
+                  onClick={loadMore}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor = "#58a6ff";
+                    e.currentTarget.style.background = "#1c2330";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = "#30363d";
+                    e.currentTarget.style.background = "#161b22";
+                  }}
                 >
-                  <MessageItem
-                    msg={msg}
-                    isLast={idx === messages.length - 1}
-                    onRegenerate={
-                      idx === messages.length - 1 ? handleRegenerate : undefined
-                    }
-                    onEdit={msg.role === "user" ? handleEditMessage : undefined}
-                    onToolReply={handleToolReply}
-                    onDelete={handleDeleteMessage}
-                  />
+                  📂 点击加载更多历史对话（已显示 {visibleRounds}/{totalRounds} 轮）
                 </div>
+              )}
+              {visibleMessages.map((msg, idx) => (
+                <MessageRow
+                  key={msg.id}
+                  msg={msg}
+                  isLast={idx === visibleMessages.length - 1}
+                  onRegenerate={
+                    idx === visibleMessages.length - 1 ? stableOnRegenerate : undefined
+                  }
+                  onEdit={msg.role === "user" ? stableOnEdit : undefined}
+                  onToolReply={stableOnToolReply}
+                  onDelete={stableOnDelete}
+                />
               ))}
               <div ref={messagesEndRef} style={{ height: 1, clear: "both" }} />
             </>

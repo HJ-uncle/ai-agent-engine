@@ -213,23 +213,14 @@ export class SQLiteConversationHistory implements ConversationHistory {
     })
     const allRows = result.rows
     const allMessages = allRows.map(rowToMessage)
-    
-    // ── 清理孤立数据：找第一条 user 消息，其之前的非 system 行直接删除 ──────────
-    // 孤立数据场景：assistant/tool 消息先于首条 user 写入（异步竞态、崩溃重启等）。
-    // system 消息（如 compress 写入的摘要）出现在 user 之前是合法的，不应删除。
+
+    // ── 清理孤立数据：找第一条 user 消息，其之前的所有 non-user 行直接删除 ────
+    // ⚠️ 注意：绝不能在“找不到 user 消息”时删除整个会话！
+    //    压缩（compress）后会话可能只剩 system 摘要 + assistant 反馈，此时没有 user 行；
+    //    若在此执行 DELETE 会把整个会话历史永久清空（历史数据丢失事故的根因）。
+    //    因此仅当存在 user 消息时，清理 user 之前的孤立 non-user 行；否则保留原样返回。
     const firstUserIdx = allRows.findIndex((r) => r['role'] === 'user')
-    if (firstUserIdx === -1 && allRows.length > 0) {
-      // 无 user 消息：若全为 system 则保留（compress 只写了摘要还未写 recent），
-      // 若含非 system 行则属于孤立脏数据，全部删除。
-      const hasOnlySystem = allRows.every((r) => r['role'] === 'system')
-      if (!hasOnlySystem) {
-        db.execute({
-          sql: `DELETE FROM conversations WHERE tenant_id = ? AND session_id = ?`,
-          args: [ctx.tenantId, ctx.sessionId],
-        }).catch(() => {})
-        return []
-      }
-      // 全部为 system 消息：直接返回（后续 append 会补齐 recent 消息）
+    if (firstUserIdx === -1) {
       return allMessages
     }
     if (firstUserIdx > 0) {
@@ -394,10 +385,14 @@ export class SQLiteConversationHistory implements ConversationHistory {
     }
   }
 
-  async clear(ctx: Ctx): Promise<void> {
+  async clear(ctx: Ctx, options?: { tombstone?: boolean }): Promise<void> {
     const db = getDb()
-    // 先设置墓碑：阻止后续 N 秒内的 append（防止正在跑的 SSE 流回写"复活"会话）
-    setTombstone(ctx.tenantId, ctx.sessionId)
+    // 默认设置墓碑：阻止后续 N 秒内的 append（防止正在跑的 SSE 流回写"复活"会话）。
+    // 调用方若要在删除后立即重建历史（如 compress），应传 { tombstone: false }，
+    // 否则紧随其后的 append 会被墓碑静默丢弃，导致重建内容丢失。
+    if (options?.tombstone !== false) {
+      setTombstone(ctx.tenantId, ctx.sessionId)
+    }
     await db.execute({
       sql: 'DELETE FROM conversations WHERE tenant_id = ? AND session_id = ?',
       args: [ctx.tenantId, ctx.sessionId],
@@ -541,13 +536,11 @@ export class SQLiteConversationHistory implements ConversationHistory {
     const summaryContent = await summarizeFn(olderMessages)
     const summaryTokens = estimateTokens(summaryContent)
 
-    // Replace DB contents: 直接 DELETE（不走 clear()，避免设置墓碑导致后续 append 被拦截）
-    // clear() 的墓碑机制是为「用户主动删除会话」设计的，compress 是引擎内部维护行为，
-    // 不应触发墓碑，否则紧随其后的摘要/最近消息写入会被静默丢弃，导致历史清空为空。
-    await db.execute({
-      sql: 'DELETE FROM conversations WHERE tenant_id = ? AND session_id = ?',
-      args: [ctx.tenantId, ctx.sessionId],
-    })
+    // Replace DB contents: clear → summary system msg → recent msgs
+    // ⚠️ tombstone: false —— 此处是"主动重建"，不是"删除后防复活"。
+    //    若使用默认墓碑，紧随其后的 append 会在墓碑期内被静默丢弃，
+    //    导致压缩后 session 历史被清空（user/system 全丢，历史丢失事故的根因）。
+    await this.clear(ctx, { tombstone: false })
 
     await this.append(
       { role: 'system', content: summaryContent, tokens: summaryTokens },
@@ -576,12 +569,8 @@ export class SQLiteConversationHistory implements ConversationHistory {
     // Callers that want a proper LLM-based summary should override this method.
     const summaryContent = `[Previous conversation summary: ${toSummarize.length} messages exchanged covering: ${toSummarize.map((m) => m.content.slice(0, 50)).join('; ')}]`
 
-    // 同 compress()：直接 DELETE 不走 clear()，避免墓碑拦截后续 append
-    const db = getDb()
-    await db.execute({
-      sql: 'DELETE FROM conversations WHERE tenant_id = ? AND session_id = ?',
-      args: [ctx.tenantId, ctx.sessionId],
-    })
+    // 同 compress：主动重建历史，不使用墓碑（否则紧随的 append 会被静默丢弃）
+    await this.clear(ctx, { tombstone: false })
 
     await this.append({
       role: 'system',

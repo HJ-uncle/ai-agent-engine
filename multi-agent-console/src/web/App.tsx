@@ -183,7 +183,8 @@ function DesktopLayout({
   activePanel: PanelKey
   setActivePanel: (k: PanelKey) => void
 }) {
-  const { addSession, openSettings } = useSessionStore()
+  const addSession = useSessionStore((s) => s.addSession)
+  const openSettings = useSessionStore((s) => s.openSettings)
 
   const [sidebarWidth, setSidebarWidth] = usePersist<number>('ui.sidebarWidth', 240)
   const sidebarDragging = useRef(false)

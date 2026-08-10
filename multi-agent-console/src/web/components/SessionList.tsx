@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { Button, Tooltip, Input, Tag, App, Modal, Checkbox } from 'antd'
 import {
   PlusOutlined,
@@ -24,20 +24,24 @@ interface Props {
 
 export default function SessionList({ onNewChat }: Props) {
   const { message } = App.useApp()
-  const { sessions, activeSessionId, switchSession, deleteSession, updateSessionTitle } =
-    useSessionStore()
+  // ── 细粒度 selector：不订阅 messageMap，避免每个 token 触发整列表重渲染 ──
+  const sessions = useSessionStore((s) => s.sessions)
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
+  const switchSession = useSessionStore((s) => s.switchSession)
+  const deleteSession = useSessionStore((s) => s.deleteSession)
+  const updateSessionTitle = useSessionStore((s) => s.updateSessionTitle)
+  // runningSessions 仅在开始/结束时变化，不随 token 更新
+  const runningSessions = useSessionStore((s) => s.runningSessions)
   const { agents } = useAgentStore()
-  const messageMap = useSessionStore((s) => s.messageMap)
 
-  // 检测会话状态：running / done / error / idle
+  // 检测会话状态：用 runningSessions 做 O(1) 查询，不再扫描消息数组
   type SessionStatus = 'running' | 'done' | 'error' | 'idle'
 
   const getSessionStatus = (sessionId: string): SessionStatus => {
-    const msgs = messageMap[sessionId] ?? []
-    if (msgs.length === 0) return 'idle'
-    // 有正在 streaming 或 sending 的消息 → running
-    if (msgs.some((m) => m.status === 'streaming' || m.status === 'sending')) return 'running'
-    // 最后一条 assistant 消息的状态
+    if (runningSessions[sessionId]) return 'running'
+    // 非运行中时按需读取最后一条 AI 消息状态（仅在 flash 检测时调用，非高频）
+    const msgs = useSessionStore.getState().messageMap[sessionId]
+    if (!msgs || msgs.length === 0) return 'idle'
     const lastAi = [...msgs].reverse().find((m) => m.role === 'assistant')
     if (lastAi?.status === 'error') return 'error'
     if (lastAi?.status === 'done') return 'done'
@@ -48,6 +52,7 @@ export default function SessionList({ onNewChat }: Props) {
   const [flashStatus, setFlashStatus] = useState<Record<string, 'done' | 'error'>>({})
   const prevStatusRef = useRef<Record<string, SessionStatus>>({})
 
+  // 仅依赖 runningSessions（开始/结束时变化），不依赖 messageMap（每 token 变化）
   useEffect(() => {
     const newFlash: Record<string, 'done' | 'error'> = {}
     sessions.forEach((s) => {
@@ -72,7 +77,7 @@ export default function SessionList({ onNewChat }: Props) {
       return () => clearTimeout(timer)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messageMap, sessions])
+  }, [runningSessions, sessions])
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
@@ -97,8 +102,9 @@ export default function SessionList({ onNewChat }: Props) {
 
   const cancelEdit = () => setEditingId(null)
 
+  const agentMap = useMemo(() => new Map(agents.map(a => [a.id, a])), [agents])
   const getAgent = (agentId?: string) =>
-    agentId ? agents.find((a) => a.id === agentId) : undefined
+    agentId ? agentMap.get(agentId) : undefined
 
   const confirmDelete = async () => {
     if (!deleteTarget) return

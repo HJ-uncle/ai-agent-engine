@@ -459,6 +459,28 @@
 .thinkingBody {
   padding: 10px 16px;
   background: var(--vscode-editor-background, #1e1e1e);
+  max-height: 400px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #484f58 transparent;
+}
+
+.thinkingBody::-webkit-scrollbar {
+  width: 6px;
+}
+
+.thinkingBody::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.thinkingBody::-webkit-scrollbar-thumb {
+  background: #484f58;
+  border-radius: 3px;
+}
+
+.thinkingBody::-webkit-scrollbar-thumb:hover {
+  background: #6e7681;
 }
 
 .timelineContainer {
@@ -521,6 +543,28 @@
   padding: 8px 12px;
   background: rgba(168, 85, 247, 0.05);
   border-radius: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #484f58 transparent;
+}
+
+.thinkTextWrapper::-webkit-scrollbar {
+  width: 6px;
+}
+
+.thinkTextWrapper::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.thinkTextWrapper::-webkit-scrollbar-thumb {
+  background: #484f58;
+  border-radius: 3px;
+}
+
+.thinkTextWrapper::-webkit-scrollbar-thumb:hover {
+  background: #6e7681;
 }
 
 .thinkText {
