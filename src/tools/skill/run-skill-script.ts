@@ -10,6 +10,11 @@
  * 与 execute_cmd 的区别：
  *  - execute_cmd 面向通用沙箱命令（白名单保护）
  *  - run_skill_script 面向可信技能脚本（SKILLS_ROOT 内的脚本）
+ *
+ *  - Windows 下声明 PYTHONUTF8=1 / PYTHONIOENCODING=utf-8 / LANG=C.UTF-8
+ *    让 bash 拉起的 python 子进程默认按 UTF-8 编解码，避免 GBK 乱码
+ *    fromfile_prefix_chars='@'，但多数 skill 脚本，
+ *    会把 @path 当成普通参数导致解析错误
  */
 
 import { exec } from 'node:child_process'
@@ -17,7 +22,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import type { Tool, ToolResult } from '../../core/agent-context/index.js'
 
-const DEFAULT_TIMEOUT_MS = 60_000  // 技能脚本可能需要较长时间（如浏览器操作）
+const DEFAULT_TIMEOUT_MS = 60_000 // 技能脚本可能需要较长时间（如浏览器操作）
 
 export const runSkillScriptTool: Tool & { source: string } = {
   name: 'run_skill_script',
@@ -67,26 +72,9 @@ export const runSkillScriptTool: Tool & { source: string } = {
     const bashPath = process.env.BASH_PATH ?? (isWindows ? 'bash' : '/bin/bash')
 
     // 替换 $SKILLS_ROOT → 绝对路径（Git Bash 支持正斜杠路径）
-    let resolvedCommand = command
-      .replace(/\$SKILLS_ROOT/g, normalizedRoot.replace(/ /g, '\\ '))  // 空格转义
-
-    // 检测命令中是否有非 ASCII 字符（中文/日文等）
-    // 若有，将查询内容写入临时文件，用 @file 方式传入，避免 shell 编码问题
-    const hasNonAscii = /[^\x00-\x7F]/.test(resolvedCommand)
-    let tmpFile: string | null = null
-
-    if (hasNonAscii && isWindows) {
-      // 提取查询字符串（通常是第一个带引号的参数）
-      const queryMatch = resolvedCommand.match(/["']([^"']*[^\x00-\x7F][^"']*)["']/)
-      if (queryMatch) {
-        const query = queryMatch[1]
-        tmpFile = path.join(skillsRoot, `.tmp_query_${Date.now()}.txt`)
-        fs.writeFileSync(tmpFile, query, 'utf-8')
-        // 替换引号参数为 @文件路径（SKILL.md 规定的非 ASCII 输入方式）
-        const tmpFileUnix = tmpFile.replace(/\\/g, '/')
-        resolvedCommand = resolvedCommand.replace(queryMatch[0], `@${tmpFileUnix}`)
-      }
-    }
+    // 不转义空格：命令里的 $SKILLS_ROOT 通常在引号内（"$SKILLS_ROOT/..."），
+    // bash 引号会正确处理空格，\ 转义反而会被当成字面量导致路径错误
+    const resolvedCommand = command.replace(/\$SKILLS_ROOT/g, normalizedRoot)
 
     return new Promise((resolve) => {
       exec(
@@ -95,19 +83,24 @@ export const runSkillScriptTool: Tool & { source: string } = {
           cwd: skillsRoot,
           timeout: timeoutMs,
           maxBuffer: 10 * 1024 * 1024,
+          encoding: 'utf8',
           env: {
             ...process.env,
             SKILLS_ROOT: normalizedRoot,
             BASH_PATH: bashPath,
+            // Windows 编码：参考 CodexAppServerManager，让 bash 拉起的 python 子进程按 UTF-8 编解码
+            ...(isWindows
+              ? {
+                  PYTHONUTF8: '1',
+                  PYTHONIOENCODING: 'utf-8',
+                  LANG: process.env.LANG ?? 'C.UTF-8',
+                  LC_ALL: process.env.LC_ALL ?? 'C.UTF-8',
+                }
+              : {}),
           },
           shell: bashPath,
         },
         (err, stdout, stderr) => {
-          // 清理临时文件
-          if (tmpFile && fs.existsSync(tmpFile)) {
-            try { fs.unlinkSync(tmpFile) } catch { /* ignore */ }
-          }
-
           const durationMs = Date.now() - startTime
           const output = [stdout, stderr].filter(Boolean).join('\n').trim()
 
