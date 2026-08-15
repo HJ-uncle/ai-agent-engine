@@ -26,6 +26,8 @@ export interface ExternalSkill {
   skillMdPath: string  // SKILL.md 文件的绝对路径（按需读取全文）
   order: number
   enabled: boolean
+  /** 来源层级：project（项目 .aether/skills）| global（~/.aether/skills，仅 registry 标注） */
+  scope?: 'global' | 'project'
   /**
    * 内联 SKILL.md 内容（来自用户端 inlineSkills 透传）
    * 当此字段非空时，getSkillContent 优先返回它而不再读 skillMdPath。

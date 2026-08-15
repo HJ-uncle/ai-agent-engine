@@ -46,6 +46,28 @@ function run(buffer: Buffer, opts: Partial<Parameters<typeof runSkillImport>[0]>
 
 // ─── 正常路径 ─────────────────────────────────────────────────────────────────
 
+describe('runSkillImport — scope 层级', () => {
+  it("scope='global' 时落盘到显式 skillsRoot（调用方解析好的全局层）", () => {
+    const globalRoot = path.join(tmpRoot, 'global')
+    const zip = makeZip({ 'shared/SKILL.md': SKILL_MD('shared') })
+    const summary = run(zip, { skillsRoot: globalRoot, scope: 'global' })
+    expect(summary.importedCount).toBe(1)
+    expect(fs.existsSync(path.join(globalRoot, 'shared', 'SKILL.md'))).toBe(true)
+  })
+
+  it('resolveSkillsRoot(scope=global) 返回全局层目录（AETHER_GLOBAL_DIR 优先）', async () => {
+    const { resolveSkillsRoot, globalSkillsRoot } = await import('../import-pipeline.js')
+    const g = path.join(tmpRoot, 'cluster-shared')
+    process.env.AETHER_GLOBAL_DIR = g
+    try {
+      expect(globalSkillsRoot()).toBe(path.join(g, 'skills'))
+      expect(resolveSkillsRoot(undefined, 'global')).toBe(path.join(g, 'skills'))
+    } finally {
+      delete process.env.AETHER_GLOBAL_DIR
+    }
+  })
+})
+
 describe('runSkillImport — 正常导入', () => {
   it('多技能包：解压到独立目录并原子落盘', () => {
     const zip = makeZip({
@@ -78,6 +100,42 @@ describe('runSkillImport — 正常导入', () => {
     const zip = makeZip({ 'a/SKILL.md': SKILL_MD('a') })
     run(zip)
     expect(fs.existsSync(path.join(tmpRoot, '.staging'))).toBe(false)
+  })
+
+  it('含目录条目的 zip（macOS zip -r / Finder 压缩）正常导入', () => {
+    // 真实系统 zip 会为每个目录生成以 / 结尾的空条目
+    const zip = makeZip({
+      'global-chain-test/': new Uint8Array(0),
+      'global-chain-test/SKILL.md': SKILL_MD('global-chain-test'),
+      'global-chain-test/assets/': new Uint8Array(0),
+      'global-chain-test/assets/note.txt': strToU8('附属文件'),
+    })
+    const summary = run(zip)
+    expect(summary.importedCount).toBe(1)
+    expect(summary.skillNames).toEqual(['global-chain-test'])
+    expect(fs.existsSync(path.join(tmpRoot, 'global-chain-test', 'SKILL.md'))).toBe(true)
+    expect(fs.existsSync(path.join(tmpRoot, 'global-chain-test', 'assets', 'note.txt'))).toBe(true)
+  })
+
+  it('含 __MACOSX / .DS_Store / ._ AppleDouble 垃圾的 zip（Finder 压缩）正常导入且垃圾零落盘', () => {
+    const zip = makeZip({
+      '__MACOSX/': new Uint8Array(0),
+      '__MACOSX/._novel-writer': strToU8('binary appleDouble junk'),
+      '__MACOSX/novel-writer/': new Uint8Array(0),
+      '.DS_Store': strToU8('junk'),
+      'novel-writer/.DS_Store': strToU8('junk'),
+      'novel-writer/._SKILL.md': strToU8('binary appleDouble junk'),
+      'novel-writer/SKILL.md': SKILL_MD('novel-writer'),
+    })
+    const summary = run(zip, { filename: 'novel-writer.zip' })
+    expect(summary.importedCount).toBe(1)
+    expect(summary.skillNames).toEqual(['novel-writer'])
+    expect(fs.existsSync(path.join(tmpRoot, 'novel-writer', 'SKILL.md'))).toBe(true)
+    // 垃圾条目不得落盘
+    expect(fs.existsSync(path.join(tmpRoot, '__MACOSX'))).toBe(false)
+    expect(fs.existsSync(path.join(tmpRoot, '.DS_Store'))).toBe(false)
+    expect(fs.existsSync(path.join(tmpRoot, 'novel-writer', '.DS_Store'))).toBe(false)
+    expect(fs.existsSync(path.join(tmpRoot, 'novel-writer', '._SKILL.md'))).toBe(false)
   })
 })
 

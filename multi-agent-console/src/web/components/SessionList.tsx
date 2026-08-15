@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
-import { Button, Tooltip, Input, Tag, App, Modal, Checkbox } from 'antd'
+import { Button, Tooltip, Input, Tag, App, Modal, Checkbox, Dropdown } from 'antd'
 import {
   PlusOutlined,
   DeleteOutlined,
@@ -11,12 +11,19 @@ import {
   LoadingOutlined,
   CheckCircleOutlined,
   ExclamationCircleOutlined,
+  ExportOutlined,
+  CopyOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons'
 import { useSessionStore } from '@core/store/session'
 import { useAgentStore } from '@core/store/agents'
 import { conversationApi } from '@core/api'
 import type { Session } from '@core/types'
+import { getSessionMessages } from '../utils/sessionExport'
+import { ExportDialog } from './ExportDialog'
+import type { Message } from '@core/types'
 import styles from './SessionList.module.css'
+
 
 interface Props {
   onNewChat: () => void
@@ -146,6 +153,33 @@ export default function SessionList({ onNewChat }: Props) {
     setDeleteTarget(Array.from(selectedSessions).join(','))
     setDeleteModalOpen(true)
   }
+
+  // ── 会话导出（分析 AI 输出用）：拉取消息 → 按轮次勾选导出 ───────────────────
+  const [exportingId, setExportingId] = useState<string | null>(null)
+  const [exportState, setExportState] = useState<{ session: Session; messages: Message[] } | null>(null)
+
+  const handleExport = async (session: Session) => {
+    setExportingId(session.id)
+    try {
+      const msgs = await getSessionMessages(session.id)
+      if (msgs.length === 0) {
+        message.warning('该会话暂无消息可导出')
+        return
+      }
+      setExportState({ session, messages: msgs })
+    } catch (e: any) {
+      message.error(e?.message ?? '导出失败')
+    } finally {
+      setExportingId(null)
+    }
+  }
+
+  const exportMenu = (session: Session) => ({
+    items: [{ key: 'export', icon: <FileTextOutlined />, label: '导出 / 复制对话…' }],
+    onClick: () => {
+      void handleExport(session)
+    },
+  })
 
   return (
     <div className={styles.container}>
@@ -293,6 +327,17 @@ export default function SessionList({ onNewChat }: Props) {
                   </>
                 ) : (
                   <>
+                    <Tooltip title="导出 / 复制会话">
+                      <Dropdown menu={exportMenu(session)} trigger={['click']}>
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={exportingId === session.id ? <LoadingOutlined /> : <ExportOutlined />}
+                          className={styles.actionBtn}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      </Dropdown>
+                    </Tooltip>
                     <Button
                       type="text"
                       size="small"
@@ -338,6 +383,17 @@ export default function SessionList({ onNewChat }: Props) {
           同时保留工作区文件 (不删除本地沙盒目录)
         </Checkbox>
       </Modal>
+
+      {/* 导出对话弹窗（按轮次勾选） */}
+      {exportState && (
+        <ExportDialog
+          open
+          onClose={() => setExportState(null)}
+          session={exportState.session}
+          messages={exportState.messages}
+          agentName={getAgent(exportState.session.agentId)?.name}
+        />
+      )}
     </div>
   )
 }

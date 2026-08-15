@@ -15,6 +15,7 @@
  */
 
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { unzipSync } from 'fflate'
 
@@ -74,6 +75,7 @@ export interface RunImportOptions {
   zipBuffer: Buffer
   filename: string
   skillsRoot?: string // 覆盖技能根目录（测试用）
+  scope?: SkillScope // 落盘层级：project（默认）| global
   conflictStrategy?: ConflictStrategy
   /** 取消标志：外部置 true 后，rename 前中断 */
   isCancelled?: () => boolean
@@ -82,15 +84,29 @@ export interface RunImportOptions {
 
 // ─── 技能根目录解析（与 SkillsRegistry 探测规则一致）────────────────────────
 
-export function resolveSkillsRoot(explicit?: string): string {
+export type SkillScope = 'project' | 'global'
+
+/** 全局技能目录：~/.aether/skills（单机多项目共享；集群时挂共享卷） */
+export function globalSkillsRoot(): string {
+  if (process.env.AETHER_GLOBAL_DIR) return path.resolve(process.env.AETHER_GLOBAL_DIR, 'skills')
+  return path.join(os.homedir(), '.aether', 'skills')
+}
+
+/**
+ * 解析目标落盘根目录。
+ *  - project（默认）：<cwd>/.aether/skills（回退旧 SKILLs/，与 registry 探测一致）
+ *  - global：~/.aether/skills（AETHER_GLOBAL_DIR 可覆盖，集群共享卷场景）
+ *  - SKILLS_ROOT 显式指定时两个 scope 都落它（单 root 部署）
+ */
+export function resolveSkillsRoot(explicit?: string, scope: SkillScope = 'project'): string {
   if (explicit) return path.resolve(explicit)
-  const candidates = [
-    process.env.SKILLS_ROOT,
-    path.join(process.cwd(), '.aether', 'skills'),
-    path.join(process.cwd(), 'SKILLs'),
-  ].filter(Boolean) as string[]
-  const found = candidates.find((p) => fs.existsSync(p as string))
-  return path.resolve(found ?? path.join(process.cwd(), '.aether', 'skills'))
+  if (process.env.SKILLS_ROOT) return path.resolve(process.env.SKILLS_ROOT)
+  if (scope === 'global') return globalSkillsRoot()
+  const projectAether = path.join(process.cwd(), '.aether', 'skills')
+  const legacy = path.join(process.cwd(), 'SKILLs')
+  if (fs.existsSync(projectAether)) return projectAether
+  if (fs.existsSync(legacy)) return legacy
+  return projectAether
 }
 
 // ─── frontmatter 轻量解析 ─────────────────────────────────────────────────────
@@ -106,6 +122,13 @@ function parseFrontmatter(content: string): Record<string, string> | null {
     if (m) out[m[1]] = m[2].trim().replace(/^["']|["']$/g, '')
   }
   return out
+}
+
+/** macOS 元数据垃圾：__MACOSX/（Finder 压缩目录）、._*（AppleDouble 资源分叉）、.DS_Store */
+function isMacJunk(name: string): boolean {
+  if (name === '__MACOSX' || name.startsWith('__MACOSX/')) return true
+  const base = name.slice(name.lastIndexOf('/') + 1)
+  return base === '.DS_Store' || base.startsWith('._')
 }
 
 // ─── 单条目路径安全检查（zip-slip 防护）──────────────────────────────────────
@@ -131,6 +154,7 @@ export function runSkillImport(options: RunImportOptions): ImportSummary {
     zipBuffer,
     filename,
     skillsRoot,
+    scope = 'project',
     conflictStrategy = 'versioned',
     isCancelled,
     onProgress,
@@ -152,7 +176,10 @@ export function runSkillImport(options: RunImportOptions): ImportSummary {
     )
   }
 
-  const fileEntries = Object.entries(entries)
+  // 目录条目（以 / 结尾，macOS `zip -r` / Finder 压缩必带）与 macOS 元数据垃圾
+  // （__MACOSX/、._* AppleDouble、.DS_Store）跳过；否则 extname 为空会被白名单拒绝，
+  // 导致正常技能包 100% 导入失败
+  const fileEntries = Object.entries(entries).filter(([name]) => !name.endsWith('/') && !isMacJunk(name))
 
   // ── 2. 限制检查（条目数 / 单文件 / 总解压 / 压缩比）──────────────────────
   onProgress?.({ progress: 15, stage: '检查包体限制' })
@@ -228,7 +255,8 @@ export function runSkillImport(options: RunImportOptions): ImportSummary {
 
   // ── 5. 冲突检测 ────────────────────────────────────────────────────────────
   onProgress?.({ progress: 45, stage: '检测命名冲突' })
-  const root = resolveSkillsRoot(skillsRoot)
+  const root = resolveSkillsRoot(skillsRoot, scope)
+  fs.mkdirSync(root, { recursive: true }) // global 层可能首次使用
   const conflicts = skillDirs.filter((d) => fs.existsSync(path.join(root, d.name)))
   if (conflicts.length > 0 && conflictStrategy === 'reject') {
     throw new SkillImportError(

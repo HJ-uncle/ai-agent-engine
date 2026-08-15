@@ -49,7 +49,7 @@ async function main() {
     //    显式字段覆盖 .env；后续 DB system_config 同步会再覆盖（DB 优先级最高）
     applyAetherConfigToEnv(loadAetherConfig())
 
-    // 1. 并行初始化核心组件：主数据库、记忆数据库、插件注册表
+    // 1. 并行初始化核心组件：主数据库、记忆数据库
     // 这些操作互不依赖，可以并发执行以缩短总启动时间
     await Promise.all([
       initDb().then(() => {
@@ -58,11 +58,8 @@ async function main() {
       initMemoryDb(MEMORY_SCHEMA).then(() => {
         logger.info('Memory database initialized')
       }),
-      (async () => {
-        skillsRegistry.start()
-      })()
     ])
-    
+
     // 2. 数据库就绪后，继续执行后续步骤
     // 启动记忆整理守护进程（它会自动处理延迟执行，不阻塞）
     const consolidator = new MemoryConsolidator()
@@ -73,11 +70,16 @@ async function main() {
 
     // 将数据库中的 system_config 同步到 process.env
     for (const [key, value] of Object.entries(dbConfig)) {
-      if (value !== null) {
+      if (value !== null && value !== '') {
         process.env[key] = value
       }
     }
     logger.info({ keys: Object.keys(dbConfig).length }, 'Synced system_config from DB to process.env')
+
+    // 4. SkillsRegistry 必须在 DB→env 同步之后启动：
+    //    SKILLS_ROOT / AETHER_GLOBAL_DIR 等路径配置此时才最终定型，
+    //    否则 registry 的双层状态（项目层/全局层）会与导入管线的目录解析分裂
+    skillsRegistry.start()
 
     const server = await buildServer()
     await server.listen({ port: PORT, host: HOST })

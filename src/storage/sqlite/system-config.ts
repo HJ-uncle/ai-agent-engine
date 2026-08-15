@@ -4,6 +4,14 @@ import { encrypt, decrypt } from '../../utils/encryption.js'
 /** 需要加密存储的敏感配置 key（供 settings route 等外部模块共享，避免重复定义） */
 export const SECRET_KEYS = new Set(['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY'])
 
+/**
+ * 启动期路径类配置 key：决定 skills/MCP/workspace 的根目录解析。
+ * 只在进程启动时生效（registry/config 解析依赖启动顺序），禁止运行时热写入
+ * process.env —— 否则会与已初始化的 SkillsRegistry/MCP 双层状态分裂
+ * （例如把全局 skill 导入静默劫持到错误目录）。
+ */
+export const BOOT_PATH_KEYS = new Set(['SKILLS_ROOT', 'MCP_CONFIG_PATH', 'WORKSPACE_ROOT', 'BASH_PATH', 'DATA_DIR'])
+
 export class SystemConfigStore {
   /**
    * 读取单个配置项。
@@ -51,6 +59,18 @@ export class SystemConfigStore {
               is_secret  = excluded.is_secret,
               updated_at = unixepoch()`,
       args: [key, stored, isSecret ? 1 : 0],
+    })
+  }
+
+  /**
+   * 删除配置项（key 不存在时静默成功）。
+   * 用于「恢复自动探测」：路径类配置清空即回到 .aether/ 约定目录。
+   */
+  async delete(key: string): Promise<void> {
+    const db = getDb()
+    await db.execute({
+      sql: 'DELETE FROM system_config WHERE key = ?',
+      args: [key],
     })
   }
 

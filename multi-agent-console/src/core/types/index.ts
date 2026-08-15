@@ -185,6 +185,8 @@ export interface McpServer {
   registryId?: string
   createdAt: number
   updatedAt: number
+  /** 来源层级：project（.aether/mcp.json）| global（~/.aether/mcp.json，多项目共享） */
+  scope?: 'project' | 'global'
   /** 运行时状态（前端本地维护，后端不返回） */
   status?: 'running' | 'stopped' | 'error' | 'unknown'
   /** 工具数量缓存（测试连接后填充） */

@@ -6,7 +6,7 @@
  */
 
 import { getDb } from '../sqlite/db.js'
-import type { ConflictStrategy } from '../../skills/import-pipeline.js'
+import type { ConflictStrategy, SkillScope } from '../../skills/import-pipeline.js'
 
 export type SkillImportStatus =
   | 'pending'      // 已创建记录
@@ -30,6 +30,7 @@ export interface SkillImportRecord {
   stage: string | null
   skillNames: string[]
   conflictStrategy: ConflictStrategy
+  scope: SkillScope
   importedCount: number
   skippedCount: number
   errorCode: string | null
@@ -52,6 +53,7 @@ function rowToRecord(row: Record<string, unknown>): SkillImportRecord {
     stage: (row['stage'] as string) ?? null,
     skillNames: row['skill_names'] ? JSON.parse(row['skill_names'] as string) : [],
     conflictStrategy: (row['conflict_strategy'] as ConflictStrategy) ?? 'versioned',
+    scope: (row['scope'] as SkillScope) ?? 'project',
     importedCount: Number(row['imported_count'] ?? 0),
     skippedCount: Number(row['skipped_count'] ?? 0),
     errorCode: (row['error_code'] as string) ?? null,
@@ -72,11 +74,12 @@ export class SkillImportStore {
     filename: string
     fileSize: number
     conflictStrategy?: ConflictStrategy
+    scope?: SkillScope
   }): Promise<SkillImportRecord> {
     const db = getDb()
     await db.execute({
-      sql: `INSERT INTO skill_imports (id, tenant_id, user_id, filename, file_size, status, conflict_strategy)
-            VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+      sql: `INSERT INTO skill_imports (id, tenant_id, user_id, filename, file_size, status, conflict_strategy, scope)
+            VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`,
       args: [
         input.id,
         input.tenantId,
@@ -84,6 +87,7 @@ export class SkillImportStore {
         input.filename,
         input.fileSize,
         input.conflictStrategy ?? 'versioned',
+        input.scope ?? 'project',
       ],
     })
     return (await this.get(input.id))!

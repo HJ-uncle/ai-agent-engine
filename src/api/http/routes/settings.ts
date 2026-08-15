@@ -1,7 +1,7 @@
 import { FastifyInstance, FastifyRequest } from 'fastify'
 import { success, fail } from '../response.js'
 import { loadSecurityConfig, saveSecurityConfig, WebFetchConfig } from '../../../tools/web-fetch/security-config.js'
-import { systemConfigStore, SECRET_KEYS } from '../../../storage/sqlite/system-config.js'
+import { systemConfigStore, SECRET_KEYS, BOOT_PATH_KEYS } from '../../../storage/sqlite/system-config.js'
 import { setGlobalToolPoolLimit } from '../../../core/utils/concurrency-pool.js'
 import { resolveOSMMode, isValidMode, OSM_MODES } from '../../../core/osm.js'
 import { logger as engineLogger } from '../../../observability/index.js'
@@ -51,7 +51,8 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       TOOL_OUTPUT_MAX_CHARS:   parseInt(getStr('TOOL_OUTPUT_MAX_CHARS',   '4000'),    10),
       COMPRESS_THRESHOLD_RATIO: parseFloat(getStr('COMPRESS_THRESHOLD_RATIO', '0.5')),
       // ── Skills ───────────────────────────────────────────────────────────
-      SKILLS_ROOT:   getStr('SKILLS_ROOT',   './skills'),
+      // 路径类配置默认空 = 自动探测 .aether/ 约定目录（不要回填旧默认 './skills'）
+      SKILLS_ROOT:   getStr('SKILLS_ROOT',   ''),
       BASH_PATH:     getStr('BASH_PATH',     ''),
       // ── Tools ────────────────────────────────────────────────────────────
       CMD_TIMEOUT_MS:      parseInt(getStr('CMD_TIMEOUT_MS',      '5000'),    10),
@@ -59,7 +60,8 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       WEB_SEARCH_SERVER:   getStr('WEB_SEARCH_SERVER', 'http://127.0.0.1:8923'),
       // ── Workspace ────────────────────────────────────────────────────────
       WORKSPACE_ROOT: getStr('WORKSPACE_ROOT', './workspace'),
-      MCP_CONFIG_PATH: getStr('MCP_CONFIG_PATH', './mcp.config.json'),
+      // 空默认 = 自动探测 .aether/mcp.json（双层合并：项目级覆盖全局级）
+      MCP_CONFIG_PATH: getStr('MCP_CONFIG_PATH', ''),
       // ── Observability ────────────────────────────────────────────────────
       QA_LOG_ENABLED: getStr('QA_LOG_ENABLED', 'false') === 'true',
       QA_LOG_DIR:     getStr('QA_LOG_DIR',     './logs/qa'),
@@ -128,6 +130,17 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       const strVal = String(v)
       // 敏感字段安全校验：如果是脱敏后的占位符（包含 ...），则忽略不更新，防止覆盖真实密钥
       if (SECRET_KEYS.has(k) && strVal.includes('...')) {
+        continue
+      }
+      // 路径类配置：空值 = 恢复自动探测（删除 DB 行）；非空持久化但只在下次启动生效。
+      // 禁止热写入 process.env —— SkillsRegistry/MCP 双层状态在启动时已定型，
+      // 运行时改写会让「全局导入」等操作落盘到与界面显示不一致的目录。
+      if (BOOT_PATH_KEYS.has(k)) {
+        if (strVal === '') {
+          await systemConfigStore.delete(k)
+        } else {
+          await systemConfigStore.set(k, strVal, false)
+        }
         continue
       }
       await systemConfigStore.set(k, strVal, SECRET_KEYS.has(k))

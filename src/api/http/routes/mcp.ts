@@ -43,6 +43,8 @@ const McpBaseSchema = z.object({
   headers: z.record(z.string()).optional(),
   enabled: z.boolean().optional().default(true),
   isBuiltIn: z.boolean().optional().default(false),
+  /** 保存层级：project（默认）| global（~/.aether/mcp.json，多项目共享） */
+  scope: z.enum(['project', 'global']).optional(),
 })
 
 const CreateMcpSchema = McpBaseSchema.refine(data => {
@@ -118,12 +120,13 @@ export async function mcpRoutes(fastify: FastifyInstance) {
   })
 
   // ── Delete ───────────────────────────────────────────────────────────────────
-  fastify.delete<{ Params: { id: string } }>('/mcp/servers/:id', async (req, reply) => {
-    const ok = deleteServer(req.params.id)
+  fastify.delete<{ Params: { id: string }; Querystring: { scope?: string } }>('/mcp/servers/:id', async (req, reply) => {
+    // ?scope=global 删除全局层定义；默认删项目层（项目层删除后同名全局定义重新生效）
+    const ok = deleteServer(req.params.id, req.query.scope === 'global' ? 'global' : 'project')
     if (!ok) {
       return reply.code(200).send(fail(40400, `MCP server "${req.params.id}" not found`))
     }
-    return reply.code(200).send(success({ deleted: true }))
+    return reply.code(200).send(success(true, '删除成功'))
   })
 
   // ── Enable ───────────────────────────────────────────────────────────────────

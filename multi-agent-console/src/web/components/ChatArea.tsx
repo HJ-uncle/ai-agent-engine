@@ -9,6 +9,8 @@ import React, {
 } from "react";
 import { TodoPanel } from './TodoPanel';
 import { Button, Tooltip, Popconfirm, Input, Select, Switch, message, Modal, Image, Dropdown, Menu, App } from "antd";
+import { ExportOutlined } from "@ant-design/icons";
+import { ExportDialog } from "./ExportDialog";
 import {
   SendOutlined,
   ReloadOutlined,
@@ -2112,6 +2114,7 @@ export default function ChatArea() {
   const compressStats = session?.compressStats || null;
   const scrollRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [exportOpen, setExportOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const atBottomRef = useRef(true);
   const lastActionRef = useRef<number>(0);
@@ -2763,6 +2766,18 @@ export default function ChatArea() {
           )}
         </div>
         <div className={styles.headerRight}>
+          {/* 导出对话：按轮次勾选导出（分析 AI 输出用） */}
+          {session && messages.length > 0 && (
+            <Button
+              size="small"
+              icon={<ExportOutlined />}
+              onClick={() => setExportOpen(true)}
+              style={{ color: "#8b949e", display: "flex", alignItems: "center" }}
+            >
+              导出
+            </Button>
+          )}
+
           {/* Agent selector - 会话开始后显示锁定文本标签，否则展示下拉选择器 */}
           {sessionStarted ? (
             <Tooltip
@@ -3389,6 +3404,16 @@ export default function ChatArea() {
           </div>
         </div>
       </div>
+
+      {/* 导出对话弹窗（按轮次勾选） */}
+      <ExportDialog
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        session={session ?? null}
+        // 弹窗打开时从 store 取实时数据，避免闭包旧数据
+        messages={exportOpen ? (useSessionStore.getState().messageMap[activeSessionId] ?? []) : []}
+        agentName={currentAgent?.name}
+      />
 
       {/* Workspace Management Modal */}
       <Modal

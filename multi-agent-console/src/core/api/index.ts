@@ -576,9 +576,10 @@ export const mcpApi = {
     return res.data as McpServer
   },
 
-  // DELETE /mcp/servers/:id
-  delete: async (id: string) => {
-    const res = await request<{ success: boolean }>(`/mcp/servers/${id}`, { method: 'DELETE' })
+  // DELETE /mcp/servers/:id（?scope=global 删除全局层定义）
+  delete: async (id: string, scope?: 'project' | 'global') => {
+    const qs = scope === 'global' ? '?scope=global' : ''
+    const res = await request<{ success: boolean }>(`/mcp/servers/${id}${qs}`, { method: 'DELETE' })
     return res.data
   },
 
@@ -843,11 +844,49 @@ export const workspaceApi = {
   },
 
   /** 技能列表（含技能根目录） */
-  skillsList: async () => {
-    const res = await request<{ root: string; list: { name: string; description: string; enabled: boolean; order: number }[] }>(
-      '/skills',
-    )
+  skillsList: async (opts?: { reload?: boolean }) => {
+    const res = await request<{
+      root: string
+      globalRoot: string | null
+      list: { name: string; description: string; enabled: boolean; order: number; scope: 'project' | 'global' }[]
+    }>(`/skills${opts?.reload ? '?reload=1' : ''}`)
     return res.data
+  },
+
+  /** 技能详情（SKILL.md 全文 + 附件清单） */
+  skillDetail: async (name: string) => {
+    const res = await request<{
+      name: string
+      description: string
+      enabled: boolean
+      order: number
+      scope: 'project' | 'global'
+      dir: string
+      content: string | null
+      files: { path: string; size: number }[]
+    }>(`/skills/${encodeURIComponent(name)}`)
+    return res.data
+  },
+
+  /** 删除技能（按定义层删除目录 + 版本备份） */
+  skillDelete: async (name: string) => {
+    const res = await request<boolean>(`/skills/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    return res.message
+  },
+
+  /** 手动创建技能（表单直建，无需压缩包） */
+  skillCreate: async (input: {
+    name: string
+    description: string
+    content: string
+    scope: 'project' | 'global'
+    overwrite?: boolean
+  }) => {
+    const res = await request<{ name: string; scope: string; dir: string }>('/skills', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+    return { message: res.message, data: res.data }
   },
 
   // ── Skill 压缩包导入 ─────────────────────────────────────────────────────
@@ -903,6 +942,7 @@ export const workspaceApi = {
     importId: string | null,
     strategy: string,
     onProgress?: (loaded: number, total: number) => void,
+    scope: 'project' | 'global' = 'project',
   ) => {
     const start = chunkIndex * workspaceApi.SKILL_IMPORT_CHUNK_SIZE
     const blob = file.slice(start, start + workspaceApi.SKILL_IMPORT_CHUNK_SIZE)
@@ -914,6 +954,7 @@ export const workspaceApi = {
     formData.append('chunkIndex', String(chunkIndex))
     if (importId) formData.append('importId', importId)
     formData.append('conflictStrategy', strategy)
+    formData.append('scope', scope)
     return workspaceApi._xhrUpload('/skills/imports/chunks', formData, onProgress)
   },
 
@@ -946,9 +987,10 @@ export const workspaceApi = {
    */
   skillImportUpload: async (
     file: File,
-    opts: { strategy?: string; onProgress?: (percent: number, stage: string) => void; resumeImportId?: string | null },
+    opts: { strategy?: string; scope?: 'project' | 'global'; onProgress?: (percent: number, stage: string) => void; resumeImportId?: string | null },
   ): Promise<string> => {
     const strategy = opts.strategy ?? 'versioned'
+    const scope = opts.scope ?? 'project'
     const CHUNK = workspaceApi.SKILL_IMPORT_CHUNK_SIZE
 
     if (file.size <= workspaceApi.SKILL_IMPORT_DIRECT_LIMIT) {
@@ -957,6 +999,7 @@ export const workspaceApi = {
       formData.append('file', file)
       formData.append('filename', file.name)
       formData.append('conflictStrategy', strategy)
+      formData.append('scope', scope)
       const json = await workspaceApi._xhrUpload('/skills/imports', formData, (loaded, total) => {
         opts.onProgress?.(5 + Math.round((loaded / total) * 45), '上传压缩包')
       })
@@ -991,6 +1034,7 @@ export const workspaceApi = {
           const base = (uploaded.size / totalChunks) * 50
           opts.onProgress?.(5 + Math.round(base + ((loaded / total) / totalChunks) * 50), `上传分片 ${i + 1}/${totalChunks}`)
         },
+        scope,
       )
       if (json.code !== 200) throw new Error(json.message || `分片 ${i + 1} 上传失败`)
       importId = json.data.importId

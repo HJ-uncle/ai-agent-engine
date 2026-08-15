@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import {
   Button, Input, Tag, Tooltip, Popconfirm, Modal, Form, Switch,
-  Spin, message as antMsg,
+  Spin, Radio, message as antMsg,
 } from 'antd'
 import {
   PlusOutlined, ReloadOutlined, DeleteOutlined,
@@ -53,7 +53,7 @@ function McpFormModal({
         })
       } else {
         form.resetFields()
-        form.setFieldsValue({ enabled: true })
+        form.setFieldsValue({ enabled: true, scope: 'project' })
       }
     }
   }, [open, editing, form])
@@ -72,6 +72,7 @@ function McpFormModal({
         enabled: values.enabled ?? true,
         env: values.envJson ? JSON.parse(values.envJson) : undefined,
         isBuiltIn: false,
+        scope: editing ? undefined : (values.scope ?? 'project'),
       }
       let server: McpServer
       if (editing) {
@@ -96,6 +97,19 @@ function McpFormModal({
       okText={editing ? '保存' : '添加'} confirmLoading={loading} width={560}
     >
       <Form form={form} layout="vertical" size="small">
+        {!editing && (
+          <Form.Item name="scope" label="保存层级" initialValue="project">
+            <Radio.Group>
+              <Radio.Button value="project">项目级</Radio.Button>
+              <Radio.Button value="global">全局级</Radio.Button>
+            </Radio.Group>
+          </Form.Item>
+        )}
+        {editing?.scope === 'global' && (
+          <div style={{ marginBottom: 12, fontSize: 12, color: '#d29922' }}>
+            该 Server 定义在全局层（~/.aether/mcp.json）。保存后将在项目级创建覆盖副本，全局定义保持不变。
+          </div>
+        )}
         <Form.Item name="name" label="名称" rules={[{ required: true }]}>
           <Input placeholder="例如：my-mcp-server" />
         </Form.Item>
@@ -125,7 +139,7 @@ function McpCard({
 }: {
   server: McpServer
   onEdit: (s: McpServer) => void
-  onDelete: (id: string) => void
+  onDelete: (s: McpServer) => void
   onToggle: (s: McpServer) => void
   onTest: (s: McpServer) => void
   onRestart: (s: McpServer) => void
@@ -135,7 +149,14 @@ function McpCard({
       <div className={styles.cardTop}>
         <ApiOutlined className={styles.icon} />
         <div className={styles.info}>
-          <div className={styles.name}>{server.name}</div>
+          <div className={styles.name}>
+            {server.name}
+            {server.scope === 'global' && (
+              <Tooltip title="全局 MCP Server（~/.aether/mcp.json），对所有项目生效">
+                <span style={{ fontSize: 10, color: '#58a6ff', background: 'rgba(88,166,255,0.12)', padding: '1px 6px', borderRadius: 4, marginLeft: 6, verticalAlign: 'middle' }}>全局</span>
+              </Tooltip>
+            )}
+          </div>
           <div className={styles.cmd}>{server.command}{server.args?.length ? ' ' + server.args.join(' ') : ''}</div>
         </div>
         <div className={styles.meta}>
@@ -158,7 +179,12 @@ function McpCard({
         <Tooltip title="编辑">
           <Button type="text" size="small" icon={<EditOutlined />} className={styles.btn} onClick={() => onEdit(server)} />
         </Tooltip>
-        <Popconfirm title={`删除 "${server.name}"？`} onConfirm={() => onDelete(server.id)} okText="删除" cancelText="取消" okButtonProps={{ danger: true }}>
+        <Popconfirm
+          title={server.scope === 'global' ? `删除全局 Server "${server.name}"？` : `删除 "${server.name}"？`}
+          description={server.scope === 'global' ? '将从 ~/.aether/mcp.json 删除，影响所有项目' : undefined}
+          onConfirm={() => onDelete(server)}
+          okText="删除" cancelText="取消" okButtonProps={{ danger: true }}
+        >
           <Button type="text" size="small" icon={<DeleteOutlined />} className={`${styles.btn} ${styles.danger}`} />
         </Popconfirm>
       </div>
@@ -187,10 +213,10 @@ export default function McpPanel() {
 
   useEffect(() => { fetchServers() }, [fetchServers])
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (server: McpServer) => {
     try {
-      await mcpApi.delete(id)
-      setServers((s) => s.filter((x) => x.id !== id))
+      await mcpApi.delete(server.id, server.scope)
+      setServers((s) => s.filter((x) => x.id !== server.id))
       antMsg.success('已删除')
     } catch (err: any) { antMsg.error(err.message) }
   }

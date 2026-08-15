@@ -2,22 +2,33 @@
  * SkillsRegistry — 技能全局注册表
  *
  * 功能：
- *  - 启动时扫描 SKILLS_ROOT，加载所有技能元数据
- *  - 使用 fs.watch 监听目录变动，自动热重载
+ *  - 双层扫描：全局层（~/.aether/skills）+ 项目层（.aether/skills 或 SKILLs）
+ *    同名技能项目层覆盖全局层（与 aether.json 配置优先级一致）
+ *  - SKILLS_ROOT 显式指定时为单 root 模式（禁用多层，保持确定性）
+ *  - 使用 fs.watch 监听目录变动，自动热重载（两层分别监听）
  *  - 提供单例 `skillsRegistry` 供全局使用
  *  - 变动防抖（500ms），避免批量写入时频繁重载
  */
 
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { loadExternalSkills, type ExternalSkill } from './external-loader.js'
 import { logger } from '../observability/index.js'
 
+/** 全局层根目录（集群部署时可设 AETHER_GLOBAL_DIR 指向共享卷） */
+function globalLayerRoot(): string {
+  if (process.env.AETHER_GLOBAL_DIR) return path.resolve(process.env.AETHER_GLOBAL_DIR, 'skills')
+  return path.join(os.homedir(), '.aether', 'skills')
+}
+
 class SkillsRegistry {
   private skills: ExternalSkill[] = []
-  private watcher: fs.FSWatcher | null = null
+  private watchers: fs.FSWatcher[] = []
   private debounceTimer: ReturnType<typeof setTimeout> | null = null
-  private skillsRoot: string | null = null
+  private skillsRoot: string | null = null   // 项目层（或显式 SKILLS_ROOT 单 root）
+  private globalRoot: string | null = null   // 全局层
+  private singleRootMode = false             // SKILLS_ROOT 显式指定：禁用多层
   private readonly DEBOUNCE_MS = 500
 
   /** 初始化并启动文件监听 */
@@ -34,43 +45,80 @@ class SkillsRegistry {
         rawRoot = legacySkills
         logger.info({ root: rawRoot }, 'SkillsRegistry: SKILLS_ROOT not set, auto-detected cwd/SKILLs (legacy path)')
       } else {
-        logger.warn('SkillsRegistry: SKILLS_ROOT not set and no .aether/skills or SKILLs directory found, skills disabled')
-        return
+        logger.warn('SkillsRegistry: SKILLS_ROOT not set and no .aether/skills or SKILLs directory found')
       }
     }
 
-    this.skillsRoot = path.resolve(process.cwd(), rawRoot)
+    // 单 root 模式：显式指定时禁用全局层（保持部署确定性）
+    this.singleRootMode = Boolean(skillsRoot || process.env.SKILLS_ROOT)
 
-    if (!fs.existsSync(this.skillsRoot)) {
-      logger.warn({ root: this.skillsRoot }, 'SkillsRegistry: SKILLS_ROOT does not exist')
+    if (rawRoot) {
+      this.skillsRoot = path.resolve(process.cwd(), rawRoot)
+      if (!fs.existsSync(this.skillsRoot)) {
+        logger.warn({ root: this.skillsRoot }, 'SkillsRegistry: skills root does not exist')
+        this.skillsRoot = null
+      }
+    }
+
+    // 全局层：SKILLS_ROOT 未显式指定时启用（单 root 部署保持确定性）
+    if (!this.singleRootMode) {
+      const g = globalLayerRoot()
+      if (fs.existsSync(g)) {
+        this.globalRoot = g
+        logger.info({ root: g }, 'SkillsRegistry: global layer enabled (~/.aether/skills)')
+      }
+    }
+
+    if (!this.skillsRoot && !this.globalRoot) {
+      logger.warn('SkillsRegistry: no skills layer available, skills disabled')
       return
     }
 
     // 首次加载
     this.reload()
 
-    // 启动文件监听
+    // 启动文件监听（所有存在的层）
+    for (const root of [this.globalRoot, this.skillsRoot]) {
+      if (!root) continue
+      this.watchLayer(root)
+    }
+  }
+
+  /** 为单个层挂载递归监听（只响应 SKILL.md 变动） */
+  private watchLayer(root: string): void {
     try {
-      this.watcher = fs.watch(
-        this.skillsRoot,
+      const watcher = fs.watch(
+        root,
         { recursive: true },
         (eventType, filename) => {
           // 只响应 SKILL.md 的变动
           if (!filename || !filename.endsWith('SKILL.md')) return
-
-          logger.debug({ eventType, filename }, 'SkillsRegistry: change detected')
+          logger.debug({ eventType, filename, root }, 'SkillsRegistry: change detected')
           this.scheduleReload()
         },
       )
-
-      this.watcher.on('error', (err) => {
-        logger.error({ err }, 'SkillsRegistry: watcher error')
+      watcher.on('error', (err) => {
+        logger.error({ err, root }, 'SkillsRegistry: watcher error')
       })
-
-      logger.info({ root: this.skillsRoot }, 'SkillsRegistry: watching for skill changes')
+      this.watchers.push(watcher)
+      logger.info({ root }, 'SkillsRegistry: watching for skill changes')
     } catch (err) {
-      logger.warn({ err }, 'SkillsRegistry: failed to start watcher, hot-reload disabled')
+      logger.warn({ err, root }, 'SkillsRegistry: failed to start watcher for layer')
     }
+  }
+
+  /**
+   * 全局层目录可能在服务启动后才创建（首次全局导入时 mkdir）。
+   * 动态探测：出现即采纳、补挂监听并重扫，无需重启服务。
+   */
+  ensureGlobalLayer(): void {
+    if (this.globalRoot || this.singleRootMode) return
+    const g = globalLayerRoot()
+    if (!fs.existsSync(g)) return
+    this.globalRoot = g
+    logger.info({ root: g }, 'SkillsRegistry: global layer adopted after startup')
+    this.watchLayer(g)
+    this.reload()
   }
 
   /** 停止监听（服务关闭时调用） */
@@ -79,10 +127,10 @@ class SkillsRegistry {
       clearTimeout(this.debounceTimer)
       this.debounceTimer = null
     }
-    if (this.watcher) {
-      this.watcher.close()
-      this.watcher = null
-      logger.info('SkillsRegistry: watcher stopped')
+    for (const w of this.watchers) w.close()
+    if (this.watchers.length > 0) {
+      this.watchers = []
+      logger.info('SkillsRegistry: watchers stopped')
     }
   }
 
@@ -95,15 +143,30 @@ class SkillsRegistry {
     }, this.DEBOUNCE_MS)
   }
 
-  /** 重新扫描并更新内存中的技能列表 */
+  /** 重新扫描并更新内存中的技能列表（双层合并，项目层同名覆盖全局层） */
   reload(): void {
     const before = this.skills.length
-    this.skills = loadExternalSkills(this.skillsRoot ?? undefined)
+    const merged = new Map<string, ExternalSkill>()
+    // 先加载全局层，后加载项目层 → 项目层覆盖同名
+    for (const [root, scope] of [
+      [this.globalRoot, 'global'],
+      [this.skillsRoot, 'project'],
+    ] as const) {
+      if (!root) continue
+      try {
+        for (const s of loadExternalSkills(root)) {
+          merged.set(s.name.toLowerCase(), { ...s, scope })
+        }
+      } catch (err) {
+        logger.warn({ err, root }, 'SkillsRegistry: failed to load layer')
+      }
+    }
+    this.skills = [...merged.values()]
     const after = this.skills.length
 
     if (before !== after) {
       logger.info(
-        { before, after, root: this.skillsRoot },
+        { before, after, projectRoot: this.skillsRoot, globalRoot: this.globalRoot },
         'SkillsRegistry: skills reloaded (count changed)',
       )
     } else {
@@ -130,8 +193,13 @@ class SkillsRegistry {
     return this.skills.length
   }
 
+  /** 全局层实际生效路径（未启用时为 null，供 API 如实上报） */
+  get globalRootPath(): string | null {
+    return this.globalRoot
+  }
+
   get isWatching(): boolean {
-    return this.watcher !== null
+    return this.watchers.length > 0
   }
 }
 

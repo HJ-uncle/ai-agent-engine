@@ -205,8 +205,13 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   // 避免在 Balanced/Off 模式下干扰 Agent 或浪费 Token。
   // 使用 isOsmSkillVisible() 精确匹配，不依赖命名约定。
   const mode = resolveOSMMode()
+  const osmHiddenSkills: string[] = []
   if (!OSM_MODE_CONFIG[mode].methodology) {
-    externalSkills = externalSkills.filter(s => isOsmSkillVisible(s.name, mode))
+    externalSkills = externalSkills.filter(s => {
+      if (isOsmSkillVisible(s.name, mode)) return true
+      osmHiddenSkills.push(s.name)
+      return false
+    })
   }
 
   // ── 合并客户端透传的 inline skill ────────────────────────────────────────
@@ -236,7 +241,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
     )
   }
 
-  createSkillTools(externalSkills).forEach((t) => { registry.register(t); skillTools.push(t.name) })
+  createSkillTools(externalSkills, { osmMode: mode, hiddenSkills: osmHiddenSkills }).forEach((t) => { registry.register(t); skillTools.push(t.name) })
   if (shouldRegister('run_skill_script')) { registry.register(runSkillScriptTool); skillTools.push(runSkillScriptTool.name) }
 
   // 7. 搜索工具（glob / grep）
