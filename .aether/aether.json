@@ -1,0 +1,5 @@
+{
+  "$comment": "Aether Engine 项目级配置基线。字段留空则回退 .env/DB 默认值；DB 中通过 UI 设置页保存的值优先级更高。用户级 ~/.aether/aether.json 优先级低于本文件。",
+  "defaultSecurityMode": "standard",
+  "osmMode": "balanced"
+}

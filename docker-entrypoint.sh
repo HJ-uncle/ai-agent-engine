@@ -5,5 +5,5 @@ echo "Running database migrations..."
 cd /app
 tsx src/storage/sqlite/migrate.ts
 
-echo "Starting AI Agent Engine..."
+echo "Starting Aether Engine..."
 exec node dist/main.js

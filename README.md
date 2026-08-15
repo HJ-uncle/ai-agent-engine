@@ -1,6 +1,6 @@
-# 🚀 AI Agent Engine
+# 🌌 Aether Engine
 
-AI Agent Engine 是一个具备**感知、思考、行动**能力的全栈 AI 智能体运行时引擎。它不仅是一个对话框，更是一个能够安全操作文件、运行命令、调用外部工具并协作完成复杂任务的数字化工作空间。
+**Aether Engine**（AE，以太引擎）是一个具备**感知、思考、行动**能力的全栈 AI 智能体运行时引擎。它不仅是一个对话框，更是一个能够安全操作文件、运行命令、调用外部工具并协作完成复杂任务的数字化工作空间。
 
 ---
 
@@ -100,6 +100,24 @@ docker-compose up -d
 - **Agent (智能体)**：AI 的“大脑”，可配置性格、知识库及专属工具集。
 - **Session (会话)**：与 AI 的一次完整交互过程，包含独立的上下文记忆。
 - **Workspace (工作区)**：AI 的“办公桌”，所有的文件创建、代码编写及命令执行均在此隔离运行。
+
+---
+
+## ⚙️ 项目配置（.aether/）
+
+Aether Engine 使用统一的 `.aether/` 目录管理项目级配置（对标 Claude Code 的 `.claude/`、Codex 的 `.codex/`）：
+
+```
+.aether/
+├── aether.json   # 配置基线：默认安全模式、OSM 档位、Agent 参数（可 git 提交，团队共享）
+├── mcp.json      # 项目级 MCP servers（含敏感信息，默认不提交）
+├── skills/       # 项目级技能包（SKILL.md 带 YAML frontmatter，支持热重载）
+└── AE.md         # 项目上下文说明，自动注入 system prompt（对标 CLAUDE.md / AGENTS.md）
+
+~/.aether/        # 用户级配置：aether.json / AE.md，优先级低于项目级
+```
+
+优先级（低 → 高）：内置默认 → `.env` → `~/.aether/aether.json` → `.aether/aether.json` → 数据库（UI 设置页）→ 请求级透传。旧版 `mcp.config.json` 与 `SKILLs/` 目录仍自动回退兼容。
 
 ---
 

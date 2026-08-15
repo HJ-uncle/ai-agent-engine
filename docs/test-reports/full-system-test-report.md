@@ -1,8 +1,8 @@
-# AI Agent 引擎 - 全面功能与架构稳定性测试报告
+# Aether Engine - 全面功能与架构稳定性测试报告
 
 ## 一、 测试体系构建与覆盖范围
 
-为确保 AI Agent Engine 及其核心认知模块在复杂业务场景下具备极高的可用性与稳定性，我们构建了多维度的大规模测试体系，测试类型涵盖**单元测试 (Unit Tests)**、**接口集成测试 (Integration Tests)**、**并发压力测试 (Stress Tests)** 与 **E2E 边界测试 (Edge Cases)**。
+为确保 Aether Engine (AE) 及其核心认知模块在复杂业务场景下具备极高的可用性与稳定性，我们构建了多维度的大规模测试体系，测试类型涵盖**单元测试 (Unit Tests)**、**接口集成测试 (Integration Tests)**、**并发压力测试 (Stress Tests)** 与 **E2E 边界测试 (Edge Cases)**。
 
 ### 核心覆盖模块：
 1. **三脑记忆体系 (Memory Subsystem)**：原生 SQLite 向量存储、图谱关联边创建、情绪效价标记、以及反思整理（Consolidation）的后台定时衰减机制。

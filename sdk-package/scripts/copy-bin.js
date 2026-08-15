@@ -113,15 +113,21 @@ for (const pkg of packages) {
 
 console.log(`[copy-bin] node_modules 完成：${copied} 个包已复制，${skipped} 个 dev 包已跳过`)
 
-// ==================== 复制 SKILLs/ 目录 ====================
+// ==================== 复制技能目录 ====================
+// 源目录：.aether/skills（新约定）优先，旧 SKILLs/ 回退
+// 目标目录保持 bin/SKILLs（与 SDK 内嵌 processManager 的探测逻辑约定一致）
 
-const skillsSrc = path.join(agentEngineRoot, 'SKILLs')
+const skillsCandidates = [
+  path.join(agentEngineRoot, '.aether', 'skills'),
+  path.join(agentEngineRoot, 'SKILLs'),
+]
+const skillsSrc = skillsCandidates.find(p => fs.existsSync(p))
 const skillsDst = path.join(binDir, 'SKILLs')
-if (fs.existsSync(skillsSrc)) {
-  console.log(`[copy-bin] 复制 SKILLs/ → bin/SKILLs/`)
+if (skillsSrc) {
+  console.log(`[copy-bin] 复制 ${skillsSrc} → bin/SKILLs/`)
   copyDirRecursive(skillsSrc, skillsDst, [])
 } else {
-  console.warn(`[copy-bin] 警告：SKILLs/ 目录不存在，跳过（${skillsSrc}）`)
+  console.warn(`[copy-bin] 警告：技能目录不存在（.aether/skills 与 SKILLs 均未找到），跳过`)
 }
 
 // ==================== 复制配置文件（.env.example 等） ====================

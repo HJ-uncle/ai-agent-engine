@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 chcp 65001 >nul
 
 echo ============================================================
-echo   AI Agent Engine - Web Search Bridge Server 启动器
+echo   Aether Engine (AE) - Web Search Bridge Server 启动器
 echo ============================================================
 echo.
 

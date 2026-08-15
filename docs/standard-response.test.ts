@@ -90,6 +90,6 @@ describe('Standard API Responses', () => {
     expect(response.statusCode).toBe(200)
     const json = response.json()
     expect(json.openapi).toBe('3.0.0')
-    expect(json.info.title).toBe('AI Agent Engine API')
+    expect(json.info.title).toBe('Aether Engine API')
   })
 })

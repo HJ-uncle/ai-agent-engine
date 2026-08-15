@@ -14,7 +14,14 @@ import { loadExternalSkills } from '../external-loader.js'
  *     `references/agent-engine-tools.md` 作为翻译对照表本身允许出现这些词，跳过。
  */
 
-const SKILLS_ROOT = path.resolve(process.cwd(), './SKILLs')
+// 技能根目录：.aether/skills（新约定）优先，旧 SKILLs/ 回退
+const SKILLS_ROOT = (() => {
+  const candidates = [
+    path.resolve(process.cwd(), '.aether', 'skills'),
+    path.resolve(process.cwd(), 'SKILLs'),
+  ]
+  return candidates.find(p => fs.existsSync(p)) ?? candidates[0]
+})()
 
 const EXPECTED = [
   'os-using-superpowers',

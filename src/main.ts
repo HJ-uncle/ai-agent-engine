@@ -37,6 +37,7 @@ import { skillsRegistry } from './skills/index.js'
 import { initDb } from './storage/sqlite/db.js'
 import { initMemoryDb, closeMemoryDb, MEMORY_SCHEMA, MemoryConsolidator } from './storage/memory/index.js'
 import { systemConfigStore } from './storage/sqlite/system-config.js'
+import { loadAetherConfig, applyAetherConfigToEnv } from './core/aether-config.js'
 import { networkInterfaces } from 'node:os'
 
 const PORT = parseInt(process.env.PORT ?? '12323', 10)
@@ -44,6 +45,10 @@ const HOST = process.env.HOST ?? '0.0.0.0'
 
 async function main() {
   try {
+    // 0. 加载 .aether/ 统一配置目录（用户级 ~/.aether + 项目级 .aether/）
+    //    显式字段覆盖 .env；后续 DB system_config 同步会再覆盖（DB 优先级最高）
+    applyAetherConfigToEnv(loadAetherConfig())
+
     // 1. 并行初始化核心组件：主数据库、记忆数据库、插件注册表
     // 这些操作互不依赖，可以并发执行以缩短总启动时间
     await Promise.all([
@@ -96,9 +101,9 @@ async function main() {
       host: HOST,
       localUrl,
       lanUrls 
-    }, 'AI Agent Engine started')
-    
-    console.log(`\n🚀 AI Agent Engine 已启动`)
+    }, 'Aether Engine started')
+
+    console.log(`\n🚀 Aether Engine (AE) 已启动`)
     console.log(`   本地访问: ${localUrl}`)
     if (lanUrls) {
       console.log(`   局域网访问: ${lanUrls}`)

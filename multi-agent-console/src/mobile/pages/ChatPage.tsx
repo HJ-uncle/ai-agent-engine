@@ -106,7 +106,7 @@ function WelcomeScreen({ onPrompt }: { onPrompt: (text: string) => void }) {
   return (
     <div className={styles.welcome}>
       <div className={styles.welcomeEmoji}>🤖</div>
-      <h2 className={styles.welcomeTitle}>Agent 引擎</h2>
+      <h2 className={styles.welcomeTitle}>Aether 引擎</h2>
       <p className={styles.welcomeSub}>多智能体协作，让 AI 帮你完成复杂任务</p>
       <div className={styles.promptGrid}>
         {PROMPT_EXAMPLES.map((p) => (

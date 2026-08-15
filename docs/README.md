@@ -1,6 +1,6 @@
-# AI Agent Engine
+# Aether Engine
 
-A production-ready AI Agent Engine built with Node.js + TypeScript ESM. Supports multi-tenant, multi-session conversational agents with a ReAct reasoning loop, tool execution, persistent memory, and a Fastify HTTP API.
+A production-ready AI agent runtime engine (Aether Engine, AE for short) built with Node.js + TypeScript ESM. Supports multi-tenant, multi-session conversational agents with a ReAct reasoning loop, tool execution, persistent memory, and a Fastify HTTP API.
 
 ---
 

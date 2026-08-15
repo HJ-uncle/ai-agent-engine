@@ -35,8 +35,30 @@ interface MCPConfigFile {
   mcpServers: Record<string, Omit<McpServerRecord, 'id'>>
 }
 
+/**
+ * MCP 配置文件路径解析。
+ *
+ * 优先级：
+ *   1. MCP_CONFIG_PATH 环境变量（显式指定）
+ *   2. <cwd>/.aether/mcp.json（新约定位置，与 aether.json/skills 同目录）
+ *   3. <cwd>/mcp.config.json（旧位置，兼容回退）
+ *
+ * 读写同源：读哪个文件就写哪个文件，避免配置分裂。
+ * 首次创建（两处都不存在）时写入 .aether/mcp.json（自动建目录）。
+ */
+function resolveConfigPath(): string {
+  if (process.env.MCP_CONFIG_PATH) {
+    return path.resolve(process.env.MCP_CONFIG_PATH)
+  }
+  const newPath = path.resolve(process.cwd(), '.aether', 'mcp.json')
+  if (fs.existsSync(newPath)) return newPath
+  const legacyPath = path.resolve(process.cwd(), 'mcp.config.json')
+  if (fs.existsSync(legacyPath)) return legacyPath
+  return newPath
+}
+
 function getConfigPath(): string {
-  return path.resolve(process.env.MCP_CONFIG_PATH ?? './mcp.config.json')
+  return resolveConfigPath()
 }
 
 function readConfig(): MCPConfigFile {
@@ -75,8 +97,10 @@ function readConfig(): MCPConfigFile {
 
 function writeConfig(config: MCPConfigFile): void {
   const configPath = getConfigPath()
+  // 新约定位置在 .aether/ 子目录下，写入前确保目录存在
+  fs.mkdirSync(path.dirname(configPath), { recursive: true })
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
-  logger.info({ configPath }, 'mcp.config.json updated')
+  logger.info({ configPath }, 'MCP config file updated')
 }
 
 function toRecord(id: string, entry: Omit<McpServerRecord, 'id'>): McpServerRecord {

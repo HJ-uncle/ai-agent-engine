@@ -160,12 +160,12 @@ export function MonacoEditor() {
 
   useEffect(() => {
     if (!activeTab) {
-      document.title = 'Agent Engine'
+      document.title = 'Aether Engine'
       return
     }
     document.title = activeTab.isDirty
-      ? `${activeTab.name}（已编辑） — Agent Engine`
-      : `${activeTab.name} — Agent Engine`
+      ? `${activeTab.name}（已编辑） — Aether Engine`
+      : `${activeTab.name} — Aether Engine`
   }, [activeTab])
 
   // ─────────────────────────────────────────────────────────────────────────

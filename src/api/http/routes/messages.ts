@@ -9,6 +9,7 @@ import { buildSkillsSystemPrompt } from '../../../skills/index.js'
 import { createToolRegistry } from '../../../tools/registry-factory.js'
 import { resolveOSMMode, isValidMode, OSM_MODES } from '../../../core/osm.js'
 import { prependBootstrapToSystemPrompt } from '../../../core/osm-bootstrap.js'
+import { getProjectContextBlock } from '../../../core/project-context.js'
 import { tenantConfigStore } from '../../../storage/sqlite/tenant-config.js'
 import { estimateTokens } from '../../../core/utils/tokens.js'
 import { v4 as uuidv4 } from 'uuid'
@@ -154,8 +155,10 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     })
 
     const skillsPrompt = buildSkillsSystemPrompt(externalSkills)
+    // ── 项目上下文（AE.md）注入（与 chat 路由保持一致）─────────────────────────
+    const projectContextBlock = getProjectContextBlock()
     const finalSystemPrompt = prependBootstrapToSystemPrompt(
-      [effectiveSystemPrompt, skillsPrompt].filter(Boolean).join('\n\n'),
+      [effectiveSystemPrompt, skillsPrompt, projectContextBlock].filter(Boolean).join('\n\n'),
       reqLogger,
     )
 

@@ -7,7 +7,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'
 
-echo -e "${RED}[Stop]${NC} Stopping AI Agent Engine services..."
+echo -e "${RED}[Stop]${NC} Stopping Aether Engine services..."
 
 if [ -f .proxy.pid ]; then
     PROXY_PID=$(cat .proxy.pid)

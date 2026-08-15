@@ -19,8 +19,24 @@ function sessionKey(tenantId: string, sessionId: string): string {
   return `${tenantId}:${sessionId}`
 }
 
+// 合法安全模式集合（校验 DEFAULT_SECURITY_MODE 配置用）
+const VALID_SECURITY_MODES: readonly SecurityMode[] = ['safe', 'standard', 'full-access']
+
+/**
+ * 解析默认安全模式。
+ * 来源：DEFAULT_SECURITY_MODE 环境变量（可由 .aether/aether.json 的
+ * defaultSecurityMode 字段在启动时注入）；未设置或非法值回退 'safe'。
+ */
+function resolveDefaultSecurityMode(): SecurityMode {
+  const raw = process.env.DEFAULT_SECURITY_MODE
+  if (raw && (VALID_SECURITY_MODES as readonly string[]).includes(raw)) {
+    return raw as SecurityMode
+  }
+  return 'safe'
+}
+
 export function getSecurityMode(tenantId: string, sessionId: string): SecurityMode {
-  return sessionSecurityModes.get(sessionKey(tenantId, sessionId)) ?? 'safe'
+  return sessionSecurityModes.get(sessionKey(tenantId, sessionId)) ?? resolveDefaultSecurityMode()
 }
 
 export function setSecurityMode(tenantId: string, sessionId: string, mode: SecurityMode): void {

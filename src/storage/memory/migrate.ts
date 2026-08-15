@@ -20,7 +20,7 @@ async function migrate() {
     )
     await db.execute(
       `INSERT OR IGNORE INTO memory_graph_meta (key, value, updated_at)
-       VALUES ('description', 'AI Agent Engine 独立记忆图谱数据库', unixepoch())`,
+       VALUES ('description', 'Aether Engine 独立记忆图谱数据库', unixepoch())`,
     )
     console.log('  ✓ Default graph meta seeded')
   } catch (err) {

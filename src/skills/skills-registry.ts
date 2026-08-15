@@ -22,15 +22,19 @@ class SkillsRegistry {
 
   /** 初始化并启动文件监听 */
   start(skillsRoot?: string): void {
-    // 优先级：参数 > 环境变量 > cwd/SKILLs 自动探测（兼容 Wuzu Client 无 SKILLS_ROOT 场景）
+    // 优先级：参数 > 环境变量 > cwd/.aether/skills（新约定）> cwd/SKILLs（旧位置回退）
     let rawRoot = skillsRoot ?? process.env.SKILLS_ROOT ?? ''
     if (!rawRoot) {
-      const cwdSkills = path.join(process.cwd(), 'SKILLs')
-      if (fs.existsSync(cwdSkills)) {
-        rawRoot = cwdSkills
-        logger.info({ root: rawRoot }, 'SkillsRegistry: SKILLS_ROOT not set, auto-detected cwd/SKILLs')
+      const aetherSkills = path.join(process.cwd(), '.aether', 'skills')
+      const legacySkills = path.join(process.cwd(), 'SKILLs')
+      if (fs.existsSync(aetherSkills)) {
+        rawRoot = aetherSkills
+        logger.info({ root: rawRoot }, 'SkillsRegistry: auto-detected cwd/.aether/skills')
+      } else if (fs.existsSync(legacySkills)) {
+        rawRoot = legacySkills
+        logger.info({ root: rawRoot }, 'SkillsRegistry: SKILLS_ROOT not set, auto-detected cwd/SKILLs (legacy path)')
       } else {
-        logger.warn('SkillsRegistry: SKILLS_ROOT not set and cwd/SKILLs not found, skills disabled')
+        logger.warn('SkillsRegistry: SKILLS_ROOT not set and no .aether/skills or SKILLs directory found, skills disabled')
         return
       }
     }

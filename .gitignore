@@ -39,6 +39,7 @@ logs/
 
 # MCP config (may contain sensitive info)
 mcp.config.json
+.aether/mcp.json
 
 # OS files
 .DS_Store

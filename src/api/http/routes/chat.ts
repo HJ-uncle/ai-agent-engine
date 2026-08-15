@@ -14,6 +14,7 @@ import { buildSkillsSystemPrompt } from '../../../skills/index.js'
 import { createToolRegistry } from '../../../tools/registry-factory.js'
 import { resolveOSMMode } from '../../../core/osm.js'
 import { prependBootstrapToSystemPrompt } from '../../../core/osm-bootstrap.js'
+import { getProjectContextBlock } from '../../../core/project-context.js'
 import { SQLiteAgentStore } from '../../../storage/agent/index.js'
 import { SessionStore } from '../../../storage/session/index.js'
 import { tenantConfigStore } from '../../../storage/sqlite/tenant-config.js'
@@ -552,8 +553,15 @@ export async function chatRoutes(fastify: FastifyInstance) {
       )
     }
 
+    // ── 项目上下文（AE.md）注入 ────────────────────────────────────────────────
+    // .aether/AE.md / ~/.aether/AE.md 的内容作为项目说明追加到系统提示词末尾
+    const projectContextBlock = getProjectContextBlock()
+    if (projectContextBlock) {
+      reqLogger.info('Project context (AE.md) injected into systemPrompt')
+    }
+
     const baseSystemPrompt = prependBootstrapToSystemPrompt(
-      [effectiveSystemPrompt, skillsPrompt].filter(Boolean).join('\n\n')
+      [effectiveSystemPrompt, skillsPrompt, projectContextBlock].filter(Boolean).join('\n\n')
         + inlineKbBlock
         + inlineMemoriesBlock,
       reqLogger,

@@ -40,9 +40,12 @@ function makeRegistry(loader = loadExternalSkills) {
     // ← 与 skills-registry.ts start() 逻辑完全一致
     let rawRoot = skillsRoot ?? process.env.SKILLS_ROOT ?? ''
     if (!rawRoot) {
-      const cwdSkills = path.join(process.cwd(), 'SKILLs')
-      if (fs.existsSync(cwdSkills)) {
-        rawRoot = cwdSkills
+      const aetherSkills = path.join(process.cwd(), '.aether', 'skills')
+      const legacySkills = path.join(process.cwd(), 'SKILLs')
+      if (fs.existsSync(aetherSkills)) {
+        rawRoot = aetherSkills
+      } else if (fs.existsSync(legacySkills)) {
+        rawRoot = legacySkills
       } else {
         return null  // 无路径可用
       }
@@ -136,7 +139,7 @@ describe('SkillsRegistry / start() 路径解析', () => {
     }
   })
 
-  it('case 4: SKILLS_ROOT 未设置 + cwd/SKILLs 不存在 → null（空列表）', () => {
+  it('case 4: SKILLS_ROOT 未设置 + .aether/skills 与 SKILLs 均不存在 → null（空列表）', () => {
     const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'test-nodir-'))
     try {
       process.chdir(tmpBase)
@@ -144,6 +147,30 @@ describe('SkillsRegistry / start() 路径解析', () => {
       const resolved = reg.start()
       expect(resolved).toBeNull()
       expect(reg.getSkills()).toHaveLength(0)
+    } finally {
+      process.chdir(origCwd)
+      fs.rmSync(tmpBase, { recursive: true, force: true })
+    }
+  })
+
+  it('case 5: .aether/skills 与 SKILLs 并存时 → 优先探测 .aether/skills（新约定）', () => {
+    const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'test-aether-'))
+    const aetherDir = path.join(tmpBase, '.aether', 'skills')
+    const legacyDir = path.join(tmpBase, 'SKILLs')
+    for (const dir of [aetherDir, legacyDir]) {
+      fs.mkdirSync(path.join(dir, 'probe-skill'), { recursive: true })
+      fs.writeFileSync(
+        path.join(dir, 'probe-skill', 'SKILL.md'),
+        '---\nname: probe-skill\ndescription: Probe\n---\n\n# probe\n',
+        'utf-8',
+      )
+    }
+    try {
+      process.chdir(tmpBase)
+      const reg = makeRegistry()
+      const resolved = reg.start()
+      // macOS 的 os.tmpdir() 是 /var/... 符号链接，chdir 后 cwd 会规范化为 /private/var/...
+      expect(resolved).toBe(fs.realpathSync(aetherDir))
     } finally {
       process.chdir(origCwd)
       fs.rmSync(tmpBase, { recursive: true, force: true })
@@ -221,10 +248,11 @@ describe('SkillsRegistry / 集成 - 真实 SKILLs 目录 + cwd 自动探测', ()
     else delete process.env.SKILLS_ROOT
   })
 
-  it('cwd = agent-engine 根目录时，自动探测到 cwd/SKILLs 并加载全部 OSM 技能', () => {
-    const cwdSkills = path.join(process.cwd(), 'SKILLs')
-    if (!fs.existsSync(cwdSkills)) {
-      console.warn('[skip] cwd/SKILLs 不存在，跳过集成测试')
+  it('cwd = 仓库根目录时，自动探测到 .aether/skills（旧 SKILLs/ 回退）并加载全部 OSM 技能', () => {
+    const aetherSkills = path.join(process.cwd(), '.aether', 'skills')
+    const legacySkills = path.join(process.cwd(), 'SKILLs')
+    if (!fs.existsSync(aetherSkills) && !fs.existsSync(legacySkills)) {
+      console.warn('[skip] .aether/skills 与 SKILLs 均不存在，跳过集成测试')
       return
     }
 

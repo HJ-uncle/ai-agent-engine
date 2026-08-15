@@ -1330,7 +1330,7 @@ function WelcomeScreen({
         {agentName ? `你好，我是 ${agentName}` : "你好，有什么可以帮你？"}
       </h2>
       <p className={styles.welcomeSub}>
-        基于 Agent Engine 驱动，支持工具调用、知识库检索、多工作区绑定及附件处理
+        基于 Aether Engine (AE) 驱动，支持工具调用、知识库检索、多工作区绑定及附件处理
       </p>
       <div style={{ fontSize: 12, color: "#8b949e", marginBottom: 24, display: "flex", gap: 16, justifyContent: "center" }}>
         <span>📎 支持所有文件格式上传</span>

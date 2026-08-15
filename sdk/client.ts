@@ -1,5 +1,5 @@
 /**
- * AI Agent Engine Client SDK
+ * Aether Engine Client SDK
  * ============================================================================
  * 封装所有 API 端点，支持 SSE 流式对话。
  *
