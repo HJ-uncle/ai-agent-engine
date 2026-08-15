@@ -22,7 +22,8 @@
 - **🤝 多智能体协作**：支持 Parent-Child Agent 模型，自动拆解复杂任务并分发给专业子智能体（支持 `implementer` / `spec-reviewer` / `code-quality-reviewer` 方法论角色预设）。
 - **🔀 Flow DAG 编排**：`POST /api/v1/flows/run` 提交节点+边定义，确定性拓扑分层调度（同层并行），每节点起独立 ephemeral 子会话跑 ReAct，SSE 流式推送 `flow_started` / `node_start` / `node_delta` / `node_done` / `flow_done` 等事件，支持 `POST /flows/:runId/stop` 中止。
 - **🔌 开放协议支持**：完美适配 MCP (Model Context Protocol) 协议，支持通过 TypeScript/Python 编写自定义 Skills，技能元数据采用标准 **`plugin.json`** 分发规范（向后兼容 SKILL.md）。
-- **🧠 专职模型路由 (Task-specific Routing)**：后台高耗能场景（安全审查 `LLM_REVIEW_MODEL`、上下文压缩 `LLM_SUMMARIZE_MODEL`）可独立指定低成本模型，未配置时自动回退主模型，实现精细化成本管控。
+- ** 技能管理中心**：前端「技能管理」面板支持 **zip 压缩包导入**（直传/分片断点续传、zip-slip/zip bomb 防护、macOS 打包垃圾自动过滤）与**表单直建**两种方式；技能分**项目级**（`.aether/skills/`）与**全局级**（`~/.aether/skills/`，`AETHER_GLOBAL_DIR` 可指向共享卷实现集群共享）两层落盘，目录热重载，同名项目级覆盖全局级；支持详情查看、删除与版本备份，接口受 admin / skill-manager RBAC 保护。
+- ** 专职模型路由 (Task-specific Routing)**：后台高耗能场景（安全审查 `LLM_REVIEW_MODEL`、上下文压缩 `LLM_SUMMARIZE_MODEL`）可独立指定低成本模型，未配置时自动回退主模型，实现精细化成本管控。
 - **♻️ 上下文智能压缩 (Auto Compaction)**：会话 Token 超过阈值（默认 500000，可配置）时，后台异步调用摘要模型无损提炼历史并释放空间，实现无限长上下文，彻底告别生硬截断。
 - **🧠 长期记忆开关**：用户可在设置页一键开关 `ENABLE_LONG_TERM_MEMORY`，关闭后新会话保持绝对干净，不携带任何历史偏好。
 - **⚡ 流式传输池化 (Connection Pooling)**：底层 HTTP/HTTPS Agent 常驻 `keepAlive` 连接池（maxSockets 100），高频工具调用复用 TCP/TLS 连接，大幅降低 TTFT 首字延迟。
@@ -30,7 +31,7 @@
 - **🛡️ 安全沙箱**：基于命令注入检测与 SSRF 防护的执行环境，配合审计日志确保操作安全。支持三种安全模式（安全 / 标准 / 完全访问），会话级切换，前端输入框可一键选择。高危命令触发 **细粒度 Exec Policy 审批流**：前端弹出红色授权卡片 → 用户允许/拒绝 → 会话级缓存白名单 → 模型原样重试。
 - **⚡ OpenSpec 方法论 (OSM)**：四档能力档位（`off` 关闭 / `balanced` 均衡 / `methodology` 专家 / `max` 极限），默认 `balanced`，一键控制工具集、Token 预算倍率和方法论 Prompt 注入。前端 OSM 模式下拉菜单支持简体中文 i18n 切换，聊天输入框可拖拽调整高度。
 - **📈 可观测性**：详细的 Token 分类统计（系统提示词、RAG、工具结果等）及性能监控指标，DeepSeek KV Cache 命中节省金额实时估算，账户余额查询与低余额告警。
-- **💎 增强交互**：聊天输入框支持拖拽缩放高度，OSM 模式下拉菜单（AI 图标 + 中文档位标签），Max 模式操作前二次确认防误触。
+- **💎 增强交互**：聊天输入框支持拖拽缩放高度，OSM 模式下拉菜单（AI 图标 + 中文档位标签），Max 模式操作前二次确认防误触；对话窗口支持**按轮次勾选导出**（Markdown 下载 / 复制全文，含思考过程与工具调用，便于分析 AI 输出）。
 
 ---
 
@@ -120,7 +121,8 @@ Aether Engine 使用统一的 `.aether/` 目录管理项目级配置（对标 Cl
 ├── skills/       # 项目级技能包（SKILL.md 带 YAML frontmatter，支持热重载）
 └── AE.md         # 项目上下文说明，自动注入 system prompt（对标 CLAUDE.md / AGENTS.md）
 
-~/.aether/        # 用户级配置：aether.json / AE.md，优先级低于项目级
+~/.aether/        # 用户级配置：aether.json / mcp.json / skills/，优先级低于项目级
+                  # 集群部署可用 AETHER_GLOBAL_DIR 指向共享卷（NFS/EFS）跨机共享
 ```
 
 优先级（低 → 高）：内置默认 → `.env` → `~/.aether/aether.json` → `.aether/aether.json` → 数据库（UI 设置页）→ 请求级透传。旧版 `mcp.config.json` 与 `SKILLs/` 目录仍自动回退兼容。
@@ -150,6 +152,7 @@ Aether Engine 使用统一的 `.aether/` 目录管理项目级配置（对标 Cl
 | **工作区** | `/api/v1/workspace` | 文件上传、下载及目录管理 |
 | **自动化** | `/api/v1/cron` / `/api/v1/todos` | 定时任务与待办事项管理 |
 | **Flow** | `/api/v1/flows/run` · `/api/v1/flows/:runId/stop` | DAG 编排执行：拓扑分层 + 同层并行 + ephemeral 子会话，SSE 流式返回节点级执行事件 |
+| **技能** | `/api/v1/skills` · `/api/v1/skills/imports` | 技能 CRUD 与 zip 导入（断点续传），项目级/全局级两层 scope |
 | **安全** | `/api/v1/security/mode` | 会话级安全模式切换（safe / standard / full-access） |
 | **管理** | `/api/v1/agents` / `/api/v1/models` | 智能体配置与模型 Key 管理 |
 | **SDK** | `agent-engine` npm 包 | Embedded / Remote 双模式，22 组 API namespace |
