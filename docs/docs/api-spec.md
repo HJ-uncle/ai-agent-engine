@@ -67,7 +67,13 @@
 | `40300` | 权限不足（如非管理员操作） |
 | `40400` | 资源不存在 |
 | `40900` | 资源冲突（例如重复创建） |
+| `41010` | Skill 导入：非法 zip 格式 |
+| `41011` | Skill 导入：超出大小/条目限制 |
+| `41012` | Skill 导入：包结构校验失败（缺 SKILL.md / 文件类型不在白名单） |
+| `41013` | Skill 导入：名称冲突且策略为拒绝 |
+| `41015` | RBAC 权限不足（技能管理接口需要 admin / skill-manager 角色） |
 | `50000` | 服务器内部错误 / 数据库异常 |
+| `50010` | Skill 导入：服务器内部错误 |
 
 ---
 
@@ -143,16 +149,60 @@
 - `POST /api/v1/knowledge/search`: 知识库语义相似度搜索检索
 
 ### 5. 模型上下文协议 MCP (`/api/v1/mcp`)
-- `GET /api/v1/mcp/servers`: 获取所有 MCP 服务器状态及信息 (支持分页)
-- `POST /api/v1/mcp/servers`: 注册/创建一个新的 MCP 服务器
+
+> **两层配置架构**：MCP 配置分**项目级**（`<项目>/.aether/mcp.json`）与**全局级**（`~/.aether/mcp.json`）两层。列表接口返回合并视图，每条记录携带 `scope` 字段（`project` / `global`）；项目级同名定义覆盖全局级（类似 git config 的 local 语义）。
+
+- `GET /api/v1/mcp/servers`: 获取所有 MCP 服务器状态及信息 (支持分页，含全局+项目合并，记录含 `scope` 字段)
+- `POST /api/v1/mcp/servers`: 注册/创建一个新的 MCP 服务器。请求体可选 `scope: "project" | "global"`（默认 `project`）；`scope=global` 时写入 `~/.aether/mcp.json`，对所有项目生效
 - `GET /api/v1/mcp/servers/:id`: 获取单个 MCP 服务器详情
-- `PUT /api/v1/mcp/servers/:id`: 全量更新指定的 MCP 服务器配置
+- `PUT /api/v1/mcp/servers/:id`: 全量更新指定的 MCP 服务器配置（编辑全局服务器时保存为项目级覆盖副本，全局定义保持不变）
 - `PATCH /api/v1/mcp/servers/:id`: 部分更新指定的 MCP 服务器配置
-- `DELETE /api/v1/mcp/servers/:id`: 删除指定的 MCP 服务器
+- `DELETE /api/v1/mcp/servers/:id`: 删除指定的 MCP 服务器。可选 query `?scope=global` 仅删除全局层定义（不影响项目级同名定义）
 - `POST /api/v1/mcp/servers/:id/enable`: 启用指定的 MCP 服务器
 - `POST /api/v1/mcp/servers/:id/disable`: 禁用指定的 MCP 服务器
 - `POST /api/v1/mcp/servers/:id/test`: 测试指定 MCP 服务器的连接情况及获取支持的工具
 - `POST /api/v1/mcp/servers/:name/restart`: 重启指定运行中的 MCP 服务器
+
+### 5a. 技能管理 Skills (`/api/v1/skills`)
+
+> **两层技能架构**：技能分**项目级**（`<项目>/.aether/skills/`）与**全局级**（`~/.aether/skills/`，可用 `AETHER_GLOBAL_DIR` 指向共享卷实现集群共享）两层。项目级同名技能覆盖全局级。技能目录支持 `fs.watch` 热重载。
+>
+> **RBAC**：本组接口需要 `admin` 或 `skill-manager` 角色（`AUTH_ENABLED=true` 时；本地开发未开启鉴权时匿名可用）。前端可在「设置 → 通用 → 访问凭据」配置 API Key。
+>
+> **技能包规范**：每个技能为一个目录，必须包含带 `name` / `description` frontmatter 的 `SKILL.md`；文件类型白名单：`.md .ts .js .mjs .cjs .json .sh .py .html .css .txt .png .jpg .jpeg .svg .gif .webp .yaml .yml .xml .csv .toml .ini .map`。macOS 打包垃圾（`__MACOSX/`、`._*`、`.DS_Store`）自动过滤。
+
+#### 技能 CRUD
+
+- `GET /api/v1/skills?reload=1`: 获取技能列表（名称/描述/启用状态/scope）。`reload=1` 强制重扫磁盘。返回 `{ skills: [...], globalRoot: "~/.aether/skills 或 null" }`
+- `GET /api/v1/skills/:name`: 获取技能详情。返回 SKILL.md 全文（`content`）、落盘目录（`dir`）、scope/enabled/order 元信息、附件清单（`files`，200 文件 / 4 层深度上限）
+- `POST /api/v1/skills`: 手动创建技能（表单直建，无需压缩包）
+
+  **请求体：**
+  ```json
+  {
+    "name": "my-skill",
+    "description": "一句话描述（供 Agent 检索匹配）",
+    "content": "## 使用场景\n…（SKILL.md 正文，Markdown）",
+    "scope": "project",
+    "overwrite": false
+  }
+  ```
+
+  **说明：** `name` 必须匹配 `^[a-z0-9][a-z0-9-_]*$`；系统自动生成 frontmatter 与正文合并为 SKILL.md；同名已存在时返回 `40900`，`overwrite: true` 时旧版本自动备份到 `<skillsRoot>/.versions/<name>/<时间戳>/`；落盘后热重载立即生效。
+
+- `DELETE /api/v1/skills/:name`: 删除技能（按定义层删除目录及版本备份，路径安全校验拒绝目录逃逸）
+
+#### 技能包导入（支持断点续传）
+
+- `POST /api/v1/skills/imports`: 直传导入（`multipart/form-data`，字段 `file` + 可选 `scope` / `conflictStrategy: versioned|overwrite|reject`）。小文件（<8MB）推荐直传
+- `POST /api/v1/skills/imports/chunks`: 初始化分片上传（body: `filename`, `totalSize`, `importId`）
+- `GET /api/v1/skills/imports/chunks?filename=&totalSize=&importId=`: 查询已上传分片索引（断点续传恢复点）
+- `POST /api/v1/skills/imports/chunks/merge`: 合并分片并触发导入（body: `importId`）
+- `GET /api/v1/skills/imports/:id`: 查询导入任务状态/进度/错误详情
+- `GET /api/v1/skills/imports?limit=10`: 获取导入历史（含 scope 审计）
+- `DELETE /api/v1/skills/imports/:id`: 取消进行中的导入 / 清理暂存文件
+
+  **导入管线安全机制**：zip-slip 路径逃逸检测、zip bomb 防护（解压比/条目数限制）、frontmatter 结构校验、文件类型白名单、冲突三策略（版本化备份 / 直接覆盖 / 拒绝）。导入成功后自动采纳全局层（首次创建 `~/.aether/skills` 无需重启）。
 
 ### 6. 记忆存储 Memory (`/api/v1/memory`)
 - `POST /api/v1/memory/remember`: 保存新的记忆节点（支持 `key`/`value` 兼容格式或 `content`/`type` 完整格式）
@@ -321,6 +371,8 @@
 ### 11. 系统设置 Settings (`/api/v1/settings`)
 
 > **存储机制变更**：`PUT /api/v1/settings` 不再写入 `.env` 文件，所有运行时配置均存储在 SQLite `system_config` 表（key-value UPSERT）。敏感字段（`OPENAI_API_KEY`、`ANTHROPIC_API_KEY`）使用 AES-256-GCM 加密存储。服务启动时会自动将数据库配置同步到 `process.env`，所有模块无需感知变化。`.env` 文件仅保留启动前必须确定的引导参数（`PORT`、`HOST`、`DATA_DIR`、`ENCRYPTION_KEY`、`AUTH_ENABLED`、`LOG_LEVEL`）。
+>
+> **路径类配置例外**：`SKILLS_ROOT`、`MCP_CONFIG_PATH`、`WORKSPACE_ROOT` 等路径键**禁止运行时热写入** `process.env`（SkillsRegistry / MCP 双层状态在启动时已定型），修改后需重启生效。写入空值即恢复自动探测（删除数据库记录，回落 `.aether` 约定路径）。
 
 - `GET /api/v1/settings`: 获取当前系统运行时配置（从数据库读取，fallback 到 `process.env`，含 `webFetch` 安全配置）
 

@@ -41,10 +41,12 @@ Agent Engine 内置一套**系统级工具**，让 AI Agent 具备任务管理�
 | `link_memories` | Memory | 在两个记忆节点之间建立关联（如矛盾、相似等） |
 | `run_command` | System | 执行 Shell 命令（经安全策略引擎校验） |
 | `ask_user` | Interaction | 向用户提问 |
-| `list_skills` | Skill | 列出可用技能 |
-| `get_skill` | Skill | 获取技能详情 |
+| `list_skills` | Skill | 列出可用技能（OSM off/balanced 档下会注明被隐藏的方法论技能数量） |
+| `get_skill` | Skill | 获取技能详情（被 OSM 模式隐藏的技能会明确提示，而非误报"不存在"） |
 | `run_skill_script` | Skill | 运行技能脚本 |
 | `code_diagnose` | LSP | 对工作区文件运行 TypeScript/ESLint 诊断 |
+
+> **Skill 工具与 OSM 模式**：技能分项目级（`.aether/skills/`）与全局级（`~/.aether/skills/`）两层，同名时项目级覆盖全局级。方法论技能（`os-*` 系列）仅在 OSM `methodology`/`max` 档下可见；其他档位下 `list_skills` 输出尾部会附隐藏提示，`get_skill` 调用被隐藏技能时返回明确的模式说明（避免 Agent 误判为数据不一致）。技能目录由 SkillsRegistry 双层扫描并热重载（`fs.watch`），可通过 `/api/v1/skills` 管理接口增删（需 admin / skill-manager 角色）。
 
 > **注：** DeepSeek 专有功能（FIM、Prefix Completion、JSON Mode）通过 `/api/v1/deepseek/*` REST 接口暴露，不作为 Agent 工具注册；DeepSeek KV Cache / Reasoning 指标由 `DeepSeekAdapter` 自动采集，在 Token Badge 中可视化展示。
 >

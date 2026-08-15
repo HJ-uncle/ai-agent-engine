@@ -109,8 +109,8 @@ graph TD
 - **记忆衰减**：模拟遗忘机制，根据时间、访问频率和重要度自动计算权重，确保存储空间的高效利用。
 
 ### 5. 开放协议：MCP 与 Skills
-- **MCP (Model Context Protocol)**：允许系统接入外部数据源（如 GitHub、Google Drive）或外部工具。
-- **Skills**：用户可以用 TypeScript/Python 编写自定义脚本，直接扩展 Agent 的能力。
+- **MCP (Model Context Protocol)**：允许系统接入外部数据源（如 GitHub、Google Drive）或外部工具。配置支持**项目级**（`.aether/mcp.json`）与**全局级**（`~/.aether/mcp.json`）两层，全局配置对所有项目生效。
+- **Skills**：用户可以用 TypeScript/Python 编写自定义脚本，直接扩展 Agent 的能力。技能支持 zip 包导入（断点续传）与表单直建，分项目级 / 全局级两层落盘，目录热重载；方法论技能（`os-*`）按 OSM 模式档位动态可见。
 
 ### 5. 隔离与安全：多租户与工作区
 - **可选鉴权**：请求携带 `X-API-Key` 或 `Authorization: Bearer <jwt>` 时自动验证；不携带则降级为默认租户 `"default"`，零配置即可启动。外部平台通过 `POST /auth/user` 同步用户 token，后续请求自动隔离。
