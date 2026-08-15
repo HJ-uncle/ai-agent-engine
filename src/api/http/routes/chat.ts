@@ -972,7 +972,7 @@ ${workspaceInfo}
           }
 
           // 上下文智能压缩：如果 token 超过阈值，在后台触发压缩
-          const autoCompactLimit = parseInt(process.env.AUTO_COMPACT_TOKEN_LIMIT ?? '8000', 10)
+          const autoCompactLimit = parseInt(process.env.AUTO_COMPACT_TOKEN_LIMIT ?? '500000', 10)
           if (finalUsage?.totalTokens > autoCompactLimit) {
             reqLogger.info({ totalTokens: finalUsage.totalTokens, limit: autoCompactLimit }, 'Token limit exceeded, triggering auto-compaction')
             import('./conversation.js').then(({ autoCompactSession }) => {

@@ -262,7 +262,7 @@ export default function ModelSettings() {
             <div className={styles.itemControls}>
               <Input
                 type="number"
-                value={settings.AUTO_COMPACT_TOKEN_LIMIT || 8000}
+                value={settings.AUTO_COMPACT_TOKEN_LIMIT || 500000}
                 onChange={(e) => handleChange('AUTO_COMPACT_TOKEN_LIMIT', Number(e.target.value))}
                 style={{ width: 120, background: '#2d2d2d', border: '1px solid #444', color: '#ccc' }}
               />
