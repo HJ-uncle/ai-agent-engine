@@ -35,10 +35,26 @@ export interface ExternalSkill {
    * 让 agent-engine 即使本地 SKILLS_ROOT 没有同名 skill 也能让 LLM 看到完整说明。
    */
   inlineContent?: string
+  /**
+   * plugin.json 中定义的其他元数据
+   */
+  version?: string
+  author?: string
 }
 
 interface SkillsConfig {
   defaults?: Record<string, { order?: number; enabled?: boolean }>
+}
+
+interface PluginManifest {
+  id?: string
+  name?: string
+  description?: string
+  version?: string
+  author?: string
+  main?: string
+  order?: number
+  enabled?: boolean
 }
 
 // 解析 SKILL.md frontmatter (--- key: value ---)
@@ -105,38 +121,59 @@ export function loadExternalSkills(skillsRoot?: string): ExternalSkill[] {
 
   for (const dirName of dirs) {
     const skillDir = path.join(root, dirName)
-    const skillMdPath = path.join(skillDir, 'SKILL.md')
+    const pluginJsonPath = path.join(skillDir, 'plugin.json')
+    const defaultSkillMdPath = path.join(skillDir, 'SKILL.md')
 
-    if (!fs.existsSync(skillMdPath)) continue
+    let hasPluginJson = false
+    let manifest: PluginManifest = {}
+    if (fs.existsSync(pluginJsonPath)) {
+      try {
+        manifest = JSON.parse(fs.readFileSync(pluginJsonPath, 'utf-8')) as PluginManifest
+        hasPluginJson = true
+      } catch (err) {
+        logger.warn({ pluginJsonPath, err }, 'Failed to parse plugin.json')
+      }
+    }
+
+    const skillMdPath = manifest.main ? path.resolve(skillDir, manifest.main) : defaultSkillMdPath
+
+    if (!fs.existsSync(skillMdPath)) {
+      if (!hasPluginJson) continue // ignore if neither SKILL.md nor plugin.json exists
+    }
 
     // 只读取元数据（前几行 frontmatter），不加载全文
-    let raw: string
-    try {
-      // 只读前 4KB 用于解析元数据，节省内存
-      const buf = Buffer.alloc(4096)
-      const fd = fs.openSync(skillMdPath, 'r')
-      const bytesRead = fs.readSync(fd, buf, 0, 4096, 0)
-      fs.closeSync(fd)
-      raw = buf.subarray(0, bytesRead).toString('utf-8')
-    } catch {
-      continue
+    let raw = ''
+    if (fs.existsSync(skillMdPath)) {
+      try {
+        // 只读前 4KB 用于解析元数据，节省内存
+        const buf = Buffer.alloc(4096)
+        const fd = fs.openSync(skillMdPath, 'r')
+        const bytesRead = fs.readSync(fd, buf, 0, 4096, 0)
+        fs.closeSync(fd)
+        raw = buf.subarray(0, bytesRead).toString('utf-8')
+      } catch {
+        // ignore
+      }
     }
 
     const { meta } = parseFrontmatter(raw)
 
-    const name = meta['name'] ?? dirName
-    const description = meta['description'] ?? `Skill: ${name}`
+    const id = manifest.id ?? dirName
+    const name = manifest.name ?? meta['name'] ?? dirName
+    const description = manifest.description ?? meta['description'] ?? `Skill: ${name}`
+    const version = manifest.version ?? meta['version']
+    const author = manifest.author ?? meta['author']
 
     const cfg = defaults[dirName] ?? {}
-    const order = cfg.order ?? 999
-    const enabled = cfg.enabled !== false  // 默认 true
+    const order = manifest.order ?? cfg.order ?? 999
+    const enabled = manifest.enabled ?? cfg.enabled ?? true
 
     if (!enabled) {
       logger.debug({ name }, 'Skill disabled in config, skipping')
       continue
     }
 
-    skills.push({ name, description, skillMdPath, order, enabled })
+    skills.push({ id, name, description, skillMdPath, order, enabled, version, author })
   }
 
   skills.sort((a, b) => a.order - b.order)

@@ -1642,33 +1642,42 @@ function MessageItemInner({
           <ThinkingPanel msgId={msg.id} steps={[]} isActive />
         )}
 
-        {/* ask_user 交互卡片 — 提取到 ThinkingPanel 外层，避免被折叠隐藏 */}
+        {/* ask_user / permission_request 交互卡片 — 提取到 ThinkingPanel 外层，避免被折叠隐藏 */}
         {!isUser &&
           msg.thinkingSteps?.some(
-            (s) => s.type === "tool_start" && s.toolName === "ask_user" && s.success === undefined,
+            (s) =>
+              s.type === "tool_start" &&
+              (s.toolName === "ask_user" || s.toolName === "execute_cmd") &&
+              s.success === undefined &&
+              s.toolArgs && (s.toolArgs as any).question,
           ) &&
           (() => {
             const pendingStep = msg.thinkingSteps!.find(
-              (s) => s.type === "tool_start" && s.toolName === "ask_user" && s.success === undefined,
+              (s) =>
+                s.type === "tool_start" &&
+                (s.toolName === "ask_user" || s.toolName === "execute_cmd") &&
+                s.success === undefined &&
+                s.toolArgs && (s.toolArgs as any).question,
             )!;
+            const isSecurityAsk = pendingStep.toolName === "execute_cmd";
             return (
               <div
                 style={{
                   margin: "8px 0",
                   padding: 16,
-                  background: "#161b22",
-                  border: "1px solid #d29922",
+                  background: isSecurityAsk ? "#1c0f0f" : "#161b22",
+                  border: isSecurityAsk ? "1px solid #f78166" : "1px solid #d29922",
                   borderRadius: 8,
-                  boxShadow: "0 0 0 1px rgba(210, 153, 34, 0.2)",
+                  boxShadow: isSecurityAsk ? "0 0 0 1px rgba(247, 129, 102, 0.2)" : "0 0 0 1px rgba(210, 153, 34, 0.2)",
                 }}
               >
-                <div style={{ color: "#d29922", fontSize: 13, marginBottom: 8, fontWeight: 600 }}>
-                  💬 AI 需要你的回复
+                <div style={{ color: isSecurityAsk ? "#f78166" : "#d29922", fontSize: 13, marginBottom: 8, fontWeight: 600 }}>
+                  {isSecurityAsk ? "🛡️ 安全拦截与审批" : "💬 AI 需要你的回复"}
                 </div>
                 <InteractiveCard
                   data={pendingStep.toolArgs as any}
                   onReply={(content) =>
-                    onToolReply?.(msg.id, pendingStep.toolCallId ?? "", "ask_user", content)
+                    onToolReply?.(msg.id, pendingStep.toolCallId ?? "", pendingStep.toolName || "ask_user", content)
                   }
                   disabled={!isLast}
                 />

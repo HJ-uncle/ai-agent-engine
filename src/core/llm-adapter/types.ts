@@ -26,9 +26,10 @@ export interface LLMStreamChunk {
   content?: string
   reasoningContent?: string
   toolCalls?: Array<{
-    id: string
-    name: string
-    args: Record<string, unknown>
+    id?: string
+    name?: string
+    args?: string
+    index?: number
   }>
   done: boolean
   promptTokens?: number
@@ -47,6 +48,7 @@ export interface LLMAdapterOptions {
   tools?: Tool[]
   thinkingConfig?: Record<string, unknown> | null
   responseThinkingField?: string | null
+  reasoningEffort?: 'low' | 'medium' | 'high'
   signal?: AbortSignal
   // ── DeepSeek 专有可选项 ───────────────────────────────────────────────
   /** "json" 强制模型输出严格 JSON（DeepSeek JSON Mode） */

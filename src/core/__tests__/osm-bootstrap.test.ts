@@ -82,13 +82,14 @@ describe('osm-bootstrap / getOSMBootstrapBlock', () => {
     expect(block).toContain('Using OSM')
   })
 
-  it('bootstrap skill 缺失时返回空 + 首次打 warn', () => {
+  it('bootstrap skill 缺失时返回 fallback 块 + 首次打 warn', () => {
     const warn = vi.fn()
     const log = { warn, debug: vi.fn() } as any
     setEnv('methodology')
     mockBootstrapSkill(null)
     const block = getOSMBootstrapBlock(log)
-    expect(block).toBe('')
+    expect(block).toContain('<openspec-methodology mode="active">')
+    expect(block).toContain('get_skill({ name: "os-using-superpowers" })')
     expect(warn).toHaveBeenCalledTimes(1)
   })
 

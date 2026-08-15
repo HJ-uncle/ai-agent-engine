@@ -464,6 +464,9 @@ async function parseSseStream(
         } else if (parsed.usage !== undefined) {
           // Token 用量
           event = { type: 'usage', usage: parsed.usage }
+        } else if (parsed.permissionRequest !== undefined) {
+          // Exec Policy 细粒度拦截审批卡片 (复用 ask_user 结构)
+          event = { type: 'ask_user', data: parsed.permissionRequest.args }
         } else if (parsed.ask_user !== undefined) {
           // 提问卡片
           event = { type: 'ask_user', data: parsed.ask_user }

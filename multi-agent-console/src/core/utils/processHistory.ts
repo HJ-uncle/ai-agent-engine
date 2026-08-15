@@ -128,9 +128,9 @@ export function processHistoryMessages(list: any[], precomputedUsage?: TokenUsag
           outputPreview: contentStr.slice(0, 500),
         }
       } else {
-        if (m.toolName === 'ask_user') {
+        if (m.toolName === 'ask_user' || m.toolName === 'execute_cmd') {
           const askUserIdx = currentThinkingSteps.findIndex(
-            (s) => s.type === 'tool_start' && s.toolName === 'ask_user' && s.success === undefined,
+            (s) => s.type === 'tool_start' && (s.toolName === 'ask_user' || s.toolName === 'execute_cmd') && s.success === undefined,
           )
           if (askUserIdx !== -1) {
             currentThinkingSteps[askUserIdx].success = true

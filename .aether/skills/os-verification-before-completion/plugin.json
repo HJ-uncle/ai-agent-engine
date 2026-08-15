@@ -1,0 +1,7 @@
+{
+  "id": "os-verification-before-completion",
+  "name": "os-verification-before-completion",
+  "description": "Use when about to claim work is complete, before committing. Part of OpenSpec Methodology.",
+  "version": "1.0.0",
+  "main": "SKILL.md"
+}

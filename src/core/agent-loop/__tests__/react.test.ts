@@ -25,7 +25,26 @@ function makeLLMAdapter(responses: LLMResponse[]): LLMAdapter {
     stream: vi.fn().mockImplementation(async function* () {
       const response = responses[callIndex]
       callIndex = Math.min(callIndex + 1, responses.length - 1)
-      yield response
+      
+      const chunk: any = {
+        done: true,
+        content: response.content,
+        reasoningContent: response.reasoningContent,
+        promptTokens: response.promptTokens,
+        completionTokens: response.completionTokens,
+        finishReason: response.finishReason,
+      }
+      
+      if (response.toolCalls && response.toolCalls.length > 0) {
+        chunk.toolCalls = response.toolCalls.map(tc => ({
+          id: tc.id,
+          name: tc.name,
+          args: typeof tc.args === 'string' ? tc.args : JSON.stringify(tc.args),
+          index: 0
+        }))
+      }
+      
+      yield chunk
     }),
     complete: vi.fn(),
     countTokens: vi.fn().mockReturnValue(10),
@@ -320,7 +339,7 @@ describe('ReActStrategy', () => {
     const results = await collectYields(strategy.run('What time is it?', ctx))
 
     expect(results).toHaveLength(1)
-    expect(results[0]).toContain('[Error: LLM call failed - Cannot read properties of undefined')
+    expect(results[0]).toContain('[Error: LLM call failed - Network timeout]')
   })
 
   // ── 6. Tool execution error is captured gracefully ───────────────────────────
@@ -357,7 +376,7 @@ describe('ReActStrategy', () => {
     const results = await collectYields(strategy.run('Use broken tool', ctx))
 
     // Should still complete (second LLM call returns final answer)
-    expect(results.join('')).toContain('[Error: LLM call failed')
+    expect(results.join('')).toContain('I encountered an error.')
 
     // Tool message should contain the error text
     const appendCalls = (ctx.history.append as ReturnType<typeof vi.fn>).mock.calls

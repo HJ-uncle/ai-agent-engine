@@ -1,5 +1,17 @@
 import OpenAI from 'openai'
-import type { LLMAdapter, LLMResponse, LLMAdapterOptions, LLMStreamChunk, EmbedOptions } from './types.js'
+import http from 'node:http'
+import https from 'node:https'
+import type { LLMAdapter, LLMResponse, LLMAdapterOptions, EmbedOptions, LLMStreamChunk } from './types.js'
+
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 100 })
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 100 })
+
+// A custom fetch function that injects keep-alive agents
+const keepAliveFetch = async (url: RequestInfo | URL, init?: RequestInit) => {
+  const parsedUrl = new URL(url.toString())
+  const agent = parsedUrl.protocol === 'http:' ? httpAgent : httpsAgent
+  return globalThis.fetch(url, { ...init, dispatcher: undefined, ...{ agent } } as any)
+}
 import type { Message, Tool } from '../agent-context/index.js'
 import { estimateTokens } from '../utils/tokens.js'
 import { repairJson } from '../utils/json.js'
@@ -591,24 +603,21 @@ export class OpenAIAdapter implements LLMAdapter {
 
     const hasTokenAuth = defaultHeaders && 'X-Access-Token' in defaultHeaders
     this.client = new OpenAI({
-      // 当 key 未设置时传占位符，绕过 SDK 构造函数的非空校验。
-      // 真正发起请求前会在 complete()/stream() 里做业务检查，给出更友好的错误。
       apiKey: this.resolvedApiKey ?? OPENAI_KEY_PLACEHOLDER,
-      baseURL: normalizeBaseURL(rawBaseURL), // supports custom OpenAI-compatible endpoints
-      // X-Access-Token 鉴权：通过自定义 fetch 移除 SDK 自动生成的 Authorization 头，
-      // 并手动注入全部自定义头，避免上游报 "duplicated valid auth method"。
-      // 其他场景：直接用 defaultHeaders 即可。
+      baseURL: normalizeBaseURL(rawBaseURL),
       ...(hasTokenAuth ? {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         fetch: (async (url: any, init?: any) => {
           const headers = new Headers(init?.headers)
           headers.delete('Authorization')
           for (const [k, v] of Object.entries(defaultHeaders!)) {
             headers.set(k, v)
           }
-          return globalThis.fetch(url as RequestInfo | URL, { ...init, headers })
+          return keepAliveFetch(url as RequestInfo | URL, { ...init, headers })
         }) as any
-      } : (defaultHeaders && Object.keys(defaultHeaders).length ? { defaultHeaders } : {}))
+      } : {
+        fetch: keepAliveFetch as any,
+        ...(defaultHeaders && Object.keys(defaultHeaders).length ? { defaultHeaders } : {})
+      })
     })
     this.supportsVision = supportsVision ?? this.detectVisionSupport(rawBaseURL)
   }
@@ -662,6 +671,10 @@ export class OpenAIAdapter implements LLMAdapter {
       model: options?.model ?? this.model,
       messages: oaiMessages,
       ...buildSamplingParams(options?.model ?? this.model, options?.temperature, options?.maxTokens),
+    }
+
+    if (options?.reasoningEffort && /^(o1|o3)/i.test(options?.model ?? this.model)) {
+      params.reasoning_effort = options.reasoningEffort
     }
 
     // ── DeepSeek JSON Mode（OpenAI 也兼容此协议） ──────────────────────────
@@ -769,6 +782,10 @@ export class OpenAIAdapter implements LLMAdapter {
       messages: oaiMessages,
       stream: true,
       ...buildSamplingParams(options?.model ?? this.model, options?.temperature, options?.maxTokens),
+    }
+
+    if (options?.reasoningEffort && /^(o1|o3)/i.test(options?.model ?? this.model)) {
+      params.reasoning_effort = options.reasoningEffort
     }
 
     // stream_options.include_usage：DeepSeek/OpenAI 官方端点支持，

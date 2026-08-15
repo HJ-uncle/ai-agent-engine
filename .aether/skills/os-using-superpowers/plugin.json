@@ -1,0 +1,7 @@
+{
+  "id": "os-using-superpowers",
+  "name": "os-using-superpowers",
+  "description": "Use when starting any conversation - establishes OpenSpec Methodology (OSM) for skill discovery and execution.",
+  "version": "1.0.0",
+  "main": "SKILL.md"
+}

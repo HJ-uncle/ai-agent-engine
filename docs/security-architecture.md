@@ -88,11 +88,11 @@ interface AuthMiddleware {
 
 ---
 
-## 模块 2：策略引擎 (Policy Engine)
+## 模块 2：策略引擎与细粒度审批 (Exec Policy)
 
 **路径**: `src/security/policy-engine.ts`
 
-**职责**: 对命令执行进行三级安全裁决（注入检测 → 路径穿越 → 规则匹配）。
+**职责**: 对命令执行进行三级安全裁决（注入检测 → 路径穿越 → 规则匹配），并在必要时暂停执行流程以获取用户显式授权。
 
 ### 架构图
 
@@ -109,6 +109,13 @@ flowchart TD
     RULES --> R1{命中规则?}
     R1 -->|是| DECISION[返回规则 action<br/>allow / ask / deny]
     R1 -->|否| FALLBACK[兜底: ASK]
+    
+    DECISION -->|allow| CHECK_APPROVED{已在当前会话审批过?}
+    DECISION -->|ask| SUSPEND[挂起 Agent Loop<br/>向前端下发 __permission_request__]
+    
+    SUSPEND --> UI[前端弹出审批卡片]
+    UI -->|用户点击 Approve| APPROVED[记录到 session approvedCommands 缓存<br/>恢复执行]
+    UI -->|用户点击 Reject| REJECTED[阻断执行<br/>通知大模型寻替代方案]
     
     DENY_INJ --> AUDIT[(审计日志)]
     ASK_PATH --> AUDIT
@@ -199,6 +206,16 @@ flowchart LR
 ```
 
 > 双重保护：即使策略引擎被绕过放行，白名单仍会拦截非预期命令。
+
+---
+
+## 模块 3.5：DevContainer 与系统级网络隔离
+
+在物理隔离层，Aether Engine 提供了基于 `.devcontainer` 的完整容器化运行规范：
+
+- **Docker Compose 隔离**：每个租户/会话可分配独立的 DevContainer，保证底层文件系统和进程空间与宿主机彻底隔离。
+- **iptables / ipset 防火墙**：在 `init-firewall.sh` 中配置了底层的网络出站策略。默认丢弃所有非必须流量，仅对大模型 API（如 `api.openai.com`, `api.deepseek.com`, `dashscope.aliyuncs.com` 等）以及必要的包管理器服务（npm、pip）放行。
+- 这一层不依赖 Node.js 的应用层检查，即使 Agent 成功诱导执行了 `curl` 或下载了恶意脚本，也会被内核级网络隔离拦截。
 
 ---
 

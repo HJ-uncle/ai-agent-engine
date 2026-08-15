@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { detectInjection, detectPathTraversal } from '../policy-engine.js'
+import { describe, it, expect, beforeEach } from 'vitest'
+import { detectInjection, detectPathTraversal, policyEngine, approveCommand, setSecurityMode } from '../policy-engine.js'
 import { isPrivateIP, parseCidr } from '../network-policy.js'
 import { createPool } from '../../core/utils/concurrency-pool.js'
 
@@ -17,6 +17,40 @@ describe('policy-engine injection detection', () => {
     expect(detectPathTraversal(['../../etc/passwd'])).toContain('../../etc/passwd')
     expect(detectPathTraversal(['/etc/shadow'])).toContain('/etc/shadow')
     expect(detectPathTraversal(['normal/path'])).toHaveLength(0)
+  })
+})
+
+describe('policy-engine evaluation and approval', () => {
+  beforeEach(async () => {
+    await policyEngine.resetDefaults()
+  })
+
+  it('allows approved commands even if they are high risk', async () => {
+    const tenantId = 'test-tenant'
+    const sessionId = 'test-session'
+    setSecurityMode(tenantId, sessionId, 'safe')
+
+    // Normally rm triggers ask in safe mode
+    let decision = await policyEngine.evaluate({
+      command: 'rm',
+      args: ['-rf', 'foo'],
+      tenantId,
+      sessionId
+    })
+    expect(decision.action).toBe('ask')
+
+    // Approve the command
+    approveCommand(tenantId, sessionId, 'rm', ['-rf', 'foo'])
+
+    // Now it should be allowed
+    decision = await policyEngine.evaluate({
+      command: 'rm',
+      args: ['-rf', 'foo'],
+      tenantId,
+      sessionId
+    })
+    expect(decision.action).toBe('allow')
+    expect(decision.reason).toContain('审批通过')
   })
 })
 

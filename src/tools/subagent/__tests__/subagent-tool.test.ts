@@ -54,13 +54,13 @@ describe('subagent-tool / ROLE_VALUES', () => {
 // ──────────────────────────────────────────────────────────────────────────
 describe('subagent-tool / __loadRoleTemplateForTests', () => {
   function installFakeSkill(content: string, filename = 'implementer-prompt.md') {
-    const skillDir = path.join(tmpDir, 'superpower-subagent-driven-dev')
+    const skillDir = path.join(tmpDir, 'os-subagent-driven-dev')
     fs.mkdirSync(skillDir, { recursive: true })
     const skillMd = path.join(skillDir, 'SKILL.md')
     fs.writeFileSync(skillMd, '# fake skill')
     fs.writeFileSync(path.join(skillDir, filename), content)
     mockSkills.push({
-      name: 'superpower-subagent-driven-dev',
+      name: 'os-subagent-driven-dev',
       skillMdPath: skillMd,
     })
   }
@@ -70,11 +70,11 @@ describe('subagent-tool / __loadRoleTemplateForTests', () => {
   })
 
   it('skill 注册但对应 role prompt 文件缺失 → null', () => {
-    const skillDir = path.join(tmpDir, 'superpower-subagent-driven-dev')
+    const skillDir = path.join(tmpDir, 'os-subagent-driven-dev')
     fs.mkdirSync(skillDir, { recursive: true })
     const skillMd = path.join(skillDir, 'SKILL.md')
     fs.writeFileSync(skillMd, '# fake')
-    mockSkills.push({ name: 'superpower-subagent-driven-dev', skillMdPath: skillMd })
+    mockSkills.push({ name: 'os-subagent-driven-dev', skillMdPath: skillMd })
 
     expect(__loadRoleTemplateForTests('spec-reviewer')).toBeNull()
   })
@@ -92,14 +92,14 @@ describe('subagent-tool / __loadRoleTemplateForTests', () => {
   })
 
   it('三个 role 分别定位各自的 <role>-prompt.md', () => {
-    const skillDir = path.join(tmpDir, 'superpower-subagent-driven-dev')
+    const skillDir = path.join(tmpDir, 'os-subagent-driven-dev')
     fs.mkdirSync(skillDir, { recursive: true })
     const skillMd = path.join(skillDir, 'SKILL.md')
     fs.writeFileSync(skillMd, '# fake')
     fs.writeFileSync(path.join(skillDir, 'implementer-prompt.md'), 'A')
     fs.writeFileSync(path.join(skillDir, 'spec-reviewer-prompt.md'), 'B')
     fs.writeFileSync(path.join(skillDir, 'code-quality-reviewer-prompt.md'), 'C')
-    mockSkills.push({ name: 'superpower-subagent-driven-dev', skillMdPath: skillMd })
+    mockSkills.push({ name: 'os-subagent-driven-dev', skillMdPath: skillMd })
 
     expect(__loadRoleTemplateForTests('implementer')).toBe('A')
     expect(__loadRoleTemplateForTests('spec-reviewer')).toBe('B')
@@ -107,7 +107,7 @@ describe('subagent-tool / __loadRoleTemplateForTests', () => {
   })
 
   it('通过目录名定位（skill.name 不匹配时按 skillMdPath 父目录名定位）', () => {
-    const skillDir = path.join(tmpDir, 'superpower-subagent-driven-dev')
+    const skillDir = path.join(tmpDir, 'os-subagent-driven-dev')
     fs.mkdirSync(skillDir, { recursive: true })
     const skillMd = path.join(skillDir, 'SKILL.md')
     fs.writeFileSync(skillMd, '# fake')

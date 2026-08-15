@@ -15,8 +15,23 @@ export type SecurityMode = 'safe' | 'standard' | 'full-access'
 // 会话级安全模式存储（内存 Map；持久化可选）
 const sessionSecurityModes = new Map<string, SecurityMode>()
 
+// 会话级命令白名单（用户通过 ask 审批后，存入此集合，单次会话有效）
+const approvedCommands = new Set<string>()
+
 function sessionKey(tenantId: string, sessionId: string): string {
   return `${tenantId}:${sessionId}`
+}
+
+function commandKey(tenantId: string, sessionId: string, command: string, args: string[]): string {
+  return `${tenantId}:${sessionId}:${command}:${args.join(' ')}`
+}
+
+export function approveCommand(tenantId: string, sessionId: string, command: string, args: string[] = []): void {
+  approvedCommands.add(commandKey(tenantId, sessionId, command, args))
+}
+
+export function isCommandApproved(tenantId: string, sessionId: string, command: string, args: string[] = []): boolean {
+  return approvedCommands.has(commandKey(tenantId, sessionId, command, args))
 }
 
 // 合法安全模式集合（校验 DEFAULT_SECURITY_MODE 配置用）
@@ -252,6 +267,24 @@ export class PolicyEngine {
     const cmd  = baseName(input.command).toLowerCase()
     const args = input.args ?? []
     const mode = getSecurityMode(input.tenantId ?? 'default', input.sessionId ?? '')
+
+    // 0) 如果用户已经审批过该命令，直接放行
+    if (isCommandApproved(input.tenantId ?? 'default', input.sessionId ?? '', input.command, input.args)) {
+      const decision: PolicyDecision = {
+        action: 'allow',
+        reason: '用户已在当前会话中审批通过该命令',
+      }
+      await auditLogStore.append({
+        tenantId: input.tenantId,
+        sessionId: input.sessionId,
+        category: 'cmd',
+        target: [cmd, ...args].join(' '),
+        decision: 'allow',
+        reason: decision.reason,
+        details: { securityMode: mode, approvedByAsk: true },
+      })
+      return decision
+    }
 
     // ── full-access 模式：全部放行，仅记审计 ──
     if (mode === 'full-access') {

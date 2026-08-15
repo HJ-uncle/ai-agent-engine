@@ -37,7 +37,7 @@ import { skillsRegistry } from './skills/index.js'
 import { initDb } from './storage/sqlite/db.js'
 import { initMemoryDb, closeMemoryDb, MEMORY_SCHEMA, MemoryConsolidator } from './storage/memory/index.js'
 import { systemConfigStore } from './storage/sqlite/system-config.js'
-import { loadAetherConfig, applyAetherConfigToEnv } from './core/aether-config.js'
+import { loadAetherConfig, applyAetherConfigToEnv, loadManagedConfig } from './core/aether-config.js'
 import { networkInterfaces } from 'node:os'
 
 const PORT = parseInt(process.env.PORT ?? '12323', 10)
@@ -75,6 +75,10 @@ async function main() {
       }
     }
     logger.info({ keys: Object.keys(dbConfig).length }, 'Synced system_config from DB to process.env')
+
+    // 3.5 加载受管配置 (Managed Settings) 并应用（最高优先级，覆盖 DB 和本地配置）
+    const managedConfig = loadManagedConfig()
+    applyAetherConfigToEnv(managedConfig, true)
 
     // 4. SkillsRegistry 必须在 DB→env 同步之后启动：
     //    SKILLS_ROOT / AETHER_GLOBAL_DIR 等路径配置此时才最终定型，

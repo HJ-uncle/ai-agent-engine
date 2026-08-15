@@ -34,8 +34,8 @@ describe('Conversation Compression API', () => {
   })
 
   afterEach(async () => {
-    await history.clear({ tenantId: 'test-tenant', sessionId: 'test-session' })
-    await history.clear({ tenantId: 'test-tenant', sessionId: 'test-session-err' })
+    await history.clear({ tenantId: 'test-tenant', sessionId: 'test-session' }, { tombstone: false })
+    await history.clear({ tenantId: 'test-tenant', sessionId: 'test-session-err' }, { tombstone: false })
     await fastify.close()
   })
 
@@ -50,8 +50,6 @@ describe('Conversation Compression API', () => {
       method: 'POST',
       url: '/conversation/compress?sessionId=test-session'
     })
-
-    console.log(response.json())
 
     expect(response.statusCode).toBe(200)
     const json = response.json()
@@ -74,12 +72,15 @@ describe('Conversation Compression API', () => {
     // 1. Prepare data
     await history.append({ role: 'user', content: 'Message 1' }, { tenantId: 'test-tenant', sessionId: 'test-session-err' })
     await history.append({ role: 'assistant', content: 'Message 2' }, { tenantId: 'test-tenant', sessionId: 'test-session-err' })
+    await history.append({ role: 'user', content: 'Message 3' }, { tenantId: 'test-tenant', sessionId: 'test-session-err' })
 
     // Override mock for error
     const factory = await import('../../../../core/llm-adapter/factory.js')
     const adapter = factory.createLLMAdapter()
     vi.spyOn(adapter, 'complete').mockRejectedValueOnce(new Error('LLM Timeout'))
     vi.spyOn(factory, 'createLLMAdapter').mockReturnValueOnce(adapter)
+
+    const beforeMessages = await history.getHistory({ tenantId: 'test-tenant', sessionId: 'test-session-err' })
 
     // 2. Call compress endpoint
     const response = await fastify.inject({
@@ -94,8 +95,9 @@ describe('Conversation Compression API', () => {
 
     // 3. Verify history is untouched
     const messages = await history.getHistory({ tenantId: 'test-tenant', sessionId: 'test-session-err' })
-    expect(messages.length).toBe(2)
+    expect(messages.length).toBe(3)
     expect(messages[0].role).toBe('user')
     expect(messages[1].role).toBe('assistant')
+    expect(messages[2].role).toBe('user')
   })
 })

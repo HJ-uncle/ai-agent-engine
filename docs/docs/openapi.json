@@ -3581,6 +3581,22 @@
                   "LLM_PRIMARY_MODEL": {
                     "type": "string"
                   },
+                  "LLM_REVIEW_MODEL": {
+                    "type": "string"
+                  },
+                  "LLM_SUMMARIZE_MODEL": {
+                    "type": "string"
+                  },
+                  "AUTO_COMPACT_TOKEN_LIMIT": {
+                    "type": "integer"
+                  },
+                  "REASONING_EFFORT": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high"]
+                  },
+                  "ENABLE_LONG_TERM_MEMORY": {
+                    "type": "boolean"
+                  },
                   "OPENAI_API_KEY": {
                     "type": "string"
                   },

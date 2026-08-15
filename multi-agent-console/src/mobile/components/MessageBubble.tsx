@@ -297,7 +297,11 @@ const ThinkingPanel = memo(({ steps, isActive, msgId, isLast, onToolReply }: Thi
 
   // ★ 关键：与 Web 端 ThinkingPanelInner 完全一致的折叠逻辑
   const needsUserInput = steps.some(
-    (s) => s.type === 'tool_start' && s.toolName === 'ask_user' && s.success === undefined,
+    (s) =>
+      s.type === 'tool_start' &&
+      (s.toolName === 'ask_user' || s.toolName === 'execute_cmd') &&
+      s.success === undefined &&
+      s.toolArgs && (s.toolArgs as any).question,
   )
 
   const [expanded, setExpanded] = useState(isActive ?? false)
@@ -362,7 +366,8 @@ const ThinkingPanel = memo(({ steps, isActive, msgId, isLast, onToolReply }: Thi
 
             // ── 工具调用 ─────────────────────────────────────────────────
             if (step.type === 'tool_start') {
-              const isAskUser = step.toolName === 'ask_user'
+              const isAskUser = (step.toolName === 'ask_user' || step.toolName === 'execute_cmd') && step.toolArgs && (step.toolArgs as any).question
+              const isSecurityAsk = step.toolName === 'execute_cmd'
               const toolDisplay = TOOL_NAME_MAP[step.toolName || ''] || step.toolName
               const isPending = step.success === undefined
               const isOk = step.success === true
@@ -370,15 +375,12 @@ const ThinkingPanel = memo(({ steps, isActive, msgId, isLast, onToolReply }: Thi
 
               return (
                 <div key={i} className={styles.tlItem}>
-                  <div
-                    className={styles.tlDot}
-                    style={{ background: isFail ? '#f44336' : isOk ? '#4caf50' : '#f59e0b' }}
-                  />
+                  <div className={styles.tlDot} style={{ background: isAskUser ? (isSecurityAsk ? '#f78166' : '#d29922') : (isFail ? '#f44336' : isOk ? '#4caf50' : '#f59e0b') }} />
                   <div className={styles.tlContent}>
                     <div className={styles.tlTitle} style={{
-                      color: isFail ? '#f44336' : isOk ? '#4caf50' : '#f59e0b',
+                      color: isAskUser ? (isSecurityAsk ? '#f78166' : '#d29922') : (isFail ? '#f44336' : isOk ? '#4caf50' : '#f59e0b'),
                     }}>
-                      {isFail ? '❌' : isOk ? '✅' : '🔧'} {toolDisplay}
+                      {isAskUser ? (isSecurityAsk ? '🛡️ 安全拦截与审批' : '💬 AI 提问') : <>{isFail ? '❌' : isOk ? '✅' : '🔧'} {toolDisplay}</>}
                       {isPending && !isAskUser && (
                         <span className={styles.pendingDots}>
                           <span /><span /><span />
@@ -392,7 +394,7 @@ const ThinkingPanel = memo(({ steps, isActive, msgId, isLast, onToolReply }: Thi
                         data={step.toolArgs}
                         disabled={!isLast || !isPending}
                         onReply={(content) =>
-                          onToolReply?.(msgId, step.toolCallId ?? '', 'ask_user', content)
+                          onToolReply?.(msgId, step.toolCallId ?? '', step.toolName || 'ask_user', content)
                         }
                       />
                     )}

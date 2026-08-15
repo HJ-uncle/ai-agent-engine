@@ -9,6 +9,50 @@ import fs from 'node:fs'
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
 
+export async function autoCompactSession(tenantId: string, sessionId: string, logger: any) {
+  const history = new SQLiteConversationHistory()
+  const messages = await history.getHistory({ tenantId, sessionId })
+  if (messages.length <= 1) return
+
+  const originalTokens = messages.reduce((sum, m) => sum + (m.tokens || 0) + (m.usage?.totalTokens || 0), 0)
+
+  // 专职模型路由：如果配置了 LLM_SUMMARIZE_MODEL，优先使用它
+  const { createLLMAdapterWithDbConfig } = await import('../../../core/llm-adapter/index.js')
+  const summarizeModel = process.env.LLM_SUMMARIZE_MODEL || undefined
+  const llm = await createLLMAdapterWithDbConfig({ model: summarizeModel })
+
+  const prompt = `请你将以下对话历史进行智能压缩和提炼，提取出核心上下文、已确认的结论、关键事实、未完成的任务等关键信息，形成一份精简的上下文摘要。这会作为后续对话的唯一背景信息，因此请务必保证信息准确。\n以下是对话历史：\n${messages.map((m) => `[${m.role}]: ${m.content}`).join('\n\n')}`
+
+  logger.info({ model: llm.model }, 'Starting background auto-compaction')
+
+  const response = await llm.complete([{ role: 'user', content: prompt, tokens: 0, createdAt: Date.now() }], {
+    model: llm.model,
+    systemPrompt: '你是一个专业的上下文压缩和摘要助手，擅长在保留核心语义和关键信息的前提下极大地缩减文本长度。',
+  })
+
+  await history.clear({ tenantId, sessionId }, { tombstone: false })
+  const summaryMsg = {
+    role: 'system' as const,
+    content: `【历史上下文摘要 (Auto-compacted)】\n${response.content}`,
+    tokens: response.completionTokens,
+    usage: {
+      promptTokens: response.promptTokens,
+      completionTokens: response.completionTokens,
+      totalTokens: response.promptTokens + response.completionTokens,
+    }
+  }
+  await history.append(summaryMsg, { tenantId, sessionId })
+  
+  await history.append({
+    role: 'assistant' as const,
+    content: '（上下文已触发智能压缩以释放空间）',
+    reasoningContent: '',
+    tokens: 15
+  }, { tenantId, sessionId })
+
+  logger.info({ originalTokens, compressedTokens: response.completionTokens }, 'Auto-compaction finished')
+}
+
 export async function conversationRoutes(fastify: FastifyInstance) {
   const history = new SQLiteConversationHistory()
 

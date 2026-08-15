@@ -42,6 +42,8 @@ export interface AetherConfig {
   /** 技能根目录覆盖（→ SKILLS_ROOT），默认自动探测 .aether/skills → SKILLs/ */
   skillsPath?: string
   agent?: AetherAgentConfig
+  /** 任意额外的环境变量覆盖（常用于企业受管配置强制注入 API_KEY 等） */
+  env?: Record<string, string>
 }
 
 // ─── 文件定位 ─────────────────────────────────────────────────────────────────
@@ -54,13 +56,23 @@ export function getUserAetherDir(): string {
   return path.join(os.homedir(), '.aether')
 }
 
-function readAetherJson(dir: string): Partial<AetherConfig> | null {
-  const file = path.join(dir, 'aether.json')
+export function getManagedAetherDir(): string {
+  if (process.platform === 'win32') {
+    return path.join(process.env.PROGRAMDATA || 'C:\\ProgramData', 'Aether')
+  } else if (process.platform === 'darwin') {
+    return '/Library/Application Support/Aether'
+  } else {
+    return '/etc/aether'
+  }
+}
+
+function readAetherJson(dir: string, filename = 'aether.json'): Partial<AetherConfig> | null {
+  const file = path.join(dir, filename)
   if (!fs.existsSync(file)) return null
   try {
     return JSON.parse(fs.readFileSync(file, 'utf-8')) as Partial<AetherConfig>
   } catch (err) {
-    logger.warn({ err: (err as Error)?.message, file }, 'aether-config: failed to parse aether.json, ignored')
+    logger.warn({ err: (err as Error)?.message, file }, `aether-config: failed to parse ${filename}, ignored`)
     return null
   }
 }
@@ -103,12 +115,18 @@ export function loadAetherConfig(): Partial<AetherConfig> {
  * 将 aether.json 的显式字段写入 process.env（覆盖 .env，被 DB 同步覆盖）。
  * 必须在 skillsRegistry.start() 与 systemConfigStore DB 同步之前调用。
  */
-export function applyAetherConfigToEnv(cfg: Partial<AetherConfig>): string[] {
+/** 记录受管配置覆盖了哪些键，防止 UI 篡改 */
+export const MANAGED_KEYS = new Set<string>()
+
+export function applyAetherConfigToEnv(cfg: Partial<AetherConfig>, isManaged = false): string[] {
   const applied: string[] = []
   const setEnv = (key: string, value: string | undefined) => {
     if (value === undefined) return
     process.env[key] = value
     applied.push(key)
+    if (isManaged) {
+      MANAGED_KEYS.add(key)
+    }
   }
 
   setEnv('DEFAULT_SECURITY_MODE', cfg.defaultSecurityMode)
@@ -119,8 +137,24 @@ export function applyAetherConfigToEnv(cfg: Partial<AetherConfig>): string[] {
   setEnv('HISTORY_MAX_TOKENS', cfg.agent?.historyMaxTokens?.toString())
   setEnv('TOOL_OUTPUT_MAX_CHARS', cfg.agent?.toolOutputMaxChars?.toString())
 
+  if (cfg.env) {
+    for (const [k, v] of Object.entries(cfg.env)) {
+      setEnv(k, v)
+    }
+  }
+
   if (applied.length > 0) {
-    logger.info({ keys: applied }, 'aether-config: applied .aether/aether.json overrides to process.env')
+    const label = isManaged ? 'managed settings' : '.aether/aether.json'
+    logger.info({ keys: applied }, `aether-config: applied ${label} overrides to process.env`)
   }
   return applied
+}
+
+/**
+ * 加载受管配置 (Managed Settings)
+ * 返回解析后的配置对象。
+ */
+export function loadManagedConfig(): Partial<AetherConfig> {
+  const managedCfg = readAetherJson(getManagedAetherDir(), 'settings.json')
+  return managedCfg || {}
 }

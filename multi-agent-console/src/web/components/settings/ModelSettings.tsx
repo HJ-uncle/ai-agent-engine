@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Input, Select, Button, App, Table, Space, Tag, Popconfirm } from 'antd'
+import { Input, Select, Button, App, Table, Space, Tag, Popconfirm, Switch } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined, SwapOutlined } from '@ant-design/icons'
 import { modelsApi, settingsApi } from '@core/api'
 
@@ -21,7 +21,7 @@ export default function ModelSettings() {
   // API Key Local State (to hide existing keys)
   const [keyChanges, setKeyChanges] = useState<Record<string, string>>({})
 
-  const LLM_KEYS = ['LLM_PROVIDER', 'LLM_PRIMARY_MODEL', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'ANTHROPIC_API_KEY', 'OLLAMA_BASE_URL', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL']
+  const LLM_KEYS = ['LLM_PROVIDER', 'LLM_PRIMARY_MODEL', 'LLM_REVIEW_MODEL', 'LLM_SUMMARIZE_MODEL', 'AUTO_COMPACT_TOKEN_LIMIT', 'REASONING_EFFORT', 'ENABLE_LONG_TERM_MEMORY', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'ANTHROPIC_API_KEY', 'OLLAMA_BASE_URL', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL']
   const SECRET_KEYS = ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY']
 
   const loadModels = async () => {
@@ -206,14 +206,97 @@ export default function ModelSettings() {
 
           <div className={styles.settingItem}>
             <div className={styles.itemInfo}>
-              <div className={styles.itemTitle}>主要模型名称</div>
-              <div className={styles.itemDescription}>默认调用的模型 (LLM_PRIMARY_MODEL)</div>
+              <div className={styles.itemTitle}>主要模型名称 (Primary)</div>
+              <div className={styles.itemDescription}>默认调用的聊天模型 (LLM_PRIMARY_MODEL)</div>
             </div>
             <div className={styles.itemControls}>
               <Input
                 value={settings.LLM_PRIMARY_MODEL}
                 onChange={(e) => handleChange('LLM_PRIMARY_MODEL', e.target.value)}
                 style={{ width: 200, background: '#2d2d2d', border: '1px solid #444', color: '#ccc' }}
+              />
+            </div>
+          </div>
+
+          <div className={styles.settingItem}>
+            <div className={styles.itemInfo}>
+              <div className={styles.itemTitle}>安全审查模型 (Review)</div>
+              <div className={styles.itemDescription}>专职模型路由：用于后台安全审计与决策 (LLM_REVIEW_MODEL)</div>
+            </div>
+            <div className={styles.itemControls}>
+              <Input
+                value={settings.LLM_REVIEW_MODEL || ''}
+                placeholder="与主要模型相同"
+                onChange={(e) => handleChange('LLM_REVIEW_MODEL', e.target.value)}
+                style={{ width: 200, background: '#2d2d2d', border: '1px solid #444', color: '#ccc' }}
+              />
+            </div>
+          </div>
+
+          <div className={styles.settingItem}>
+            <div className={styles.itemInfo}>
+              <div className={styles.itemTitle}>摘要压缩模型 (Summarize)</div>
+              <div className={styles.itemDescription}>专职模型路由：用于后台上下文无损压缩 (LLM_SUMMARIZE_MODEL)</div>
+            </div>
+            <div className={styles.itemControls}>
+              <Input
+                value={settings.LLM_SUMMARIZE_MODEL || ''}
+                placeholder="与主要模型相同"
+                onChange={(e) => handleChange('LLM_SUMMARIZE_MODEL', e.target.value)}
+                style={{ width: 200, background: '#2d2d2d', border: '1px solid #444', color: '#ccc' }}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── 高级特性控制 (Advanced) ── */}
+      <div className={styles.section}>
+        <div className={styles.sectionTitle}>高级特性配置</div>
+        <div className={styles.card}>
+          <div className={styles.settingItem}>
+            <div className={styles.itemInfo}>
+              <div className={styles.itemTitle}>上下文智能压缩阈值</div>
+              <div className={styles.itemDescription}>历史 Token 数超过此值时触发自动压缩 (AUTO_COMPACT_TOKEN_LIMIT)</div>
+            </div>
+            <div className={styles.itemControls}>
+              <Input
+                type="number"
+                value={settings.AUTO_COMPACT_TOKEN_LIMIT || 8000}
+                onChange={(e) => handleChange('AUTO_COMPACT_TOKEN_LIMIT', Number(e.target.value))}
+                style={{ width: 120, background: '#2d2d2d', border: '1px solid #444', color: '#ccc' }}
+              />
+            </div>
+          </div>
+
+          <div className={styles.settingItem}>
+            <div className={styles.itemInfo}>
+              <div className={styles.itemTitle}>推理模式控制 (Reasoning Effort)</div>
+              <div className={styles.itemDescription}>调节推理模型（如 o1, o3, R1 等）的思考深度 (REASONING_EFFORT)</div>
+            </div>
+            <div className={styles.itemControls}>
+              <Select
+                value={settings.REASONING_EFFORT || 'medium'}
+                onChange={(val) => handleChange('REASONING_EFFORT', val)}
+                style={{ width: 180 }}
+                options={[
+                  { value: 'low', label: 'Low (低)' },
+                  { value: 'medium', label: 'Medium (中)' },
+                  { value: 'high', label: 'High (高)' },
+                ]}
+              />
+            </div>
+          </div>
+
+          <div className={styles.settingItem}>
+            <div className={styles.itemInfo}>
+              <div className={styles.itemTitle}>长期记忆提取 (Long-term Memory)</div>
+              <div className={styles.itemDescription}>开启后，系统将在每次对话后自动提取并保留用户的长期偏好与事实。</div>
+            </div>
+            <div className={styles.itemControls}>
+              <Switch
+                checked={settings.ENABLE_LONG_TERM_MEMORY !== false && settings.ENABLE_LONG_TERM_MEMORY !== 'false'}
+                onChange={(checked: boolean) => handleChange('ENABLE_LONG_TERM_MEMORY', checked)}
               />
             </div>
           </div>

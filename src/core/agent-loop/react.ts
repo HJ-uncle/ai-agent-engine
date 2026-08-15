@@ -100,6 +100,7 @@ export interface ReActOptions {
   promptBreakdown?: Pick<TokenUsage, 'systemPromptTokens' | 'systemToolsTokens' | 'skillTokens' | 'ragTokens' | 'builtinToolsTokens' | 'mcpToolsTokens'>
   thinkingConfig?: Record<string, unknown> | null
   responseThinkingField?: string | null
+  reasoningEffort?: 'low' | 'medium' | 'high'
   /**
    * 原始用户消息内容（含 workspace_image 等前端格式），用于存入历史 DB（UI 展示用）。
    * 与 input（LLM prompt）分离：LLM 看到文本化的 prompt，DB/UI 保留原始格式。
@@ -295,6 +296,7 @@ export class ReActStrategy implements LoopStrategy {
         temperature: this.options.temperature,
         thinkingConfig: this.options.thinkingConfig,
         responseThinkingField: this.options.responseThinkingField,
+        reasoningEffort: this.options.reasoningEffort,
         tools: effectiveTools.map((t) => ({
           name: t.name,
           description: t.description,
@@ -682,6 +684,33 @@ export class ReActStrategy implements LoopStrategy {
               output: `Tool error: ${err instanceof Error ? err.message : 'unknown error'}`,
             }
           }
+        }
+
+        // ── 如果工具返回需要确认，则暂停 Loop，抛给前端审批 ────────────────
+        if (toolResult && toolResult.needsConfirmation) {
+          ctx.logger.info({ toolName: toolCall.name }, 'Tool execution requires user confirmation')
+          
+          // 构造一个供前端展示的问题描述
+          const reason = toolResult.pendingAction?.reason || toolResult.output
+          const question = `安全策略拦截了此操作，是否允许执行？\n原因：${reason}`
+          
+          yield `\x00__ask_user__${JSON.stringify({
+            question,
+            options: ['approved', 'rejected'],
+            toolCallId: toolCall.id
+          })}`
+
+          yield `\x00__permission_request__${JSON.stringify({
+            requestId: toolCall.id,
+            toolName: toolCall.name,
+            args: toolCall.args,
+            sessionId: ctx.sessionId,
+            messageId: assistantMsgId,
+            description: question,
+          })}`
+
+          // 返回中断，等待前端提交 toolResponse
+          return
         }
 
         // ── 思考过程：通知前端工具执行完毕 ──────────────────────────────

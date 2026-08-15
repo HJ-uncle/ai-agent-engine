@@ -21,6 +21,9 @@ function createMockReply(): MockReply {
     setHeader(name: string, value: string): void {
       headers[name] = value
     },
+    setTimeout(): void {},
+    once(): void {},
+    off(): void {},
     write(chunk: string): boolean {
       writes.push(chunk)
       return true
@@ -48,7 +51,10 @@ async function* fromArray<T>(items: T[]): AsyncIterable<T> {
  */
 function parseEnvelopes(writes: string[]): Array<Record<string, unknown> | '[DONE]'> {
   return writes
-    .map((w) => w.replace(/^data: /, '').replace(/\n\n$/, ''))
+    .map((w) => {
+      if (w === 'event: done\ndata: [DONE]\n\n' || w === 'data: [DONE]\n\n') return '[DONE]'
+      return w.replace(/^data: /, '').replace(/\n\n$/, '')
+    })
     .map((line) => (line === '[DONE]' ? '[DONE]' : (JSON.parse(line) as Record<string, unknown>)))
 }
 
@@ -215,6 +221,6 @@ describe('sseStream', () => {
     await sseStream(fromArray(['hello']), mock.reply)
 
     const last = mock.writes[mock.writes.length - 1]
-    expect(last).toBe('data: [DONE]\n\n')
+    expect(last).toBe('event: done\ndata: [DONE]\n\n')
   })
 })

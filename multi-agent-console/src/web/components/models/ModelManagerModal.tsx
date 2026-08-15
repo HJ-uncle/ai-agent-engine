@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { Modal, Form, Input, Button, Radio, Typography, message, Row, Col, Switch, Tooltip, Tag, Divider } from 'antd'
+import { Modal, Form, Input, Button, Radio, Typography, message, Row, Col, Switch, Tooltip, Tag, Divider, Select } from 'antd'
 import { ThunderboltOutlined } from '@ant-design/icons'
 import { useForm, Controller } from 'react-hook-form'
 import { yupResolver } from '@hookform/resolvers/yup'
@@ -58,17 +58,19 @@ export default function ModelManagerModal({ open, onClose, onSuccess, editModel 
       ? yup.string().optional().test('key-length', t('keyLengthError'), (val) => !val || val.length === 0 || val.length >= 16)
       : yup.string().min(16, t('keyLengthError')).required(),
     baseUrl: yup.string().url(t('urlFormatError')).matches(/^https?:\/\/.+/, t('urlFormatError')).required(),
-    displayName: yup.string().optional()
+    displayName: yup.string().optional(),
+    authType: yup.string().optional()
   })
 
-  const { control, handleSubmit, watch, reset, setValue, trigger } = useForm<FormData>({
+  const { control, handleSubmit, watch, reset, setValue, trigger } = useForm<FormData & { authType?: string }>({
     resolver: yupResolver(schema) as any,
     defaultValues: {
       provider: 'openai',
       modelId: '',
       apiKey: '',
       baseUrl: 'https://api.openai.com/v1',
-      displayName: ''
+      displayName: '',
+      authType: 'apiKey'
     },
     mode: 'onChange'
   })
@@ -293,22 +295,49 @@ export default function ModelManagerModal({ open, onClose, onSuccess, editModel 
               />
             </Form.Item>
 
-            <Form.Item
-              label={t('apiKey')}
-              required={!isEdit}
-              extra={isEdit ? <Text type="secondary" style={{ fontSize: 12 }}>留空则保留原有 API Key</Text> : undefined}
-            >
-              <Controller
-                name="apiKey"
-                control={control}
-                render={({ field, fieldState }) => (
-                  <>
-                    <Input.Password {...field} placeholder={isEdit ? '留空保留原有 Key，或输入新 Key' : 'sk-...'} status={fieldState.error ? 'error' : ''} autoComplete="new-password" />
-                    {fieldState.error && !isEdit && <Text type="danger">{fieldState.error.message}</Text>}
-                  </>
-                )}
-              />
-            </Form.Item>
+            <Row gutter={16}>
+              <Col span={8}>
+                <Form.Item label="认证类型 (Auth)">
+                  <Controller
+                    name="authType"
+                    control={control}
+                    render={({ field }) => (
+                      <Select
+                        {...field}
+                        options={[
+                          { value: 'apiKey', label: 'API Key (默认)' },
+                          { value: 'oauth', label: 'OAuth / JWT' },
+                          { value: 'bedrock', label: 'AWS Bedrock' }
+                        ]}
+                      />
+                    )}
+                  />
+                </Form.Item>
+              </Col>
+              <Col span={16}>
+                <Form.Item
+                  label="API Key / 凭证"
+                  required={!isEdit}
+                  extra={isEdit ? <Text type="secondary" style={{ fontSize: 12 }}>留空则保留原有 API Key</Text> : undefined}
+                >
+                  <Controller
+                    name="apiKey"
+                    control={control}
+                    render={({ field, fieldState }) => (
+                      <>
+                        <Input.Password
+                          {...field}
+                          placeholder={isEdit ? '留空保留原有 Key，或输入新 Key' : (watchedValues.authType === 'bedrock' ? 'AKIA...:SecretKey' : 'sk-...')}
+                          status={fieldState.error ? 'error' : ''}
+                          autoComplete="new-password"
+                        />
+                        {fieldState.error && !isEdit && <Text type="danger">{fieldState.error.message}</Text>}
+                      </>
+                    )}
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
 
             <Form.Item label={t('endpoint')} required>
               <Controller

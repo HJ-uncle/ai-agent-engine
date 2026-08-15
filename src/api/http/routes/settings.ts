@@ -5,6 +5,7 @@ import { systemConfigStore, SECRET_KEYS, BOOT_PATH_KEYS } from '../../../storage
 import { setGlobalToolPoolLimit } from '../../../core/utils/concurrency-pool.js'
 import { resolveOSMMode, isValidMode, OSM_MODES } from '../../../core/osm.js'
 import { logger as engineLogger } from '../../../observability/index.js'
+import { MANAGED_KEYS } from '../../../core/aether-config.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
@@ -32,6 +33,10 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       // ── LLM ──────────────────────────────────────────────────────────────
       LLM_PROVIDER:      getStr('LLM_PROVIDER',      'openai'),
       LLM_PRIMARY_MODEL: getStr('LLM_PRIMARY_MODEL',  'deepseek-chat'),
+      LLM_REVIEW_MODEL: getStr('LLM_REVIEW_MODEL',  ''),
+      LLM_SUMMARIZE_MODEL: getStr('LLM_SUMMARIZE_MODEL',  ''),
+      AUTO_COMPACT_TOKEN_LIMIT: parseInt(getStr('AUTO_COMPACT_TOKEN_LIMIT', '8000'), 10),
+      REASONING_EFFORT: getStr('REASONING_EFFORT', 'medium'),
       OPENAI_API_KEY:    mask(getStr('OPENAI_API_KEY',     '')),
       OPENAI_BASE_URL:   getStr('OPENAI_BASE_URL',    'https://api.deepseek.com'),
       ANTHROPIC_API_KEY: mask(getStr('ANTHROPIC_API_KEY',  '')),
@@ -66,6 +71,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       QA_LOG_ENABLED: getStr('QA_LOG_ENABLED', 'false') === 'true',
       QA_LOG_DIR:     getStr('QA_LOG_DIR',     './logs/qa'),
       // ── Memory ───────────────────────────────────────────────────────────
+      ENABLE_LONG_TERM_MEMORY: getStr('ENABLE_LONG_TERM_MEMORY', 'true') === 'true',
       MEMORY_CONSOLIDATION_INTERVAL_HOURS: parseInt(getStr('MEMORY_CONSOLIDATION_INTERVAL_HOURS', '24'), 10),
       MEMORY_DECAY_THRESHOLD: parseFloat(getStr('MEMORY_DECAY_THRESHOLD', '0.05')),
       // ── Performance ──────────────────────────────────────────────────────
@@ -84,6 +90,8 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       SUPERPOWER_ENABLED: getStr('SUPERPOWER_ENABLED', 'false') === 'true',
       // ── WebFetch Security ────────────────────────────────────────────────
       webFetch: securityConfig.webFetch,
+      // ── Managed Settings ────────────────────────────────────────────────
+      managedKeys: Array.from(MANAGED_KEYS),
     }
 
     return reply.code(200).send(success(settings))
@@ -127,6 +135,10 @@ export async function settingsRoutes(fastify: FastifyInstance) {
 
     // 其余所有字段写入数据库
     for (const [k, v] of Object.entries(updates)) {
+      if (MANAGED_KEYS.has(k)) {
+        engineLogger.warn({ key: k }, 'Attempted to modify a managed setting, ignoring.')
+        continue
+      }
       const strVal = String(v)
       // 敏感字段安全校验：如果是脱敏后的占位符（包含 ...），则忽略不更新，防止覆盖真实密钥
       if (SECRET_KEYS.has(k) && strVal.includes('...')) {

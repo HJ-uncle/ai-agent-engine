@@ -106,19 +106,24 @@ graph TD
   - **联络图 (图数据库模拟)**：提供高阶联想。通过 Edges (边) 自动激活关联节点，实现从“点”到“网”的认知扩散。
 - **无感 AI 路由**：在检索前并行启动微型 LLM 分析用户意图。自动区分寒暄（NONE）、身份查询（IDENTITY）或业务问询，并智能扩展检索词阵列，整个过程与 RAG 并行，对用户零延迟感知。
 - **自动提取与关联**：对话结束后异步提取关键事实、偏好和决策。支持 `reinforces` (强化)、`contradicts` (矛盾) 等多种逻辑关联。
+- **记忆开关控制**：用户可在前端 `Settings` 中自由开启或关闭长期记忆提取 (`ENABLE_LONG_TERM_MEMORY`)。关闭后，新会话将保持绝对干净，不留下任何历史包袱，充分保护用户隐私。
+- **上下文智能压缩 (Auto Compaction)**：内置会话长度监控，当 Token 累积超过阈值（如 8000）时，系统自动在后台异步派生摘要模型（如 `LLM_SUMMARIZE_MODEL`），无损提炼历史对话并释放 Token 空间，实现无限长上下文。
 - **记忆衰减**：模拟遗忘机制，根据时间、访问频率和重要度自动计算权重，确保存储空间的高效利用。
 
 ### 5. 开放协议：MCP 与 Skills
 - **MCP (Model Context Protocol)**：允许系统接入外部数据源（如 GitHub、Google Drive）或外部工具。配置支持**项目级**（`.aether/mcp.json`）与**全局级**（`~/.aether/mcp.json`）两层，全局配置对所有项目生效。
 - **Skills**：用户可以用 TypeScript/Python 编写自定义脚本，直接扩展 Agent 的能力。技能支持 zip 包导入（断点续传）与表单直建，分项目级 / 全局级两层落盘，目录热重载；方法论技能（`os-*`）按 OSM 模式档位动态可见。
 
-### 5. 隔离与安全：多租户与工作区
-- **可选鉴权**：请求携带 `X-API-Key` 或 `Authorization: Bearer <jwt>` 时自动验证；不携带则降级为默认租户 `"default"`，零配置即可启动。外部平台通过 `POST /auth/user` 同步用户 token，后续请求自动隔离。
-- **多租户隔离**：每个用户（租户）的数据在数据库中逻辑隔离，在磁盘上通过独立的 **Workspace** 目录物理隔离。
-- **业务订制化 (Tenant Config)**：
+### 6. 隔离与安全：多租户与工作区
+- **可选鉴权与企业级认证**：请求携带 `X-API-Key` 或 `Authorization: Bearer <jwt>` 时自动验证；不携带则降级为默认租户 `"default"`，零配置即可启动。模型调用层面同时支持 API Key / OAuth / AWS Bedrock 等高级企业网关认证方式。
+- **专职模型路由 (Task-specific Routing)**：系统内部针对高耗能场景（如安全审计 `LLM_REVIEW_MODEL`、上下文压缩 `LLM_SUMMARIZE_MODEL`）支持单独指定低成本、高并发的模型引擎，实现精细化成本管控。
+- **流式传输池化 (Connection Pooling)**：通过底层的 `keepAlive` 调度池，大幅度复用 HTTP/TLS 连接，对齐了 WebSocket 的预热效果，极大降低高并发 Agent 工具调用的 TTFT (首字延迟)。
+- **多租户隔离**：每个用户（租户）的数据在数据库中逻辑隔离，在磁盘上通过独立的 **Workspace** 目录物理隔离，同时通过 **DevContainer + Docker** 结合 `iptables` 实现彻底的网络与运行时环境隔离。
+- **业务订制化 (Tenant Config) 与受管配置 (Managed Settings)**：
   - **专属身份**：支持租户级 `default_identity` 配置，自动为该租户的所有会话注入基础身份。
   - **业务透传**：通过 `metadata` 字段支持第三方系统透传业务上下文（如 `userId`, `traceId`），实现业务数据的闭环。
-- **安全沙箱**：所有的 Shell 命令和网络请求都经过**安全策略引擎**的正则过滤和 SSRF 防护。
+  - **受管覆盖**：系统管理员可通过 `/etc/aether/aether-managed.json` 强行下发 API 密钥等敏感信息，并锁定前端修改权限。
+- **安全沙箱与细粒度审批 (Exec Policy)**：所有的 Shell 命令和网络请求都经过安全策略引擎过滤。高危命令触发 `ask` 模式，前端会弹出授权卡片；用户授权后，命令记录在会话缓存白名单中，大模型原样重试。既保障了安全，又确保了自动化流程的顺畅。
 
 ---
 

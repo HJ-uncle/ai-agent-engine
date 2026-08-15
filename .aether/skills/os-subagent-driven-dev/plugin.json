@@ -1,0 +1,7 @@
+{
+  "id": "os-subagent-driven-dev",
+  "name": "os-subagent-driven-dev",
+  "description": "Delegate implementation / OpenSpec review / code quality review to fresh subagents.",
+  "version": "1.0.0",
+  "main": "SKILL.md"
+}

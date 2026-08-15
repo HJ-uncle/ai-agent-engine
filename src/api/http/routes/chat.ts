@@ -716,6 +716,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     }
 
     // 并行执行 RAG 和 记忆检索
+    const enableMemory = process.env.ENABLE_LONG_TERM_MEMORY !== 'false'
     const [ragChunks, memoryRecallBlock] = await Promise.all([
       (async () => {
         if (boundKnowledgeBases && boundKnowledgeBases.length > 0) {
@@ -725,12 +726,12 @@ export async function chatRoutes(fastify: FastifyInstance) {
           return await searchChunks(tenantId, plainTextQuery, ragTopK)
         }
       })(),
-      buildMemoryRecallBlock(tenantId, plainTextQuery, {
+      enableMemory ? buildMemoryRecallBlock(tenantId, plainTextQuery, {
         model: resolvedModel,
         apiKey: modelApiKey,
         baseUrl: modelBaseUrl,
         provider: modelProvider,
-      })
+      }) : Promise.resolve('')
     ])
     
     let ragPrompt = ''
@@ -801,14 +802,32 @@ ${workspaceInfo}
     async function* runAgent(): AsyncIterable<string> {
       try {
         if (toolResponse) {
+          let toolOutputContent = `用户选择了: ${toolResponse.output}`
+
+          // 拦截 Exec Policy 审批响应
+          if (toolResponse.name === 'execute_cmd' && toolResponse.output === 'approved') {
+            const { approveCommand } = await import('../../../security/policy-engine.js')
+            // 从历史记录中找到这个 toolCall 的参数
+            const fullHistory = await ctx.history.getFullHistory(ctx)
+            const assistantMsg = fullHistory.find((m: any) => m.role === 'assistant' && m.toolCall?.id === toolResponse.toolCallId)
+            if (assistantMsg && assistantMsg.toolCall?.args?.command) {
+              const command = String(assistantMsg.toolCall.args.command)
+              const args = Array.isArray(assistantMsg.toolCall.args.args) ? assistantMsg.toolCall.args.args.map(String) : []
+              approveCommand(tenantId, sessionId, command, args)
+              toolOutputContent = `User approved the command execution. Please call the 'execute_cmd' tool again with the exact same arguments to actually execute it and get the results.`
+            }
+          } else if (toolResponse.name === 'execute_cmd' && toolResponse.output === 'rejected') {
+            toolOutputContent = `User rejected the command execution. Please do not call this command again, and inform the user or try an alternative approach.`
+          }
+
           const toolMsg: Message & { conversationId?: string } = {
             id: uuidv4(),
             role: 'tool',
-            content: `用户选择了: ${toolResponse.output}`,
+            content: toolOutputContent,
             toolCallId: toolResponse.toolCallId,
             toolName: toolResponse.name,
             createdAt: Date.now(),
-            tokens: estimateTokens(toolResponse.output),
+            tokens: estimateTokens(toolOutputContent),
             conversationId,
           }
           await ctx.history.append(toolMsg, ctx)
@@ -847,6 +866,7 @@ ${workspaceInfo}
           promptBreakdown: { systemPromptTokens, systemToolsTokens, skillTokens, ragTokens, builtinToolsTokens, mcpToolsTokens },
           thinkingConfig: finalThinkingConfig,
           responseThinkingField: finalResponseThinkingField,
+          reasoningEffort: process.env.REASONING_EFFORT as 'low' | 'medium' | 'high' | undefined,
           displayContent: message || null,
           metadata: requestedMetadata,
         })
@@ -922,30 +942,45 @@ ${workspaceInfo}
         })
 
         setImmediate(() => {
-          extractAndStoreMemories({
-            messages: fullHistory.map((m: any) => ({
-              role: m.role as string,
-              content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-            })),
-            sessionId,
-            tenantId,
-            llm: {
-              model: resolvedModel,
-              apiKey: modelApiKey,
-              baseUrl: modelBaseUrl,
-              provider: modelProvider,
-            },
-            minImportance: 0.3,
-          }).then((res) => {
-            if (res.stored > 0) {
-              reqLogger.info({ extracted: res.extracted, stored: res.stored }, 'Memories auto-extracted')
-            }
-            if (res.errors.length > 0) {
-              reqLogger.warn({ errors: res.errors }, 'Memory extraction had errors')
-            }
-          }).catch((err) => {
-            reqLogger.warn({ err: (err as Error)?.message }, 'Memory extraction failed silently')
-          })
+          // 检查长期记忆提取开关
+          const enableMemory = process.env.ENABLE_LONG_TERM_MEMORY !== 'false'
+          if (enableMemory) {
+            extractAndStoreMemories({
+              messages: fullHistory.map((m: any) => ({
+                role: m.role as string,
+                content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+              })),
+              sessionId,
+              tenantId,
+              llm: {
+                model: resolvedModel,
+                apiKey: modelApiKey,
+                baseUrl: modelBaseUrl,
+                provider: modelProvider,
+              },
+              minImportance: 0.3,
+            }).then((res) => {
+              if (res.stored > 0) {
+                reqLogger.info({ extracted: res.extracted, stored: res.stored }, 'Memories auto-extracted')
+              }
+              if (res.errors.length > 0) {
+                reqLogger.warn({ errors: res.errors }, 'Memory extraction had errors')
+              }
+            }).catch((err) => {
+              reqLogger.warn({ err: (err as Error)?.message }, 'Memory extraction failed silently')
+            })
+          }
+
+          // 上下文智能压缩：如果 token 超过阈值，在后台触发压缩
+          const autoCompactLimit = parseInt(process.env.AUTO_COMPACT_TOKEN_LIMIT ?? '8000', 10)
+          if (finalUsage?.totalTokens > autoCompactLimit) {
+            reqLogger.info({ totalTokens: finalUsage.totalTokens, limit: autoCompactLimit }, 'Token limit exceeded, triggering auto-compaction')
+            import('./conversation.js').then(({ autoCompactSession }) => {
+              autoCompactSession(tenantId, sessionId, reqLogger).catch((err: any) => {
+                reqLogger.error({ err }, 'Auto-compaction failed')
+              })
+            })
+          }
         })
       } catch (err: any) {
         reqLogger.error({ err, agentId }, 'Agent execution error')
