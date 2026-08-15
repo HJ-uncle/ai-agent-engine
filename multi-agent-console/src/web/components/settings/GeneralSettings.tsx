@@ -1,6 +1,6 @@
-import React from 'react'
-import { Input, Segmented, Tag, Tooltip, App } from 'antd'
-import { ThunderboltOutlined, ExclamationCircleOutlined, CheckCircleTwoTone } from '@ant-design/icons'
+import React, { useState } from 'react'
+import { Input, Segmented, Tag, Tooltip, App, Button } from 'antd'
+import { ThunderboltOutlined, ExclamationCircleOutlined, CheckCircleTwoTone, KeyOutlined } from '@ant-design/icons'
 import { useSettings } from './useSettings'
 import { settingsApi } from '@core/api'
 import { useSessionStore } from '@core/store/session'
@@ -21,6 +21,53 @@ const MODE_TOOLTIPS: Record<OSMMode, string> = {
   balanced: '全量工具可用；数值 ×2；不注入方法论；适合日常工程任务。',
   methodology: '全量工具 + 数值 ×2 + 自动注入 OSM 注入；自动建 .openspec/ 目录；严肃项目推荐。',
   max: '全量工具 + 数值 ×5/×4 + OSM 注入 + 压缩阈值 0.7；长自治任务用；消耗高。',
+}
+
+/** 访问凭据（AUTH_ENABLED=true 时管理类操作需要） */
+function AccessKeySection() {
+  const { message } = App.useApp()
+  const [key, setKey] = useState(() => {
+    try { return localStorage.getItem('api_key') ?? '' } catch { return '' }
+  })
+  const [saving, setSaving] = useState(false)
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      if (key.trim()) localStorage.setItem('api_key', key.trim())
+      else localStorage.removeItem('api_key')
+      message.success(key.trim() ? '访问密钥已保存，管理类操作即刻生效' : '已清除访问密钥')
+    } catch { message.error('保存失败（localStorage 不可用）') }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <div className={styles.section}>
+      <div className={styles.sectionTitle}>访问凭据</div>
+      <div className={styles.card}>
+        <div className={styles.settingItem}>
+          <div className={styles.itemInfo}>
+            <div className={styles.itemTitle}>Access Key <KeyOutlined /></div>
+            <div className={styles.itemDescription}>
+              服务器开启 AUTH_ENABLED 时，管理类操作（技能管理/导入等）需携带访问密钥。
+              密钥由部署管理员通过 POST /auth/user 注册后颁发；本地开发（AUTH_ENABLED=false）无需填写
+            </div>
+          </div>
+          <div className={styles.itemControls}>
+            <div className={styles.controlRow}>
+              <Input.Password
+                value={key}
+                onChange={(e) => setKey(e.target.value)}
+                placeholder="粘贴部署管理员颁发的 Access Key"
+                style={{ width: 260, background: '#2d2d2d', border: '1px solid #444' }}
+              />
+              <Button loading={saving} onClick={save}>{key ? '保存' : '清除'}</Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 export default function GeneralSettings() {
@@ -126,6 +173,9 @@ export default function GeneralSettings() {
           </div>
         </div>
       </div>
+
+      {/* ── 访问凭据 ── */}
+      <AccessKeySection />
 
       {/* ── 界面设置 ── */}
       <div className={styles.section}>

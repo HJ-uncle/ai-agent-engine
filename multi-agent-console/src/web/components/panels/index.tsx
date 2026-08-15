@@ -9,7 +9,7 @@ import { Tooltip, App as AntdApp, Modal, Select, Input } from 'antd'
 import {
   MessageOutlined, RobotOutlined,
   ApiOutlined, DatabaseOutlined,
-  FolderOutlined, ThunderboltOutlined, ToolOutlined,
+  FolderOutlined, ThunderboltOutlined, ToolOutlined, ExperimentOutlined,
   CheckSquareOutlined, ReloadOutlined, DeleteOutlined,
   FunctionOutlined, EditOutlined, LinkOutlined, ClockCircleOutlined
 } from '@ant-design/icons'
@@ -19,6 +19,7 @@ import McpPanel from '../McpPanel'
 import KnowledgePanel from '../KnowledgePanel'
 import OldExplorerPanel from '../ExplorerPanel'
 import NewExplorerPanel from '../explorer'
+import { SkillsPanel } from './SkillsPanel'
 import { useSessionStore } from '@core/store/session'
 import { toolsApi, memoryApi, todoApi } from '@core/api'
 import type { Tool, MemoryEntry } from '@core/types'
@@ -44,6 +45,7 @@ const ACTIVITY_ICONS: Record<PanelKey, React.ReactNode> = {
   mcp:       <ApiOutlined />,
   knowledge: <DatabaseOutlined />,
   tools:     <ToolOutlined />,
+  skills:    <ExperimentOutlined />,
   memory:    <ThunderboltOutlined />,
   tasks:     <CheckSquareOutlined />,
   history:   <MessageOutlined />,
@@ -589,6 +591,7 @@ export function renderSidebarPanel(
     case 'mcp':       return <McpPanel />
     case 'knowledge': return <KnowledgePanel />
     case 'tools':     return <ToolsPanel />
+    case 'skills':    return <SkillsPanel />
     case 'memory':    return <MemoryPanel />
     case 'tasks':     return <TasksPanel />
     case 'history':   return <HistoryPanel />

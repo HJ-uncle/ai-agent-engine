@@ -2,6 +2,7 @@ import React from 'react'
 import { Input, Button, Tooltip } from 'antd'
 import { InfoCircleOutlined } from '@ant-design/icons'
 import { useSettings } from './useSettings'
+import SkillImportPanel from './SkillImportPanel'
 import styles from './SettingsLayout.module.css'
 
 const INPUT_STYLE: React.CSSProperties = { background: '#2d2d2d', border: '1px solid #444', color: '#ccc' }
@@ -78,6 +79,13 @@ export default function SkillSettings() {
               style={{ width: 240, ...INPUT_STYLE }}
             />
           </SettingRow>
+        </div>
+      </div>
+
+      <div className={styles.section}>
+        <div className={styles.sectionTitle}>导入 Skill 压缩包</div>
+        <div className={styles.card}>
+          <SkillImportPanel />
         </div>
       </div>
 

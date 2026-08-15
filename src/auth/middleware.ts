@@ -46,6 +46,8 @@ export class DefaultAuthMiddleware implements AuthMiddleware {
       tenantId: user['tenant_id'] as string,
       userId: user['id'] as string,
       method: 'api-key',
+      // 当前用户模型为一租户一用户：持有有效 api-key 即视为管理员
+      roles: ['admin'],
     }
   }
 
@@ -60,6 +62,10 @@ export class DefaultAuthMiddleware implements AuthMiddleware {
         tenantId,
         userId: payload.sub,
         method: 'jwt',
+        // JWT 载荷可显式携带 roles；缺省时视为管理员（一租户一用户模型）
+        roles: Array.isArray(payload.roles) && payload.roles.length > 0
+          ? (payload.roles as string[])
+          : ['admin'],
       }
     } catch (err) {
       throw new Error(`Invalid JWT: ${err instanceof Error ? err.message : 'unknown error'}`)

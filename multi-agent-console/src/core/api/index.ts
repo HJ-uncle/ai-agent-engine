@@ -35,6 +35,13 @@ async function request<T>(path: string, options?: RequestInit): Promise<Standard
   if (options?.body) {
     defaultHeaders['Content-Type'] = 'application/json'
   }
+  // 鉴权凭据（AUTH_ENABLED=true 时管理类接口需要；无凭据则匿名降级）
+  try {
+    const apiKey = localStorage.getItem('api_key')
+    if (apiKey) defaultHeaders['x-api-key'] = apiKey
+    const token = localStorage.getItem('auth_token')
+    if (token) defaultHeaders['Authorization'] = `Bearer ${token}`
+  } catch { /* localStorage 不可用（SSR 等）时忽略 */ }
 
   const res = await fetch(`${API_PREFIX}${path}`, {
     ...options,
@@ -833,6 +840,167 @@ export const workspaceApi = {
     })
     const json = await res.json()
     return json.data as { path: string; size: number; filename: string } | undefined
+  },
+
+  /** 技能列表（含技能根目录） */
+  skillsList: async () => {
+    const res = await request<{ root: string; list: { name: string; description: string; enabled: boolean; order: number }[] }>(
+      '/skills',
+    )
+    return res.data
+  },
+
+  // ── Skill 压缩包导入 ─────────────────────────────────────────────────────
+
+  /** 直传模式上限（与后端 DIRECT_UPLOAD_LIMIT 一致） */
+  SKILL_IMPORT_DIRECT_LIMIT: 5 * 1024 * 1024,
+  /** 分片大小（与后端 CHUNK_SIZE 一致） */
+  SKILL_IMPORT_CHUNK_SIZE: 2 * 1024 * 1024,
+
+  /** XMLHTTPRequest multipart POST（fetch 不支持上传进度，故用 XHR） */
+  _xhrUpload: (
+    path: string,
+    formData: FormData,
+    onProgress?: (loaded: number, total: number) => void,
+  ): Promise<{ code: number; message: string; data?: any }> =>
+    new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', `${API_PREFIX}${path}`)
+      // 附带鉴权头（与 request() 封装一致）
+      const apiKey = localStorage.getItem('api_key')
+      if (apiKey) xhr.setRequestHeader('x-api-key', apiKey)
+      const token = localStorage.getItem('auth_token')
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) onProgress(e.loaded, e.total)
+      }
+      xhr.onload = () => {
+        try {
+          resolve(JSON.parse(xhr.responseText))
+        } catch {
+          reject(new Error(`响应解析失败（HTTP ${xhr.status}）`))
+        }
+      }
+      xhr.onerror = () => reject(new Error('网络错误，上传中断'))
+      xhr.onabort = () => reject(new DOMException('aborted', 'AbortError'))
+      xhr.send(formData)
+    }),
+
+  /** 查询分片续传位图（断点续传入口） */
+  skillImportResumeInfo: async (filename: string, totalSize: number) => {
+    const qs = `?filename=${encodeURIComponent(filename)}&totalSize=${totalSize}`
+    const res = await request<{ importId: string | null; uploadedChunks: number[]; totalChunks: number }>(
+      `/skills/imports/chunks${qs}`,
+    )
+    return res.data
+  },
+
+  /** 上传单个分片 */
+  skillImportUploadChunk: (
+    file: File,
+    chunkIndex: number,
+    totalChunks: number,
+    importId: string | null,
+    strategy: string,
+    onProgress?: (loaded: number, total: number) => void,
+  ) => {
+    const start = chunkIndex * workspaceApi.SKILL_IMPORT_CHUNK_SIZE
+    const blob = file.slice(start, start + workspaceApi.SKILL_IMPORT_CHUNK_SIZE)
+    const formData = new FormData()
+    formData.append('file', blob)
+    formData.append('filename', file.name)
+    formData.append('totalSize', String(file.size))
+    formData.append('totalChunks', String(totalChunks))
+    formData.append('chunkIndex', String(chunkIndex))
+    if (importId) formData.append('importId', importId)
+    formData.append('conflictStrategy', strategy)
+    return workspaceApi._xhrUpload('/skills/imports/chunks', formData, onProgress)
+  },
+
+  /** 合并分片并触发导入 */
+  skillImportMerge: async (importId: string) => {
+    const res = await request<{ importId: string }>('/skills/imports/chunks/merge', {
+      method: 'POST',
+      body: JSON.stringify({ importId }),
+    })
+    return res.data
+  },
+
+  /** 导入状态查询（轮询用） */
+  skillImportStatus: async (importId: string) => {
+    const res = await request<{
+      importId: string; filename: string; status: string; progress: number; stage: string | null
+      skillNames: string[]; importedCount: number; errorCode: string | null; errorMessage: string | null
+    }>(`/skills/imports/${encodeURIComponent(importId)}`)
+    return res.data
+  },
+
+  /** 取消导入 */
+  skillImportCancel: async (importId: string) => {
+    await request(`/skills/imports/${encodeURIComponent(importId)}`, { method: 'DELETE' })
+  },
+
+  /**
+   * 统一上传入口：≤5MB 直传，否则分片（带断点续传）。
+   * @returns importId（上传/合并已受理，处理进度用 skillImportStatus 轮询）
+   */
+  skillImportUpload: async (
+    file: File,
+    opts: { strategy?: string; onProgress?: (percent: number, stage: string) => void; resumeImportId?: string | null },
+  ): Promise<string> => {
+    const strategy = opts.strategy ?? 'versioned'
+    const CHUNK = workspaceApi.SKILL_IMPORT_CHUNK_SIZE
+
+    if (file.size <= workspaceApi.SKILL_IMPORT_DIRECT_LIMIT) {
+      opts.onProgress?.(5, '上传压缩包')
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('filename', file.name)
+      formData.append('conflictStrategy', strategy)
+      const json = await workspaceApi._xhrUpload('/skills/imports', formData, (loaded, total) => {
+        opts.onProgress?.(5 + Math.round((loaded / total) * 45), '上传压缩包')
+      })
+      if (json.code !== 200 || !json.data?.importId) throw new Error(json.message || '上传失败')
+      return json.data.importId as string
+    }
+
+    // 分片模式（支持续传：优先显式传入的 resumeImportId，其次按文件名+大小找回）
+    const totalChunks = Math.ceil(file.size / CHUNK)
+    let importId = opts.resumeImportId ?? null
+    let uploaded: Set<number> = new Set()
+    if (!importId) {
+      const info = await workspaceApi.skillImportResumeInfo(file.name, file.size)
+      if (info?.importId) {
+        importId = info.importId
+        uploaded = new Set(info.uploadedChunks ?? [])
+      }
+    } else {
+      const info = await workspaceApi.skillImportResumeInfo(file.name, file.size).catch(() => null)
+      void info
+    }
+    if (importId && uploaded.size === 0) {
+      const info = await workspaceApi.skillImportResumeInfo(file.name, file.size)
+      if (info?.importId === importId) uploaded = new Set(info.uploadedChunks ?? [])
+    }
+
+    for (let i = 0; i < totalChunks; i++) {
+      if (uploaded.has(i)) continue
+      const json = await workspaceApi.skillImportUploadChunk(
+        file, i, totalChunks, importId, strategy,
+        (loaded, total) => {
+          const base = (uploaded.size / totalChunks) * 50
+          opts.onProgress?.(5 + Math.round(base + ((loaded / total) / totalChunks) * 50), `上传分片 ${i + 1}/${totalChunks}`)
+        },
+      )
+      if (json.code !== 200) throw new Error(json.message || `分片 ${i + 1} 上传失败`)
+      importId = json.data.importId
+      uploaded.add(i)
+    }
+
+    opts.onProgress?.(60, '合并分片')
+    if (!importId) throw new Error('导入会话丢失')
+    await workspaceApi.skillImportMerge(importId)
+    return importId
   },
 
   // ── New file-ops (VS Code explorer refactor) ─────────────────────────────

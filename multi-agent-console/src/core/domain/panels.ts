@@ -12,6 +12,7 @@ export type PanelKey =
   | 'mcp'
   | 'knowledge'
   | 'tools'
+  | 'skills'
   | 'memory'
   | 'tasks'
   | 'history'
@@ -25,6 +26,7 @@ export const ACTIVITY_KEYS: { key: PanelKey; label: string }[] = [
   { key: 'mcp',       label: 'MCP Servers' },
   { key: 'knowledge', label: '知识库' },
   { key: 'tools',     label: '工具列表' },
+  { key: 'skills',    label: '技能管理' },
   { key: 'memory',    label: '记忆存储' },
   { key: 'tasks',     label: '任务' },
 ]
