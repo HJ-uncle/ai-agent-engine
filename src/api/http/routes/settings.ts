@@ -35,7 +35,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       LLM_PRIMARY_MODEL: getStr('LLM_PRIMARY_MODEL',  'deepseek-chat'),
       LLM_REVIEW_MODEL: getStr('LLM_REVIEW_MODEL',  ''),
       LLM_SUMMARIZE_MODEL: getStr('LLM_SUMMARIZE_MODEL',  ''),
-      AUTO_COMPACT_TOKEN_LIMIT: parseInt(getStr('AUTO_COMPACT_TOKEN_LIMIT', '8000'), 10),
+      AUTO_COMPACT_TOKEN_LIMIT: parseInt(getStr('AUTO_COMPACT_TOKEN_LIMIT', '500000'), 10),
       REASONING_EFFORT: getStr('REASONING_EFFORT', 'medium'),
       OPENAI_API_KEY:    mask(getStr('OPENAI_API_KEY',     '')),
       OPENAI_BASE_URL:   getStr('OPENAI_BASE_URL',    'https://api.deepseek.com'),

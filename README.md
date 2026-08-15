@@ -13,17 +13,23 @@
   - **任务管理**：定时任务 (Cron) 及待办管理 (Todo)，支持 AI 自主排程。
   - **扩展能力**：支持 MCP (Model Context Protocol) 协议及自定义 TypeScript/Python Skills。
   - **流式工具参数**：工具调用参数以流式增量 (`tool_arg`) 实时展示，配合 Qwen/vLLM `<tool_call>` XML 回退解析，覆盖更多模型的工具调用语义。
-- **🔐 可选鉴权**：`POST /auth/user` 接口支持外部平台用户同步（token + userId），携带凭据时自动验证并多租户隔离，不携带时降级为默认租户，零配置即可启动。
+- **🔐 可选鉴权**：`POST /auth/user` 接口支持外部平台用户同步（token + userId），携带凭据时自动验证并多租户隔离，不携带时降级为默认租户，零配置即可启动。模型调用层面支持 **API Key / OAuth / JWT / AWS Bedrock** 等企业级认证方式。
 - **🎨 业务深度订制**：
   - **元数据支持**：通过 `metadata` 字段透传业务 ID（如 `userId`, `appId`），随会话和消息持久化。
   - **专属默认身份**：租户可设置全局 `default_identity`，自动作为 Base Identity 注入该租户下的所有会话。
-- **📂 隔离的工作区**：每个会话拥有独立的物理工作目录，支持 VS Code 风格的文件树管理、实时编辑及大文件上传 (100MB)。
-- **🤝 多智能体协作**：支持 Parent-Child Agent 模型，自动拆解复杂任务并分发给专业子智能体。
+  - **受管配置 (Managed Settings)**：管理员可通过 `/etc/aether/aether-managed.json` 系统目录强制下发 API Key 等敏感配置并锁定前端修改权限，对标企业级 MDM 治理。
+- **📂 隔离的工作区**：每个会话拥有独立的物理工作目录，支持 VS Code 风格的文件树管理、实时编辑及大文件上传 (100MB)。支持 **DevContainer + Docker + iptables/ipset** 内核级网络白名单隔离。
+- **🤝 多智能体协作**：支持 Parent-Child Agent 模型，自动拆解复杂任务并分发给专业子智能体（支持 `implementer` / `spec-reviewer` / `code-quality-reviewer` 方法论角色预设）。
 - **🔀 Flow DAG 编排**：`POST /api/v1/flows/run` 提交节点+边定义，确定性拓扑分层调度（同层并行），每节点起独立 ephemeral 子会话跑 ReAct，SSE 流式推送 `flow_started` / `node_start` / `node_delta` / `node_done` / `flow_done` 等事件，支持 `POST /flows/:runId/stop` 中止。
-- **🔌 开放协议支持**：完美适配 MCP (Model Context Protocol) 协议，支持通过 TypeScript/Python 编写自定义 Skills。
-- **🛡️ 安全沙箱**：基于命令注入检测与 SSRF 防护的执行环境，配合审计日志确保操作安全。支持三种安全模式（安全 / 标准 / 完全访问），会话级切换，前端输入框可一键选择。
+- **🔌 开放协议支持**：完美适配 MCP (Model Context Protocol) 协议，支持通过 TypeScript/Python 编写自定义 Skills，技能元数据采用标准 **`plugin.json`** 分发规范（向后兼容 SKILL.md）。
+- **🧠 专职模型路由 (Task-specific Routing)**：后台高耗能场景（安全审查 `LLM_REVIEW_MODEL`、上下文压缩 `LLM_SUMMARIZE_MODEL`）可独立指定低成本模型，未配置时自动回退主模型，实现精细化成本管控。
+- **♻️ 上下文智能压缩 (Auto Compaction)**：会话 Token 超过阈值（默认 500000，可配置）时，后台异步调用摘要模型无损提炼历史并释放空间，实现无限长上下文，彻底告别生硬截断。
+- **🧠 长期记忆开关**：用户可在设置页一键开关 `ENABLE_LONG_TERM_MEMORY`，关闭后新会话保持绝对干净，不携带任何历史偏好。
+- **⚡ 流式传输池化 (Connection Pooling)**：底层 HTTP/HTTPS Agent 常驻 `keepAlive` 连接池（maxSockets 100），高频工具调用复用 TCP/TLS 连接，大幅降低 TTFT 首字延迟。
+- **🔍 推理模式控制 (Reasoning Effort)**：前端可配置 low / medium / high 三档推理深度，自动适配 o1 / o3 / R1 等思考型模型。
+- **🛡️ 安全沙箱**：基于命令注入检测与 SSRF 防护的执行环境，配合审计日志确保操作安全。支持三种安全模式（安全 / 标准 / 完全访问），会话级切换，前端输入框可一键选择。高危命令触发 **细粒度 Exec Policy 审批流**：前端弹出红色授权卡片 → 用户允许/拒绝 → 会话级缓存白名单 → 模型原样重试。
 - **⚡ OpenSpec 方法论 (OSM)**：四档能力档位（`off` 关闭 / `balanced` 均衡 / `methodology` 专家 / `max` 极限），默认 `balanced`，一键控制工具集、Token 预算倍率和方法论 Prompt 注入。前端 OSM 模式下拉菜单支持简体中文 i18n 切换，聊天输入框可拖拽调整高度。
-- **📈 可观测性**：详细的 Token 分类统计（系统提示词、RAG、工具结果等）及性能监控指标。
+- **📈 可观测性**：详细的 Token 分类统计（系统提示词、RAG、工具结果等）及性能监控指标，DeepSeek KV Cache 命中节省金额实时估算，账户余额查询与低余额告警。
 - **💎 增强交互**：聊天输入框支持拖拽缩放高度，OSM 模式下拉菜单（AI 图标 + 中文档位标签），Max 模式操作前二次确认防误触。
 
 ---

@@ -3588,7 +3588,9 @@
                     "type": "string"
                   },
                   "AUTO_COMPACT_TOKEN_LIMIT": {
-                    "type": "integer"
+                    "type": "integer",
+                    "description": "上下文智能压缩阈值（Token），默认 500000",
+                    "default": 500000
                   },
                   "REASONING_EFFORT": {
                     "type": "string",
