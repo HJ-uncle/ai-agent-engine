@@ -1,0 +1,154 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Aether Engine API",
+    "version": "1.0.0",
+    "description": "Standardized API for interacting with the Aether Engine (AE), managing agents, knowledge, mcp, memory, tasks, and conversations."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:12323/api/v1"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {
+      "StandardResponse": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "integer", "example": 200 },
+          "message": { "type": "string", "example": "操作成功" },
+          "data": { "type": "object" },
+          "timestamp": { "type": "integer", "example": 1745222400000 }
+        }
+      },
+      "PaginatedResponse": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "integer", "example": 200 },
+          "message": { "type": "string", "example": "查询成功" },
+          "data": { "type": "array", "items": { "type": "object" } },
+          "pagination": {
+            "type": "object",
+            "properties": {
+              "current": { "type": "integer", "example": 1 },
+              "pageSize": { "type": "integer", "example": 10 },
+              "total": { "type": "integer", "example": 25 },
+              "totalPages": { "type": "integer", "example": 3 }
+            }
+          },
+          "timestamp": { "type": "integer", "example": 1745222400000 }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/agents": {
+      "get": {
+        "summary": "Get Agents",
+        "parameters": [
+          { "name": "current", "in": "query", "schema": { "type": "integer" } },
+          { "name": "pageSize", "in": "query", "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedResponse" } } } } }
+      },
+      "post": {
+        "summary": "Create Agent",
+        "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } }
+      }
+    },
+    "/agents/{id}": {
+      "get": { "summary": "Get Agent", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } },
+      "put": { "summary": "Update Agent", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } },
+      "delete": { "summary": "Delete Agent", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } }
+    },
+    "/conversation/sessions": {
+      "get": { "summary": "List Sessions", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedResponse" } } } } } }
+    },
+    "/conversation/history": {
+      "get": { "summary": "Get Session History", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedResponse" } } } } } },
+      "delete": { "summary": "Clear Session History", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } }
+    },
+    "/conversations/{conversationId}": {
+      "get": { "summary": "Get Chat Conversation by ID", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedResponse" } } } } } }
+    },
+    "/sessions/{sessionId}": {
+      "delete": { "summary": "Delete Session completely", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } }
+    },
+    "/messages/{messageId}/tokens": {
+      "get": { "summary": "Get message tokens", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } }
+    },
+    "/sessions/{sessionId}/tokens": {
+      "get": { "summary": "Get session total tokens", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } }
+    },
+    "/messages/{messageId}": {
+      "put": { "summary": "Edit and regenerate", "responses": { "200": { "description": "Stream response" } } },
+      "delete": { "summary": "Delete message", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } }
+    },
+    "/messages/{messageId}/regenerate": {
+      "post": { "summary": "Regenerate AI response", "responses": { "200": { "description": "Stream response" } } }
+    },
+    "/knowledge/documents": {
+      "post": { "summary": "Ingest Document", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } },
+      "get": { "summary": "List Documents", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedResponse" } } } } } }
+    },
+    "/knowledge/documents/{id}": {
+      "delete": { "summary": "Delete Document", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } }
+    },
+    "/knowledge/search": {
+      "post": { "summary": "Search Knowledge", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } }
+    },
+    "/mcp/servers": {
+      "get": { "summary": "List MCP Servers", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedResponse" } } } } } },
+      "post": { "summary": "Create MCP Server", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } }
+    },
+    "/mcp/servers/{id}": {
+      "get": { "summary": "Get MCP Server", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } },
+      "put": { "summary": "Full Update MCP Server", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } },
+      "patch": { "summary": "Partial Update MCP Server", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } },
+      "delete": { "summary": "Delete MCP Server", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } }
+    },
+    "/mcp/servers/{id}/enable": {
+      "post": { "summary": "Enable MCP Server", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } }
+    },
+    "/mcp/servers/{id}/disable": {
+      "post": { "summary": "Disable MCP Server", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } }
+    },
+    "/mcp/servers/{id}/test": {
+      "post": { "summary": "Test MCP Server", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } }
+    },
+    "/mcp/servers/{name}/restart": {
+      "post": { "summary": "Restart MCP Server", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } }
+    },
+    "/memory/remember": {
+      "post": { "summary": "Remember key value", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } }
+    },
+    "/memory/recall": {
+      "get": { "summary": "Recall value by key", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } }
+    },
+    "/memory/list": {
+      "get": { "summary": "List memory keys", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedResponse" } } } } } }
+    },
+    "/memory/{id}": {
+      "delete": { "summary": "Delete memory", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } }
+    },
+    "/tasks": {
+      "post": { "summary": "Create Task", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } },
+      "get": { "summary": "List Tasks", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedResponse" } } } } } }
+    },
+    "/tasks/{id}": {
+      "get": { "summary": "Get Task", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } },
+      "put": { "summary": "Update Task", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } },
+      "delete": { "summary": "Delete Task", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StandardResponse" } } } } } }
+    },
+    "/tools": {
+      "get": { "summary": "List Tools", "responses": { "200": { "description": "Successful response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedResponse" } } } } } }
+    }
+  }
+}

@@ -1,0 +1,520 @@
+/**
+ * ============================================================
+ *  macOS Sonoma Design Tokens
+ *  For Web / Electron applications
+ *  Follows Apple Human Interface Guidelines for macOS
+ *  Version: 1.0.0
+ * ============================================================
+ *
+ *  MATERIAL USAGE GUIDE
+ *  ──────────────────────────────────────────────────────────
+ *
+ *  Title Bar  (--macos-titlebar-*)
+ *    半透明毛玻璃效果，位于窗口最顶层。当窗口失焦时建议降低
+ *    backdrop-filter 饱和度以配合 macOS 行为。背景色跟随
+ *    系统强调色时应适当调整 rgba 的色相通道。
+ *
+ *  Sidebar  (--macos-sidebar-*)
+ *    轻量级半透明效果，透明度低于标题栏，允许桌面壁纸若隐
+ *    若现。用于 Navigator / 文件树 / 列表区域。在主窗口内
+ *    应与内容区之间用 --macos-separator 分隔线区分层次。
+ *
+ *  Content Area  (--macos-content-*)
+ *    纯色背景，不带透明度。是主要内容的承载面，确保文本对比
+ *    度达到 WCAG AA 标准。深色模式下使用深灰而非纯黑，与
+ *    macOS 系统窗口保持一致。
+ *
+ *  Sheet / Modal  (--macos-sheet-*)
+ *    与内容区相近但略有提升，配合窗口级阴影营造层叠感。
+ *
+ *  ──────────────────────────────────────────────────────────
+ */
+
+/* ============================================================
+   1. LIGHT MODE  (default / :root)
+   ============================================================ */
+:root {
+
+  /* ----------------------------------------------------------
+     1-A  MATERIALS — Title Bar
+     backdrop-filter blur(25px) 须在父元素设置
+     -webkit-backdrop-filter 以兼容 Safari / WebKit
+     ---------------------------------------------------------- */
+  --macos-titlebar-bg:              rgba(246, 246, 246, 0.75);
+  --macos-titlebar-bg-inactive:     rgba(246, 246, 246, 0.60);  /* 窗口失焦 */
+  --macos-titlebar-backdrop-blur:   blur(25px) saturate(1.8);
+  --macos-titlebar-border-bottom:   rgba(0, 0, 0, 0.10);        /* 1px 分隔线 */
+  --macos-titlebar-height:          28px;                        /* 标准标题栏高度 */
+
+  /* ----------------------------------------------------------
+     1-B  MATERIALS — Sidebar
+     ---------------------------------------------------------- */
+  --macos-sidebar-bg:               rgba(246, 246, 246, 0.60);
+  --macos-sidebar-bg-inactive:      rgba(246, 246, 246, 0.50);
+  --macos-sidebar-backdrop-blur:    blur(20px) saturate(1.6);
+  --macos-sidebar-width-default:    220px;
+  --macos-sidebar-width-compact:    180px;
+
+  /* ----------------------------------------------------------
+     1-C  MATERIALS — Content Area (纯色，无透明)
+     ---------------------------------------------------------- */
+  --macos-content-bg:               #f5f5f5;
+  --macos-content-bg-elevated:      #ffffff;  /* 卡片 / Sheet 抬升面 */
+  --macos-content-bg-sunken:        #ebebeb;  /* 输入框 / 凹陷区域 */
+  --macos-sheet-bg:                 #ffffff;
+
+  /* ----------------------------------------------------------
+     1-D  SEPARATOR / DIVIDER
+     ---------------------------------------------------------- */
+  --macos-separator:                rgba(0, 0, 0, 0.10);
+  --macos-separator-opaque:         #d1d1d1;
+
+  /* ----------------------------------------------------------
+     2.  TYPOGRAPHY
+     系统字体栈：SF Pro（macOS）→ Segoe UI（Windows fallback）
+     ---------------------------------------------------------- */
+  --macos-font-family:
+    -apple-system, "SF Pro Text", "Helvetica Neue",
+    "Segoe UI", Arial, sans-serif;
+  --macos-font-family-display:
+    -apple-system, "SF Pro Display", "Helvetica Neue",
+    "Segoe UI", Arial, sans-serif;
+  --macos-font-family-mono:
+    "SF Mono", "Menlo", "Monaco", "Consolas",
+    "Liberation Mono", monospace;
+
+  /* 标题栏文字 */
+  --macos-font-size-titlebar:       13px;
+  --macos-font-weight-titlebar:     600;       /* Semibold */
+  --macos-font-color-titlebar:      rgba(0, 0, 0, 0.85);
+  --macos-font-color-titlebar-inactive: rgba(0, 0, 0, 0.40);
+
+  /* 窗口标题（居中大标题场景） */
+  --macos-font-size-window-title:   15px;
+  --macos-font-weight-window-title: 600;
+
+  /* 侧边栏分组标题 */
+  --macos-font-size-sidebar-label:  11px;
+  --macos-font-weight-sidebar-label: 700;       /* Bold */
+  --macos-letter-spacing-sidebar-label: 0.5px;
+  --macos-font-color-sidebar-label: rgba(0, 0, 0, 0.40); /* 次要标签色 */
+
+  /* 侧边栏正常行 */
+  --macos-font-size-sidebar-item:   13px;
+  --macos-font-weight-sidebar-item: 400;
+
+  /* 正文 */
+  --macos-font-size-body:           13px;
+  --macos-font-weight-body:         400;
+  --macos-line-height-body:         1.5;
+
+  /* 辅助文字 / Caption */
+  --macos-font-size-caption:        11px;
+  --macos-font-weight-caption:      400;
+
+  /* 工具提示 */
+  --macos-font-size-tooltip:        11px;
+
+  /* ----------------------------------------------------------
+     3.  SYSTEM COLORS — Label & Text
+     ---------------------------------------------------------- */
+  --macos-label-primary:            rgba(0, 0, 0, 0.85);
+  --macos-label-secondary:          rgba(0, 0, 0, 0.50);
+  --macos-label-tertiary:           rgba(0, 0, 0, 0.25);
+  --macos-label-quaternary:         rgba(0, 0, 0, 0.10);
+
+  --macos-text-color:               rgba(0, 0, 0, 0.85);
+  --macos-text-color-secondary:     rgba(0, 0, 0, 0.50);
+  --macos-text-color-placeholder:   rgba(0, 0, 0, 0.25);
+  --macos-text-color-disabled:      rgba(0, 0, 0, 0.25);
+  --macos-text-color-link:          #0064d2;
+  --macos-text-color-on-accent:     #ffffff;
+
+  /* ----------------------------------------------------------
+     4.  SYSTEM COLORS — Accent & Semantic
+     ---------------------------------------------------------- */
+  /* 强调色 — 蓝（默认） */
+  --macos-accent-blue:              #0064d2;
+  --macos-accent-blue-hover:        #0050a8;
+  --macos-accent-blue-pressed:      #003f86;
+  --macos-accent-blue-subtle:       rgba(0, 100, 210, 0.12);
+
+  /* 语义色 */
+  --macos-color-red:                #ff3b30;
+  --macos-color-red-subtle:         rgba(255, 59, 48, 0.12);
+  --macos-color-green:              #28cd41;
+  --macos-color-green-subtle:       rgba(40, 205, 65, 0.12);
+  --macos-color-orange:             #ff9500;
+  --macos-color-orange-subtle:      rgba(255, 149, 0, 0.12);
+  --macos-color-yellow:             #ffd60a;
+  --macos-color-purple:             #bf5af2;
+  --macos-color-pink:               #ff2d55;
+  --macos-color-teal:               #5ac8fa;
+  --macos-color-gray:               #8e8e93;
+  --macos-color-gray-subtle:        rgba(142, 142, 147, 0.12);
+
+  /* Fill 填充色（用于控件背景） */
+  --macos-fill-primary:             rgba(0, 0, 0, 0.05);
+  --macos-fill-secondary:           rgba(0, 0, 0, 0.08);
+  --macos-fill-tertiary:            rgba(0, 0, 0, 0.03);
+
+  /* ----------------------------------------------------------
+     5.  SPACING SYSTEM (4px grid)
+     ---------------------------------------------------------- */
+  --macos-space-1:    4px;
+  --macos-space-2:    8px;
+  --macos-space-3:    12px;
+  --macos-space-4:    16px;
+  --macos-space-5:    20px;
+  --macos-space-6:    24px;
+  --macos-space-8:    32px;
+  --macos-space-10:   40px;
+  --macos-space-12:   48px;
+
+  /* 组件内边距语义别名 */
+  --macos-padding-xs:     var(--macos-space-1);   /* 4px  */
+  --macos-padding-sm:     var(--macos-space-2);   /* 8px  */
+  --macos-padding-md:     var(--macos-space-3);   /* 12px */
+  --macos-padding-lg:     var(--macos-space-4);   /* 16px */
+  --macos-padding-xl:     var(--macos-space-6);   /* 24px */
+
+  /* ----------------------------------------------------------
+     6.  SHADOW SYSTEM
+     ---------------------------------------------------------- */
+  /* 窗口级阴影 — 大偏移，柔和扩散 */
+  --macos-shadow-window:
+    0 20px 40px rgba(0, 0, 0, 0.15),
+    0  8px 16px rgba(0, 0, 0, 0.08),
+    0  2px  4px rgba(0, 0, 0, 0.06);
+
+  /* 下拉菜单 / Popover 阴影 */
+  --macos-shadow-menu:
+    0 8px 24px rgba(0, 0, 0, 0.14),
+    0 2px  8px rgba(0, 0, 0, 0.08),
+    0 0    1px rgba(0, 0, 0, 0.06);
+
+  /* 卡片轻微阴影 */
+  --macos-shadow-card:
+    0 2px  8px rgba(0, 0, 0, 0.08),
+    0 1px  2px rgba(0, 0, 0, 0.04);
+
+  /* 按钮/控件内阴影（按压态） */
+  --macos-shadow-inset:
+    inset 0 1px 2px rgba(0, 0, 0, 0.10);
+
+  /* Sheet / Modal 阴影 */
+  --macos-shadow-sheet:
+    0 12px 32px rgba(0, 0, 0, 0.18),
+    0  4px 12px rgba(0, 0, 0, 0.10);
+
+  /* ----------------------------------------------------------
+     7.  BORDER RADIUS
+     ---------------------------------------------------------- */
+  --macos-radius-window:    10px;   /* 窗口整体圆角 */
+  --macos-radius-panel:     10px;   /* 面板 / Sheet */
+  --macos-radius-card:       8px;   /* 卡片 */
+  --macos-radius-control:    6px;   /* 通用控件（输入框、下拉等） */
+  --macos-radius-button:     6px;   /* 按钮 */
+  --macos-radius-tag:        4px;   /* 标签 / Badge */
+  --macos-radius-full:     999px;   /* 完全圆角（胶囊按钮） */
+
+  /* ----------------------------------------------------------
+     8.  WINDOW CONTROLS (Traffic Lights)
+     红黄绿按钮尺寸与间距严格遵循 macOS 规范
+     ---------------------------------------------------------- */
+  --macos-traffic-light-size:       12px;
+  --macos-traffic-light-gap:         8px;
+  --macos-traffic-light-margin-x:   12px;  /* 距窗口左边缘 */
+  --macos-traffic-light-margin-y:    8px;  /* 距标题栏上边缘 */
+  --macos-traffic-light-close:      #ff5f57;
+  --macos-traffic-light-close-hover: #ff3b30;
+  --macos-traffic-light-minimize:   #febc2e;
+  --macos-traffic-light-minimize-hover: #ff9500;
+  --macos-traffic-light-zoom:       #28c840;
+  --macos-traffic-light-zoom-hover: #00b828;
+  --macos-traffic-light-inactive:   #d0d0d0; /* 失焦统一色 */
+
+  /* ----------------------------------------------------------
+     9.  HOVER & INTERACTION STATES
+     ---------------------------------------------------------- */
+  /* 列表行悬停 */
+  --macos-list-row-hover-bg:        rgba(0, 0, 0, 0.05);
+  --macos-list-row-active-bg:       rgba(0, 0, 0, 0.09);
+  /* 列表行选中（聚焦窗口） */
+  --macos-list-row-selected-bg:     var(--macos-accent-blue);
+  --macos-list-row-selected-text:   #ffffff;
+  /* 列表行选中（非聚焦窗口） */
+  --macos-list-row-selected-bg-inactive: rgba(0, 0, 0, 0.10);
+  --macos-list-row-selected-text-inactive: var(--macos-label-primary);
+
+  /* 图标悬停 */
+  --macos-icon-hover-bg:            rgba(0, 0, 0, 0.05);
+  --macos-icon-active-bg:           rgba(0, 0, 0, 0.10);
+
+  /* 工具栏按钮悬停 */
+  --macos-toolbar-btn-hover-bg:     rgba(0, 0, 0, 0.07);
+  --macos-toolbar-btn-active-bg:    rgba(0, 0, 0, 0.12);
+
+  /* ----------------------------------------------------------
+     10. CONTROL & COMPONENT TOKENS
+     ---------------------------------------------------------- */
+  /* 输入框 */
+  --macos-input-bg:                 rgba(255, 255, 255, 0.90);
+  --macos-input-border:             rgba(0, 0, 0, 0.20);
+  --macos-input-border-focus:       var(--macos-accent-blue);
+  --macos-input-shadow-focus:       0 0 0 3px rgba(0, 100, 210, 0.30);
+  --macos-input-height:             22px;
+
+  /* 按钮 — 主按钮 */
+  --macos-btn-primary-bg:           var(--macos-accent-blue);
+  --macos-btn-primary-bg-hover:     var(--macos-accent-blue-hover);
+  --macos-btn-primary-bg-pressed:   var(--macos-accent-blue-pressed);
+  --macos-btn-primary-text:         #ffffff;
+
+  /* 按钮 — 次要按钮 */
+  --macos-btn-secondary-bg:         rgba(255, 255, 255, 0.80);
+  --macos-btn-secondary-bg-hover:   rgba(255, 255, 255, 1.00);
+  --macos-btn-secondary-border:     rgba(0, 0, 0, 0.18);
+  --macos-btn-secondary-text:       var(--macos-label-primary);
+
+  /* 过渡动画 */
+  --macos-transition-fast:          80ms ease;
+  --macos-transition-base:          150ms ease;
+  --macos-transition-slow:          250ms ease;
+  --macos-transition-spring:        300ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+
+/* ============================================================
+   2. DARK MODE  (@media prefers-color-scheme: dark)
+   ============================================================ */
+@media (prefers-color-scheme: dark) {
+  :root {
+
+    /* --------------------------------------------------------
+       2-A  MATERIALS — Title Bar (Dark)
+       -------------------------------------------------------- */
+    --macos-titlebar-bg:              rgba(40, 40, 40, 0.80);
+    --macos-titlebar-bg-inactive:     rgba(40, 40, 40, 0.65);
+    --macos-titlebar-backdrop-blur:   blur(25px) saturate(1.6);
+    --macos-titlebar-border-bottom:   rgba(255, 255, 255, 0.08);
+    --macos-font-color-titlebar:      rgba(255, 255, 255, 0.85);
+    --macos-font-color-titlebar-inactive: rgba(255, 255, 255, 0.35);
+
+    /* --------------------------------------------------------
+       2-B  MATERIALS — Sidebar (Dark)
+       -------------------------------------------------------- */
+    --macos-sidebar-bg:               rgba(30, 30, 30, 0.70);
+    --macos-sidebar-bg-inactive:      rgba(30, 30, 30, 0.60);
+    --macos-sidebar-backdrop-blur:    blur(20px) saturate(1.4);
+
+    /* --------------------------------------------------------
+       2-C  MATERIALS — Content Area (Dark)
+       -------------------------------------------------------- */
+    --macos-content-bg:               #1e1e1e;
+    --macos-content-bg-elevated:      #2c2c2c;
+    --macos-content-bg-sunken:        #141414;
+    --macos-sheet-bg:                 #2c2c2c;
+
+    /* --------------------------------------------------------
+       2-D  SEPARATOR (Dark)
+       -------------------------------------------------------- */
+    --macos-separator:                rgba(255, 255, 255, 0.10);
+    --macos-separator-opaque:         #3a3a3a;
+
+    /* --------------------------------------------------------
+       Text & Labels (Dark)
+       -------------------------------------------------------- */
+    --macos-label-primary:            rgba(255, 255, 255, 0.85);
+    --macos-label-secondary:          rgba(255, 255, 255, 0.50);
+    --macos-label-tertiary:           rgba(255, 255, 255, 0.25);
+    --macos-label-quaternary:         rgba(255, 255, 255, 0.10);
+
+    --macos-text-color:               rgba(255, 255, 255, 0.85);
+    --macos-text-color-secondary:     rgba(255, 255, 255, 0.50);
+    --macos-text-color-placeholder:   rgba(255, 255, 255, 0.25);
+    --macos-text-color-disabled:      rgba(255, 255, 255, 0.25);
+    --macos-text-color-link:          #4da3ff;
+
+    /* --------------------------------------------------------
+       Sidebar Label (Dark)
+       -------------------------------------------------------- */
+    --macos-font-color-sidebar-label: rgba(255, 255, 255, 0.40);
+
+    /* --------------------------------------------------------
+       Accent (Dark) — 蓝色亮度微调以适配深色背景
+       -------------------------------------------------------- */
+    --macos-accent-blue:              #4da3ff;
+    --macos-accent-blue-hover:        #70b8ff;
+    --macos-accent-blue-pressed:      #3b8fe0;
+    --macos-accent-blue-subtle:       rgba(77, 163, 255, 0.18);
+
+    /* --------------------------------------------------------
+       Semantic Colors (Dark) — 饱和度略高以补偿深色背景
+       -------------------------------------------------------- */
+    --macos-color-red:                #ff453a;
+    --macos-color-red-subtle:         rgba(255, 69, 58, 0.18);
+    --macos-color-green:              #30d158;
+    --macos-color-green-subtle:       rgba(48, 209, 88, 0.18);
+    --macos-color-orange:             #ff9f0a;
+    --macos-color-orange-subtle:      rgba(255, 159, 10, 0.18);
+    --macos-color-yellow:             #ffd60a;
+    --macos-color-purple:             #bf5af2;
+    --macos-color-pink:               #ff375f;
+    --macos-color-teal:               #5ac8fa;
+    --macos-color-gray:               #98989d;
+    --macos-color-gray-subtle:        rgba(152, 152, 157, 0.18);
+
+    /* --------------------------------------------------------
+       Fill (Dark)
+       -------------------------------------------------------- */
+    --macos-fill-primary:             rgba(255, 255, 255, 0.07);
+    --macos-fill-secondary:           rgba(255, 255, 255, 0.11);
+    --macos-fill-tertiary:            rgba(255, 255, 255, 0.04);
+
+    /* --------------------------------------------------------
+       Shadows (Dark) — 阴影不透明度略高以在深色上可见
+       -------------------------------------------------------- */
+    --macos-shadow-window:
+      0 20px 40px rgba(0, 0, 0, 0.40),
+      0  8px 16px rgba(0, 0, 0, 0.28),
+      0  2px  4px rgba(0, 0, 0, 0.20);
+
+    --macos-shadow-menu:
+      0 8px 24px rgba(0, 0, 0, 0.40),
+      0 2px  8px rgba(0, 0, 0, 0.28),
+      0 0    1px rgba(0, 0, 0, 0.30);
+
+    --macos-shadow-card:
+      0 2px  8px rgba(0, 0, 0, 0.30),
+      0 1px  2px rgba(0, 0, 0, 0.18);
+
+    --macos-shadow-sheet:
+      0 12px 32px rgba(0, 0, 0, 0.50),
+      0  4px 12px rgba(0, 0, 0, 0.30);
+
+    /* --------------------------------------------------------
+       Hover States (Dark)
+       -------------------------------------------------------- */
+    --macos-list-row-hover-bg:        rgba(255, 255, 255, 0.07);
+    --macos-list-row-active-bg:       rgba(255, 255, 255, 0.12);
+    --macos-list-row-selected-bg-inactive: rgba(255, 255, 255, 0.12);
+    --macos-list-row-selected-text-inactive: var(--macos-label-primary);
+
+    --macos-icon-hover-bg:            rgba(255, 255, 255, 0.08);
+    --macos-icon-active-bg:           rgba(255, 255, 255, 0.14);
+
+    --macos-toolbar-btn-hover-bg:     rgba(255, 255, 255, 0.09);
+    --macos-toolbar-btn-active-bg:    rgba(255, 255, 255, 0.15);
+
+    /* --------------------------------------------------------
+       Controls (Dark)
+       -------------------------------------------------------- */
+    --macos-input-bg:                 rgba(255, 255, 255, 0.06);
+    --macos-input-border:             rgba(255, 255, 255, 0.18);
+    --macos-input-border-focus:       var(--macos-accent-blue);
+    --macos-input-shadow-focus:       0 0 0 3px rgba(77, 163, 255, 0.35);
+
+    --macos-btn-secondary-bg:         rgba(255, 255, 255, 0.10);
+    --macos-btn-secondary-bg-hover:   rgba(255, 255, 255, 0.16);
+    --macos-btn-secondary-border:     rgba(255, 255, 255, 0.14);
+    --macos-btn-secondary-text:       var(--macos-label-primary);
+
+    --macos-traffic-light-inactive:   #4a4a4a;
+  }
+}
+
+
+/* ============================================================
+   3. UTILITY CLASSES  (可选，方便快速应用材质)
+   ============================================================ */
+
+/* 标题栏材质 */
+.mac-titlebar {
+  background:       var(--macos-titlebar-bg);
+  -webkit-backdrop-filter: var(--macos-titlebar-backdrop-blur);
+  backdrop-filter:  var(--macos-titlebar-backdrop-blur);
+  border-bottom:    1px solid var(--macos-titlebar-border-bottom);
+  height:           var(--macos-titlebar-height);
+  font-size:        var(--macos-font-size-titlebar);
+  font-weight:      var(--macos-font-weight-titlebar);
+  color:            var(--macos-font-color-titlebar);
+  -webkit-app-region: drag;   /* Electron: 标题栏可拖动 */
+  user-select:      none;
+}
+
+/* 侧边栏材质 */
+.mac-sidebar {
+  background:       var(--macos-sidebar-bg);
+  -webkit-backdrop-filter: var(--macos-sidebar-backdrop-blur);
+  backdrop-filter:  var(--macos-sidebar-backdrop-blur);
+  border-right:     1px solid var(--macos-separator);
+  width:            var(--macos-sidebar-width-default);
+}
+
+/* 内容区 */
+.mac-content {
+  background:       var(--macos-content-bg);
+  color:            var(--macos-text-color);
+  font-family:      var(--macos-font-family);
+  font-size:        var(--macos-font-size-body);
+  line-height:      var(--macos-line-height-body);
+}
+
+/* 窗口容器 */
+.mac-window {
+  border-radius:    var(--macos-radius-window);
+  box-shadow:       var(--macos-shadow-window);
+  overflow:         hidden;
+}
+
+/* 侧边栏分组标签 */
+.mac-sidebar-label {
+  font-size:        var(--macos-font-size-sidebar-label);
+  font-weight:      var(--macos-font-weight-sidebar-label);
+  letter-spacing:   var(--macos-letter-spacing-sidebar-label);
+  color:            var(--macos-font-color-sidebar-label);
+  text-transform:   uppercase;
+}
+
+/* 列表行 */
+.mac-list-row {
+  border-radius:    var(--macos-radius-tag);
+  padding:          var(--macos-padding-xs) var(--macos-padding-sm);
+  cursor:           default;
+  transition:       background var(--macos-transition-fast);
+}
+.mac-list-row:hover  { background: var(--macos-list-row-hover-bg); }
+.mac-list-row:active { background: var(--macos-list-row-active-bg); }
+.mac-list-row.selected {
+  background: var(--macos-list-row-selected-bg);
+  color:      var(--macos-list-row-selected-text);
+}
+
+/* 交通灯按钮容器 */
+.mac-traffic-lights {
+  display:     flex;
+  align-items: center;
+  gap:         var(--macos-traffic-light-gap);
+  padding-left: var(--macos-traffic-light-margin-x);
+  -webkit-app-region: no-drag;
+}
+.mac-traffic-lights .btn {
+  width:         var(--macos-traffic-light-size);
+  height:        var(--macos-traffic-light-size);
+  border-radius: var(--macos-radius-full);
+  border:        none;
+  cursor:        pointer;
+  transition:    filter var(--macos-transition-fast);
+}
+.mac-traffic-lights .btn-close    { background: var(--macos-traffic-light-close); }
+.mac-traffic-lights .btn-minimize { background: var(--macos-traffic-light-minimize); }
+.mac-traffic-lights .btn-zoom     { background: var(--macos-traffic-light-zoom); }
+.mac-traffic-lights:hover .btn-close    { background: var(--macos-traffic-light-close-hover); }
+.mac-traffic-lights:hover .btn-minimize { background: var(--macos-traffic-light-minimize-hover); }
+.mac-traffic-lights:hover .btn-zoom     { background: var(--macos-traffic-light-zoom-hover); }
+
+/* 窗口失焦时统一灰色 */
+.mac-window-inactive .mac-traffic-lights .btn {
+  background: var(--macos-traffic-light-inactive) !important;
+}

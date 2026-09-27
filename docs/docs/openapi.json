@@ -1,0 +1,4549 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Aether Engine API",
+    "version": "1.0.0",
+    "description": "用于与 Aether Engine (AE) 引擎交互、管理智能体、知识库、MCP、记忆、任务和对话的标准化 API。"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:12323/api/v1",
+      "description": "核心 API（带 /api/v1 前缀）"
+    },
+    {
+      "url": "http://localhost:12323",
+      "description": "根路径（白名单接口：/auth/user、/health、/openapi.json、/metrics）"
+    }
+  ],
+  "paths": {
+    "/auth/user": {
+      "post": {
+        "summary": "外部平台用户同步/注册（白名单，无需鉴权）",
+        "description": "外部平台登录后将用户 token 以 SHA-256 哈希存储，后续请求携带 X-API-Key: <token> 即可鉴权。同一 userId 多次调用为幂等 UPSERT。",
+        "tags": [
+          "Auth"
+        ],
+        "servers": [
+          {
+            "url": "http://localhost:12323"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "description": "外部平台颁发的 token（必填）"
+                  },
+                  "userId": {
+                    "type": "string",
+                    "description": "外部平台的用户 ID（必填，作为 tenantId）"
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "显示名称（可选）"
+                  },
+                  "email": {
+                    "type": "string",
+                    "description": "邮箱（可选）"
+                  }
+                },
+                "required": [
+                  "token",
+                  "userId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/StandardResponse"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "tenantId": {
+                              "type": "string",
+                              "example": "user_123"
+                            },
+                            "name": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "email": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "externalId": {
+                              "type": "string",
+                              "example": "user_123"
+                            },
+                            "createdAt": {
+                              "type": "integer",
+                              "example": 1716192000
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat": {
+      "post": {
+        "summary": "发送消息（SSE 流式响应）",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "message": {
+                    "type": "string"
+                  },
+                  "sessionId": {
+                    "type": "string"
+                  },
+                  "agentId": {
+                    "type": "string"
+                  },
+                  "systemPrompt": {
+                    "type": "string"
+                  },
+                  "maxAskUserCount": {
+                    "type": "integer"
+                  },
+                  "includeStreamUsage": {
+                    "type": "boolean",
+                    "description": "流式 usage 开关（默认 true，第三方代理可设为 false 避免 400/422）"
+                  },
+                  "thinkingMode": {
+                    "type": "boolean"
+                  },
+                  "metadata": {
+                    "type": "object",
+                    "description": "业务元数据，随会话和消息持久化"
+                  },
+                  "toolResponse": {
+                    "type": "object",
+                    "properties": {
+                      "toolCallId": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "output": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "message"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SSE 流式响应（text/event-stream）"
+          }
+        }
+      }
+    },
+    "/chat/cancel": {
+      "post": {
+        "summary": "主动取消正在进行的 SSE 流式生成",
+        "tags": [
+          "Chat"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionId": {
+                    "type": "string",
+                    "description": "要取消的会话 ID"
+                  }
+                },
+                "required": [
+                  "sessionId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cron": {
+      "post": {
+        "summary": "创建定时任务",
+        "tags": [
+          "Cron"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "example": "每日日报"
+                  },
+                  "cronExpr": {
+                    "type": "string",
+                    "example": "0 9 * * 1-5",
+                    "description": "5 字段 cron 表达式：分 时 日 月 周"
+                  },
+                  "message": {
+                    "type": "string",
+                    "example": "请总结昨日工作进展"
+                  },
+                  "sessionId": {
+                    "type": "string",
+                    "example": "my-session"
+                  },
+                  "agentId": {
+                    "type": "string",
+                    "description": "可选，指定 Agent ID"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                },
+                "required": [
+                  "name",
+                  "cronExpr",
+                  "message"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "获取定时任务列表",
+        "tags": [
+          "Cron"
+        ],
+        "parameters": [
+          {
+            "name": "current",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cron/{id}": {
+      "put": {
+        "summary": "更新定时任务",
+        "tags": [
+          "Cron"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除定时任务",
+        "tags": [
+          "Cron"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cron/{id}/enable": {
+      "post": {
+        "summary": "启用定时任务",
+        "tags": [
+          "Cron"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cron/{id}/disable": {
+      "post": {
+        "summary": "禁用定时任务",
+        "tags": [
+          "Cron"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flows/run": {
+      "post": {
+        "summary": "提交 Flow 定义并启动 DAG 执行（SSE 流式返回执行事件）",
+        "description": "确定性 DAG 调度：拓扑分层 → 逐层推进 → 层内 Promise.all 并发。每节点起一个 ephemeral 子会话（ID 前缀 flow-<runId>-<nodeId>，不进入可见会话列表）。失败语义：同层失败不阻断本层兄弟节点，本层结算后存在失败则阻断后续层。环检测在执行前提前完成。",
+        "tags": [
+          "Flow"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "flowId",
+                  "nodes",
+                  "edges"
+                ],
+                "properties": {
+                  "flowId": {
+                    "type": "string"
+                  },
+                  "flowName": {
+                    "type": "string"
+                  },
+                  "nodes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "nodeId",
+                        "label",
+                        "nodeType"
+                      ],
+                      "properties": {
+                        "nodeId": {
+                          "type": "string"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "nodeType": {
+                          "type": "string"
+                        },
+                        "prompt": {
+                          "type": "string"
+                        },
+                        "systemPrompt": {
+                          "type": "string"
+                        },
+                        "activeSkillIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "activeMcpServerIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "knowledgeBases": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "model": {
+                          "type": "string",
+                          "description": "每节点独立模型（请求级隔离）"
+                        },
+                        "agentId": {
+                          "type": "string"
+                        },
+                        "upstreamNodeIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "config": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  },
+                  "edges": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "source",
+                        "target"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "source": {
+                          "type": "string"
+                        },
+                        "target": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "userInput": {
+                    "type": "string"
+                  },
+                  "cwd": {
+                    "type": "string"
+                  },
+                  "executionMode": {
+                    "type": "string",
+                    "enum": [
+                      "auto",
+                      "local",
+                      "sandbox",
+                      "workspace",
+                      "fullAccess",
+                      "yolo"
+                    ]
+                  },
+                  "securityMode": {
+                    "type": "string",
+                    "enum": [
+                      "safe",
+                      "standard",
+                      "full-access"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SSE 流式响应，事件由 __flow__ 控制帧承载，envelope 字段为 flow，按 flow.type 分发（flow_started / node_start / node_delta / node_done / node_error / flow_done / flow_error / flow_cancelled）"
+          }
+        }
+      }
+    },
+    "/flows/{runId}/stop": {
+      "post": {
+        "summary": "停止正在执行的 Flow",
+        "tags": [
+          "Flow"
+        ],
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应（不存在或已结束时 cancelled=false）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/StandardResponse"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "runId": {
+                              "type": "string"
+                            },
+                            "cancelled": {
+                              "type": "boolean"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/deepseek/prices": {
+      "get": {
+        "summary": "获取 DeepSeek 动态价格配置",
+        "description": "返回所有模型的当前定价（含原价、折扣价、折扣截止时间）。配置持久化于 ~/.agent-engine/deepseek-prices.json。",
+        "tags": [
+          "DeepSeek"
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "更新 DeepSeek 价格配置（全量覆盖）",
+        "description": "持久化用户自定义价格配置，自动计算 updatedAt。合并逻辑：系统升级新增的模型会自动补全到本地配置。",
+        "tags": [
+          "DeepSeek"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "lowBalanceThreshold": {
+                    "type": "number",
+                    "example": 10
+                  },
+                  "models": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "modelId": {
+                          "type": "string"
+                        },
+                        "normalPrice": {
+                          "type": "object",
+                          "properties": {
+                            "input": {
+                              "type": "number"
+                            },
+                            "output": {
+                              "type": "number"
+                            },
+                            "cacheHit": {
+                              "type": "number"
+                            }
+                          }
+                        },
+                        "discountPrice": {
+                          "type": "object",
+                          "properties": {
+                            "input": {
+                              "type": "number"
+                            },
+                            "output": {
+                              "type": "number"
+                            },
+                            "cacheHit": {
+                              "type": "number"
+                            }
+                          }
+                        },
+                        "discountUntil": {
+                          "type": "string",
+                          "nullable": true,
+                          "description": "ISO 8601 折扣截止时间，null 表示永久/无折扣"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agents": {
+      "get": {
+        "summary": "获取智能体列表",
+        "parameters": [
+          {
+            "name": "current",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "创建智能体",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agents/{id}": {
+      "get": {
+        "summary": "获取智能体详情",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "更新智能体",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除智能体",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenant/identity": {
+      "get": {
+        "summary": "获取租户专属默认身份",
+        "tags": [
+          "Tenant"
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/StandardResponse"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "identity": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "更新租户专属默认身份",
+        "tags": [
+          "Tenant"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "identity": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "identity"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "清除租户专属默认身份",
+        "tags": [
+          "Tenant"
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/conversation/sessions": {
+      "get": {
+        "summary": "获取会话列表",
+        "tags": [
+          "Conversation"
+        ],
+        "parameters": [
+          {
+            "name": "current",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/PaginatedResponse"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "sessionId": {
+                                "type": "string"
+                              },
+                              "agentId": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "metadata": {
+                                "type": "object",
+                                "nullable": true
+                              },
+                              "lastMessage": {
+                                "type": "string"
+                              },
+                              "lastAt": {
+                                "type": "integer"
+                              },
+                              "messageCount": {
+                                "type": "integer"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/conversation/history": {
+      "get": {
+        "summary": "获取会话历史",
+        "tags": [
+          "Conversation"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "current",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/PaginatedResponse"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Message"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "清空会话历史",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/conversations/{conversationId}": {
+      "get": {
+        "summary": "根据 ID 获取单轮对话",
+        "tags": [
+          "Conversation"
+        ],
+        "parameters": [
+          {
+            "name": "conversationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "current",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/PaginatedResponse"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Message"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/{sessionId}": {
+      "delete": {
+        "summary": "彻底删除会话",
+        "parameters": [
+          {
+            "name": "keepWorkspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/{sessionId}/binding": {
+      "get": {
+        "summary": "查询会话 Agent 绑定状态",
+        "description": "返回 `started` (是否已锁定)、`agentId`、`agent` 信息。首次发送消息后 Agent 锁定，后续无论传什么 agentId 均被忽略。绑定仅在硬删除会话时解除。",
+        "tags": [
+          "Session"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应，data.started=false 表示未锁定",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/StandardResponse"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "started": {
+                              "type": "boolean"
+                            },
+                            "agentId": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "metadata": {
+                              "type": "object",
+                              "nullable": true
+                            },
+                            "agent": {
+                              "type": "object",
+                              "nullable": true
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/messages/{messageId}/tokens": {
+      "get": {
+        "summary": "获取消息 Token 使用量",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/{sessionId}/tokens": {
+      "get": {
+        "summary": "获取会话总 Token 使用量",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/messages/{messageId}": {
+      "put": {
+        "summary": "编辑并重新生成",
+        "tags": [
+          "Messages"
+        ],
+        "parameters": [
+          {
+            "name": "messageId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "content": {
+                    "type": "string"
+                  },
+                  "systemPrompt": {
+                    "type": "string"
+                  },
+                  "maxAskUserCount": {
+                    "type": "integer"
+                  },
+                  "thinkingMode": {
+                    "type": "boolean"
+                  },
+                  "metadata": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "content"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "流式响应"
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除消息",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/messages/{messageId}/regenerate": {
+      "post": {
+        "summary": "重新生成 AI 响应",
+        "tags": [
+          "Messages"
+        ],
+        "parameters": [
+          {
+            "name": "messageId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "systemPrompt": {
+                    "type": "string"
+                  },
+                  "maxAskUserCount": {
+                    "type": "integer"
+                  },
+                  "thinkingMode": {
+                    "type": "boolean"
+                  },
+                  "metadata": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "流式响应"
+          }
+        }
+      }
+    },
+    "/knowledge/documents": {
+      "post": {
+        "summary": "录入文档",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "获取文档列表",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/knowledge/documents/{id}": {
+      "delete": {
+        "summary": "删除文档",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/knowledge/search": {
+      "post": {
+        "summary": "搜索知识库",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/servers": {
+      "get": {
+        "summary": "获取 MCP 服务器列表（全局 ~/.aether/mcp.json 与项目 .aether/mcp.json 合并视图，记录含 scope 字段）",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "创建 MCP 服务器",
+        "description": "请求体可选 scope: project（默认，写入 .aether/mcp.json）| global（写入 ~/.aether/mcp.json，对所有项目生效）",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "唯一标识，^[a-z0-9][a-z0-9-_]*$"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "transportType": {
+                    "type": "string",
+                    "enum": [
+                      "stdio",
+                      "sse",
+                      "http",
+                      "streamableHttp"
+                    ]
+                  },
+                  "url": {
+                    "type": "string",
+                    "description": "非 stdio 传输必填"
+                  },
+                  "command": {
+                    "type": "string",
+                    "description": "stdio 传输必填"
+                  },
+                  "scope": {
+                    "type": "string",
+                    "enum": [
+                      "project",
+                      "global"
+                    ],
+                    "description": "保存层级，默认 project"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/servers/{id}": {
+      "get": {
+        "summary": "获取 MCP 服务器详情",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "全量更新 MCP 服务器",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "部分更新 MCP 服务器",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除 MCP 服务器",
+        "description": "可选 query 参数 scope=global 仅删除全局层（~/.aether/mcp.json）定义，不影响项目级同名定义",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "project",
+                "global"
+              ]
+            },
+            "description": "删除目标层级，默认 project"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/skills": {
+      "get": {
+        "summary": "获取技能列表（项目级 .aether/skills 与全局级 ~/.aether/skills 合并视图）",
+        "description": "返回 { skills: [{ name, description, enabled, order, scope }], globalRoot }。RBAC：需要 admin / skill-manager 角色（AUTH_ENABLED=true 时）",
+        "parameters": [
+          {
+            "name": "reload",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            },
+            "description": "reload=1 强制重扫磁盘"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "手动创建技能（表单直建，无需压缩包）",
+        "description": "自动生成 frontmatter 与正文合并为 SKILL.md，落盘后热重载立即生效。同名冲突返回 40900；overwrite=true 时旧版本备份到 .versions/",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "description",
+                  "content"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "^[a-z0-9][a-z0-9-_]*$"
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "一句话描述，供 Agent 检索匹配"
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "SKILL.md 正文（Markdown）"
+                  },
+                  "scope": {
+                    "type": "string",
+                    "enum": [
+                      "project",
+                      "global"
+                    ],
+                    "description": "保存层级，默认 project"
+                  },
+                  "overwrite": {
+                    "type": "boolean",
+                    "description": "同名已存在时覆盖（旧版本自动备份），默认 false"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/skills/{name}": {
+      "get": {
+        "summary": "获取技能详情",
+        "description": "返回 name/description/enabled/order/scope/dir（落盘目录）/content（SKILL.md 全文）/files（附件清单）",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除技能",
+        "description": "按定义层删除技能目录及版本备份（路径安全校验拒绝目录逃逸）",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/skills/imports": {
+      "post": {
+        "summary": "直传导入技能包（zip）",
+        "description": "multipart/form-data：file + 可选 scope（project/global）+ conflictStrategy（versioned|overwrite|reject）。导入管线含 zip-slip / zip bomb 防护、白名单校验、macOS 垃圾过滤",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "技能包 zip（<8MB 推荐直传）"
+                  },
+                  "scope": {
+                    "type": "string",
+                    "enum": [
+                      "project",
+                      "global"
+                    ]
+                  },
+                  "conflictStrategy": {
+                    "type": "string",
+                    "enum": [
+                      "versioned",
+                      "overwrite",
+                      "reject"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应（data 含 importId，轮询 /skills/imports/:id 获取进度）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "获取导入历史（含 scope 审计）",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/skills/imports/chunks": {
+      "post": {
+        "summary": "上传分片（大文件断点续传）",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "filename": {
+                    "type": "string"
+                  },
+                  "totalSize": {
+                    "type": "integer"
+                  },
+                  "importId": {
+                    "type": "string"
+                  },
+                  "chunkIndex": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "查询已上传分片索引（断点续传恢复点）",
+        "parameters": [
+          {
+            "name": "filename",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "totalSize",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "importId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/skills/imports/chunks/merge": {
+      "post": {
+        "summary": "合并分片并触发导入",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "importId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/skills/imports/{id}": {
+      "get": {
+        "summary": "查询导入任务状态/进度/错误详情",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应（status: pending|running|completed|failed|cancelled，含 errorCode/errorMessage）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "取消进行中的导入 / 清理暂存文件",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/servers/{id}/enable": {
+      "post": {
+        "summary": "启用 MCP 服务器",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/servers/{id}/disable": {
+      "post": {
+        "summary": "禁用 MCP 服务器",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/servers/{id}/test": {
+      "post": {
+        "summary": "测试 MCP 服务器",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/servers/{name}/restart": {
+      "post": {
+        "summary": "重启 MCP 服务器",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/memory/remember": {
+      "post": {
+        "summary": "保存记忆节点",
+        "description": "支持兼容格式 (key, value) 或完整格式 (content, type, tags, emotionalValence)。",
+        "tags": [
+          "Memory"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionId": {
+                    "type": "string"
+                  },
+                  "key": {
+                    "type": "string",
+                    "description": "兼容模式：键"
+                  },
+                  "value": {
+                    "type": "string",
+                    "description": "兼容模式：值"
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "完整模式：记忆内容"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "fact",
+                      "preference",
+                      "decision",
+                      "lesson",
+                      "narrative",
+                      "milestone"
+                    ]
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "sessionId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/memory/recall/{key}": {
+      "get": {
+        "summary": "根据键或标签读取记忆",
+        "tags": [
+          "Memory"
+        ],
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sessionId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/memory/list": {
+      "get": {
+        "summary": "获取记忆节点列表",
+        "tags": [
+          "Memory"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "current",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/memory/graph": {
+      "get": {
+        "summary": "获取记忆图谱数据",
+        "description": "返回节点和边，用于 ECharts 图谱可视化。",
+        "tags": [
+          "Memory"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/memory/link": {
+      "post": {
+        "summary": "手动建立记忆关联",
+        "tags": [
+          "Memory"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sourceId": {
+                    "type": "string"
+                  },
+                  "targetId": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "reinforces",
+                      "contradicts",
+                      "leads_to",
+                      "part_of",
+                      "similar_to",
+                      "tagged_with"
+                    ]
+                  },
+                  "description": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "sourceId",
+                  "targetId",
+                  "type"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应"
+          }
+        }
+      }
+    },
+    "/memory/consolidate": {
+      "post": {
+        "summary": "触发记忆反思与整理",
+        "tags": [
+          "Memory"
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应"
+          }
+        }
+      }
+    },
+    "/memory/{id}": {
+      "delete": {
+        "summary": "删除记忆节点",
+        "tags": [
+          "Memory"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应"
+          }
+        }
+      },
+      "put": {
+        "summary": "更新记忆节点",
+        "tags": [
+          "Memory"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "summary": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string"
+                  },
+                  "importance": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应"
+          }
+        }
+      }
+    },
+    "/tasks": {
+      "post": {
+        "summary": "创建任务",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "获取任务列表",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{id}": {
+      "get": {
+        "summary": "获取任务详情",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "更新任务",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除任务",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/todos": {
+      "post": {
+        "summary": "创建待办任务",
+        "tags": [
+          "Todo"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "example": "Review PR #42"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "priority": {
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ],
+                    "default": "medium"
+                  },
+                  "dueAt": {
+                    "type": "string",
+                    "example": "2026-05-01T18:00:00",
+                    "description": "ISO 8601 截止时间"
+                  },
+                  "sessionId": {
+                    "type": "string",
+                    "example": "my-session"
+                  }
+                },
+                "required": [
+                  "title"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "获取待办列表",
+        "tags": [
+          "Todo"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "in_progress",
+                "done",
+                "cancelled"
+              ]
+            }
+          },
+          {
+            "name": "current",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/todos/{id}": {
+      "put": {
+        "summary": "更新待办任务",
+        "tags": [
+          "Todo"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "priority": {
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "pending",
+                      "in_progress",
+                      "done",
+                      "cancelled"
+                    ]
+                  },
+                  "dueAt": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除待办任务",
+        "tags": [
+          "Todo"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tools": {
+      "get": {
+        "summary": "获取工具列表",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tools/system-tools": {
+      "get": {
+        "summary": "获取系统内置工具列表（排除技能工具）",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tools/external-skills": {
+      "get": {
+        "summary": "获取自定义技能列表（SKILLs 目录）",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspace/files": {
+      "get": {
+        "summary": "获取工作区文件列表",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspace/recent": {
+      "get": {
+        "summary": "获取最近工作区列表",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspace/file/content": {
+      "get": {
+        "summary": "获取工作区文件内容",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspace/recent/{sessionId}": {
+      "delete": {
+        "summary": "删除工作区目录",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspace/rename": {
+      "post": {
+        "summary": "重命名工作区",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "oldName": {
+                    "type": "string"
+                  },
+                  "newName": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "oldName",
+                  "newName"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/models/whitelist": {
+      "get": {
+        "summary": "获取模型白名单列表",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/models": {
+      "get": {
+        "summary": "获取已配置模型列表",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "添加模型配置",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string"
+                  },
+                  "modelId": {
+                    "type": "string"
+                  },
+                  "apiKey": {
+                    "type": "string"
+                  },
+                  "baseUrl": {
+                    "type": "string"
+                  },
+                  "displayName": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "provider",
+                  "modelId",
+                  "apiKey"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/models/{id}": {
+      "put": {
+        "summary": "更新模型配置",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除模型配置",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/models/{id}/test": {
+      "post": {
+        "summary": "测试模型连接",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspace/file/create": {
+      "post": {
+        "summary": "创建空文件",
+        "tags": [
+          "Workspace"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionId": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string",
+                    "example": "subdir/newfile.ts"
+                  }
+                },
+                "required": [
+                  "sessionId",
+                  "path"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspace/folder/create": {
+      "post": {
+        "summary": "创建目录（递归创建父目录）",
+        "tags": [
+          "Workspace"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionId": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string",
+                    "example": "subdir/newfolder"
+                  }
+                },
+                "required": [
+                  "sessionId",
+                  "path"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspace/file/move": {
+      "post": {
+        "summary": "移动或重命名文件/目录（原子操作，目标已存在时报错）",
+        "tags": [
+          "Workspace"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionId": {
+                    "type": "string"
+                  },
+                  "srcPath": {
+                    "type": "string",
+                    "example": "old/path.ts"
+                  },
+                  "destPath": {
+                    "type": "string",
+                    "example": "new/path.ts"
+                  }
+                },
+                "required": [
+                  "sessionId",
+                  "srcPath",
+                  "destPath"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspace/file/trash": {
+      "post": {
+        "summary": "将文件/目录移入系统回收站（trash 包，不可用时降级为永久删除）",
+        "tags": [
+          "Workspace"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionId": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string",
+                    "example": "subdir/file.ts"
+                  }
+                },
+                "required": [
+                  "sessionId",
+                  "path"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应；降级删除时 data.fallback = 'permanent_delete'",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspace/file/format": {
+      "post": {
+        "summary": "使用 prettier 格式化文件内容（工作区存在 prettier 配置时生效，否则原样返回）",
+        "tags": [
+          "Workspace"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionId": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string",
+                    "example": "src/index.ts"
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "待格式化的源代码"
+                  }
+                },
+                "required": [
+                  "sessionId",
+                  "path",
+                  "content"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应，data.content 为格式化后内容",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/StandardResponse"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "content": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspace/upload": {
+      "post": {
+        "summary": "multipart 二进制文件上传（保留原始字节流）",
+        "description": "通过 multipart/form-data 上传文件，保留原始二进制完整性，适用于 xlsx、图片等二进制文件，避免 UTF-8 编码污染。最大 100MB。",
+        "tags": [
+          "Workspace"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "二进制文件"
+                  },
+                  "sessionId": {
+                    "type": "string",
+                    "description": "目标会话 ID"
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "上传路径（相对于工作区根目录）"
+                  }
+                },
+                "required": [
+                  "file",
+                  "sessionId",
+                  "path"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/StandardResponse"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "path": {
+                              "type": "string"
+                            },
+                            "size": {
+                              "type": "integer"
+                            },
+                            "filename": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspace/file/stream": {
+      "get": {
+        "summary": "视频/二进制流媒体（支持 HTTP Range 分片，206 Partial Content）",
+        "tags": [
+          "Workspace"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "example": "video.mp4"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "完整视频流（Content-Type: video/mp4 等）"
+          },
+          "206": {
+            "description": "Range 分片响应（Accept-Ranges: bytes）"
+          },
+          "404": {
+            "description": "文件不存在"
+          }
+        }
+      }
+    },
+    "/terminal/create": {
+      "post": {
+        "summary": "创建 PTY 终端会话",
+        "description": "基于 node-pty 创建服务器端 PTY，工作目录物理锁定在会话工作空间内。返回 terminalId 供后续 WebSocket 连接使用。",
+        "tags": [
+          "Terminal"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionId": {
+                    "type": "string",
+                    "description": "关联的工作区会话 ID"
+                  },
+                  "cwd": {
+                    "type": "string",
+                    "description": "相对工作区根目录的初始路径（可选）"
+                  },
+                  "cols": {
+                    "type": "integer",
+                    "default": 120,
+                    "description": "终端初始列数"
+                  },
+                  "rows": {
+                    "type": "integer",
+                    "default": 30,
+                    "description": "终端初始行数"
+                  }
+                },
+                "required": [
+                  "sessionId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应，返回 terminalId 和实际 cwd",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/StandardResponse"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "terminalId": {
+                              "type": "string",
+                              "example": "550e8400-e29b-41d4-a716-446655440000"
+                            },
+                            "cwd": {
+                              "type": "string",
+                              "example": "/workspace/my-session"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/terminal/ws/{id}": {
+      "get": {
+        "summary": "WebSocket 双向桥接 PTY ↔ xterm.js",
+        "description": "升级为 WebSocket 连接后，客户端发送 JSON 消息控制终端，服务器推送 PTY 输出。\n\n**客户端 → 服务器：**\n- `{\"type\":\"input\",\"data\":\"...\"}` — 键入字符\n- `{\"type\":\"resize\",\"cols\":120,\"rows\":30}` — 调整尺寸\n- `{\"type\":\"kill\"}` — 终止 PTY\n\n**服务器 → 客户端：**\n- `{\"type\":\"output\",\"data\":\"...\"}` — PTY 输出\n- `{\"type\":\"exit\",\"code\":0}` — 进程退出\n- `{\"type\":\"error\",\"message\":\"...\"}` — 会话不存在",
+        "tags": [
+          "Terminal"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "terminalId（由 /terminal/create 返回）"
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "WebSocket 升级成功"
+          },
+          "200": {
+            "description": "会话不存在时发送 error 消息后关闭连接"
+          }
+        }
+      }
+    },
+    "/terminal/{id}": {
+      "delete": {
+        "summary": "手动终止并销毁 PTY 会话",
+        "tags": [
+          "Terminal"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/settings": {
+      "get": {
+        "summary": "获取系统运行时配置（从 SQLite system_config 表读取，fallback 到 process.env）",
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/StandardResponse"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "LLM_PROVIDER": {
+                              "type": "string",
+                              "example": "openai"
+                            },
+                            "LLM_PRIMARY_MODEL": {
+                              "type": "string",
+                              "example": "gpt-4o-mini"
+                            },
+                            "OPENAI_API_KEY": {
+                              "type": "string",
+                              "example": "sk-..."
+                            },
+                            "OPENAI_BASE_URL": {
+                              "type": "string",
+                              "example": "https://api.openai.com/v1"
+                            },
+                            "ANTHROPIC_API_KEY": {
+                              "type": "string",
+                              "example": ""
+                            },
+                            "ANTHROPIC_BASE_URL": {
+                              "type": "string",
+                              "example": "https://api.anthropic.com",
+                              "description": "Anthropic 自定义 Base URL（代理/私有部署时使用）"
+                            },
+                            "DEEPSEEK_API_KEY": {
+                              "type": "string",
+                              "example": ""
+                            },
+                            "OLLAMA_BASE_URL": {
+                              "type": "string",
+                              "example": "http://localhost:11434"
+                            },
+                            "MAX_ITERATIONS": {
+                              "type": "integer",
+                              "example": 50
+                            },
+                            "TOKEN_BUDGET": {
+                              "type": "integer",
+                              "example": 80000
+                            },
+                            "HISTORY_MAX_TOKENS": {
+                              "type": "integer",
+                              "example": 20000
+                            },
+                            "TOOL_OUTPUT_MAX_CHARS": {
+                              "type": "integer",
+                              "example": 4000
+                            },
+                            "COMPRESS_THRESHOLD_RATIO": {
+                              "type": "number",
+                              "example": 0.5
+                            },
+                            "SUPERPOWER_MODE": {
+                              "type": "string",
+                              "example": "off",
+                              "description": "增强模式档位：off | balanced | methodology | max"
+                            },
+                            "SUPERPOWER_ENABLED": {
+                              "type": "boolean",
+                              "example": false,
+                              "description": "⚠️ 已废弃：旧版布尔开关（true→methodology，false→off）；将在下个 minor 版本移除"
+                            },
+                            "SKILLS_ROOT": {
+                              "type": "string",
+                              "example": "./skills"
+                            },
+                            "BASH_PATH": {
+                              "type": "string",
+                              "example": ""
+                            },
+                            "CMD_TIMEOUT_MS": {
+                              "type": "integer",
+                              "example": 5000
+                            },
+                            "MAX_FILE_SIZE_BYTES": {
+                              "type": "integer",
+                              "example": 10485760
+                            },
+                            "WEB_SEARCH_SERVER": {
+                              "type": "string",
+                              "example": "http://127.0.0.1:8923"
+                            },
+                            "WORKSPACE_ROOT": {
+                              "type": "string",
+                              "example": "./workspace"
+                            },
+                            "MCP_CONFIG_PATH": {
+                              "type": "string",
+                              "example": "./mcp.config.json"
+                            },
+                            "QA_LOG_ENABLED": {
+                              "type": "boolean",
+                              "example": false
+                            },
+                            "QA_LOG_DIR": {
+                              "type": "string",
+                              "example": "./logs/qa"
+                            },
+                            "webFetch": {
+                              "type": "object",
+                              "properties": {
+                                "enabled": {
+                                  "type": "boolean"
+                                },
+                                "allowedDomains": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "blockedDomains": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "更新系统运行时配置（写入 SQLite system_config 表，敏感字段 AES-256-GCM 加密，立即同步到 process.env）",
+        "description": "webFetch 字段仍存储于 config/security.json；其余所有字段写入 system_config 表。OPENAI_API_KEY / ANTHROPIC_API_KEY 自动加密存储。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "LLM_PROVIDER": {
+                    "type": "string"
+                  },
+                  "LLM_PRIMARY_MODEL": {
+                    "type": "string"
+                  },
+                  "LLM_REVIEW_MODEL": {
+                    "type": "string"
+                  },
+                  "LLM_SUMMARIZE_MODEL": {
+                    "type": "string"
+                  },
+                  "AUTO_COMPACT_TOKEN_LIMIT": {
+                    "type": "integer",
+                    "description": "上下文智能压缩阈值（Token），默认 500000",
+                    "default": 500000
+                  },
+                  "REASONING_EFFORT": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high"]
+                  },
+                  "ENABLE_LONG_TERM_MEMORY": {
+                    "type": "boolean"
+                  },
+                  "OPENAI_API_KEY": {
+                    "type": "string"
+                  },
+                  "OPENAI_BASE_URL": {
+                    "type": "string"
+                  },
+                  "ANTHROPIC_API_KEY": {
+                    "type": "string"
+                  },
+                  "ANTHROPIC_BASE_URL": {
+                    "type": "string",
+                    "description": "Anthropic 自定义 Base URL"
+                  },
+                  "DEEPSEEK_API_KEY": {
+                    "type": "string"
+                  },
+                  "OLLAMA_BASE_URL": {
+                    "type": "string"
+                  },
+                  "MAX_ITERATIONS": {
+                    "type": "integer"
+                  },
+                  "TOKEN_BUDGET": {
+                    "type": "integer"
+                  },
+                  "HISTORY_MAX_TOKENS": {
+                    "type": "integer"
+                  },
+                  "TOOL_OUTPUT_MAX_CHARS": {
+                    "type": "integer"
+                  },
+                  "COMPRESS_THRESHOLD_RATIO": {
+                    "type": "number"
+                  },
+                  "SUPERPOWER_MODE": {
+                    "type": "string",
+                    "description": "增强模式档位：off | balanced | methodology | max；不可与 SUPERPOWER_ENABLED 同时传入"
+                  },
+                  "SUPERPOWER_ENABLED": {
+                    "type": "boolean",
+                    "description": "⚠️ 已废弃：旧版布尔开关；不可与 SUPERPOWER_MODE 同时传入"
+                  },
+                  "SKILLS_ROOT": {
+                    "type": "string"
+                  },
+                  "BASH_PATH": {
+                    "type": "string"
+                  },
+                  "CMD_TIMEOUT_MS": {
+                    "type": "integer"
+                  },
+                  "MAX_FILE_SIZE_BYTES": {
+                    "type": "integer"
+                  },
+                  "WEB_SEARCH_SERVER": {
+                    "type": "string"
+                  },
+                  "WORKSPACE_ROOT": {
+                    "type": "string"
+                  },
+                  "MCP_CONFIG_PATH": {
+                    "type": "string"
+                  },
+                  "QA_LOG_ENABLED": {
+                    "type": "boolean"
+                  },
+                  "QA_LOG_DIR": {
+                    "type": "string"
+                  },
+                  "webFetch": {
+                    "type": "object",
+                    "properties": {
+                      "enabled": {
+                        "type": "boolean"
+                      },
+                      "allowedDomains": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "blockedDomains": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                },
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/security/policies": {
+      "get": {
+        "summary": "获取所有命令安全策略",
+        "tags": [
+          "Security"
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "创建命令安全策略",
+        "tags": [
+          "Security"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "example": "禁止删除根目录"
+                  },
+                  "pattern": {
+                    "type": "string",
+                    "example": "rm\\s+-rf\\s+/"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                },
+                "required": [
+                  "name",
+                  "pattern"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/security/policies/{id}": {
+      "put": {
+        "summary": "更新安全策略",
+        "tags": [
+          "Security"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除安全策略",
+        "tags": [
+          "Security"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/security/network-policy": {
+      "get": {
+        "summary": "获取 SSRF 网络策略配置",
+        "tags": [
+          "Security"
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/StandardResponse"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "enabled": {
+                              "type": "boolean"
+                            },
+                            "blockPrivateIPs": {
+                              "type": "boolean"
+                            },
+                            "whitelist": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "blacklist": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "更新 SSRF 网络策略",
+        "tags": [
+          "Security"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "blockPrivateIPs": {
+                    "type": "boolean"
+                  },
+                  "whitelist": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "blacklist": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/security/audit-log": {
+      "get": {
+        "summary": "查询审计日志",
+        "tags": [
+          "Security"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          },
+          {
+            "name": "tenantId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "toolName",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "blocked",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/security/mode": {
+      "get": {
+        "summary": "获取当前会话的安全模式",
+        "description": "返回指定 session 的安全模式（safe / standard / full-access）。未设置时默认 safe。",
+        "tags": [
+          "Security"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "会话 ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "example": 200
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "sessionId": {
+                          "type": "string"
+                        },
+                        "mode": {
+                          "type": "string",
+                          "enum": [
+                            "safe",
+                            "standard",
+                            "full-access"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "切换会话安全模式",
+        "description": "设置指定 session 的安全模式。切换会写入审计日志。三种模式：safe（安全，默认）、standard（标准，跳过 ask 确认）、full-access（完全访问，跳过所有检查）。",
+        "tags": [
+          "Security"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "sessionId",
+                  "mode"
+                ],
+                "properties": {
+                  "sessionId": {
+                    "type": "string",
+                    "description": "会话 ID"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "safe",
+                      "standard",
+                      "full-access"
+                    ],
+                    "description": "目标安全模式"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "切换成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "example": 200
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "sessionId": {
+                          "type": "string"
+                        },
+                        "mode": {
+                          "type": "string",
+                          "enum": [
+                            "safe",
+                            "standard",
+                            "full-access"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/lsp/diagnostics": {
+      "get": {
+        "summary": "获取 LSP 诊断配置",
+        "tags": [
+          "LSP"
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "更新 LSP 诊断配置",
+        "tags": [
+          "LSP"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "languages": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "typescript",
+                        "javascript"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/lsp/diagnostics/run": {
+      "post": {
+        "summary": "对工作区文件运行 TypeScript / ESLint 诊断",
+        "tags": [
+          "LSP"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionId": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string",
+                    "example": "src/index.ts"
+                  }
+                },
+                "required": [
+                  "sessionId",
+                  "path"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/StandardResponse"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "file": {
+                              "type": "string"
+                            },
+                            "diagnostics": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "severity": {
+                                    "type": "string",
+                                    "enum": [
+                                      "error",
+                                      "warning",
+                                      "info"
+                                    ]
+                                  },
+                                  "message": {
+                                    "type": "string"
+                                  },
+                                  "line": {
+                                    "type": "integer"
+                                  },
+                                  "column": {
+                                    "type": "integer"
+                                  },
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "typescript",
+                                      "eslint"
+                                    ]
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/performance/stats": {
+      "get": {
+        "summary": "获取 SQLite 运行时 pragma 统计",
+        "tags": [
+          "Performance"
+        ],
+        "responses": {
+          "200": {
+            "description": "成功响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/StandardResponse"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "journal_mode": {
+                              "type": "string",
+                              "example": "wal"
+                            },
+                            "synchronous": {
+                              "type": "integer",
+                              "example": 1
+                            },
+                            "cache_size": {
+                              "type": "integer",
+                              "example": -20000
+                            },
+                            "temp_store": {
+                              "type": "integer",
+                              "example": 2
+                            },
+                            "mmap_size": {
+                              "type": "integer",
+                              "example": 268435456
+                            },
+                            "busy_timeout": {
+                              "type": "integer",
+                              "example": 5000
+                            },
+                            "foreign_keys": {
+                              "type": "integer",
+                              "example": 1
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {
+      "StandardResponse": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "integer",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "操作成功"
+          },
+          "data": {
+            "type": "object"
+          },
+          "timestamp": {
+            "type": "integer",
+            "example": 1745222400000
+          }
+        }
+      },
+      "PaginatedResponse": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "integer",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "查询成功"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "properties": {
+              "current": {
+                "type": "integer",
+                "example": 1
+              },
+              "pageSize": {
+                "type": "integer",
+                "example": 10
+              },
+              "total": {
+                "type": "integer",
+                "example": 25
+              },
+              "totalPages": {
+                "type": "integer",
+                "example": 3
+              }
+            }
+          },
+          "timestamp": {
+            "type": "integer",
+            "example": 1745222400000
+          }
+        }
+      },
+      "DiagnosticResult": {
+        "type": "object",
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": [
+              "error",
+              "warning",
+              "info"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer"
+          },
+          "column": {
+            "type": "integer"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "typescript",
+              "eslint"
+            ]
+          }
+        }
+      },
+      "SecurityPolicy": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "pattern": {
+            "type": "string",
+            "description": "正则表达式，匹配则拦截命令"
+          },
+          "description": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "integer"
+          }
+        }
+      },
+      "AuditLogEntry": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "tenantId": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "toolName": {
+            "type": "string"
+          },
+          "args": {
+            "type": "object"
+          },
+          "result": {
+            "type": "string"
+          },
+          "blocked": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "integer"
+          }
+        }
+      },
+      "Message": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant",
+              "tool",
+              "system"
+            ]
+          },
+          "content": {
+            "type": "string"
+          },
+          "reasoningContent": {
+            "type": "string"
+          },
+          "toolCallId": {
+            "type": "string"
+          },
+          "toolName": {
+            "type": "string"
+          },
+          "tokens": {
+            "type": "integer"
+          },
+          "modelId": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "createdAt": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  }
+}

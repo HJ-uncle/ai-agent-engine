@@ -1,0 +1,108 @@
+/* VSCode-style dark theme for Multi-Agent Console */
+.app {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background: #1e1e1e;
+  color: #d4d4d4;
+}
+
+/* ── Activity Bar ──────────────────────────────────────────────────── */
+.activityBar {
+  width: 48px;
+  background: #333333;
+  border-right: 1px solid #2d2d2d;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+.activityTop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 8px;
+  gap: 2px;
+  flex: 1;
+}
+
+.activityBottom {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-bottom: 8px;
+  gap: 2px;
+}
+
+.activityBtn {
+  width: 48px;
+  height: 48px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  transition: color 0.15s;
+  outline: none;
+}
+
+.activityBtn:hover {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.activityActive {
+  color: white !important;
+}
+
+.activityActive::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 2px;
+  background: white;
+  border-radius: 0 2px 2px 0;
+}
+
+/* ── Sidebar ───────────────────────────────────────────────────────── */
+.sidebar {
+  background: #252526;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  min-width: 120px;
+  max-width: 600px;
+}
+
+/* ── Sidebar resize handle ──────────────────────────────────────────── */
+.sidebarResizer {
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  transition: background 0.15s;
+  z-index: 5;
+}
+
+.sidebarResizer:hover,
+.sidebarResizer.dragging {
+  background: #0e639c;
+}
+
+/* ── Main ──────────────────────────────────────────────────────────── */
+.main {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: #1e1e1e;
+}

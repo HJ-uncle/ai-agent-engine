@@ -1,0 +1,7 @@
+{
+  "id": "os-systematic-debugging",
+  "name": "os-systematic-debugging",
+  "description": "Use when encountering any bug, test failure, or unexpected behavior. Part of OpenSpec Methodology.",
+  "version": "1.0.0",
+  "main": "SKILL.md"
+}

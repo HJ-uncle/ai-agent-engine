@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="/favicon.ico" />
+
+    <!-- H5 viewport：移动端专用，必须 viewport-fit=cover 才会触发 env(safe-area-*) -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+
+    <!-- 浏览器主题色 -->
+    <meta name="theme-color" content="#1e1e1e" />
+
+    <!-- iOS Safari Web App 全屏 + 状态栏样式 -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Multi-Agent Console" />
+
+    <!-- Android Chrome WebApp -->
+    <meta name="mobile-web-app-capable" content="yes" />
+
+    <!-- 关闭手机浏览器对电话 / 邮箱 / 地址的自动识别 -->
+    <meta name="format-detection" content="telephone=no, email=no, address=no" />
+
+    <meta
+      name="description"
+      content="Multi-Agent Console Mobile — 为手机端 / RN WebView 套壳重新设计的移动体验"
+    />
+    <link rel="apple-touch-icon" href="/logo192.png" />
+    <link rel="manifest" href="/manifest.json" />
+    <title>Multi-Agent Console Mobile</title>
+  </head>
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+    <script type="module" src="/src/mobile/index.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,7 @@
+{
+  "id": "os-writing-plans",
+  "name": "os-writing-plans",
+  "description": "Use when you have an OpenSpec or requirements for a multi-step task, before touching code",
+  "version": "1.0.0",
+  "main": "SKILL.md"
+}

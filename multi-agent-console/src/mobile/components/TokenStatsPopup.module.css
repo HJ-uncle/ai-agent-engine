@@ -1,0 +1,75 @@
+.container {
+  padding: 20px;
+  background: var(--adm-color-background);
+  color: var(--adm-color-text);
+}
+
+.header {
+  margin-bottom: 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.title {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.modelId {
+  font-size: 12px;
+  color: var(--adm-color-text-secondary);
+}
+
+.chartBar {
+  height: 12px;
+  background: #2a2a2e;
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  gap: 1px;
+  margin-bottom: 20px;
+}
+
+.list {
+  --adm-font-size-main: 14px;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.groupItem {
+  color: var(--adm-color-text-secondary);
+  --adm-font-size-main: 13px;
+}
+
+.totalItem {
+  --adm-font-size-main: 16px;
+  font-weight: 700;
+}
+
+.totalVal {
+  color: #10b981;
+}
+
+.deepseekSection {
+  margin-top: 24px;
+}
+
+.dsTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: #10b981;
+  margin-bottom: 12px;
+}
+
+.dsList {
+  --adm-font-size-main: 13px;
+}
+
+.hitText {
+  color: #10b981;
+}

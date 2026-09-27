@@ -1,0 +1,230 @@
+{
+  "name": "multi-agent-console",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@ant-design/icons": "^6.1.1",
+    "@ant-design/x": "^2.5.0",
+    "@hookform/resolvers": "^5.2.2",
+    "@monaco-editor/react": "^4.6.0",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^13.5.0",
+    "@types/jest": "^27.5.2",
+    "@types/node": "^20.0.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0",
+    "ajv": "^8.17.1",
+    "ajv-keywords": "^5.1.0",
+    "antd": "^6.3.6",
+    "antd-mobile": "^5.42.3",
+    "axios": "^1.15.2",
+    "dayjs": "^1.11.20",
+    "echarts": "^6.1.0",
+    "echarts-for-react": "^3.0.6",
+    "fuse.js": "^7.0.0",
+    "highlight.js": "^11.11.1",
+    "http-proxy-middleware": "^3.0.5",
+    "i18next": "^26.0.8",
+    "monaco-editor": "^0.52.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "react-file-icon": "^1.6.0",
+    "react-hook-form": "^7.73.1",
+    "react-i18next": "^17.0.4",
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "^7.14.2",
+    "react-scripts": "5.0.1",
+    "react-window": "^1.8.10",
+    "rehype-highlight": "^7.0.2",
+    "rehype-katex": "^7.0.1",
+    "rehype-raw": "^7.0.0",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
+    "simple-git": "^3.27.0",
+    "trash": "^8.1.1",
+    "typescript": "^5.0.0",
+    "vscode-icons-js": "^11.6.1",
+    "web-vitals": "^2.1.4",
+    "yup": "^1.7.1",
+    "zustand": "^5.0.12"
+  },
+  "overrides": {
+    "nth-check": "^2.0.1",
+    "postcss": "^8.5.10",
+    "serialize-javascript": "^7.0.5",
+    "@tootallnate/once": "^3.0.1",
+    "underscore": "^1.13.8"
+  },
+  "devDependencies": {
+    "@craco/craco": "^7.1.0",
+    "@playwright/test": "^1.44.0",
+    "@types/echarts": "^4.9.22",
+    "@types/react-window": "^1.8.8",
+    "@vitejs/plugin-react": "^6.0.1",
+    "esbuild": "^0.25.0",
+    "monaco-editor-webpack-plugin": "^7.1.0",
+    "ts-node": "^10.9.2",
+    "vite": "^8.0.12",
+    "vite-plugin-monaco-editor": "^1.1.0"
+  },
+  "scripts": {
+    "start": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest",
+    "eject": "react-scripts eject",
+    "typecheck": "tsc --noEmit",
+    "perf:bench": "ts-node scripts/perf-benchmark.ts",
+    "check:mobile": "node scripts/check-mobile-bundle.js"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ],
+    "overrides": [
+      {
+        "files": [
+          "src/core/**/*.ts",
+          "src/core/**/*.tsx"
+        ],
+        "rules": {
+          "no-restricted-imports": [
+            "error",
+            {
+              "paths": [
+                {
+                  "name": "antd",
+                  "message": "src/core/ 必须 UI 框架无关，禁止 import antd。把 UI 逻辑放到 src/web/ 或 src/mobile/。"
+                },
+                {
+                  "name": "antd-mobile",
+                  "message": "src/core/ 必须 UI 框架无关，禁止 import antd-mobile。"
+                },
+                {
+                  "name": "react-dom",
+                  "message": "src/core/ 不允许直接操作 DOM，禁止 import react-dom。"
+                },
+                {
+                  "name": "react-dom/client",
+                  "message": "src/core/ 不允许直接操作 DOM，禁止 import react-dom/client。"
+                },
+                {
+                  "name": "monaco-editor",
+                  "message": "桌面专属重型依赖，禁止在 core 出现。"
+                }
+              ],
+              "patterns": [
+                {
+                  "group": [
+                    "antd/*"
+                  ],
+                  "message": "src/core/ 禁止 import antd 子模块。"
+                },
+                {
+                  "group": [
+                    "antd-mobile/*"
+                  ],
+                  "message": "src/core/ 禁止 import antd-mobile 子模块。"
+                },
+                {
+                  "group": [
+                    "@xterm/*"
+                  ],
+                  "message": "桌面专属重型依赖，禁止在 core 出现。"
+                },
+                {
+                  "group": [
+                    "monaco-editor/*"
+                  ],
+                  "message": "桌面专属重型依赖，禁止在 core 出现。"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "files": [
+          "src/web/**/*.ts",
+          "src/web/**/*.tsx"
+        ],
+        "rules": {
+          "no-restricted-imports": [
+            "error",
+            {
+              "patterns": [
+                {
+                  "group": [
+                    "@mobile/*",
+                    "**/mobile/*"
+                  ],
+                  "message": "src/web/ 禁止 import 移动端代码。"
+                },
+                {
+                  "group": [
+                    "antd-mobile",
+                    "antd-mobile/*"
+                  ],
+                  "message": "桌面端禁止使用 antd-mobile。"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "files": [
+          "src/mobile/**/*.ts",
+          "src/mobile/**/*.tsx"
+        ],
+        "rules": {
+          "no-restricted-imports": [
+            "error",
+            {
+              "patterns": [
+                {
+                  "group": [
+                    "@web/*",
+                    "**/web/*"
+                  ],
+                  "message": "src/mobile/ 禁止 import 桌面端代码。"
+                },
+                {
+                  "group": [
+                    "monaco-editor",
+                    "monaco-editor/*"
+                  ],
+                  "message": "移动端禁止打入 Monaco。"
+                },
+                {
+                  "group": [
+                    "@xterm/*"
+                  ],
+                  "message": "移动端禁止打入 xterm。"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  }
+}

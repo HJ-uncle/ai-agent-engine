@@ -1,0 +1,30 @@
+version: '3.8'
+services:
+  agent-engine:
+    build: .
+    ports:
+      - "${PORT:-12323}:12323"
+    environment:
+      - NODE_ENV=production
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - LLM_PRIMARY_MODEL=${LLM_PRIMARY_MODEL:-gpt-4o-mini}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - WORKSPACE_ROOT=/app/workspace
+      - DATA_DIR=/app/data/agent.db
+      - AUTH_ENABLED=${AUTH_ENABLED:-false}
+      - JWT_SECRET=${JWT_SECRET:-change-me}
+      - PORT=12323
+    volumes:
+      - agent_workspace:/app/workspace
+      - agent_data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:12323/health').then(r => process.exit(r.ok ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  agent_workspace:
+  agent_data:

@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# SDK sub-package — only generated artifacts, source code is tracked
+sdk-package/dist/
+sdk-package/bin/
+sdk-package/node_modules/
+sdk-package/*.tgz
+
+# Release artifacts
+release/
+
+deploy.sh
+
+
+# Environment variables (contains API keys!)
+.env
+.env.local
+.env.*.local
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+data/
+
+# Logs
+*.log
+logs/
+
+# Service PID files
+*.pid
+.proxy.pid
+.backend.pid
+.frontend.pid
+
+# MCP config (may contain sensitive info)
+mcp.config.json
+.aether/mcp.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+.trae/
+workspace
+package-lock.json
