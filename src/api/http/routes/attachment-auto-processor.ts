@@ -3,6 +3,7 @@ import path from 'node:path'
 import type { AgentContext } from '../../../core/agent-context/index.js'
 import { workspaceManager } from '../../../workspace/index.js'
 import { readFileTool } from '../../../tools/file/index.js'
+import { describeImageWithVisionProxy, isVisionProxyConfigured } from '../../../tools/file/vision-proxy.js'
 
 interface ImageUrlPart {
   type: 'image_url'
@@ -43,6 +44,17 @@ export interface AutoProcessResult {
   prompt: string | any[]
   /** Paths of files that were successfully processed */
   processedFiles: string[]
+  /**
+   * 是否真的把图片以内嵌（image_url）形式交给了 LLM。
+   *
+   * 调用方据此决定 systemPrompt 里该说什么：
+   *   - true  → 可以告诉模型「你已经能看到图片，别再调用读图工具」
+   *   - false → 绝不能说「已内嵌」，否则模型会陷入「我到底看不看得到」的自我怀疑循环
+   *
+   * 之前 call-site 无从得知这一点，提示词里一律写「图片已内嵌」，
+   * 在非视觉模型上就与实际（走 OCR / 纯文本）矛盾。
+   */
+  visionInlined: boolean
 }
 
 // ── Built-in handlers ──────────────────────────────────────────────────
@@ -68,6 +80,17 @@ const imageHandler: FileHandler = {
           image_url: { url: `data:${mime};base64,${base64}` }
         }]
       }
+    }
+
+    // 主模型无视觉能力：优先请视觉子模型代看（结构化描述），否则退回 OCR。
+    // 转录实证：直接走 OCR 只能拿到零散文字，模型无法理解布局，进而反复
+    // 怀疑「我到底能不能看到图片」。视觉代理能给出布局/间距/对齐描述。
+    if (isVisionProxyConfigured()) {
+      const proxyResult = await describeImageWithVisionProxy(safePath, ctx)
+      if (proxyResult.success) {
+        return { text: proxyResult.output }
+      }
+      ctx.logger.warn(`[vision-proxy] 回退到 OCR：${proxyResult.output}`)
     }
 
     const ocrResult = await readFileTool.execute(
@@ -127,7 +150,7 @@ export async function autoProcessAttachments(
 
   const uniqueNames = [...new Set(fileNames)]
   if (uniqueNames.length === 0) {
-    return { prompt: messageText || null as any, processedFiles: [] }
+    return { prompt: messageText || null as any, processedFiles: [], visionInlined: false }
   }
 
   const imageParts: ImageUrlPart[] = []
@@ -148,7 +171,7 @@ export async function autoProcessAttachments(
   }
 
   if (imageParts.length > 0) {
-    const inlineNote = `\n\n[系统提示：以上图片内容已通过视觉能力直接内嵌到本消息中，你已经可以看到图片内容。无需再调用 smart_read / read_image 工具重复读取。]`
+    const inlineNote = `\n\n[系统提示：以上图片已通过视觉通道直接内嵌到本消息中，你确实能看到图片内容。请直接基于画面作答，不要再调用 read_file / smart_read 等工具重复读取。]`
     const multimodal: any[] = [
       { type: 'text', text: (messageText || '') + inlineNote },
       ...imageParts,
@@ -156,11 +179,12 @@ export async function autoProcessAttachments(
     if (textBlocks.length > 0) {
       multimodal.push({ type: 'text', text: textBlocks.join('') })
     }
-    return { prompt: multimodal, processedFiles: processed }
+    return { prompt: multimodal, processedFiles: processed, visionInlined: true }
   }
 
   return {
     prompt: (messageText || '') + textBlocks.join(''),
     processedFiles: processed,
+    visionInlined: false,
   }
 }

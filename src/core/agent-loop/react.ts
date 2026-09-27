@@ -22,6 +22,54 @@ function getToolOutputMaxChars(): number {
   return applyOSMMultiplier('toolOutputMaxChars', base)
 }
 
+/**
+ * 连续失败 / 重复调用的止损阈值。
+ *
+ * 旧值写死 20：意味着「同一个工具连续失败或重复调 20 轮」才刹车，
+ * 中间 19 轮全在白白烧 token（转录里同一假设反复推演 4-5 遍就是这种浪费）。
+ * 现改为可配（默认 8），并可用 MAX_CONSECUTIVE_FAILURES 热更新。
+ */
+function getMaxConsecutiveFailures(): number {
+  const raw = parseInt(process.env.MAX_CONSECUTIVE_FAILURES ?? '', 10)
+  if (Number.isFinite(raw) && raw > 0) return raw
+  return 8
+}
+
+/**
+ * 语义级重复检测：判断两次工具调用是否「实质相同」。
+ *
+ * 旧实现用 `name + JSON.stringify(args)` 全等比较，过于严格 —— 模型只要把
+ * 参数换个写法（键顺序、空格）就绕过了检测。
+ * 这里做归一化后再比：
+ *   - 键排序后序列化，消除键顺序差异；
+ *   - 字符串值仅保留前 200 字符，避免长文本（如整段代码）的微小差异
+ *     把「实质相同的重复调用」判成不同。
+ * 只比较工具名 + 归一化参数，不涉及语义模型，零额外成本。
+ */
+function fingerprintToolCall(tc: { name?: string; args?: unknown }): string {
+  const args = tc?.args ?? {}
+  let normalized: string
+  try {
+    const sortKeys = (val: unknown): unknown => {
+      if (Array.isArray(val)) return val.map(sortKeys)
+      if (val && typeof val === 'object') {
+        const out: Record<string, unknown> = {}
+        for (const k of Object.keys(val as Record<string, unknown>).sort()) {
+          out[k] = sortKeys((val as Record<string, unknown>)[k])
+        }
+        return out
+      }
+      return val
+    }
+    normalized = JSON.stringify(sortKeys(args), (_k, v) =>
+      typeof v === 'string' && v.length > 200 ? v.slice(0, 200) : v,
+    )
+  } catch {
+    normalized = String(args)
+  }
+  return `${tc?.name ?? ''}:${normalized}`
+}
+
 
 /**
  * Truncate tool output that is too long.
@@ -627,7 +675,7 @@ export class ReActStrategy implements LoopStrategy {
       const toolCalls: any[] = response.toolCalls
       const hasAskUser = toolCalls.some((tc) => tc.name === 'ask_user' && !tc._parseError)
 
-      const currentToolFingerprints = toolCalls.map((tc: any) => `${tc.name}:${JSON.stringify(tc.args)}`)
+      const currentToolFingerprints = toolCalls.map((tc: any) => fingerprintToolCall(tc))
       const isRepeating = currentToolFingerprints.length > 0 && 
         currentToolFingerprints.every((f: string) => lastToolFingerprints.includes(f))
       
@@ -855,8 +903,9 @@ export class ReActStrategy implements LoopStrategy {
         }
         await ctx.history.append(toolMsg, ctx)
 
-        // Bail out if tools fail 20 times in a row or repeat 20 times (prevents infinite loops)
-        if (globalConsecutiveFailures >= 20) {
+        // Bail out if tools fail repeatedly or repeat too many times (prevents infinite loops).
+        // 阈值可配（默认 8，见 getMaxConsecutiveFailures）——旧值写死 20 容忍度过高。
+        if (globalConsecutiveFailures >= getMaxConsecutiveFailures()) {
           ctx.logger.error({ toolName: toolCall.name, globalConsecutiveFailures }, 'Consecutive failures or repetitions exceeded limit, stopping')
           yield `\n\n[Loop detected or tool \`${toolCall.name}\` failed repeatedly. Stopping to prevent token waste.]`
           return

@@ -211,6 +211,11 @@ export function getSkillContent(skills: ExternalSkill[], name: string): string |
 /**
  * 构建技能目录索引（轻量，只含名称 + 描述）
  * 注入到系统提示词，不包含全文内容
+ *
+ * 体积说明：这段文本**每一轮请求都会重复发送**，所以按「够用即止」写：
+ * 把调用纪律压成 3 行，而不是原先那篇带 `Mandatory Workflow (NEVER skip any step)`
+ * 的英文宣贯文。对「修 CSS 溢出」这类不匹配任何 skill 的任务，冗长的工作流
+ * 说明纯属噪声，只会稀释模型对真正任务的注意力。
  */
 export function buildSkillsSystemPrompt(skills: ExternalSkill[]): string {
   if (skills.length === 0) return ''
@@ -223,22 +228,12 @@ export function buildSkillsSystemPrompt(skills: ExternalSkill[]): string {
     '---',
     '# Available Skills Index',
     '',
-    `You have access to ${skills.length} external skills. **You MUST use them when the user's request matches.**`,
+    `你有 ${skills.length} 个外部技能。当用户请求**确实匹配**下列技能时（中文意图需映射到英文技能名，如「查新闻」→ \`web-search\`）：`,
+    '1. 先用 `get_skill({name: "<英文技能名>"})` 取回 SKILL.md 并阅读；',
+    '2. 再按 SKILL.md 里的命令调用 `run_skill_script` 执行。',
     '',
-    '## Mandatory Workflow (NEVER skip any step):',
-    'When the user\'s request matches a skill below — regardless of language (中文/English/etc.) — you MUST:',
-    '1. Identify the matching skill name from the index below (map Chinese intent → English skill name).',
-    '2. Call `get_skill` with that exact English skill name → e.g. `get_skill({name: "web-search"})`.',
-    '3. Read the returned SKILL.md instructions carefully.',
-    '4. Call `run_skill_script` with the exact bash command shown in SKILL.md.',
-    '',
-    '## Critical Rules:',
-    '- **NEVER** answer from memory if a matching skill exists — always execute it.',
-    '- **NEVER** guess or invent tool names. Always use `get_skill` first.',
-    '- **NEVER** skip `run_skill_script` — reading SKILL.md alone is not enough.',
-    '- User may write in **Chinese** (中文): map their intent to the English skill name below.',
-    '  Examples: "搜索新闻/查新闻" → `web-search` | "搜索音乐" → `music-search` | "查电影" → `films-search`',
-    '- If unsure which skill fits, call `list_skills` for the full list, then proceed with the workflow.',
+    '不匹配任何技能时**忽略本段**，不要为了「走流程」而强行套用技能；不确定是否有匹配可用 `list_skills` 查全量。',
+    '禁止凭空编造技能名或工具名。',
     '',
     '## Skills Index:',
     rows,

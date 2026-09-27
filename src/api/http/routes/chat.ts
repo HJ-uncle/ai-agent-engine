@@ -701,6 +701,24 @@ export async function chatRoutes(fastify: FastifyInstance) {
     ctx.modelName = currentModelName
     ctx.modelCaps = modelCaps
 
+    // ── 图片可见性：给模型一个明确、唯一、与事实一致的信号 ────────────────────
+    // 转录实证：当提示词一方面说「图片已内嵌，你看得到」，另一方面又引导
+    // 「用 smart_read 读」，模型会陷入「我到底看不看得到图片」的反复自我怀疑，
+    // 白白烧掉大量 token 却始终无法自证。
+    //
+    // 因此这里根据模型真实视觉能力给出**互斥**的两句话，绝不两头都说：
+    //   - 视觉模型 → 明确告知「已内嵌，禁止再用读图工具」，并明确「不要怀疑自己能否看到」
+    //   - 非视觉模型 → 明确告知「你无法直接看图」，图片内容已由视觉代理/OCR 转为文本，
+    //                 并**明确封死**「自己动手解码图片」这条死路
+    const visionProxyModel = process.env.VISION_PROXY_MODEL?.trim()
+    const visionCapabilityNote = modelCaps.vision === true
+      ? `\n本机当前模型具备视觉能力：以上图片已内嵌到消息中，**你确实能够看到图片内容**。请直接基于看到的画面作答，不要怀疑自己的视觉能力，也不要再调用 \`read_file\` / \`smart_read\` 等工具重复读取。`
+      : `\n注意：当前模型**不具备视觉能力**，无法查看图片像素。${
+          visionProxyModel
+            ? `图片内容已由视觉代理模型 \`${visionProxyModel}\` 转换为结构化文本描述（含布局/间距/对齐），并附在消息里。`
+            : `图片内容已由系统在服务端转换为文本（文本类走 smart_read，图片类走 OCR），并附在消息里。`
+        }\n请基于这些文本内容作答。**严禁**再用 \`read_file mode:"vision"\` 尝试看图，**严禁**自己写脚本解码 PNG/JPEG 二进制做「像素取证」——图片数据从未进入你的上下文，这条路必然失败，只会浪费大量轮次。`
+
     // ── Thinking Mode 注入：根据能力 + 模型族 决定具体 thinking 参数 ────────
     const wantThinking = thinkingMode === true || (thinkingMode !== false && modelCaps.thinking === true)
     if (wantThinking && modelCaps.thinking) {
@@ -771,13 +789,16 @@ export async function chatRoutes(fastify: FastifyInstance) {
 # Rules
 1. **Use the \`ask_user\` tool ONLY** when you need the user to make a critical decision among specific options to continue a complex task. For normal conversational questions, open-ended clarifications, or when chatting naturally, DO NOT use the \`ask_user\` tool — just output your question as plain text.
 1a. When calling \`ask_user\`, you MUST provide **at least 2 meaningful, specific options**. NEVER call it with only one option (e.g. only "其他").
+1b. **能自行查证的一律自行查证，禁止用 \`ask_user\` 代替探索。** 只要信息可以通过工具获得（读文件、列目录、grep、看诊断、读代码图），就必须先去查，而不是先问用户。典型反例：不给路径就问「你指哪个文件」、不读代码就问「是哪个组件」、不跑测试就问「是不是这里错了」。只有在**信息确实只存在于用户脑子里**（业务偏好、优先级取舍、无法从仓库推断的需求）时才用 \`ask_user\`。
 2. Use Chinese tool names in replies (e.g. 写入文件, not write_file).
 3. You are ${currentModelName}.
 4. When providing a downloadable file to the user, ALWAYS present it as an HTTP download link using this exact Markdown format:
    [文件名](/api/v1/workspace/file/download?sessionId=${sessionId}&path=文件名)
    Use only the filename (not the full path) in the \`path\` parameter. Never use file:// URLs.
 5. 多步任务（≥3 步）必须先用 todo 工具建清单：用 \`todo_create\` 逐项创建步骤（标题用简短中文），开始某项前用 \`todo_update\` 置为 in_progress，完成后立即置为 done；全部完成才算任务结束。
-${workspaceInfo}${codegraphBlock}${attachments && attachments.length > 0 ? `\n\n## 本次消息已附带以下文件（已上传到工作区，可直接用 smart_read 读取，无需先 list_files）：\n${attachments.map(a => `- ${a.name}`).join('\n')}` : ''}
+6. **先给结论，再说理由。** 不要在回答里反复自我怀疑或把同一假设推演多遍；一旦确认了一件事，就把它当既定事实继续推进，不要回头重复论证。
+7. **禁止绕过工具链自造轮子。** 当现有工具做不到某件事时（例如看不到图片），**不要**自己写脚本去实现底层能力（手写 PNG/JPEG 解码器、二进制解析、像素取证、OCR 引擎等）。这类自造轮子几乎必然失败，且会烧掉几十轮工具调用。正确做法：① 换用受支持的路径（如 \`read_file mode:"ocr"\`）；② 确认该路径确实不可用后，直接向用户说明限制并给出替代方案。**同一件事尝试失败一次就换路径，绝不允许用「再换个脚本试试」的方式反复试探。**
+${workspaceInfo}${codegraphBlock}${attachments && attachments.length > 0 ? `\n\n## 本次消息已附带以下文件\n${attachments.map(a => `- ${a.name}`).join('\n')}${visionCapabilityNote}` : ''}
 `
 
     // ── Estimate token counts for each injected prompt section ──────────
@@ -787,12 +808,15 @@ ${workspaceInfo}${codegraphBlock}${attachments && attachments.length > 0 ? `\n\n
 # Rules
 1. **Use the \`ask_user\` tool ONLY** when you need the user to make a critical decision among specific options to continue a complex task. For normal conversational questions, open-ended clarifications, or when chatting naturally, DO NOT use the \`ask_user\` tool — just output your question as plain text.
 1a. When calling \`ask_user\`, you MUST provide **at least 2 meaningful, specific options**. NEVER call it with only one option (e.g. only "其他").
+1b. **能自行查证的一律自行查证，禁止用 \`ask_user\` 代替探索。** 只要信息可以通过工具获得（读文件、列目录、grep、看诊断、读代码图），就必须先去查，而不是先问用户。典型反例：不给路径就问「你指哪个文件」、不读代码就问「是哪个组件」、不跑测试就问「是不是这里错了」。只有在**信息确实只存在于用户脑子里**（业务偏好、优先级取舍、无法从仓库推断的需求）时才用 \`ask_user\`。
 2. Use Chinese tool names in replies (e.g. 写入文件, not write_file).
 3. You are ${currentModelName}.
 4. When providing a downloadable file to the user, ALWAYS present it as an HTTP download link using this exact Markdown format:
    [文件名](/api/v1/workspace/file/download?sessionId=${sessionId}&path=文件名)
    Use only the filename (not the full path) in the \`path\` parameter. Never use file:// URLs.
 5. 多步任务（≥3 步）必须先用 todo 工具建清单：用 \`todo_create\` 逐项创建步骤（标题用简短中文），开始某项前用 \`todo_update\` 置为 in_progress，完成后立即置为 done；全部完成才算任务结束。
+6. **先给结论，再说理由。** 不要在回答里反复自我怀疑或把同一假设推演多遍；一旦确认了一件事，就把它当既定事实继续推进，不要回头重复论证。
+7. **禁止绕过工具链自造轮子。** 当现有工具做不到某件事时（例如看不到图片），**不要**自己写脚本去实现底层能力（手写 PNG/JPEG 解码器、二进制解析、像素取证、OCR 引擎等）。这类自造轮子几乎必然失败，且会烧掉几十轮工具调用。正确做法：① 换用受支持的路径（如 \`read_file mode:"ocr"\`）；② 确认该路径确实不可用后，直接向用户说明限制并给出替代方案。**同一件事尝试失败一次就换路径，绝不允许用「再换个脚本试试」的方式反复试探。**
 ${workspaceInfo}${codegraphBlock}
 `
     const systemPromptTokens = estimateTokens(pureSystemPrompt)
@@ -867,6 +891,13 @@ ${workspaceInfo}${codegraphBlock}
             isVisionModel,
           })
           prompt = result.prompt
+          // 记录「图片是否真的进了多模态上下文」，便于线上排查视觉相关死循环
+          if (attachments && attachments.length > 0) {
+            reqLogger.info(
+              { visionInlined: result.visionInlined, isVisionModel, processedFiles: result.processedFiles },
+              '附件处理完成'
+            )
+          }
         }
 
         const llm = await createLLMAdapterWithDbConfig({ 
