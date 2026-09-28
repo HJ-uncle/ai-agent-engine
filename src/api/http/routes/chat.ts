@@ -288,6 +288,32 @@ export async function chatRoutes(fastify: FastifyInstance) {
     })
   })
 
+  // ── 单独停止某个子代理 ────────────────────────────────────────────────────
+  // POST /subagent/cancel  body: { sessionId, toolCallId }
+  // 只中断对应 subagent 工具调用的内层 ReAct，主会话与其余并行子代理继续运行。
+  fastify.post<{ Body: { sessionId: string; toolCallId: string } }>('/subagent/cancel', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['sessionId', 'toolCallId'],
+        properties: {
+          sessionId: { type: 'string', minLength: 1 },
+          toolCallId: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const { sessionId, toolCallId } = request.body
+    const { cancelSubagent } = await import('../../../tools/subagent/subagent-tool.js')
+    const cancelled = cancelSubagent(sessionId, toolCallId, 'Stopped by user via /subagent/cancel')
+    return reply.code(200).send({
+      code: 200,
+      message: cancelled ? 'OK' : 'Subagent not running or already finished',
+      data: { sessionId, toolCallId, cancelled },
+      timestamp: Date.now(),
+    })
+  })
+
   fastify.post<{ Body: ChatBody }>('/chat', {
     schema: {
       body: {

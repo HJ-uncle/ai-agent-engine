@@ -415,11 +415,15 @@ export class SQLiteConversationHistory implements ConversationHistory {
   }
 
   /** 列出该租户下所有有历史消息的 session，按最新消息时间倒序 */
-  async listSessions(tenantId: string): Promise<Array<{ 
-    sessionId: string; 
-    lastMessage: string; 
-    lastAt: number; 
+  async listSessions(tenantId: string): Promise<Array<{
+    sessionId: string;
+    lastMessage: string;
+    lastAt: number;
     messageCount: number;
+    /** 首条用户消息原文（可能含附件结构 JSON），前端做纯文本化 + 截断作为标题 */
+    title?: string;
+    /** 最后一条助手消息原文，前端提取纯文本作为副标题 */
+    lastReply?: string;
     agentId?: string | null;
     metadata?: any;
     totalUsage?: Record<string, number>;
@@ -435,6 +439,14 @@ export class SQLiteConversationHistory implements ConversationHistory {
                     WHERE c2.tenant_id = c.tenant_id AND c2.session_id = c.session_id
                       AND c2.role IN ('user','assistant')
                     ORDER BY c2.created_at DESC LIMIT 1) as last_msg,
+                   (SELECT content FROM conversations c3
+                    WHERE c3.tenant_id = c.tenant_id AND c3.session_id = c.session_id
+                      AND c3.role = 'user'
+                    ORDER BY c3.created_at ASC LIMIT 1) as first_user_msg,
+                   (SELECT content FROM conversations c4
+                    WHERE c4.tenant_id = c.tenant_id AND c4.session_id = c.session_id
+                      AND c4.role = 'assistant'
+                    ORDER BY c4.created_at DESC LIMIT 1) as last_assistant_msg,
                    SUM(CAST(json_extract(token_usage, '$.systemPromptTokens') AS INTEGER)) as system_prompt_tokens,
                    SUM(CAST(json_extract(token_usage, '$.systemToolsTokens') AS INTEGER)) as system_tools_tokens,
                    SUM(CAST(json_extract(token_usage, '$.messagesTokens') AS INTEGER)) as messages_tokens,
@@ -470,6 +482,8 @@ export class SQLiteConversationHistory implements ConversationHistory {
         agentId:      row['agent_id'] ? String(row['agent_id']) : null,
         metadata:     metadata,
         lastMessage:  String(row['last_msg'] ?? '').slice(0, 50),
+        title:        row['first_user_msg'] ? String(row['first_user_msg']) : undefined,
+        lastReply:    row['last_assistant_msg'] ? String(row['last_assistant_msg']) : undefined,
         lastAt:       Number(row['last_at']) * 1000,
         messageCount: Number(row['cnt']),
         totalUsage: {

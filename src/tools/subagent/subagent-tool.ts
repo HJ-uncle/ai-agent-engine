@@ -28,6 +28,25 @@ export interface SubagentMeta {
 
 export const SUBAGENT_META_MARKER = '__SUBAGENT_META__'
 
+// ── 子代理取消注册表 ─────────────────────────────────────────────────────────
+// key: 父会话中该次 subagent 工具调用的 toolCallId（前端子代理卡片上的「停止」按钮
+// 通过 POST /subagent/cancel { sessionId, toolCallId } 找到对应控制器并中断，
+// 只停该子代理，不影响主会话与其余并行子代理）。
+const activeSubagents = new Map<string, AbortController>()
+
+function subagentKey(sessionId: string, toolCallId: string): string {
+  return `${sessionId}:${toolCallId}`
+}
+
+/** 取消指定子代理；返回是否确实存在并在运行 */
+export function cancelSubagent(sessionId: string, toolCallId: string, reason = 'Stopped by user'): boolean {
+  const key = subagentKey(sessionId, toolCallId)
+  const controller = activeSubagents.get(key)
+  if (!controller || controller.signal.aborted) return false
+  try { controller.abort(new Error(reason)) } catch { /* noop */ }
+  return true
+}
+
 /** 摘要优先取的参数键（与前端工具摘要口径一致） */
 const SUMMARY_KEYS = ['path', 'command', 'pattern', 'query', 'url', 'task', 'question', 'title', 'name']
 
@@ -99,7 +118,12 @@ async function resolveSubagentLLM(
   requested: string | undefined,
   ctx: AgentContext
 ): Promise<ReturnType<typeof createLLMAdapterWithDbConfig>> {
-  if (!requested) return createLLMAdapterWithDbConfig()
+  // 透传主会话已解析好的模型能力（chat.ts 挂在 ctx.modelCaps 上）。
+  // 缺失时适配器会退化为按 baseURL 启发式猜测能力（detectVisionSupport 默认 true），
+  // 自定义网关 + 非视觉模型的组合会被误判成视觉模型，消息被包装成多模态数组，
+  // 严格校验 content 类型的网关直接 400 —— 子代理首轮 LLM 调用失败就是这么来的。
+  const capabilities = ctx.modelCaps ?? undefined
+  if (!requested) return createLLMAdapterWithDbConfig({ capabilities })
   try {
     const info = (await new ModelsStore().getModels(ctx.tenantId)).find(
       (m) => m.modelId === requested
@@ -109,7 +133,8 @@ async function resolveSubagentLLM(
         model: info.modelId,
         apiKey: info.apiKey,
         baseUrl: info.baseUrl,
-        provider: info.provider
+        provider: info.provider,
+        capabilities
       })
     }
     if (info) {
@@ -117,12 +142,12 @@ async function resolveSubagentLLM(
         { model: requested },
         '[Subagent] model found in DB but apiKey is unavailable, falling back to default config'
       )
-      return createLLMAdapterWithDbConfig()
+      return createLLMAdapterWithDbConfig({ capabilities })
     }
   } catch (err) {
     ctx.logger.warn({ err, model: requested }, '[Subagent] failed to resolve model from DB, falling back')
   }
-  return createLLMAdapterWithDbConfig({ model: requested })
+  return createLLMAdapterWithDbConfig({ model: requested, capabilities })
 }
 
 export const subagentTool: Tool = {
@@ -184,6 +209,21 @@ export const subagentTool: Tool = {
         output: `❌ subagent: 未知 role '${role}'，可选值为 ${ROLE_VALUES.join(' / ')}`,
       }
     }
+
+    // ── 取消句柄（提升到 try 外声明，catch/finally 里要用）────────────────
+    // 子代理使用独立的 AbortController（主会话 abort 时一并联动中断），
+    // 并以父会话 toolCallId 为 key 注册到全局表，供 /subagent/cancel 单独停止。
+    const subAbort = new AbortController()
+    const onParentAbort = () => {
+      try { subAbort.abort((ctx.signal as AbortSignal).reason ?? new Error('Parent aborted')) } catch { /* noop */ }
+    }
+    if (ctx.signal) {
+      if (ctx.signal.aborted) onParentAbort()
+      else ctx.signal.addEventListener('abort', onParentAbort, { once: true })
+    }
+    const parentToolCallId = ctx.currentToolCallId
+    const registryKey = parentToolCallId ? subagentKey(ctx.sessionId, parentToolCallId) : null
+    if (registryKey) activeSubagents.set(registryKey, subAbort)
 
     try {
       // 创建独立的子会话 ID
@@ -261,7 +301,7 @@ export const subagentTool: Tool = {
         history: new SQLiteConversationHistory(),
         logger: ctx.logger.child({ subSessionId }),
         tokenBudget: ctx.tokenBudget,
-        signal: ctx.signal
+        signal: subAbort.signal
       })
 
       // 创建 LLM 适配器。
@@ -346,6 +386,16 @@ export const subagentTool: Tool = {
         durationMs
       }
 
+      // ── 被手动停止（/subagent/cancel）──────────────────────────────────
+      // 子 AbortController 被触发但主会话仍在运行：走失败结果返回给主会话，
+      // 由主会话的 LLM 决定如何继续（不能用 throw，那会被 ReAct 视为整轮 abort）。
+      if (subAbort.signal.aborted && !ctx.signal?.aborted) {
+        return {
+          success: false,
+          output: `🛑 子代理已被手动停止，未产出完整结果。${result.trim() ? `\n\n已产生的部分内容：\n${result}` : ''}\n${SUBAGENT_META_MARKER}${JSON.stringify(meta)}`
+        }
+      }
+
       // ── 空结果兜底 ────────────────────────────────────────────────────
       // 内层循环有两种「正常返回但一个字都没有」的情况，绝不能报成成功：
       //   1) 被安全策略拦截（子代理无审批渠道）→ 内层立即挂起结束
@@ -370,11 +420,23 @@ export const subagentTool: Tool = {
         output: `✅ 子代理任务执行完成\n\n${result}\n${SUBAGENT_META_MARKER}${JSON.stringify(meta)}`
       }
     } catch (err: any) {
+      // 主动停止（含 /subagent/cancel 触发的 AbortError）按失败结果返回，
+      // 不抛给 ReAct —— 抛异常会被判成整轮 abort，把主会话也一起停掉。
+      const isAbort = err?.name === 'AbortError' || subAbort.signal.aborted
+      if (isAbort && !ctx.signal?.aborted) {
+        return {
+          success: false,
+          output: '🛑 子代理已被手动停止，未产出完整结果。'
+        }
+      }
       ctx.logger.error(`[Subagent] 执行失败: ${err.message}`)
       return {
         success: false,
         output: `❌ 子代理执行失败: ${err.message}`
       }
+    } finally {
+      if (registryKey) activeSubagents.delete(registryKey)
+      if (ctx.signal) ctx.signal.removeEventListener('abort', onParentAbort)
     }
   }
 }

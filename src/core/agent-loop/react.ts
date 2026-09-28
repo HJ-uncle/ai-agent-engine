@@ -774,6 +774,10 @@ export class ReActStrategy implements LoopStrategy {
           return
         }
         try {
+          // 执行前把 toolCallId 挂到 ctx：subagent 等工具借此注册按调用粒度的
+          // 取消句柄（/subagent/cancel 按 toolCallId 单独停止某个子代理）。
+          // 并发执行时最后一个会覆盖前一个 —— 只影响按 id 停止的精确性，不影响正确性。
+          ctx.currentToolCallId = toolCall.id
           toolResults[i] = await ctx.tools.execute(toolCall.name, toolCall.args, ctx)
         } catch (err) {
           // 区分主动 abort 与真正的工具错误：abort 时保持 undefined，
@@ -786,6 +790,8 @@ export class ReActStrategy implements LoopStrategy {
             success: false,
             output: `Tool error: ${err instanceof Error ? err.message : 'unknown error'}`,
           }
+        } finally {
+          if (ctx.currentToolCallId === toolCall.id) ctx.currentToolCallId = undefined
         }
       }
 

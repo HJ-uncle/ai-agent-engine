@@ -148,6 +148,8 @@ export interface AgentContext {
   tokenBudget: number
   requestId?: string
   signal?: AbortSignal
+  /** 当前正在执行的工具调用 ID（ReAct 循环执行前注入），供子代理等工具按调用粒度注册取消句柄 */
+  currentToolCallId?: string
   inheritContext?: boolean
   /** 当前请求绑定的模型名（供工具按模型能力做不同处理） */
   modelName?: string
