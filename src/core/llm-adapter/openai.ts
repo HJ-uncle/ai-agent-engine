@@ -40,6 +40,20 @@ import { repairJson } from '../utils/json.js'
  *   https://api.example.com                        → https://api.example.com  (left as-is, no forced /v1)
  *   https://proxy.example.com/proxy               → https://proxy.example.com/proxy (left as-is)
  */
+/**
+ * 判断上游流式错误是否为瞬态网络错误（可安全重试）。
+ * 覆盖 undici 的 "terminated"、ECONNRESET、socket hang up 等常见断流形态。
+ */
+function isTransientStreamError(err: any): boolean {
+  const msg = String(err?.message ?? err ?? '')
+  return (
+    /terminated/i.test(msg) ||
+    /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE/i.test(msg) ||
+    /socket hang up|connection (was )?(reset|closed)|network error|fetch failed/i.test(msg) ||
+    err?.code === 'ECONNRESET' || err?.code === 'EPIPE'
+  )
+}
+
 function normalizeBaseURL(url: string | undefined): string | undefined {
   if (!url) return url
   // Remove trailing slash
@@ -824,18 +838,27 @@ export class OpenAIAdapter implements LLMAdapter {
     // 原生 API 只做基础 JSON parse，由我们自己处理 delta，兼容性最佳。
     // 注意：将 params 断言为 ChatCompletionCreateParamsStreaming 以触发流式重载，
     // 返回值为 Stream<ChatCompletionChunk>，实现了 AsyncIterable<ChatCompletionChunk>。
-    const stream = await streamWithParamFallback(
+    let manualUsage: any = null
+    let manualModel: string | undefined = undefined
+    let abortedBySignal = false
+
+    // ── 上游流断开重试 ──────────────────────────────────────────────
+    // 长上下文下（首 token 延迟高、整流时长长），上游连接中断（ECONNRESET /
+    // socket hang up / terminated）概率显著上升。若失败时尚未向调用方输出任何
+    // 增量（内容 / 工具调用），重建流重试是安全的；一旦有增量已产出则不可重试，
+    // 否则会导致内容重复，只能上抛（上层现已会下发友好错误帧）。
+    const STREAM_MAX_RETRIES = 2
+    let yieldedSinceStreamStart = false
+
+    let stream = await streamWithParamFallback(
       this.client,
       params,
       { signal: options?.signal }
     )
 
-    let manualUsage: any = null
-    let manualModel: string | undefined = undefined
-    let abortedBySignal = false
-
-    try {
-      for await (const chunk of stream) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        for await (const chunk of stream) {
         // 1. 提取 usage（部分供应商在最后一个 chunk 的顶层或 usage 字段中返回）
         const usage = (chunk as any).usage
         if (usage) manualUsage = usage
@@ -854,8 +877,9 @@ export class OpenAIAdapter implements LLMAdapter {
           (delta as any).reasoning
 
         if (delta.content || rContent || delta.tool_calls) {
-          yield { 
-            content: delta.content as string, 
+          yieldedSinceStreamStart = true
+          yield {
+            content: delta.content as string,
             reasoningContent: rContent as string,
             toolCalls: delta.tool_calls?.map((tc: any) => ({
               id: tc.id,
@@ -864,18 +888,34 @@ export class OpenAIAdapter implements LLMAdapter {
               args: tc.function?.arguments, // string delta（流式增量字符串）
               index: tc.index ?? 0,
             })).filter((tc: any) => tc.name !== undefined || tc.id !== undefined || tc.args !== undefined),
-            done: false 
+            done: false
           }
         }
       }
+      break // 流正常走完
     } catch (err: any) {
       if (err?.name === 'AbortError' || options?.signal?.aborted) {
         // 用户主动中止：即使没拿到完整 usage，也 yield done:true 让上层能发 __usage__
         // 这样 stopSession 时 state.lastUsage 不为 null，计费信息得以保留。
         abortedBySignal = true
+      } else if (
+        attempt < STREAM_MAX_RETRIES &&
+        !yieldedSinceStreamStart &&
+        isTransientStreamError(err)
+      ) {
+        // 尚无增量产出且属于瞬态网络错误 → 重建流重试
+        console.warn(`[llm-adapter] upstream stream broke before first delta (attempt ${attempt + 1}/${STREAM_MAX_RETRIES}), retrying:`, err?.message ?? err)
+        await new Promise(r => setTimeout(r, 500 * (attempt + 1)))
+        stream = await streamWithParamFallback(
+          this.client,
+          params,
+          { signal: options?.signal }
+        )
+        continue
       } else {
         throw err
       }
+    }
     }
 
     // 原生 stream 没有 finalMessage()，usage 从 chunk 中累积

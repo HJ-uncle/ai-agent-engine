@@ -17,15 +17,16 @@ const store = new ChangeStore()
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
 
 export async function changeRoutes(fastify: FastifyInstance) {
-  fastify.get<{ Querystring: { sessionId?: string; status?: string } }>(
+  fastify.get<{ Querystring: { sessionId?: string; status?: string; createdAfter?: string } }>(
     '/changes', async (req, reply) => {
       const tenantId = getTenantId(req)
-      const { sessionId, status } = req.query
+      const { sessionId, status, createdAfter } = req.query
       if (!sessionId) return reply.send(fail(40001, 'sessionId 不能为空'))
       const list = await store.list(
         tenantId,
         sessionId,
-        (status as any) || undefined
+        (status as any) || undefined,
+        createdAfter ? Number(createdAfter) : undefined
       )
       return reply.send(success(list))
     }
@@ -73,5 +74,17 @@ export async function changeRoutes(fastify: FastifyInstance) {
     if (!sessionId) return reply.send(fail(40001, 'sessionId 不能为空'))
     const count = await store.keepAll(tenantId, sessionId)
     return reply.send(success({ kept: count }))
+  })
+
+  // POST /changes/keep-many — 批量确认保留（「暂存」动作的配套：git add 成功后调用）
+  fastify.post<{ Body: { sessionId?: string; ids?: string[] } }>('/changes/keep-many', async (req, reply) => {
+    const tenantId = getTenantId(req)
+    const { ids } = req.body ?? {}
+    if (!Array.isArray(ids) || ids.length === 0) return reply.send(fail(40001, 'ids 不能为空'))
+    const results = await Promise.all(
+      ids.map((id) => store.markStatus(id, tenantId, 'kept').catch(() => null))
+    )
+    const kept = results.filter(Boolean).length
+    return reply.send(success({ kept }))
   })
 }

@@ -809,11 +809,26 @@ export class ReActStrategy implements LoopStrategy {
         const toolCall = toolCalls[i]
         const toolResult = toolResults[i]
 
-        // 结果为 undefined 只有一种可能：执行期间被 abort。与串行实现一致，
-        // 直接结束本轮，不落库任何消息，避免留下无 tool_result 的 tool_calls。
+        // 结果为 undefined 只有一种可能：执行期间被 abort。
+        // 此时把 assistant tool_call 与一条合成的 tool result 一起落库，
+        // 保持历史配对完整——否则下一轮重建上下文时会出现孤儿 tool_call，
+        // 被 llm-adapter 降级为 "[Intended to call tool: ..., but was interrupted]" 占位文本。
         if (!toolResult) {
-          if (ctx.signal?.aborted) {
-            ctx.logger.info({ toolName: toolCall.name }, 'Agent loop aborted during tool execution')
+          ctx.logger.info({ toolName: toolCall.name }, 'Agent loop aborted during tool execution')
+          try {
+            await ctx.history.append(assistantMsgs[i], ctx)
+            const abortedMsg: Message & { conversationId?: string } = {
+              role: 'tool',
+              content: '[Tool execution was aborted before completion. The user may retry this operation.]',
+              toolCallId: toolCall.id,
+              toolName: toolCall.name,
+              createdAt: Date.now(),
+              tokens: estimateTokens('[Tool execution was aborted before completion]'),
+              ...(conversationId ? { conversationId } : {}),
+            }
+            await ctx.history.append(abortedMsg, ctx)
+          } catch (appendErr) {
+            ctx.logger.warn({ err: appendErr, toolName: toolCall.name }, 'Failed to persist aborted tool_call pair')
           }
           return
         }

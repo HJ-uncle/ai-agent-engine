@@ -308,6 +308,21 @@ export class SQLiteConversationHistory implements ConversationHistory {
     })
   }
 
+  /** 硬删除一整轮对话（同一 conversation_id 的所有行） */
+  async deleteByConversationId(conversationId: string, tenantId: string): Promise<number> {
+    const db = getDb()
+    const before = await db.execute({
+      sql: `SELECT COUNT(*) as cnt FROM conversations WHERE conversation_id = ? AND tenant_id = ?`,
+      args: [conversationId, tenantId],
+    })
+    const count = Number(before.rows[0]?.['cnt'] ?? 0)
+    await db.execute({
+      sql: `DELETE FROM conversations WHERE conversation_id = ? AND tenant_id = ?`,
+      args: [conversationId, tenantId],
+    })
+    return count
+  }
+
   /**
    * 滑动窗口裁剪：当历史 tokens 超过 maxTokens 时，
    * 从最旧的消息开始丢弃（保留最近的对话上下文）。

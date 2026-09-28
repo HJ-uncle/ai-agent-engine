@@ -13,6 +13,32 @@ import { createRequestLogger, QALogger, type QALogEntry } from '../../../observa
 import { buildSkillsSystemPrompt } from '../../../skills/index.js'
 import { createToolRegistry } from '../../../tools/registry-factory.js'
 import { resolveOSMMode } from '../../../core/osm.js'
+
+/**
+ * 主 Agent 的子代理委派纪律（对齐 wuzu-client codeAgent.ts 的「探索预算」章节）。
+ *
+ * 解决的实际症状：主 Agent 遇到调研/审计类任务时倾向闷头自己读，不派子代理；
+ * 派了也只有一个模糊 task，子代理没有范围/输出格式/已知线索，效果差。
+ * 这段注入把「何时该派、怎么写好一个委派 prompt、怎么回收结果」讲清。
+ */
+const SUBAGENT_DISPATCH_PROMPT = [
+  '## 子代理委派（subagent 工具）',
+  '',
+  '主对话的上下文很宝贵。遇到下述情形，把探索整体委派给 subagent，不要在主会话里自己趟：',
+  '- 广度：要跨多个文件/多个目录的调研、审计、批量定位；',
+  '- 噪音：会产生大量一次性中间输出的动作（全仓扫描、长日志、递归统计）；',
+  '- 并行：有 ≥2 个相互独立的子问题时，同一回合并行派多个 subagent。',
+  '',
+  '反过来，这些留在主会话、不要派：写/改代码、≤2-3 跳的定向小查找、需要与用户持续交互的修改类工作。',
+  '',
+  '派发时，task 必须自包含（子代理看不到本会话历史，缺什么就要给什么），写清四项：',
+  '1. 目标：一句话说清产出什么；',
+  '2. 范围：限定要看的目录/文件，禁止全仓乱扫；',
+  '3. 深度：快扫定位还是深挖实现；',
+  '4. 已知线索与输出格式：已确认的路径/结论一并给出，要求结论先行、发现带 文件路径+行号、不贴大段源码。',
+  '',
+  '回收纪律：子代理已经查过的东西不要再读一遍复核；拿到带定位的结论就直接用。',
+].join('\n')
 import { prependBootstrapToSystemPrompt } from '../../../core/osm-bootstrap.js'
 import { getProjectContextBlock } from '../../../core/project-context.js'
 import { SQLiteAgentStore } from '../../../storage/agent/index.js'
@@ -30,7 +56,13 @@ interface ChatBody {
   agentId?: string
   systemPrompt?: string
   maxAskUserCount?: number
-  thinkingMode?: boolean
+  /**
+   * 思考模式控制：
+   *  - boolean：false=强制关闭；true=强制开启（按模型族选高/中 effort）
+   *  - 字符串档位：'low' | 'medium' | 'high' = 强制开启并指定推理 effort
+   *  - 不传：由引擎按模型能力决定（支持则开，中等 effort）
+   */
+  thinkingMode?: boolean | 'low' | 'medium' | 'high'
   inheritContext?: boolean
   workspacePaths?: string[]
   toolResponse?: { toolCallId: string, name: string, output: string }
@@ -267,7 +299,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
           agentId: { type: 'string' },
           systemPrompt: { type: 'string' },
           maxAskUserCount: { type: 'number' },
-          thinkingMode: { type: 'boolean' },
+          thinkingMode: { type: ['boolean', 'string'], enum: [true, false, 'low', 'medium', 'high'] },
           inheritContext: { type: 'boolean' },
           workspacePaths: { type: 'array', items: { type: 'string' } },
           ragTopK: { type: 'number' },
@@ -429,11 +461,19 @@ export async function chatRoutes(fastify: FastifyInstance) {
     // 如果租户配置了专属默认身份（default_identity），则将其前置到系统提示词中。
     const tenantIdentity = await tenantConfigStore.get(tenantId, 'default_identity')
     if (tenantIdentity) {
-      effectiveSystemPrompt = effectiveSystemPrompt 
+      effectiveSystemPrompt = effectiveSystemPrompt
         ? `${tenantIdentity}\n\n${effectiveSystemPrompt}`
         : tenantIdentity
       reqLogger.info('Tenant-level default identity applied')
     }
+
+    // ── 主 Agent 子代理委派纪律（对齐 wuzu-client codeAgent.ts 的「探索预算」章节）──
+    // 放在末尾追加：不改变上层 prompt 的相对优先级，只补充默认缺失的行为约束。
+    // 已注册的 agent / inlineAgent 提示词若自带委派说明，此段会与之共存而非冲突
+    // （二者语义一致，重复无害）。
+    effectiveSystemPrompt = effectiveSystemPrompt
+      ? `${effectiveSystemPrompt}\n\n${SUBAGENT_DISPATCH_PROMPT}`
+      : SUBAGENT_DISPATCH_PROMPT
 
     // ── inlineAgents 诊断日志 ─────────────────────────────────────────────────
     if (Array.isArray(requestedInlineAgents) && requestedInlineAgents.length > 0) {
@@ -720,16 +760,32 @@ export async function chatRoutes(fastify: FastifyInstance) {
         }\n请基于这些文本内容作答。**严禁**再用 \`read_file mode:"vision"\` 尝试看图，**严禁**自己写脚本解码 PNG/JPEG 二进制做「像素取证」——图片数据从未进入你的上下文，这条路必然失败，只会浪费大量轮次。`
 
     // ── Thinking Mode 注入：根据能力 + 模型族 决定具体 thinking 参数 ────────
-    const wantThinking = thinkingMode === true || (thinkingMode !== false && modelCaps.thinking === true)
+    // thinkingMode 支持布尔与档位字符串两种形态：
+    //   true / 'low' | 'medium' | 'high' → 强制开启（字符串档位同时指定 effort）
+    //   false → 强制关闭；不传 → 模型声明支持则开
+    const effortTier =
+      thinkingMode === 'low' || thinkingMode === 'medium' || thinkingMode === 'high'
+        ? thinkingMode
+        : undefined
+    const wantThinking =
+      thinkingMode === true ||
+      effortTier !== undefined ||
+      (thinkingMode !== false && modelCaps.thinking === true)
+    // 请求级 effort 优先；未指定时强制开启走 high、能力驱动走 env 配置（缺省 medium）
+    const effectiveReasoningEffort: 'low' | 'medium' | 'high' | undefined =
+      effortTier ??
+      (thinkingMode === true
+        ? 'high'
+        : (process.env.REASONING_EFFORT as 'low' | 'medium' | 'high' | undefined) ?? 'medium')
     if (wantThinking && modelCaps.thinking) {
       if (isQwenModel) {
         finalThinkingConfig = { enable_thinking: true }
         finalResponseThinkingField = 'reasoning_content'
         reqLogger.info({ model: currentModelName }, 'Qwen 思考模式启用 (enable_thinking=true)')
       } else if (isDeepSeekModel) {
-        finalThinkingConfig = { reasoning_effort: thinkingMode === true ? 'high' : 'medium' }
+        finalThinkingConfig = { reasoning_effort: effectiveReasoningEffort }
         finalResponseThinkingField = 'reasoning_content'
-        reqLogger.info({ model: currentModelName, effort: finalThinkingConfig.reasoning_effort }, 'DeepSeek 思考模式启用')
+        reqLogger.info({ model: currentModelName, effort: effectiveReasoningEffort }, 'DeepSeek 思考模式启用')
       } else if (whitelistInfo && whitelistInfo.thinkingMode) {
         finalThinkingConfig = whitelistInfo.thinkingConfig
         finalResponseThinkingField = whitelistInfo.responseThinkingField
@@ -737,7 +793,10 @@ export async function chatRoutes(fastify: FastifyInstance) {
       } else {
         reqLogger.warn({ model: currentModelName }, 'Thinking mode requested 但当前模型族未实现具体注入逻辑，跳过')
       }
-    } else if (thinkingMode === true && !modelCaps.thinking) {
+    } else if (
+      (thinkingMode === true || effortTier !== undefined) &&
+      !modelCaps.thinking
+    ) {
       reqLogger.warn({ model: currentModelName }, 'Thinking mode 已请求但能力注册表声明该模型不支持 thinking')
     }
 
@@ -916,7 +975,7 @@ ${workspaceInfo}${codegraphBlock}
           promptBreakdown: { systemPromptTokens, systemToolsTokens, skillTokens, ragTokens, builtinToolsTokens, mcpToolsTokens },
           thinkingConfig: finalThinkingConfig,
           responseThinkingField: finalResponseThinkingField,
-          reasoningEffort: process.env.REASONING_EFFORT as 'low' | 'medium' | 'high' | undefined,
+          reasoningEffort: effectiveReasoningEffort,
           displayContent: message || null,
           metadata: requestedMetadata,
         })

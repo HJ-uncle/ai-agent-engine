@@ -129,7 +129,11 @@ export const subagentTool: Tool = {
   name: 'subagent',
   displayName: '子代理',
   description:
-    '创建子代理执行任务；可选 role 参数（implementer / spec-reviewer / code-quality-reviewer）'
+    '创建子代理执行独立任务。适合：需要读大量文件的调研/审计、跨多个目录的探索、'
+    + '与主任务相互独立的并行子问题。不适合：一两步就能完成的定向小查、需要持续交互的修改类工作。'
+    + 'task 必须自包含（子代理看不到本会话历史）：写清目标、范围（目录/文件）、'
+    + '期望输出格式（结论先行、发现带 路径+行号）与已知线索。'
+    + '可选 role 参数（implementer / spec-reviewer / code-quality-reviewer）'
     + ' 会自动加载 os-subagent-driven-dev 技能下的对应 prompt 模板作为系统提示词基底。',
   parameters: {
     type: 'object',
@@ -187,8 +191,9 @@ export const subagentTool: Tool = {
       ctx.logger.info(`[Subagent] 开始执行任务: ${task.slice(0, 50)}...`)
       ctx.logger.info(`[Subagent] 子会话 ID: ${subSessionId}`)
 
-      // 创建子代理的工具注册表
+      // 创建子代理的工具注册表；摘掉 subagent 自身，防止子代理递归派发空转
       const { registry: subRegistry, externalSkills } = await createToolRegistry()
+      subRegistry.unregister('subagent')
 
       // ── 构建子代理的系统提示词 ────────────────────────────────────────
       // 优先级：
@@ -228,6 +233,13 @@ export const subagentTool: Tool = {
         '- 你没有安全审批渠道：需要用户授权的操作（例如带 shell 元字符的命令）会被安全策略拦截，一旦被拦截任务立即失败。优先用读文件/搜索类工具，把需要执行命令的部分留给调用方；',
         '- 结束时必须用纯文本写出你的完整结论 —— 文字输出是调用方唯一能直接收到的返回值，只写文件不做总结等于没有产出；',
         '- 直接按任务步骤执行。你没有向调用方提问的渠道，任务描述有歧义时按最合理的方式处理，并在结果中说明你的假设。',
+        '',
+        '—— 产出与执行纪律（与主会话对齐）——',
+        '- 一次委派只做一件事；调研/审计类任务先建立待办清单（todo 工具），系统性逐项推进，不要零散东看西看；',
+        '- 互相独立的读取/搜索尽量放在同一轮并行发出，不要串行排队等待；',
+        '- 结论先行：最终结果用结构化文本给出（结论 → 证据 → 定位），涉及代码的发现必须带 文件路径 + 行号，不要贴大段源码；',
+        '- 不复述过程：不要把"我读了哪些文件、调了哪些工具"写进结果，调用方只需要你的结论；',
+        '- 失败或信息不足时如实交还：说清卡在哪一步、缺什么信息，不要编造结果。',
       ].join('\n')
       const basePrompt = rolePreamble
         ? [rolePreamble, effectiveSystemPrompt].filter(Boolean).join('\n\n---\n\n')

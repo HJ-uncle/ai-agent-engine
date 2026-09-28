@@ -5,7 +5,7 @@ import { createAuthMiddleware } from '../../auth/index.js'
 
 // White listed paths that do not require login state (reserved for future JWT)
 // Also we bypass header checks for standard health checks to avoid breaking internal ops
-export const WHITELIST_PATHS = ['/health', '/openapi.json', '/metrics', '/auth/user']
+export const WHITELIST_PATHS = ['/health', '/openapi.json', '/metrics', '/meta', '/auth/user']
 
 const authMiddleware = createAuthMiddleware()
 

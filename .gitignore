@@ -51,3 +51,13 @@ Thumbs.db
 .trae/
 workspace
 package-lock.json
+.codemap/
+.codemaker/codemap/
+.codemaker/codeindex/
+.codemaker/rules/codemap.mdc
+.codemaker/mcps.json
+.codemaker/hooks.json
+.claude/skills/codemap-*/
+.claude/skills/code-index-*/
+.claude/settings.local.json
+.cowork-temp

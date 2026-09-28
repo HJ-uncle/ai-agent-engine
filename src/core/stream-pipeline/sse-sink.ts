@@ -239,6 +239,16 @@ export async function sseStream(
     if (!clientGone) {
       try { reply.raw.write('event: done\ndata: [DONE]\n\n') } catch { /* noop */ }
     }
+  } catch (err) {
+    // 源流出错（上游 LLM 断流、pipeline 异常等）：显式下发错误帧 + 结束帧，
+    // 避免连接裸断导致客户端 fetch 抛 "TypeError: terminated" 并渲染成莫名的红色报错。
+    if (!clientGone) {
+      const message = err instanceof Error ? err.message : String(err)
+      try {
+        reply.raw.write(`data: ${JSON.stringify({ error: message })}\n\n`)
+      } catch { /* noop */ }
+      try { reply.raw.write('event: done\ndata: [DONE]\n\n') } catch { /* noop */ }
+    }
   } finally {
     stopHeartbeat()
     reply.raw.off('error', onClientError)

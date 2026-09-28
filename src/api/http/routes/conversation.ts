@@ -147,9 +147,60 @@ export async function conversationRoutes(fastify: FastifyInstance) {
     return reply.code(200).send(paginateArray(messages, current, pageSize))
   })
 
+  // DELETE /conversation/turns/:conversationId — 删除一整轮（该 conversation_id 的所有行）
+  fastify.delete<{ Params: { conversationId: string }, Querystring: { sessionId?: string } }>('/conversation/turns/:conversationId', async (request, reply) => {
+    const { conversationId } = request.params
+    const tenantId = getTenantId(request)
+    if (!conversationId) {
+      return reply.code(200).send(fail(40001, '参数验证失败：conversationId 不能为空'))
+    }
+    try { abortActiveChat(tenantId, request.query.sessionId ?? '', 'Turn deleted by user') } catch { /* noop */ }
+    const removed = await history.deleteByConversationId(conversationId, tenantId)
+    if (removed === 0) {
+      return reply.code(200).send(fail(40400, '该轮对话不存在'))
+    }
+    return reply.code(200).send(success({ success: true, removed }))
+  })
+
+  // DELETE /conversation/messages/:messageId — 删除单条消息
+  // 配套约定：前端按「轮」操作（用户消息 + 其后的助手回复一起删），
+  // 引擎只提供单行删除；删除 assistant/tool 行时前端应连同配对行一起删。
+  fastify.delete<{ Params: { messageId: string }, Querystring: { sessionId?: string } }>('/conversation/messages/:messageId', async (request, reply) => {
+    const { messageId } = request.params
+    const tenantId = getTenantId(request)
+    if (!messageId) {
+      return reply.code(200).send(fail(40001, '参数验证失败：messageId 不能为空'))
+    }
+    try { abortActiveChat(tenantId, request.query.sessionId ?? '', 'Message deleted by user') } catch { /* noop */ }
+    const target = await history.getMessageById(messageId, tenantId)
+    if (!target) {
+      return reply.code(200).send(fail(40400, '消息不存在'))
+    }
+    await history.deleteMessage(messageId, tenantId)
+    return reply.code(200).send(success({ success: true }))
+  })
+
+  // POST /conversation/truncate — 截断历史：删除指定消息及其之后的所有消息
+  // （回退到此处 / 重新发送 / 重新生成的底座）。前端传该消息的 message_id，
+  // 引擎先解析出 dbId，再按自增 id > dbId 删除。
+  fastify.post<{ Body: { sessionId: string; messageId: string } }>('/conversation/truncate', async (request, reply) => {
+    const { sessionId, messageId } = request.body ?? {}
+    const tenantId = getTenantId(request)
+    if (!sessionId || !messageId) {
+      return reply.code(200).send(fail(40001, '参数验证失败：sessionId 与 messageId 不能为空'))
+    }
+    try { abortActiveChat(tenantId, sessionId, 'History truncated by user') } catch { /* noop */ }
+    const target = await history.getMessageById(messageId, tenantId)
+    if (!target) {
+      return reply.code(200).send(fail(40400, '消息不存在'))
+    }
+    await history.deleteMessagesAfterId(target.dbId, sessionId, tenantId)
+    await history.deleteMessage(messageId, tenantId)
+    return reply.code(200).send(success({ success: true, removedFrom: messageId }))
+  })
+
   // POST /conversation/compress  — 压缩当前会话历史
-  fastify.post<{ Querystring: { sessionId: string } }>('/conversation/compress', async (request, reply) => {
-    const { sessionId } = request.query
+  fastify.post<{ Querystring: { sessionId: string } }>('/conversation/compress', async (request, reply) => {    const { sessionId } = request.query
     const tenantId = (request as any).authContext?.tenantId ?? 'default'
 
     if (!sessionId) {

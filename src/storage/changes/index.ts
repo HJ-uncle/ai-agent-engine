@@ -114,14 +114,24 @@ export class ChangeStore {
     return res.rows[0] ? rowToChange(res.rows[0] as any) : null
   }
 
-  /** 会话内改动列表；status 缺省返回全部，一般用 pending 画确认面板 */
-  async list(tenantId: string, sessionId: string, status?: ChangeStatus): Promise<FileChange[]> {
+  /** 会话内改动列表；status 缺省返回全部，一般用 pending 画确认面板。
+   *  createdAfter：只返回该时间戳之后产生的改动（消息级回退用，含 kept/reverted 之外的） */
+  async list(
+    tenantId: string,
+    sessionId: string,
+    status?: ChangeStatus,
+    createdAfter?: number
+  ): Promise<FileChange[]> {
     await this.ensureTable()
     let sql = 'SELECT * FROM file_changes WHERE tenant_id=? AND session_id=?'
     const args: any[] = [tenantId, sessionId]
     if (status) {
       sql += ' AND status=?'
       args.push(status)
+    }
+    if (createdAfter !== undefined && Number.isFinite(createdAfter)) {
+      sql += ' AND created_at > ?'
+      args.push(createdAfter)
     }
     sql += ' ORDER BY created_at DESC LIMIT 200'
     const res = await this.db.execute({ sql, args })

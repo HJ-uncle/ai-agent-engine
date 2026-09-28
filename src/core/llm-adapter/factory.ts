@@ -47,8 +47,23 @@ function shouldUseQwen(provider: string, model: string, baseUrl?: string): boole
   return QwenAdapter.detect(model, baseUrl)
 }
 
+/**
+ * 端点是否显式声明了 Anthropic 协议（如 DeepSeek / 阿里百炼等提供的
+ * `…/anthropic` 兼容端点）。显式声明优先于模型名推断 ——
+ * 「DeepSeek 模型 + Anthropic 网关」不应被模型名劫持到 DeepSeek 适配器。
+ */
+function declaresAnthropicProtocol(baseUrl?: string): boolean {
+  if (!baseUrl) return false
+  return /\/anthropic(\/|$)/i.test(baseUrl)
+}
+
 function createBaseAdapter(provider: string, model: string, options?: CreateAdapterOptions): LLMAdapter {
   const eh = options?.extraHeaders
+  // Anthropic 协议端点显式声明优先：模型名不参与判断，避免被劫持到 DeepSeek/Qwen 适配器
+  if (provider === 'anthropic' || declaresAnthropicProtocol(options?.baseUrl)) {
+    return new AnthropicAdapter(model, options?.apiKey, options?.baseUrl, eh)
+  }
+
   // DeepSeek 自动路由（最高优先级，避免 qwen 误判）
   if (shouldUseDeepSeek(provider, model, options?.baseUrl)) {
     return new DeepSeekAdapter(model, options?.apiKey, options?.baseUrl, options?.deepseek, eh)
@@ -138,12 +153,15 @@ export async function createLLMAdapterWithDbConfig(overrides?: CreateAdapterOpti
   const provider = overrides?.provider ?? dbProvider ?? process.env.LLM_PROVIDER ?? 'openai'
   const model    = overrides?.model    ?? dbModel    ?? process.env.LLM_PRIMARY_MODEL ?? process.env.LLM_MODEL ?? 'gpt-4o-mini'
 
+  // ── Anthropic 协议端点（baseUrl 显式声明）优先：凭证与路由都按 Anthropic 走 ──
+  const effectiveBaseUrl = overrides?.baseUrl ?? dbBaseUrl ?? process.env.OPENAI_BASE_URL
+  const isAnthropicEndpoint = provider === 'anthropic' || declaresAnthropicProtocol(effectiveBaseUrl)
   // ── DeepSeek 通道自动检测 + 专有凭据优先 ─────────────────────────────────
-  const isDs = shouldUseDeepSeek(provider, model, overrides?.baseUrl ?? dbBaseUrl ?? process.env.OPENAI_BASE_URL)
+  const isDs = !isAnthropicEndpoint && shouldUseDeepSeek(provider, model, effectiveBaseUrl)
   // ── Qwen 通道自动检测 ─────────────────────────────────────────────────────
-  const isQwen = !isDs && shouldUseQwen(provider, model, overrides?.baseUrl ?? dbBaseUrl ?? process.env.OPENAI_BASE_URL)
+  const isQwen = !isAnthropicEndpoint && !isDs && shouldUseQwen(provider, model, effectiveBaseUrl)
   // ── Anthropic 通道检测 ────────────────────────────────────────────────────
-  const isAnthropic = !isDs && !isQwen && (provider === 'anthropic' || /claude/i.test(model))
+  const isAnthropic = isAnthropicEndpoint || (!isDs && !isQwen && /claude/i.test(model))
 
   const apiKey = overrides?.apiKey
     ?? (isDs   ? (dsApiKey   ?? process.env.DEEPSEEK_API_KEY)  : null)

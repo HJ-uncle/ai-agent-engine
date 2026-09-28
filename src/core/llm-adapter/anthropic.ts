@@ -309,14 +309,18 @@ export class AnthropicAdapter implements LLMAdapter {
   async *stream(messages: Message[], options?: LLMAdapterOptions): AsyncIterable<LLMStreamChunk> {
     // Two-pass orphan filtering (same as complete())
     const validToolUseIds = new Set<string>()
+    const validToolResultIds = new Set<string>()
     for (const msg of messages) {
       if (msg.role === 'assistant' && msg.toolCall?.id && msg.toolCall?.name) {
-        validToolUseIds.add(msg.toolCall.id)
+        // We defer adding to validToolUseIds to messageToAnthropic
+      }
+      if (msg.role === 'tool' && msg.toolCallId) {
+        validToolResultIds.add(msg.toolCallId)
       }
     }
     const anthropicMessages = mergeAdjacentRoles(
       messages
-        .map((m) => messageToAnthropic(m, validToolUseIds))
+        .map((m) => messageToAnthropic(m, validToolUseIds, validToolResultIds))
         .filter((m): m is AnthropicMessageParam => m !== null),
     )
 
@@ -334,6 +338,13 @@ export class AnthropicAdapter implements LLMAdapter {
     if (options?.tools && options.tools.length > 0) {
       streamParams['tools'] = options.tools.map(toolToAnthropic)
     }
+
+    // 流式 tool_use 组装：content_block_start 带 id/name，
+    // 后续 input_json_delta 追加参数，content_block_stop 时上报
+    const pendingTools = new Map<
+      number,
+      { id: string; name: string; args: string }
+    >()
 
     // Use the messages.stream() helper available in v0.20
     const stream = (this.client.messages as unknown as {
@@ -355,11 +366,37 @@ export class AnthropicAdapter implements LLMAdapter {
     }).stream(streamParams)
 
     for await (const event of stream as any) {
-      if (event.type === 'content_block_delta') {
+      if (event.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
+        pendingTools.set(event.index, {
+          id: event.content_block.id ?? '',
+          name: event.content_block.name ?? '',
+          args: ''
+        })
+      } else if (event.type === 'content_block_delta') {
         if (event.delta?.type === 'text_delta' && event.delta.text) {
           yield { content: event.delta.text, done: false }
         } else if ((event.delta?.type === 'thinking_delta' || event.delta?.type === options?.responseThinkingField) && (event.delta.thinking || event.delta[options?.responseThinkingField || 'thinking'])) {
           yield { reasoningContent: event.delta.thinking || event.delta[options?.responseThinkingField || 'thinking'], done: false }
+        } else if (event.delta?.type === 'input_json_delta') {
+          const tool = pendingTools.get(event.index)
+          if (tool && event.delta.partial_json) tool.args += event.delta.partial_json
+        }
+      } else if (event.type === 'content_block_stop' && pendingTools.has(event.index)) {
+        const tool = pendingTools.get(event.index)!
+        pendingTools.delete(event.index)
+        if (tool.id && tool.name) {
+          yield {
+            content: '',
+            done: false,
+            toolCalls: [
+              {
+                id: tool.id,
+                name: tool.name,
+                args: tool.args || '{}',
+                index: event.index
+              }
+            ]
+          }
         }
       }
     }

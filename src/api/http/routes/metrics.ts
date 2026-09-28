@@ -9,6 +9,21 @@ export async function metricsRoutes(fastify: FastifyInstance) {
     return reply.code(200).send(success({ status: 'ok', timestamp: new Date().toISOString() }))
   })
 
+  // 引擎元信息：版本等只读描述。与 /health 同级（root 前缀 + 白名单），
+  // 供远端客户端在连接后展示引擎版本
+  fastify.get('/meta', async (_request, reply) => {
+    let version = process.env.ENGINE_VERSION ?? 'unknown'
+    try {
+      const pkg = JSON.parse(
+        await fs.promises.readFile(path.resolve(process.cwd(), 'package.json'), 'utf-8')
+      ) as { version?: string }
+      if (pkg.version) version = pkg.version
+    } catch {
+      // cwd 下没有 package.json（打包 dist 运行）时保留 env / unknown
+    }
+    return reply.code(200).send(success({ version }))
+  })
+
   fastify.get('/metrics', async (request, reply) => {
     const tenantId = (request as any).authContext?.tenantId
     const metrics = await getMetrics(tenantId)
