@@ -2,8 +2,9 @@
  * Grep 工具 — 文本内容搜索
  * 优先使用 ripgrep (rg)，降级为 Node.js 内置实现
  */
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
+import { createInterface } from 'node:readline'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
@@ -18,6 +19,45 @@ async function hasRipgrep(): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+function grepWithRipgrep(args: string[], maxResults: number, signal?: AbortSignal): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(signal.reason ?? new Error('Search cancelled')); return }
+    const child = spawn('rg', args, { windowsHide: true })
+    const reader = createInterface({ input: child.stdout, crlfDelay: Infinity })
+    const lines: string[] = []
+    let stderr = ''
+    let commandError: Error | undefined
+    let cancelled = false
+    let timedOut = false
+    let limited = false
+    const abort = () => { cancelled = true; child.kill() }
+    signal?.addEventListener('abort', abort, { once: true })
+    if (signal?.aborted) abort()
+    const timer = setTimeout(() => { timedOut = true; child.kill() }, 15_000)
+    timer.unref?.()
+    child.once('error', (error) => { commandError = error })
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (chunk: string) => { stderr = (stderr + chunk).slice(0, 64_000) })
+    reader.on('line', (line) => {
+      if (lines.length >= maxResults) return
+      lines.push(line)
+      // rg's --max-count is per file; stopping this stream bounds the result set across the whole tree.
+      if (lines.length === maxResults) { limited = true; child.kill() }
+    })
+    child.once('close', (code) => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', abort)
+      reader.close()
+      if (commandError) { reject(commandError); return }
+      if (cancelled) { reject(signal?.reason ?? new Error('Search cancelled')); return }
+      if (timedOut) { reject(new Error('ripgrep search timed out after 15000 ms')); return }
+      // Exit 1 means no matches; exit 2 remains a command/search error even if it produced partial output.
+      if (code === 0 || code === 1 || (limited && code !== 2)) { resolve(lines); return }
+      reject(new Error(stderr.trim() || `ripgrep exited with code ${String(code)}`))
+    })
+  })
 }
 
 // Node.js 内置实现（降级方案）
@@ -72,27 +112,28 @@ export const grepTool: Tool = {
       path: { type: 'string' },
       filePattern: { type: 'string', description: '文件过滤如 *.ts' },
       caseSensitive: { type: 'boolean' },
-      maxResults: { type: 'number' },
+      maxResults: { type: 'integer', minimum: 1, description: '整个搜索范围内返回的最大匹配行数，默认50' },
     },
     required: ['pattern'],
   },
   async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
     const { pattern, path: searchPath = '.', filePattern, caseSensitive = false, maxResults = 50 } =
       rawArgs as { pattern: string; path?: string; filePattern?: string; caseSensitive?: boolean; maxResults?: number }
+    if (!Number.isSafeInteger(maxResults) || maxResults < 1) {
+      return { success: false, output: 'grep_search: maxResults 必须是正整数。' }
+    }
     try {
       const basePath = workspaceManager.resolveSafePath(ctx, searchPath)
       const rgAvailable = await hasRipgrep()
 
       if (rgAvailable) {
         // 使用 ripgrep
-        const args = ['--line-number', '--no-heading', '--color=never', '--max-count=1000']
+        const args = ['--line-number', '--no-heading', '--color=never', '--max-count', String(maxResults)]
         if (!caseSensitive) args.push('--ignore-case')
         if (filePattern) args.push('--glob', filePattern)
-        args.push('--max-results', String(maxResults))
-        args.push(pattern, basePath)
+        args.push('--', pattern, basePath)
 
-        const { stdout } = await execFileAsync('rg', args, { timeout: 15000, maxBuffer: 1024 * 1024 })
-        const lines = stdout.trim().split('\n').filter(Boolean).slice(0, maxResults)
+        const lines = await grepWithRipgrep(args, maxResults, ctx.signal)
         return {
           success: true,
           output: lines.length
@@ -112,8 +153,7 @@ export const grepTool: Tool = {
           ? `Found ${results.length} match(es) [nodejs fallback]:\n${results.join('\n')}`
           : `No matches found for "${pattern}"`,
       }
-    } catch (err: any) {
-      if (err.code === 1) return { success: true, output: `No matches found for "${pattern}"` }
+    } catch (err) {
       return { success: false, output: err instanceof Error ? err.message : 'Unknown error' }
     }
   },

@@ -120,7 +120,7 @@ export function createLLMAdapter(overrides?: CreateAdapterOptions): LLMAdapter {
  *   - 或 LLM_PROVIDER 显式设为 qwen
  * 命中后优先使用数据库中的 DASHSCOPE_API_KEY / QWEN_BASE_URL（如未提供 overrides）
  */
-export async function createLLMAdapterWithDbConfig(overrides?: CreateAdapterOptions): Promise<LLMAdapter> {
+export async function resolveAdapterOptionsWithDbConfig(overrides?: CreateAdapterOptions): Promise<CreateAdapterOptions> {
   const [
     dbProvider, dbModel, dbApiKey, dbBaseUrl,
     dsApiKey, dsBaseUrl,
@@ -195,13 +195,9 @@ export async function createLLMAdapterWithDbConfig(overrides?: CreateAdapterOpti
     ...(overrides?.qwen ?? {}),
   }
 
-  const effectiveOptions: CreateAdapterOptions = { provider, model, apiKey, baseUrl, deepseek: deepseekOptions, qwen: qwenOptions, extraHeaders: overrides?.extraHeaders }
-  const primary = new RetryingAdapter(createBaseAdapter(provider, model, effectiveOptions))
+  return { provider, model, apiKey, baseUrl, capabilities: overrides?.capabilities, deepseek: deepseekOptions, qwen: qwenOptions, extraHeaders: overrides?.extraHeaders }
+}
 
-  if (fallbackModel) {
-    const fallback = createBaseAdapter(provider, fallbackModel, effectiveOptions)
-    return new FallbackAdapter({ primary, fallbacks: [fallback] })
-  }
-
-  return primary
+export async function createLLMAdapterWithDbConfig(overrides?: CreateAdapterOptions): Promise<LLMAdapter> {
+  return createLLMAdapter(await resolveAdapterOptionsWithDbConfig(overrides))
 }

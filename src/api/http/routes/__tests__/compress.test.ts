@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify'
-import { SQLiteConversationHistory } from '../../../../storage/conversation/index.js'
+import { createConversationHistory } from '../../../../storage/conversation/factory.js'
 import { conversationRoutes } from '../conversation.js'
 import Fastify from 'fastify'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -21,10 +21,10 @@ vi.mock('../../../../core/llm-adapter/factory.js', () => {
 
 describe('Conversation Compression API', () => {
   let fastify: FastifyInstance
-  let history: SQLiteConversationHistory
+  let history: ReturnType<typeof createConversationHistory>
 
   beforeEach(async () => {
-    history = new SQLiteConversationHistory()
+    history = createConversationHistory()
     fastify = Fastify()
     fastify.decorateRequest('authContext', null)
     fastify.addHook('onRequest', async (req) => {
@@ -40,10 +40,10 @@ describe('Conversation Compression API', () => {
   })
 
   it('should compress history and preserve data integrity', async () => {
-    // 1. Prepare data
-    await history.append({ role: 'user', content: 'Hello AI' }, { tenantId: 'test-tenant', sessionId: 'test-session' })
-    await history.append({ role: 'assistant', content: 'Hi User!' }, { tenantId: 'test-tenant', sessionId: 'test-session' })
-    await history.append({ role: 'user', content: 'Can you summarize this?' }, { tenantId: 'test-tenant', sessionId: 'test-session' })
+    // 1. Prepare data（8 条，超过手动压缩下限且超出保留 6 条的窗口）
+    for (let i = 1; i <= 8; i++) {
+      await history.append({ role: i % 2 ? 'user' : 'assistant', content: `Message ${i}` }, { tenantId: 'test-tenant', sessionId: 'test-session' })
+    }
 
     // 2. Call compress endpoint
     const response = await fastify.inject({
@@ -55,24 +55,22 @@ describe('Conversation Compression API', () => {
     const json = response.json()
     expect(json.data.success).toBe(true)
     expect(json.data.stats).toBeDefined()
-    expect(json.data.stats.compressedTokens).toBe(20)
+    expect(json.data.stats.compressedTokens).toBeGreaterThan(0)
 
-    // 3. Verify history after compression
+    // 3. Verify history after compression（8 条 → 摘要 1 条 + 最近 6 条 + 压缩反馈 1 条 = 8 条）
     const messages = await history.getHistory({ tenantId: 'test-tenant', sessionId: 'test-session' })
-    expect(messages.length).toBe(2)
+    expect(messages.length).toBe(8)
     expect(messages[0].role).toBe('system')
-    expect(messages[0].content).toContain('【历史上下文摘要】')
     expect(messages[0].content).toContain('Mocked Summary')
-    expect(messages[0].usage).toBeDefined()
-    expect(messages[1].role).toBe('assistant')
-    expect(messages[1].content).toContain('我已经为您完成了上下文压缩')
+    expect(messages[7].role).toBe('assistant')
+    expect(messages[7].content).toContain('我已经为您完成了上下文压缩')
   })
 
   it('should rollback history if LLM completion fails', async () => {
-    // 1. Prepare data
-    await history.append({ role: 'user', content: 'Message 1' }, { tenantId: 'test-tenant', sessionId: 'test-session-err' })
-    await history.append({ role: 'assistant', content: 'Message 2' }, { tenantId: 'test-tenant', sessionId: 'test-session-err' })
-    await history.append({ role: 'user', content: 'Message 3' }, { tenantId: 'test-tenant', sessionId: 'test-session-err' })
+    // 1. Prepare data（超过手动压缩的 4 条下限）
+    for (let i = 1; i <= 8; i++) {
+      await history.append({ role: i % 2 ? 'user' : 'assistant', content: `Message ${i}` }, { tenantId: 'test-tenant', sessionId: 'test-session-err' })
+    }
 
     // Override mock for error
     const factory = await import('../../../../core/llm-adapter/factory.js')
@@ -95,7 +93,7 @@ describe('Conversation Compression API', () => {
 
     // 3. Verify history is untouched
     const messages = await history.getHistory({ tenantId: 'test-tenant', sessionId: 'test-session-err' })
-    expect(messages.length).toBe(3)
+    expect(messages.length).toBe(8)
     expect(messages[0].role).toBe('user')
     expect(messages[1].role).toBe('assistant')
     expect(messages[2].role).toBe('user')

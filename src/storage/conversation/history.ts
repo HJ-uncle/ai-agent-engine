@@ -158,7 +158,8 @@ export class SQLiteConversationHistory implements ConversationHistory {
     await db.execute({
       sql: `INSERT INTO conversations
               (tenant_id, session_id, conversation_id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, model_id, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            WHERE NOT EXISTS (SELECT 1 FROM conversations WHERE tenant_id=? AND session_id=? AND message_id=?)`,
       args: [
         ctx.tenantId,
         ctx.sessionId,
@@ -175,6 +176,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
         message.usage ? JSON.stringify(message.usage) : null,
         message.modelId ?? null,
         message.metadata ? JSON.stringify(message.metadata) : null,
+        ctx.tenantId, ctx.sessionId, messageId,
       ],
     })
     return messageId
@@ -428,6 +430,8 @@ export class SQLiteConversationHistory implements ConversationHistory {
     metadata?: any;
     totalUsage?: Record<string, number>;
   }>> {
+    const { getSubagentStore } = await import('../../core/subagent/store.js')
+    const childSessions = new Set(await getSubagentStore().listChildSessionIds(tenantId))
     const db = getDb()
     const rs = await db.execute({
       sql: `SELECT c.session_id,
@@ -464,12 +468,12 @@ export class SQLiteConversationHistory implements ConversationHistory {
                    SUM(CAST(json_extract(token_usage, '$.reasoningTokens') AS INTEGER)) as reasoning_tokens
             FROM conversations c
             LEFT JOIN sessions s ON s.session_id = c.session_id AND s.tenant_id = c.tenant_id
-            WHERE c.tenant_id = ? AND c.role IN ('user','assistant')
+            WHERE c.tenant_id = ? AND c.role IN ('user','assistant') AND c.session_id NOT LIKE 'subagent-%'
             GROUP BY c.session_id
             ORDER BY last_at DESC`,
       args: [tenantId],
     })
-    return rs.rows.map((row) => {
+    return rs.rows.filter(row => !childSessions.has(String(row['session_id']))).map((row) => {
       let metadata = undefined
       if (row['metadata']) {
         try {
@@ -534,17 +538,20 @@ export class SQLiteConversationHistory implements ConversationHistory {
   }
 
   /**
-   * Compress stored history by LLM-summarising older messages and keeping only
-   * the `keepRecent` most-recent messages verbatim.
-   * Skips compression when there are not enough messages to bother (≤ keepRecent).
+   * Compress stored history by LLM-summarising older messages.
+   *
+   * 保留策略（对齐 Claude Code）：
+   * - 数值参数 `keepRecent`（旧）：按条数保留最近 N 条原文
+   * - `{ keepRecentTokens }`（新）：从尾部按 token 预算回溯保留，保底 floor(n/2) 条
+   *
+   * 重建包在事务里：clear + append 任一失败整体回滚，不留「历史已删摘要未写」的半重建状态。
    */
   async compress(
     ctx: Ctx,
     summarizeFn: (messages: Message[]) => Promise<string>,
-    keepRecent = 6,
-  ): Promise<void> {
+    keepRecent: number | { keepRecentTokens?: number } = 6,
+  ): Promise<{ preTokens: number; postTokens: number }> {
     const db = getDb()
-    // Fetch ALL raw messages (no window)
     const result = await db.execute({
       sql: `SELECT message_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at
             FROM conversations
@@ -554,36 +561,135 @@ export class SQLiteConversationHistory implements ConversationHistory {
     })
     const allMessages = result.rows.map(rowToMessage)
 
-    if (allMessages.length <= keepRecent) return // nothing meaningful to compress
-
-    const olderMessages = allMessages.slice(0, allMessages.length - keepRecent)
-    const recentMessages = allMessages.slice(allMessages.length - keepRecent)
-
     const tokensBefore = allMessages.reduce((s, m) => s + (m.tokens ?? estimateTokens(m.content)), 0)
 
-    // Build summary via the provided LLM function
+    // 切分点：数值按条数；对象按 token 预算回溯 + 保底一半
+    let splitIdx: number
+    if (typeof keepRecent === 'number') {
+      splitIdx = Math.max(0, allMessages.length - keepRecent)
+    } else {
+      const budget = keepRecent.keepRecentTokens ?? 20000
+      const floor = Math.max(1, Math.floor(allMessages.length / 2))
+      let acc = 0
+      splitIdx = 0
+      for (let i = allMessages.length - 1; i >= 0; i--) {
+        acc += allMessages[i].tokens ?? estimateTokens(allMessages[i].content)
+        const kept = allMessages.length - i
+        if (acc >= budget && kept >= floor) {
+          splitIdx = i
+          break
+        }
+      }
+      if (allMessages.length - splitIdx < floor) splitIdx = Math.max(0, allMessages.length - floor)
+    }
+
+    const olderMessages = allMessages.slice(0, splitIdx)
+    const recentMessages = allMessages.slice(splitIdx)
+    if (olderMessages.length === 0) return { preTokens: tokensBefore, postTokens: tokensBefore }
+
     const summaryContent = await summarizeFn(olderMessages)
     const summaryTokens = estimateTokens(summaryContent)
 
-    // Replace DB contents: clear → summary system msg → recent msgs
-    // ⚠️ tombstone: false —— 此处是"主动重建"，不是"删除后防复活"。
-    //    若使用默认墓碑，紧随其后的 append 会在墓碑期内被静默丢弃，
-    //    导致压缩后 session 历史被清空（user/system 全丢，历史丢失事故的根因）。
-    await this.clear(ctx, { tombstone: false })
-
-    await this.append(
-      { role: 'system', content: summaryContent, tokens: summaryTokens },
-      ctx,
-    )
-
-    for (const msg of recentMessages) {
-      await this.append(msg, ctx)
+    // 事务化重建：clear + summary + recent，任一失败整体回滚。
+    // ⚠️ 不经 this.clear()：它是独立连接的非事务删除，失败时已无法回滚。
+    const summaryMsg: Message = { role: 'system', content: summaryContent, tokens: summaryTokens }
+    const rebuilt: Message[] = [summaryMsg, ...recentMessages]
+    const tx = await db.transaction('write')
+    try {
+      await tx.execute({
+        sql: `DELETE FROM conversations WHERE tenant_id = ? AND session_id = ?`,
+        args: [ctx.tenantId, ctx.sessionId],
+      })
+      for (const msg of rebuilt) {
+        await tx.execute({
+          sql: `INSERT INTO conversations
+                (tenant_id, session_id, conversation_id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, model_id, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          args: [
+            ctx.tenantId,
+            ctx.sessionId,
+            (msg as { conversationId?: string }).conversationId ?? null,
+            msg.id ?? uuidv4(),
+            msg.role,
+            typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+            msg.reasoningContent ?? null,
+            msg.toolCallId ?? null,
+            msg.toolCall?.name ?? null,
+            msg.toolName ?? null,
+            msg.toolCall ? JSON.stringify(msg.toolCall.args) : null,
+            msg.tokens ?? 0,
+            msg.usage ? JSON.stringify(msg.usage) : null,
+            msg.modelId ?? null,
+            msg.metadata ? JSON.stringify(msg.metadata) : null,
+          ],
+        })
+      }
+      await tx.commit()
+    } catch (e) {
+      await tx.rollback()
+      throw e
     }
 
-    const tokensAfter = summaryTokens + recentMessages.reduce((s, m) => s + (m.tokens ?? estimateTokens(m.content)), 0)
-    const freed = tokensBefore - tokensAfter
-    // Caller (react.ts) owns the logger; log a simple console message here.
-    console.log(`[history] compress: ${tokensBefore} → ${tokensAfter} tokens (freed ${freed})`)
+    const tokensAfter =
+      summaryTokens + recentMessages.reduce((s, m) => s + (m.tokens ?? estimateTokens(m.content)), 0)
+    console.log(`[history] compress: ${tokensBefore} → ${tokensAfter} tokens (freed ${tokensBefore - tokensAfter})`)
+    return { preTokens: tokensBefore, postTokens: tokensAfter }
+  }
+
+  /**
+   * Micro-compact：把最近 keepRecent 条消息之前的 tool 结果替换为占位符。
+   *
+   * 长会话里历史工具结果（读文件/命令输出）是上下文大头，而这些结果对后续推理
+   * 通常已无用。不调 LLM、不动对话结构，只改 content + tokens，全量压缩前先跑
+   * 一次往往能省下大量空间（对齐 Claude Code 的 micro-compact 思路）。
+   */
+  async microCompactToolResults(
+    ctx: Ctx,
+    opts: { keepRecent?: number } = {},
+  ): Promise<{ cleared: number; freedTokens: number }> {
+    const keepRecent = opts.keepRecent ?? 10
+    const placeholder = '[tool result cleared]'
+    const placeholderTokens = estimateTokens(placeholder)
+    const db = getDb()
+
+    // 取该会话全部消息（按写入顺序），排除最近 keepRecent 条消息范围内的
+    const all = await db.execute({
+      sql: `SELECT id, role, content, tokens FROM conversations
+            WHERE tenant_id = ? AND session_id = ?
+            ORDER BY created_at ASC, id ASC`,
+      args: [ctx.tenantId, ctx.sessionId],
+    })
+    const rows = all.rows
+    if (rows.length <= keepRecent) return { cleared: 0, freedTokens: 0 }
+    const cutoffId = Number(rows[rows.length - keepRecent]['id'])
+
+    const tx = await db.transaction('write')
+    let cleared = 0
+    let freedTokens = 0
+    try {
+      for (const row of rows) {
+        const id = Number(row['id'])
+        if (id >= cutoffId) break
+        if (row['role'] !== 'tool') continue
+        const content = row['content'] as string | null
+        if (!content || content === placeholder) continue
+        const oldTokens = Number(row['tokens'] ?? 0) || estimateTokens(content)
+        await tx.execute({
+          sql: `UPDATE conversations SET content = ?, tokens = ? WHERE id = ?`,
+          args: [placeholder, placeholderTokens, id],
+        })
+        cleared++
+        freedTokens += Math.max(0, oldTokens - placeholderTokens)
+      }
+      await tx.commit()
+    } catch (e) {
+      await tx.rollback()
+      throw e
+    }
+    if (cleared > 0) {
+      console.log(`[history] micro-compact: cleared ${cleared} tool results, freed ~${freedTokens} tokens`)
+    }
+    return { cleared, freedTokens }
   }
 
   async summarize(ctx: AgentContext): Promise<void> {

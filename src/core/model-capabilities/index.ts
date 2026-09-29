@@ -46,6 +46,11 @@ export interface ModelCapabilities {
   streamUsage?: boolean
   /** Prefix / Continue 续写 */
   prefix?: boolean
+  /**
+   * 上下文窗口上限（token 数）。前端用量环以此为分母；未声明时前端回落到估算值。
+   * 注意与 maxTokens（输出上限）区分——这里是「模型一次能吃进去多少」。
+   */
+  contextWindow?: number
 }
 
 /** 单条规则匹配条件，任意一组命中即视为匹配（OR 关系） */
@@ -87,24 +92,24 @@ const DEFAULT_RULES: CapabilityRule[] = [
   {
     id: 'openai:gpt-4o',
     match: { model: [/gpt-4o/i, /gpt-4-turbo/i, /gpt-4v/i, /gpt-4-vision/i, /gpt-5/i, /o1/i, /o3/i, /o4/i] },
-    caps: { vision: true, toolCalling: true, jsonMode: true, parallelTools: true, streamUsage: true, caching: true },
+    caps: { vision: true, toolCalling: true, jsonMode: true, parallelTools: true, streamUsage: true, caching: true, contextWindow: 128_000 },
   },
   {
     id: 'openai:o-series-thinking',
     match: { model: [/^o1/i, /^o3/i, /^o4/i] },
-    caps: { thinking: true },
+    caps: { thinking: true, contextWindow: 200_000 },
   },
   {
     id: 'openai:gpt-3.5',
     match: { model: [/gpt-3\.5/i] },
-    caps: { vision: false, toolCalling: true, jsonMode: true, streamUsage: true },
+    caps: { vision: false, toolCalling: true, jsonMode: true, streamUsage: true, contextWindow: 16_385 },
   },
 
   // ── Anthropic Claude 系列 ───────────────────────────────────────────────
   {
     id: 'anthropic:claude-3+',
     match: { model: [/claude-3/i, /claude-4/i, /claude-opus/i, /claude-sonnet/i, /claude-haiku/i] },
-    caps: { vision: true, toolCalling: true, caching: true, parallelTools: true, prefix: true },
+    caps: { vision: true, toolCalling: true, caching: true, parallelTools: true, prefix: true, contextWindow: 200_000 },
   },
   {
     id: 'anthropic:claude-thinking',
@@ -116,18 +121,18 @@ const DEFAULT_RULES: CapabilityRule[] = [
   {
     id: 'gemini:1.5+',
     match: { model: [/gemini-1\.5/i, /gemini-2/i, /gemini-pro-vision/i] },
-    caps: { vision: true, video: true, audio: true, toolCalling: true, jsonMode: true, streamUsage: true },
+    caps: { vision: true, video: true, audio: true, toolCalling: true, jsonMode: true, streamUsage: true, contextWindow: 1_000_000 },
   },
 
   // ── DeepSeek 系列 ───────────────────────────────────────────────────────
   {
     id: 'deepseek:base',
     match: { provider: ['deepseek'], baseUrl: [/deepseek/i], model: [/deepseek/i] },
-    caps: { toolCalling: true, jsonMode: true, caching: true, streamUsage: true, prefix: true, vision: false },
+    caps: { toolCalling: true, jsonMode: true, caching: true, streamUsage: true, prefix: true, vision: false, contextWindow: 128_000 },
   },
   {
     id: 'deepseek:reasoner',
-    match: { model: [/deepseek.*reasoner/i, /deepseek.*r1/i, /v4-(pro|flash)/i, /v3.*think/i] },
+    match: { model: [/deepseek.*reasoner/i, /deepseek.*r1/i, /v4[.-]?(pro|flash)/i, /v3.*think/i] },
     caps: { thinking: true },
   },
 
@@ -139,7 +144,7 @@ const DEFAULT_RULES: CapabilityRule[] = [
       baseUrl: [/dashscope/i, /aliyuncs\.com/i],
       model: [/^qwen/i, /^qwq/i],
     },
-    caps: { vision: true, toolCalling: true, search: true, streamUsage: true, caching: true },
+    caps: { vision: true, toolCalling: true, search: true, streamUsage: true, caching: true, contextWindow: 128_000 },
   },
   {
     id: 'qwen:thinking',
@@ -169,7 +174,7 @@ const DEFAULT_RULES: CapabilityRule[] = [
   {
     id: 'moonshot:base',
     match: { baseUrl: [/moonshot/i], model: [/moonshot/i, /kimi/i] },
-    caps: { toolCalling: true, jsonMode: true, streamUsage: false },
+    caps: { toolCalling: true, jsonMode: true, streamUsage: false, contextWindow: 256_000 },
   },
   {
     id: 'moonshot:vision',
@@ -181,7 +186,7 @@ const DEFAULT_RULES: CapabilityRule[] = [
   {
     id: 'zhipu:base',
     match: { baseUrl: [/zhipu/i, /bigmodel\.cn/i], model: [/glm-/i, /chatglm/i] },
-    caps: { toolCalling: true, jsonMode: true },
+    caps: { toolCalling: true, jsonMode: true, contextWindow: 128_000 },
   },
   {
     id: 'zhipu:vision',

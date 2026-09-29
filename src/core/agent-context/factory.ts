@@ -6,7 +6,9 @@ import { applyOSMMultiplier, resolveOSMMode, OSM_MODE_CONFIG } from '../osm.js'
 export function createAgentContext(options: CreateAgentContextOptions): AgentContext {
   const tenantId = options.tenantId ?? 'default'
   const workspaceRoot = process.env.WORKSPACE_ROOT ?? './workspace'
-  const workspaceDir = path.resolve(workspaceRoot, tenantId, options.sessionId)
+  const workspaceDir = path.resolve(options.scratchDir ?? path.join(workspaceRoot, tenantId, options.sessionId))
+  const projectRoot = path.resolve(options.projectRoot ?? options.workspacePaths?.[0] ?? options.cwd ?? workspaceDir)
+  const cwd = path.resolve(options.cwd ?? projectRoot)
 
   // Auto-create workspace directory
   if (!fs.existsSync(workspaceDir)) {
@@ -43,9 +45,13 @@ export function createAgentContext(options: CreateAgentContextOptions): AgentCon
     : applyOSMMultiplier('tokenBudget', envDefaultBudget)
 
   return {
+    ...options,
     tenantId,
     sessionId: options.sessionId,
     workspaceDir,
+    scratchDir: workspaceDir,
+    projectRoot,
+    cwd,
     workspacePaths: options.workspacePaths,
     tools: options.tools,
     history: options.history,
@@ -54,5 +60,13 @@ export function createAgentContext(options: CreateAgentContextOptions): AgentCon
     requestId: options.requestId,
     signal: options.signal,
     inheritContext: options.inheritContext,
+    modelName: options.modelName,
+    modelCaps: options.modelCaps,
+    resolvedModel: options.resolvedModel,
+    subagentModel: options.subagentModel,
+    utilityModel: options.utilityModel,
+    onRequestAttempt: options.onRequestAttempt,
+    requestBudget: options.requestBudget,
+    finalizationReserveTokens: options.finalizationReserveTokens,
   }
 }

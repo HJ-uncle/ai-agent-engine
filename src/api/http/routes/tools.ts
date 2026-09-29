@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { getRequestToolProfile } from '../tool-profile.js'
 import { createToolRegistry } from '../../../tools/registry-factory.js'
 import { paginateArray } from '../response.js'
 import { skillsRegistry } from '../../../skills/index.js'
@@ -9,6 +10,7 @@ export async function toolRoutes(fastify: FastifyInstance) {
 
   // 获取所有工具列表（包括系统工具和技能工具）
   fastify.get<{ Querystring: { current?: number; pageSize?: number; agentId?: string } }>('/tools', async (request, reply) => {
+    const toolProfile = getRequestToolProfile(request)
     const { current, pageSize, agentId } = request.query
     const tenantId = (request as any).authContext?.tenantId ?? 'default'
 
@@ -22,7 +24,7 @@ export async function toolRoutes(fastify: FastifyInstance) {
       }
     }
 
-    const { registry } = await createToolRegistry({ allowedTools, allowedSkills })
+    const { registry } = await createToolRegistry({ toolProfile, allowedTools, allowedSkills })
     const toolsList = registry.list().map(t => ({
       name: t.name,
       displayName: (t as any).displayName,
@@ -35,6 +37,7 @@ export async function toolRoutes(fastify: FastifyInstance) {
 
   // 获取系统工具列表（排除技能工具）
   fastify.get<{ Querystring: { current?: number; pageSize?: number; agentId?: string } }>('/system-tools', async (request, reply) => {
+    const toolProfile = getRequestToolProfile(request)
     const { current, pageSize, agentId } = request.query
     const tenantId = (request as any).authContext?.tenantId ?? 'default'
 
@@ -50,7 +53,7 @@ export async function toolRoutes(fastify: FastifyInstance) {
       }
     }
 
-    const { registry } = await createToolRegistry({ allowedTools, allowedSkills })
+    const { registry } = await createToolRegistry({ toolProfile, allowedTools, allowedSkills })
     const toolsList = registry.list()
       .filter(t => (t as any).source !== 'skill')
       .map(t => ({

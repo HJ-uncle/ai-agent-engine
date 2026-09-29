@@ -93,6 +93,11 @@ export async function sseStream(
         }
       }
 
+      if (chunk.startsWith('\x00__subagent_event__')) {
+        const subagentEvent = JSON.parse(chunk.slice('\x00__subagent_event__'.length))
+        await writeData(idStr + 'data: ' + JSON.stringify({ subagentEvent }) + '\n\n')
+        continue
+      }
       // ── __usage__ frame ──────────────────────────────────────────────────
       if (chunk.startsWith('\x00__usage__')) {
         try {

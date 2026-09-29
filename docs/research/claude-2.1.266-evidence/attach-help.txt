@@ -1,0 +1,3 @@
+Usage: claude attach <id>
+
+  Open the background session in this terminal. ← returns to agent view, Ctrl+Z drops back to your shell. The session keeps running either way.

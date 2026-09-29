@@ -1,3 +1,4 @@
+import { abortableDelay, isAbortError, throwIfAborted } from '../utils/abort.js'
 /**
  * DeepSeek 专有通道适配器
  * ============================================================================
@@ -49,8 +50,8 @@ const REASONER_MODEL_PATTERNS = [
   /deepseek-reasoner/i,
   /deepseek-r1/i,
   /deepseek-v3.*think/i,
-  /deepseek-v4-pro/i,    // V4 Pro 默认推理
-  /deepseek-v4-flash/i,  // V4 Flash 也支持推理
+  /deepseek-v4(\.\d+)?-pro/i,    // V4 Pro 默认推理（含 v4.1-pro）
+  /deepseek-v4(\.\d+)?-flash/i,  // V4 Flash 也支持推理（含 v4.1-flash）
 ]
 
 export interface DeepSeekAdapterOptions {
@@ -130,7 +131,7 @@ export class DeepSeekAdapter extends OpenAIAdapter {
   }
 
   override async complete(messages: Message[], options?: LLMAdapterOptions): Promise<LLMResponse> {
-    return this._withRetry(() => this._doComplete(messages, options))
+    return this._withRetry(() => this._doComplete(messages, options), 0, options?.signal)
   }
 
   private async _doComplete(messages: Message[], options?: LLMAdapterOptions): Promise<LLMResponse> {
@@ -159,15 +160,16 @@ export class DeepSeekAdapter extends OpenAIAdapter {
   /**
    * 指数退避重试（仅对 429 自动重试，最多 3 次；1s / 2s / 4s）
    */
-  private async _withRetry<T>(fn: () => Promise<T>, attempt = 0): Promise<T> {
+  private async _withRetry<T>(fn: () => Promise<T>, attempt = 0, signal?: AbortSignal): Promise<T> {
+    throwIfAborted(signal)
     try {
       return await fn()
     } catch (err) {
-      if (err instanceof DeepSeekRateLimitError && attempt < 3) {
+      if (!signal?.aborted && err instanceof DeepSeekRateLimitError && attempt < 3) {
         const delay = Math.pow(2, attempt) * 1000   // 1s, 2s, 4s
         console.warn(`[DeepSeek] 429 速率限制，${delay / 1000}s 后第 ${attempt + 1} 次重试...`)
-        await new Promise((r) => setTimeout(r, delay))
-        return this._withRetry(fn, attempt + 1)
+        await abortableDelay(delay, signal)
+        return this._withRetry(fn, attempt + 1, signal)
       }
       throw err
     }
@@ -177,6 +179,7 @@ export class DeepSeekAdapter extends OpenAIAdapter {
    * 将 OpenAI SDK APIError 映射为 DeepSeek 语义错误，并处理 422 参数降级
    */
   private _mapError(err: unknown, options?: LLMAdapterOptions): unknown {
+    if (isAbortError(err, options?.signal)) return err
     const status = (err as any)?.status ?? (err as any)?.statusCode
     const body = (err as any)?.error ?? (err as any)?.body
     if (!status) return err

@@ -1,0 +1,3 @@
+Usage: claude logs <id>
+
+  Print the background session's recent terminal output.

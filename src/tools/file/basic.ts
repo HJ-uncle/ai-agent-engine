@@ -4,6 +4,7 @@ import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/in
 import { workspaceManager } from '../../workspace/index.js'
 import { listRecursive } from './utils.js'
 import { commitDeleteChange } from './change-recorder.js'
+import { moveToSystemTrash } from './trash.js'
 
 // ── list_files ───────────────────────────────────────────────────────────
 
@@ -70,7 +71,8 @@ export const listFilesTool: Tool = {
 export const deleteFileTool: Tool = {
   name: 'delete_file',
   displayName: '删除文件',
-  description: '删除文件',
+  description:
+    '删除文件（移入操作系统回收站，可恢复；不是永久删除）',
   parameters: {
     type: 'object',
     properties: {
@@ -84,10 +86,11 @@ export const deleteFileTool: Tool = {
       const safePath = workspaceManager.resolveSafePath(ctx, filePath)
       // 删除前留快照（供改动面板撤回恢复）
       const change = await commitDeleteChange(ctx, filePath, safePath)
-      fs.unlinkSync(safePath)
+      // 进回收站而非永久删除：即使快照机制失效，用户也能从回收站找回
+      await moveToSystemTrash(safePath)
       return {
         success: true,
-        output: `Deleted: ${filePath}`,
+        output: `Moved to trash: ${filePath}`,
         ...(change ? { change } : {})
       }
     } catch (err) {

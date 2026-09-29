@@ -1,3 +1,4 @@
+import { throwIfAborted } from '../../core/utils/abort.js'
 import type { MCPClient, MCPServerConfig, MCPToolDefinition } from './types.js'
 import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
 
@@ -25,7 +26,8 @@ export class HTTPMCPClient implements MCPClient {
   constructor(private readonly config: MCPServerConfig) {}
 
   // ── JSON-RPC 2.0 请求 ─────────────────────────────────────────────────────
-  private async rpc<T>(method: string, params: unknown = {}): Promise<T> {
+  private async rpc<T>(method: string, params: unknown = {}, signal?: AbortSignal): Promise<T> {
+    throwIfAborted(signal)
     const id = _rpcId++
     const body = JSON.stringify({ jsonrpc: '2.0', id, method, params })
 
@@ -37,7 +39,7 @@ export class HTTPMCPClient implements MCPClient {
         ...this.config.headers,
       },
       body,
-      signal: AbortSignal.timeout(15000),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000),
     })
 
     if (!res.ok) {
@@ -74,12 +76,12 @@ export class HTTPMCPClient implements MCPClient {
   }
 
   // ── REST 降级：POST /tools/:name ─────────────────────────────────────────
-  private async restCallTool(name: string, args: Record<string, unknown>): Promise<string> {
+  private async restCallTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
     const res = await fetch(`${this.config.url}/tools/${name}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...this.config.headers },
       body: JSON.stringify(args),
-      signal: AbortSignal.timeout(30000),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),
     })
     if (!res.ok) throw new Error(`REST /tools/${name} ${res.status}`)
     const data = (await res.json()) as { result?: string; content?: Array<{type:string;text?:string}> }
@@ -125,12 +127,15 @@ export class HTTPMCPClient implements MCPClient {
     return this.cachedTools
   }
 
-  async callTool(name: string, args: Record<string, unknown>): Promise<string> {
+  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+    throwIfAborted(signal)
     if (this.mode === 'jsonrpc') {
       const result = await this.rpc<{
         content?: Array<{ type: string; text?: string }>
         result?: unknown
-      }>('tools/call', { name, arguments: args })
+        isError?: boolean
+      }>('tools/call', { name, arguments: args }, signal)
+      if (result.isError) throw new Error(result.content?.map(c => c.text ?? '').join('\n') || 'MCP tool reported an error')
 
       // MCP 标准返回 content 数组
       if (result.content) {
@@ -138,7 +143,7 @@ export class HTTPMCPClient implements MCPClient {
       }
       return JSON.stringify(result)
     }
-    return this.restCallTool(name, args)
+    return this.restCallTool(name, args, signal)
   }
 
   async toTools(): Promise<Tool[]> {
@@ -154,9 +159,10 @@ export class HTTPMCPClient implements MCPClient {
       },
       async execute(rawArgs: unknown, _ctx: AgentContext): Promise<ToolResult> {
         try {
-          const output = await client.callTool(def.name, rawArgs as Record<string, unknown>)
+          const output = await client.callTool(def.name, rawArgs as Record<string, unknown>, _ctx.signal)
           return { success: true, output }
         } catch (err) {
+          throwIfAborted(_ctx.signal)
           return {
             success: false,
             output: `MCP tool error: ${err instanceof Error ? err.message : 'unknown error'}`,

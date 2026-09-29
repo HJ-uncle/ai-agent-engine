@@ -41,9 +41,13 @@ const VISION_PROXY_PROMPT = [
 /**
  * 解析视觉代理使用的模型名。
  * 支持后缀语法 `model:provider`，例如 `qwen-vl-max:qwen`。
+ *
+ * 优先级：ctx.utilityModel（客户端设置「轻任务模型」，请求级下发）
+ *       > env.VISION_PROXY_MODEL（运维侧全局配置）。
+ * 两者皆空时视觉代理不启用，调用方回退 OCR。
  */
-export function resolveVisionProxyConfig(): { model: string; provider?: string } | null {
-  const raw = process.env.VISION_PROXY_MODEL?.trim()
+export function resolveVisionProxyConfig(ctx?: AgentContext): { model: string; provider?: string } | null {
+  const raw = ctx?.utilityModel?.trim() || process.env.VISION_PROXY_MODEL?.trim()
   if (!raw) return null
   const [model, provider] = raw.split(':').map((s) => s.trim())
   if (!model) return null
@@ -51,8 +55,8 @@ export function resolveVisionProxyConfig(): { model: string; provider?: string }
 }
 
 /** 视觉代理是否已配置可用 */
-export function isVisionProxyConfigured(): boolean {
-  return resolveVisionProxyConfig() !== null
+export function isVisionProxyConfigured(ctx?: AgentContext): boolean {
+  return resolveVisionProxyConfig(ctx) !== null
 }
 
 /**
@@ -65,12 +69,12 @@ export async function describeImageWithVisionProxy(
   imagePath: string,
   ctx: AgentContext,
 ): Promise<ToolResult> {
-  const config = resolveVisionProxyConfig()
+  const config = resolveVisionProxyConfig(ctx)
   if (!config) {
     return {
       success: false,
       output:
-        '视觉代理未启用（未配置 VISION_PROXY_MODEL）。无法通过视觉子模型查看图片，请改用 mode: "ocr"。',
+        '视觉代理未启用（未配置轻任务模型 / VISION_PROXY_MODEL）。无法通过视觉子模型查看图片，请改用 mode: "ocr"。',
     }
   }
 

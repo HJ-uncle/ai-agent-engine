@@ -1,0 +1,8 @@
+Usage: claude mcp add-from-claude-desktop [options]
+
+Import MCP servers from Claude Desktop (Mac and WSL only)
+
+Options:
+  -h, --help           Display help for command
+  -s, --scope <scope>  Configuration scope (local, user, or project) (default:
+                       "local")

@@ -1,0 +1,394 @@
+[
+  {
+    "command": [
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "agents",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "auth",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "auto-mode",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "gateway",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "import",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "mcp",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "plugin",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "plugin",
+      "marketplace",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "project",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "ultrareview",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "attach",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "logs",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "respawn",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "rm",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "stop",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "mcp",
+      "add",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "mcp",
+      "serve",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "plugin",
+      "install",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "plugin",
+      "validate",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "project",
+      "purge",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "doctor",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "install",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "setup-token",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "update",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "auth",
+      "login",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "auth",
+      "status",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "mcp",
+      "login",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "mcp",
+      "add-json",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "mcp",
+      "add-from-claude-desktop",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "mcp",
+      "get",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "mcp",
+      "list",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "mcp",
+      "remove",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "mcp",
+      "reset-project-choices",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "plugin",
+      "details",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "plugin",
+      "eval",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "plugin",
+      "init",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "plugin",
+      "disable",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "plugin",
+      "enable",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "plugin",
+      "list",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "plugin",
+      "prune",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "plugin",
+      "tag",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "plugin",
+      "uninstall",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "plugin",
+      "update",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "plugin",
+      "marketplace",
+      "add",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "plugin",
+      "marketplace",
+      "list",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "plugin",
+      "marketplace",
+      "remove",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "plugin",
+      "marketplace",
+      "update",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "auto-mode",
+      "defaults",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "auto-mode",
+      "critique",
+      "--help"
+    ],
+    "status": 0
+  },
+  {
+    "command": [
+      "auto-mode",
+      "reset",
+      "--help"
+    ],
+    "status": 0
+  }
+]

@@ -1,0 +1,1196 @@
+[
+  {
+    "name": "AgentInput",
+    "line": 683,
+    "fields": [
+      {
+        "name": "description",
+        "optional": false,
+        "type": "string",
+        "description": "A short (3-5 word) description of the task"
+      },
+      {
+        "name": "prompt",
+        "optional": false,
+        "type": "string",
+        "description": "The task for the agent to perform"
+      },
+      {
+        "name": "subagent_type",
+        "optional": true,
+        "type": "string",
+        "description": "The type of specialized agent to use for this task"
+      },
+      {
+        "name": "model",
+        "optional": true,
+        "type": "\"sonnet\" | \"opus\" | \"haiku\" | \"fable\"",
+        "description": "Optional model override for this agent. Takes precedence over the agent definition's model frontmatter and the configured default subagent model. If omitted, uses the agent definition's model, else the default (inherits from the parent unless a default subagent model is configured). Ignored for subagent_type: \"fork\" — forks always inherit the parent model."
+      },
+      {
+        "name": "run_in_background",
+        "optional": true,
+        "type": "boolean",
+        "description": "Agents run in the background by default; you will be notified when one completes. Set to false only when your very next action depends on this agent's result and nothing else could usefully happen while it runs — otherwise leave it in the background so the user can hand you other work."
+      },
+      {
+        "name": "name",
+        "optional": true,
+        "type": "string",
+        "description": "Name for the spawned agent. Makes it addressable via SendMessage({to: name}) while running."
+      },
+      {
+        "name": "team_name",
+        "optional": true,
+        "type": "string",
+        "description": "Deprecated; ignored. The session has a single implicit team."
+      },
+      {
+        "name": "mode",
+        "optional": true,
+        "type": "\"acceptEdits\" | \"auto\" | \"bypassPermissions\" | \"default\" | \"dontAsk\" | \"plan\"",
+        "description": "Deprecated; ignored. Subagents inherit the parent session's permission mode; agent-definition frontmatter may override it."
+      },
+      {
+        "name": "isolation",
+        "optional": true,
+        "type": "\"worktree\" | \"remote\"",
+        "description": "Isolation mode. \"worktree\" creates a temporary git worktree so the agent works on an isolated copy of the repo. \"remote\" launches the agent in a remote cloud environment (always runs in background; availability is gated)."
+      }
+    ]
+  },
+  {
+    "name": "BashInput",
+    "line": 721,
+    "fields": [
+      {
+        "name": "command",
+        "optional": false,
+        "type": "string",
+        "description": "The command to execute"
+      },
+      {
+        "name": "timeout",
+        "optional": true,
+        "type": "number",
+        "description": "Optional timeout in milliseconds (max 600000)"
+      },
+      {
+        "name": "description",
+        "optional": true,
+        "type": "string",
+        "description": "Clear, concise description of what this command does in active voice. Never use words like \"complex\" or \"risk\" in the description - just describe what it does.\n\nFor simple commands (git, npm, standard CLI tools), keep it brief (5-10 words):\n- ls → \"List files in current directory\"\n- git status → \"Show working tree status\"\n- npm install → \"Install package dependencies\"\n\nFor commands that are harder to parse at a glance (piped commands, obscure flags, etc.), add enough context to clarify what it does:\n- find . -name \"*.tmp\" -exec rm {} \\; → \"Find and delete all .tmp files recursively\"\n- git reset --hard origin/main → \"Discard all local changes and match remote main\"\n- curl -s url | jq '.data[]' → \"Fetch JSON from URL and extract data array elements\""
+      },
+      {
+        "name": "run_in_background",
+        "optional": true,
+        "type": "boolean",
+        "description": "Set to true to run this command in the background."
+      },
+      {
+        "name": "dangerouslyDisableSandbox",
+        "optional": true,
+        "type": "boolean",
+        "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing."
+      }
+    ]
+  },
+  {
+    "name": "TaskOutputInput",
+    "line": 753,
+    "fields": [
+      {
+        "name": "task_id",
+        "optional": false,
+        "type": "string",
+        "description": "The task ID to get output from"
+      },
+      {
+        "name": "block",
+        "optional": false,
+        "type": "boolean",
+        "description": "Whether to wait for completion"
+      },
+      {
+        "name": "timeout",
+        "optional": false,
+        "type": "number",
+        "description": "Max wait time in ms"
+      }
+    ]
+  },
+  {
+    "name": "ExitPlanModeInput",
+    "line": 767,
+    "fields": [
+      {
+        "name": "allowedPrompts",
+        "optional": true,
+        "type": "{\n    /**\n     * The tool this prompt applies to\n     */\n    tool: \"Bash\";\n    /**\n     * Semantic description of the action, e.g. \"run tests\", \"install dependencies\"\n     */\n    prompt: string;\n  }[]",
+        "description": "Deprecated: no longer used."
+      },
+      {
+        "optional": false,
+        "type": "unknown"
+      }
+    ]
+  },
+  {
+    "name": "FileEditInput",
+    "line": 783,
+    "fields": [
+      {
+        "name": "file_path",
+        "optional": false,
+        "type": "string",
+        "description": "The absolute path to the file to modify"
+      },
+      {
+        "name": "old_string",
+        "optional": false,
+        "type": "string",
+        "description": "The text to replace"
+      },
+      {
+        "name": "new_string",
+        "optional": false,
+        "type": "string",
+        "description": "The text to replace it with (must be different from old_string)"
+      },
+      {
+        "name": "replace_all",
+        "optional": true,
+        "type": "boolean",
+        "description": "Replace all occurrences of old_string (default false)"
+      }
+    ]
+  },
+  {
+    "name": "FileReadInput",
+    "line": 801,
+    "fields": [
+      {
+        "name": "file_path",
+        "optional": false,
+        "type": "string",
+        "description": "The absolute path to the file to read"
+      },
+      {
+        "name": "offset",
+        "optional": true,
+        "type": "number",
+        "description": "The line number to start reading from. Only provide if the file is too large to read at once"
+      },
+      {
+        "name": "limit",
+        "optional": true,
+        "type": "number",
+        "description": "The number of lines to read. Only provide if the file is too large to read at once."
+      },
+      {
+        "name": "pages",
+        "optional": true,
+        "type": "string",
+        "description": "Page range for PDF files (e.g., \"1-5\", \"3\", \"10-20\"). Only applicable to PDF files. Maximum 20 pages per request."
+      }
+    ]
+  },
+  {
+    "name": "FileWriteInput",
+    "line": 819,
+    "fields": [
+      {
+        "name": "file_path",
+        "optional": false,
+        "type": "string",
+        "description": "The absolute path to the file to write (must be absolute, not relative)"
+      },
+      {
+        "name": "content",
+        "optional": false,
+        "type": "string",
+        "description": "The content to write to the file"
+      }
+    ]
+  },
+  {
+    "name": "GlobInput",
+    "line": 829,
+    "fields": [
+      {
+        "name": "pattern",
+        "optional": false,
+        "type": "string",
+        "description": "The glob pattern to match files against"
+      },
+      {
+        "name": "path",
+        "optional": true,
+        "type": "string",
+        "description": "The directory to search in. If not specified, the current working directory will be used. IMPORTANT: Omit this field to use the default directory. DO NOT enter \"undefined\" or \"null\" - simply omit it for the default behavior. Must be a valid directory path if provided."
+      }
+    ]
+  },
+  {
+    "name": "GrepInput",
+    "line": 839,
+    "fields": [
+      {
+        "name": "pattern",
+        "optional": false,
+        "type": "string",
+        "description": "The regular expression pattern to search for in file contents"
+      },
+      {
+        "name": "path",
+        "optional": true,
+        "type": "string",
+        "description": "File or directory to search in (rg PATH). Defaults to current working directory."
+      },
+      {
+        "name": "glob",
+        "optional": true,
+        "type": "string",
+        "description": "Glob pattern to filter files (e.g. \"*.js\", \"*.{ts,tsx}\") - maps to rg --glob"
+      },
+      {
+        "name": "output_mode",
+        "optional": true,
+        "type": "\"content\" | \"files_with_matches\" | \"count\"",
+        "description": "Output mode: \"content\" shows matching lines (supports -A/-B/-C context, -n line numbers, head_limit), \"files_with_matches\" shows file paths (supports head_limit), \"count\" shows match counts (supports head_limit). Defaults to \"files_with_matches\"."
+      },
+      {
+        "name": "\"-B\"",
+        "optional": true,
+        "type": "number",
+        "description": "Number of lines to show before each match (rg -B). Requires output_mode: \"content\", ignored otherwise."
+      },
+      {
+        "name": "\"-A\"",
+        "optional": true,
+        "type": "number",
+        "description": "Number of lines to show after each match (rg -A). Requires output_mode: \"content\", ignored otherwise."
+      },
+      {
+        "name": "\"-C\"",
+        "optional": true,
+        "type": "number",
+        "description": "Alias for context."
+      },
+      {
+        "name": "context",
+        "optional": true,
+        "type": "number",
+        "description": "Number of lines to show before and after each match (rg -C). Requires output_mode: \"content\", ignored otherwise."
+      },
+      {
+        "name": "\"-n\"",
+        "optional": true,
+        "type": "boolean",
+        "description": "Show line numbers in output (rg -n). Requires output_mode: \"content\", ignored otherwise. Defaults to true."
+      },
+      {
+        "name": "\"-i\"",
+        "optional": true,
+        "type": "boolean",
+        "description": "Case insensitive search (rg -i)"
+      },
+      {
+        "name": "\"-o\"",
+        "optional": true,
+        "type": "boolean",
+        "description": "Print only the matched (non-empty) parts of each matching line, one match per output line (rg -o / --only-matching). Requires output_mode: \"content\", ignored otherwise. Defaults to false."
+      },
+      {
+        "name": "type",
+        "optional": true,
+        "type": "string",
+        "description": "File type to search (rg --type). Common types: js, py, rust, go, java, etc. More efficient than include for standard file types."
+      },
+      {
+        "name": "head_limit",
+        "optional": true,
+        "type": "number",
+        "description": "Limit output to first N lines/entries, equivalent to \"| head -N\". Works across all output modes: content (limits output lines), files_with_matches (limits file paths), count (limits count entries). Defaults to 250 when unspecified. Pass 0 for unlimited (use sparingly — large result sets waste context)."
+      },
+      {
+        "name": "offset",
+        "optional": true,
+        "type": "number",
+        "description": "Skip first N lines/entries before applying head_limit, equivalent to \"| tail -n +N | head -N\". Works across all output modes. Defaults to 0."
+      },
+      {
+        "name": "multiline",
+        "optional": true,
+        "type": "boolean",
+        "description": "Enable multiline mode where . matches newlines and patterns can span lines (rg -U --multiline-dotall). Default: false."
+      }
+    ]
+  },
+  {
+    "name": "TaskStopInput",
+    "line": 901,
+    "fields": [
+      {
+        "name": "task_id",
+        "optional": true,
+        "type": "string",
+        "description": "The ID of the background task to stop. Agent-team teammates and named background agents are also accepted by agent ID or name."
+      },
+      {
+        "name": "shell_id",
+        "optional": true,
+        "type": "string",
+        "description": "Deprecated: use task_id instead"
+      }
+    ]
+  },
+  {
+    "name": "ListMcpResourcesInput",
+    "line": 911,
+    "fields": [
+      {
+        "name": "server",
+        "optional": true,
+        "type": "string",
+        "description": "Optional server name to filter resources by"
+      }
+    ]
+  },
+  {
+    "name": "RefreshMcpToolsInput",
+    "line": 917,
+    "fields": [
+      {
+        "name": "server",
+        "optional": true,
+        "type": "string",
+        "description": "Optional server name: refresh only this server. Omit to refresh all connected servers."
+      }
+    ]
+  },
+  {
+    "name": "McpInput",
+    "line": 923,
+    "fields": [
+      {
+        "optional": false,
+        "type": "unknown"
+      }
+    ]
+  },
+  {
+    "name": "NotebookEditInput",
+    "line": 926,
+    "fields": [
+      {
+        "name": "notebook_path",
+        "optional": false,
+        "type": "string",
+        "description": "The absolute path to the Jupyter notebook file to edit (must be absolute, not relative)"
+      },
+      {
+        "name": "cell_id",
+        "optional": true,
+        "type": "string",
+        "description": "The ID of the cell to edit. When inserting a new cell, the new cell will be inserted after the cell with this ID, or at the beginning if not specified."
+      },
+      {
+        "name": "new_source",
+        "optional": false,
+        "type": "string",
+        "description": "The new source for the cell"
+      },
+      {
+        "name": "cell_type",
+        "optional": true,
+        "type": "\"code\" | \"markdown\"",
+        "description": "The type of the cell (code or markdown). If not specified, it defaults to the current cell type. If using edit_mode=insert, this is required."
+      },
+      {
+        "name": "edit_mode",
+        "optional": true,
+        "type": "\"replace\" | \"insert\" | \"delete\"",
+        "description": "The type of edit to make (replace, insert, delete). Defaults to replace."
+      }
+    ]
+  },
+  {
+    "name": "ReadMcpResourceDirInput",
+    "line": 948,
+    "fields": [
+      {
+        "name": "server",
+        "optional": false,
+        "type": "string",
+        "description": "The MCP server name"
+      },
+      {
+        "name": "uri",
+        "optional": false,
+        "type": "string",
+        "description": "The directory resource URI to list"
+      }
+    ]
+  },
+  {
+    "name": "ReadMcpResourceInput",
+    "line": 958,
+    "fields": [
+      {
+        "name": "server",
+        "optional": false,
+        "type": "string",
+        "description": "The MCP server name"
+      },
+      {
+        "name": "uri",
+        "optional": false,
+        "type": "string",
+        "description": "The resource URI to read"
+      }
+    ]
+  },
+  {
+    "name": "ReportFindingsInput",
+    "line": 968,
+    "fields": [
+      {
+        "name": "level",
+        "optional": true,
+        "type": "\"low\" | \"medium\" | \"high\" | \"xhigh\" | \"max\"",
+        "description": "Effort level the review ran at"
+      },
+      {
+        "name": "findings",
+        "optional": false,
+        "type": "{\n    /**\n     * Repo-relative path of the file the finding is in\n     */\n    file: string;\n    /**\n     * 1-indexed line the finding anchors to\n     */\n    line?: number;\n    /**\n     * One-sentence statement of the defect\n     */\n    summary: string;\n    /**\n     * Compressed label for compact UI (≤60 chars): the claim alone, no rationale or consequence clause\n     */\n    short_summary?: string;\n    /**\n     * Concrete inputs/state → wrong output/crash\n     */\n    failure_scenario: string;\n    /**\n     * Short kebab-case slug of the finding type, e.g. \"correctness\", \"simplification\", \"efficiency\", \"test-coverage\"\n     */\n    category?: string;\n    /**\n     * Set when a verify pass ran; absent on inline-only reviews\n     */\n    verdict?: \"CONFIRMED\" | \"PLAUSIBLE\";\n    /**\n     * Set ONLY when re-reporting after applying fixes: what happened to this finding\n     */\n    outcome?: \"fixed\" | \"skipped\" | \"no_change_needed\";\n  }[]",
+        "description": "Verified findings, most-severe first; empty if none survived"
+      }
+    ]
+  },
+  {
+    "name": "TodoWriteInput",
+    "line": 1013,
+    "fields": [
+      {
+        "name": "todos",
+        "optional": false,
+        "type": "{\n    content: string;\n    status: \"pending\" | \"in_progress\" | \"completed\";\n    activeForm: string;\n  }[]",
+        "description": "The updated todo list"
+      }
+    ]
+  },
+  {
+    "name": "WebFetchInput",
+    "line": 1023,
+    "fields": [
+      {
+        "name": "url",
+        "optional": false,
+        "type": "string",
+        "description": "The URL to fetch content from"
+      },
+      {
+        "name": "prompt",
+        "optional": false,
+        "type": "string",
+        "description": "The prompt to run on the fetched content"
+      }
+    ]
+  },
+  {
+    "name": "WebSearchInput",
+    "line": 1033,
+    "fields": [
+      {
+        "name": "query",
+        "optional": false,
+        "type": "string",
+        "description": "The search query to use"
+      },
+      {
+        "name": "allowed_domains",
+        "optional": true,
+        "type": "string[]",
+        "description": "Only include search results from these domains"
+      },
+      {
+        "name": "blocked_domains",
+        "optional": true,
+        "type": "string[]",
+        "description": "Never include search results from these domains"
+      }
+    ]
+  },
+  {
+    "name": "AskUserQuestionInput",
+    "line": 1047,
+    "fields": [
+      {
+        "name": "questions",
+        "optional": false,
+        "type": "| [\n        {\n          /**\n           * The complete question to ask the user. Should be clear, specific, and end with a question mark. Example: \"Which library should we use for date formatting?\" If multiSelect is true, phrase it accordingly, e.g. \"Which features do you want to enable?\"\n           */\n          question: string;\n          /**\n           * Very short label displayed as a chip/tag (max 12 chars). Examples: \"Auth method\", \"Library\", \"Approach\".\n           */\n          header: string;\n          /**\n           * The available choices for this question. Must have 2-4 options. Each option should be a distinct, mutually exclusive choice (unless multiSelect is enabled). There should be no 'Other' option, that will be provided automatically.\n           *\n           * @minItems 2\n           * @maxItems 4\n           */\n          options:\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ]\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ]\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ];\n          /**\n           * Set to true to allow the user to select multiple options instead of just one. Use when choices are not mutually exclusive.\n           */\n          multiSelect: boolean;\n        }\n      ]\n    | [\n        {\n          /**\n           * The complete question to ask the user. Should be clear, specific, and end with a question mark. Example: \"Which library should we use for date formatting?\" If multiSelect is true, phrase it accordingly, e.g. \"Which features do you want to enable?\"\n           */\n          question: string;\n          /**\n           * Very short label displayed as a chip/tag (max 12 chars). Examples: \"Auth method\", \"Library\", \"Approach\".\n           */\n          header: string;\n          /**\n           * The available choices for this question. Must have 2-4 options. Each option should be a distinct, mutually exclusive choice (unless multiSelect is enabled). There should be no 'Other' option, that will be provided automatically.\n           *\n           * @minItems 2\n           * @maxItems 4\n           */\n          options:\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ]\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ]\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ];\n          /**\n           * Set to true to allow the user to select multiple options instead of just one. Use when choices are not mutually exclusive.\n           */\n          multiSelect: boolean;\n        },\n        {\n          /**\n           * The complete question to ask the user. Should be clear, specific, and end with a question mark. Example: \"Which library should we use for date formatting?\" If multiSelect is true, phrase it accordingly, e.g. \"Which features do you want to enable?\"\n           */\n          question: string;\n          /**\n           * Very short label displayed as a chip/tag (max 12 chars). Examples: \"Auth method\", \"Library\", \"Approach\".\n           */\n          header: string;\n          /**\n           * The available choices for this question. Must have 2-4 options. Each option should be a distinct, mutually exclusive choice (unless multiSelect is enabled). There should be no 'Other' option, that will be provided automatically.\n           *\n           * @minItems 2\n           * @maxItems 4\n           */\n          options:\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ]\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ]\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ];\n          /**\n           * Set to true to allow the user to select multiple options instead of just one. Use when choices are not mutually exclusive.\n           */\n          multiSelect: boolean;\n        }\n      ]\n    | [\n        {\n          /**\n           * The complete question to ask the user. Should be clear, specific, and end with a question mark. Example: \"Which library should we use for date formatting?\" If multiSelect is true, phrase it accordingly, e.g. \"Which features do you want to enable?\"\n           */\n          question: string;\n          /**\n           * Very short label displayed as a chip/tag (max 12 chars). Examples: \"Auth method\", \"Library\", \"Approach\".\n           */\n          header: string;\n          /**\n           * The available choices for this question. Must have 2-4 options. Each option should be a distinct, mutually exclusive choice (unless multiSelect is enabled). There should be no 'Other' option, that will be provided automatically.\n           *\n           * @minItems 2\n           * @maxItems 4\n           */\n          options:\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ]\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ]\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ];\n          /**\n           * Set to true to allow the user to select multiple options instead of just one. Use when choices are not mutually exclusive.\n           */\n          multiSelect: boolean;\n        },\n        {\n          /**\n           * The complete question to ask the user. Should be clear, specific, and end with a question mark. Example: \"Which library should we use for date formatting?\" If multiSelect is true, phrase it accordingly, e.g. \"Which features do you want to enable?\"\n           */\n          question: string;\n          /**\n           * Very short label displayed as a chip/tag (max 12 chars). Examples: \"Auth method\", \"Library\", \"Approach\".\n           */\n          header: string;\n          /**\n           * The available choices for this question. Must have 2-4 options. Each option should be a distinct, mutually exclusive choice (unless multiSelect is enabled). There should be no 'Other' option, that will be provided automatically.\n           *\n           * @minItems 2\n           * @maxItems 4\n           */\n          options:\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ]\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ]\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ];\n          /**\n           * Set to true to allow the user to select multiple options instead of just one. Use when choices are not mutually exclusive.\n           */\n          multiSelect: boolean;\n        },\n        {\n          /**\n           * The complete question to ask the user. Should be clear, specific, and end with a question mark. Example: \"Which library should we use for date formatting?\" If multiSelect is true, phrase it accordingly, e.g. \"Which features do you want to enable?\"\n           */\n          question: string;\n          /**\n           * Very short label displayed as a chip/tag (max 12 chars). Examples: \"Auth method\", \"Library\", \"Approach\".\n           */\n          header: string;\n          /**\n           * The available choices for this question. Must have 2-4 options. Each option should be a distinct, mutually exclusive choice (unless multiSelect is enabled). There should be no 'Other' option, that will be provided automatically.\n           *\n           * @minItems 2\n           * @maxItems 4\n           */\n          options:\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ]\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ]\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ];\n          /**\n           * Set to true to allow the user to select multiple options instead of just one. Use when choices are not mutually exclusive.\n           */\n          multiSelect: boolean;\n        }\n      ]\n    | [\n        {\n          /**\n           * The complete question to ask the user. Should be clear, specific, and end with a question mark. Example: \"Which library should we use for date formatting?\" If multiSelect is true, phrase it accordingly, e.g. \"Which features do you want to enable?\"\n           */\n          question: string;\n          /**\n           * Very short label displayed as a chip/tag (max 12 chars). Examples: \"Auth method\", \"Library\", \"Approach\".\n           */\n          header: string;\n          /**\n           * The available choices for this question. Must have 2-4 options. Each option should be a distinct, mutually exclusive choice (unless multiSelect is enabled). There should be no 'Other' option, that will be provided automatically.\n           *\n           * @minItems 2\n           * @maxItems 4\n           */\n          options:\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ]\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ]\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ];\n          /**\n           * Set to true to allow the user to select multiple options instead of just one. Use when choices are not mutually exclusive.\n           */\n          multiSelect: boolean;\n        },\n        {\n          /**\n           * The complete question to ask the user. Should be clear, specific, and end with a question mark. Example: \"Which library should we use for date formatting?\" If multiSelect is true, phrase it accordingly, e.g. \"Which features do you want to enable?\"\n           */\n          question: string;\n          /**\n           * Very short label displayed as a chip/tag (max 12 chars). Examples: \"Auth method\", \"Library\", \"Approach\".\n           */\n          header: string;\n          /**\n           * The available choices for this question. Must have 2-4 options. Each option should be a distinct, mutually exclusive choice (unless multiSelect is enabled). There should be no 'Other' option, that will be provided automatically.\n           *\n           * @minItems 2\n           * @maxItems 4\n           */\n          options:\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ]\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ]\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ];\n          /**\n           * Set to true to allow the user to select multiple options instead of just one. Use when choices are not mutually exclusive.\n           */\n          multiSelect: boolean;\n        },\n        {\n          /**\n           * The complete question to ask the user. Should be clear, specific, and end with a question mark. Example: \"Which library should we use for date formatting?\" If multiSelect is true, phrase it accordingly, e.g. \"Which features do you want to enable?\"\n           */\n          question: string;\n          /**\n           * Very short label displayed as a chip/tag (max 12 chars). Examples: \"Auth method\", \"Library\", \"Approach\".\n           */\n          header: string;\n          /**\n           * The available choices for this question. Must have 2-4 options. Each option should be a distinct, mutually exclusive choice (unless multiSelect is enabled). There should be no 'Other' option, that will be provided automatically.\n           *\n           * @minItems 2\n           * @maxItems 4\n           */\n          options:\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ]\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ]\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ];\n          /**\n           * Set to true to allow the user to select multiple options instead of just one. Use when choices are not mutually exclusive.\n           */\n          multiSelect: boolean;\n        },\n        {\n          /**\n           * The complete question to ask the user. Should be clear, specific, and end with a question mark. Example: \"Which library should we use for date formatting?\" If multiSelect is true, phrase it accordingly, e.g. \"Which features do you want to enable?\"\n           */\n          question: string;\n          /**\n           * Very short label displayed as a chip/tag (max 12 chars). Examples: \"Auth method\", \"Library\", \"Approach\".\n           */\n          header: string;\n          /**\n           * The available choices for this question. Must have 2-4 options. Each option should be a distinct, mutually exclusive choice (unless multiSelect is enabled). There should be no 'Other' option, that will be provided automatically.\n           *\n           * @minItems 2\n           * @maxItems 4\n           */\n          options:\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ]\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ]\n            | [\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                },\n                {\n                  /**\n                   * The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.\n                   */\n                  label: string;\n                  /**\n                   * Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.\n                   */\n                  description: string;\n                  /**\n                   * Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.\n                   */\n                  preview?: string;\n                }\n              ];\n          /**\n           * Set to true to allow the user to select multiple options instead of just one. Use when choices are not mutually exclusive.\n           */\n          multiSelect: boolean;\n        }\n      ]",
+        "description": "Questions to ask the user (1-4 questions)"
+      },
+      {
+        "name": "answers",
+        "optional": true,
+        "type": "{\n    [k: string]: string;\n  }",
+        "description": "User answers collected by the permission component"
+      },
+      {
+        "name": "annotations",
+        "optional": true,
+        "type": "{\n    [k: string]: {\n      /**\n       * The preview content of the selected option, if the question used previews.\n       */\n      preview?: string;\n      /**\n       * Free-text notes the user added to their selection.\n       */\n      notes?: string;\n    };\n  }",
+        "description": "Optional per-question annotations from the user (e.g., notes on preview selections). Keyed by question text."
+      },
+      {
+        "name": "metadata",
+        "optional": true,
+        "type": "{\n    /**\n     * Optional identifier for the source of this question (e.g., \"remember\" for /remember command). Used for analytics tracking.\n     */\n    source?: string;\n  }",
+        "description": "Optional metadata for tracking and analytics purposes. Not displayed to user."
+      }
+    ]
+  },
+  {
+    "name": "SendFeedbackInput",
+    "line": 2624,
+    "fields": [
+      {
+        "name": "type",
+        "optional": false,
+        "type": "\"bug\" | \"idea\" | \"missing_capability\"",
+        "description": "What kind of feedback this is."
+      },
+      {
+        "name": "title",
+        "optional": false,
+        "type": "string",
+        "description": "Short, specific one-line summary of the issue."
+      },
+      {
+        "name": "details",
+        "optional": false,
+        "type": "string",
+        "description": "Labeled bullets, in order: **What happened:** (observed vs. expected, exact error text if short); **What the user said:** (quoted, or \"User didn't comment; observed by the model.\"); **Repro:** (minimal steps); **Evidence:** (request IDs, timestamps, paths, versions; omit if none); optionally a final **Cause:** only if verified in-session. One to three lines per bullet. No narrative paragraphs, no speculation, no secrets."
+      },
+      {
+        "name": "area",
+        "optional": true,
+        "type": "string",
+        "description": "Optional short tag naming the part of Claude Code this is about (e.g. \"hooks config\", \"/help\", \"file editing\"). Leave blank if unclear."
+      },
+      {
+        "name": "failure_mode",
+        "optional": true,
+        "type": "| \"instruction_following\"\n    | \"destructive_actions\"\n    | \"code_quality\"\n    | \"repetition_and_looping\"\n    | \"model_regression\"\n    | \"overconfidence_and_hallucination\"\n    | \"context_and_memory\"\n    | \"overeager\"\n    | \"over_correction\"\n    | \"stopping_short\"\n    | \"dispute_or_decline\"\n    | \"subagent_overspawn\"\n    | \"tone_or_preachiness\"\n    | \"excessive_questions\"\n    | \"unwanted_scope\"\n    | \"other\"",
+        "description": "When the report is about MODEL BEHAVIOR (not a product bug), the closest failure mode, or `other` when it is a model-behavior issue that fits no listed value. Omit only when the report is a product/tool bug with no model-behavior component."
+      },
+      {
+        "name": "task_category",
+        "optional": true,
+        "type": "\"code_edit\" | \"debug\" | \"explain\" | \"plan\" | \"shell\" | \"search\" | \"review\" | \"other\"",
+        "description": "What kind of task the session was doing when the issue occurred, or `other` when it is a clear task that fits no listed value. Omit only if genuinely unclear."
+      }
+    ]
+  },
+  {
+    "name": "ClaudeDesignInput",
+    "line": 2666,
+    "fields": [
+      {
+        "name": "operation",
+        "optional": false,
+        "type": "string",
+        "description": "Claude Design action to perform. Call with \"list\" first to discover the available operations and their argument schemas."
+      },
+      {
+        "name": "arguments",
+        "optional": false,
+        "type": "{\n    [k: string]: unknown;\n  }",
+        "description": "Action input object (server-validated). Pass {} for operations that take no input."
+      }
+    ]
+  },
+  {
+    "name": "ProjectsInput",
+    "line": 2678,
+    "fields": [
+      {
+        "name": "method",
+        "optional": false,
+        "type": "| \"project_info\"\n    | \"project_read\"\n    | \"project_search\"\n    | \"project_write\"\n    | \"project_delete\"\n    | \"project_memory_list\"\n    | \"project_memory_read\""
+      },
+      {
+        "name": "path",
+        "optional": true,
+        "type": "string",
+        "description": "project_read/project_write/project_delete: doc path. project_write: an existing path is replaced in place; a new bare filename (no \"/\") is namespaced to \"claude/<name>\". project_memory_read: memory file path as listed by project_memory_list."
+      },
+      {
+        "name": "content",
+        "optional": true,
+        "type": "string",
+        "description": "project_write: inline doc text. Mutually exclusive with local_path. Use local_path for anything you have on disk."
+      },
+      {
+        "name": "local_path",
+        "optional": true,
+        "type": "string",
+        "description": "project_write: a file inside the working directory to upload. The tool reads, encodes, and uploads directly — contents never enter your context. Mutually exclusive with content."
+      },
+      {
+        "name": "present_to_user",
+        "optional": true,
+        "type": "boolean",
+        "description": "project_write: true marks this doc as the file the user needs to see — the deliverable they asked for or must act on. Defaults to false; leave it unset for routine saves, notes, and bulk writes."
+      },
+      {
+        "name": "query",
+        "optional": true,
+        "type": "string",
+        "description": "project_search: knowledge-base query"
+      },
+      {
+        "name": "n",
+        "optional": true,
+        "type": "number",
+        "description": "project_search: number of hits (default 5)"
+      }
+    ]
+  },
+  {
+    "name": "EnterPlanModeInput",
+    "line": 2712,
+    "fields": []
+  },
+  {
+    "name": "TaskCreateInput",
+    "line": 2713,
+    "fields": [
+      {
+        "name": "subject",
+        "optional": false,
+        "type": "string",
+        "description": "A brief title for the task"
+      },
+      {
+        "name": "description",
+        "optional": false,
+        "type": "string",
+        "description": "What needs to be done"
+      },
+      {
+        "name": "activeForm",
+        "optional": true,
+        "type": "string",
+        "description": "Present continuous form shown in spinner when in_progress (e.g., \"Running tests\")"
+      },
+      {
+        "name": "metadata",
+        "optional": true,
+        "type": "{\n    [k: string]: unknown;\n  }",
+        "description": "Arbitrary metadata to attach to the task"
+      }
+    ]
+  },
+  {
+    "name": "TaskGetInput",
+    "line": 2733,
+    "fields": [
+      {
+        "name": "taskId",
+        "optional": false,
+        "type": "string",
+        "description": "The ID of the task to retrieve"
+      }
+    ]
+  },
+  {
+    "name": "TaskUpdateInput",
+    "line": 2739,
+    "fields": [
+      {
+        "name": "taskId",
+        "optional": false,
+        "type": "string",
+        "description": "The ID of the task to update"
+      },
+      {
+        "name": "subject",
+        "optional": true,
+        "type": "string",
+        "description": "New subject for the task"
+      },
+      {
+        "name": "description",
+        "optional": true,
+        "type": "string",
+        "description": "New description for the task"
+      },
+      {
+        "name": "activeForm",
+        "optional": true,
+        "type": "string",
+        "description": "Present continuous form shown in spinner when in_progress (e.g., \"Running tests\")"
+      },
+      {
+        "name": "status",
+        "optional": true,
+        "type": "(\"pending\" | \"in_progress\" | \"completed\") | \"deleted\"",
+        "description": "New status for the task"
+      },
+      {
+        "name": "addBlocks",
+        "optional": true,
+        "type": "string[]",
+        "description": "Task IDs that this task blocks"
+      },
+      {
+        "name": "addBlockedBy",
+        "optional": true,
+        "type": "string[]",
+        "description": "Task IDs that block this task"
+      },
+      {
+        "name": "owner",
+        "optional": true,
+        "type": "string",
+        "description": "New owner for the task"
+      },
+      {
+        "name": "metadata",
+        "optional": true,
+        "type": "{\n    [k: string]: unknown;\n  }",
+        "description": "Metadata keys to merge into the task. Set a key to null to delete it."
+      }
+    ]
+  },
+  {
+    "name": "TaskListInput",
+    "line": 2779,
+    "fields": []
+  },
+  {
+    "name": "REPLInput",
+    "line": 2780,
+    "fields": [
+      {
+        "name": "code",
+        "optional": false,
+        "type": "string",
+        "description": "JavaScript code to execute. Supports top-level await. State persists across calls."
+      },
+      {
+        "name": "description",
+        "optional": true,
+        "type": "string",
+        "description": "Clear, concise description of what this script does in active voice (5-10 words). E.g. \"Trace upgrade message to its GrowthBook flag\""
+      },
+      {
+        "name": "timeout",
+        "optional": true,
+        "type": "number",
+        "description": "Optional timeout in milliseconds (default 30000, max 600000)"
+      }
+    ]
+  },
+  {
+    "name": "WorkflowInput",
+    "line": 2794,
+    "fields": [
+      {
+        "name": "script",
+        "optional": true,
+        "type": "string",
+        "description": "Self-contained workflow script. Must begin with `export const meta = { name, description, phases }` (pure literal, no computed values) followed by the script body using agent()/parallel()/pipeline()/phase()."
+      },
+      {
+        "name": "name",
+        "optional": true,
+        "type": "string",
+        "description": "Name of a predefined workflow (built-in or from .claude/workflows/). Resolves to a self-contained script."
+      },
+      {
+        "name": "description",
+        "optional": true,
+        "type": "string",
+        "description": "Ignored — set the workflow description in the script's `meta` block."
+      },
+      {
+        "name": "title",
+        "optional": true,
+        "type": "string",
+        "description": "Ignored — set the workflow title in the script's `meta` block."
+      },
+      {
+        "name": "args",
+        "optional": true,
+        "type": "{\n    [k: string]: unknown;\n  }",
+        "description": "Optional input value exposed to the script as the global `args`, verbatim. Pass arrays/objects as actual JSON values, NOT as a JSON-encoded string — a stringified list breaks `args.filter`/`args.map` in the script. Use for parameterized named workflows (e.g. a research question)."
+      },
+      {
+        "name": "scriptPath",
+        "optional": true,
+        "type": "string",
+        "description": "Path to a workflow script file on disk. Every Workflow invocation persists its script under the session directory and returns the path in the tool result. To iterate, edit that file with Write/Edit and re-invoke Workflow with the same `scriptPath` instead of re-sending the full script. Takes precedence over `script` and `name`."
+      },
+      {
+        "name": "resumeFromRunId",
+        "optional": true,
+        "type": "string",
+        "description": "Run ID of a prior Workflow invocation to resume from. Completed agent() calls with unchanged (prompt, opts) return their cached results instantly; only edited or new calls re-run. Same-session only. Stop the prior run first (TaskStop) before resuming."
+      }
+    ]
+  },
+  {
+    "name": "CronCreateInput",
+    "line": 2826,
+    "fields": [
+      {
+        "name": "cron",
+        "optional": false,
+        "type": "string",
+        "description": "Standard 5-field cron expression in local time: \"M H DoM Mon DoW\" (e.g. \"* /5 * * * *\" = every 5 minutes, \"30 14 28 2 *\" = Feb 28 at 2:30pm local once)."
+      },
+      {
+        "name": "prompt",
+        "optional": false,
+        "type": "string",
+        "description": "The prompt to enqueue at each fire time."
+      },
+      {
+        "name": "recurring",
+        "optional": true,
+        "type": "boolean",
+        "description": "true (default) = fire on every cron match until deleted or auto-expired after 7 days. false = fire once at the next match, then auto-delete. Use false for \"remind me at X\" one-shot requests with pinned minute/hour/dom/month."
+      },
+      {
+        "name": "durable",
+        "optional": true,
+        "type": "boolean",
+        "description": "true = persist to .claude/scheduled_tasks.json and survive restarts. false (default) = in-memory only, dies when this Claude session ends. Use true only when the user asks the task to survive across sessions."
+      }
+    ]
+  },
+  {
+    "name": "CronDeleteInput",
+    "line": 2844,
+    "fields": [
+      {
+        "name": "id",
+        "optional": false,
+        "type": "string",
+        "description": "Job ID returned by CronCreate."
+      }
+    ]
+  },
+  {
+    "name": "CronListInput",
+    "line": 2850,
+    "fields": []
+  },
+  {
+    "name": "ScheduleWakeupInput",
+    "line": 2851,
+    "fields": [
+      {
+        "name": "delaySeconds",
+        "optional": true,
+        "type": "number",
+        "description": "Seconds from now to wake up. Clamped to [60, 3600] by the runtime. Required unless `stop` is true."
+      },
+      {
+        "name": "reason",
+        "optional": true,
+        "type": "string",
+        "description": "One short sentence explaining the chosen delay. Goes to telemetry and is shown to the user. Be specific. Required unless `stop` is true."
+      },
+      {
+        "name": "prompt",
+        "optional": true,
+        "type": "string",
+        "description": "The /loop input to fire on wake-up. Pass the same /loop input verbatim each turn so the next firing re-enters the skill and continues the loop. For autonomous /loop (no user prompt), pass the literal sentinel `<<autonomous-loop-dynamic>>` instead (the dynamic-pacing variant, not the CronCreate-mode `<<autonomous-loop>>`). Required unless `stop` is true."
+      },
+      {
+        "name": "stop",
+        "optional": true,
+        "type": "boolean",
+        "description": "Set to true to end the dynamic loop immediately instead of scheduling another wakeup. When true, all other fields are ignored and no further wakeups fire."
+      },
+      {
+        "name": "noop",
+        "optional": true,
+        "type": "boolean",
+        "description": "true = nothing changed (you checked and there is nothing to report). false = something happened worth keeping (edited a file, posted a message, advanced state, surfaced a finding). Consecutive noop:true ticks are collapsed in the user's terminal view and tracked as a streak. Required unless `stop` is true."
+      }
+    ]
+  },
+  {
+    "name": "RemoteTriggerInput",
+    "line": 2873,
+    "fields": [
+      {
+        "name": "action",
+        "optional": false,
+        "type": "\"list\" | \"get\" | \"create\" | \"update\" | \"run\" | \"create_webhook_trigger\" | \"list_runs\" | \"get_run_log\""
+      },
+      {
+        "name": "trigger_id",
+        "optional": true,
+        "type": "string",
+        "description": "Required for get, update, run, and list_runs"
+      },
+      {
+        "name": "session_id",
+        "optional": true,
+        "type": "string",
+        "description": "Required for get_run_log: a run session id (cse_… or session_…, from list_runs)"
+      },
+      {
+        "name": "cursor",
+        "optional": true,
+        "type": "string",
+        "description": "next_cursor from a previous list_runs or get_run_log page"
+      },
+      {
+        "name": "body",
+        "optional": true,
+        "type": "{\n    [k: string]: unknown;\n  }",
+        "description": "Required for create and update; optional for run"
+      }
+    ]
+  },
+  {
+    "name": "ShowOnboardingRolePickerInput",
+    "line": 2894,
+    "fields": []
+  },
+  {
+    "name": "ReadNotificationsInput",
+    "line": 2895,
+    "fields": []
+  },
+  {
+    "name": "MonitorInput",
+    "line": 2896,
+    "fields": [
+      {
+        "name": "description",
+        "optional": false,
+        "type": "string",
+        "description": "Short human-readable description of what you are monitoring (shown in notifications)."
+      },
+      {
+        "name": "timeout_ms",
+        "optional": false,
+        "type": "number",
+        "description": "Kill the monitor after this deadline. Default 300000ms, max 3600000ms. Ignored when persistent is true."
+      },
+      {
+        "name": "persistent",
+        "optional": false,
+        "type": "boolean",
+        "description": "Run for the lifetime of the session (no timeout). Use for session-length watches like PR monitoring or log tails. Stop with TaskStop."
+      },
+      {
+        "name": "command",
+        "optional": true,
+        "type": "string",
+        "description": "Shell command or script. Each stdout line is an event; exit ends the watch."
+      },
+      {
+        "name": "ws",
+        "optional": true,
+        "type": "{\n    url: string;\n    protocols?: string[];\n  }",
+        "description": "WebSocket to open. Each text frame is an event; binary frames are reported as a placeholder line. Socket close ends the watch. Cannot be combined with command."
+      }
+    ]
+  },
+  {
+    "name": "ProposeSkillsInput",
+    "line": 2921,
+    "fields": [
+      {
+        "name": "proposals",
+        "optional": false,
+        "type": "| [\n        {\n          /**\n           * kebab-case skill slug\n           */\n          name: string;\n          kind: \"new\" | \"improvement\";\n          /**\n           * Name of the existing skill to update. Required when kind is 'improvement'; omit for 'new'.\n           */\n          target?: string;\n          /**\n           * One short sentence saying when to use this skill: aim for under 200 characters, never more than 1024. Shown on the review card and saved as the skill's description, which is what decides when the skill is used. For an improvement, reuse the existing skill's description unless the change alters when the skill applies.\n           */\n          description: string;\n          /**\n           * memory file paths where this procedure was observed\n           */\n          evidence?: string[];\n          /**\n           * The complete SKILL.md exactly as it should be saved: frontmatter plus the full body. When the user saves, the body below the frontmatter becomes the skill's entire instructions and the name and description come from the fields above; other frontmatter keys are not kept. For an improvement this replaces the existing skill's SKILL.md entirely, so read that skill's current SKILL.md first and include everything worth keeping, not only the changes.\n           */\n          skillMd: string;\n        }\n      ]\n    | [\n        {\n          /**\n           * kebab-case skill slug\n           */\n          name: string;\n          kind: \"new\" | \"improvement\";\n          /**\n           * Name of the existing skill to update. Required when kind is 'improvement'; omit for 'new'.\n           */\n          target?: string;\n          /**\n           * One short sentence saying when to use this skill: aim for under 200 characters, never more than 1024. Shown on the review card and saved as the skill's description, which is what decides when the skill is used. For an improvement, reuse the existing skill's description unless the change alters when the skill applies.\n           */\n          description: string;\n          /**\n           * memory file paths where this procedure was observed\n           */\n          evidence?: string[];\n          /**\n           * The complete SKILL.md exactly as it should be saved: frontmatter plus the full body. When the user saves, the body below the frontmatter becomes the skill's entire instructions and the name and description come from the fields above; other frontmatter keys are not kept. For an improvement this replaces the existing skill's SKILL.md entirely, so read that skill's current SKILL.md first and include everything worth keeping, not only the changes.\n           */\n          skillMd: string;\n        },\n        {\n          /**\n           * kebab-case skill slug\n           */\n          name: string;\n          kind: \"new\" | \"improvement\";\n          /**\n           * Name of the existing skill to update. Required when kind is 'improvement'; omit for 'new'.\n           */\n          target?: string;\n          /**\n           * One short sentence saying when to use this skill: aim for under 200 characters, never more than 1024. Shown on the review card and saved as the skill's description, which is what decides when the skill is used. For an improvement, reuse the existing skill's description unless the change alters when the skill applies.\n           */\n          description: string;\n          /**\n           * memory file paths where this procedure was observed\n           */\n          evidence?: string[];\n          /**\n           * The complete SKILL.md exactly as it should be saved: frontmatter plus the full body. When the user saves, the body below the frontmatter becomes the skill's entire instructions and the name and description come from the fields above; other frontmatter keys are not kept. For an improvement this replaces the existing skill's SKILL.md entirely, so read that skill's current SKILL.md first and include everything worth keeping, not only the changes.\n           */\n          skillMd: string;\n        }\n      ]\n    | [\n        {\n          /**\n           * kebab-case skill slug\n           */\n          name: string;\n          kind: \"new\" | \"improvement\";\n          /**\n           * Name of the existing skill to update. Required when kind is 'improvement'; omit for 'new'.\n           */\n          target?: string;\n          /**\n           * One short sentence saying when to use this skill: aim for under 200 characters, never more than 1024. Shown on the review card and saved as the skill's description, which is what decides when the skill is used. For an improvement, reuse the existing skill's description unless the change alters when the skill applies.\n           */\n          description: string;\n          /**\n           * memory file paths where this procedure was observed\n           */\n          evidence?: string[];\n          /**\n           * The complete SKILL.md exactly as it should be saved: frontmatter plus the full body. When the user saves, the body below the frontmatter becomes the skill's entire instructions and the name and description come from the fields above; other frontmatter keys are not kept. For an improvement this replaces the existing skill's SKILL.md entirely, so read that skill's current SKILL.md first and include everything worth keeping, not only the changes.\n           */\n          skillMd: string;\n        },\n        {\n          /**\n           * kebab-case skill slug\n           */\n          name: string;\n          kind: \"new\" | \"improvement\";\n          /**\n           * Name of the existing skill to update. Required when kind is 'improvement'; omit for 'new'.\n           */\n          target?: string;\n          /**\n           * One short sentence saying when to use this skill: aim for under 200 characters, never more than 1024. Shown on the review card and saved as the skill's description, which is what decides when the skill is used. For an improvement, reuse the existing skill's description unless the change alters when the skill applies.\n           */\n          description: string;\n          /**\n           * memory file paths where this procedure was observed\n           */\n          evidence?: string[];\n          /**\n           * The complete SKILL.md exactly as it should be saved: frontmatter plus the full body. When the user saves, the body below the frontmatter becomes the skill's entire instructions and the name and description come from the fields above; other frontmatter keys are not kept. For an improvement this replaces the existing skill's SKILL.md entirely, so read that skill's current SKILL.md first and include everything worth keeping, not only the changes.\n           */\n          skillMd: string;\n        },\n        {\n          /**\n           * kebab-case skill slug\n           */\n          name: string;\n          kind: \"new\" | \"improvement\";\n          /**\n           * Name of the existing skill to update. Required when kind is 'improvement'; omit for 'new'.\n           */\n          target?: string;\n          /**\n           * One short sentence saying when to use this skill: aim for under 200 characters, never more than 1024. Shown on the review card and saved as the skill's description, which is what decides when the skill is used. For an improvement, reuse the existing skill's description unless the change alters when the skill applies.\n           */\n          description: string;\n          /**\n           * memory file paths where this procedure was observed\n           */\n          evidence?: string[];\n          /**\n           * The complete SKILL.md exactly as it should be saved: frontmatter plus the full body. When the user saves, the body below the frontmatter becomes the skill's entire instructions and the name and description come from the fields above; other frontmatter keys are not kept. For an improvement this replaces the existing skill's SKILL.md entirely, so read that skill's current SKILL.md first and include everything worth keeping, not only the changes.\n           */\n          skillMd: string;\n        }\n      ]",
+        "description": ""
+      }
+    ]
+  },
+  {
+    "name": "ProposeGoalInput",
+    "line": 3072,
+    "fields": [
+      {
+        "name": "condition",
+        "optional": false,
+        "type": "string",
+        "description": "The completion condition to propose, written so a separate evaluator can verify it from the conversation (e.g. \"all tests in test/auth pass (bun test exits 0)\"). At most 500 characters — the user must be able to read the whole condition in the approval dialog."
+      },
+      {
+        "name": "ask_user",
+        "optional": true,
+        "type": "boolean",
+        "description": "Whether to ask the user for approval before the goal is set. Defaults to true — an approval dialog is shown. Set false ONLY when the user's own words in this conversation stated this outcome as what they want; the goal is then set directly, with a visible notice in the transcript, and the user can clear it with /goal clear."
+      }
+    ]
+  },
+  {
+    "name": "ArtifactInput",
+    "line": 3082,
+    "fields": [
+      {
+        "name": "action",
+        "optional": true,
+        "type": "| \"publish\"\n    | \"list\"\n    | \"read\"\n    | \"list_types\"\n    | \"watch\"\n    | \"unwatch\"\n    | \"status\"\n    | \"upload_asset\"\n    | \"list_assets\"\n    | \"read_asset\"\n    | \"delete_asset\"",
+        "description": "Omit (or 'publish') to publish file_path. 'list' enumerates artifacts — the user's own by default, see `scope`; only `limit` and `scope` may accompany it. 'read' returns the content of the published artifact at `url` (raw HTML for the user's own; an isolated summary, steered by the optional `prompt`, for one shared with them, though a page published in this session's own Slack channel can come back in full as untrusted content) — see **To read an existing artifact's content**. 'watch', 'unwatch', and 'status' manage live-update subscriptions that notify a session when an artifact is republished elsewhere, and those aren't available in this session: 'watch' only reports that — no republish notification reaches this session — and 'status' lists this session's artifact watches (pass `url` to check one). 'upload_asset' adds one local media, PDF, font, or text file to an existing artifact — pass `url` and `file_path`. 'list_assets' lists the files in an artifact's asset store (pass `url`; `after` continues a listing), 'read_asset' saves one of them to a local file named by its id (pass `url` and `asset_id`, optionally `out_dir`), and 'delete_asset' permanently removes one (pass `url` and `asset_id`). See **Artifact assets** above."
+      },
+      {
+        "name": "file_path",
+        "optional": true,
+        "type": "string",
+        "description": "Path to the .html file to render. Required to publish (the default action). Use a short, distinctive basename — it is the last-resort title when the HTML has no <title> and no `title` parameter is given. For 'upload_asset', the local image, video, PDF, font, or text (CSV, Markdown, JSON, plain text) file to upload."
+      },
+      {
+        "name": "favicon",
+        "optional": true,
+        "type": "string",
+        "description": "Browser-tab icon: one or two emoji (e.g. \"📊\"). No markup. Required on a page's first publish; omit on a redeploy (same file path this session, or `url`) to keep the artifact's icon — pass a new one only when the user asks."
+      },
+      {
+        "name": "limit",
+        "optional": true,
+        "type": "number",
+        "description": "list only: maximum artifacts to return (default 25)."
+      },
+      {
+        "name": "scope",
+        "optional": true,
+        "type": "\"mine\" | \"shared\" | \"all\"",
+        "description": "list only: 'mine' (default) lists artifacts the user owns — the only ones the update flow can target; 'shared' lists artifacts other people shared with the user (read-only); 'all' lists both. Rows are labeled (mine)/(shared) whenever scope is not 'mine'."
+      },
+      {
+        "name": "title",
+        "optional": true,
+        "type": "string",
+        "description": "Title for the artifact — the name shown in the browser tab and gallery. A short, distinctive noun-phrase name — not a generic label, a summary, or a name with an appended explainer. Prefer a <title> tag at the top of the HTML itself; this parameter fills in only when the file lacks one in the first 8KB of the file, and never overrides the tag. HTML publishes only — Markdown pages keep their filename identity. Content always comes from file_path — there is no inline content parameter."
+      },
+      {
+        "name": "description",
+        "optional": true,
+        "type": "string",
+        "description": "One-sentence subtitle shown on the gallery card. Say what the page is or does."
+      },
+      {
+        "name": "label",
+        "optional": true,
+        "type": "string",
+        "description": "A short name for the version this publish makes, max 60 chars (e.g. \"Draft to legal\"). Shown in the version picker. Optional — a few words, not a description."
+      },
+      {
+        "name": "url",
+        "optional": true,
+        "type": "string",
+        "description": "Existing artifact URL to update in place. Pass whenever the user wants to update an artifact this conversation did not publish — \"update my artifact\", \"keep the same link\", a pasted artifact URL — and find the URL with action: \"list\" or ask the user for the link if you don't have it; without this, the publish creates a separate artifact instead of updating the existing one. Omit for new artifacts and same-conversation redeploys. Must be an artifact the user owns. For 'read' and the other url-addressed actions: the artifact to act on."
+      },
+      {
+        "name": "prompt",
+        "optional": true,
+        "type": "string",
+        "description": "read only: what to extract from an artifact shared with the user — its content reaches you as an isolated summary answering this. Ignored for artifacts the user owns and for a page published in this session's own Slack channel (raw content is returned); optional."
+      },
+      {
+        "name": "force",
+        "optional": true,
+        "type": "boolean",
+        "description": "Last-resort overwrite that DISCARDS the newer published version's page — another session's publish, or someone's save from a page that can publish new versions of itself. On a conflict the fix is to merge your changes onto the newer content (handed to you in the rejection, or re-read) and publish again — not force. Pass force:true only when the user has explicitly said to discard that specific version; never to get past a conflict on your own judgment. The tracked baseVersion is still sent; with force:true the server treats it as informational and overwrites, unless it refuses force over a version saved from inside the page. Omit (or false) so a concurrent write conflicts instead of being silently clobbered."
+      },
+      {
+        "name": "out_dir",
+        "optional": true,
+        "type": "string",
+        "description": "read_asset: directory to save the file into (default: the working directory); the file is named by the asset id plus the extension for its type."
+      },
+      {
+        "name": "asset_id",
+        "optional": true,
+        "type": "string",
+        "description": "read_asset and delete_asset: the asset's id (32 hex characters), from a list_assets or upload_asset result."
+      },
+      {
+        "name": "after",
+        "optional": true,
+        "type": "string",
+        "description": "list_assets only: the `next` value from a previous list_assets result, to continue that listing."
+      },
+      {
+        "name": "capabilities",
+        "optional": true,
+        "type": "{\n    [k: string]: unknown;\n  }",
+        "description": "Runtime capabilities this page declares, as {name: config}. The control plane is the authority on valid names and config shapes. An empty object clears any previously stored declaration; omit the field on a redeploy to carry the stored declaration forward unchanged. Before declaring any capability, load the `artifact-capabilities` skill for the current contract and per-capability guidance."
+      },
+      {
+        "name": "contract",
+        "optional": true,
+        "type": "\"latest\" | string",
+        "description": "The artifact's runtime version. Omit to keep its current version (the default); 'latest' to upgrade; a specific version to pin or roll back. Changing it changes how the published page behaves — pass only when the author explicitly intends the change, never as a side effect of editing."
+      }
+    ]
+  },
+  {
+    "name": "PushNotificationInput",
+    "line": 3161,
+    "fields": [
+      {
+        "name": "message",
+        "optional": false,
+        "type": "string",
+        "description": "The notification body. Keep it under 200 characters; mobile OSes truncate."
+      },
+      {
+        "name": "status",
+        "optional": false,
+        "type": "\"proactive\""
+      }
+    ]
+  },
+  {
+    "name": "EnterWorktreeInput",
+    "line": 3168,
+    "fields": [
+      {
+        "name": "name",
+        "optional": true,
+        "type": "string",
+        "description": "Optional name for a new worktree. Each \"/\"-separated segment may contain only letters, digits, dots, underscores, and dashes; max 64 chars total. A random name is generated if not provided. Mutually exclusive with `path`."
+      },
+      {
+        "name": "path",
+        "optional": true,
+        "type": "string",
+        "description": "Path to an existing worktree to switch into instead of creating a new one. Must appear in `git worktree list` for the current repo — or, on first entry from the launch directory, for a repo nested inside it (multi-repo workspace). Mutually exclusive with `name`."
+      }
+    ]
+  },
+  {
+    "name": "ExitWorktreeInput",
+    "line": 3178,
+    "fields": [
+      {
+        "name": "action",
+        "optional": false,
+        "type": "\"keep\" | \"remove\"",
+        "description": "\"keep\" leaves the worktree and branch on disk; \"remove\" deletes both."
+      },
+      {
+        "name": "discard_changes",
+        "optional": true,
+        "type": "boolean",
+        "description": "Required true when action is \"remove\" and the worktree has uncommitted files or unmerged commits. The tool will refuse and list them otherwise."
+      }
+    ]
+  }
+]

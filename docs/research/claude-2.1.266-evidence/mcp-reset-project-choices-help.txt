@@ -1,0 +1,7 @@
+Usage: claude mcp reset-project-choices [options]
+
+Reset all approved and rejected project-scoped (.mcp.json) servers within this
+project
+
+Options:
+  -h, --help  Display help for command

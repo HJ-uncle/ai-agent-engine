@@ -1,3 +1,5 @@
+import { observeRequest, observeStreamRequest, openAIUsage } from './request-attempt.js'
+import { abortableDelay, throwIfAborted } from '../utils/abort.js'
 import OpenAI from 'openai'
 import http from 'node:http'
 import https from 'node:https'
@@ -205,14 +207,18 @@ async function createWithParamFallback<T>(
   client: OpenAI,
   params: Record<string, unknown>,
   requestOptions: { signal?: AbortSignal },
+  options?: LLMAdapterOptions,
+  provider = 'openai',
 ): Promise<T> {
   let current = { ...params }
   const dropped = new Set<string>()
   // 最多重试参数个数次，防御性上限避免死循环
   for (let attempt = 0; attempt < 8; attempt++) {
+    throwIfAborted(requestOptions.signal)
     try {
-      return (await client.chat.completions.create(current as any, requestOptions)) as T
+      return await observeRequest(() => client.chat.completions.create(current as any, requestOptions) as unknown as Promise<T>, options, provider, String(current.model), value => openAIUsage((value as {usage?: unknown}).usage))
     } catch (error: any) {
+      throwIfAborted(requestOptions.signal)
       const status = error?.status ?? error?.response?.status
       if (status !== 400) throw error
       const msg: string =
@@ -226,7 +232,7 @@ async function createWithParamFallback<T>(
     }
   }
   // 兜底：再尝试一次（理论不可达）
-  return (await client.chat.completions.create(current as any, requestOptions)) as T
+  return await observeRequest(() => client.chat.completions.create(current as any, requestOptions) as unknown as Promise<T>, options, provider, String(current.model), value => openAIUsage((value as {usage?: unknown}).usage))
 }
 
 /**
@@ -241,16 +247,18 @@ async function streamWithParamFallback(
   client: OpenAI,
   params: Record<string, unknown>,
   requestOptions: { signal?: AbortSignal },
+  options?: LLMAdapterOptions,
+  provider = 'openai',
 ): Promise<AsyncIterable<OpenAI.Chat.ChatCompletionChunk>> {
   let current = { ...params }
   const dropped = new Set<string>()
   for (let attempt = 0; attempt < 8; attempt++) {
     try {
-      return await client.chat.completions.create(
-        current as unknown as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
-        requestOptions,
-      )
+      return await observeStreamRequest(() => client.chat.completions.create(
+        current as unknown as OpenAI.Chat.ChatCompletionCreateParamsStreaming, requestOptions,
+      ), options, provider, String(current.model), chunk => openAIUsage(chunk.usage))
     } catch (error: any) {
+      throwIfAborted(requestOptions.signal)
       const status = error?.status ?? error?.response?.status
       if (status !== 400) throw error
       const msg: string =
@@ -263,10 +271,9 @@ async function streamWithParamFallback(
       current = next
     }
   }
-  return await client.chat.completions.create(
-    current as unknown as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
-    requestOptions,
-  )
+  return await observeStreamRequest(() => client.chat.completions.create(
+    current as unknown as OpenAI.Chat.ChatCompletionCreateParamsStreaming, requestOptions,
+  ), options, provider, String(current.model), chunk => openAIUsage(chunk.usage))
 }
 
 function messagesToOpenAI(
@@ -618,6 +625,7 @@ export class OpenAIAdapter implements LLMAdapter {
     const hasTokenAuth = defaultHeaders && 'X-Access-Token' in defaultHeaders
     this.client = new OpenAI({
       apiKey: this.resolvedApiKey ?? OPENAI_KEY_PLACEHOLDER,
+      maxRetries: 0,
       baseURL: normalizeBaseURL(rawBaseURL),
       ...(hasTokenAuth ? {
         fetch: (async (url: any, init?: any) => {
@@ -707,7 +715,7 @@ export class OpenAIAdapter implements LLMAdapter {
     const response = await createWithParamFallback<OpenAI.Chat.ChatCompletion>(
       this.client,
       params,
-      { signal: options?.signal },
+      { signal: options?.signal }, { ...options, model: String(params.model), requestInputTokenEstimate: Math.max(options?.requestInputTokenEstimate ?? 0, estimateTokens(JSON.stringify({ messages: params.messages, tools: params.tools, system: params.system }))) }, this.provider,
     )
     const choice = response.choices[0]
     const message = choice.message
@@ -840,7 +848,7 @@ export class OpenAIAdapter implements LLMAdapter {
     // 返回值为 Stream<ChatCompletionChunk>，实现了 AsyncIterable<ChatCompletionChunk>。
     let manualUsage: any = null
     let manualModel: string | undefined = undefined
-    let abortedBySignal = false
+    let streamFinishReason: LLMStreamChunk['finishReason']
 
     // ── 上游流断开重试 ──────────────────────────────────────────────
     // 长上下文下（首 token 延迟高、整流时长长），上游连接中断（ECONNRESET /
@@ -853,13 +861,15 @@ export class OpenAIAdapter implements LLMAdapter {
     let stream = await streamWithParamFallback(
       this.client,
       params,
-      { signal: options?.signal }
+      { signal: options?.signal }, { ...options, model: String(params.model), requestInputTokenEstimate: Math.max(options?.requestInputTokenEstimate ?? 0, estimateTokens(JSON.stringify({ messages: params.messages, tools: params.tools, system: params.system }))) }, this.provider,
     )
 
     for (let attempt = 0; ; attempt++) {
       try {
         for await (const chunk of stream) {
         // 1. 提取 usage（部分供应商在最后一个 chunk 的顶层或 usage 字段中返回）
+        const reason = chunk.choices?.[0]?.finish_reason
+        if (reason) streamFinishReason = reason === 'length' ? 'length' : reason === 'tool_calls' || reason === 'function_call' ? 'tool_calls' : reason === 'stop' ? 'stop' : 'error'
         const usage = (chunk as any).usage
         if (usage) manualUsage = usage
 
@@ -897,7 +907,7 @@ export class OpenAIAdapter implements LLMAdapter {
       if (err?.name === 'AbortError' || options?.signal?.aborted) {
         // 用户主动中止：即使没拿到完整 usage，也 yield done:true 让上层能发 __usage__
         // 这样 stopSession 时 state.lastUsage 不为 null，计费信息得以保留。
-        abortedBySignal = true
+        throw err
       } else if (
         attempt < STREAM_MAX_RETRIES &&
         !yieldedSinceStreamStart &&
@@ -905,11 +915,11 @@ export class OpenAIAdapter implements LLMAdapter {
       ) {
         // 尚无增量产出且属于瞬态网络错误 → 重建流重试
         console.warn(`[llm-adapter] upstream stream broke before first delta (attempt ${attempt + 1}/${STREAM_MAX_RETRIES}), retrying:`, err?.message ?? err)
-        await new Promise(r => setTimeout(r, 500 * (attempt + 1)))
+        await abortableDelay(500 * (attempt + 1), options?.signal)
         stream = await streamWithParamFallback(
           this.client,
           params,
-          { signal: options?.signal }
+          { signal: options?.signal }, { ...options, model: String(params.model), requestInputTokenEstimate: Math.max(options?.requestInputTokenEstimate ?? 0, estimateTokens(JSON.stringify({ messages: params.messages, tools: params.tools, system: params.system }))) }, this.provider,
         )
         continue
       } else {
@@ -942,6 +952,7 @@ export class OpenAIAdapter implements LLMAdapter {
 
     yield {
       done: true,
+      finishReason: streamFinishReason,
       promptTokens: finalPromptTokens,
       completionTokens: finalUsage?.completion_tokens ?? 0,
       ...(cacheHitTokens != null ? { cacheHitTokens } : {}),

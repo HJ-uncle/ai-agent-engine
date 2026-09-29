@@ -1,0 +1,10 @@
+Usage: claude plugin prune|autoremove [options]
+
+Remove auto-installed dependencies that are no longer needed
+
+Options:
+  --dry-run            List what would be removed without removing
+  -h, --help           Display help for command
+  -s, --scope <scope>  Prune at scope: user, project, or local (default: "user")
+  -y, --yes            Skip the confirmation prompt (required when stdin or
+                       stdout is not a TTY)

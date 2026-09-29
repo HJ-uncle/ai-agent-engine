@@ -1,0 +1,12 @@
+Usage: claude plugin update [options] <plugin>
+
+Update a plugin to the latest version (restart required to apply)
+
+Options:
+  -h, --help           Display help for command
+  -s, --scope <scope>  Installation scope: user, project, local, managed
+                       (default: user)
+  -y, --yes            Accept the displayed marketplace-declared command without
+                       the confirmation prompt — a changed install command, or
+                       the headersHelper command that fetches its archive
+                       (required when stdin or stdout is not a TTY)

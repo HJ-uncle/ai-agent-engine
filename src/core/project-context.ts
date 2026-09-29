@@ -14,7 +14,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { getUserAetherDir, getProjectAetherDir } from './aether-config.js'
+import { getUserAetherDir } from './aether-config.js'
 
 const MAX_CONTEXT_CHARS = 32 * 1024
 
@@ -32,11 +32,11 @@ function readIfExist(file: string): string | null {
  * 读取并拼接所有 AE.md 上下文，返回可直接追加到 system prompt 的段落。
  * 无任何 AE.md 时返回空字符串。
  */
-export function getProjectContextBlock(): string {
+export function getProjectContextBlock(projectRoot: string = process.cwd()): string {
   const candidates: Array<{ file: string; label: string }> = [
     { file: path.join(getUserAetherDir(), 'AE.md'), label: 'user' },
-    { file: path.join(getProjectAetherDir(), 'AE.md'), label: 'project' },
-    { file: path.resolve(process.cwd(), 'AE.md'), label: 'root' },
+    { file: path.resolve(projectRoot, '.aether', 'AE.md'), label: 'project' },
+    { file: path.resolve(projectRoot, 'AE.md'), label: 'root' },
   ]
 
   const sections: string[] = []

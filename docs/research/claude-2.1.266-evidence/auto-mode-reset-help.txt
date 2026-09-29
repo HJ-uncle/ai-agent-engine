@@ -1,0 +1,8 @@
+Usage: claude auto-mode reset [options]
+
+Reset auto mode configuration to the shipped defaults by removing the autoMode
+section from your user settings file
+
+Options:
+  -h, --help  Display help for command
+  -y, --yes   Skip the confirmation prompt

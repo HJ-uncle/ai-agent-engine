@@ -44,7 +44,7 @@ export class ImageHandler implements FileHandler {
     // 这是「断链止损」之上更进一步的处理：与其让模型撞墙后只能拿到 OCR 文本，
     // 不如用具备视觉能力的子模型生成结构化描述，让主模型「间接看到」布局。
     // 仅在 auto 模式下生效（用户显式指定 ocr 时尊重其选择）。
-    if (useOcr && mode === 'auto' && isVisionProxyConfigured()) {
+    if (useOcr && mode === 'auto' && isVisionProxyConfigured(ctx)) {
       const proxyResult = await describeImageWithVisionProxy(filePath, ctx)
       if (proxyResult.success) {
         return {

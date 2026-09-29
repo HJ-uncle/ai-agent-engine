@@ -1,3 +1,5 @@
+import { observeRequest, observeStreamRequest } from './request-attempt.js'
+import type { RequestAttemptUsage } from './types.js'
 import type { LLMAdapter, LLMResponse, LLMAdapterOptions, LLMStreamChunk } from './types.js'
 import type { Message } from '../agent-context/index.js'
 import { estimateTokens } from '../utils/tokens.js'
@@ -48,28 +50,21 @@ export class OllamaAdapter implements LLMAdapter {
       Object.assign(requestBody, options.thinkingConfig)
     }
 
-    const response = await fetch(`${this.baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody),
-    })
-
-    if (!response.ok) {
-      throw new Error(`Ollama API error: ${response.status} ${response.statusText}`)
-    }
-
-    const data = await response.json() as {
-      model: string
-      message: { content: string }
-      prompt_eval_count?: number
-      eval_count?: number
-    }
+    const data = await observeRequest(async () => {
+      const response = await fetch(`${this.baseUrl}/api/chat`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody), signal: options?.signal,
+      })
+      if (!response.ok) throw new Error(`Ollama API error: ${response.status} ${response.statusText}`)
+      return await response.json() as { model: string; message: { content: string }; prompt_eval_count?: number; eval_count?: number; done_reason?: string }
+    }, { ...options, model: requestBody.model, requestInputTokenEstimate: Math.max(options?.requestInputTokenEstimate ?? 0, estimateTokens(JSON.stringify({ messages: requestBody.messages, tools: requestBody.tools, system: requestBody.system }))) }, this.provider, requestBody.model,
+      data => data.prompt_eval_count === undefined && data.eval_count === undefined ? undefined : { promptTokens: data.prompt_eval_count ?? 0, completionTokens: data.eval_count ?? 0 })
 
     return {
       content: data.message.content,
       promptTokens: data.prompt_eval_count ?? 0,
       completionTokens: data.eval_count ?? 0,
-      finishReason: 'stop',
+      finishReason: data.done_reason === 'length' ? 'length' : 'stop',
       model: data.model,
     }
   }
@@ -91,53 +86,36 @@ export class OllamaAdapter implements LLMAdapter {
       Object.assign(requestBody, options.thinkingConfig)
     }
 
-    const response = await fetch(`${this.baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody),
-    })
-
-    if (!response.ok || !response.body) {
-      throw new Error(`Ollama API error: ${response.status}`)
+    interface Frame { model: string; message?: { content?: string }; done?: boolean; done_reason?: string; prompt_eval_count?: number; eval_count?: number }
+    const observed = await observeStreamRequest<Frame>(async () => {
+      const response = await fetch(`${this.baseUrl}/api/chat`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody), signal: options?.signal,
+      })
+      if (!response.ok || !response.body) throw new Error(`Ollama API error: ${response.status}`)
+      const reader = response.body.getReader()
+      return (async function* () {
+        const decoder = new TextDecoder()
+        let pending = ''
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            pending += decoder.decode(value, { stream: !done })
+            const lines = pending.split('\n')
+            pending = lines.pop() ?? ''
+            for (const line of lines) if (line.trim()) yield JSON.parse(line) as Frame
+            if (done) { if (pending.trim()) yield JSON.parse(pending) as Frame; break }
+          }
+        } finally { await reader.cancel().catch(() => {}); reader.releaseLock() }
+      })()
+    }, { ...options, model: requestBody.model, requestInputTokenEstimate: Math.max(options?.requestInputTokenEstimate ?? 0, estimateTokens(JSON.stringify({ messages: requestBody.messages, tools: requestBody.tools, system: requestBody.system }))) }, this.provider, requestBody.model,
+      (data): RequestAttemptUsage | undefined => data.prompt_eval_count === undefined && data.eval_count === undefined ? undefined : { promptTokens: data.prompt_eval_count ?? 0, completionTokens: data.eval_count ?? 0 })
+    let terminal: Frame | undefined
+    for await (const data of observed) {
+      if (data.message?.content) yield { content: data.message.content, done: false }
+      if (data.done) terminal = data
     }
-
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        const text = decoder.decode(value)
-        const lines = text.split('\n').filter(Boolean)
-
-        for (const line of lines) {
-          const data = JSON.parse(line) as {
-            model: string
-            message?: { content?: string }
-            done?: boolean
-            prompt_eval_count?: number
-            eval_count?: number
-          }
-
-          if (data.message?.content) {
-            yield { content: data.message.content, done: false }
-          }
-
-          if (data.done) {
-            yield {
-              done: true,
-              promptTokens: data.prompt_eval_count ?? 0,
-              completionTokens: data.eval_count ?? 0,
-              model: data.model,
-            }
-          }
-        }
-      }
-    } finally {
-      reader.releaseLock()
-    }
+    if (terminal) yield { done: true, finishReason: terminal.done_reason === 'length' ? 'length' : 'stop', promptTokens: terminal.prompt_eval_count ?? 0, completionTokens: terminal.eval_count ?? 0, model: terminal.model }
   }
 
   countTokens(content: string | any[]): number {

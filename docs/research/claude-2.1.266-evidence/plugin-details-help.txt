@@ -1,0 +1,6 @@
+Usage: claude plugin details [options] <name>
+
+Show a plugin's component inventory and projected token cost
+
+Options:
+  -h, --help  Display help for command

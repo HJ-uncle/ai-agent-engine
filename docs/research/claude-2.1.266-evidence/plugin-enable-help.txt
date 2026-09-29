@@ -1,0 +1,8 @@
+Usage: claude plugin enable [options] <plugin>
+
+Enable a disabled plugin
+
+Options:
+  -h, --help           Display help for command
+  -s, --scope <scope>  Installation scope: user, project, local (default:
+                       auto-detect)

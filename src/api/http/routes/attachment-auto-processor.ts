@@ -85,7 +85,7 @@ const imageHandler: FileHandler = {
     // 主模型无视觉能力：优先请视觉子模型代看（结构化描述），否则退回 OCR。
     // 转录实证：直接走 OCR 只能拿到零散文字，模型无法理解布局，进而反复
     // 怀疑「我到底能不能看到图片」。视觉代理能给出布局/间距/对齐描述。
-    if (isVisionProxyConfigured()) {
+    if (isVisionProxyConfigured(ctx)) {
       const proxyResult = await describeImageWithVisionProxy(safePath, ctx)
       if (proxyResult.success) {
         return { text: proxyResult.output }

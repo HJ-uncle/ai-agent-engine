@@ -32,12 +32,39 @@ export interface LLMStreamChunk {
     index?: number
   }>
   done: boolean
+  finishReason?: 'stop' | 'tool_calls' | 'length' | 'error'
   promptTokens?: number
   completionTokens?: number
   cacheHitTokens?: number
   cacheMissTokens?: number
   reasoningTokens?: number
   model?: string
+}
+
+export interface RequestAttemptUsage {
+  cacheWriteTokens?: number
+  promptTokens: number
+  completionTokens: number
+  cacheHitTokens?: number
+  cacheMissTokens?: number
+  reasoningTokens?: number
+}
+
+export type LLMRequestAttemptEvent = {
+  type: 'start'
+  estimatedInputTokens?: number
+  maxOutputTokens?: number
+  requestAttemptId: string
+  provider: string
+  model: string
+} | {
+  type: 'finish'
+  requestAttemptId: string
+  provider: string
+  model: string
+  outcome: 'succeeded' | 'failed' | 'cancelled'
+  /** Missing means the upstream did not report usage; it must not be billed as zero. */
+  usage?: RequestAttemptUsage
 }
 
 export interface LLMAdapterOptions {
@@ -50,6 +77,9 @@ export interface LLMAdapterOptions {
   responseThinkingField?: string | null
   reasoningEffort?: 'low' | 'medium' | 'high'
   signal?: AbortSignal
+  onRequestAttempt?: (event: LLMRequestAttemptEvent) => void | Promise<void>
+  /** Internal estimate computed from the provider request, for shared budget reservations. */
+  requestInputTokenEstimate?: number
   // ── DeepSeek 专有可选项 ───────────────────────────────────────────────
   /** "json" 强制模型输出严格 JSON（DeepSeek JSON Mode） */
   responseFormat?: 'json' | 'text'

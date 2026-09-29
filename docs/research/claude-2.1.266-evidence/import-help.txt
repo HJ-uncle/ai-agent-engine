@@ -1,0 +1,12 @@
+Usage: claude import [options] [source]
+
+Import config from another AI coding agent into Claude Code
+
+Arguments:
+  source      Which agent to import from (codex, gemini, cursor)
+
+Options:
+  --dry-run   Show what would be imported without writing anything
+  -h, --help  Display help for command
+  --yes       Skip the interactive picker. On headless surfaces, pass
+              --yes=<digest> from the `/import` preview.

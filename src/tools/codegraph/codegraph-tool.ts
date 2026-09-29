@@ -29,7 +29,7 @@ function resolveProjectRoot(rawPath: string | undefined, ctx: AgentContext): str
   if (rawPath && path.isAbsolute(rawPath)) return rawPath
   let cwd = process.cwd()
   try {
-    cwd = workspaceManager.init(ctx)
+    cwd = workspaceManager.getWorkingDirectory(ctx)
   } catch {
     // ctx 不完整（如脱离完整 AgentContext 的测试场景）时退回 process.cwd()
   }
@@ -148,7 +148,7 @@ export const codegraphTool: Tool = {
       if (action === 'index') {
         let wsRoot: string
         try {
-          wsRoot = workspaceManager.init(ctx)
+          wsRoot = workspaceManager.getWorkingDirectory(ctx)
         } catch {
           return { success: false, output: '❌ 无法确定当前工作区，无法创建索引' }
         }

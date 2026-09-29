@@ -8,11 +8,16 @@ import { ReActStrategy } from '../../../core/agent-loop/index.js'
 import { createPipeline, sseStream } from '../../../core/stream-pipeline/index.js'
 import { createAgentContext, Message } from '../../../core/agent-context/index.js'
 import { SQLiteConversationHistory } from '../../../storage/conversation/index.js'
+import { createConversationHistory } from '../../../storage/conversation/factory.js'
 import { createLLMAdapterWithDbConfig } from '../../../core/llm-adapter/index.js'
+import { resolveModelConfig, createAdapterFromResolved } from '../../../core/llm-adapter/resolve-model.js'
+import { RequestBudget, parseRequestTokenLimit } from '../../../core/subagent/budget.js'
 import { createRequestLogger, QALogger, type QALogEntry } from '../../../observability/index.js'
 import { buildSkillsSystemPrompt } from '../../../skills/index.js'
+import { getRequestToolProfile } from '../tool-profile.js'
 import { createToolRegistry } from '../../../tools/registry-factory.js'
 import { resolveOSMMode } from '../../../core/osm.js'
+import { success } from '../response.js'
 
 /**
  * 主 Agent 的子代理委派纪律（对齐 wuzu-client codeAgent.ts 的「探索预算」章节）。
@@ -27,7 +32,8 @@ const SUBAGENT_DISPATCH_PROMPT = [
   '主对话的上下文很宝贵。遇到下述情形，把探索整体委派给 subagent，不要在主会话里自己趟：',
   '- 广度：要跨多个文件/多个目录的调研、审计、批量定位；',
   '- 噪音：会产生大量一次性中间输出的动作（全仓扫描、长日志、递归统计）；',
-  '- 并行：有 ≥2 个相互独立的子问题时，同一回合并行派多个 subagent。',
+  '- 并行：仅在任务确实需要多个独立产出时拆分，避免重复范围。',
+  '先遵守用户要求的深度。简单、快速、概览类调研默认只派一个只读子代理；只看目录、入口和少量关键文件，输出简短概览。不要自行升级为深挖或全面审计。',
   '',
   '反过来，这些留在主会话、不要派：写/改代码、≤2-3 跳的定向小查找、需要与用户持续交互的修改类工作。',
   '',
@@ -38,6 +44,7 @@ const SUBAGENT_DISPATCH_PROMPT = [
   '4. 已知线索与输出格式：已确认的路径/结论一并给出，要求结论先行、发现带 文件路径+行号、不贴大段源码。',
   '',
   '回收纪律：子代理已经查过的东西不要再读一遍复核；拿到带定位的结论就直接用。',
+  '子任务因引擎本地预算或步数结束时，使用它返回的部分证据完成总结，并说明未核实范围。不要把本地预算解释为模型服务商欠费，也不要再次派发或接管同一探索。',
 ].join('\n')
 import { prependBootstrapToSystemPrompt } from '../../../core/osm-bootstrap.js'
 import { getProjectContextBlock } from '../../../core/project-context.js'
@@ -82,6 +89,16 @@ interface ChatBody {
    * 用于桌面客户端等需要按会话即时切换模型的场景。
    */
   model?: string
+  /**
+   * 子代理专用模型（可选）：subagent 工具未显式指定 model 时优先用它，
+   * 再回退到主会话模型。用于「主对话强模型 + 子任务便宜模型」的省钱组合。
+   */
+  subagentModel?: string
+  /**
+   * 轻任务专用模型（可选）：图片理解（vision-proxy）等旁路调用优先用它，
+   * 再回退到 env.VISION_PROXY_MODEL / 主模型。
+   */
+  utilityModel?: string
   /**
    * 请求级 LLM 凭证覆盖（可选 —— 桌面客户端把自己的 model 配置直接下发，
    * agent-engine 以最高优先级使用这些凭证，避免去自身 DB / .env 取过期 key）
@@ -305,7 +322,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     const { sessionId, toolCallId } = request.body
     const { cancelSubagent } = await import('../../../tools/subagent/subagent-tool.js')
-    const cancelled = cancelSubagent(sessionId, toolCallId, 'Stopped by user via /subagent/cancel')
+    const cancelled = await cancelSubagent(getTenantId(request), sessionId, toolCallId, 'Stopped by user via /subagent/cancel')
     return reply.code(200).send({
       code: 200,
       message: cancelled ? 'OK' : 'Subagent not running or already finished',
@@ -330,6 +347,8 @@ export async function chatRoutes(fastify: FastifyInstance) {
           workspacePaths: { type: 'array', items: { type: 'string' } },
           ragTopK: { type: 'number' },
           model: { type: 'string' },
+          subagentModel: { type: 'string' },
+          utilityModel: { type: 'string' },
           modelApiKey: { type: 'string' },
           modelBaseUrl: { type: 'string' },
           modelProvider: { type: 'string' },
@@ -360,6 +379,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const toolProfile = getRequestToolProfile(request)
     const requestId = uuidv4()
     const { 
       message, 
@@ -373,8 +393,10 @@ export async function chatRoutes(fastify: FastifyInstance) {
       toolResponse, 
       attachments, 
       ragTopK = 3, 
-      model: requestedModel, 
-      modelApiKey: requestedApiKey, 
+      model: requestedModel,
+      subagentModel: requestedSubagentModel,
+      utilityModel: requestedUtilityModel,
+      modelApiKey: requestedApiKey,
       modelBaseUrl: requestedBaseUrl, 
       modelProvider: requestedProvider, 
       capabilities: requestedCapabilities, 
@@ -547,6 +569,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     // 把客户端透传的 inline 资源（桌面端本地 skill / mcp）一并注入，
     // 让 list_skills / get_skill / MCP 工具都能即时看到 + 调用。
     const { registry, externalSkills, toolCategories } = await createToolRegistry({
+      toolProfile,
       allowedSkills,
       allowedTools,
       inlineSkills: requestedInlineSkills,
@@ -557,35 +580,42 @@ export async function chatRoutes(fastify: FastifyInstance) {
     const abortController = new AbortController()
 
     const streamBus = new StreamBus(abortController)
-    activeStreams.set(sessionId, streamBus)
+    activeStreams.set(makeAbortKey(tenantId, sessionId), streamBus)
 
     // ── 客户端断开检测：给予重连宽限期 ───────────────────────────────────────
     let aborted = false
     const onClientClose = () => {
-      if (aborted) return
+      if (aborted || streamBus.finished) return
       aborted = true
       reqLogger.info({ sessionId }, 'Client connection closed, entering grace period')
       streamBus.disconnectTimeout = setTimeout(() => {
         try { abortController.abort(new Error('Client disconnected timeout')) } catch { /* noop */ }
-        activeStreams.delete(sessionId)
+        activeStreams.delete(makeAbortKey(getTenantId(request), sessionId))
       }, 15000) // 15s grace period
     }
-    request.raw.on('close', onClientClose)
+    reply.raw.on('close', onClientClose)
     request.raw.on('aborted', onClientClose)
 
     // Build agent context
     const ctx = createAgentContext({
+      toolProfile,
       sessionId,
       tenantId,
       workspacePaths,
       tools: registry,
-      history: new SQLiteConversationHistory(),
+      history: createConversationHistory(),
       logger: reqLogger,
       requestId,
       signal: abortController.signal,
       inheritContext,
     })
 
+    ctx.emitSubagentEvent = (event) => { streamBus.push('\x00__subagent_event__' + JSON.stringify(event)) }
+    ctx.rootSessionId = sessionId
+    // Spend accounting is shared by parent/children and independent of context capacity.
+    const requestBudget = new RequestBudget(parseRequestTokenLimit(process.env.AGENT_TOTAL_TOKEN_LIMIT))
+    ctx.requestBudget = requestBudget
+    ctx.onRequestAttempt = (event) => requestBudget.observe(event)
     const skillsPrompt = buildSkillsSystemPrompt(externalSkills)
 
     // 注：客户端透传的 inlineSkills 已经在 createToolRegistry 内被合并到
@@ -616,7 +646,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
     // ── 客户端透传用户长期记忆（lobster-core buildAllMemoriesXml 直出）──────────
     let inlineMemoriesBlock = ''
-    if (typeof requestedInlineMemoriesXml === 'string' && requestedInlineMemoriesXml.trim()) {
+    if (toolProfile !== 'code' && typeof requestedInlineMemoriesXml === 'string' && requestedInlineMemoriesXml.trim()) {
       inlineMemoriesBlock =
         '\n\n## 用户长期记忆（User Memories）\n' +
         '以下记忆由客户端持久化并随每次会话同步，可作为回答的上下文参考：\n' +
@@ -629,7 +659,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
     // ── 项目上下文（AE.md）注入 ────────────────────────────────────────────────
     // .aether/AE.md / ~/.aether/AE.md 的内容作为项目说明追加到系统提示词末尾
-    const projectContextBlock = getProjectContextBlock()
+    const projectContextBlock = getProjectContextBlock(ctx.projectRoot ?? ctx.cwd)
     if (projectContextBlock) {
       reqLogger.info('Project context (AE.md) injected into systemPrompt')
     }
@@ -766,6 +796,10 @@ export async function chatRoutes(fastify: FastifyInstance) {
     // 把模型名 + 能力注入 ctx，让下游工具（smart-read 等）按能力分支
     ctx.modelName = currentModelName
     ctx.modelCaps = modelCaps
+    // 按用途指派的模型（客户端设置「子代理/轻任务模型」）：请求级下发，
+    // 空字符串等价于未指定 —— 回退到主模型（subagent）或 env（vision-proxy）。
+    ctx.subagentModel = requestedSubagentModel?.trim() || undefined
+    ctx.utilityModel = requestedUtilityModel?.trim() || undefined
 
     // ── 图片可见性：给模型一个明确、唯一、与事实一致的信号 ────────────────────
     // 转录实证：当提示词一方面说「图片已内嵌，你看得到」，另一方面又引导
@@ -827,7 +861,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     }
 
     // 并行执行 RAG 和 记忆检索
-    const enableMemory = process.env.ENABLE_LONG_TERM_MEMORY !== 'false'
+    const enableMemory = toolProfile !== 'code' && process.env.ENABLE_LONG_TERM_MEMORY !== 'false'
     const [ragChunks, memoryRecallBlock] = await Promise.all([
       (async () => {
         if (boundKnowledgeBases && boundKnowledgeBases.length > 0) {
@@ -985,14 +1019,12 @@ ${workspaceInfo}${codegraphBlock}
           }
         }
 
-        const llm = await createLLMAdapterWithDbConfig({ 
-          model: resolvedModel,   // agent model 优先；DB 配置不可用时回退 env primaryModel
-          apiKey: modelApiKey, 
-          baseUrl: modelBaseUrl, 
-          provider: modelProvider,
-          capabilities: modelCaps, // 传入已解析的模型能力，确保 vision 等功能正常
-          extraHeaders: requestedExtraHeaders,
-        })
+        ctx.resolvedModel = await resolveModelConfig({ tenantId, model: resolvedModel, overrides: {
+          apiKey: modelApiKey, baseUrl: modelBaseUrl, provider: modelProvider,
+          capabilities: modelCaps, extraHeaders: requestedExtraHeaders,
+          thinkingConfig: finalThinkingConfig, responseThinkingField: finalResponseThinkingField,
+        } })
+        const llm = createAdapterFromResolved(ctx.resolvedModel)
         const strategy = new ReActStrategy(llm, {
           systemPrompt: fullSystemPrompt || undefined,
           temperature: effectiveTemperature,
@@ -1077,8 +1109,7 @@ ${workspaceInfo}${codegraphBlock}
         })
 
         setImmediate(() => {
-          // 检查长期记忆提取开关
-          const enableMemory = process.env.ENABLE_LONG_TERM_MEMORY !== 'false'
+          // Reuse the request's capability decision; code runs must not write memories in the background.
           if (enableMemory) {
             extractAndStoreMemories({
               messages: fullHistory.map((m: any) => ({
@@ -1106,10 +1137,14 @@ ${workspaceInfo}${codegraphBlock}
             })
           }
 
-          // 上下文智能压缩：如果 token 超过阈值，在后台触发压缩
-          const autoCompactLimit = parseInt(process.env.AUTO_COMPACT_TOKEN_LIMIT ?? '500000', 10)
-          if (finalUsage?.totalTokens > autoCompactLimit) {
-            reqLogger.info({ totalTokens: finalUsage.totalTokens, limit: autoCompactLimit }, 'Token limit exceeded, triggering auto-compaction')
+          // 上下文智能压缩：如果当前上下文占用超过有效窗口阈值，在后台触发压缩。
+          // 口径用单次调用快照 currentPromptTokens（当前上下文真实占用），
+          // 不用累计 totalTokens（跨轮计费口径，会严重误触发/漏触发）。
+          const autoCompactRatio = parseFloat(process.env.AUTO_COMPACT_THRESHOLD_RATIO ?? '0.92')
+          const contextWindow = modelCaps?.contextWindow ?? parseInt(process.env.AUTO_COMPACT_TOKEN_LIMIT ?? '500000', 10)
+          const currentPromptTokens = (finalUsage as any)?.currentPromptTokens ?? 0
+          if (currentPromptTokens > Math.floor(contextWindow * autoCompactRatio)) {
+            reqLogger.info({ currentPromptTokens, contextWindow }, 'Context usage exceeded, triggering auto-compaction')
             import('./conversation.js').then(({ autoCompactSession }) => {
               autoCompactSession(tenantId, sessionId, reqLogger).catch((err: any) => {
                 reqLogger.error({ err }, 'Auto-compaction failed')
@@ -1143,7 +1178,10 @@ ${workspaceInfo}${codegraphBlock}
         streamBus.error(err)
       } finally {
         unregisterActiveChat(tenantId, sessionId, abortController)
-        setTimeout(() => activeStreams.delete(sessionId), 60000) // 运行结束后保留 1 分钟
+        setTimeout(() => {
+          const key = makeAbortKey(tenantId, sessionId)
+          if (activeStreams.get(key) === streamBus) activeStreams.delete(key)
+        }, 60000) // 运行结束后保留 1 分钟
       }
     })()
 
@@ -1152,6 +1190,31 @@ ${workspaceInfo}${codegraphBlock}
     } finally {
       // 这里的 finally 只代表请求结束，不清理 activeChatAborters
     }
+  })
+
+  // ── 查询会话流状态（刷新/切会话后探测是否有进行中的流）────────────────────
+  fastify.get<{ Querystring: { sessionId: string } }>('/chat/status', {
+    schema: {
+      querystring: {
+        type: 'object',
+        required: ['sessionId'],
+        properties: {
+          sessionId: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const { sessionId } = request.query
+    const streamBus = activeStreams.get(makeAbortKey(getTenantId(request), sessionId))
+    if (!streamBus) {
+      return reply.code(200).send(success({ running: false, finished: false }))
+    }
+    const lastEvent = streamBus.events[streamBus.events.length - 1]
+    return reply.code(200).send(success({
+      running: !streamBus.finished,
+      finished: streamBus.finished,
+      lastEventId: lastEvent?.id,
+    }))
   })
 
   // ── 恢复断开的流 ──────────────────────────────────────────────────────────
@@ -1169,7 +1232,7 @@ ${workspaceInfo}${codegraphBlock}
   }, async (request, reply) => {
     const { sessionId, lastEventId } = request.query
 
-    const streamBus = activeStreams.get(sessionId)
+    const streamBus = activeStreams.get(makeAbortKey(getTenantId(request), sessionId))
     if (!streamBus) {
       reply.raw.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
       reply.raw.write('event: done\ndata: [DONE]\n\n')
@@ -1184,14 +1247,14 @@ ${workspaceInfo}${codegraphBlock}
 
     let aborted = false
     const onClientClose = () => {
-      if (aborted) return
+      if (aborted || streamBus.finished) return
       aborted = true
       streamBus.disconnectTimeout = setTimeout(() => {
         try { streamBus.abortController.abort(new Error('Client disconnected timeout')) } catch {}
-        activeStreams.delete(sessionId)
+        activeStreams.delete(makeAbortKey(getTenantId(request), sessionId))
       }, 15000)
     }
-    request.raw.on('close', onClientClose)
+    reply.raw.on('close', onClientClose)
     request.raw.on('aborted', onClientClose)
 
     await sseStream(busToIterable(streamBus, lastEventId), reply)

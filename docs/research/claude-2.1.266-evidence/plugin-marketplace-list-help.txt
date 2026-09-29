@@ -1,0 +1,7 @@
+Usage: claude plugin marketplace list [options]
+
+List all configured marketplaces
+
+Options:
+  -h, --help  Display help for command
+  --json      Output as JSON

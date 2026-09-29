@@ -1,11 +1,13 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
-import { SQLiteConversationHistory } from '../../../storage/conversation/index.js'
+import { createConversationHistory } from '../../../storage/conversation/factory.js'
 import { ReActStrategy } from '../../../core/agent-loop/index.js'
 import { createPipeline, sseStream } from '../../../core/stream-pipeline/index.js'
 import { createAgentContext } from '../../../core/agent-context/index.js'
 import { createLLMAdapterWithDbConfig } from '../../../core/llm-adapter/index.js'
 import { createRequestLogger } from '../../../observability/index.js'
 import { buildSkillsSystemPrompt } from '../../../skills/index.js'
+import type { ToolProfile } from '../../../tools/tool-profile.js'
+import { getRequestToolProfile } from '../tool-profile.js'
 import { createToolRegistry } from '../../../tools/registry-factory.js'
 import { resolveOSMMode, isValidMode, OSM_MODES } from '../../../core/osm.js'
 import { prependBootstrapToSystemPrompt } from '../../../core/osm-bootstrap.js'
@@ -39,7 +41,7 @@ const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId 
 import { StreamBus, activeStreams, busToIterable } from '../../../core/stream-pipeline/stream-bus.js'
 
 export async function messagesRoutes(fastify: FastifyInstance) {
-  const history = new SQLiteConversationHistory()
+  const history = createConversationHistory()
 
   // 1. 查询消息的 token 消耗量
   fastify.get<{ Params: { messageId: string } }>('/messages/:messageId/tokens', async (request, reply) => {
@@ -72,27 +74,15 @@ export async function messagesRoutes(fastify: FastifyInstance) {
   fastify.delete<{ Params: { messageId: string } }>('/messages/:messageId', async (request, reply) => {
     const { messageId } = request.params
     const tenantId = getTenantId(request)
-    const db = (await import('../../../storage/sqlite/db.js')).getDb()
 
     const message = await history.getMessageById(messageId, tenantId)
 
     if (message) {
       // ── a. 按 message_id 找到了 ──────────────────────────────────────
-      const sessionResult = await db.execute({
-        sql: 'SELECT session_id FROM conversations WHERE message_id = ? AND tenant_id = ?',
-        args: [messageId, tenantId],
-      })
-      const sessionId = sessionResult.rows[0]?.session_id as string | undefined
       const convId = (message as any).conversationId as string | undefined
-
-      if (convId && sessionId) {
-        // 删整轮非 user 行（tool_call 中间行 + tool 结果行 + 最终 assistant 行）
-        await db.execute({
-          sql: `DELETE FROM conversations
-                WHERE tenant_id = ? AND session_id = ? AND conversation_id = ? AND role != 'user'`,
-          args: [tenantId, sessionId, convId],
-        })
-        // user 消息本身无论如何也要删掉（这是调用方明确要删的那条）
+      if (convId) {
+        // 删整轮（含 user 行与 tool/assistant 行）；SQLite 后端删整轮后 user 行由 deleteMessage 兜底
+        await history.deleteByConversationId(convId, tenantId)
         await history.deleteMessage(messageId, tenantId)
       } else {
         await history.deleteMessage(messageId, tenantId)
@@ -101,16 +91,8 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     }
 
     // ── b. 尝试当作 conversation_id 删整轮（前端幽灵块只有 conversationId）
-    const byConv = await db.execute({
-      sql: `SELECT COUNT(*) AS c FROM conversations WHERE conversation_id = ? AND tenant_id = ?`,
-      args: [messageId, tenantId],
-    })
-    console.log(`[DELETE /messages/${messageId}] branch-b count=${byConv.rows[0]?.c}`)
-    if (Number(byConv.rows[0]?.c ?? 0) > 0) {
-      await db.execute({
-        sql: `DELETE FROM conversations WHERE conversation_id = ? AND tenant_id = ?`,
-        args: [messageId, tenantId],
-      })
+    const removed = await history.deleteByConversationId(messageId, tenantId)
+    if (removed > 0) {
       return reply.code(200).send(success({ success: true, messageId }))
     }
 
@@ -129,7 +111,8 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     newMessageContent?: string,
     thinkingMode?: boolean,
     effectiveModel?: string,
-    metadata?: any
+    metadata?: any,
+    toolProfile: ToolProfile = 'general'
   ) {
     const reqLogger = createRequestLogger(requestId, tenantId, sessionId)
 
@@ -143,9 +126,10 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     }
 
     // Build tool registry（统一工厂，含所有内置工具 + MCP + Skills）
-    const { registry, externalSkills, toolCategories } = await createToolRegistry()
+    const { registry, externalSkills, toolCategories } = await createToolRegistry({ toolProfile })
 
     const ctx = createAgentContext({
+      toolProfile,
       sessionId,
       tenantId,
       tools: registry,
@@ -310,6 +294,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 
   // 3. 编辑用户消息并重新生成响应
   fastify.put<{ Params: { messageId: string } }>('/messages/:messageId', async (request, reply) => {
+    const toolProfile = getRequestToolProfile(request)
     const { messageId } = request.params
     const tenantId = getTenantId(request)
 
@@ -350,11 +335,12 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 
     // Then run AI to generate a response for the updated history
     const requestId = uuidv4()
-    await runAIForSession(sessionId, tenantId, requestId, systemPrompt, reply, maxAskUserCount, content, thinkingMode, undefined, metadata ?? message.metadata)
+    await runAIForSession(sessionId, tenantId, requestId, systemPrompt, reply, maxAskUserCount, content, thinkingMode, undefined, metadata ?? message.metadata, toolProfile)
   })
 
   // 4. 重新生成最后一条 AI 回复
   fastify.post<{ Params: { messageId: string } }>('/messages/:messageId/regenerate', async (request, reply) => {
+    const toolProfile = getRequestToolProfile(request)
     const { messageId } = request.params
     const tenantId = getTenantId(request)
 
@@ -399,7 +385,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 
     const requestId = uuidv4()
     
-    await runAIForSession(sessionId, tenantId, requestId, systemPrompt, reply, maxAskUserCount, undefined, thinkingMode, undefined, metadata)
+    await runAIForSession(sessionId, tenantId, requestId, systemPrompt, reply, maxAskUserCount, undefined, thinkingMode, undefined, metadata, toolProfile)
     return reply
   })
 }

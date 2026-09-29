@@ -5,7 +5,11 @@ import { getGlobalToolPool } from '../utils/concurrency-pool.js'
 export class ToolRegistry implements IToolRegistry {
   private tools = new Map<string, Tool>()
 
+  constructor(private readonly canRegister?: (tool: Tool) => boolean) {}
+
   register(tool: Tool): void {
+    // Enforce capability selection at insertion, including dynamically loaded registrations.
+    if (this.canRegister && !this.canRegister(tool)) return
     if (this.tools.has(tool.name)) {
       throw new DuplicateToolError(tool.name)
     }
@@ -44,6 +48,6 @@ export class ToolRegistry implements IToolRegistry {
     }
     // 全局并发池：防止大量并发调用把服务器打爆
     const pool = getGlobalToolPool()
-    return pool(() => tool.execute(args, ctx))
+    return pool(() => tool.execute(args, ctx), ctx.signal)
   }
 }

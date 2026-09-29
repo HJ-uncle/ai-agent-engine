@@ -1,0 +1,12 @@
+Usage: claude plugin tag [options] [path]
+
+Create a {name}--v{version} git tag for a plugin release, validating that
+plugin.json and any enclosing marketplace entry agree
+
+Options:
+  --dry-run            Print what would be tagged without creating it
+  -f, --force          Skip the dirty-working-tree and tag-already-exists checks
+  -h, --help           Display help for command
+  -m, --message <msg>  Tag annotation message (use %s for the version)
+  --push               Push the tag to --remote after creating it
+  --remote <name>      Remote to push to with --push (default: "origin")

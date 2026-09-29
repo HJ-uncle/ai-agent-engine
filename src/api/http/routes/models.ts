@@ -48,9 +48,16 @@ export async function modelsRoutes(fastify: FastifyInstance) {
   fastify.get('/api/v1/models', async (request, reply) => {
     const tenantId = getTenantId(request)
     const models = await store.getModels(tenantId)
-    // Mask API keys
+    // Mask API keys；capabilities 与内置规则合并后再返回——DB 里存的是创建时的
+    // 快照（可能缺 contextWindow 等后加字段），纯直出会让读取方永远拿不到新字段。
     const safeModels = models.map(m => ({
       ...m,
+      capabilities: resolveCapabilities({
+        model: m.modelId,
+        baseUrl: m.baseUrl,
+        provider: m.provider,
+        dbOverrides: (m.capabilities ?? null) as Partial<ModelCapabilities> | null
+      }),
       apiKey: m.apiKey ? `...${m.apiKey.slice(-4)}` : ''
     }))
     return reply.code(200).send(success(safeModels))

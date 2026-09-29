@@ -1,3 +1,4 @@
+import { observeRequest, observeStreamRequest, anthropicUsage } from './request-attempt.js'
 import Anthropic from '@anthropic-ai/sdk'
 import type { LLMAdapter, LLMResponse, LLMAdapterOptions, LLMStreamChunk } from './types.js'
 import type { Message, Tool } from '../agent-context/index.js'
@@ -201,6 +202,7 @@ export class AnthropicAdapter implements LLMAdapter {
     const hasTokenAuth = defaultHeaders && 'X-Access-Token' in defaultHeaders
     this.client = new Anthropic({
       apiKey: apiKey || process.env.ANTHROPIC_API_KEY,
+      maxRetries: 0,
       baseURL: baseURL || process.env.ANTHROPIC_BASE_URL,
       // X-Access-Token 鉴权：通过自定义 fetch 移除 SDK 自动生成的 X-API-Key 头，
       // 并手动注入全部自定义头，避免上游报 "duplicated valid auth method"。
@@ -259,7 +261,7 @@ export class AnthropicAdapter implements LLMAdapter {
       params['tools'] = options.tools.map(toolToAnthropic)
     }
 
-    type CreateFn = (p: Record<string, unknown>) => Promise<{
+    type CreateFn = (p: Record<string, unknown>, requestOptions: { signal?: AbortSignal }) => Promise<{
       content: Array<{ type: string; text?: string; id?: string; name?: string; input?: unknown }>
       usage: { 
         input_tokens: number; 
@@ -269,7 +271,7 @@ export class AnthropicAdapter implements LLMAdapter {
       }
       stop_reason: string | null
     }>
-    const response = await (this.client.messages.create as unknown as CreateFn)(params)
+    const response = await observeRequest(() => (this.client.messages.create as unknown as CreateFn)(params, { signal: options?.signal }), { ...options, model: String(params.model), requestInputTokenEstimate: Math.max(options?.requestInputTokenEstimate ?? 0, estimateTokens(JSON.stringify({ messages: params.messages, tools: params.tools, system: params.system }))) }, this.provider, String(params.model), value => anthropicUsage(value.usage))
 
     let content = ''
     let reasoningContent = ''
@@ -296,7 +298,7 @@ export class AnthropicAdapter implements LLMAdapter {
       content,
       reasoningContent: reasoningContent || undefined,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-      promptTokens: response.usage.input_tokens,
+      promptTokens: anthropicUsage(response.usage)!.promptTokens,
       completionTokens: response.usage.output_tokens,
       finishReason: response.stop_reason === 'tool_use' ? 'tool_calls' :
                     response.stop_reason === 'max_tokens' ? 'length' : 'stop',
@@ -347,8 +349,10 @@ export class AnthropicAdapter implements LLMAdapter {
     >()
 
     // Use the messages.stream() helper available in v0.20
-    const stream = (this.client.messages as unknown as {
-      stream: (params: Record<string, unknown>) => {
+    let stream: ReturnType<(typeof createStream)>
+    const createStream = () => (this.client.messages as unknown as {
+      stream: (params: Record<string, unknown>, requestOptions: { signal?: AbortSignal }) => {
+        abort(): void
         [Symbol.asyncIterator](): AsyncIterator<{
           type: string
           delta?: { type: string; text?: string }
@@ -361,11 +365,20 @@ export class AnthropicAdapter implements LLMAdapter {
             cache_read_input_tokens?: number;
           }
           model: string
+          stop_reason: string | null
         }>
       }
-    }).stream(streamParams)
+    }).stream(streamParams, { signal: options?.signal })
 
-    for await (const event of stream as any) {
+    const observed = await observeStreamRequest(async () => {
+      stream = createStream()
+      return stream
+    }, { ...options, model: String(streamParams.model), requestInputTokenEstimate: Math.max(options?.requestInputTokenEstimate ?? 0, estimateTokens(JSON.stringify({ messages: streamParams.messages, tools: streamParams.tools, system: streamParams.system }))) }, this.provider, String(streamParams.model), (event, previous) => {
+      const frame = event as {type: string; message?: {usage?: unknown}; usage?: unknown}
+      return anthropicUsage(frame.type === 'message_start' ? frame.message?.usage : frame.usage, previous)
+    })
+    try {
+    for await (const event of observed as any) {
       if (event.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
         pendingTools.set(event.index, {
           id: event.content_block.id ?? '',
@@ -401,18 +414,20 @@ export class AnthropicAdapter implements LLMAdapter {
       }
     }
 
-    const finalMessage = await stream.finalMessage()
+    const finalMessage = await stream!.finalMessage()
     const cacheHitTokens = finalMessage.usage.cache_read_input_tokens
     const cacheMissTokens = finalMessage.usage.cache_creation_input_tokens
 
     yield {
       done: true,
-      promptTokens: finalMessage.usage.input_tokens,
+      finishReason: finalMessage.stop_reason === 'max_tokens' ? 'length' : finalMessage.stop_reason === 'tool_use' ? 'tool_calls' : 'stop',
+      promptTokens: anthropicUsage(finalMessage.usage)!.promptTokens,
       completionTokens: finalMessage.usage.output_tokens,
       model: finalMessage.model,
       ...(cacheHitTokens != null ? { cacheHitTokens } : {}),
       ...(cacheMissTokens != null ? { cacheMissTokens } : {}),
     }
+    } finally { stream!.abort() }
   }
 
   countTokens(content: string | any[]): number {

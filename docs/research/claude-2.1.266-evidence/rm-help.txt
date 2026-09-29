@@ -1,0 +1,4 @@
+Usage: claude rm <id> [--discard-unpushed <commit>@<worktree-id>]
+
+  Delete a background session and its worktree. Unlike `stop`, works on already-exited sessions.
+  --discard-unpushed <commit>@<worktree-id>  also discard the worktree's unpushed commits (and any uncommitted changes) while it is still the same worktree at that commit — pass the value a previous 'claude rm <id>' reported

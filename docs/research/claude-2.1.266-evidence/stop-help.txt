@@ -1,0 +1,3 @@
+Usage: claude stop <id>
+
+  Stop a background session. Its conversation is kept; resume it later with `claude attach <id>`.

@@ -60,6 +60,13 @@ async function main() {
       }),
     ])
 
+    // Unowned executions are interrupted after restart; never re-execute their side effects.
+    const { getSubagentStore } = await import('./core/subagent/store.js')
+    const { projectPendingSubagents } = await import('./core/subagent/projection.js')
+    const { createConversationHistory } = await import('./storage/conversation/factory.js')
+    await getSubagentStore().recoverInterrupted()
+    await projectPendingSubagents(createConversationHistory())
+
     // 2. 数据库就绪后，继续执行后续步骤
     // 启动记忆整理守护进程（它会自动处理延迟执行，不阻塞）
     const consolidator = new MemoryConsolidator()

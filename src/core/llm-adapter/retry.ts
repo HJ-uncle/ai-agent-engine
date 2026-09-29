@@ -1,17 +1,16 @@
 import type { LLMAdapter, LLMResponse, LLMAdapterOptions, LLMStreamChunk, RetryOptions, FallbackConfig } from './types.js'
 import type { Message } from '../agent-context/index.js'
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
+import { abortableDelay, isAbortError, throwIfAborted } from '../utils/abort.js'
 
-function isRetryable(error: unknown): boolean {
-  if (error instanceof Error) {
-    const msg = error.message.toLowerCase()
-    return msg.includes('5') || msg.includes('timeout') || msg.includes('network') ||
-           msg.includes('rate') || msg.includes('overload')
-  }
-  return false
+export function isRetryable(error: unknown): boolean {
+  if (isAbortError(error)) return false
+  if (!error || typeof error !== 'object') return false
+  const value = error as { status?: number; statusCode?: number; httpStatus?: number; retryable?: boolean; code?: string; message?: string }
+  if (value.retryable === false) return false
+  const status = value.status ?? value.statusCode ?? value.httpStatus
+  if (status !== undefined) return status === 408 || status === 429 || status >= 500 && status <= 599
+  return value.retryable === true || /^(ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE)$/.test(value.code ?? '') || /timeout|network|fetch failed|socket hang up|terminated|rate limit|overload/i.test(value.message ?? '')
 }
 
 function getDelay(attempt: number, options: RetryOptions): number {
@@ -22,18 +21,20 @@ function getDelay(attempt: number, options: RetryOptions): number {
 export async function withRetry<T>(
   fn: () => Promise<T>,
   options: RetryOptions = { maxRetries: 3, baseDelayMs: 1000, maxDelayMs: 30000 },
+  signal?: AbortSignal,
 ): Promise<T> {
   let lastError: unknown
 
   for (let attempt = 0; attempt <= options.maxRetries; attempt++) {
+    throwIfAborted(signal)
     try {
       return await fn()
     } catch (err) {
       lastError = err
-      if (attempt === options.maxRetries || !isRetryable(err)) {
+      if (signal?.aborted || attempt === options.maxRetries || !isRetryable(err)) {
         throw err
       }
-      await sleep(getDelay(attempt, options))
+      await abortableDelay(getDelay(attempt, options), signal)
     }
   }
 
@@ -54,12 +55,25 @@ export class RetryingAdapter implements LLMAdapter {
   get model(): string { return this.inner.model }
 
   async complete(messages: Message[], options?: LLMAdapterOptions): Promise<LLMResponse> {
-    return withRetry(() => this.inner.complete(messages, options), this.retryOptions)
+    return withRetry(() => this.inner.complete(messages, options), this.retryOptions, options?.signal)
   }
 
   async *stream(messages: Message[], options?: LLMAdapterOptions): AsyncIterable<LLMStreamChunk> {
-    // For streaming, retry on initial connection error only
-    yield* this.inner.stream(messages, options)
+    for (let attempt = 0; attempt <= this.retryOptions.maxRetries; attempt++) {
+      throwIfAborted(options?.signal)
+      let emitted = false
+      try {
+        for await (const chunk of this.inner.stream(messages, options)) {
+          // Once a consumer has seen any progress, replay could duplicate content or tool work.
+          emitted = true
+          yield chunk
+        }
+        return
+      } catch (error) {
+        if (emitted || options?.signal?.aborted || attempt === this.retryOptions.maxRetries || !isRetryable(error)) throw error
+        await abortableDelay(getDelay(attempt, this.retryOptions), options?.signal)
+      }
+    }
   }
 
   countTokens(text: string): number {
@@ -88,9 +102,13 @@ export class FallbackAdapter implements LLMAdapter {
     let lastError: unknown
 
     for (const adapter of this.adapters) {
+      throwIfAborted(options?.signal)
       try {
         return await adapter.complete(messages, options)
       } catch (err) {
+        if (isAbortError(err, options?.signal)) throw err
+        const status = (err as {status?: number})?.status
+        if (typeof status === 'number' && status >= 400 && status < 500 && !isRetryable(err)) throw err
         lastError = err
         console.warn(`LLM adapter ${adapter.provider}/${adapter.model} failed, trying fallback...`)
       }

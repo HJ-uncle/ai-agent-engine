@@ -1,3 +1,4 @@
+import { throwIfAborted } from '../../core/utils/abort.js'
 import { spawn } from 'node:child_process'
 import os from 'node:os'
 import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
@@ -36,6 +37,7 @@ export const cmdTool: Tool = {
     const args = rawArgs as { command: string; args?: string[]; cwd?: string; timeoutMs?: number }
     const { command, args: cmdArgs = [], cwd: cwdArg, timeoutMs } = args
     const startTime = Date.now()
+    throwIfAborted(ctx.signal)
 
     // 1) 策略引擎裁决（含注入检测 + 审计日志）
     const decision = await policyEngine.evaluate({
@@ -77,9 +79,9 @@ export const cmdTool: Tool = {
     }
 
     // Ensure workspace exists
-    const workspaceCwd = workspaceManager.init(ctx)
-    // full-access 模式下允许调用方指定任意 cwd，否则锁定到 workspace 沙箱
-    const cwd = (mode === 'full-access' && cwdArg) ? cwdArg : workspaceCwd
+    workspaceManager.init(ctx)
+    const cwd = cwdArg ? workspaceManager.resolveSafePath(ctx, cwdArg) : workspaceManager.getWorkingDirectory(ctx)
+    throwIfAborted(ctx.signal)
     // full-access 模式下默认超时 120s，避免长命令被 5s 硬截断
     const defaultTimeout = mode === 'full-access' ? 120000 : 30000
     // 显式 timeoutMs 优先（上限 10 分钟），其次环境变量，最后按模式默认
@@ -87,82 +89,73 @@ export const cmdTool: Tool = {
       ? Math.min(Math.floor(timeoutMs), 600000)
       : parseInt(process.env.CMD_TIMEOUT_MS ?? String(defaultTimeout), 10)
 
-    return new Promise((resolve) => {
+    return new Promise<ToolResult>((resolve, reject) => {
       let stdout = ''
       let stderr = ''
       let timedOut = false
-
-      // Windows：内建命令 或 .cmd/.bat 文件 需通过 cmd.exe /c 调用
+      let cancelled = false
+      let settled = false
+      let termination: Promise<void> | undefined
+      let forceTimer: ReturnType<typeof setTimeout> | undefined
       let spawnCmd = command
       let spawnArgs = cmdArgs
-      if (os.platform() === 'win32') {
-        const cmdLower = command.toLowerCase()
-        const isBuiltin = WIN_BUILTINS.has(cmdLower)
-        const isScriptFile = cmdLower.endsWith('.cmd') || cmdLower.endsWith('.bat')
-        if (isBuiltin || isScriptFile) {
-          spawnCmd = 'cmd.exe'
-          spawnArgs = ['/c', command, ...cmdArgs]
+      const windows = os.platform() === 'win32'
+      if (windows && (WIN_BUILTINS.has(command.toLowerCase()) || /\.(cmd|bat)$/i.test(command))) {
+        spawnCmd = 'cmd.exe'
+        spawnArgs = ['/c', command, ...cmdArgs]
+      }
+      const spawnEnv = mode === 'full-access' ? { ...process.env } : {
+        PATH: process.env.PATH, HOME: cwd, SystemRoot: process.env.SystemRoot, COMSPEC: process.env.COMSPEC,
+      }
+      const child = spawn(spawnCmd, spawnArgs, {
+        cwd, shell: false, windowsHide: true, detached: !windows, env: spawnEnv,
+      })
+      const stopTree = () => {
+        if (termination || !child.pid || child.exitCode !== null || child.signalCode !== null) return
+        const pid = child.pid
+        if (windows) {
+          termination = new Promise<void>(done => {
+            const killer = spawn('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+            killer.once('error', () => { child.kill(); done() })
+            killer.once('close', () => { child.kill(); done() })
+          })
+        } else {
+          try { process.kill(-pid, 'SIGTERM') } catch { child.kill('SIGTERM') }
+          termination = new Promise<void>(done => {
+            forceTimer = setTimeout(() => { try { process.kill(-pid, 'SIGKILL') } catch { /* already exited */ } done() }, 1000)
+          })
         }
       }
-
-      // full-access 模式下透传完整环境变量，保证 node/npm 等工具正常工作
-      const spawnEnv = mode === 'full-access'
-        ? { ...process.env }
-        : {
-            PATH: process.env.PATH,
-            HOME: cwd, // Restrict HOME to workspace
-            SystemRoot: process.env.SystemRoot, // Windows 需要此变量让 cmd.exe 正常工作
-            COMSPEC: process.env.COMSPEC,
-          }
-
-      const child = spawn(spawnCmd, spawnArgs, {
-        cwd,
-        shell: false, // NEVER use shell:true — prevents injection
-        timeout,
-        env: spawnEnv,
-      })
-
-      const timer = setTimeout(() => {
-        timedOut = true
-        child.kill('SIGTERM')
-      }, timeout)
-
-      child.stdout?.on('data', (data: Buffer) => {
-        stdout += data.toString()
-      })
-
-      child.stderr?.on('data', (data: Buffer) => {
-        stderr += data.toString()
-      })
-
-      child.on('close', (code) => {
+      const abort = () => { cancelled = true; stopTree() }
+      const timer = setTimeout(() => { timedOut = true; stopTree() }, timeout)
+      const cleanup = () => {
         clearTimeout(timer)
-        const durationMs = Date.now() - startTime
-
+        if (forceTimer) clearTimeout(forceTimer)
+        ctx.signal?.removeEventListener('abort', abort)
+      }
+      ctx.signal?.addEventListener('abort', abort, { once: true })
+      if (ctx.signal?.aborted) abort()
+      child.stdout?.on('data', (data: Buffer) => { stdout += data.toString() })
+      child.stderr?.on('data', (data: Buffer) => { stderr += data.toString() })
+      child.once('error', (error) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        if (cancelled) { reject(ctx.signal?.reason ?? new DOMException('Command cancelled', 'AbortError')); return }
+        resolve({ success: false, output: 'Failed to execute command: ' + error.message, error: error.message, durationMs: Date.now() - startTime })
+      })
+      child.once('close', async code => {
+        await termination
+        if (settled) return
+        settled = true
+        cleanup()
+        if (cancelled) { reject(ctx.signal?.reason ?? new DOMException('Command cancelled', 'AbortError')); return }
         if (timedOut) {
-          resolve({
-            success: false,
-            output: `Command timed out after ${timeout}ms`,
-            durationMs,
-          })
+          resolve({ success: false, output: 'Command timed out after ' + timeout + 'ms', error: 'Command timeout', durationMs: Date.now() - startTime })
           return
         }
-
         const output = [stdout, stderr].filter(Boolean).join('\n').trim()
-        resolve({
-          success: code === 0,
-          output: output || `Command exited with code ${code}`,
-          durationMs,
-        })
-      })
-
-      child.on('error', (err) => {
-        clearTimeout(timer)
-        resolve({
-          success: false,
-          output: `Failed to execute command: ${err.message}`,
-          durationMs: Date.now() - startTime,
-        })
+        resolve({ success: code === 0, output: output || 'Command exited with code ' + code, durationMs: Date.now() - startTime })
       })
     })
   },

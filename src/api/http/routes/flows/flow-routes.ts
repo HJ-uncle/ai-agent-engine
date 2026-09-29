@@ -14,6 +14,7 @@ import { sseStream } from '../../../../core/stream-pipeline/index.js'
 import { busToIterable } from '../../../../core/stream-pipeline/stream-bus.js'
 import { FlowEventBus } from './flow-event-bus.js'
 import { FlowExecutor, topologicalLevels } from './flow-executor.js'
+import { getRequestToolProfile } from '../../tool-profile.js'
 import type { RunFlowOptions } from './flow-types.js'
 
 /** 活跃 Flow 运行注册表（runId → FlowEventBus + AbortController） */
@@ -70,6 +71,7 @@ export async function flowRoutes(fastify: FastifyInstance): Promise<void> {
       }
     }
   }, async (request: FastifyRequest<{ Body: RunFlowOptions }>, reply: FastifyReply) => {
+    const toolProfile = getRequestToolProfile(request)
     const body = request.body
     const tenantId = (request as any).tenantId ?? 'flow-tenant'
 
@@ -96,7 +98,7 @@ export async function flowRoutes(fastify: FastifyInstance): Promise<void> {
     logger.info({ flowId: body.flowId, runId: bus.runId, tenantId }, '[Flow] 收到执行请求，启动 SSE')
 
     // 异步启动执行器（不阻塞 SSE 响应）
-    const executor = new FlowExecutor(bus, abortController.signal)
+    const executor = new FlowExecutor(bus, abortController.signal, toolProfile)
     executor.run(body).catch((err) => {
       logger.error({ err, runId: bus.runId }, '[Flow] 执行器异常')
       bus.error(err)

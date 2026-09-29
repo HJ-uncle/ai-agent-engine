@@ -1,0 +1,1178 @@
+{
+  "chunkStart": 186900845,
+  "chunkSize": 5691140,
+  "commands": [
+    {
+      "name": "add-dir",
+      "type": "local",
+      "byteOffset": 188219145,
+      "description": "\"Add a new working directory\"",
+      "argumentHint": "\"<path>\"",
+      "enabledExpression": "()=>Re()&&mgr()",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "add-dir",
+      "type": "local-jsx",
+      "byteOffset": 188219404,
+      "description": "\"Add a new working directory\"",
+      "argumentHint": "\"<path>\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "cloud-plugins",
+      "type": "local-jsx",
+      "byteOffset": 188219593,
+      "description": "\"Choose whether cloud sessions use the plugins enabled on this machine\"",
+      "enabledExpression": "()=>Tet()&&!a.CLAUDE_CODE_DISABLE_PLUGIN_FORWARDING",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "auto-mode-setup",
+      "type": "local",
+      "byteOffset": 191900572,
+      "description": "\"Teach auto mode about your environment, plus optional rule tweaks\"",
+      "argumentHint": "\"[--request-id <uuid>] (--wizard posture=\\u2026 scope=\\u2026 depth=\\u2026 --propose | --expect-sha256 <64-hex> --apply-file <path>)\"",
+      "enabledExpression": "()=>UEt()&&Re()",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "auto-mode-setup",
+      "type": "local-jsx",
+      "byteOffset": 191900970,
+      "description": "\"Teach auto mode about your environment, plus optional rule tweaks\"",
+      "enabledExpression": "()=>WEt()&&!Re()",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "artifacts",
+      "type": "local-jsx",
+      "byteOffset": 191901166,
+      "description": "\"Browse your published and shared artifacts\"",
+      "aliases": "[]",
+      "enabledExpression": "()=>aC()&&Xd()===null",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "autofix-pr",
+      "type": "local-jsx",
+      "byteOffset": 191901387,
+      "description": "\"Monitor and autofix any issues with the current PR\"",
+      "argumentHint": "void 0",
+      "enabledExpression": "()=>hpr()&&!Re()",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "btw",
+      "type": "local-jsx",
+      "byteOffset": 191901622,
+      "description": "\"Ask a quick side question without interrupting the main conversation\"",
+      "argumentHint": "\"[question]\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "feedback",
+      "type": "local-jsx",
+      "byteOffset": 191901878,
+      "description": "\"Send feedback to Anthropic or report a bug\"",
+      "argumentHint": "\"[report]\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "bug",
+      "type": "local-jsx",
+      "byteOffset": 191902041,
+      "description": "\"Report a bug or share your conversation\"",
+      "aliases": "[\"share\"]",
+      "argumentHint": "\"[report]\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "cd",
+      "type": "local-jsx",
+      "byteOffset": 191902214,
+      "description": "\"Move this session to a new working directory\"",
+      "argumentHint": "\"<path>\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "clear",
+      "type": "local",
+      "byteOffset": 191902340,
+      "description": "\"Start a new session with empty context; previous session stays on disk (resumable with /resume)\"",
+      "aliases": "[\"reset\",\"new\"]",
+      "argumentHint": "\"[name]\"",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "color",
+      "type": "local-jsx",
+      "byteOffset": 191902647,
+      "description": "\"Set the prompt bar color for this session\"",
+      "argumentHint": "`[${[..._f,\"default\"].join(\"|\")}]`",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "color",
+      "type": "local",
+      "byteOffset": 191902888,
+      "description": "\"Set the prompt bar color for this session\"",
+      "argumentHint": "`[${[..._f,\"default\"].join(\"|\")}]`",
+      "enabledExpression": "()=>Re()",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "copy",
+      "type": "local-jsx",
+      "byteOffset": 191903179,
+      "description": "\"Copy Claude's last response to clipboard (or /copy N for the Nth-latest)\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "desktop",
+      "type": "local-jsx",
+      "byteOffset": 191903390,
+      "description": "\"Continue the current session in Claude Desktop\"",
+      "aliases": "[\"app\"]",
+      "availability": "[\"claude-ai\"]",
+      "enabledExpression": "FTe",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "compact",
+      "type": "local",
+      "byteOffset": 191909515,
+      "description": "\"Free up context by summarizing the conversation so far\"",
+      "argumentHint": "\"<optional custom summarization instructions>\"",
+      "enabledExpression": "()=>!Oe(process.env.DISABLE_COMPACT)",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "autocompact",
+      "type": "local-jsx",
+      "byteOffset": 191909844,
+      "description": "\"Set how full the context gets before auto-summarizing\"",
+      "argumentHint": "\"[auto|<tokens>]\"",
+      "enabledExpression": "()=>!Re()",
+      "hiddenExpression": "!1",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "autocompact",
+      "type": "local",
+      "byteOffset": 191910068,
+      "description": "\"Configure the auto-compact window size\"",
+      "argumentHint": "\"[auto|<tokens>]\"",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "config",
+      "type": "local-jsx",
+      "byteOffset": 191910405,
+      "description": "\"Open settings\"",
+      "aliases": "[\"settings\"]",
+      "argumentHint": "\"[key=value]\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "config",
+      "type": "local",
+      "byteOffset": 191910703,
+      "description": "\"Set a setting by key\"",
+      "aliases": "[\"settings\"]",
+      "argumentHint": "\"key=value\"",
+      "enabledExpression": "()=>Re()",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "context",
+      "type": "local-jsx",
+      "byteOffset": 191911266,
+      "description": "\"Visualize current context usage as a colored grid\"",
+      "argumentHint": "\"[all]\"",
+      "enabledExpression": "()=>!Re()",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "context",
+      "type": "local",
+      "byteOffset": 191911446,
+      "description": "\"Show current context usage\"",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "diff",
+      "type": "local-jsx",
+      "byteOffset": 191911801,
+      "dynamicGetters": [
+        "description"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "memory",
+      "type": "local-jsx",
+      "byteOffset": 191912087,
+      "description": "\"Edit CLAUDE.md files and memory settings\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "pause-memory",
+      "type": "local",
+      "byteOffset": 191912228,
+      "description": "\"Pause automemory for this session\"",
+      "aliases": "[\"memory-pause\",\"toggle-memory\"]",
+      "enabledExpression": "()=>!1",
+      "hiddenExpression": "!1",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "help",
+      "type": "local-jsx",
+      "byteOffset": 191912543,
+      "description": "\"Show help and available commands\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "ide",
+      "type": "local-jsx",
+      "byteOffset": 191912689,
+      "description": "\"Manage IDE integrations and show status\"",
+      "argumentHint": "\"[open]\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "import",
+      "type": "local-jsx",
+      "byteOffset": 191913727,
+      "description": "\"Import config from another AI coding agent\"",
+      "argumentHint": "\"[codex|gemini|cursor] [--dry-run]\"",
+      "enabledExpression": "V7",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "import",
+      "type": "local",
+      "byteOffset": 191913924,
+      "description": "\"Import config from another AI coding agent\"",
+      "enabledExpression": "()=>V7()&&Re()",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "init",
+      "type": "prompt",
+      "byteOffset": 191938742,
+      "dynamicGetters": [
+        "description"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "keybindings",
+      "type": "local",
+      "byteOffset": 191939135,
+      "description": "\"Open your keyboard shortcuts file\"",
+      "enabledExpression": "()=>sF()",
+      "supportsNonInteractive": "!1",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "design-consent",
+      "type": "local",
+      "byteOffset": 191939352,
+      "description": "\"Grant Claude agent access to your Design projects\"",
+      "enabledExpression": "()=>cF()",
+      "hiddenExpression": "!0",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "design-revoke",
+      "type": "local",
+      "byteOffset": 191939579,
+      "description": "\"Revoke Claude agent access to your Design projects\"",
+      "enabledExpression": "()=>cF()",
+      "hiddenExpression": "!0",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "design-login",
+      "type": "local-jsx",
+      "byteOffset": 191939815,
+      "description": "\"Authorize design-system access for /design-sync with your claude.ai account\"",
+      "enabledExpression": "()=>cF()",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "login",
+      "type": "local-jsx",
+      "byteOffset": 191939992,
+      "enabledExpression": "()=>!a.DISABLE_LOGIN_COMMAND",
+      "dynamicGetters": [
+        "description"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "logout",
+      "type": "local-jsx",
+      "byteOffset": 191940206,
+      "description": "\"Sign out from your Anthropic account\"",
+      "enabledExpression": "()=>!a.DISABLE_LOGOUT_COMMAND",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "install-github-app",
+      "type": "local-jsx",
+      "byteOffset": 191940446,
+      "description": "\"Set up Claude GitHub Actions for a repository\"",
+      "availability": "[\"claude-ai\",\"console\"]",
+      "enabledExpression": "()=>!a.DISABLE_INSTALL_GITHUB_APP_COMMAND",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "install-slack-app",
+      "type": "local",
+      "byteOffset": 191940656,
+      "description": "\"Install the Claude Slack app\"",
+      "availability": "[\"claude-ai\"]",
+      "supportsNonInteractive": "!1",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "mcp",
+      "type": "local",
+      "byteOffset": 191940909,
+      "description": "\"Manage MCP servers\"",
+      "argumentHint": "\"[reconnect|enable|disable [<server>|all]]\"",
+      "enabledExpression": "()=>Re()",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "mcp",
+      "type": "local-jsx",
+      "byteOffset": 191941183,
+      "description": "\"Manage MCP servers\"",
+      "argumentHint": "\"[reconnect <server>|enable|disable [<server>|all]]\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "mobile",
+      "type": "local-jsx",
+      "byteOffset": 191941367,
+      "description": "\"Show QR code to download the Claude mobile app\"",
+      "aliases": "[\"ios\",\"android\"]",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "voice",
+      "type": "local",
+      "byteOffset": 191941853,
+      "description": "\"Toggle voice mode\"",
+      "argumentHint": "\"[hold|tap|off]\"",
+      "availability": "[\"claude-ai\"]",
+      "supportsNonInteractive": "!1",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "powerup",
+      "type": "local-jsx",
+      "byteOffset": 191942091,
+      "description": "\"Discover Claude Code features through quick interactive lessons\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "release-notes",
+      "type": "local-jsx",
+      "byteOffset": 191942229,
+      "description": "\"View release notes\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "rename",
+      "type": "local-jsx",
+      "byteOffset": 191942336,
+      "description": "\"Rename the current conversation\"",
+      "aliases": "[\"name\"]",
+      "argumentHint": "\"[name]\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "rename",
+      "type": "local",
+      "byteOffset": 191942539,
+      "description": "\"Rename the current conversation\"",
+      "aliases": "[\"name\"]",
+      "argumentHint": "\"[name]\"",
+      "enabledExpression": "()=>Re()",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "resume",
+      "type": "local-jsx",
+      "byteOffset": 191942792,
+      "description": "\"Resume a previous conversation\"",
+      "aliases": "[\"continue\"]",
+      "argumentHint": "\"[conversation id or search term]\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "setup-bedrock",
+      "type": "local-jsx",
+      "byteOffset": 191942955,
+      "description": "\"Reconfigure Amazon Bedrock authentication, region, or model pins\"",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "setup-vertex",
+      "type": "local-jsx",
+      "byteOffset": 191943131,
+      "description": "\"Reconfigure Google Vertex AI authentication, project, region, or model pins\"",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "ultrareview",
+      "type": "local-jsx",
+      "byteOffset": 191943539,
+      "enabledExpression": "()=>RT()",
+      "dynamicGetters": [
+        "description"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "ultrareview",
+      "type": "local",
+      "byteOffset": 191943632,
+      "enabledExpression": "()=>Re()&&RT()",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [
+        "description",
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "session",
+      "type": "local-jsx",
+      "byteOffset": 191943835,
+      "description": "\"Show cloud session URL and QR code\"",
+      "aliases": "[\"remote\"]",
+      "enabledExpression": "()=>Nn()",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "scroll-speed",
+      "type": "local-jsx",
+      "byteOffset": 191944128,
+      "description": "\"Adjust mouse wheel scroll speed\"",
+      "enabledExpression": "()=>{if(!Aa())return!1;let e=hl();return!(e?OG.includes(e.terminal??\"\"):fb.isJetBrainsIdeTerminal())}",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "skills",
+      "type": "local-jsx",
+      "byteOffset": 191944341,
+      "description": "\"List available skills\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "status",
+      "type": "local-jsx",
+      "byteOffset": 191944476,
+      "description": "\"Show Claude Code status including version, model, account, API connectivity, and tool statuses\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "tasks",
+      "type": "local-jsx",
+      "byteOffset": 191944665,
+      "description": "\"View and manage everything running in the background\"",
+      "aliases": "[\"bashes\"]",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "teleport",
+      "type": "local-jsx",
+      "byteOffset": 191944849,
+      "description": "\"Send this session to the cloud, or resume one from claude.ai\"",
+      "aliases": "[\"tp\"]",
+      "enabledExpression": "()=>gt()&&Ht(\"allow_remote_sessions\")",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "terminal-setup",
+      "type": "local-jsx",
+      "byteOffset": 191957450,
+      "dynamicGetters": [
+        "description"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "ultraplan",
+      "type": "local-jsx",
+      "byteOffset": 191978266,
+      "argumentHint": "\"<prompt>\"",
+      "enabledExpression": "()=>rL()",
+      "dynamicGetters": [
+        "description"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "usage",
+      "type": "local-jsx",
+      "byteOffset": 191978505,
+      "description": "\"Show session cost, plan usage, and activity stats\"",
+      "aliases": "[\"cost\",\"stats\"]",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "usage",
+      "type": "local",
+      "byteOffset": 191978698,
+      "description": "\"Show session cost, plan usage, and what's contributing to your limits\"",
+      "aliases": "[\"cost\",\"stats\"]",
+      "enabledExpression": "()=>Re()",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "skill-doctor",
+      "type": "local-jsx",
+      "byteOffset": 191979017,
+      "description": "\"Show which loaded skills are unused and costing context\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "skill-doctor",
+      "type": "local",
+      "byteOffset": 191979169,
+      "description": "\"Show which loaded skills are unused and costing context\"",
+      "enabledExpression": "()=>Re()",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "theme",
+      "type": "local-jsx",
+      "byteOffset": 191979436,
+      "description": "\"Change the theme\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "tui",
+      "type": "local-jsx",
+      "byteOffset": 191979567,
+      "description": "\"Set the terminal UI renderer (default | fullscreen)\"",
+      "argumentHint": "\"[default|fullscreen]\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "permissions",
+      "type": "local-jsx",
+      "byteOffset": 191979715,
+      "description": "\"Manage allow and deny tool permission rules\"",
+      "aliases": "[\"allowed-tools\"]",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "plan",
+      "type": "local-jsx",
+      "byteOffset": 191979903,
+      "description": "\"Enable plan mode or view the current session plan\"",
+      "argumentHint": "\"[open|<description>]\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "fast",
+      "type": "local-jsx",
+      "byteOffset": 191980068,
+      "argumentHint": "\"[on|off]\"",
+      "dynamicGetters": [
+        "description",
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "fast",
+      "type": "local",
+      "byteOffset": 191980277,
+      "argumentHint": "\"[on|off]\"",
+      "enabledExpression": "()=>Re()",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [
+        "description",
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "passes",
+      "type": "local-jsx",
+      "byteOffset": 191984954,
+      "dynamicGetters": [
+        "description",
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "privacy-settings",
+      "type": "local-jsx",
+      "byteOffset": 191985234,
+      "description": "\"View and update your privacy settings\"",
+      "enabledExpression": "()=>LW()",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "hooks",
+      "type": "local-jsx",
+      "byteOffset": 191985382,
+      "description": "\"View hook configurations for tool events\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "loops",
+      "type": "local-jsx",
+      "byteOffset": 191985529,
+      "description": "\"List, create, and delete loops\"",
+      "enabledExpression": "()=>!1",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "branch",
+      "type": "local-jsx",
+      "byteOffset": 191985652,
+      "description": "\"Create a branch of the current conversation at this point\"",
+      "argumentHint": "\"[name]\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "fork",
+      "type": "local-jsx",
+      "byteOffset": 191985845,
+      "description": "\"Spawn a background agent that inherits the full conversation\"",
+      "argumentHint": "\"<directive>\"",
+      "enabledExpression": "()=>!Pi()",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "fork",
+      "type": "local-jsx",
+      "byteOffset": 191986056,
+      "description": "\"Copy this conversation into a new background session and keep working here\"",
+      "argumentHint": "\"[prompt]\"",
+      "enabledExpression": "()=>!Pi()",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "subtask",
+      "type": "local-jsx",
+      "byteOffset": 191986228,
+      "description": "\"Send a subagent off with your full context; its result comes back here\"",
+      "argumentHint": "\"<task>\"",
+      "enabledExpression": "()=>!Pi()",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "agents",
+      "type": "local",
+      "byteOffset": 191986797,
+      "description": "\"(removed) Ask Claude to create/manage subagents, or edit .claude/agents/\"",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "plugin",
+      "type": "local-jsx",
+      "byteOffset": 191987023,
+      "description": "\"Manage Claude Code plugins\"",
+      "aliases": "[\"plugins\",\"marketplace\"]",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "plugin-types",
+      "type": "local",
+      "byteOffset": 191987327,
+      "description": "\"Write claude-code.d.ts and claude-code-mcp.d.ts: the plugin API's TypeScript declarations and the inputs of the connected MCP tools, for typing a hooks module against this session\"",
+      "argumentHint": "\"[dir]\"",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "reload-plugins",
+      "type": "local",
+      "byteOffset": 191987662,
+      "description": "\"Activate pending plugin changes in the current session\"",
+      "argumentHint": "\"[--force]\"",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "reload-skills",
+      "type": "local",
+      "byteOffset": 191987942,
+      "description": "\"Pick up skills added or changed on disk during this session\"",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "rewind",
+      "type": "local",
+      "byteOffset": 191988175,
+      "description": "\"Restore the code and/or conversation to a previous point\"",
+      "aliases": "[\"checkpoint\",\"undo\"]",
+      "argumentHint": "\"\"",
+      "supportsNonInteractive": "!1",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "heapdump",
+      "type": "local",
+      "byteOffset": 191988450,
+      "description": "\"Dump the JS heap to ~/Desktop\"",
+      "enabledExpression": "()=>Ht(\"allow_heap_dump\")",
+      "hiddenExpression": "!0",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "version",
+      "type": "local-jsx",
+      "byteOffset": 191989055,
+      "description": "\"Show this session's version (autoupdate may have a newer one)\"",
+      "enabledExpression": "()=>!1",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "version",
+      "type": "local",
+      "byteOffset": 191990733,
+      "description": "\"Print the version this session is running (not what autoupdate downloaded)\"",
+      "enabledExpression": "()=>!1",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "sandbox",
+      "type": "local-jsx",
+      "byteOffset": 191991377,
+      "dynamicGetters": [
+        "description",
+        "argumentHint",
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "chrome",
+      "type": "local-jsx",
+      "byteOffset": 192005577,
+      "description": "\"Open Claude in Chrome settings\"",
+      "availability": "[\"claude-ai\"]",
+      "enabledExpression": "()=>!Re()&&JD()",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "stickers",
+      "type": "local",
+      "byteOffset": 192005809,
+      "description": "\"Order Claude Code stickers\"",
+      "supportsNonInteractive": "!1",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "radio",
+      "type": "local",
+      "byteOffset": 192005973,
+      "description": "\"Listen to Claude FM lo-fi radio\"",
+      "supportsNonInteractive": "!1",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "advisor",
+      "type": "local-jsx",
+      "byteOffset": 192006139,
+      "description": "\"Let Claude consult a stronger model at key moments\"",
+      "enabledExpression": "()=>Bv()",
+      "dynamicGetters": [
+        "argumentHint",
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "advisor",
+      "type": "local",
+      "byteOffset": 192006452,
+      "description": "\"Let Claude consult a stronger model at key moments\"",
+      "enabledExpression": "()=>Re()&&Bv()",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [
+        "argumentHint",
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "exit",
+      "type": "local-jsx",
+      "byteOffset": 192008199,
+      "aliases": "[\"quit\"]",
+      "dynamicGetters": [
+        "description"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "exit",
+      "type": "local",
+      "byteOffset": 192008369,
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [
+        "description"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "update",
+      "type": "local",
+      "byteOffset": 192008540,
+      "description": "\"Switch to the latest version (conversation continues)\"",
+      "aliases": "[\"restart\"]",
+      "enabledExpression": "()=>!1",
+      "hiddenExpression": "!0",
+      "supportsNonInteractive": "!1",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "export",
+      "type": "local-jsx",
+      "byteOffset": 192008817,
+      "description": "\"Export the current conversation to a file or clipboard\"",
+      "argumentHint": "\"[filename]\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "model",
+      "type": "local",
+      "byteOffset": 192008979,
+      "description": "\"Set the AI model for Claude Code\"",
+      "argumentHint": "\"<model>\"",
+      "enabledExpression": "()=>Re()",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "model",
+      "type": "local-jsx",
+      "byteOffset": 192009204,
+      "argumentHint": "\"[model]\"",
+      "dynamicGetters": [
+        "description"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "remote-env",
+      "type": "local-jsx",
+      "byteOffset": 192009419,
+      "description": "\"Choose the default environment for cloud agents\"",
+      "enabledExpression": "()=>gt()&&Ht(\"allow_remote_sessions\")",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "__remote-workflow",
+      "type": "local",
+      "byteOffset": 192009632,
+      "description": "\"Run the workflow script delivered in this session environment (server-launched sessions only)\"",
+      "hiddenExpression": "!0",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "workflow-launch-exec",
+      "type": "local",
+      "byteOffset": 192009937,
+      "description": "\"Execute a server-launched workflow handoff (workflow_launch event sessions only)\"",
+      "hiddenExpression": "!0",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "upgrade",
+      "type": "local-jsx",
+      "byteOffset": 192010232,
+      "description": "\"Upgrade to Max for higher rate limits and more Opus\"",
+      "availability": "[\"claude-ai\"]",
+      "enabledExpression": "oV",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "usage-credits",
+      "type": "local-jsx",
+      "byteOffset": 192010405,
+      "description": "\"Configure usage credits or request them from your admin when you hit a limit\"",
+      "enabledExpression": "()=>qS()&&!Re()",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "usage-credits",
+      "type": "local",
+      "byteOffset": 192010584,
+      "description": "\"Configure usage credits or request them from your admin when you hit a limit\"",
+      "enabledExpression": "()=>qS()&&Re()",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "extra-usage",
+      "type": "local-jsx",
+      "byteOffset": 192010844,
+      "description": "\"Renamed to /usage-credits\"",
+      "enabledExpression": "()=>qS()&&!Re()",
+      "hiddenExpression": "!0",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "extra-usage",
+      "type": "local",
+      "byteOffset": 192010982,
+      "description": "\"Renamed to /usage-credits\"",
+      "enabledExpression": "()=>qS()&&Re()",
+      "hiddenExpression": "!0",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "pro-trial-expired",
+      "type": "local-jsx",
+      "byteOffset": 192011177,
+      "description": "\"Options shown when the Pro plan Claude Code trial has ended\"",
+      "hiddenExpression": "!0",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "rate-limit-options",
+      "type": "local-jsx",
+      "byteOffset": 192011323,
+      "description": "\"Show options when rate limit is reached\"",
+      "enabledExpression": "()=>gt()||!1",
+      "hiddenExpression": "!0",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "statusline",
+      "type": "prompt",
+      "byteOffset": 192013228,
+      "description": "\"Set up Claude Code's status line UI\"",
+      "aliases": "[]",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "effort",
+      "type": "local-jsx",
+      "byteOffset": 192014289,
+      "description": "\"Set effort level for model usage\"",
+      "dynamicGetters": [
+        "argumentHint"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "effort",
+      "type": "local",
+      "byteOffset": 192014481,
+      "description": "\"Set effort level for model usage\"",
+      "enabledExpression": "()=>Re()",
+      "supportsNonInteractive": "!0",
+      "dynamicGetters": [
+        "argumentHint",
+        "isHidden"
+      ],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "wellbeing",
+      "type": "local-jsx",
+      "byteOffset": 192014736,
+      "description": "\"Configure optional break reminders and quiet-hours nudges\"",
+      "aliases": "[\"breaks\",\"break-reminder\",\"downtime\"]",
+      "enabledExpression": "()=>!1",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "focus",
+      "type": "local-jsx",
+      "byteOffset": 192014955,
+      "description": "\"Toggle focus view: just your prompt, summary, and response\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    },
+    {
+      "name": "insights",
+      "type": "prompt",
+      "byteOffset": 192017840,
+      "description": "\"Generate a report analyzing your Claude Code sessions\"",
+      "dynamicGetters": [],
+      "evidenceClass": "Static command definition; registration, gating, account entitlement and execution not verified"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+Usage: claude plugin validate [options] <path>
+
+Validate a plugin or marketplace manifest, or the skills, agents, and commands
+in a directory
+
+Options:
+  -h, --help  Display help for command
+  --json      Output the validation report as JSON (same exit codes)
+  --strict    Treat warnings as errors (exit 1). Use in CI to fail on
+              unrecognized fields, missing metadata, and other issues that the
+              runtime tolerates.

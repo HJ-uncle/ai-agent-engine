@@ -8,3 +8,7 @@ export { QwenAdapter } from './qwen.js'
 export type { QwenAdapterOptions } from './qwen.js'
 export { RetryingAdapter, FallbackAdapter, withRetry } from './retry.js'
 export { createLLMAdapter, createLLMAdapterWithDbConfig } from './factory.js'
+
+export { resolveModelConfig, createAdapterFromResolved } from './resolve-model.js'
+export type { ResolvedModelConfig, ResolveModelOptions } from './resolve-model.js'
+export type { LLMRequestAttemptEvent, RequestAttemptUsage } from './types.js'

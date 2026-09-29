@@ -112,6 +112,7 @@ describe('ReActStrategy', () => {
     const results = await collectYields(strategy.run('What is the answer?', ctx))
 
     expect(results.join('')).toBe('The answer is 42.')
+    expect(llm.stream).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({ maxTokens: undefined }))
     expect(llm.stream).toHaveBeenCalledTimes(1)
   })
 
@@ -177,7 +178,7 @@ describe('ReActStrategy', () => {
     expect(ctx.tools.execute).toHaveBeenCalledWith(
       'calculator',
       { expression: '2+2' },
-      ctx,
+      expect.objectContaining({ tenantId: ctx.tenantId, sessionId: ctx.sessionId, currentToolCallId: 'call-1' }),
     )
   })
 
@@ -412,5 +413,182 @@ describe('ReActStrategy', () => {
         temperature: 0.7,
       }),
     )
+  })
+})
+
+describe('structured run lifecycle', () => {
+  it('rejects Message[] before history or provider writes', async () => {
+    const llm = makeLLMAdapter([{ content: 'unused', promptTokens: 0, completionTokens: 0, finishReason: 'stop' }])
+    const onOutcome = vi.fn()
+    const ctx = makeCtx({ runObserver: { onOutcome } })
+    await collectYields(new ReActStrategy(llm).run([{ role: 'user', content: 'invalid' }], ctx))
+    expect(llm.stream).not.toHaveBeenCalled()
+    expect(ctx.history.append).not.toHaveBeenCalled()
+    expect(onOutcome).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'failed', error: expect.objectContaining({ message: expect.stringContaining('Message[]') }) }))
+  })
+
+  it('reports a provider failure and preserves partial output', async () => {
+    const llm = makeLLMAdapter([])
+    llm.stream = async function* () { yield { done: false, content: 'partial evidence' }; throw new Error('400 invalid request') }
+    const onOutcome = vi.fn()
+    await collectYields(new ReActStrategy(llm).run('research', makeCtx({ runObserver: { onOutcome } })))
+    expect(onOutcome).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'failed', stopReason: 'provider_error', partialOutput: 'partial evidence' }))
+    expect(onOutcome.mock.calls.some(([value]) => value.status === 'succeeded')).toBe(false)
+  })
+
+  it('reports max_steps as a failure even when the loop emits explanatory text', async () => {
+    const onOutcome = vi.fn()
+    const output = await collectYields(new ReActStrategy(makeLLMAdapter([]), { maxIterations: 0 }).run('research', makeCtx({ runObserver: { onOutcome } })))
+    expect(output.join('')).toContain('Max iterations')
+    expect(onOutcome).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'failed', stopReason: 'max_steps' }))
+  })
+
+  it('durably saves both launches and isolates invocation contexts across awaits', async () => {
+    const llm = makeLLMAdapter([])
+    let count = 0
+    let nextRequest: Message[] = []
+    llm.stream = async function* (messages) {
+      if (count++ === 0) yield { done: true, toolCalls: [
+        { id: 'child-a', name: 'subagent', args: '{"task":"a"}', index: 0 },
+        { id: 'child-b', name: 'subagent', args: '{"task":"b"}', index: 1 },
+      ] }
+      else { nextRequest = messages; yield { done: true, content: 'complete', promptTokens: 2, completionTokens: 1 } }
+    }
+    const onOutcome = vi.fn()
+    const ctx = makeCtx({ runObserver: { onOutcome } })
+    const seen: string[] = []
+    ctx.tools.execute = async (_name, _args, invocation) => {
+      const launched = await ctx.history.getHistory(ctx)
+      expect(launched.filter(message => message.toolCall).map(message => message.toolCall?.id)).toEqual(['child-a', 'child-b'])
+      await Promise.resolve()
+      seen.push(invocation.currentToolCallId ?? '')
+      expect(invocation.currentMessageId).toBeTruthy()
+      return { success: true, output: invocation.currentToolCallId ?? '' }
+    }
+    await collectYields(new ReActStrategy(llm).run('research', ctx))
+    expect(seen.sort()).toEqual(['child-a', 'child-b'])
+    expect(ctx.currentToolCallId).toBeUndefined()
+    const roles = nextRequest.filter(message => message.role !== 'user').map(message => `${message.role}:${message.toolCall?.id ?? message.toolCallId ?? ''}`)
+    expect(roles).toEqual(['assistant:child-a', 'tool:child-a', 'assistant:child-b', 'tool:child-b'])
+    expect(onOutcome).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'succeeded' }))
+  })
+
+  it('persists every sibling result before finishing cancellation', async () => {
+    const abort = new AbortController()
+    const llm = makeLLMAdapter([])
+    llm.stream = async function* () { yield { done: true, toolCalls: [
+      { id: 'a', name: 'read_file', args: '{}', index: 0 },
+      { id: 'b', name: 'read_file', args: '{}', index: 1 },
+    ] } }
+    const onOutcome = vi.fn()
+    const ctx = makeCtx({ signal: abort.signal, runObserver: { onOutcome } })
+    ctx.tools.execute = async () => { abort.abort(); throw new DOMException('cancel', 'AbortError') }
+    await collectYields(new ReActStrategy(llm).run('research', ctx))
+    const history = await ctx.history.getHistory(ctx)
+    expect(history.filter(message => message.role === 'tool').map(message => message.toolCallId).sort()).toEqual(['a', 'b'])
+    expect(onOutcome).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'cancelled' }))
+  })
+})
+
+describe('run resource and permission boundaries', () => {
+  it('a length-limited model reply is partial, never succeeded', async () => {
+    const llm = makeLLMAdapter([])
+    llm.stream = async function* () { yield { done: true, content: 'unfinished evidence', finishReason: 'length' } }
+    const onOutcome = vi.fn()
+    const ctx = makeCtx({ runId: 'bounded', runObserver: { onOutcome } })
+    await collectYields(new ReActStrategy(llm).run('task', ctx))
+    expect(onOutcome).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'failed', stopReason: 'output_limit', partialOutput: 'unfinished evidence' }))
+    expect((await ctx.history.getHistory(ctx)).find(message => message.id === 'subagent-outcome:bounded')?.content).toBe('unfinished evidence')
+  })
+
+  it('budget rejection keeps its own error code and does not shrink the context capacity', async () => {
+    const llm = makeLLMAdapter([])
+    llm.stream = async function* () { throw Object.assign(new Error('quota reached'), { code: 'TOKEN_BUDGET_EXCEEDED' }); yield { done: true } }
+    const onOutcome = vi.fn()
+    const ctx = makeCtx({ runObserver: { onOutcome } })
+    await collectYields(new ReActStrategy(llm).run('task', ctx))
+    expect(onOutcome).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'failed', stopReason: 'budget', error: expect.objectContaining({ code: 'TOKEN_BUDGET_EXCEEDED' }) }))
+    expect(ctx.tokenBudget).toBe(100_000)
+  })
+
+  it('a forbidden child tool ends as blocked without another model call', async () => {
+    const llm = makeLLMAdapter([{ content: '', toolCalls: [{ id: 'forbidden', name: 'write_file', args: {} }], promptTokens: 5, completionTokens: 1, finishReason: 'tool_calls' }])
+    const onOutcome = vi.fn()
+    const ctx = makeCtx({ runId: 'blocked', runObserver: { onOutcome } })
+    ctx.tools.execute = async () => ({ success: false, output: 'Permission denied', metadata: { blocked: true } })
+    await collectYields(new ReActStrategy(llm).run('task', ctx))
+    expect(onOutcome).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'blocked', stopReason: 'permission' }))
+    expect(llm.stream).toHaveBeenCalledTimes(1)
+  })
+})
+
+it('does not execute partial tool dispatches when the provider hits its output limit', async () => {
+  const llm = makeLLMAdapter([])
+  llm.stream = async function* () { yield { done: true, finishReason: 'length', toolCalls: [
+    { id: 'complete-first', name: 'write_file', args: '{"path":"first.ts"}', index: 0 },
+    { id: 'truncated-second', name: 'write_file', args: '{"path":', index: 1 },
+  ] } }
+  const onOutcome = vi.fn()
+  const ctx = makeCtx({ runObserver: { onOutcome } })
+  await collectYields(new ReActStrategy(llm).run('task', ctx))
+  expect(ctx.tools.execute).not.toHaveBeenCalled()
+  expect(onOutcome).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'failed', stopReason: 'output_limit' }))
+})
+
+
+describe('ReAct bounded finalization with opt-in cumulative budgets', () => {
+  it('stops exploration on the last child iteration, returns evidence, and preserves incomplete status', async () => {
+    const outcome = vi.fn()
+    const llm = makeLLMAdapter([
+      { content: '', toolCalls: [{ id: 'read-probe', name: 'read_file', args: { path: 'probe.ts' } }], promptTokens: 10, completionTokens: 3, finishReason: 'tool_calls' },
+      { content: 'probe.ts contains the entry point; other modules were not checked.', promptTokens: 20, completionTokens: 8, finishReason: 'stop' },
+    ])
+    const ctx = makeCtx({ runObserver: { onOutcome: outcome } })
+    ctx.tools.list = vi.fn().mockReturnValue([{ name: 'read_file', description: 'Read a file', parameters: { type: 'object' } }])
+    const output = await collectYields(new ReActStrategy(llm, { maxIterations: 2, finalizeOnLimit: true }).run('Inspect project', ctx))
+    expect(ctx.tools.execute).toHaveBeenCalledTimes(1)
+    expect(llm.stream).toHaveBeenLastCalledWith(expect.any(Array), expect.objectContaining({ tools: [], maxTokens: 4096 }))
+    expect(output.join('')).toContain('探索步数上限')
+    expect(output.join('')).toContain('probe.ts contains')
+    expect(outcome).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'failed', stopReason: 'max_steps', partialOutput: expect.stringContaining('probe.ts') }))
+  })
+
+  it('never executes a tool returned against the reserved no-tools finalization request', async () => {
+    const llm = makeLLMAdapter([
+      { content: '', toolCalls: [{ id: 'first', name: 'read_file', args: { path: 'a' } }], promptTokens: 10, completionTokens: 3, finishReason: 'tool_calls' },
+      { content: '', toolCalls: [{ id: 'illegal-write', name: 'write_file', args: { path: 'b', content: 'bad' } }], promptTokens: 10, completionTokens: 3, finishReason: 'tool_calls' },
+    ])
+    const ctx = makeCtx()
+    const output = await collectYields(new ReActStrategy(llm, { maxIterations: 2, finalizeOnLimit: true }).run('Inspect', ctx))
+    expect(ctx.tools.execute).toHaveBeenCalledTimes(1)
+    expect(output.join('')).toContain('tool result')
+    expect(output.join('')).toContain('证据片段')
+  })
+
+  it('uses one no-tools summary only when an explicit budget cannot fund exploration plus a final answer', async () => {
+    const { RequestBudget } = await import('../../subagent/budget.js')
+    const budget = new RequestBudget(12_000)
+    const outcome = vi.fn()
+    const llm = makeLLMAdapter([{ content: 'Only the recorded evidence is available.', promptTokens: 20, completionTokens: 8, finishReason: 'stop' }])
+    const ctx = makeCtx({ requestBudget: budget, runObserver: { onOutcome: outcome } })
+    await collectYields(new ReActStrategy(llm, { maxIterations: 4 }).run('Inspect', ctx))
+    expect(llm.stream).toHaveBeenCalledTimes(1)
+    expect(llm.stream).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({ tools: [], maxTokens: 4096 }))
+    expect(ctx.tools.execute).not.toHaveBeenCalled()
+    expect(outcome).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'failed', stopReason: 'budget', partialOutput: expect.stringContaining('recorded evidence') }))
+  })
+
+  it('returns saved evidence without another model call when even a summary cannot fit', async () => {
+    const { RequestBudget } = await import('../../subagent/budget.js')
+    const budget = new RequestBudget(10)
+    const llm = makeLLMAdapter([{ content: 'must not run', promptTokens: 1, completionTokens: 1, finishReason: 'stop' }])
+    const ctx = makeCtx({ requestBudget: budget })
+    await ctx.history.append({ role: 'assistant', content: '', toolCall: { id: 'r', name: 'read_file', args: { path: 'entry.ts' } }, createdAt: 1 }, ctx)
+    await ctx.history.append({ role: 'tool', content: 'export function realEntry() {}', toolCallId: 'r', toolName: 'read_file', createdAt: 2 }, ctx)
+    const output = await collectYields(new ReActStrategy(llm).run('Inspect', ctx))
+    expect(llm.stream).not.toHaveBeenCalled()
+    expect(output.join('')).toContain('realEntry')
+    expect(output.join('')).toContain('entry.ts')
+    expect(output.join('')).not.toContain('LLM call failed')
   })
 })

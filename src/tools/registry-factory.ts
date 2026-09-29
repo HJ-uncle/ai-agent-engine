@@ -5,6 +5,8 @@
  * 新增或移除工具只需修改这一处。
  */
 import { ToolRegistry } from '../core/tool-registry/index.js'
+import type { Tool } from '../core/agent-context/index.js'
+import { isCodeProfileTool, normalizeAllowedTools, normalizeToolName, type ToolProfile } from './tool-profile.js'
 import { registerBuiltinSkills, skillsRegistry } from '../skills/index.js'
 import {
   listFilesTool,
@@ -44,9 +46,11 @@ import {
 import { logger } from '../observability/index.js'
 
 export interface RegistryFactoryOptions {
+  /** general preserves service capabilities; code selects the IDE's executable programming tools. */
+  toolProfile?: ToolProfile
   /** 允许的 skill 列表，undefined = 全部，[] = 全部，传入列表则过滤 */
   allowedSkills?: string[] | null
-  /** 允许的系统工具列表，undefined = 全部，[] = 全部，传入列表则只注册指定的工具 */
+  /** undefined/null 使用 profile 默认集；[] 显式禁用；列表只能缩窄。general 保留原有始终注册的基础工具例外。 */
   allowedTools?: string[] | null
   /**
    * 客户端透传的内联 Skill 列表（请求级；典型场景：桌面客户端把
@@ -110,16 +114,21 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   externalSkills: ExternalSkill[]
   toolCategories: ToolCategories
 }> {
-  const registry = new ToolRegistry()
+  const profile = opts.toolProfile ?? 'general'
+  const explicitAllowedTools = normalizeAllowedTools(opts.allowedTools)
+  const registry = new ToolRegistry(profile === 'code' ? (tool) =>
+    isCodeProfileTool(tool as Tool & { source?: string }) &&
+    (explicitAllowedTools === undefined || explicitAllowedTools.includes(tool.name))
+    : undefined)
 
   // ── Tool category tracking ────────────────────────────────────────────
   const builtinTools: string[] = []
   const skillTools: string[] = []
 
   /** Helper: register a tool into the registry and track it as builtin */
-  const registerBuiltin = (t: { name: string; [k: string]: any }) => {
-    registry.register(t as any)
-    builtinTools.push(t.name)
+  const registerBuiltin = (tool: Tool) => {
+    registry.register(tool)
+    if (registry.has(tool.name)) builtinTools.push(tool.name)
   }
 
   // 技能工具名称（需要随自定义技能自动添加）
@@ -141,7 +150,10 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   // 当调用方没有显式指定 allowedTools 时，根据 superpower 开关决定默认工具集：
   //   ON  → 全量工具（undefined，走现有全注册逻辑）
   //   OFF → 仅核心工具（安全省 token）
-  let effectiveAllowedTools = resolveDefaultAllowedTools(opts.allowedTools)
+  // Code capabilities are independent of OSM; an explicit list may only narrow the profile.
+  let effectiveAllowedTools = profile === 'code'
+    ? explicitAllowedTools
+    : normalizeAllowedTools(resolveDefaultAllowedTools(opts.allowedTools))
 
   // 计算 effectiveAllowedTools：如果选择了自定义技能，自动添加技能工具
   //
@@ -151,7 +163,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   //   skill 工具本身已经在全量集合内，无需显式列出。继续保持 undefined 即可。
   //   这一 bug 在 superpower ON + 选了外部 skill 的场景下最明显：
   //   承诺"全量工具可用"但 Agent 突然失去了 run_command / web_fetch 等能力。
-  if (hasExternalSkill) {
+  if (profile === 'general' && hasExternalSkill) {
     if (effectiveAllowedTools === undefined || effectiveAllowedTools === null) {
       // 保持 undefined：全量工具已经包含 skill 工具，无需窄化
       // (prev bug: effectiveAllowedTools = [...skillToolNames])
@@ -166,13 +178,12 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
     if (effectiveAllowedTools === undefined || effectiveAllowedTools === null) return true
     // 空数组 = Agent 明确设置了"不允许任何工具"，禁用全部
     if (effectiveAllowedTools.length === 0) return false
-    return effectiveAllowedTools.includes(toolName)
+    return effectiveAllowedTools.includes(normalizeToolName(toolName))
   }
 
-  // 1. 内置 Skill（list_skills / get_skill）- 始终注册，AI 需要知道自己有哪些技能
+  // 1. General utility skills retain their old behavior; code's registration guard excludes them.
   registerBuiltinSkills(registry)
-  // list_skills / get_skill are skill-infrastructure tools → track as skill
-  skillTools.push('list_skills', 'get_skill')
+  skillTools.push(...registry.list().map(tool => tool.name))
 
   // 2. 文件工具（read_file / write_file / list_files / delete_file / create_dir）
   // 支持格式：JSON, CSV, XLSX, XLS, PDF, DOC, DOCX, 代码, 文本
@@ -188,7 +199,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   })
 
   // 3. 命令行工具
-  if (shouldRegister('run_command')) registerBuiltin(cmdTool)
+  if (shouldRegister(cmdTool.name)) registerBuiltin(cmdTool)
 
   // 4. 向用户提问工具 - 始终注册，交互需要
   registerBuiltin(askUserTool)
@@ -242,12 +253,18 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
     )
   }
 
-  createSkillTools(externalSkills, { osmMode: mode, hiddenSkills: osmHiddenSkills }).forEach((t) => { registry.register(t); skillTools.push(t.name) })
-  if (shouldRegister('run_skill_script')) { registry.register(runSkillScriptTool); skillTools.push(runSkillScriptTool.name) }
+  createSkillTools(externalSkills, { osmMode: mode, hiddenSkills: osmHiddenSkills }).forEach((tool) => {
+    registry.register(tool)
+    if (registry.has(tool.name)) skillTools.push(tool.name)
+  })
+  if (shouldRegister('run_skill_script')) {
+    registry.register(runSkillScriptTool)
+    if (registry.has(runSkillScriptTool.name)) skillTools.push(runSkillScriptTool.name)
+  }
 
   // 7. 搜索工具（glob / grep）
-  if (shouldRegister('glob')) registerBuiltin(globTool)
-  if (shouldRegister('grep')) registerBuiltin(grepTool)
+  if (shouldRegister(globTool.name)) registerBuiltin(globTool)
+  if (shouldRegister(grepTool.name)) registerBuiltin(grepTool)
 
   // 8. 待办任务工具（todo_list / todo_create / todo_update / todo_delete）
   todoTools.forEach(t => {
@@ -283,7 +300,8 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   // 16. MCP 工具（动态加载）- 按名称过滤；合并 inlineMcpServers
   const mcpTools = await registerMCPTools(
     registry,
-    opts.allowedTools ? (name: string) => opts.allowedTools!.includes(name) : undefined,
+    (name: string) => (profile !== 'code' || isCodeProfileTool({ name })) &&
+      (explicitAllowedTools === undefined || explicitAllowedTools.includes(name)),
     opts.inlineMcpServers
   )
 
@@ -302,11 +320,20 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   // 验证 CORE 工具名与 registry 实际注册保持一致，避免 OFF 模式下 Agent
   // 因工具名变更而"静默失去能力"。只在注册最多的完整场景（allowedTools
   // 为 undefined，即本次 registry 理论上应包含所有内置工具）触发。
-  if (effectiveAllowedTools === undefined) {
+  if (profile === 'general' && effectiveAllowedTools === undefined) {
     const result = runOSMSelfCheck(registry)
     logOSMSelfCheck(logger, result)
   }
 
-  const toolCategories: ToolCategories = { builtinTools, mcpTools, skillTools }
+  // Classify the actual registry, including skipped dynamic registrations and name collisions.
+  const registeredNames = registry.list().map(tool => tool.name)
+  const skillNames = new Set(skillTools)
+  const builtinNames = new Set(builtinTools)
+  const mcpNames = new Set(mcpTools.filter(name => !skillNames.has(name) && !builtinNames.has(name)))
+  const toolCategories: ToolCategories = {
+    builtinTools: registeredNames.filter(name => !skillNames.has(name) && !mcpNames.has(name)),
+    mcpTools: registeredNames.filter(name => mcpNames.has(name)),
+    skillTools: registeredNames.filter(name => skillNames.has(name)),
+  }
   return { registry, externalSkills, toolCategories }
 }

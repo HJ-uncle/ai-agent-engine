@@ -28,7 +28,7 @@ export const lspDiagnoseTool: Tool = {
   async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
     const { filePath, content, adapters } = rawArgs as { filePath: string; content?: string; adapters?: string[] }
     try {
-      const cwd = workspaceManager.init(ctx)
+      const cwd = workspaceManager.getWorkingDirectory(ctx)
       const abs = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath)
 
       const result = await diagnoseFile(abs, {

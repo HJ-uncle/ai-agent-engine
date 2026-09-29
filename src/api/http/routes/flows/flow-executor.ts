@@ -10,12 +10,13 @@
  * 设计借鉴 ViMax：确定性 DAG 调度而非 LLM 自主 subagent 调用，
  * 以保证「同层并行」硬约束与可视化图边的严格遵循。
  */
+import type { ToolProfile } from '../../../../tools/tool-profile.js'
 import { logger } from '../../../../observability/index.js'
 import { createLLMAdapter } from '../../../../core/llm-adapter/index.js'
 import { ReActStrategy } from '../../../../core/agent-loop/react.js'
 import { createToolRegistry } from '../../../../tools/registry-factory.js'
 import { createAgentContext } from '../../../../core/agent-context/factory.js'
-import { SQLiteConversationHistory } from '../../../../storage/conversation/index.js'
+import { createConversationHistory } from '../../../../storage/conversation/factory.js'
 import type {
   FlowNodeConfig,
   FlowEdgeConfig,
@@ -87,7 +88,8 @@ async function executeNode(
   resolvedPrompt: string,
   runId: string,
   bus: FlowEventBus,
-  signal: AbortSignal
+  signal: AbortSignal,
+  toolProfile: ToolProfile
 ): Promise<{ output: string; usage?: FlowEvent['usage'] }> {
   const subSessionId = `flow-${runId}-${node.nodeId}`
   const nodeLogger = logger.child({ flowRunId: runId, nodeId: node.nodeId, subSessionId })
@@ -101,7 +103,7 @@ async function executeNode(
   })
 
   try {
-    const { registry: subRegistry, externalSkills } = await createToolRegistry()
+    const { registry: subRegistry, externalSkills } = await createToolRegistry({ toolProfile })
 
     // 系统提示词：节点 > 默认
     const defaultPrompt = '你是一个专业的子代理，专注于完成特定任务。请清晰思考，分步执行，确保任务完成后提供详细的总结。'
@@ -110,10 +112,11 @@ async function executeNode(
     const finalSystemPrompt = [baseSystemPrompt, skillsPrompt].filter(Boolean).join('\n\n')
 
     const subCtx = createAgentContext({
+      toolProfile,
       sessionId: subSessionId,
       tenantId: 'flow-tenant', // ephemeral，不入可见列表
       tools: subRegistry,
-      history: new SQLiteConversationHistory(),
+      history: createConversationHistory(),
       logger: nodeLogger,
       tokenBudget: undefined,
       signal
@@ -215,7 +218,8 @@ function resolveFinalOutput(nodes: FlowNodeConfig[], context: Record<string, str
 export class FlowExecutor {
   constructor(
     private bus: FlowEventBus,
-    private signal: AbortSignal
+    private signal: AbortSignal,
+    private toolProfile: ToolProfile = 'general'
   ) {}
 
   async run(opts: RunFlowOptions): Promise<void> {
@@ -275,7 +279,7 @@ export class FlowExecutor {
             }
 
             try {
-              const { output } = await executeNode(node, prompt, this.bus.runId, this.bus, this.signal)
+              const { output } = await executeNode(node, prompt, this.bus.runId, this.bus, this.signal, this.toolProfile)
               // 仅写各自的 node key（互不覆盖）
               context[node.nodeId] = output
               context['output'] = output

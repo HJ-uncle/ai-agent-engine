@@ -1,0 +1,14 @@
+Usage: claude plugin marketplace add [options] <source>
+
+Add a marketplace from a URL, path, or GitHub repo
+
+Options:
+  --claudeai           Add the marketplace of this name that claude.ai hosts for
+                       you, by its listed name or its local name (see: claude
+                       plugin marketplace list)
+  -h, --help           Display help for command
+  --scope <scope>      Where to declare the marketplace: user (default),
+                       project, or local
+  --sparse <paths...>  Limit checkout to specific directories via git
+                       sparse-checkout (for monorepos). Example: --sparse
+                       .claude-plugin plugins

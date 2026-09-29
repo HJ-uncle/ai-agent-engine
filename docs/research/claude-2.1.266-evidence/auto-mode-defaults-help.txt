@@ -1,0 +1,9 @@
+Usage: claude auto-mode defaults [options]
+
+Print the default auto mode environment, allow, soft_deny, and hard_deny rules
+as JSON
+
+Options:
+  -h, --help        Display help for command
+  --label <prefix>  Show only rules whose label starts with this prefix
+                    (case-insensitive)

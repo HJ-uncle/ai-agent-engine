@@ -1,0 +1,52 @@
+// Verifies code context never opens general memory storage while preserving tools and local conversation history.
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AgentContext } from '../../../core/agent-context/types.js'
+import { getCurrentContextTool } from '../get-context-tool.js'
+
+const memory = vi.hoisted(() => ({
+  imported: vi.fn(), constructed: vi.fn(),
+  list: vi.fn().mockResolvedValue([{ type: 'fact', summary: 'GENERAL_MEMORY_FIXTURE' }]),
+}))
+vi.mock('../../../storage/memory/memory-manager.js', () => {
+  memory.imported()
+  return { SQLiteMemoryManager: class {
+    constructor() { memory.constructed() }
+    listNodes(...args: unknown[]) { return memory.list(...args) }
+  } }
+})
+
+beforeEach(() => { vi.clearAllMocks() })
+
+function context(toolProfile?: 'code' | 'general'): AgentContext {
+  return {
+    toolProfile, tenantId: 'context-tenant', sessionId: 'context-session',
+    workspaceDir: process.cwd(), projectRoot: process.cwd(), cwd: process.cwd(), tokenBudget: 100_000,
+    tools: { list: () => [{ name: 'read_file', description: 'Read project files', parameters: { type: 'object' } }] },
+    history: { getHistory: vi.fn().mockResolvedValue([{ role: 'user', content: 'LOCAL_PROJECT_HISTORY' }]) },
+    logger: { info: vi.fn(), error: vi.fn() },
+  } as unknown as AgentContext
+}
+
+describe('get_current_context memory isolation', () => {
+  it('code neither imports nor constructs the memory manager and preserves local context', async () => {
+    const ctx = context('code')
+    const result = await getCurrentContextTool.execute({ includeTools: true, includeHistory: true }, ctx)
+    expect(result.success).toBe(true)
+    expect(result.output).toContain('read_file')
+    expect(result.output).toContain('LOCAL_PROJECT_HISTORY')
+    expect(result.output).toContain(process.cwd())
+    expect(result.output).not.toContain('GENERAL_MEMORY_FIXTURE')
+    expect(result.output).not.toContain('记忆信息')
+    expect(memory.imported).not.toHaveBeenCalled()
+    expect(memory.constructed).not.toHaveBeenCalled()
+    expect(memory.list).not.toHaveBeenCalled()
+  })
+
+  it.each(['general', undefined] as const)('%s retains existing memory context behavior', async (toolProfile) => {
+    const result = await getCurrentContextTool.execute({}, context(toolProfile))
+    expect(result.success).toBe(true)
+    expect(result.output).toContain('GENERAL_MEMORY_FIXTURE')
+    expect(memory.constructed).toHaveBeenCalledTimes(1)
+    expect(memory.list).toHaveBeenCalledWith({ limit: 5, orderBy: 'timestamp', orderDir: 'DESC' }, { tenantId: 'context-tenant', sessionId: 'context-session' })
+  })
+})

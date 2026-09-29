@@ -1,0 +1,70 @@
+Usage: claude plugin eval [options] [command] [target]
+
+Run eval cases (<eval dir>/**/case.yaml or prompt.md + graders/*.md; the eval
+dir is evals/ unless --eval-dir or the manifest says otherwise) against a plugin
+and report scored results. Target is a path, a plugin name, or a
+`plugin@marketplace` id — installed and skills-dir plugins both resolve (and add
+a no-plugin baseline arm)
+
+Options:
+  --ablation <mode>         Run a no-plugin baseline arm and report the score
+                            delta (none | with-without; default: with-without
+                            whenever a plugin resolves — by name, or from the
+                            target path — and none when nothing does; under
+                            with-without, graders marked with-only, incl.
+                            `tool_used: Skill`, are a plugin-fired indicator
+                            rather than part of the score)
+  --allow-tools <tools...>  Operator grant for gated tools (Bash, Write, Edit,
+                            WebFetch, mcp__*). Supports Tool(pattern:*) syntax
+  --case <glob>             Filter cases by name glob
+  --eval-dir <dir>          Directory name (below the plugin) that holds the
+                            eval cases; results go to <plugin>/<dir>/results/ —
+                            for an installed-plugin target, ./<dir>/results/
+                            with this flag, else ./evals/results/ (default dir:
+                            the manifest's experimental.evals value, else
+                            evals/)
+  -h, --help                Display help for command
+  --json [path]             Print the full run result (prompts, graders, per-run
+                            scores) as JSON to stdout, or write it to this .json
+                            file
+  --judge-model <model>     Override LLM-grader model (default: haiku)
+  --keep-temp               Preserve scaffold dirs for debugging
+  --max-cost-usd <usd>      Optional hard cost ceiling; abort and report partial
+                            results if hit (exit 2). Overrun is bounded to one
+                            agent run — when that run breaches, paid graders
+                            (llm/baseline) are skipped while free graders still
+                            score it. Runs are already bounded by max_turns and
+                            timeout_seconds — only set this when you need a
+                            strict budget
+  --mocks <mode>            Mock stand-ins for MCP servers, from <eval
+                            dir>/mocks/ (record | off; default: record — off
+                            spawns the real servers, gated by --allow-tools as
+                            usual)
+  --model <model>           Override model for all cases
+  --no-publish              Keep the HTML report local only; skip publishing it
+                            to claude.ai
+  --no-scaffold             Explicitly skip scaffold_script
+  --output-dir <dir>        Directory for aggregate-result.json (default:
+                            ./<eval dir>/results/<timestamp>/)
+  --publish-report          Also require publishing the report to claude.ai
+                            (already the default when your account supports it);
+                            explains why if unavailable
+  --report <path>           Write the self-contained HTML report (scores,
+                            prompts, grader verdicts) to <path> instead of the
+                            results dir
+  --runs <n>                Override per-case runs (default: case.runs ?? 3)
+  --scaffold                Run each case's scaffold_script (runs
+                            author-supplied bash as you; off by default — only
+                            use on case files you authored)
+  --tag <tag...>            Filter cases by tag (repeatable)
+  --threshold <0..1>        Exit 1 if any case score is below this threshold
+                            (default: 1.0)
+  --verbose                 Log per-message trace events to the debug log (use
+                            --debug-file to read them)
+
+Commands:
+  init [options] [name]     Author an eval suite under the eval dir (evals/
+                            unless --eval-dir or the manifest says otherwise)
+                            via an interview that sources inputs and designs
+                            graders. Use --bare <name> for a blank single-case
+                            template.

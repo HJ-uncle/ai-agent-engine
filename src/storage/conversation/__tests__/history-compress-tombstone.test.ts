@@ -78,6 +78,15 @@ const mockDb = {
 
     return Promise.resolve({ rows: [] })
   },
+
+  /** mock 事务：直接复用同一个 execute（内存数组本身就是单线程语义），提交/回滚空操作 */
+  transaction(_mode?: string) {
+    return Promise.resolve({
+      execute: (opts: { sql: string; args?: unknown[] }) => mockDb.execute(opts),
+      commit: () => Promise.resolve(),
+      rollback: () => Promise.resolve(),
+    })
+  },
 }
 
 vi.mock('../../../storage/sqlite/db.js', () => ({

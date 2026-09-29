@@ -16,6 +16,6 @@ export interface MCPClient {
   connect(): Promise<void>
   disconnect(): Promise<void>
   listTools(): Promise<MCPToolDefinition[]>
-  callTool(name: string, args: Record<string, unknown>): Promise<string>
+  callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string>
   toTools(): Promise<Tool[]>
 }

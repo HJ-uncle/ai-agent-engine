@@ -1,60 +1,58 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
-import { SQLiteConversationHistory } from '../../../storage/conversation/index.js'
+import { createConversationHistory } from '../../../storage/conversation/factory.js'
 import { SessionStore } from '../../../storage/session/index.js'
 import { success, fail, paginateArray } from '../response.js'
 import { workspaceManager } from '../../../workspace/index.js'
 import { abortActiveChat } from './chat.js'
 import fs from 'node:fs'
+import { getSubagentStore } from '../../../core/subagent/store.js'
+import { getSubagentRunner } from '../../../core/subagent/runner.js'
+import { projectPendingSubagents } from '../../../core/subagent/projection.js'
+import { subagentRoutes } from './subagent.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
 
 export async function autoCompactSession(tenantId: string, sessionId: string, logger: any) {
-  const history = new SQLiteConversationHistory()
+  const history = createConversationHistory()
   const messages = await history.getHistory({ tenantId, sessionId })
   if (messages.length <= 1) return
 
-  const originalTokens = messages.reduce((sum, m) => sum + (m.tokens || 0) + (m.usage?.totalTokens || 0), 0)
-
   // 专职模型路由：如果配置了 LLM_SUMMARIZE_MODEL，优先使用它
   const { createLLMAdapterWithDbConfig } = await import('../../../core/llm-adapter/index.js')
+  const { buildCompactSummarizeFn } = await import('../../../core/agent-loop/compact-prompt.js')
   const summarizeModel = process.env.LLM_SUMMARIZE_MODEL || undefined
   const llm = await createLLMAdapterWithDbConfig({ model: summarizeModel })
 
-  const prompt = `请你将以下对话历史进行智能压缩和提炼，提取出核心上下文、已确认的结论、关键事实、未完成的任务等关键信息，形成一份精简的上下文摘要。这会作为后续对话的唯一背景信息，因此请务必保证信息准确。\n以下是对话历史：\n${messages.map((m) => `[${m.role}]: ${m.content}`).join('\n\n')}`
-
   logger.info({ model: llm.model }, 'Starting background auto-compaction')
 
-  const response = await llm.complete([{ role: 'user', content: prompt, tokens: 0, createdAt: Date.now() }], {
-    model: llm.model,
-    systemPrompt: '你是一个专业的上下文压缩和摘要助手，擅长在保留核心语义和关键信息的前提下极大地缩减文本长度。',
-  })
+  // 与手动端点同一条路：history.compress 统一落地与保留策略；后台压缩同样按条数保留
+  const stats = await history.compress(
+    { tenantId, sessionId },
+    buildCompactSummarizeFn(llm),
+    6,
+  )
 
-  await history.clear({ tenantId, sessionId }, { tombstone: false })
-  const summaryMsg = {
-    role: 'system' as const,
-    content: `【历史上下文摘要 (Auto-compacted)】\n${response.content}`,
-    tokens: response.completionTokens,
-    usage: {
-      promptTokens: response.promptTokens,
-      completionTokens: response.completionTokens,
-      totalTokens: response.promptTokens + response.completionTokens,
-    }
-  }
-  await history.append(summaryMsg, { tenantId, sessionId })
-  
   await history.append({
     role: 'assistant' as const,
     content: '（上下文已触发智能压缩以释放空间）',
-    reasoningContent: '',
-    tokens: 15
+    tokens: 15,
+    metadata: { compressedFrom: stats.preTokens, compressedTo: stats.postTokens },
   }, { tenantId, sessionId })
 
-  logger.info({ originalTokens, compressedTokens: response.completionTokens }, 'Auto-compaction finished')
+  logger.info({ originalTokens: stats.preTokens, compressedTokens: stats.postTokens }, 'Auto-compaction finished')
 }
 
 export async function conversationRoutes(fastify: FastifyInstance) {
-  const history = new SQLiteConversationHistory()
+  const history = createConversationHistory()
+  await subagentRoutes(fastify)
+
+  async function removeChildRuns(tenantId: string, sessionId: string, parentMessageIds: Set<string>): Promise<void> {
+    await getSubagentRunner().cancelRunsForParent(tenantId, sessionId)
+    const runs = (await getSubagentStore().listRunsForParent(tenantId, sessionId)).filter(run => parentMessageIds.has(run.parentMessageId))
+    for (const run of runs) await history.clear({ tenantId, sessionId: run.childSessionId })
+    await getSubagentStore().deleteRuns(tenantId, runs.map(run => run.runId))
+  }
 
   // GET /conversation/sessions  — 列出该租户下所有有对话记录的 session
   fastify.get<{ Querystring: { current?: number; pageSize?: number } }>('/conversation/sessions', async (request, reply) => {
@@ -71,11 +69,17 @@ export async function conversationRoutes(fastify: FastifyInstance) {
     if (!sessionId) {
       return reply.code(200).send(fail(40001, '参数验证失败：sessionId 不能为空'))
     }
+    await projectPendingSubagents(history, tenantId)
     const messages = await history.getFullHistory({ tenantId, sessionId })
+    const subagentRuns = await getSubagentStore().listRunsForParent(tenantId, sessionId)
+    for (const message of messages) {
+      const run = subagentRuns.find(item => item.parentToolCallId === message.toolCallId)
+      if (run) message.metadata = { ...message.metadata, subagent: run, success: run.status === 'succeeded', error: run.error?.message }
+    }
     const sessionUsage = await history.getSessionUsage({ tenantId, sessionId })
     
     const response = paginateArray(messages, current, pageSize)
-    response.metadata = { sessionUsage }
+    response.metadata = { sessionUsage, subagentRuns }
     
     return reply.code(200).send(response)
   })
@@ -87,6 +91,11 @@ export async function conversationRoutes(fastify: FastifyInstance) {
     if (!sessionId) {
       return reply.code(200).send(fail(40001, '参数验证失败：sessionId 不能为空'))
     }
+    abortActiveChat(tenantId, sessionId, 'History cleared by user')
+    await getSubagentRunner().cancelRunsForParent(tenantId, sessionId)
+    const childRuns = await getSubagentStore().listRunsForParent(tenantId, sessionId)
+    for (const run of childRuns) await history.clear({ tenantId, sessionId: run.childSessionId })
+    await getSubagentStore().deleteRunsForParent(tenantId, sessionId)
     await history.clear({ tenantId, sessionId })
     // 注意：Agent 绑定不随历史清空而解除，绑定与会话生命周期一致（仅硬删除 session 时清除）
     return reply.code(200).send(success({ success: true }))
@@ -107,6 +116,10 @@ export async function conversationRoutes(fastify: FastifyInstance) {
     try { abortActiveChat(tenantId, sessionId, 'Session deleted by user') } catch { /* noop */ }
 
     // 1. Delete DB history（内部会先设置墓碑，再 DELETE FROM conversations）
+    await getSubagentRunner().cancelRunsForParent(tenantId, sessionId)
+    const childRuns = await getSubagentStore().listRunsForParent(tenantId, sessionId)
+    for (const run of childRuns) await history.clear({ tenantId, sessionId: run.childSessionId })
+    await getSubagentStore().deleteRunsForParent(tenantId, sessionId)
     await history.clear({ tenantId, sessionId })
 
     // 2. 同步清除会话 Agent 绑定，允许重新选择 Agent
@@ -155,6 +168,10 @@ export async function conversationRoutes(fastify: FastifyInstance) {
       return reply.code(200).send(fail(40001, '参数验证失败：conversationId 不能为空'))
     }
     try { abortActiveChat(tenantId, request.query.sessionId ?? '', 'Turn deleted by user') } catch { /* noop */ }
+    if (request.query.sessionId) {
+      const messages = await history.getByConversationId(conversationId, tenantId)
+      await removeChildRuns(tenantId, request.query.sessionId, new Set(messages.flatMap(message => message.id ? [message.id] : [])))
+    }
     const removed = await history.deleteByConversationId(conversationId, tenantId)
     if (removed === 0) {
       return reply.code(200).send(fail(40400, '该轮对话不存在'))
@@ -176,6 +193,7 @@ export async function conversationRoutes(fastify: FastifyInstance) {
     if (!target) {
       return reply.code(200).send(fail(40400, '消息不存在'))
     }
+    if (request.query.sessionId) await removeChildRuns(tenantId, request.query.sessionId, new Set([messageId]))
     await history.deleteMessage(messageId, tenantId)
     return reply.code(200).send(success({ success: true }))
   })
@@ -194,6 +212,9 @@ export async function conversationRoutes(fastify: FastifyInstance) {
     if (!target) {
       return reply.code(200).send(fail(40400, '消息不存在'))
     }
+    const messages = await history.getFullHistory({ tenantId, sessionId })
+    const from = messages.findIndex(message => message.id === messageId)
+    if (from >= 0) await removeChildRuns(tenantId, sessionId, new Set(messages.slice(from).flatMap(message => message.id ? [message.id] : [])))
     await history.deleteMessagesAfterId(target.dbId, sessionId, tenantId)
     await history.deleteMessage(messageId, tenantId)
     return reply.code(200).send(success({ success: true, removedFrom: messageId }))
@@ -208,64 +229,42 @@ export async function conversationRoutes(fastify: FastifyInstance) {
     }
 
     const messages = await history.getHistory({ tenantId, sessionId })
-    if (messages.length <= 1) {
+    if (messages.length <= 4) {
       return reply.code(200).send(success({ success: true, message: '消息数量过少，无需压缩' }))
     }
 
     const originalTokens = messages.reduce((sum, m) => sum + (m.tokens || 0) + (m.usage?.totalTokens || 0), 0)
 
-    // 动态导入 createLLMAdapter 避免循环依赖
+    // 动态导入避免循环依赖；摘要 prompt 与自动压缩（react.ts）共用同一份 6 段式模板
     const { createLLMAdapter } = await import('../../../core/llm-adapter/factory.js')
+    const { buildCompactSummarizeFn } = await import('../../../core/agent-loop/compact-prompt.js')
     const llm = createLLMAdapter()
 
-    const prompt = `请你将以下对话历史进行智能压缩和提炼，提取出核心上下文、已确认的结论、关键事实、未完成的任务等关键信息，形成一份精简的上下文摘要。这会作为后续对话的唯一背景信息，因此请务必保证信息准确。
-以下是对话历史：
-${messages.map((m) => `[${m.role}]: ${m.content}`).join('\n\n')}`
-
     try {
-      const response = await llm.complete([{ role: 'user', content: prompt, tokens: 0, createdAt: Date.now() }], {
-        model: llm.model,
-        systemPrompt: '你是一个专业的上下文压缩和摘要助手，擅长在保留核心语义和关键信息的前提下极大地缩减文本长度。',
-      })
+      // 经 history.compress 统一处理：两套后端各自落地（SQLite 事务重建 / JSONL 追加 summary 行）。
+      // 手动压缩按条数保留（保底一半），保证「点了就一定压缩」——token 预算回溯只用于
+      // 自动压缩（react.ts），那里上下文大、预算回溯才有意义。
+      const stats = await history.compress(
+        { tenantId, sessionId },
+        buildCompactSummarizeFn(llm),
+        6,
+      )
 
-      // 覆盖历史（主动重建，不使用墓碑，否则紧随的 append 会被静默丢弃）
-      await history.clear({ tenantId, sessionId }, { tombstone: false })
-      const summaryMsg = {
-        role: 'system' as const,
-        content: `【历史上下文摘要】\n${response.content}`,
-        tokens: response.completionTokens,
-        usage: {
-          promptTokens: response.promptTokens,
-          completionTokens: response.completionTokens,
-          totalTokens: response.promptTokens + response.completionTokens,
-        }
-      }
-      await history.append(summaryMsg, { tenantId, sessionId })
-      
       // 增加一条 assistant 消息作为反馈
       await history.append({
         role: 'assistant' as const,
         content: '我已经为您完成了上下文压缩，并保留了核心摘要信息。您可以继续与我对话。',
-        reasoningContent: '',
-        tokens: 20
+        tokens: 20,
+        metadata: { compressedFrom: stats.preTokens, compressedTo: stats.postTokens },
       }, { tenantId, sessionId })
 
-      return reply.code(200).send(success({ 
-        success: true, 
+      return reply.code(200).send(success({
+        success: true,
         message: '压缩成功',
         stats: {
-          originalTokens,
-          compressedTokens: response.completionTokens,
-          ratio: originalTokens > 0 ? (response.completionTokens / originalTokens * 100).toFixed(1) + '%' : '0%'
-        },
-        usage: {
-          promptTokens: response.promptTokens,
-          completionTokens: response.completionTokens,
-          totalTokens: response.promptTokens + response.completionTokens,
-          systemPromptTokens: 0,
-          messagesTokens: 0,
-          skillTokens: 0,
-          systemToolsTokens: 0,
+          originalTokens: stats.preTokens || originalTokens,
+          compressedTokens: stats.postTokens,
+          ratio: stats.preTokens > 0 ? ((stats.preTokens - stats.postTokens) / stats.preTokens * 100).toFixed(1) + '%' : '0%'
         }
       }))
     } catch (e: any) {

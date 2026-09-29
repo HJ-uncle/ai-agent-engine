@@ -102,20 +102,22 @@ export const getCurrentContextTool: Tool = {
         }
       }
 
-      // 获取内存摘要
-      contextInfo.push(``)
-      contextInfo.push(`### 记忆信息`)
-      try {
-        const { SQLiteMemoryManager } = await import('../../storage/memory/memory-manager.js')
-        const manager = new SQLiteMemoryManager()
-        const memories = await manager.listNodes({ limit: 5, orderBy: 'timestamp', orderDir: 'DESC' }, { tenantId: ctx.tenantId, sessionId: ctx.sessionId })
-        contextInfo.push(`**已存储近期记忆**\n`)
-        for (const mem of memories) {
-          const value = typeof mem.summary === 'string' ? mem.summary.slice(0, 80) : ''
-          contextInfo.push(`- **[${mem.type}]**: ${value}${value.length >= 80 ? '...' : ''}`)
+      // Code sessions use project context; do not open the general-purpose memory store for them.
+      if (ctx.toolProfile !== 'code') {
+        contextInfo.push(``)
+        contextInfo.push(`### 记忆信息`)
+        try {
+          const { SQLiteMemoryManager } = await import('../../storage/memory/memory-manager.js')
+          const manager = new SQLiteMemoryManager()
+          const memories = await manager.listNodes({ limit: 5, orderBy: 'timestamp', orderDir: 'DESC' }, { tenantId: ctx.tenantId, sessionId: ctx.sessionId })
+          contextInfo.push(`**已存储近期记忆**\n`)
+          for (const mem of memories) {
+            const value = typeof mem.summary === 'string' ? mem.summary.slice(0, 80) : ''
+            contextInfo.push(`- **[${mem.type}]**: ${value}${value.length >= 80 ? '...' : ''}`)
+          }
+        } catch (e) {
+          contextInfo.push(`*无法获取记忆信息: ${(e as Error).message}*`)
         }
-      } catch (e) {
-        contextInfo.push(`*无法获取记忆信息: ${(e as Error).message}*`)
       }
 
       // 获取当前信号状态
