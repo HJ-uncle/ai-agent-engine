@@ -3,8 +3,10 @@ import path from 'node:path'
 import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
 import { workspaceManager } from '../../workspace/index.js'
 import { listRecursive } from './utils.js'
-import { commitDeleteChange } from './change-recorder.js'
+import { readOldSnapshot, commitDeleteChange, ChangeRecordingError } from './change-recorder.js'
 import { moveToSystemTrash } from './trash.js'
+import { withFileLocks } from '../../shared/file-version.js'
+import { throwIfAborted } from '../../core/utils/abort.js'
 
 // ── list_files ───────────────────────────────────────────────────────────
 
@@ -84,17 +86,25 @@ export const deleteFileTool: Tool = {
     const { path: filePath } = rawArgs as { path: string }
     try {
       const safePath = workspaceManager.resolveSafePath(ctx, filePath)
-      // 删除前留快照（供改动面板撤回恢复）
-      const change = await commitDeleteChange(ctx, filePath, safePath)
-      // 进回收站而非永久删除：即使快照机制失效，用户也能从回收站找回
-      await moveToSystemTrash(safePath)
-      return {
-        success: true,
-        output: `Moved to trash: ${filePath}`,
-        ...(change ? { change } : {})
-      }
+      return await withFileLocks([safePath], async ([canonicalPath]) => {
+        throwIfAborted(ctx.signal)
+        // Do not canonicalize a link then trash its target. Directories require
+        // a different snapshot/lock protocol and are outside this file tool.
+        const stat = fs.lstatSync(safePath)
+        if (!stat.isFile() || stat.isSymbolicLink()) {
+          return { success: false, output: 'delete_file 仅支持普通文件，不支持目录或符号链接' }
+        }
+        workspaceManager.resolveSafePath(ctx, canonicalPath)
+        const snapshot = await readOldSnapshot(canonicalPath)
+        await moveToSystemTrash(canonicalPath)
+        const change = await commitDeleteChange(ctx, filePath, canonicalPath, snapshot)
+        return { success: true, output: `Moved to trash: ${filePath}`, change }
+      })
     } catch (err) {
-      return { success: false, output: err instanceof Error ? err.message : 'Unknown error' }
+      return {
+        success: false, output: err instanceof Error ? err.message : 'Unknown error',
+        ...(err instanceof ChangeRecordingError ? { metadata: { fileMutationApplied: true, rollbackAvailable: false } } : {}),
+      }
     }
   },
 }
@@ -116,8 +126,12 @@ export const createDirTool: Tool = {
     const { path: dirPath } = rawArgs as { path: string }
     try {
       const safePath = workspaceManager.resolveSafePath(ctx, dirPath)
-      fs.mkdirSync(safePath, { recursive: true })
-      return { success: true, output: `Created directory: ${dirPath}` }
+      return await withFileLocks([safePath], async ([canonicalPath]) => {
+        throwIfAborted(ctx.signal)
+        workspaceManager.resolveSafePath(ctx, canonicalPath)
+        fs.mkdirSync(canonicalPath, { recursive: true })
+        return { success: true, output: `Created directory: ${dirPath}` }
+      })
     } catch (err) {
       return { success: false, output: err instanceof Error ? err.message : 'Unknown error' }
     }

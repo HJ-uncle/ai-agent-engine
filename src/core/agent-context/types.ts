@@ -47,6 +47,7 @@ export interface Message {
 export interface ToolResult {
   success: boolean
   output: string
+  status?: ToolOutcomeStatus
   error?: string
   durationMs?: number
   needsConfirmation?: boolean
@@ -63,6 +64,31 @@ export interface ToolResult {
 export interface PendingAction {
   type: string
   [key: string]: unknown
+}
+
+export type ToolOutcomeStatus = 'succeeded' | 'failed' | 'cancelled' | 'interrupted' | 'waiting'
+export type ToolExecutionMode = 'readonly' | 'subagent' | 'serial'
+
+/** Durable user interaction. requestId is the original toolCallId. */
+export interface Pending {
+  requestId: string
+  toolCallId: string
+  toolName: string
+  args: Record<string, unknown>
+  messageId?: string
+  kind: 'ask' | 'permission'
+  pendingAction?: PendingAction
+  question?: string
+  options?: unknown[]
+  status: 'pending' | 'answered'
+  output?: string
+}
+
+export interface ResumeToolCall {
+  toolCall: ToolCall
+  messageId?: string
+  decision: 'approved' | 'rejected' | 'answered'
+  output?: string
 }
 
 export class ToolError extends Error {
@@ -97,6 +123,8 @@ export interface Tool {
   readonly displayName?: string
   readonly description: string
   readonly parameters: JSONSchema
+  readonly executionMode?: ToolExecutionMode
+  preflight?(args: unknown, ctx: AgentContext): Promise<ToolResult | undefined>
   execute(args: unknown, ctx: AgentContext): Promise<ToolResult>
 }
 
@@ -163,12 +191,21 @@ export interface IToolRegistry {
   unregister(name: string): void
   list(): Array<{ name: string; displayName?: string; description: string; parameters: JSONSchema }>
   execute(name: string, args: unknown, ctx: AgentContext): Promise<ToolResult>
+  preflight?(name: string, args: unknown, ctx: AgentContext): Promise<ToolResult | undefined>
+  executionMode?(name: string, args?: unknown): ToolExecutionMode
   has(name: string): boolean
 }
 
 // ─── AgentContext ──────────────────────────────────────────────────────────────
 
 export interface AgentContext {
+  rootRunId?: string
+  turnId?: string
+  userMessageId?: string
+  assistantMessageId?: string
+  onPending?: (pending: Pending) => void | Promise<void>
+  resumeToolCall?: ResumeToolCall
+  approvedToolCallId?: string
   cwd?: string
   projectRoot?: string
   scratchDir?: string
@@ -214,6 +251,13 @@ export interface AgentContext {
 // ─── AgentContext Factory Options ─────────────────────────────────────────────
 
 export interface CreateAgentContextOptions {
+  rootRunId?: string
+  turnId?: string
+  userMessageId?: string
+  assistantMessageId?: string
+  onPending?: (pending: Pending) => void | Promise<void>
+  resumeToolCall?: ResumeToolCall
+  approvedToolCallId?: string
   cwd?: string
   projectRoot?: string
   scratchDir?: string

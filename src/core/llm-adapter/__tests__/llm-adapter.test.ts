@@ -173,7 +173,7 @@ describe('FallbackAdapter', () => {
   })
 
   it('falls back to secondary when primary fails', async () => {
-    const primary = makeMockAdapter('primary', new Error('primary failed'))
+    const primary = makeMockAdapter('primary', Object.assign(new Error('primary failed'), { status: 503 }))
     const fallback = makeMockAdapter('fallback')
     const adapter = new FallbackAdapter({ primary, fallbacks: [fallback] })
 
@@ -185,8 +185,8 @@ describe('FallbackAdapter', () => {
   })
 
   it('throws when all adapters fail', async () => {
-    const primary = makeMockAdapter('primary', new Error('primary failed'))
-    const fallback = makeMockAdapter('fallback', new Error('fallback failed'))
+    const primary = makeMockAdapter('primary', Object.assign(new Error('primary failed'), { status: 503 }))
+    const fallback = makeMockAdapter('fallback', Object.assign(new Error('fallback failed'), { status: 503 }))
     const adapter = new FallbackAdapter({ primary, fallbacks: [fallback] })
 
     await expect(adapter.complete(makeMessages())).rejects.toThrow('fallback failed')

@@ -72,6 +72,11 @@ export function createSubagentToolRegistry(parent: IToolRegistry, readOnly: bool
     unregister: (name) => { names.delete(name) },
     has: (name) => names.has(name),
     list: () => parent.list().filter((tool) => names.has(tool.name)),
+    preflight: async (name, args, ctx) => {
+      if (!names.has(name)) return { success: false, output: `子代理不允许使用工具 ${name}。`, metadata: { blocked: true, code: 'TOOL_NOT_ALLOWED' } }
+      return parent.preflight?.(name, args, ctx)
+    },
+    executionMode: (name, args) => names.has(name) ? parent.executionMode?.(name, args) ?? 'serial' : 'serial',
     execute: async (name, args, ctx) => {
       if (!names.has(name)) return { success: false, output: `子代理不允许使用工具 ${name}。`, metadata: { blocked: true, code: 'TOOL_NOT_ALLOWED' } }
       // Reuse the resolved parent implementations, including inline skill/MCP resources, without broadening capabilities.
@@ -157,6 +162,8 @@ export const subagentTool: Tool = {
         resolvedModel: resolved,
         utilityModel: ctx.utilityModel,
         runId: snapshot.runId,
+        rootRunId: ctx.rootRunId,
+        turnId: ctx.turnId ?? ctx.parentConversationId ?? ctx.conversationId,
         rootSessionId: snapshot.rootSessionId,
         parentSessionId: snapshot.parentSessionId,
         parentConversationId: snapshot.parentConversationId,

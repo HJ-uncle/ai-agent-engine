@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
 import type { AgentContext } from '../../agent-context/index.js'
 import { WorkspaceManager } from '../../../workspace/manager.js'
 import { createPool } from '../concurrency-pool.js'
@@ -83,23 +85,36 @@ describe('cancellation propagation', () => {
   })
 
   it('aborts the MCP HTTP request and does not convert provider isError into success', async () => {
+    state.mode = 'full-access'
     const controller = new AbortController()
     let started!: () => void
     const ready = new Promise<void>(resolve => { started = resolve })
-    const fetchMock = vi.fn((_url: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    let requests = 0
+    let respond = false
+    const server = http.createServer((_request, response) => {
+      requests++
       started()
-      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
-    }))
-    vi.stubGlobal('fetch', fetchMock)
-    const client = new HTTPMCPClient({ name: 'test', url: 'http://mcp.invalid' })
-    const request = client.callTool('lookup', {}, controller.signal)
-    const rejected = expect(request).rejects.toMatchObject({ name: 'AbortError' })
-    await ready
-    controller.abort()
-    await rejected
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({jsonrpc:'2.0', id:1, result:{isError:true, content:[{type:'text',text:'remote rejected'}]}}))))
-    await expect(client.callTool('lookup', {})).rejects.toThrow('remote rejected')
+      if (respond) {
+        response.setHeader('content-type', 'application/json')
+        response.end(JSON.stringify({jsonrpc:'2.0', id:1, result:{isError:true, content:[{type:'text',text:'remote rejected'}]}}))
+      }
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const client = new HTTPMCPClient({ name: 'test', url: `http://127.0.0.1:${(server.address() as AddressInfo).port}` })
+      const request = client.callTool('lookup', {}, controller.signal)
+      const rejected = expect(request).rejects.toMatchObject({ name: 'AbortError' })
+      await ready
+      controller.abort()
+      await rejected
+      expect(requests).toBe(1)
+      respond = true
+      await expect(client.callTool('lookup', {})).rejects.toThrow('remote rejected')
+      expect(requests).toBe(2)
+    } finally {
+      server.closeAllConnections()
+      await new Promise<void>(resolve => server.close(() => resolve()))
+    }
   })
 
   it('runs commands inside the project and actually terminates a cancelled process', async () => {

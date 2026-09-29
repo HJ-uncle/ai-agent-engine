@@ -6,6 +6,7 @@ import { createToolRegistry } from '../registry-factory.js'
 import { CODE_BUILTIN_TOOLS, normalizeAllowedTools, normalizeToolName } from '../tool-profile.js'
 import { createSubagentToolRegistry } from '../subagent/subagent-tool.js'
 import { skillsRegistry } from '../../skills/index.js'
+import { clearSecurityMode, setSecurityMode } from '../../security/policy-engine.js'
 
 const external = vi.hoisted(() => ({ tools: [] as Array<Tool & { source?: string }> }))
 vi.mock('../../storage/mcp/mcp-config.js', () => ({ listServers: () => [] }))
@@ -35,7 +36,7 @@ beforeEach(() => {
   external.tools = []
   vi.spyOn(skillsRegistry, 'getSkills').mockReturnValue([])
 })
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs() })
+afterEach(() => { clearSecurityMode(context.tenantId, context.sessionId); vi.restoreAllMocks(); vi.unstubAllEnvs() })
 
 describe('executable tool profiles', () => {
   it.each(['off', 'balanced', 'methodology', 'max'])('keeps code capabilities independent of OSM %s', async mode => {
@@ -61,6 +62,18 @@ describe('executable tool profiles', () => {
     expect(result.output).toContain('20')
     expect(implicit.toolCategories.skillTools).toEqual(expect.arrayContaining(['calculate', 'get_time', 'list_skills', 'get_skill', 'run_skill_script']))
     expectExactCategories(implicit)
+  })
+
+  it('keeps exact editing available by default when OSM is off and respects explicit narrowing', async () => {
+    vi.stubEnv('OSM_MODE', 'off')
+    const general = await createToolRegistry()
+    expect(general.registry.has('edit_file')).toBe(true)
+    expect(general.registry.executionMode('edit_file', {})).toBe('serial')
+    expect(general.toolCategories.builtinTools).toContain('edit_file')
+    const readOnlySelection = await createToolRegistry({ allowedTools: ['read_file'] })
+    expect(readOnlySelection.registry.has('edit_file')).toBe(false)
+    const editSelection = await createToolRegistry({ toolProfile: 'code', allowedTools: ['edit_file'] })
+    expect(editSelection.registry.list().map(item => item.name)).toEqual(['edit_file'])
   })
 
   it('does not leak tool selections between general, code and subsequent general registries', async () => {
@@ -105,6 +118,7 @@ describe('executable tool profiles', () => {
   })
 
   it('retains configured MCP and inline skill access with accurate categories and actual execution', async () => {
+    setSecurityMode(context.tenantId, context.sessionId, 'standard')
     external.tools = [tool('mcp_fixture_query')]
     const result = await createToolRegistry({ toolProfile: 'code', inlineMcpServers: mcpServers,
       inlineSkills: [{ id: 'fixture-skill', name: 'Fixture Skill', promptContent: 'Fixture instructions' }],
@@ -144,6 +158,7 @@ describe('executable tool profiles', () => {
   })
 
   it('permits configured dynamic skill identities while rejecting general service identities', async () => {
+    setSecurityMode(context.tenantId, context.sessionId, 'standard')
     const result = await createToolRegistry({ toolProfile: 'code' })
     const dynamic = tool('fixture_skill_action', 'skill')
     result.registry.register(dynamic)
@@ -159,6 +174,8 @@ describe('executable tool profiles', () => {
     const child = createSubagentToolRegistry(parent.registry, false)
     expect(child.has('execute_cmd')).toBe(true)
     expect(child.has('read_file')).toBe(true)
+    expect(child.has('edit_file')).toBe(true)
+    expect(child.executionMode?.('edit_file', {})).toBe('serial')
     expect(child.has('subagent')).toBe(false)
     expect(child.has('ask_user')).toBe(false)
     for (const name of excluded) {
@@ -168,6 +185,9 @@ describe('executable tool profiles', () => {
     const readOnly = createSubagentToolRegistry(parent.registry, true)
     expect(readOnly.has('read_file')).toBe(true)
     expect(readOnly.has('execute_cmd')).toBe(false)
+    expect(readOnly.has('edit_file')).toBe(false)
+    await expect(readOnly.preflight?.('edit_file', {}, context)).resolves.toMatchObject({ success: false, metadata: { blocked: true, code: 'TOOL_NOT_ALLOWED' } })
+    await expect(readOnly.execute('edit_file', {}, context)).resolves.toMatchObject({ success: false, metadata: { blocked: true, code: 'TOOL_NOT_ALLOWED' } })
     expect(readOnly.list().every(item => parent.registry.has(item.name))).toBe(true)
   })
 })

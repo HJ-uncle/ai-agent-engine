@@ -3,6 +3,12 @@ import { v4 as uuidv4 } from 'uuid'
 import { encrypt, decrypt } from '../../utils/encryption.js'
 import type { Row } from '@libsql/client'
 import type { ModelCapabilities } from '../../core/model-capabilities/index.js'
+import { capabilityPatchFromInput, type CapabilityOverridePatch } from '../../core/model-capabilities/overrides.js'
+
+export type ModelUpdate = Omit<Partial<ModelConfig>, 'capabilities'> & {
+  capabilities?: CapabilityOverridePatch | null
+  capabilityOverrides?: CapabilityOverridePatch | null
+}
 
 export interface ModelConfig {
   id: string
@@ -116,8 +122,9 @@ export class ModelsStore {
     return this.getModelById(id, data.tenantId) as Promise<ModelConfig>
   }
 
-  async updateModel(id: string, tenantId: string, data: Partial<ModelConfig>): Promise<ModelConfig | null> {
+  async updateModel(id: string, tenantId: string, data: ModelUpdate): Promise<ModelConfig | null> {
     const db = getDb()
+    const capabilityPatch = capabilityPatchFromInput(data)
 
     const updates: string[] = []
     const args: any[] = []
@@ -142,9 +149,15 @@ export class ModelsStore {
       updates.push('version = ?')
       args.push(data.version)
     }
-    if (data.capabilities !== undefined) {
-      updates.push('capabilities = ?')
-      args.push(data.capabilities ? JSON.stringify(data.capabilities) : null)
+    if (capabilityPatch !== undefined) {
+      if (capabilityPatch === null) {
+        updates.push('capabilities = NULL')
+      } else {
+        // SQLite merge-patch changes only supplied keys atomically, preserving concurrent edits.
+        // JSON null removes one override; JSON false remains an explicit disabled capability.
+        updates.push("capabilities = json_patch(COALESCE(capabilities, '{}'), ?)")
+        args.push(JSON.stringify(capabilityPatch))
+      }
     }
 
     if (updates.length === 0) return this.getModelById(id, tenantId)
@@ -153,7 +166,7 @@ export class ModelsStore {
     args.push(id, tenantId)
 
     await db.execute({
-      sql: `UPDATE models SET ${updates.join(', ')} WHERE id = ? AND tenant_id = ?`,
+      sql: `UPDATE models SET ${updates.join(', ')} WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL`,
       args
     })
 

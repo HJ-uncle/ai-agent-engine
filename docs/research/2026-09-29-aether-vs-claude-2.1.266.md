@@ -1,5 +1,7 @@
 # Aether Engine 与 Claude Code 2.1.266 深度能力对比
 
+> 后续范围补充：实际消费方已确认为 `D:\dev\aether-code`。请结合 [Aether Code × Engine 能力与联动升级报告](2026-09-29-aether-code-engine-compatibility.md) 阅读；该报告修正 Git/PTY/真 LSP/改动 UI 的产品归属，标明 code profile、已修工具名称问题及跨仓升级风险。本文保留前轮快照与测试的历史证据，不代表当前消费者验收状态。
+
 审计日期：2026-09-29。引擎对象：`D:\dev\ai-agent-engine` 的**当前工作树，包含未提交修改**。竞品对象：用户指定目录 `C:\Users\wb.xielin02\AppData\Roaming\Wuzu Client Dev\cli-binaries\claude\2.1.266` 中的实际安装包。
 
 引擎基线 HEAD：`14ea05bcaf912b0c778224c3d46c3332fdbc2fc8`；结论以工作树而非该提交单独内容为准。[源码文件指纹清单](engine-source-manifest.json)保存本次审计末尾的逐文件 SHA-256，便于后续代码变更时复核。

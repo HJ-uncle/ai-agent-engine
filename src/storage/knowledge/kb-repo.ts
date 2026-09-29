@@ -144,11 +144,15 @@ export async function addDocument(
  */
 export async function searchChunks(
   tenantId: string,
-  query: any,
+  query: unknown,
   limit = 5,
+  documentIds?: readonly string[],
 ): Promise<SearchResult[]> {
   const queryStr = typeof query === 'string' ? query : ''
   if (!queryStr || queryStr.trim().length === 0) return []
+  const scopedIds = documentIds === undefined ? undefined : [...new Set(documentIds)]
+  if (scopedIds?.length === 0) return []
+  const scopeSql = scopedIds ? ` AND d.id IN (${scopedIds.map(() => '?').join(',')})` : ''
 
   const db = await getDb()
 
@@ -172,10 +176,12 @@ export async function searchChunks(
         JOIN document_chunks dc ON dc.id = f.chunk_id
         WHERE chunks_fts MATCH ?
           AND f.tenant_id = ?
+          AND d.tenant_id = f.tenant_id AND dc.tenant_id = f.tenant_id
+          ${scopeSql}
         ORDER BY rank
         LIMIT ?
       `,
-      args: [safeQuery, tenantId, limit],
+      args: [safeQuery, tenantId, ...(scopedIds ?? []), limit],
     }).catch(() => ({ rows: [] }))
 
     for (const row of ftsResult.rows) {
@@ -197,11 +203,11 @@ export async function searchChunks(
         SELECT dc.id AS chunk_id, dc.document_id, d.filename, dc.content, 0.0 AS score, dc.chunk_index
         FROM document_chunks dc
         JOIN documents d ON d.id = dc.document_id
-        WHERE dc.tenant_id = ? AND (${likeConditions})
+        WHERE dc.tenant_id = ? AND d.tenant_id = dc.tenant_id AND (${likeConditions}) ${scopeSql}
         ORDER BY dc.chunk_index
         LIMIT ?
       `,
-      args: [tenantId, ...likeArgs, limit],
+      args: [tenantId, ...likeArgs, ...(scopedIds ?? []), limit],
     })
     for (const row of likeResult.rows) {
       const id = row.chunk_id as string

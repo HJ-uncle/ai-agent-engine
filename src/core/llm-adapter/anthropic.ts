@@ -149,8 +149,12 @@ function messageToAnthropic(
     return { role: 'assistant', content: blocks }
   }
 
-  // ── system filtered out at call site ─────────────────────────────────────
-  if (msg.role === 'system') return null
+  // Anthropic has no system role inside messages. Compacted history belongs
+  // in the conversation, without replacing the request's system prompt.
+  if (msg.role === 'system') {
+    const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
+    return { role: 'user', content: `[Historical context]\n${content}` }
+  }
 
   return {
     role: msg.role as 'user' | 'assistant',

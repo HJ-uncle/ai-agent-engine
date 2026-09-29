@@ -1,0 +1,79 @@
+
+Running 38 tests using 1 worker
+
+
+
+(node:31480) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[1/38] e2e\pending-interactions.spec.ts:23:7 › normalizePending › 安全拦截帧：工具名取真实工具、选项固定为 approved/rejected
+[2/38] e2e\pending-interactions.spec.ts:42:7 › normalizePending › 安全拦截帧：缺少 description 时自行生成可读问题
+[3/38] e2e\pending-interactions.spec.ts:49:7 › normalizePending › 提问帧：对象数组选项取 label 作为显示与回传值
+[4/38] e2e\pending-interactions.spec.ts:66:7 › normalizePending › 提问帧：字符串数组选项（引擎的另一种形状）也能处理
+[5/38] e2e\pending-interactions.spec.ts:76:7 › normalizePending › 提问帧：无选项时给出兜底，避免渲染空按钮组
+  1) e2e\pending-interactions.spec.ts:76:7 › normalizePending › 提问帧：无选项时给出兜底，避免渲染空按钮组 ──────────────
+
+    Error: expect(received).toBeGreaterThan(expected)
+
+    Expected: > 0
+    Received:   0
+
+      78 |       ask_user: { toolCallId: 'call_04', question: '需要确认' }
+      79 |     })
+    > 80 |     expect(pending!.options.length).toBeGreaterThan(0)
+         |                                     ^
+      81 |   })
+      82 |
+      83 |   test('非交互帧返回 null', () => {
+        at D:\dev\aether-code\e2e\pending-interactions.spec.ts:80:37
+
+    Error Context: ..\ai-agent-engine\.e2e-tmp\consumer-audit-pure-results\pending-interactions-normalizePending-提问帧：无选项时给出兜底，避免渲染空按钮组\error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    ..\ai-agent-engine\.e2e-tmp\consumer-audit-pure-results\pending-interactions-normalizePending-提问帧：无选项时给出兜底，避免渲染空按钮组\trace.zip
+    Usage:
+
+        npx playwright show-trace ..\ai-agent-engine\.e2e-tmp\consumer-audit-pure-results\pending-interactions-normalizePending-提问帧：无选项时给出兜底，避免渲染空按钮组\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+
+(node:45108) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+[6/38] e2e\pending-interactions.spec.ts:83:7 › normalizePending › 非交互帧返回 null
+[7/38] e2e\pending-interactions.spec.ts:88:7 › normalizePending › 缺少 toolCallId 时返回 null（无法应答，不应产生死卡片）
+[8/38] e2e\pending-interactions.spec.ts:95:7 › mergePending › 同一 toolCallId 时以 permission 帧为准（它带真实工具名）
+[9/38] e2e\pending-interactions.spec.ts:114:7 › mergePending › permission 先到、ask 别名后到时不会被覆盖回 ask_user
+[10/38] e2e\pending-interactions.spec.ts:130:7 › mergePending › 不同 toolCallId 时替换为新交互
+[11/38] e2e\pending-interactions.spec.ts:145:7 › buildToolResponse › 授权场景回传 value（approved）而非中文 label
+[12/38] e2e\pending-interactions.spec.ts:159:7 › buildToolResponse › 多选时用逗号连接
+[13/38] e2e\security-client.spec.ts:30:7 › isSecurityMode › 只接受三种合法取值
+[14/38] e2e\security-client.spec.ts:36:7 › isSecurityMode › 非法取值一律拒绝
+[15/38] e2e\security-client.spec.ts:47:7 › parseSecurityMode › 兼容引擎的对象形状 { sessionId, mode }
+[16/38] e2e\security-client.spec.ts:51:7 › parseSecurityMode › 兼容裸字符串（引擎若将来简化返回也不会崩）
+[17/38] e2e\security-client.spec.ts:55:7 › parseSecurityMode › 无法识别时返回 null，由调用方兜底为 safe
+[18/38] e2e\security-client.spec.ts:63:7 › buildModePayload › 合法入参原样带出 sessionId 与 mode
+[19/38] e2e\security-client.spec.ts:67:7 › buildModePayload › 缺少 sessionId 时抛错（模式是会话级的，缺了就必然设错）
+[20/38] e2e\security-client.spec.ts:71:7 › buildModePayload › 非法 mode 抛错而不是静默发出
+[21/38] e2e\security-client.spec.ts:78:7 › 模式元数据 › 三种模式都有描述，且 full-access 必须带风险提示
+[22/38] e2e\security-client.spec.ts:86:7 › 模式元数据 › 只有 full-access 属于高风险模式
+[23/38] e2e\security-client.spec.ts:92:7 › 模式元数据 › 三种动作都有中文标签（下拉框依赖它渲染）
+[24/38] e2e\subagent-state.spec.ts:73:5 › subagent 协议拒绝错版、损坏身份和 seq 不一致的事件
+[25/38] e2e\subagent-state.spec.ts:100:5 › 首次 LLM 400 零工具失败在 live、replay 和导出里有相同原因
+[26/38] e2e\subagent-state.spec.ts:130:5 › 历史无结构化证据的子任务保持 unknown，普通旧工具兼容成功
+[27/38] e2e\subagent-state.spec.ts:141:5 › 实时和历史的一般工具显式失败不再被 end 染成成功
+[28/38] e2e\subagent-state.spec.ts:160:5 › 重复和旧 seq 不覆盖终态，较新进度只补齐统计和输出
+[29/38] e2e\subagent-state.spec.ts:188:5 › 取消后的外部结果未知保留于协议与导出，不能表示已经回滚
+[30/38] e2e\subagent-state.spec.ts:197:5 › 取消中任务不能被 running 复活，失败与兄弟运行状态独立
+[31/38] e2e\subagent-state.spec.ts:211:5 › 不同 run 或被改写归属的 snapshot 不能覆盖已有任务
+[32/38] e2e\subagent-state.spec.ts:222:5 › 父回合结束且新轮已开始，迟到任务事件仍归原工具且不新建气泡
+[33/38] e2e\subagent-state.spec.ts:243:5 › 迟到 tool result 按调用 ID 回填旧消息，不依赖最后一个 streaming 消息
+[34/38] e2e\subagent-state.spec.ts:260:5 › 父工具旧 end 帧不能抹掉权威 child failed 状态
+[35/38] e2e\subagent-state.spec.ts:276:5 › 恢复已持久化派发但缺父投影时，使用稳定身份并按轮次顺序放回
+[36/38] e2e\subagent-state.spec.ts:285:5 › 没有匹配 owner 的实时旧事件不制造新气泡
+[37/38] e2e\subagent-state.spec.ts:290:5 › 主历史跳过 sidechain 消息，内部工具只存在子 snapshot
+[38/38] e2e\subagent-state.spec.ts:317:5 › 父自身与 child 用量分开，重复 snapshot 不双算且未知不是零
+  1 failed
+    e2e\pending-interactions.spec.ts:76:7 › normalizePending › 提问帧：无选项时给出兜底，避免渲染空按钮组 ───────────────
+  37 passed (1.0s)

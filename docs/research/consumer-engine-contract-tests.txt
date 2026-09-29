@@ -1,0 +1,32 @@
+
+> aether-engine@2.0.0 test
+> vitest --run src/tools/__tests__/tool-profile.test.ts src/api/http/routes/__tests__/tool-profile-routes.test.ts src/api/http/routes/__tests__/subagent-routes.test.ts src/tools/subagent/__tests__/subagent-capabilities.test.ts src/core/subagent/__tests__/subagent-runtime.test.ts src/core/subagent/__tests__/subagent-projection.test.ts src/tools/get-context/__tests__/get-context-tool.test.ts --maxWorkers=1 --minWorkers=1
+
+
+ RUN  v2.1.9 D:/dev/ai-agent-engine
+
+ ✓ src/core/subagent/__tests__/subagent-runtime.test.ts (16 tests) 1428ms
+ ✓ src/core/subagent/__tests__/subagent-projection.test.ts (10 tests) 1209ms
+stderr | src/tools/__tests__/tool-profile.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+ ✓ src/tools/__tests__/tool-profile.test.ts (13 tests) 26ms
+ ✓ src/api/http/routes/__tests__/subagent-routes.test.ts (10 tests) 1336ms
+ ✓ src/api/http/routes/__tests__/tool-profile-routes.test.ts (16 tests) 119ms
+ ✓ src/tools/get-context/__tests__/get-context-tool.test.ts (3 tests) 56ms
+stderr | src/tools/subagent/__tests__/subagent-capabilities.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+ ✓ src/tools/subagent/__tests__/subagent-capabilities.test.ts (7 tests) 3ms
+
+ Test Files  7 passed (7)
+      Tests  75 passed (75)
+   Start at  18:03:42
+   Duration  7.12s (transform 472ms, setup 0ms, collect 1.83s, tests 4.18s, environment 1ms, prepare 293ms)
+

@@ -1,0 +1,26 @@
+{
+  "capturedAt": "2026-09-29T10:20:14.529Z",
+  "results": [
+    {
+      "report": "2026-09-29-aether-code-engine-compatibility.md",
+      "lines": 343,
+      "checkedLinks": 44
+    },
+    {
+      "report": "2026-09-29-aether-code-host-release-audit.md",
+      "lines": 181,
+      "checkedLinks": 3
+    },
+    {
+      "report": "2026-09-29-aether-code-wire-contract-audit.md",
+      "lines": 219,
+      "checkedLinks": 133
+    },
+    {
+      "report": "2026-09-29-aether-code-capability-ownership.md",
+      "lines": 166,
+      "checkedLinks": 125
+    }
+  ],
+  "bad": []
+}

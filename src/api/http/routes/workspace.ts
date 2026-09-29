@@ -7,6 +7,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { withFileLocks } from '../../../shared/file-version.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -238,13 +239,12 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
 
     try {
       const safePath = workspaceManager.resolveSafePath({ tenantId, sessionId }, filePath)
-      const dir = path.dirname(safePath)
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true })
-      }
-      
       const buffer = encoding === 'base64' ? Buffer.from(content, 'base64') : Buffer.from(content, 'utf-8')
-      fs.writeFileSync(safePath, buffer)
+      await withFileLocks([safePath], async ([target]) => {
+        workspaceManager.resolveSafePath({ tenantId, sessionId }, target)
+        fs.mkdirSync(path.dirname(target), { recursive: true })
+        fs.writeFileSync(target, buffer)
+      })
       
       return reply.code(200).send(success({ path: filePath, size: buffer.length }))
     } catch (e: any) {
@@ -269,17 +269,16 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
       }
 
       const safePath = workspaceManager.resolveSafePath({ tenantId, sessionId }, uploadPath)
-      const dir = path.dirname(safePath)
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true })
-      }
-
       const chunks: Buffer[] = []
       for await (const chunk of data.file) {
         chunks.push(chunk)
       }
       const buffer = Buffer.concat(chunks)
-      fs.writeFileSync(safePath, buffer)
+      await withFileLocks([safePath], async ([target]) => {
+        workspaceManager.resolveSafePath({ tenantId, sessionId }, target)
+        fs.mkdirSync(path.dirname(target), { recursive: true })
+        fs.writeFileSync(target, buffer)
+      })
 
       return reply.code(200).send(success({ path: uploadPath, size: buffer.length, filename: data.filename }))
     } catch (e: any) {
@@ -294,10 +293,16 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
     if (!sessionId || !filePath) return reply.code(200).send(fail(40001, 'sessionId and path are required'))
     try {
       const safePath = workspaceManager.resolveSafePath({ tenantId, sessionId }, filePath)
-      const dir = path.dirname(safePath)
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-      if (fs.existsSync(safePath)) return reply.code(200).send(fail(40000, 'File already exists'))
-      fs.writeFileSync(safePath, '')
+      const created = await withFileLocks([safePath], async ([target]) => {
+        workspaceManager.resolveSafePath({ tenantId, sessionId }, target)
+        fs.mkdirSync(path.dirname(target), { recursive: true })
+        try { fs.writeFileSync(target, '', { flag: 'wx' }); return true }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false
+          throw error
+        }
+      })
+      if (!created) return reply.code(200).send(fail(40000, 'File already exists'))
       return reply.code(200).send(success({ path: filePath }))
     } catch (e: any) {
       return reply.code(200).send(fail(50000, `Failed to create file: ${e.message}`))
@@ -326,16 +331,18 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
     if (!sessionId || !filePath) return reply.code(200).send(fail(40001, 'sessionId and path are required'))
     try {
       const safePath = workspaceManager.resolveSafePath({ tenantId, sessionId }, filePath)
-      if (!fs.existsSync(safePath)) return reply.code(200).send(fail(40400, 'File not found'))
-      try {
-        // @ts-expect-error trash may not be installed
-        const { default: trash } = await import('trash')
-        await trash(safePath)
-        return reply.code(200).send(success({ success: true }))
-      } catch {
-        fs.rmSync(safePath, { recursive: true, force: true })
-        return reply.code(200).send(success({ success: true, fallback: 'permanent_delete' }))
-      }
+      return await withFileLocks([safePath], async () => {
+        if (!fs.existsSync(safePath)) return reply.code(200).send(fail(40400, 'File not found'))
+        try {
+          // @ts-expect-error trash may not be installed
+          const { default: trash } = await import('trash')
+          await trash(safePath)
+          return reply.code(200).send(success({ success: true }))
+        } catch {
+          fs.rmSync(safePath, { recursive: true, force: true })
+          return reply.code(200).send(success({ success: true, fallback: 'permanent_delete' }))
+        }
+      })
     } catch (e: any) {
       return reply.code(200).send(fail(50000, `Failed to delete: ${e.message}`))
     }
@@ -349,12 +356,14 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
     try {
       const safeSrc = workspaceManager.resolveSafePath({ tenantId, sessionId }, srcPath)
       const safeDest = workspaceManager.resolveSafePath({ tenantId, sessionId }, destPath)
-      if (!fs.existsSync(safeSrc)) return reply.code(200).send(fail(40400, 'Source not found'))
-      if (fs.existsSync(safeDest)) return reply.code(200).send(fail(40000, 'Destination already exists'))
-      const destDir = path.dirname(safeDest)
-      if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true })
-      await fsp.rename(safeSrc, safeDest)
-      return reply.code(200).send(success({ path: destPath }))
+      return await withFileLocks([safeSrc, safeDest], async () => {
+        if (!fs.existsSync(safeSrc)) return reply.code(200).send(fail(40400, 'Source not found'))
+        if (fs.existsSync(safeDest)) return reply.code(200).send(fail(40000, 'Destination already exists'))
+        const destDir = path.dirname(safeDest)
+        if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true })
+        await fsp.rename(safeSrc, safeDest)
+        return reply.code(200).send(success({ path: destPath }))
+      })
     } catch (e: any) {
       return reply.code(200).send(fail(50000, `Failed to move: ${e.message}`))
     }

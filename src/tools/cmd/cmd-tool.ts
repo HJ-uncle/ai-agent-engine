@@ -2,7 +2,6 @@ import { throwIfAborted } from '../../core/utils/abort.js'
 import { spawn } from 'node:child_process'
 import os from 'node:os'
 import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
-import { isCommandAllowed, getCmdWhitelist } from '../../security/cmd-whitelist.js'
 import { policyEngine, getSecurityMode } from '../../security/policy-engine.js'
 import { workspaceManager } from '../../workspace/index.js'
 
@@ -18,10 +17,28 @@ export interface CMDToolOptions {
   allowedCommands?: string[]
 }
 
+async function preflightCommand(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult | undefined> {
+  const args = rawArgs as { command?: unknown; args?: unknown }
+  if (!args || typeof args.command !== 'string' || !args.command ||
+    (args.args !== undefined && (!Array.isArray(args.args) || args.args.some(value => typeof value !== 'string')))) {
+    return { success: false, output: '命令参数无效：command 必须为字符串，args 必须为字符串数组' }
+  }
+  const cmdArgs = (args.args ?? []) as string[]
+  const decision = await policyEngine.evaluate({ command: args.command, args: cmdArgs, tenantId: ctx.tenantId,
+    sessionId: ctx.sessionId, ignoreSessionApproval: ctx.toolProfile === 'code',
+    approved: Boolean(ctx.currentToolCallId && ctx.currentToolCallId === ctx.approvedToolCallId) })
+  if (decision.action === 'allow') return undefined
+  if (decision.action === 'deny') return { success: false, output: `命令被策略拒绝: ${decision.reason}`, metadata: { blocked: true } }
+  return { success: false, needsConfirmation: true,
+    pendingAction: { type: 'confirm_command', command: args.command, args: cmdArgs, reason: decision.reason, ruleId: decision.ruleId, ruleName: decision.ruleName },
+    output: `该命令需要用户确认: ${decision.reason}` }
+}
+
 export const cmdTool: Tool = {
   name: 'execute_cmd',
   displayName: '执行命令',
-  description: '执行白名单内的 Shell 命令',
+  description: '按当前安全策略执行命令，需要时先请求用户批准',
+  preflight: preflightCommand,
   parameters: {
     type: 'object',
     properties: {
@@ -39,44 +56,9 @@ export const cmdTool: Tool = {
     const startTime = Date.now()
     throwIfAborted(ctx.signal)
 
-    // 1) 策略引擎裁决（含注入检测 + 审计日志）
-    const decision = await policyEngine.evaluate({
-      command,
-      args: cmdArgs,
-      tenantId: ctx.tenantId,
-      sessionId: ctx.sessionId,
-    })
-    if (decision.action === 'deny') {
-      return {
-        success: false,
-        output: `❌ 命令被策略拒绝: ${decision.reason}`,
-      }
-    }
-    if (decision.action === 'ask') {
-      // 交给 agent-loop / 前端做二次确认。此处返回 needsConfirmation。
-      return {
-        success: false,
-        needsConfirmation: true,
-        pendingAction: {
-          type: 'confirm_command',
-          command,
-          args: cmdArgs,
-          reason: decision.reason,
-          ruleId: decision.ruleId,
-          ruleName: decision.ruleName,
-        },
-        output: `⚠️ 该命令需要用户确认: ${decision.reason}`,
-      }
-    }
-
-    // 2) 兼容旧白名单（safe 模式下双保险；standard / full-access 跳过白名单）
+    const blocked = await preflightCommand(rawArgs, ctx)
+    if (blocked) return blocked
     const mode = getSecurityMode(ctx.tenantId, ctx.sessionId)
-    if (mode === 'safe' && !isCommandAllowed(command)) {
-      return {
-        success: false,
-        output: `Command "${command}" is not allowed. Permitted commands: ${Array.from(getCmdWhitelist()).join(', ')}`,
-      }
-    }
 
     // Ensure workspace exists
     workspaceManager.init(ctx)

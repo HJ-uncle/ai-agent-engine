@@ -1,0 +1,11 @@
+
+Running 3 tests using 1 worker
+
+
+
+(node:17104) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[1/3] e2e\subagent-lifecycle.spec.ts:316:7 › 子代理：真实引擎 / HTTP / IPC 生命周期 › 同轮成功与首请求400：即时独立终态、真实工具详情、失败不显示成功
+[2/3] e2e\subagent-lifecycle.spec.ts:424:7 › 子代理：真实引擎 / HTTP / IPC 生命周期 › 只取消一个子任务：上游连接断开，兄弟保持运行并可独立完成
+[3/3] e2e\subagent-lifecycle.spec.ts:464:7 › 子代理：真实引擎 / HTTP / IPC 生命周期 › 切换历史并重启：归属、失败原因、步骤与导出保持一致
+  3 passed (10.8s)

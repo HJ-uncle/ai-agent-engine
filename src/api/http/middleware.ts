@@ -2,6 +2,7 @@ import type { FastifyRequest, FastifyReply } from 'fastify'
 import { fail } from './response.js'
 import { logger } from '../../observability/index.js'
 import { createAuthMiddleware } from '../../auth/index.js'
+import { hasValidInstanceToken, isPublicInstanceProbe } from '../../auth/instance-token.js'
 
 // White listed paths that do not require login state (reserved for future JWT)
 // Also we bypass header checks for standard health checks to avoid breaking internal ops
@@ -41,6 +42,11 @@ export async function loggingMiddleware(request: FastifyRequest, reply: FastifyR
  * API 鉴权中间件
  */
 export async function authMiddlewareHook(request: FastifyRequest, reply: FastifyReply) {
+  // Check before the legacy whitelist and AUTH_ENABLED switch: neither can bypass an owned instance's token.
+  if (!isPublicInstanceProbe(request.method, request.url) && !hasValidInstanceToken(request.headers)) {
+    return reply.code(401).send(fail(40100, 'Invalid or missing instance token'))
+  }
+  if (isPublicInstanceProbe(request.method, request.url)) return
   // skip auth if in whitelist
   if (WHITELIST_PATHS.includes(request.url)) return
 

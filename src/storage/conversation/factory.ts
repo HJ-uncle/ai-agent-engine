@@ -10,10 +10,11 @@
 import type { ConversationHistory } from '../../core/agent-context/types.js'
 import { SQLiteConversationHistory } from './history.js'
 import { JSONLConversationHistory } from './jsonl-history.js'
+import { serializeConversationHistory } from './serialization.js'
 
 export function createConversationHistory(maxTokens?: number): ConversationHistory {
   if (process.env.HISTORY_BACKEND === 'sqlite') {
-    return new SQLiteConversationHistory(maxTokens)
+    return serializeConversationHistory(new SQLiteConversationHistory(maxTokens))
   }
-  return new JSONLConversationHistory(maxTokens)
+  return serializeConversationHistory(new JSONLConversationHistory(maxTokens))
 }

@@ -1,0 +1,14 @@
+
+> aether-code@1.0.0 typecheck
+> npm run typecheck:node && npm run typecheck:web
+
+
+> aether-code@1.0.0 typecheck:node
+> tsc --noEmit -p tsconfig.node.json --composite false
+
+
+> aether-code@1.0.0 typecheck:web
+> tsc --noEmit -p tsconfig.web.json --composite false
+
+src/renderer/src/contrib/chat/ChatView.tsx(2094,18): error TS6133: 'setMemory' is declared but its value is never read.
+src/renderer/src/contrib/chat/ChatView.tsx(2110,24): error TS2304: Cannot find name 'setOpen'.

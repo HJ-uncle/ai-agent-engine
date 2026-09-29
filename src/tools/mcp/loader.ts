@@ -2,6 +2,7 @@ import { HTTPMCPClient } from './client.js'
 import type { IToolRegistry } from '../../core/agent-context/index.js'
 import { logger } from '../../observability/index.js'
 import { listServers } from '../../storage/mcp/mcp-config.js'
+import type { NetworkContext } from '../../security/guarded-http.js'
 
 /**
  * 内联 MCP server 配置（来自客户端请求级透传，如 桌面客户端）
@@ -31,7 +32,8 @@ interface InlineMcpServer {
 export async function registerMCPTools(
   registry: IToolRegistry,
   toolFilter?: (name: string) => boolean,
-  inlineServers?: InlineMcpServer[]
+  inlineServers?: InlineMcpServer[],
+  securityContext?: NetworkContext
 ): Promise<string[]> {
   const registeredNames: string[] = []
   const localServers = listServers()
@@ -82,7 +84,7 @@ export async function registerMCPTools(
         name: server.name || server.id,
         url: server.url,
         headers: server.headers,
-      })
+      }, securityContext)
 
       try {
         const tools = await client.toTools()
@@ -107,7 +109,7 @@ export async function registerMCPTools(
         name: server.name || server.id,
         url: server.url!,
         headers: server.headers,
-      })
+      }, securityContext)
       try {
         const tools = await client.toTools()
         tools.forEach((t) => {

@@ -2,6 +2,7 @@ import type { LLMAdapter, LLMResponse, LLMAdapterOptions, LLMStreamChunk, RetryO
 import type { Message } from '../agent-context/index.js'
 
 import { abortableDelay, isAbortError, throwIfAborted } from '../utils/abort.js'
+import { estimateRequestInput } from '../agent-loop/finalization.js'
 
 export function isRetryable(error: unknown): boolean {
   if (isAbortError(error)) return false
@@ -90,13 +91,28 @@ export class RetryingAdapter implements LLMAdapter {
 
 export class FallbackAdapter implements LLMAdapter {
   private adapters: LLMAdapter[]
+  private readonly modelContextWindows: Record<string, number>
 
   constructor(config: FallbackConfig) {
     this.adapters = [config.primary, ...config.fallbacks]
+    this.modelContextWindows = config.modelContextWindows ?? {}
   }
 
   get provider(): string { return this.adapters[0].provider }
   get model(): string { return this.adapters[0].model }
+
+  private selectedOptions(adapter: LLMAdapter, messages: Message[], options?: LLMAdapterOptions): LLMAdapterOptions {
+    const contextWindow = this.modelContextWindows[adapter.model]
+    if (Number.isFinite(contextWindow) && contextWindow > 0) {
+      const input = Math.max(options?.requestInputTokenEstimate ?? 0,
+        estimateRequestInput(messages, options?.systemPrompt, options?.tools ?? []))
+      const requested = input + (options?.maxTokens ?? 4096)
+      if (requested > contextWindow) throw Object.assign(new Error(
+        `Model ${adapter.model} context window ${contextWindow} cannot fit estimated input and output reserve ${requested}`,
+      ), { code: 'CONTEXT_WINDOW_EXCEEDED', retryable: false, model: adapter.model, contextWindow, requested })
+    }
+    return { ...options, model: adapter.model }
+  }
 
   async complete(messages: Message[], options?: LLMAdapterOptions): Promise<LLMResponse> {
     let lastError: unknown
@@ -104,13 +120,11 @@ export class FallbackAdapter implements LLMAdapter {
     for (const adapter of this.adapters) {
       throwIfAborted(options?.signal)
       try {
-        return await adapter.complete(messages, options)
+        const response = await adapter.complete(messages, this.selectedOptions(adapter, messages, options))
+        return { ...response, model: response.model ?? adapter.model }
       } catch (err) {
-        if (isAbortError(err, options?.signal)) throw err
-        const status = (err as {status?: number})?.status
-        if (typeof status === 'number' && status >= 400 && status < 500 && !isRetryable(err)) throw err
+        if (isAbortError(err, options?.signal) || !isRetryable(err)) throw err
         lastError = err
-        console.warn(`LLM adapter ${adapter.provider}/${adapter.model} failed, trying fallback...`)
       }
     }
 
@@ -118,7 +132,24 @@ export class FallbackAdapter implements LLMAdapter {
   }
 
   async *stream(messages: Message[], options?: LLMAdapterOptions): AsyncIterable<LLMStreamChunk> {
-    yield* this.adapters[0].stream(messages, options)
+    let lastError: unknown
+    for (const adapter of this.adapters) {
+      throwIfAborted(options?.signal)
+      let delivered = false
+      try {
+        for await (const chunk of adapter.stream(messages, this.selectedOptions(adapter, messages, options))) {
+          // A yielded chunk is already visible to the consumer, including thinking,
+          // tool arguments, usage and terminal state. Never replay after that boundary.
+          delivered = true
+          yield { ...chunk, model: chunk.model ?? adapter.model }
+        }
+        return
+      } catch (error) {
+        if (delivered || isAbortError(error, options?.signal) || !isRetryable(error)) throw error
+        lastError = error
+      }
+    }
+    throw lastError
   }
 
   countTokens(text: string): number {

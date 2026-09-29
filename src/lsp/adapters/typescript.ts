@@ -1,9 +1,10 @@
-import { spawn } from 'node:child_process'
 import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import type { LspAdapter, Diagnostic } from '../types.js'
+import { isAbortError, throwIfAborted } from '../../core/utils/abort.js'
+import { runDiagnosticProcess } from './process.js'
 
 /**
  * 解析 typescript 模块。两处探测：
@@ -54,14 +55,17 @@ class TypeScriptAdapter implements LspAdapter {
   }
 
   async diagnose(filePath: string, content?: string, signal?: AbortSignal): Promise<Diagnostic[]> {
+    throwIfAborted(signal)
     // 优先用 typescript 编程 API（更快、不需要起子进程）
     const ts = loadTs()
     if (ts) {
       try {
         const diags = await this.diagnoseWithApi(ts, filePath, content)
+        throwIfAborted(signal)
         console.log(`[LSP][typescript] api: ${diags.length} diag(s), ts=${ts.version}`)
         return diags
       } catch (e: any) {
+        if (isAbortError(e, signal)) throw e
         console.error(`[LSP][typescript] api failed: ${e?.message ?? e}`)
       }
     } else {
@@ -131,8 +135,10 @@ class TypeScriptAdapter implements LspAdapter {
     })
   }
 
-  private diagnoseWithCli(filePath: string, content: string | undefined, signal?: AbortSignal): Promise<Diagnostic[]> {
-    return new Promise((resolve) => {
+  private async diagnoseWithCli(filePath: string, content: string | undefined, signal?: AbortSignal): Promise<Diagnostic[]> {
+      throwIfAborted(signal)
+      const tscJs = resolveTscJs()
+      if (!tscJs) throw new Error('TypeScript CLI 不可用')
       let target = filePath
       let cleanup: (() => void) | null = null
       if (content !== undefined) {
@@ -141,34 +147,18 @@ class TypeScriptAdapter implements LspAdapter {
         target = tmp
         cleanup = () => { try { fs.unlinkSync(tmp) } catch {} }
       }
-      const tscJs = resolveTscJs()
-      if (!tscJs) return []
       // node 直接跑 tsc.js：不能 spawn .cmd（Node 新版 EINVAL），且
       // embedded 宿主是 electron.exe + ELECTRON_RUN_AS_NODE（继承后即 node 模式）
       const nodeBin = process.env.AETHER_ENGINE_NODE || process.execPath
-      const proc = spawn(
-        nodeBin,
-        ['--max-old-space-size=4096', tscJs, '--noEmit', '--pretty', 'false', '--allowJs', target],
-        { shell: false },
-      )
-      let out = ''
-      proc.stdout.on('data', (b) => { out += b.toString() })
-      proc.stderr.on('data', (b) => { out += b.toString() })
-      const onAbort = () => proc.kill('SIGTERM')
-      signal?.addEventListener('abort', onAbort)
-      proc.on('close', () => {
-        signal?.removeEventListener('abort', onAbort)
-        cleanup?.()
-        console.log(`[LSP][typescript] cli exit: ${parseTsCliOutput(out, filePath).length} diag(s), out=${out.slice(0, 200)}`)
-        resolve(parseTsCliOutput(out, filePath))
-      })
-      proc.on('error', (e) => {
-        signal?.removeEventListener('abort', onAbort)
-        cleanup?.()
-        console.error(`[LSP][typescript] cli spawn error: ${e.message}`)
-        resolve([])
-      })
-    })
+      try {
+        const { stdout, stderr, exitCode } = await runDiagnosticProcess(nodeBin,
+          ['--max-old-space-size=4096', tscJs, '--noEmit', '--pretty', 'false', '--allowJs', target], { signal })
+        const diagnostics = parseTsCliOutput(stdout + stderr, filePath)
+        if (exitCode !== 0 && diagnostics.length === 0) {
+          throw new Error(`TypeScript CLI 失败 (${exitCode}): ${(stderr || stdout).slice(0, 500)}`)
+        }
+        return diagnostics
+      } finally { cleanup?.() }
   }
 }
 

@@ -194,7 +194,7 @@ export async function checkNetworkAccess(input: NetworkCheckInput): Promise<Netw
     return { allowed: false, reason, ...base }
   }
 
-  const hostname = parsed.hostname.toLowerCase()
+  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '')
 
   // 白名单模式（优先）
   if (policy.allowListEnabled && policy.allowDomains.length > 0) {

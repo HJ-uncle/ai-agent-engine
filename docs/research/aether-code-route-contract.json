@@ -1,0 +1,473 @@
+{
+  "capturedAt": "2026-09-29T10:02:06.641Z",
+  "fixture": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\consumer-route-audit-AGITM3",
+  "scope": "Literal IDE request objects only; dynamic/generated paths and request bodies require separate review. Route match is not behavior or authorization validation.",
+  "callSites": 48,
+  "matched": 48,
+  "unmatched": [],
+  "calls": [
+    {
+      "file": "src/renderer/src/contrib/chat/ChangesPanel.tsx",
+      "line": 76,
+      "method": "GET",
+      "path": "/changes",
+      "normalizedPath": "/api/v1/changes",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/contrib/chat/ChangesPanel.tsx",
+      "line": 125,
+      "method": "POST",
+      "path": "/changes/__audit__/keep",
+      "normalizedPath": "/api/v1/changes/__audit__/keep",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/contrib/chat/ChangesPanel.tsx",
+      "line": 128,
+      "method": "POST",
+      "path": "/changes/__audit__/revert",
+      "normalizedPath": "/api/v1/changes/__audit__/revert",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/contrib/chat/ChangesPanel.tsx",
+      "line": 149,
+      "method": "POST",
+      "path": "/changes/keep-all",
+      "normalizedPath": "/api/v1/changes/keep-all",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/contrib/chat/ChangesPanel.tsx",
+      "line": 179,
+      "method": "POST",
+      "path": "/changes/keep-many",
+      "normalizedPath": "/api/v1/changes/keep-many",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/contrib/chat/ChangesPanel.tsx",
+      "line": 204,
+      "method": "POST",
+      "path": "/changes/__audit__/revert",
+      "normalizedPath": "/api/v1/changes/__audit__/revert",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/contrib/chat/ChatView.tsx",
+      "line": 827,
+      "method": "GET",
+      "path": "/codegraph/status",
+      "normalizedPath": "/api/v1/codegraph/status",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/contrib/chat/ChatView.tsx",
+      "line": 855,
+      "method": "GET",
+      "path": "/codegraph/status",
+      "normalizedPath": "/api/v1/codegraph/status",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/contrib/chat/ChatView.tsx",
+      "line": 898,
+      "method": "POST",
+      "path": "/codegraph/index",
+      "normalizedPath": "/api/v1/codegraph/index",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/contrib/chat/ChatView.tsx",
+      "line": 1405,
+      "method": "POST",
+      "path": "/conversation/compress",
+      "normalizedPath": "/api/v1/conversation/compress",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/contrib/history/SessionHistoryView.tsx",
+      "line": 129,
+      "method": "GET",
+      "path": "/conversation/sessions",
+      "normalizedPath": "/api/v1/conversation/sessions",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/contrib/history/SessionHistoryView.tsx",
+      "line": 219,
+      "method": "DELETE",
+      "path": "/sessions/__audit__",
+      "normalizedPath": "/api/v1/sessions/__audit__",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/contrib/settings/CodeGraphSettingsView.tsx",
+      "line": 73,
+      "method": "GET",
+      "path": "/codegraph/status",
+      "normalizedPath": "/api/v1/codegraph/status",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/contrib/settings/CodeGraphSettingsView.tsx",
+      "line": 91,
+      "method": "GET",
+      "path": "/codegraph/status",
+      "normalizedPath": "/api/v1/codegraph/status",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/contrib/settings/CodeGraphSettingsView.tsx",
+      "line": 131,
+      "method": "POST",
+      "path": "/codegraph/index",
+      "normalizedPath": "/api/v1/codegraph/index",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/client.ts",
+      "line": 76,
+      "method": "POST",
+      "path": "/subagent/cancel",
+      "normalizedPath": "/api/v1/subagent/cancel",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/client.ts",
+      "line": 84,
+      "method": "GET",
+      "path": "/subagent/runs",
+      "normalizedPath": "/api/v1/subagent/runs",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/client.ts",
+      "line": 88,
+      "method": "GET",
+      "path": "/subagent/runs/__audit__",
+      "normalizedPath": "/api/v1/subagent/runs/__audit__",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/client.ts",
+      "line": 93,
+      "method": "POST",
+      "path": "/subagent/runs/__audit__/cancel",
+      "normalizedPath": "/api/v1/subagent/runs/__audit__/cancel",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/models.ts",
+      "line": 106,
+      "method": "GET",
+      "path": "/models",
+      "normalizedPath": "/api/v1/models",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/models.ts",
+      "line": 112,
+      "method": "POST",
+      "path": "/models",
+      "normalizedPath": "/api/v1/models",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/models.ts",
+      "line": 121,
+      "method": "PUT",
+      "path": "/models/__audit__",
+      "normalizedPath": "/api/v1/models/__audit__",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/models.ts",
+      "line": 135,
+      "method": "PUT",
+      "path": "/models/__audit__",
+      "normalizedPath": "/api/v1/models/__audit__",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/models.ts",
+      "line": 140,
+      "method": "DELETE",
+      "path": "/models/__audit__",
+      "normalizedPath": "/api/v1/models/__audit__",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/models.ts",
+      "line": 156,
+      "method": "POST",
+      "path": "/models/__audit__/test",
+      "normalizedPath": "/api/v1/models/__audit__/test",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/models.ts",
+      "line": 172,
+      "method": "POST",
+      "path": "/models/detect-capabilities",
+      "normalizedPath": "/api/v1/models/detect-capabilities",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/models.ts",
+      "line": 182,
+      "method": "GET",
+      "path": "/models/capability-defs",
+      "normalizedPath": "/api/v1/models/capability-defs",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/security.ts",
+      "line": 120,
+      "method": "GET",
+      "path": "/security/mode",
+      "normalizedPath": "/api/v1/security/mode",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/security.ts",
+      "line": 127,
+      "method": "PUT",
+      "path": "/security/mode",
+      "normalizedPath": "/api/v1/security/mode",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/security.ts",
+      "line": 138,
+      "method": "GET",
+      "path": "/security/policies",
+      "normalizedPath": "/api/v1/security/policies",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/security.ts",
+      "line": 152,
+      "method": "PUT",
+      "path": "/security/policies/__audit__",
+      "normalizedPath": "/api/v1/security/policies/__audit__",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/security.ts",
+      "line": 157,
+      "method": "DELETE",
+      "path": "/security/policies/__audit__",
+      "normalizedPath": "/api/v1/security/policies/__audit__",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/security.ts",
+      "line": 163,
+      "method": "POST",
+      "path": "/security/policies/reset",
+      "normalizedPath": "/api/v1/security/policies/reset",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/useChat.ts",
+      "line": 431,
+      "method": "POST",
+      "path": "/chat",
+      "normalizedPath": "/api/v1/chat",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/useChat.ts",
+      "line": 631,
+      "method": "GET",
+      "path": "/conversation/history",
+      "normalizedPath": "/api/v1/conversation/history",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/useChat.ts",
+      "line": 660,
+      "method": "GET",
+      "path": "/chat/status",
+      "normalizedPath": "/api/v1/chat/status",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/useChat.ts",
+      "line": 678,
+      "method": "GET",
+      "path": "/chat/stream",
+      "normalizedPath": "/api/v1/chat/stream",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/useChat.ts",
+      "line": 742,
+      "method": "POST",
+      "path": "/chat/cancel",
+      "normalizedPath": "/api/v1/chat/cancel",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/useChat.ts",
+      "line": 774,
+      "method": "DELETE",
+      "path": "/conversation/history",
+      "normalizedPath": "/api/v1/conversation/history",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/useChat.ts",
+      "line": 797,
+      "method": "GET",
+      "path": "/conversation/history",
+      "normalizedPath": "/api/v1/conversation/history",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/useChat.ts",
+      "line": 819,
+      "method": "DELETE",
+      "path": "/conversation/turns/__audit__",
+      "normalizedPath": "/api/v1/conversation/turns/__audit__",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/useChat.ts",
+      "line": 840,
+      "method": "POST",
+      "path": "/conversation/truncate",
+      "normalizedPath": "/api/v1/conversation/truncate",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/useChat.ts",
+      "line": 868,
+      "method": "GET",
+      "path": "/conversation/history",
+      "normalizedPath": "/api/v1/conversation/history",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/useChat.ts",
+      "line": 888,
+      "method": "GET",
+      "path": "/changes",
+      "normalizedPath": "/api/v1/changes",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/useChat.ts",
+      "line": 896,
+      "method": "POST",
+      "path": "/changes/__audit__/revert",
+      "normalizedPath": "/api/v1/changes/__audit__/revert",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/useChat.ts",
+      "line": 908,
+      "method": "POST",
+      "path": "/conversation/truncate",
+      "normalizedPath": "/api/v1/conversation/truncate",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/engine/utility-chat.ts",
+      "line": 19,
+      "method": "POST",
+      "path": "/utility/chat",
+      "normalizedPath": "/api/v1/utility/chat",
+      "matched": true
+    },
+    {
+      "file": "src/renderer/src/core/lsp/diagnostics.ts",
+      "line": 58,
+      "method": "POST",
+      "path": "/lsp/diagnose",
+      "normalizedPath": "/api/v1/lsp/diagnose",
+      "matched": true
+    }
+  ],
+  "probes": [
+    {
+      "method": "GET",
+      "url": "/health",
+      "httpStatus": 200,
+      "body": {
+        "code": 200,
+        "message": "操作成功",
+        "data": {
+          "status": "ok",
+          "timestamp": "2026-09-29T10:02:06.634Z"
+        },
+        "timestamp": 1790676126634
+      }
+    },
+    {
+      "method": "GET",
+      "url": "/meta",
+      "httpStatus": 200,
+      "body": {
+        "code": 200,
+        "message": "操作成功",
+        "data": {
+          "version": "2.0.0"
+        },
+        "timestamp": 1790676126637
+      }
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/subagent/runs?parentSessionId=audit-empty-parent",
+      "httpStatus": 200,
+      "body": {
+        "code": 200,
+        "message": "操作成功",
+        "data": [],
+        "timestamp": 1790676126638
+      }
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/subagent/cancel",
+      "httpStatus": 200,
+      "body": {
+        "code": 200,
+        "message": "Subagent not running or already finished",
+        "data": {
+          "sessionId": "audit-empty-parent",
+          "toolCallId": "missing",
+          "cancelled": false
+        },
+        "timestamp": 1790676126640
+      }
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/subagent/runs/audit-missing-run/cancel",
+      "httpStatus": 200,
+      "body": {
+        "code": 40400,
+        "message": "Subagent run not found",
+        "data": null,
+        "timestamp": 1790676126641
+      }
+    },
+    {
+      "method": "GET",
+      "url": "/meta (cwd=engine/dist; ENGINE_VERSION absent)",
+      "httpStatus": 200,
+      "body": {
+        "code": 200,
+        "message": "操作成功",
+        "data": {
+          "version": "unknown"
+        },
+        "timestamp": 1790676126641
+      }
+    }
+  ]
+}

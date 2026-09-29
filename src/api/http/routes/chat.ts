@@ -17,7 +17,12 @@ import { buildSkillsSystemPrompt } from '../../../skills/index.js'
 import { getRequestToolProfile } from '../tool-profile.js'
 import { createToolRegistry } from '../../../tools/registry-factory.js'
 import { resolveOSMMode } from '../../../core/osm.js'
-import { success } from '../response.js'
+import { success, fail } from '../response.js'
+import { withHistoryLock, isSessionHistoryMutating } from '../../../storage/conversation/serialization.js'
+import { rootRunStore, type RootRun, type RootPending } from '../../../storage/root-runs/index.js'
+import { persistedTurnProjection } from '../chat-snapshot.js'
+import { TodoStore } from '../../../storage/todo/index.js'
+import { ChangeStore } from '../../../storage/changes/index.js'
 
 /**
  * 主 Agent 的子代理委派纪律（对齐 wuzu-client codeAgent.ts 的「探索预算」章节）。
@@ -72,7 +77,7 @@ interface ChatBody {
   thinkingMode?: boolean | 'low' | 'medium' | 'high'
   inheritContext?: boolean
   workspacePaths?: string[]
-  toolResponse?: { toolCallId: string, name: string, output: string }
+  toolResponse?: { toolCallId: string, name: string, output: string, requestId: string, runId: string }
   /**
    * 附件清单。
    *
@@ -245,6 +250,9 @@ const activeChatAborters = new Map<string, AbortController>()
 function makeAbortKey(tenantId: string, sessionId: string): string {
   return `${tenantId}:${sessionId}`
 }
+// Also cancel requests still preparing their model/registry before a controller exists.
+const cancellationEpochs = new Map<string, number>()
+const pendingAdmissions = new Map<string, Set<Promise<void>>>()
 
 export function registerActiveChat(tenantId: string, sessionId: string, controller: AbortController) {
   const key = makeAbortKey(tenantId, sessionId)
@@ -277,6 +285,7 @@ export function abortActiveChat(tenantId: string, sessionId: string, reason = 'U
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
 
 export async function chatRoutes(fastify: FastifyInstance) {
+  await rootRunStore.initialize()
   // Initialize agent store
   const agentStore = new SQLiteAgentStore()
 
@@ -296,7 +305,19 @@ export async function chatRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     const { sessionId } = request.body
     const tenantId = getTenantId(request)
-    const cancelled = abortActiveChat(tenantId, sessionId, 'Cancelled by user via /chat/cancel')
+    const cancelled = await withHistoryLock(tenantId, async () => {
+      const key = makeAbortKey(tenantId, sessionId)
+      cancellationEpochs.set(key, (cancellationEpochs.get(key) ?? 0) + 1)
+      let cancelled = abortActiveChat(tenantId, sessionId, 'Cancelled by user via /chat/cancel')
+      const active = (await rootRunStore.list(tenantId, sessionId)).filter(run => run.status === 'running' || run.status === 'waiting')
+      for (const run of active) {
+        const updated = await rootRunStore.update(tenantId, run.runId, { status: 'cancelled', stopReason: 'Cancelled by user' })
+        if (updated) activeStreams.get(key)?.publishRunState(updated)
+        cancelled = true
+      }
+      abortActiveChat(tenantId, sessionId, 'Cancelled by user via /chat/cancel')
+      return cancelled
+    })
     return reply.code(200).send({
       code: 200,
       message: cancelled ? 'OK' : 'No active chat for this session',
@@ -355,6 +376,8 @@ export async function chatRoutes(fastify: FastifyInstance) {
           toolResponse: {
             type: 'object',
             properties: {
+              requestId: { type: 'string' },
+              runId: { type: 'string' },
               toolCallId: { type: 'string' },
               name: { type: 'string' },
               output: { type: 'string' }
@@ -381,6 +404,39 @@ export async function chatRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     const toolProfile = getRequestToolProfile(request)
     const requestId = uuidv4()
+    request.body.sessionId ??= uuidv4()
+    const admissionKey = makeAbortKey(getTenantId(request), request.body.sessionId)
+    const admissionEpoch = cancellationEpochs.get(admissionKey) ?? 0
+    let resumeRecord = null as Awaited<ReturnType<typeof rootRunStore.get>>
+    if (request.body.toolResponse) {
+      const response = request.body.toolResponse
+      if (!response.runId || !response.requestId || !request.body.sessionId) {
+        return reply.code(400).send(fail(40001, 'runId, requestId and sessionId are required to answer a pending request'))
+      }
+      resumeRecord = await rootRunStore.get(getTenantId(request), response.runId)
+      if (!resumeRecord || resumeRecord.sessionId !== request.body.sessionId) return reply.code(404).send(fail(40400, 'Run not found'))
+      if (resumeRecord.request.toolProfile && resumeRecord.request.toolProfile !== toolProfile) return reply.code(409).send(fail(40900, 'Resume must use the original tool profile'))
+      const pending = resumeRecord.pending.find(item => item.requestId === response.requestId)
+      if (!pending || pending.toolCallId !== response.toolCallId || pending.toolName !== response.name) return reply.code(404).send(fail(40400, 'Pending request not found'))
+      if (pending.status === 'answered') {
+        const accepted = await rootRunStore.answer(getTenantId(request), resumeRecord.sessionId, response.runId, response.requestId, response.toolCallId, response.name, response.output)
+        async function* duplicate() { yield '\x00__run__' + JSON.stringify(accepted.run) }
+        await sseStream(duplicate(), reply)
+        return
+      }
+      // The waiting frame may arrive before sibling result persistence finishes.
+      const prior = activeStreams.get(makeAbortKey(getTenantId(request), resumeRecord.sessionId))
+      if (prior && !prior.finished) await new Promise<void>((resolve, reject) => {
+        const finish = () => { cleanup(); resolve() }
+        const failed = () => { cleanup(); resolve() }
+        const timer = setTimeout(() => { cleanup(); reject(Object.assign(new Error('Previous tool batch is still settling; retry this answer'), { statusCode: 409 })) }, 30_000)
+        const cleanup = () => { clearTimeout(timer); prior.emitter.off('end', finish); prior.emitter.off('error', failed) }
+        prior.emitter.once('end', finish); prior.emitter.once('error', failed)
+        if (prior.finished) finish()
+      })
+      request.body = { ...resumeRecord.request, message: '', sessionId: resumeRecord.sessionId,
+        model: resumeRecord.modelId, workspacePaths: resumeRecord.workspacePaths, toolResponse: response } as ChatBody
+    }
     const { 
       message, 
       sessionId = uuidv4(), 
@@ -570,6 +626,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     // 让 list_skills / get_skill / MCP 工具都能即时看到 + 调用。
     const { registry, externalSkills, toolCategories } = await createToolRegistry({
       toolProfile,
+      securityContext: { tenantId, sessionId, toolProfile },
       allowedSkills,
       allowedTools,
       inlineSkills: requestedInlineSkills,
@@ -580,7 +637,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     const abortController = new AbortController()
 
     const streamBus = new StreamBus(abortController)
-    activeStreams.set(makeAbortKey(tenantId, sessionId), streamBus)
+    // Published only after the root run has been claimed below.
 
     // ── 客户端断开检测：给予重连宽限期 ───────────────────────────────────────
     let aborted = false
@@ -589,8 +646,8 @@ export async function chatRoutes(fastify: FastifyInstance) {
       aborted = true
       reqLogger.info({ sessionId }, 'Client connection closed, entering grace period')
       streamBus.disconnectTimeout = setTimeout(() => {
+        if (streamBus.emitter.listenerCount('data') > 0) return
         try { abortController.abort(new Error('Client disconnected timeout')) } catch { /* noop */ }
-        activeStreams.delete(makeAbortKey(getTenantId(request), sessionId))
       }, 15000) // 15s grace period
     }
     reply.raw.on('close', onClientClose)
@@ -864,12 +921,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     const enableMemory = toolProfile !== 'code' && process.env.ENABLE_LONG_TERM_MEMORY !== 'false'
     const [ragChunks, memoryRecallBlock] = await Promise.all([
       (async () => {
-        if (boundKnowledgeBases && boundKnowledgeBases.length > 0) {
-          // Search only in bound KBs
-          return await searchChunks(tenantId, plainTextQuery, ragTopK)
-        } else {
-          return await searchChunks(tenantId, plainTextQuery, ragTopK)
-        }
+        return await searchChunks(tenantId, plainTextQuery, ragTopK, boundKnowledgeBases ?? (toolProfile === 'code' ? [] : undefined))
       })(),
       enableMemory ? buildMemoryRecallBlock(tenantId, plainTextQuery, {
         model: resolvedModel,
@@ -956,52 +1008,102 @@ ${workspaceInfo}${codegraphBlock}
     const mcpToolsTokens = estimateTokens(mcpToolDefsText)
     const systemToolsTokens = builtinToolsTokens + mcpToolsTokens
 
-    const conversationId = uuidv4()
+    let rootRun!: RootRun
+    let attemptId = ''
+    let conversationId = ''
+    let resumedPending: RootPending | undefined
+    const publishRun = (run: RootRun | null) => {
+      if (!run) return
+      rootRun = run
+      streamBus.push('\x00__run__' + JSON.stringify(run))
+    }
+    // Snapshot readers await publication, while cancellation remains free to interrupt admission.
+    let finishAdmission!: () => void
+    const pendingAdmission = new Promise<void>(resolve => { finishAdmission = resolve })
+    const admissions = pendingAdmissions.get(admissionKey) ?? new Set<Promise<void>>()
+    admissions.add(pendingAdmission)
+    pendingAdmissions.set(admissionKey, admissions)
+    const admission = await (async () => {
+      try {
+        if (toolResponse) {
+          const accepted = await rootRunStore.answer(tenantId, sessionId, toolResponse.runId, toolResponse.requestId, toolResponse.toolCallId, toolResponse.name, toolResponse.output)
+          rootRun = accepted.run
+          if (accepted.duplicate) return 'duplicate' as const
+          resumedPending = accepted.pending
+        } else {
+          rootRun = await rootRunStore.create(tenantId, sessionId, resolvedModel ?? ctx.modelName ?? '', workspacePaths ?? [], { ...request.body, toolProfile } as unknown as Record<string, unknown>)
+        }
+        attemptId = (await rootRunStore.get(tenantId, rootRun.runId))!.attemptId
+        conversationId = rootRun.turnId
+        ctx.rootRunId = rootRun.runId
+        ctx.turnId = rootRun.turnId
+        ctx.userMessageId = rootRun.userMessageId
+        ctx.assistantMessageId = rootRun.assistantMessageId
+        ctx.conversationId = rootRun.turnId
+        if (resumedPending) {
+          ctx.resumeToolCall = { toolCall: { id: resumedPending.toolCallId, name: resumedPending.toolName, args: resumedPending.args },
+            messageId: resumedPending.messageId ?? '', decision: resumedPending.kind === 'permission' ? (resumedPending.output === 'approved' ? 'approved' : 'rejected') : 'answered', output: resumedPending.output }
+        }
+        ctx.onPending = async pending => { publishRun(await rootRunStore.pending(tenantId, rootRun.runId, pending, attemptId)) }
+        ctx.runObserver = {
+          onOutcome: async outcome => {
+            const waiting = outcome.status === 'blocked' && rootRun.pending.some(item => item.status === 'pending')
+            publishRun(await rootRunStore.update(tenantId, rootRun.runId, { status: waiting ? 'waiting' : outcome.stopReason === 'incomplete' ? 'interrupted' : outcome.status === 'blocked' ? 'failed' : outcome.status,
+              error: outcome.error, stopReason: outcome.stopReason }, attemptId))
+          },
+        }
+        if (toolResponse) {
+          const prior = activeStreams.get(makeAbortKey(tenantId, sessionId))
+          const priorSnapshot = prior?.snapshot()
+          const priorRun = priorSnapshot?.projection.find(payload => payload.run)?.run as RootRun | undefined
+          if (priorRun?.runId === rootRun.runId) streamBus.seedProjection(priorSnapshot!.projection)
+          else streamBus.seedProjection(persistedTurnProjection(await ctx.history.getFullHistory(ctx), rootRun))
+        } else {
+          streamBus.push('\x00__user_message__' + JSON.stringify({ id: rootRun.userMessageId, role: 'user', content: message,
+            conversationId: rootRun.turnId, createdAt: rootRun.createdAt,
+            metadata: { ...requestedMetadata, rootRunId: rootRun.runId, turnId: rootRun.turnId,
+              attachments: attachments?.map(item => ({ name: item.name, type: item.type })) } }))
+        }
+        const started = await withHistoryLock(tenantId, async () => {
+          const current = await rootRunStore.get(tenantId, rootRun.runId)
+          const cancelledBeforeStart = (cancellationEpochs.get(admissionKey) ?? 0) !== admissionEpoch
+          if (!current || current.status !== 'running' || current.attemptId !== attemptId || isSessionHistoryMutating(tenantId, sessionId) || cancelledBeforeStart) {
+            abortController.abort(new Error('Run stopped before execution'))
+            if (current) publishRun(cancelledBeforeStart ? await rootRunStore.update(tenantId, rootRun.runId, { status: 'cancelled', stopReason: 'Cancelled before execution started' }, attemptId) : rootRunStore.public(current))
+            streamBus.end()
+            return false
+          }
+          activeStreams.set(makeAbortKey(tenantId, sessionId), streamBus)
+          registerActiveChat(tenantId, sessionId, abortController)
+          publishRun(rootRun)
+          return true
+        })
+        return started ? 'started' as const : 'stopped' as const
+      } finally {
+        admissions.delete(pendingAdmission)
+        if (!admissions.size) pendingAdmissions.delete(admissionKey)
+        finishAdmission()
+      }
+    })()
+    if (admission === 'duplicate') {
+      async function* duplicate() { yield '\x00__run__' + JSON.stringify(rootRun) }
+      await sseStream(duplicate(), reply)
+      return
+    }
+    if (admission === 'stopped') { await sseStream(busToIterable(streamBus), reply); return }
     let assistantResponse = ''
     let reasoningContent = ''
     let finalUsage: any = null
 
     async function* runAgent(): AsyncIterable<string> {
       try {
-        if (toolResponse) {
-          let toolOutputContent = `用户选择了: ${toolResponse.output}`
-
-          // 拦截 Exec Policy 审批响应
-          if (toolResponse.name === 'execute_cmd' && toolResponse.output === 'approved') {
-            const { approveCommand } = await import('../../../security/policy-engine.js')
-            // 从历史记录中找到这个 toolCall 的参数
-            const fullHistory = await ctx.history.getFullHistory(ctx)
-            const assistantMsg = fullHistory.find((m: any) => m.role === 'assistant' && m.toolCall?.id === toolResponse.toolCallId)
-            if (assistantMsg && assistantMsg.toolCall?.args?.command) {
-              const command = String(assistantMsg.toolCall.args.command)
-              const args = Array.isArray(assistantMsg.toolCall.args.args) ? assistantMsg.toolCall.args.args.map(String) : []
-              approveCommand(tenantId, sessionId, command, args)
-              toolOutputContent = `User approved the command execution. Please call the 'execute_cmd' tool again with the exact same arguments to actually execute it and get the results.`
-            }
-          } else if (toolResponse.name === 'execute_cmd' && toolResponse.output === 'rejected') {
-            toolOutputContent = `User rejected the command execution. Please do not call this command again, and inform the user or try an alternative approach.`
-          }
-
-          const toolMsg: Message & { conversationId?: string } = {
-            id: uuidv4(),
-            role: 'tool',
-            content: toolOutputContent,
-            toolCallId: toolResponse.toolCallId,
-            toolName: toolResponse.name,
-            createdAt: Date.now(),
-            tokens: estimateTokens(toolOutputContent),
-            conversationId,
-          }
-          await ctx.history.append(toolMsg, ctx)
-        }
-
         // 提取消息中的纯文本部分（message 可能是数组格式）
         const messageText = extractPlainText(message)
 
         // 视觉能力来自统一注册表（已在前面解析过）
         const isVisionModel = modelCaps.vision === true
 
-        let prompt: string | any[] | null = messageText || null
+        let prompt: string | any[] | null = toolResponse ? null : messageText || null
 
         if (!toolResponse) {
           const { autoProcessAttachments } = await import('./attachment-auto-processor.js')
@@ -1035,18 +1137,27 @@ ${workspaceInfo}${codegraphBlock}
           responseThinkingField: finalResponseThinkingField,
           reasoningEffort: effectiveReasoningEffort,
           displayContent: message || null,
-          metadata: requestedMetadata,
+          metadata: { ...requestedMetadata,
+            attachments: attachments?.map(item => ({ name: item.name, type: item.type })) },
         })
         const pipeline = createPipeline([])
 
         const generator = pipeline.pipe(strategy.run(prompt, ctx))
         for await (const chunk of generator) {
+          if (chunk.startsWith('\x00__assistant_msg_id__')) {
+            const assistantMessageId = chunk.slice('\x00__assistant_msg_id__'.length)
+            if (assistantMessageId !== rootRun.assistantMessageId) publishRun(await rootRunStore.update(tenantId, rootRun.runId, { assistantMessageId }, attemptId))
+          }
           if (chunk.includes('\x00__thinking__')) {
             reasoningContent += chunk.split('\x00__thinking__')[1]
           } else if (chunk.includes('\x00__usage__')) {
             try {
               const usageStr = chunk.split('\x00__usage__')[1]
-              finalUsage = JSON.parse(usageStr)
+              const usage = JSON.parse(usageStr)
+              finalUsage = { ...finalUsage, ...usage }
+              if (typeof usage.modelId === 'string' && usage.modelId && usage.modelId !== rootRun.actualModelId) {
+                publishRun(await rootRunStore.update(tenantId, rootRun.runId, { actualModelId: usage.modelId }, attemptId))
+              }
             } catch (e) {
               reqLogger.error({ err: e, chunk }, 'Failed to parse usage chunk')
             }
@@ -1153,6 +1264,8 @@ ${workspaceInfo}${codegraphBlock}
           }
         })
       } catch (err: any) {
+        publishRun(await rootRunStore.update(tenantId, rootRun.runId, { status: abortController.signal.aborted ? 'cancelled' : 'failed',
+          error: { code: 'CHAT_FAILED', message: err.message || String(err), retryable: false } }, attemptId))
         reqLogger.error({ err, agentId }, 'Agent execution error')
         // DeepSeek 特有错误：附加 errorType 以便前端分级处理
         const dsErrorType: string | null =
@@ -1168,13 +1281,15 @@ ${workspaceInfo}${codegraphBlock}
 
     // 后台运行 Agent
     ;(async () => {
-      registerActiveChat(tenantId, sessionId, abortController)
       try {
         for await (const chunk of runAgent()) {
           streamBus.push(chunk)
         }
+        if (rootRun.status === 'running') publishRun(await rootRunStore.update(tenantId, rootRun.runId, { status: abortController.signal.aborted ? 'cancelled' : 'interrupted', stopReason: 'Execution ended without an outcome' }, attemptId))
         streamBus.end()
       } catch (err) {
+        publishRun(await rootRunStore.update(tenantId, rootRun.runId, { status: abortController.signal.aborted ? 'cancelled' : 'failed',
+          error: { code: 'CHAT_FAILED', message: err instanceof Error ? err.message : String(err), retryable: false } }, attemptId))
         streamBus.error(err)
       } finally {
         unregisterActiveChat(tenantId, sessionId, abortController)
@@ -1192,6 +1307,44 @@ ${workspaceInfo}${codegraphBlock}
     }
   })
 
+  fastify.get<{ Querystring: { sessionId: string } }>('/chat/snapshot', async (request, reply) => {
+    const { sessionId } = request.query
+    if (!sessionId) return reply.code(400).send(fail(40001, 'sessionId is required'))
+    const tenantId = getTenantId(request)
+    const key = makeAbortKey(tenantId, sessionId)
+    const earlyBus = activeStreams.get(key)
+    if (earlyBus?.disconnectTimeout) { clearTimeout(earlyBus.disconnectTimeout); earlyBus.disconnectTimeout = null }
+    while (true) {
+      await Promise.all(pendingAdmissions.get(key) ?? [])
+      const result = await withHistoryLock(tenantId, async () => {
+        // An admission can begin while this reader was queued for the history lock.
+        if (pendingAdmissions.get(key)?.size) return null
+        const [history, runs, todos, changes] = await Promise.all([
+          createConversationHistory().getFullHistory({ tenantId, sessionId }), rootRunStore.list(tenantId, sessionId),
+          new TodoStore().list(tenantId, sessionId), new ChangeStore().list(tenantId, sessionId),
+        ])
+        const bus = activeStreams.get(key)
+        if (bus) {
+          // No await between state projection and cursor: they describe exactly the same delivered prefix.
+          const snapshot = bus.snapshot()
+          const run = snapshot.projection.find(payload => payload.run)?.run as RootRun | undefined
+          if (run && runs.at(-1)?.runId === run.runId) {
+            const projectedRuns = [...runs.filter(item => item.runId !== run.runId), run].sort((a, b) => a.seq - b.seq)
+            return { ...snapshot, source: 'live', sessionId, run, runs: projectedRuns, history, todos, changes }
+          }
+        }
+        return { schemaVersion: 1, source: 'persisted', sessionId, eventId: null, finished: true,
+          projection: [], run: runs.at(-1), runs, history, todos, changes }
+      })
+      if (result) return reply.send(success(result))
+    }
+  })
+
+  fastify.get<{ Querystring: { sessionId: string } }>('/chat/runs', async (request, reply) => {
+    if (!request.query.sessionId) return reply.code(400).send(fail(40001, 'sessionId is required'))
+    return reply.send(success({ runs: await rootRunStore.list(getTenantId(request), request.query.sessionId) }))
+  })
+
   // ── 查询会话流状态（刷新/切会话后探测是否有进行中的流）────────────────────
   fastify.get<{ Querystring: { sessionId: string } }>('/chat/status', {
     schema: {
@@ -1206,14 +1359,18 @@ ${workspaceInfo}${codegraphBlock}
   }, async (request, reply) => {
     const { sessionId } = request.query
     const streamBus = activeStreams.get(makeAbortKey(getTenantId(request), sessionId))
-    if (!streamBus) {
-      return reply.code(200).send(success({ running: false, finished: false }))
+    const runs = await rootRunStore.list(getTenantId(request), sessionId)
+    const run = runs.at(-1)
+    const busRun = streamBus?.snapshot().projection.find(payload => payload.run)?.run as RootRun | undefined
+    if (!streamBus || !busRun || runs.at(-1)?.runId !== busRun.runId) {
+      return reply.code(200).send(success({ running: false, finished: Boolean(run), run }))
     }
-    const lastEvent = streamBus.events[streamBus.events.length - 1]
+    const lastEventId = streamBus.lastEventId
     return reply.code(200).send(success({
       running: !streamBus.finished,
       finished: streamBus.finished,
-      lastEventId: lastEvent?.id,
+      lastEventId,
+      run,
     }))
   })
 
@@ -1232,13 +1389,16 @@ ${workspaceInfo}${codegraphBlock}
   }, async (request, reply) => {
     const { sessionId, lastEventId } = request.query
 
-    const streamBus = activeStreams.get(makeAbortKey(getTenantId(request), sessionId))
-    if (!streamBus) {
-      reply.raw.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
-      reply.raw.write('event: done\ndata: [DONE]\n\n')
-      reply.raw.end()
-      return
-    }
+    const tenantId = getTenantId(request)
+    const subscription = await withHistoryLock(tenantId, async () => {
+      const bus = activeStreams.get(makeAbortKey(tenantId, sessionId))
+      const run = bus?.snapshot().projection.find(payload => payload.run)?.run as RootRun | undefined
+      if (!bus || !run || (await rootRunStore.list(tenantId, sessionId)).at(-1)?.runId !== run.runId) return null
+      try { return { bus, source: busToIterable(bus, lastEventId) } }
+      catch { return null }
+    })
+    if (!subscription) return reply.code(409).send(fail(40902, 'snapshot_required'))
+    const { bus: streamBus, source } = subscription
 
     if (streamBus.disconnectTimeout) {
       clearTimeout(streamBus.disconnectTimeout)
@@ -1250,13 +1410,13 @@ ${workspaceInfo}${codegraphBlock}
       if (aborted || streamBus.finished) return
       aborted = true
       streamBus.disconnectTimeout = setTimeout(() => {
+        if (streamBus.emitter.listenerCount('data') > 0) return
         try { streamBus.abortController.abort(new Error('Client disconnected timeout')) } catch {}
-        activeStreams.delete(makeAbortKey(getTenantId(request), sessionId))
       }, 15000)
     }
     reply.raw.on('close', onClientClose)
     request.raw.on('aborted', onClientClose)
 
-    await sseStream(busToIterable(streamBus, lastEventId), reply)
+    await sseStream(source, reply)
   })
 }

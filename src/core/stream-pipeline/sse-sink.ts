@@ -1,263 +1,90 @@
 import type { FastifyReply } from 'fastify'
 import type { SseEventPayload } from './stream-bus.js'
+import { decodeStreamChunk } from './stream-projection.js'
 
-/**
- * 默认心跳间隔（毫秒）。
- * - 1Panel 的 OpenResty 默认 proxy_read_timeout = 60s，保守取 15s 发一次。
- * - 若客户端使用原生 EventSource，这也是它"看起来还活着"的最低保障。
- */
 const HEARTBEAT_INTERVAL_MS = 15000
 
-export async function sseStream(
-  source: AsyncIterable<SseEventPayload | string>,
-  reply: FastifyReply,
-): Promise<void> {
-  console.log('--- sseStream started ---')
+export async function sseStream(source: AsyncIterable<SseEventPayload | string>, reply: FastifyReply): Promise<void> {
   reply.raw.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
   reply.raw.setHeader('Cache-Control', 'no-cache')
   reply.raw.setHeader('Connection', 'keep-alive')
   reply.raw.setHeader('X-Accel-Buffering', 'no')
-
-  // 告诉 Nginx/反代 这条连接上允许长时间无业务数据；
-  // 真实的 keep-alive 还是依赖下面的 heartbeat 定时器。
   reply.raw.setTimeout(0)
 
-  let heartbeatTimer: ReturnType<typeof setTimeout> | null = null
-  let heartbeatStopped = false
+  const iterator = source[Symbol.asyncIterator]()
   let clientGone = false
+  let returned = false
+  let heartbeat: ReturnType<typeof setTimeout> | undefined
+  let disconnect!: () => void
+  const disconnected = new Promise<null>(resolve => { disconnect = () => resolve(null) })
+  const returnSource = () => {
+    if (returned) return
+    returned = true
+    // A bus subscription return detaches immediately; it never aborts its producer.
+    try { void Promise.resolve(iterator.return?.()).catch(() => {}) } catch { /* already closed */ }
+  }
+  const onClientClose = () => {
+    clientGone = true
+    if (heartbeat) clearTimeout(heartbeat)
+    disconnect()
+    returnSource()
+  }
+  reply.raw.once('error', onClientClose)
+  reply.raw.once('close', onClientClose)
 
   const scheduleHeartbeat = () => {
-    if (heartbeatStopped || clientGone) return
-    heartbeatTimer = setTimeout(() => {
-      if (heartbeatStopped || clientGone) return
-      try {
-        // SSE 注释帧：以 `:` 开头的行会被浏览器忽略，不触发 onmessage；
-        // 但会让 TCP/Nginx/反代 认为连接上仍有字节流动，从而不掐断。
-        const ok = reply.raw.write(`: ping ${Date.now()}\n\n`)
-        if (!ok) {
-          // 写缓冲区已满，等 drain 再继续发心跳（不需要 resolve，只是"尽力而为"）
-          reply.raw.once('drain', () => {})
-        }
-      } catch {
-        // 写入失败（例如 socket 已经关闭），不再排程
-        return
-      }
+    if (clientGone) return
+    heartbeat = setTimeout(() => {
+      if (clientGone) return
+      try { reply.raw.write(`: ping ${Date.now()}\n\n`) }
+      catch { onClientClose(); return }
       scheduleHeartbeat()
     }, HEARTBEAT_INTERVAL_MS)
   }
-
-  const stopHeartbeat = () => {
-    heartbeatStopped = true
-    if (heartbeatTimer) {
-      clearTimeout(heartbeatTimer)
-      heartbeatTimer = null
-    }
-  }
-
-  const onClientError = () => {
-    clientGone = true
-    stopHeartbeat()
-  }
-
-  reply.raw.once('error', onClientError)
-  reply.raw.once('close', onClientError)
-
-  // 在写任何业务数据之前先排好心跳；避免 "LLM 还在第一句生成的 30s 空窗 + Nginx 60s" 临界时被断。
   scheduleHeartbeat()
 
+  const writeData = async (data: string): Promise<void> => {
+    if (clientGone || reply.raw.write(data)) return
+    await new Promise<void>(resolve => {
+      const finish = () => {
+        reply.raw.off('drain', finish)
+        reply.raw.off('error', finish)
+        reply.raw.off('close', finish)
+        resolve()
+      }
+      reply.raw.once('drain', finish)
+      reply.raw.once('error', finish)
+      reply.raw.once('close', finish)
+      if (clientGone) finish()
+    })
+  }
+
   try {
-    for await (const item of source) {
-      if (clientGone) break
+    while (!clientGone) {
+      const next = await Promise.race([iterator.next(), disconnected])
+      if (next === null || next.done || clientGone) break
+      const item = next.value
       const chunk = typeof item === 'string' ? item : item.chunk
-      const idStr = typeof item === 'string' || !item.id ? '' : `id: ${item.id}\n`
-
-      console.log('--- sseStream chunk ---', chunk.slice(0, 50))
-
-      const writeData = async (data: string): Promise<void> => {
-        if (clientGone) return
-        const result = reply.raw.write(data)
-        if (!result) {
-          await new Promise<void>((resolve) => {
-            const onDrain = () => {
-              reply.raw.off('error', onErr)
-              resolve()
-            }
-            const onErr = () => {
-              clientGone = true
-              reply.raw.off('drain', onDrain)
-              resolve()
-            }
-            reply.raw.once('drain', onDrain)
-            reply.raw.once('error', onErr)
-          })
-        }
-      }
-
-      if (chunk.startsWith('\x00__subagent_event__')) {
-        const subagentEvent = JSON.parse(chunk.slice('\x00__subagent_event__'.length))
-        await writeData(idStr + 'data: ' + JSON.stringify({ subagentEvent }) + '\n\n')
-        continue
-      }
-      // ── __usage__ frame ──────────────────────────────────────────────────
-      if (chunk.startsWith('\x00__usage__')) {
-        try {
-          const usage = JSON.parse(chunk.slice('\x00__usage__'.length))
-          await writeData(`${idStr}data: ${JSON.stringify({ usage })}\n\n`)
-        } catch (e) {
-          console.error('Failed to parse __usage__ frame:', e, chunk)
-        }
-        continue
-      }
-      // ── __thinking__ frame (AI 思考文字，调用工具前) ─────────────────────
-      if (chunk.startsWith('\x00__thinking__')) {
-        const text = chunk.slice('\x00__thinking__'.length)
-        await writeData(`${idStr}data: ${JSON.stringify({ thinking: text })}\n\n`)
-        continue
-      }
-      // ── __tool_start__ frame ─────────────────────────────────────────────
-      if (chunk.startsWith('\x00__tool_start__')) {
-        try {
-          const tool = JSON.parse(chunk.slice('\x00__tool_start__'.length))
-          await writeData(`${idStr}data: ${JSON.stringify({ toolStart: tool })}\n\n`)
-        } catch (e) {
-          console.error('Failed to parse __tool_start__ frame:', e, chunk);
-        }
-        continue
-      }
-      // ── __tool_args__ frame ─────────────────────────────────────────────
-      if (chunk.startsWith('\x00__tool_args__')) {
-        try {
-          const jsonStr = chunk.slice('\x00__tool_args__'.length)
-          const tool = JSON.parse(jsonStr)
-          await writeData(`${idStr}data: ${JSON.stringify({ toolArgs: tool })}\n\n`)
-        } catch (e) {
-          console.error('Failed to parse __tool_args__ frame:', e, chunk);
-        }
-        continue
-      }
-      // ── __tool_end__ frame ───────────────────────────────────────────────
-      if (chunk.startsWith('\x00__tool_end__')) {
-        try {
-          const tool = JSON.parse(chunk.slice('\x00__tool_end__'.length))
-          await writeData(`${idStr}data: ${JSON.stringify({ toolEnd: tool })}\n\n`)
-        } catch (e) {
-          console.error('Failed to parse __tool_end__ frame:', e, chunk);
-        }
-        continue
-      }
-      // ── __ask_user__ frame ─────────────────────────────────────────────
-      if (chunk.startsWith('\x00__ask_user__')) {
-        try {
-          const data = JSON.parse(chunk.slice('\x00__ask_user__'.length))
-          await writeData(`${idStr}data: ${JSON.stringify({ ask_user: data })}\n\n`)
-        } catch (e) {
-          console.error('Failed to parse __ask_user__ frame:', e, chunk)
-        }
-        continue
-      }
-      // ── __user_msg_id__ frame ──────────────────────────────────────────
-      if (chunk.startsWith('\x00__user_msg_id__')) {
-        const id = chunk.slice('\x00__user_msg_id__'.length)
-        await writeData(`${idStr}data: ${JSON.stringify({ userMsgId: id })}\n\n`)
-        continue
-      }
-      // ── 新版协议别名帧 ────────────────────────────────────────────────
-      if (chunk.startsWith('\x00__userMsgId__')) {
-        const id = chunk.slice('\x00__userMsgId__'.length)
-        await writeData(`${idStr}data: ${JSON.stringify({ userMsgId: id })}\n\n`)
-        continue
-      }
-      if (chunk.startsWith('\x00__tool_call__')) {
-        try {
-          const tool = JSON.parse(chunk.slice('\x00__tool_call__'.length))
-          await writeData(`${idStr}data: ${JSON.stringify({ toolCall: tool })}\n\n`)
-        } catch (e) {
-          console.error('Failed to parse __tool_call__ frame:', e, chunk)
-        }
-        continue
-      }
-      if (chunk.startsWith('\x00__tool_result__')) {
-        try {
-          const tool = JSON.parse(chunk.slice('\x00__tool_result__'.length))
-          await writeData(`${idStr}data: ${JSON.stringify({ toolResult: tool })}\n\n`)
-        } catch (e) {
-          console.error('Failed to parse __tool_result__ frame:', e, chunk)
-        }
-        continue
-      }
-      if (chunk.startsWith('\x00__permission_request__')) {
-        try {
-          const data = JSON.parse(chunk.slice('\x00__permission_request__'.length))
-          await writeData(`${idStr}data: ${JSON.stringify({ permissionRequest: data })}\n\n`)
-        } catch (e) {
-          console.error('Failed to parse __permission_request__ frame:', e, chunk)
-        }
-        continue
-      }
-      if (chunk.startsWith('\x00__message_block__')) {
-        try {
-          const data = JSON.parse(chunk.slice('\x00__message_block__'.length))
-          await writeData(`${idStr}data: ${JSON.stringify({ messageBlock: data })}\n\n`)
-        } catch (e) {
-          console.error('Failed to parse __message_block__ frame:', e, chunk)
-        }
-        continue
-      }
-      // ── __flow__ frame ────────────────────────────────────────────────
-      if (chunk.startsWith('\x00__flow__')) {
-        try {
-          const data = JSON.parse(chunk.slice('\x00__flow__'.length))
-          await writeData(`${idStr}data: ${JSON.stringify({ flow: data })}\n\n`)
-        } catch (e) {
-          console.error('Failed to parse __flow__ frame:', e, chunk)
-        }
-        continue
-      }
-      // ── __todo__ frame（会话待办清单，客户端任务托盘）──────────────────
-      if (chunk.startsWith('\x00__todo__')) {
-        try {
-          const data = JSON.parse(chunk.slice('\x00__todo__'.length))
-          await writeData(`${idStr}data: ${JSON.stringify({ todo: data })}\n\n`)
-        } catch (e) {
-          console.error('Failed to parse __todo__ frame:', e, chunk)
-        }
-        continue
-      }
-      // ── __file_change__ frame（文件改动记录，diff 视图 + 改动确认面板）──
-      if (chunk.startsWith('\x00__file_change__')) {
-        try {
-          const data = JSON.parse(chunk.slice('\x00__file_change__'.length))
-          await writeData(`${idStr}data: ${JSON.stringify({ fileChange: data })}\n\n`)
-        } catch (e) {
-          console.error('Failed to parse __file_change__ frame:', e, chunk)
-        }
-        continue
-      }
-      // ── 普通内容 ─────────────────────────────────────────────────────────
-      if (chunk.includes('\x00')) {
-        console.warn('Unhandled control frame in sseStream:', chunk);
-        continue;
-      }
-      await writeData(`${idStr}data: ${JSON.stringify({ content: chunk })}\n\n`)
+      const envelope = decodeStreamChunk(chunk)
+      if (!envelope) continue
+      const id = typeof item === 'string' || !item.id ? '' : `id: ${item.id}\n`
+      await writeData(`${id}data: ${JSON.stringify(envelope)}\n\n`)
     }
-    // Send done event
+    if (!clientGone) await writeData('event: done\ndata: [DONE]\n\n')
+  } catch (error) {
     if (!clientGone) {
-      try { reply.raw.write('event: done\ndata: [DONE]\n\n') } catch { /* noop */ }
-    }
-  } catch (err) {
-    // 源流出错（上游 LLM 断流、pipeline 异常等）：显式下发错误帧 + 结束帧，
-    // 避免连接裸断导致客户端 fetch 抛 "TypeError: terminated" 并渲染成莫名的红色报错。
-    if (!clientGone) {
-      const message = err instanceof Error ? err.message : String(err)
+      const message = error instanceof Error ? error.message : String(error)
+      const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : undefined
       try {
-        reply.raw.write(`data: ${JSON.stringify({ error: message })}\n\n`)
-      } catch { /* noop */ }
-      try { reply.raw.write('event: done\ndata: [DONE]\n\n') } catch { /* noop */ }
+        await writeData(`data: ${JSON.stringify({ error: message, ...(code ? { code } : {}) })}\n\n`)
+        await writeData('event: done\ndata: [DONE]\n\n')
+      } catch { /* socket failed while reporting an upstream error */ }
     }
   } finally {
-    stopHeartbeat()
-    reply.raw.off('error', onClientError)
-    reply.raw.off('close', onClientError)
-    try { reply.raw.end() } catch { /* noop */ }
+    if (heartbeat) clearTimeout(heartbeat)
+    returnSource()
+    reply.raw.off('error', onClientClose)
+    reply.raw.off('close', onClientClose)
+    try { reply.raw.end() } catch { /* already closed */ }
   }
 }

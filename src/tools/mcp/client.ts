@@ -1,6 +1,8 @@
 import { throwIfAborted } from '../../core/utils/abort.js'
 import type { MCPClient, MCPServerConfig, MCPToolDefinition } from './types.js'
 import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
+import { guardedHttp, type NetworkContext } from '../../security/guarded-http.js'
+import { extensionPolicy } from '../../security/tool-policy.js'
 
 let _rpcId = 1
 
@@ -23,15 +25,15 @@ export class HTTPMCPClient implements MCPClient {
   private cachedTools: MCPToolDefinition[] = []
   private mode: 'jsonrpc' | 'rest' = 'jsonrpc'
 
-  constructor(private readonly config: MCPServerConfig) {}
+  constructor(private readonly config: MCPServerConfig, private readonly securityContext: NetworkContext = { tenantId: 'default', sessionId: '' }) {}
 
   // ── JSON-RPC 2.0 请求 ─────────────────────────────────────────────────────
-  private async rpc<T>(method: string, params: unknown = {}, signal?: AbortSignal): Promise<T> {
+  private async rpc<T>(method: string, params: unknown = {}, signal?: AbortSignal, ctx = this.securityContext): Promise<T> {
     throwIfAborted(signal)
     const id = _rpcId++
     const body = JSON.stringify({ jsonrpc: '2.0', id, method, params })
 
-    const res = await fetch(this.config.url, {
+    const res = await guardedHttp(this.config.url, ctx, 'mcp', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -66,7 +68,7 @@ export class HTTPMCPClient implements MCPClient {
 
   // ── REST 降级：GET /tools ─────────────────────────────────────────────────
   private async restListTools(): Promise<MCPToolDefinition[]> {
-    const res = await fetch(`${this.config.url}/tools`, {
+    const res = await guardedHttp(`${this.config.url}/tools`, this.securityContext, 'mcp-discovery', {
       headers: this.config.headers,
       signal: AbortSignal.timeout(10000),
     })
@@ -76,8 +78,8 @@ export class HTTPMCPClient implements MCPClient {
   }
 
   // ── REST 降级：POST /tools/:name ─────────────────────────────────────────
-  private async restCallTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
-    const res = await fetch(`${this.config.url}/tools/${name}`, {
+  private async restCallTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, ctx = this.securityContext): Promise<string> {
+    const res = await guardedHttp(`${this.config.url}/tools/${encodeURIComponent(name)}`, ctx, 'mcp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...this.config.headers },
       body: JSON.stringify(args),
@@ -127,14 +129,16 @@ export class HTTPMCPClient implements MCPClient {
     return this.cachedTools
   }
 
-  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, ctx = this.securityContext): Promise<string> {
     throwIfAborted(signal)
+    const denied = extensionPolicy(ctx)
+    if (denied) throw new Error(denied.output)
     if (this.mode === 'jsonrpc') {
       const result = await this.rpc<{
         content?: Array<{ type: string; text?: string }>
         result?: unknown
         isError?: boolean
-      }>('tools/call', { name, arguments: args }, signal)
+      }>('tools/call', { name, arguments: args }, signal, ctx)
       if (result.isError) throw new Error(result.content?.map(c => c.text ?? '').join('\n') || 'MCP tool reported an error')
 
       // MCP 标准返回 content 数组
@@ -143,15 +147,17 @@ export class HTTPMCPClient implements MCPClient {
       }
       return JSON.stringify(result)
     }
-    return this.restCallTool(name, args, signal)
+    return this.restCallTool(name, args, signal, ctx)
   }
 
   async toTools(): Promise<Tool[]> {
     const definitions = await this.listTools()
     const client = this
 
-    return definitions.map((def): Tool => ({
+    return definitions.map((def): Tool & { source: string } => ({
       name: `mcp_${this.config.name}_${def.name}`,
+      source: 'mcp',
+      preflight: async (_args, ctx) => extensionPolicy(ctx),
       description: `[MCP:${this.config.name}] ${def.description}`,
       parameters: {
         type: 'object',
@@ -159,7 +165,7 @@ export class HTTPMCPClient implements MCPClient {
       },
       async execute(rawArgs: unknown, _ctx: AgentContext): Promise<ToolResult> {
         try {
-          const output = await client.callTool(def.name, rawArgs as Record<string, unknown>, _ctx.signal)
+          const output = await client.callTool(def.name, rawArgs as Record<string, unknown>, _ctx.signal, _ctx)
           return { success: true, output }
         } catch (err) {
           throwIfAborted(_ctx.signal)

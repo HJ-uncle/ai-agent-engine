@@ -1,6 +1,6 @@
 import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
 import { loadSecurityConfig, checkDomainAllowed } from './security-config.js'
-import { checkNetworkAccess } from '../../security/network-policy.js'
+import { guardedHttp } from '../../security/guarded-http.js'
 import { getSecurityMode } from '../../security/policy-engine.js'
 
 /**
@@ -17,12 +17,11 @@ export const webFetchTool: Tool = {
     properties: {
       url: { type: 'string' },
       convertToMarkdown: { type: 'boolean' },
-      bypassSecurityCheck: { type: 'boolean' }
     },
     required: ['url']
   },
   async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
-    const { url, convertToMarkdown = true, bypassSecurityCheck = false } = rawArgs as any
+    const { url, convertToMarkdown = true } = rawArgs as any
 
     try {
       // 验证 URL 格式
@@ -35,7 +34,7 @@ export const webFetchTool: Tool = {
 
       // 安全检查（非 safe 模式或明确绕过时跳过旧版检查）
       const secMode = getSecurityMode(ctx.tenantId, ctx.sessionId)
-      if (!bypassSecurityCheck && secMode === 'safe') {
+      if (secMode === 'safe') {
         const config = loadSecurityConfig().webFetch
         
         // 检查工具是否启用
@@ -50,22 +49,11 @@ export const webFetchTool: Tool = {
           return { success: false, output: `❌ 访问被拒绝: ${checkResult.reason}` }
         }
 
-        // 新版网络策略（SSRF 防护、DNS 检查、CIDR 等）
-        const net = await checkNetworkAccess({
-          url,
-          tenantId: ctx.tenantId,
-          sessionId: ctx.sessionId,
-          source: 'web_fetch',
-        })
-        if (!net.allowed) {
-          ctx.logger.warn(`[web_fetch] Network policy denied ${url}: ${net.reason}`)
-          return { success: false, output: `❌ 访问被网络策略拒绝: ${net.reason}` }
-        }
       }
 
       ctx.logger.info(`[web_fetch] Fetching URL: ${url}`)
 
-      const response = await fetch(url, {
+      const response = await guardedHttp(url, ctx, 'web_fetch', {
         headers: {
           'User-Agent': 'Mozilla/5.0 (compatible; AI-Agent-Engine/1.0)',
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',

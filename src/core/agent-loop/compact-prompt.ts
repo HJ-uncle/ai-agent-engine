@@ -9,6 +9,7 @@
  */
 import type { Message } from '../agent-context/types.js'
 import type { LLMAdapterOptions } from '../llm-adapter/types.js'
+import { estimateRequestInput } from './finalization.js'
 
 interface CompactLLM {
   complete?(messages: Message[], options?: any): Promise<unknown>
@@ -67,22 +68,34 @@ export function extractSummary(output: string): string {
  * 构造压缩用的 summarizeFn：序列化消息 → 填 6 段模板 → 调 LLM → 提取 <summary>。
  * 供 react.ts 自动压缩与手动压缩端点共用，保证两条路径摘要质量一致。
  */
-export function buildCompactSummarizeFn(llm: CompactLLM, options: Pick<LLMAdapterOptions, 'signal' | 'onRequestAttempt'> = {}): (messages: Message[]) => Promise<string> {
+export function buildCompactSummarizeFn(llm: CompactLLM, options: Pick<LLMAdapterOptions, 'signal' | 'onRequestAttempt'> & {
+  contextWindow?: number; maxOutputTokens?: number
+} = {}): (messages: Message[]) => Promise<string> {
   return async (messages: Message[]): Promise<string> => {
+    // Keep original instructions outside the lossy summary, including tails beyond
+    // the per-message and total-input caps used for the summarizer request.
+    const preservedInstructions = messages.filter(message => message.role === 'system' || message.role === 'user')
+      .map(message => `[${message.role}, verbatim]:\n${typeof message.content === 'string' ? message.content : JSON.stringify(message.content)}`)
     let serialized = messages.map(serializeMessage).join('\n\n')
     if (serialized.length > TOTAL_INPUT_CAP) {
       serialized = `...[earlier messages truncated]\n\n${serialized.slice(-TOTAL_INPUT_CAP)}`
     }
     const prompt: Message = { role: 'user', content: COMPACT_PROMPT_TEMPLATE + serialized }
+    const maxTokens = options.maxOutputTokens ?? 4096
+    const requestInputTokenEstimate = estimateRequestInput([prompt], undefined, [])
+    if (options.contextWindow && requestInputTokenEstimate + maxTokens > options.contextWindow) {
+      throw Object.assign(new Error('Compaction request exceeds the context window; original history was preserved'), { code: 'CONTEXT_LIMIT' })
+    }
     const invoke = llm.complete ?? llm.chat
     if (!invoke) throw new Error('LLM adapter has no complete/chat method')
-    const raw = await invoke.call(llm, [prompt], { temperature: 0.3, ...options })
+    const raw = await invoke.call(llm, [prompt], { temperature: 0.3, maxTokens, requestInputTokenEstimate,
+      ...(llm.model ? { model: llm.model } : {}), signal: options.signal, onRequestAttempt: options.onRequestAttempt })
     const text =
       typeof raw === 'string'
         ? raw
         : typeof (raw as { content?: unknown })?.content === 'string'
           ? ((raw as { content: string }).content)
           : JSON.stringify(raw)
-    return extractSummary(text)
+    return [...preservedInstructions, extractSummary(text)].filter(Boolean).join('\n\n')
   }
 }

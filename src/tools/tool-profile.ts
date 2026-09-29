@@ -18,7 +18,7 @@ export function normalizeAllowedTools(names?: readonly string[] | null): string[
 }
 
 export const CODE_BUILTIN_TOOLS: ReadonlySet<string> = new Set([
-  'read_file', 'write_file', 'list_files', 'delete_file', 'create_dir',
+  'read_file', 'write_file', 'edit_file', 'list_files', 'delete_file', 'create_dir',
   'glob_search', 'grep_search', 'execute_cmd', 'code_diagnose', 'codegraph',
   'subagent', 'todo_list', 'todo_create', 'todo_update', 'todo_delete',
   'list_skills', 'get_skill', 'run_skill_script',

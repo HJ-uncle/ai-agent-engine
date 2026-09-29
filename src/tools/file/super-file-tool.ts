@@ -5,19 +5,21 @@ import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/in
 import { workspaceManager } from '../../workspace/index.js'
 import { MAX_FILE_SIZE } from './constants.js'
 import { handlerRegistry } from './handlers/registry.js'
-import { readOldSnapshot, commitWriteChange } from './change-recorder.js'
+import { readOldSnapshot, commitWriteChange, ChangeRecordingError, decodeEditableText } from './change-recorder.js'
+import { readFileVersionSync, withFileLocks } from '../../shared/file-version.js'
+import { throwIfAborted } from '../../core/utils/abort.js'
 
 export const readFileTool: Tool = {
   name: 'read_file',
   displayName: '读取文件',
-  description: '读取任意支持格式的文件（JSON, CSV, XLSX, PDF, DOCX, 代码, 文本）。支持分页读取大文件以节省 Token。返回带行号的内容以便引用。',
+  description: '读取支持格式的文件（JSON, CSV, XLSX, PDF, DOCX, 代码, 文本），支持分页。默认返回行号及完整字节 expectedHash；行号和格式化展示不是源文件原文。精确编辑前使用 mode="exact"：返回 JSON，其 content 为无行号的原始 UTF-8 文本（保留 CRLF/BOM），expectedHash 始终对应完整文件。',
   parameters: {
     type: 'object',
     properties: {
       path: { type: 'string', description: '文件路径' },
       start_line: { type: 'number', description: '起始行号（从 1 开始），默认 1' },
       end_line: { type: 'number', description: '结束行号，默认读取 300 行' },
-      mode: { type: 'string', enum: ['auto', 'full', 'summary', 'vision', 'ocr'], description: '读取模式：auto(默认), full(全文), summary(摘要/签名), vision(图片预览), ocr(文本提取)' },
+      mode: { type: 'string', enum: ['auto', 'full', 'summary', 'vision', 'ocr', 'exact'], description: 'auto(默认), full(全文), summary(摘要/签名), vision(图片预览), ocr(文本提取), exact(原始UTF-8 JSON，含完整expectedHash，可按行分页)' },
     },
     required: ['path'],
   },
@@ -30,12 +32,14 @@ export const readFileTool: Tool = {
       try {
         targetPath = workspaceManager.resolveSafePath(ctx, filePath)
       } catch (e) {
+        if (mode === 'exact') throw e
         // 如果路径解析失败（可能是非法字符），尝试在工作区搜索
         targetPath = ''
       }
 
       // --- 智能路径纠错逻辑 ---
       if (!targetPath || !fs.existsSync(targetPath)) {
+        if (mode === 'exact') return { success: false, output: `File not found: ${filePath}. Exact mode requires the specified file and does not guess another path.` }
         const fileName = path.basename(filePath)
         const allWorkspacePaths = workspaceManager.getPaths(ctx)
         let bestMatchPath = ''
@@ -78,35 +82,44 @@ export const readFileTool: Tool = {
         }
       }
       
-      const stat = fs.statSync(targetPath)
-      if (stat.isDirectory()) {
-        return { success: false, output: `Path is a directory, not a file: ${filePath}` }
-      }
-      if (stat.size > MAX_FILE_SIZE) {
-        return { success: false, output: `File too large (${stat.size} bytes, max ${MAX_FILE_SIZE} bytes)` }
-      }
-
-      const handler = handlerRegistry.getHandler(targetPath)
-      const result = await handler.read(targetPath, ctx, { 
-        mode,
-        startLine: start_line,
-        endLine: end_line
+      return await withFileLocks([targetPath], async ([canonicalPath]) => {
+        throwIfAborted(ctx.signal)
+        workspaceManager.resolveSafePath(ctx, canonicalPath)
+        const stat = fs.statSync(canonicalPath)
+        if (!stat.isFile()) return { success: false, output: `Path is not a regular file: ${filePath}` }
+        if (stat.size > MAX_FILE_SIZE) return { success: false, output: `File too large (${stat.size} bytes, max ${MAX_FILE_SIZE} bytes)` }
+        const before = readFileVersionSync(canonicalPath)
+        if (!before.content) return { success: false, output: `File not found: ${filePath}` }
+        if (before.content.byteLength > MAX_FILE_SIZE) return { success: false, output: `File too large (${before.content.byteLength} bytes, max ${MAX_FILE_SIZE} bytes)` }
+        const text = decodeEditableText(canonicalPath, before.content)
+        const endings = text?.match(/\r\n|\r|\n/g) ?? []
+        const endingKinds = [...new Set(endings)]
+        const version = { path: canonicalPath, expectedHash: before.hash, encoding: text === null ? 'binary-or-non-utf8' : 'utf-8',
+          lineEnding: endingKinds.length > 1 ? 'mixed' : endingKinds[0] === '\r\n' ? 'CRLF' : endingKinds[0] === '\n' ? 'LF' : endingKinds[0] === '\r' ? 'CR' : 'none',
+          utf8Bom: text?.startsWith('\uFEFF') ?? false }
+        if (mode === 'exact') {
+          if (text === null) return { success: false, output: 'Exact reading requires a valid UTF-8 text file; use its format-specific read mode for binary files.' }
+          if ([start_line, end_line].some(value => value !== undefined && (!Number.isInteger(value) || value < 1))) return { success: false, output: 'start_line and end_line must be positive integers.' }
+          const lineStarts = [0, ...Array.from(text.matchAll(/\r\n|\r|\n/g), match => match.index! + match[0].length)]
+          const totalLines = lineStarts.length
+          const startLine = Math.min(start_line ?? 1, totalLines)
+          const endLine = Math.min(end_line ?? totalLines, totalLines)
+          if (endLine < startLine) return { success: false, output: 'end_line must not be before start_line.' }
+          const content = text.slice(lineStarts[startLine - 1], lineStarts[endLine] ?? text.length)
+          return { success: true, output: JSON.stringify({ ...version, startLine, endLine, totalLines, content }), metadata: version }
+        }
+        const handler = handlerRegistry.getHandler(canonicalPath)
+        const result = await handler.read(canonicalPath, ctx, { mode, startLine: start_line, endLine: end_line })
+        if (readFileVersionSync(canonicalPath).hash !== before.hash) return { success: false, output: 'File changed while being read; read it again to obtain a matching content and expectedHash.' }
+        const timeMs = performance.now() - startTime
+        const originalBytes = before.content.byteLength
+        const outputContent = result.content || ''
+        const compressedBytes = Buffer.byteLength(outputContent, 'utf8')
+        const compressionRatio = originalBytes > 0 ? ((1 - compressedBytes / originalBytes) * 100).toFixed(2) + '%' : '0%'
+        const report = `[读取监控] 耗时: ${timeMs.toFixed(2)}ms | 原始大小: ${originalBytes}B | 压缩后: ${compressedBytes}B | 压缩率: ${compressionRatio}`
+        ctx.logger.info(`[read_file] ${canonicalPath} - ${report}`)
+        return { success: true, output: `${report}\n[文件版本] ${JSON.stringify(version)}\n[精确编辑] 展示行号和格式化内容不是原文；edit_file 前可用 mode="exact" 获取无行号 content。\n\n${outputContent}`, metadata: version }
       })
-      
-      const endTime = performance.now()
-      const timeMs = endTime - startTime
-      const originalBytes = stat.size
-      const outputContent = result.content || ''
-      const compressedBytes = Buffer.byteLength(outputContent, 'utf8')
-      const compressionRatio = originalBytes > 0 ? ((1 - compressedBytes / originalBytes) * 100).toFixed(2) + '%' : '0%'
-      
-      const report = `[读取监控] 耗时: ${timeMs.toFixed(2)}ms | 原始大小: ${originalBytes}B | 压缩后: ${compressedBytes}B | 压缩率: ${compressionRatio}`
-      ctx.logger.info(`[read_file] ${targetPath} - ${report}`)
-
-      return { 
-        success: true, 
-        output: `${report}\n\n${outputContent}` 
-      }
     } catch (err) {
       return { success: false, output: `Read error: ${err instanceof Error ? err.message : 'Unknown error'}` }
     }
@@ -143,22 +156,38 @@ export const writeFileTool: Tool = {
     const { path: filePath, data } = rawArgs as { path: string; data: any }
     try {
       const safePath = workspaceManager.resolveSafePath(ctx, filePath)
-      fs.mkdirSync(path.dirname(safePath), { recursive: true })
-
-      // 覆盖前先留旧内容快照（供 diff 视图与撤回）
-      const snapshot = readOldSnapshot(safePath)
-
-      const handler = handlerRegistry.getHandler(safePath)
-      await handler.write(safePath, data, ctx)
-
-      const change = await commitWriteChange(ctx, filePath, safePath, data, snapshot)
-      return {
-        success: true,
-        output: `Successfully written to ${filePath}`,
-        ...(change ? { change } : {})
-      }
+      return await withFileLocks([safePath], async ([canonicalPath]) => {
+        throwIfAborted(ctx.signal)
+        workspaceManager.resolveSafePath(ctx, canonicalPath)
+        const snapshot = await readOldSnapshot(canonicalPath)
+        fs.mkdirSync(path.dirname(canonicalPath), { recursive: true })
+        const handler = handlerRegistry.getHandler(canonicalPath)
+        try {
+          await handler.write(canonicalPath, data, ctx)
+        } catch (error) {
+          // Some format writers can fail after touching the destination. Keep
+          // evidence of those bytes too, while preserving the failed outcome.
+          const after = await readOldSnapshot(canonicalPath)
+          if (after.oldHash !== snapshot.oldHash) {
+            const change = await commitWriteChange(ctx, filePath, canonicalPath, snapshot)
+            return {
+              success: false,
+              output: `Write failed after changing ${filePath}; the actual change was recorded: ${error instanceof Error ? error.message : String(error)}`,
+              change,
+              metadata: { fileMutationApplied: true, rollbackAvailable: !change.truncated },
+            }
+          }
+          throw error
+        }
+        const change = await commitWriteChange(ctx, filePath, canonicalPath, snapshot)
+        return { success: true, output: `Successfully written to ${filePath}`, change }
+      })
     } catch (err) {
-      return { success: false, output: `Write error: ${err instanceof Error ? err.message : 'Unknown error'}` }
+      return {
+        success: false,
+        output: `Write error: ${err instanceof Error ? err.message : 'Unknown error'}`,
+        ...(err instanceof ChangeRecordingError ? { metadata: { fileMutationApplied: true, rollbackAvailable: false } } : {}),
+      }
     }
   },
 }

@@ -75,6 +75,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     const { messageId } = request.params
     const tenantId = getTenantId(request)
 
+    if (getRequestToolProfile(request) === 'code') return reply.code(409).send(fail(40900, 'Code sessions use /conversation/turns or /conversation/messages'))
     const message = await history.getMessageById(messageId, tenantId)
 
     if (message) {
@@ -126,7 +127,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     }
 
     // Build tool registry（统一工厂，含所有内置工具 + MCP + Skills）
-    const { registry, externalSkills, toolCategories } = await createToolRegistry({ toolProfile })
+    const { registry, externalSkills, toolCategories } = await createToolRegistry({ toolProfile, securityContext: { tenantId, sessionId, toolProfile } })
 
     const ctx = createAgentContext({
       toolProfile,
@@ -148,7 +149,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 
     // RAG for new message if provided
     let ragPrompt = ''
-    if (newMessageContent) {
+    if (newMessageContent && toolProfile !== 'code') {
       const { searchChunks } = await import('../../../storage/knowledge/kb-repo.js')
       const ragChunks = await searchChunks(tenantId, newMessageContent, 3)
       if (ragChunks.length > 0) {
@@ -295,6 +296,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
   // 3. 编辑用户消息并重新生成响应
   fastify.put<{ Params: { messageId: string } }>('/messages/:messageId', async (request, reply) => {
     const toolProfile = getRequestToolProfile(request)
+    if (toolProfile === 'code') return reply.code(409).send(fail(40900, 'Code sessions use /conversation/truncate and /chat with stable run identity'))
     const { messageId } = request.params
     const tenantId = getTenantId(request)
 
@@ -341,6 +343,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
   // 4. 重新生成最后一条 AI 回复
   fastify.post<{ Params: { messageId: string } }>('/messages/:messageId/regenerate', async (request, reply) => {
     const toolProfile = getRequestToolProfile(request)
+    if (toolProfile === 'code') return reply.code(409).send(fail(40900, 'Code sessions use /conversation/truncate and /chat with stable run identity'))
     const { messageId } = request.params
     const tenantId = getTenantId(request)
 

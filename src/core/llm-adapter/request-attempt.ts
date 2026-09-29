@@ -35,6 +35,7 @@ export async function observeRequest<T>(
 export async function observeStreamRequest<T>(
   request: () => Promise<AsyncIterable<T>>, options: LLMAdapterOptions | undefined, provider: string, model: string,
   getUsage: (value: T, previous?: RequestAttemptUsage) => RequestAttemptUsage | undefined,
+  isTerminal?: (value: T) => boolean,
 ): Promise<AsyncIterable<T>> {
   const finish = await begin(options, provider, model)
   let stream: AsyncIterable<T>
@@ -43,13 +44,18 @@ export async function observeStreamRequest<T>(
   return (async function* () {
     let outcome: Outcome = 'cancelled'
     let usage: RequestAttemptUsage | undefined
+    let completed = !isTerminal
     try {
       for await (const value of stream) {
         usage = getUsage(value, usage) ?? usage
+        completed ||= isTerminal?.(value) === true
         throwIfAborted(options?.signal)
         yield value
       }
       throwIfAborted(options?.signal)
+      if (!completed) throw Object.assign(new Error('Upstream stream ended before a terminal completion marker'), {
+        code: 'INCOMPLETE_STREAM', retryable: true,
+      })
       outcome = 'succeeded'
     } catch (error) { outcome = isAbortError(error, options?.signal) ? 'cancelled' : 'failed'; throw error }
     finally { await finish(outcome, usage) }

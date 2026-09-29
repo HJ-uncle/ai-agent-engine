@@ -2,6 +2,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import type { AgentContext, CreateAgentContextOptions } from './types.js'
 import { applyOSMMultiplier, resolveOSMMode, OSM_MODE_CONFIG } from '../osm.js'
+import { bindHistoryGeneration } from '../../storage/conversation/serialization.js'
 
 export function createAgentContext(options: CreateAgentContextOptions): AgentContext {
   const tenantId = options.tenantId ?? 'default'
@@ -54,7 +55,7 @@ export function createAgentContext(options: CreateAgentContextOptions): AgentCon
     cwd,
     workspacePaths: options.workspacePaths,
     tools: options.tools,
-    history: options.history,
+    history: bindHistoryGeneration(options.history, tenantId, options.sessionId),
     logger: options.logger.child({ tenantId, sessionId: options.sessionId }),
     tokenBudget,
     requestId: options.requestId,

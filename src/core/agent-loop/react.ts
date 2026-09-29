@@ -9,6 +9,8 @@ import { repairJson } from '../utils/json.js'
 import { TodoStore } from '../../storage/todo/index.js'
 import type { RunOutcome } from '../subagent/types.js'
 import { FINALIZATION_PROMPT, estimateRequestInput, finalizationMessages, partialEvidence } from './finalization.js'
+import { executeRegisteredTool, executeToolBatch, normalizeToolResult, type RegisteredToolCall, type ParsedToolCall } from './tool-batch.js'
+import { resolveCapabilities } from '../model-capabilities/index.js'
 
 /**
  * 截断过大的工具输出，避免历史消息膨胀。
@@ -112,6 +114,9 @@ function stripSubagentMeta(output: string): string {
 }
 
 export interface TokenUsage {
+  /** Per-request context occupancy; cumulative usage counters below remain separate. */
+  currentPromptTokens?: number
+  contextWindow?: number
   /** Tokens in the system prompt (excluding RAG context) */
   systemPromptTokens: number
   /** Tokens used by tool definitions (builtin + MCP combined, kept for backward compat) */
@@ -203,11 +208,81 @@ export function pairToolHistory(messages: Message[]): Message[] {
   })
 }
 
+/** Read the complete active history so backend windows cannot hide system constraints. */
+async function requestHistory(ctx: AgentContext): Promise<Message[]> {
+  const all = typeof ctx.history.getFullHistory === 'function'
+    ? await ctx.history.getFullHistory(ctx) : await ctx.history.getHistory(ctx)
+  let selected = all
+  if (ctx.inheritContext === false) {
+    const lastUser = all.map(message => message.role).lastIndexOf('user')
+    if (lastUser >= 0) selected = all.slice(lastUser)
+  }
+  return pairToolHistory(selected.map(message => ({ ...message })))
+}
+
 export class ReActStrategy implements LoopStrategy {
   constructor(
     private readonly llm: LLMAdapter,
     private readonly options: ReActOptions = {},
   ) {}
+
+  /** Settle one invocation without letting storage/observer failure skip siblings. */
+  private async *settleTool(item: RegisteredToolCall, rawResult: ToolResult, ctx: AgentContext): AsyncGenerator<string, { tokens: number; failedToPersist: boolean }> {
+    const result = normalizeToolResult(rawResult)
+    const { call, messageId } = item
+    const output = String(result.output)
+    const metadata = { ...result.metadata, status: result.status, success: result.success, error: result.error,
+      durationMs: result.durationMs, rootRunId: ctx.rootRunId, turnId: ctx.turnId,
+      ...(result.change ? { change: { ...result.change, toolCallId: call.id } } : {}) }
+    let failedToPersist = false
+    const truncated = truncateToolOutput(stripSubagentMeta(output))
+    const tokens = estimateTokens(truncated)
+    if (result.status !== 'waiting') {
+      const subagent = result.metadata?.subagent as { runId?: string } | undefined
+      try {
+        await ctx.history.append({
+          id: subagent?.runId ? 'subagent-result:' + subagent.runId : `tool-result:${ctx.rootRunId ?? ctx.runId ?? ctx.conversationId ?? ctx.sessionId}:${call.id}`,
+          role: 'tool', content: truncated, toolCallId: call.id, toolName: call.name,
+          createdAt: Date.now(), tokens, metadata, conversationId: ctx.conversationId,
+        } as Message, ctx)
+      } catch (error) {
+        failedToPersist = true
+        ctx.logger.error({ err: error, toolCallId: call.id }, 'Failed to persist tool result')
+      }
+      try {
+        await ctx.runObserver?.onToolEnd?.({ toolCallId: call.id, name: call.name,
+          success: result.success, output, durationMs: result.durationMs,
+          error: result.error ? { code: result.status === 'cancelled' ? 'CANCELLED' : 'TOOL_ERROR', message: result.error, retryable: false } : undefined })
+      } catch (error) {
+        failedToPersist = true
+        ctx.logger.error({ err: error, toolCallId: call.id }, 'Failed to persist tool observer outcome')
+      }
+    }
+    const frame = { toolCallId: call.id, toolName: call.name, name: call.name, messageId,
+      success: result.success, status: result.status, output, outputPreview: output,
+      error: result.error, metadata, durationMs: result.durationMs,
+      rootRunId: ctx.rootRunId, turnId: ctx.turnId }
+    yield `\x00__tool_end__${JSON.stringify(frame)}`
+    yield `\x00__tool_result__${JSON.stringify(frame)}`
+    if (call.name.startsWith('todo_') && result.status !== 'waiting') yield* yieldTodoFrame(ctx)
+    // A writer may partially mutate before failing; its recorded change still matters.
+    if (result.change) yield `\x00__file_change__${JSON.stringify({ ...result.change, toolCallId: call.id })}`
+    return { tokens: result.status === 'waiting' ? 0 : tokens, failedToPersist }
+  }
+
+  /** Streaming may announce cards before the provider returns a valid batch. */
+  private async *settleUnstarted(calls: ParsedToolCall[], ctx: AgentContext, reason: string): AsyncGenerator<string> {
+    for (const call of calls) {
+      const item = { call, messageId: uuidv4() }
+      try {
+        await ctx.history.append({ id: item.messageId, role: 'assistant', content: '', toolCall: call,
+          toolCallId: call.id, createdAt: Date.now(), tokens: 0,
+          metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId }, conversationId: ctx.conversationId } as Message, ctx)
+      } catch (error) { ctx.logger.error({ err: error, toolCallId: call.id }, 'Failed to persist interrupted tool announcement') }
+      yield* this.settleTool(item, { success: false, status: ctx.signal?.aborted ? 'cancelled' : 'interrupted',
+        output: reason, error: reason, durationMs: 0 }, ctx)
+    }
+  }
 
   async *run(input: string | any[] | null, ctx: AgentContext): AsyncIterable<string> {
     let outcome: RunOutcome | undefined
@@ -258,7 +333,7 @@ export class ReActStrategy implements LoopStrategy {
       : applyOSMMultiplier('maxIterations', baseMaxIterations)
 
     const maxAskUserCount = this.options.maxAskUserCount ?? 5
-    const conversationId = this.options.conversationId ?? ctx.conversationId
+    const conversationId = ctx.turnId ?? this.options.conversationId ?? ctx.conversationId
     ctx.conversationId = conversationId
 
     // Add user message to history only if input is provided
@@ -267,14 +342,15 @@ export class ReActStrategy implements LoopStrategy {
     const historyContent = (this.options.displayContent ?? input) as string | any[]
     if (input !== null && input !== '') {
       const userMessage: Message & { conversationId?: string } = {
+        id: ctx.userMessageId ?? uuidv4(),
         role: 'user',
         content: historyContent,
         createdAt: Date.now(),
         tokens: estimateTokens(historyContent),
         ...(conversationId ? { conversationId } : {}),
-        metadata: this.options.metadata,
+        metadata: { ...this.options.metadata, rootRunId: ctx.rootRunId, turnId: ctx.turnId },
       }
-      const savedUserMsgId = await ctx.history.append(userMessage, ctx)
+      const savedUserMsgId = await ctx.history.append(userMessage, ctx) ?? userMessage.id
       // ★ 把后端 message_id 回传给前端，前端用它做删除/重发的准确定位
       yield `\x00__user_msg_id__${savedUserMsgId}`
       // ★ 别名帧（新版协议，第三方项目 等下游消费 camelCase 命名；不影响旧消费者）
@@ -283,6 +359,22 @@ export class ReActStrategy implements LoopStrategy {
 
     // ★ 会话待办初始帧：每轮开始时推送现有清单，客户端据此恢复任务托盘
     yield* yieldTodoFrame(ctx)
+
+    if (ctx.resumeToolCall) {
+      const resume = ctx.resumeToolCall
+      const item: RegisteredToolCall = { call: resume.toolCall, messageId: resume.messageId ?? uuidv4() }
+      const result = resume.decision === 'approved'
+        ? await executeRegisteredTool(item, { ...ctx, approvedToolCallId: resume.toolCall.id })
+        : resume.decision === 'answered'
+          ? { success: true, status: 'succeeded' as const, output: resume.output ?? '', durationMs: 0 }
+          : { success: false, status: 'interrupted' as const, output: '用户拒绝此操作，未执行', durationMs: 0 }
+      // A claimed approval cannot become a second pending approval for this ID.
+      const settled = yield* this.settleTool(item, result.needsConfirmation
+        ? { ...result, needsConfirmation: false, status: 'failed', success: false, output: '审批后策略仍未允许执行：' + result.output }
+        : result, ctx)
+      if (settled.failedToPersist) throw new Error('Approved tool result could not be persisted; execution will not be repeated automatically')
+      if (ctx.signal?.aborted) return
+    }
 
     // Build tool list from registry
     const toolList = ctx.tools.list()
@@ -342,25 +434,37 @@ export class ReActStrategy implements LoopStrategy {
       // 阈值对齐 Claude Code auto-compact：有效窗口的 ~92% 触发（COMPRESS_THRESHOLD_RATIO=0.92）。
       // 有效窗口取 min(tokenBudget, 模型真实 contextWindow)：tokenBudget 经 OSM 倍率放大后
       // 可能远超模型实际上限，若直接用它做阈值，模型都拒答了压缩还没触发。
+      let messages = await requestHistory(ctx)
+      let effectiveTools = toolList.filter(tool => tool.name !== 'ask_user' || askUserCount < maxAskUserCount)
       const compressRatio = getOSMCompressRatio(
         parseFloat(process.env.COMPRESS_THRESHOLD_RATIO ?? '0.92'))
       const effectiveBudget = Math.min(ctx.tokenBudget, ctx.modelCaps?.contextWindow ?? Infinity)
+      let maxOutputTokens = this.options.maxOutputTokens ?? Math.min(8192, Math.max(256, Math.floor(effectiveBudget / 4)))
+      const fixedInputTokens = estimateRequestInput(messages.filter(message => message.role === 'system'), this.options.systemPrompt, effectiveTools)
+      if (!Number.isFinite(maxOutputTokens) || maxOutputTokens <= 0 || fixedInputTokens + maxOutputTokens > effectiveBudget) {
+        await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'context_limit',
+          error: { code: 'CONTEXT_LIMIT', message: 'System instructions, tools and output reservation exceed the context window', retryable: false } })
+        yield '\n\n[Response truncated: token budget exceeded]'
+        return
+      }
       const compressThreshold = Math.floor(effectiveBudget * compressRatio)
-      let rawTokens = await ctx.history.getRawTokenCount(ctx)
-      if (rawTokens > compressThreshold) {
+      let rawTokens = estimateRequestInput(messages, this.options.systemPrompt, effectiveTools) + maxOutputTokens
+      if (rawTokens > compressThreshold && typeof ctx.history.microCompactToolResults === 'function') {
         // 先做 micro-compact：清理旧工具结果（不调 LLM），省下的空间可能足以
         // 避免全量压缩——对齐 Claude Code「先轻量清理再考虑总结」的分级策略。
         try {
           const micro = await ctx.history.microCompactToolResults(ctx, { keepRecent: 10 })
           if (micro.cleared > 0) {
-            rawTokens -= micro.freedTokens
+            messages = await requestHistory(ctx)
+            rawTokens = estimateRequestInput(messages, this.options.systemPrompt, effectiveTools) + maxOutputTokens
             ctx.logger.info({ ...micro, rawTokens }, 'Micro-compact done')
           }
         } catch (err: any) {
           ctx.logger.warn({ err: err?.message }, 'Micro-compact failed, continuing')
         }
       }
-      if (rawTokens > compressThreshold && (!ctx.requestBudget || ctx.requestBudget.canAfford(rawTokens * 3 + 16_384))) {
+      if (rawTokens > compressThreshold && typeof ctx.history.compress === 'function'
+        && (!ctx.requestBudget || ctx.requestBudget.canAfford(rawTokens * 3 + 16_384))) {
         ctx.logger.info({ rawTokens, threshold: compressThreshold }, 'Compressing conversation history')
         const { buildCompactSummarizeFn } = await import('./compact-prompt.js')
         // 专职模型路由：配置了 LLM_SUMMARIZE_MODEL 时用轻量模型做总结，
@@ -375,20 +479,22 @@ export class ReActStrategy implements LoopStrategy {
           }
         }
         try {
+          const summarizeWindow = resolveCapabilities({ model: summarizeLlm.model, provider: summarizeLlm.provider }).contextWindow
+          const summarize = buildCompactSummarizeFn(summarizeLlm, { signal: ctx.signal, onRequestAttempt: ctx.onRequestAttempt,
+            contextWindow: Math.min(effectiveBudget, summarizeWindow ?? Infinity), maxOutputTokens: Math.min(4096, maxOutputTokens) })
           const stats = await ctx.history.compress(
             ctx,
-            buildCompactSummarizeFn(summarizeLlm, { signal: ctx.signal, onRequestAttempt: ctx.onRequestAttempt }),
+            summarize,
             { keepRecentTokens: Math.floor(effectiveBudget * 0.2) },
           )
           ctx.logger.info({ preTokens: stats.preTokens, postTokens: stats.postTokens }, 'Compression done')
         } catch (err: any) {
-          // 压缩失败（摘要模型报错等）降级：不阻断对话，仅靠滑动窗口继续
-          ctx.logger.error({ err: err?.message, rawTokens }, 'Compression failed, continuing with token window only')
+          ctx.logger.error({ err: err?.message, rawTokens }, 'Compression failed; checking the complete request before dispatch')
         }
       }
 
-      // 2. 压缩后重新取 windowed messages（applyTokenWindow 加截断超大消息）
-      let messages = pairToolHistory(await ctx.history.getHistory(ctx))
+      // Read again after compaction without silently windowing away constraints.
+      messages = await requestHistory(ctx)
 
       // ★ 修复：当设置了 displayContent（前端原始格式）时，历史存的是 displayContent，
       //   但 LLM 需要看到处理后的 input（含 OCR/图片/文件内容）。
@@ -416,15 +522,8 @@ export class ReActStrategy implements LoopStrategy {
         return
       }
 
-      // ── 全量工具：每次都把所有已注册工具发给 LLM，不做截断 ─────────────────
-      let effectiveTools = toolList.filter((t) => {
-        if (t.name === 'ask_user' && askUserCount >= maxAskUserCount) return false
-        return true
-      })
-
       let finalizationReason: 'budget' | 'max_steps' | undefined
       let systemPrompt = this.options.systemPrompt
-      let maxOutputTokens = this.options.maxOutputTokens ?? 8192
       let requestInputTokenEstimate = estimateRequestInput(messages, systemPrompt, effectiveTools)
       // One more exploration request must leave enough for a summary, including likely tool-result growth.
       const summaryReserve = estimateRequestInput(messages, systemPrompt, []) + 4096 + 8192
@@ -444,7 +543,7 @@ export class ReActStrategy implements LoopStrategy {
         maxOutputTokens = Math.min(maxOutputTokens, 4096)
         requestInputTokenEstimate = estimateRequestInput(messages, systemPrompt, [])
         if (ctx.requestBudget && !ctx.requestBudget.canAfford(requestInputTokenEstimate + maxOutputTokens)) {
-          messages = finalizationMessages(messages)
+          messages = [...messages.filter(message => message.role === 'system'), ...finalizationMessages(messages)]
           requestInputTokenEstimate = estimateRequestInput(messages, systemPrompt, [])
         }
         if (ctx.requestBudget && !ctx.requestBudget.canAfford(requestInputTokenEstimate + maxOutputTokens)) {
@@ -457,11 +556,18 @@ export class ReActStrategy implements LoopStrategy {
         yield '\n\n' + finalizationNotice + '\n\n'
       }
 
+      if (requestInputTokenEstimate + maxOutputTokens > effectiveBudget) {
+        await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'context_limit',
+          error: { code: 'CONTEXT_LIMIT', message: `Request input (${requestInputTokenEstimate}) plus output reservation (${maxOutputTokens}) exceeds context window (${effectiveBudget})`, retryable: false } })
+        yield '\n\n[Response truncated: token budget exceeded]'
+        return
+      }
+
       ctx.logger.debug({ iteration, toolCount: effectiveTools.length, finalizationReason }, 'Preparing model request')
 
       const llmOptions: LLMAdapterOptions = {
         model: this.llm.model,
-        maxTokens: finalizationReason ? maxOutputTokens : this.options.maxOutputTokens,
+        maxTokens: maxOutputTokens,
         requestInputTokenEstimate,
         onRequestAttempt: ctx.onRequestAttempt,
         systemPrompt,
@@ -486,25 +592,54 @@ export class ReActStrategy implements LoopStrategy {
         promptTokens: 0,
         completionTokens: 0,
         finishReason: 'stop',
+        model: this.llm.model,
       }
-      
+
       let partialOutput = ''
+      let partialSaved = false
+      let streamCompleted = false
+      let failureReason = 'incomplete'
+      const persistPartial = async (status: 'failed' | 'cancelled', stopReason: string) => {
+        if (partialSaved || (!response.content && !response.reasoningContent)) return
+        const messageId = ctx.assistantMessageId ?? uuidv4()
+        const promptTokens = response.promptTokens || requestInputTokenEstimate
+        const completionTokens = response.completionTokens || estimateTokens(response.content + response.reasoningContent)
+        await ctx.history.append({ id: messageId, role: 'assistant', content: response.content,
+          reasoningContent: response.reasoningContent, modelId: response.model, createdAt: Date.now(),
+          tokens: completionTokens, conversationId,
+          usage: { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens,
+            currentPromptTokens: promptTokens, ...(ctx.modelCaps?.contextWindow ? { contextWindow: ctx.modelCaps.contextWindow } : {}),
+            ...(response.cacheHitTokens != null ? { cacheHitTokens: response.cacheHitTokens } : {}),
+            ...(response.cacheMissTokens != null ? { cacheMissTokens: response.cacheMissTokens } : {}),
+            ...(response.reasoningTokens != null ? { reasoningTokens: response.reasoningTokens } : {}) },
+          metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId, partial: true, status, stopReason,
+            usageEstimated: response.promptTokens === 0 || response.completionTokens === 0 },
+        } as Message, ctx)
+        partialSaved = true
+      }
+      const toolCallsMap = new Map<number, { id?: string; name?: string; args: string; started: boolean }>()
       try {
         const stream = this.llm.stream(messages, {
           ...llmOptions,
           ...(ctx.signal ? { signal: ctx.signal } : {}),
         } as LLMAdapterOptions & { signal?: AbortSignal })
 
-        const toolCallsMap = new Map<number, { id?: string; name?: string; args: string; started: boolean }>()
-
-        let bufferedContent = ''
         for await (const chunk of stream) {
+          if (ctx.signal?.aborted) throw Object.assign(new Error('Model request cancelled'), { name: 'AbortError' })
+          // Providers may report usage/model before their final chunk (or fail afterwards).
+          for (const key of ['promptTokens', 'completionTokens', 'cacheHitTokens', 'cacheMissTokens', 'reasoningTokens'] as const) {
+            if (chunk[key] != null) response[key] = chunk[key]
+          }
+          if (chunk.model && chunk.model !== response.reportedModel) {
+            response.model = response.reportedModel = chunk.model
+            yield `\x00__usage__${JSON.stringify({ modelId: chunk.model })}`
+          }
+          if (chunk.finishReason) response.finishReason = chunk.finishReason
           if (chunk.content) {
-            bufferedContent += chunk.content
-            partialOutput = bufferedContent
-            await ctx.runObserver?.onOutput?.(bufferedContent)
-            // 注意：我们暂时不 yield chunk.content，因为它可能是“思考过程”也可能是“最终回答”
-            // 我们等到流结束，根据是否有 toolCalls 来决定将其作为 __thinking__ 还是普通文本。
+            response.content += chunk.content
+            partialOutput = response.content
+            yield chunk.content
+            await ctx.runObserver?.onOutput?.(response.content)
           }
           if (chunk.reasoningContent) {
             response.reasoningContent += chunk.reasoningContent
@@ -532,35 +667,8 @@ export class ReActStrategy implements LoopStrategy {
               }
             }
           }
-          if (chunk.done) {
-            response.promptTokens = chunk.promptTokens ?? response.promptTokens
-            response.completionTokens = chunk.completionTokens ?? response.completionTokens
-            response.cacheHitTokens = chunk.cacheHitTokens
-            response.cacheMissTokens = chunk.cacheMissTokens
-            response.reasoningTokens = chunk.reasoningTokens
-            response.model = chunk.model
-            response.finishReason = chunk.finishReason ?? response.finishReason
-          }
         }
-
-        response.content = bufferedContent
-        
-        // ── 决定 content 的归属 ──
-        if (toolCallsMap.size > 0) {
-          // 如果有工具调用，那么本轮产生的 content 应当视为“思考过程”
-          if (response.content) {
-            yield `\x00__thinking__${response.content}`
-          }
-        } else {
-          // 如果没有工具调用，这就是最终回答，模拟流式输出以保持 UX
-          if (response.content) {
-            const chunkSize = 20
-            for (let i = 0; i < response.content.length; i += chunkSize) {
-              yield response.content.slice(i, i + chunkSize)
-              await new Promise(resolve => setTimeout(resolve, 5))
-            }
-          }
-        }
+        if (ctx.signal?.aborted) throw Object.assign(new Error('Model request cancelled'), { name: 'AbortError' })
 
         // Convert toolCallsMap back to response.toolCalls
          response.toolCalls = Array.from(toolCallsMap.values()).map((tc: any) => {
@@ -584,7 +692,20 @@ export class ReActStrategy implements LoopStrategy {
         if (response.toolCalls.length > 0 && response.finishReason !== 'length' && response.finishReason !== 'error') {
           response.finishReason = 'tool_calls'
         }
+        streamCompleted = true
       } catch (err: any) {
+        failureReason = err.name === 'AbortError' || ctx.signal?.aborted ? 'cancelled'
+          : err?.code === 'TOKEN_BUDGET_EXCEEDED' ? 'budget' : 'provider_error'
+        await persistPartial(failureReason === 'cancelled' ? 'cancelled' : 'failed', failureReason)
+        if (partialSaved) yield `\x00__usage__${JSON.stringify({ modelId: response.model,
+          promptTokens: cumulativePromptTokens + (response.promptTokens || requestInputTokenEstimate),
+          completionTokens: cumulativeCompletionTokens + (response.completionTokens || estimateTokens(response.content + response.reasoningContent)),
+          totalTokens: cumulativePromptTokens + cumulativeCompletionTokens + (response.promptTokens || requestInputTokenEstimate)
+            + (response.completionTokens || estimateTokens(response.content + response.reasoningContent)),
+          currentPromptTokens: response.promptTokens || requestInputTokenEstimate, contextWindow: ctx.modelCaps?.contextWindow })}`
+        const announced = [...toolCallsMap.values()].filter(call => call.started && call.id && call.name)
+          .map(call => ({ id: call.id!, name: call.name!, args: {}, _rawArgs: call.args }))
+        yield* this.settleUnstarted(announced, ctx, 'Model request ended before this tool could execute')
         if (err.name === 'AbortError' || ctx.signal?.aborted) {
           ctx.logger.info('LLM call aborted')
           await ctx.runObserver?.onOutcome?.({ status: 'cancelled', stopReason: 'cancelled', partialOutput })
@@ -595,7 +716,7 @@ export class ReActStrategy implements LoopStrategy {
           const message = err instanceof Error ? err.message : '本次任务的引擎本地累计用量额度不足。'
           await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'budget', partialOutput: evidence,
             error: { code: 'TOKEN_BUDGET_EXCEEDED', message, retryable: false } })
-          yield '\n\n' + message + '\n\n' + evidence
+          yield '\n\n' + message + (partialOutput ? '' : '\n\n' + evidence)
           return
         }
         ctx.logger.error({ err }, 'LLM call failed')
@@ -603,14 +724,18 @@ export class ReActStrategy implements LoopStrategy {
           error: { retryable: false, code: err?.code === 'TOKEN_BUDGET_EXCEEDED' ? 'TOKEN_BUDGET_EXCEEDED' : 'PROVIDER_ERROR', message: err instanceof Error ? err.message : String(err) } })
         yield `\n\n[Error: LLM call failed - ${err instanceof Error ? err.message : 'unknown error'}]`
         return
+      } finally {
+        // Generator cancellation can happen at any yielded delta, before the provider completes.
+        if (!streamCompleted) await persistPartial(ctx.signal?.aborted ? 'cancelled' : 'failed', ctx.signal?.aborted ? 'cancelled' : failureReason)
       }
 
     // A provider may ignore the empty tool list. Never execute new work during the reserved summary.
     if (finalizationReason && response.toolCalls.length > 0) {
       const evidence = response.content || recordedEvidence || partialEvidence(messages)
+      await persistPartial('failed', finalizationReason)
       await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: finalizationReason, partialOutput: evidence,
         error: { code: finalizationReason === 'budget' ? 'TOKEN_BUDGET_EXCEEDED' : 'MAX_STEPS', message: finalizationNotice, retryable: false } })
-      yield evidence
+      if (!response.content) yield evidence
       return
     }
 
@@ -620,7 +745,7 @@ export class ReActStrategy implements LoopStrategy {
       cacheMissTokens: response.cacheMissTokens })
 
     const bd = this.options.promptBreakdown ?? { systemPromptTokens: 0, systemToolsTokens: 0, skillTokens: 0, ragTokens: 0, builtinToolsTokens: 0, mcpToolsTokens: 0 }
-    const completionTokens = response.completionTokens || estimateTokens(response.content || '')
+    const completionTokens = response.completionTokens || estimateTokens((response.content || '') + (response.reasoningContent || ''))
 
     // ── 真实 Token 统计 ──────────────────────────────────────────────
     // 优先使用 LLM API 返回的 promptTokens（真实计费值）。
@@ -708,6 +833,8 @@ export class ReActStrategy implements LoopStrategy {
     }
 
     const currentUsage: TokenUsage = {
+      currentPromptTokens: promptTokens,
+      contextWindow: ctx.modelCaps?.contextWindow,
       systemPromptTokens: finalSystemPromptTokens,
       systemToolsTokens: finalSystemToolsTokens,
       skillTokens: finalSkillTokens,
@@ -782,314 +909,117 @@ export class ReActStrategy implements LoopStrategy {
     }
 
       if (response.finishReason === 'length' || response.finishReason === 'error') {
+        await persistPartial('failed', response.finishReason === 'length' ? 'output_limit' : 'provider_error')
+        yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, currentPromptTokens: currentUsage.promptTokens,
+          contextWindow: ctx.modelCaps?.contextWindow, modelId: response.model })}`
+        yield* this.settleUnstarted(response.toolCalls ?? [], ctx, 'Model response ended before this tool could execute')
         await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: response.finishReason === 'length' ? 'output_limit' : 'provider_error',
           partialOutput: response.content, error: { code: response.finishReason === 'length' ? 'OUTPUT_LIMIT' : 'INCOMPLETE_RESPONSE', message: 'Model response ended before completion', retryable: false } })
         return
       }
-      // Handle tool calls
-    if (response.toolCalls && response.toolCalls.length > 0) {
-      // Record which tools were used in this iteration (for next-iteration pruning)
-      lastUsedToolNames = new Set(response.toolCalls.map((tc: any) => tc.name))
-
-      // 同一轮的多个工具调用并发执行（典型场景：一轮里派发多个 subagent）。
-      // 旧实现是 for + await 逐个串行执行，子代理只能排队跑 —— 用户感知为
-      // 「子代理无法并行」。现在拆成三步：
-      //   1) 登记：先持久化 assistant 调用，再推送 tool_start/tool_call 帧
-      //   2) 执行：可并发的轮次用 Promise.all；含 ask_user 的轮次保持串行
-      //   3) 收尾：工具结果幂等落盘；子任务通过独立事件即时更新
-      // 帧的产出顺序、历史里 assistant→tool 的配对、失败计数语义都与串行实现一致。
-      const toolCalls: any[] = response.toolCalls
-      const hasAskUser = toolCalls.some((tc) => tc.name === 'ask_user' && !tc._parseError)
-
-      const currentToolFingerprints = toolCalls.map((tc: any) => fingerprintToolCall(tc))
-      const isRepeating = currentToolFingerprints.length > 0 && 
-        currentToolFingerprints.every((f: string) => lastToolFingerprints.includes(f))
-      
-      if (isRepeating) {
-        globalConsecutiveFailures++
-        ctx.logger.warn({ currentToolFingerprints }, 'Repeating tool calls detected')
-      }
-      lastToolFingerprints = currentToolFingerprints
-
-      // ── 步骤 1：登记 + 通知前端（ask_user 在此挂起，不执行任何工具）──────
-      const assistantMsgs: Array<Message & { conversationId?: string }> = []
-      for (let i = 0; i < toolCalls.length; i++) {
-        const toolCall = toolCalls[i]
-
-        // 为每一个工具调用单独创建一条 assistant 消息（并附加相应的 toolCall）
-        // 如果有多个工具调用，思考文本（content）和 token 消耗只挂载在第一条消息上，避免重复
-        const assistantMsgId = uuidv4()
-        const assistantMsg: Message & { conversationId?: string } = {
-          id: assistantMsgId,
-          role: 'assistant',
-          content: i === 0 ? response.content || '' : '',
-          reasoningContent: response.reasoningContent != null ? (i === 0 ? response.reasoningContent : '') : undefined,
-          toolCall: toolCall,
-          toolCallId: toolCall.id,
-          createdAt: Date.now(),
-          tokens: i === 0 ? response.completionTokens : 0,
-          usage: i === 0 ? (currentUsage as unknown as Record<string, number>) : undefined,
-          modelId: response.model, // 持久化真实模型 ID
-          ...(conversationId ? { conversationId } : {}),
-        }
-        assistantMsgs.push(assistantMsg)
-        // A child cannot start until its stable parent invocation is durable.
-        await ctx.history.append(assistantMsg, ctx)
-        
-        // Only yield usage for the first message (to avoid duplicating tokens in the frontend)
-        if (i === 0) {
-          yield `\x00__usage__${JSON.stringify({
-            ...cumulativeUsage,
-            // 单次调用口径：本次 LLM 调用的真实输入 token，代表当前上下文占用。
-            // 前端用量环用它做分子；cumulativeUsage.promptTokens 是跨迭代累加值，
-            // 多轮工具调用后会成倍膨胀，不能当「当前上下文大小」用。
-            currentPromptTokens: currentUsage.promptTokens,
-            // 当前模型的上下文窗口上限（能力表解析结果），前端用量环分母
-            contextWindow: ctx.modelCaps?.contextWindow,
-            conversationId: assistantMsgId,
-            modelId: response.model // 透传模型 ID 供前端计算价格
-          })}`
-        }
-
-        ctx.logger.info({ toolName: toolCall.name, args: toolCall.args }, 'Executing tool')
-
-        // ── 思考过程：通知前端正在调用哪个工具 ──────────────────────────
-        yield `\x00__tool_start__${JSON.stringify({ name: toolCall.name, args: toolCall.args, toolCallId: toolCall.id })}`
-        // ★ 别名帧（新版协议，第三方项目 等下游消费规范字段；不影响旧消费者）
-        yield `\x00__tool_call__${JSON.stringify({ toolName: toolCall.name, args: toolCall.args, toolCallId: toolCall.id, messageId: assistantMsgId })}`
-
-        // SPECIAL CASE: ask_user tool pauses the agent loop
-        if (toolCall.name === 'ask_user' && !toolCall._parseError) {
-          // Output the interactive card
-          yield `\x00__ask_user__${JSON.stringify({ ...toolCall.args, toolCallId: toolCall.id })}`
-          // ★ 别名帧（新版协议）：携带 sessionId / requestId 以便外部下游做权限关联
-          const askArgs = (toolCall.args ?? {}) as Record<string, unknown>
-          yield `\x00__permission_request__${JSON.stringify({
-            requestId: toolCall.id,
-            toolName: 'ask_user',
-            args: askArgs,
-            sessionId: ctx.sessionId,
-            messageId: assistantMsgId,
-            description: typeof askArgs.question === 'string' ? askArgs.question : undefined,
-          })}`
-
-          // DO NOT APPEND A TOOL MSG HERE! Wait for the user to submit it.
-          // Otherwise, OpenAI throws 400 because there is no tool_result matching tool_calls
-
-          // 本轮排在提问之后、尚未登记的工具调用不会被受理（整轮挂起等应答）。
-          // 它们的 tool_start 帧在流式阶段已经发过，必须补一个结束帧，否则前端
-          // 会留下永远「执行中」的残留卡片。
-          for (let j = i + 1; j < toolCalls.length; j++) {
-            const skipped = toolCalls[j]
-            yield `\x00__tool_end__${JSON.stringify({
-              name: skipped.name,
-              toolCallId: skipped.id,
-              success: false,
-              outputPreview: '[已跳过] 本轮因等待用户应答而挂起，该工具未执行',
-            })}`
-          }
-
-          // Child runs have no independent approval UI in this phase.
-          await ctx.runObserver?.onOutcome?.({ status: 'blocked', stopReason: 'needs_user', error: { retryable: false, code: 'NEEDS_USER', message: 'User input required' } })
-          return
-        }
-      }
-
-      // ── 步骤 2：执行 ───────────────────────────────────────────────────
-      const toolResults: Array<ToolResult | undefined> = new Array(toolCalls.length)
-
-      /** 执行单个工具并把结果（或错误）写回 toolResults[i] */
-      const execOne = async (i: number): Promise<void> => {
-        const toolCall = toolCalls[i]
-        if (toolCall._parseError) {
-          toolResults[i] = {
-            success: false,
-            output: `Tool error: SyntaxError in arguments JSON: ${toolCall._parseError}\nPlease ensure your tool arguments are strictly valid JSON (e.g. properly escape internal quotes). Raw args: ${toolCall._rawArgs}`,
-          }
-          return
-        }
+      // Register the complete batch before any invocation can start.
+      if (response.toolCalls && response.toolCalls.length > 0) {
+        const calls = response.toolCalls as ParsedToolCall[]
+        lastUsedToolNames = new Set(calls.map(call => call.name))
+        const fingerprints = calls.map(fingerprintToolCall)
+        const isRepeating = fingerprints.length > 0 && fingerprints.every(value => lastToolFingerprints.includes(value))
+        if (isRepeating) globalConsecutiveFailures++
+        lastToolFingerprints = fingerprints
+        const registered: RegisteredToolCall[] = []
         try {
-          const invocationCtx: AgentContext = { ...ctx, currentToolCallId: toolCall.id,
-            currentMessageId: assistantMsgs[i].id, conversationId }
-          await ctx.runObserver?.onToolStart?.({ toolCallId: toolCall.id, name: toolCall.name, args: toolCall.args })
-          toolResults[i] = await ctx.tools.execute(toolCall.name, toolCall.args, invocationCtx)
-        } catch (err) {
-          // 每个取消的调用也必须有结果，保持所有兄弟调用的历史配对。
-          if ((err as any)?.name === 'AbortError' || ctx.signal?.aborted) {
-            ctx.logger.info({ toolName: toolCall.name }, 'Tool execution aborted')
-            toolResults[i] = { success: false, output: 'Tool execution cancelled', error: 'Cancelled', metadata: { status: 'cancelled' } }
-            return
-          }
-          toolResults[i] = {
-            success: false,
-            output: `Tool error: ${err instanceof Error ? err.message : 'unknown error'}`,
-          }
-        } finally {
-          const result = toolResults[i]
-          if (result) await ctx.runObserver?.onToolEnd?.({ toolCallId: toolCall.id, name: toolCall.name,
-            success: result.success, output: result.output, error: result.error ? { code: 'TOOL_ERROR', message: result.error, retryable: false } : undefined, durationMs: result.durationMs })
+        for (let index = 0; index < calls.length; index++) {
+          const call = calls[index]
+          const messageId = uuidv4()
+          registered.push({ call, messageId })
+          await ctx.history.append({
+            id: messageId, role: 'assistant', content: index === 0 ? response.content || '' : '',
+            reasoningContent: index === 0 ? response.reasoningContent : undefined,
+            toolCall: call, toolCallId: call.id, createdAt: Date.now(),
+            tokens: index === 0 ? response.completionTokens : 0,
+            usage: index === 0 ? currentUsage as unknown as Record<string, number> : undefined,
+            modelId: response.model, conversationId,
+            metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId },
+          } as Message, ctx)
+          if (index === 0) yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage,
+            currentPromptTokens: currentUsage.promptTokens, contextWindow: ctx.modelCaps?.contextWindow,
+            conversationId: messageId, modelId: response.model })}`
+          const frame = { name: call.name, toolName: call.name, args: call.args,
+            toolCallId: call.id, messageId, rootRunId: ctx.rootRunId, turnId: ctx.turnId }
+          yield `\x00__tool_start__${JSON.stringify(frame)}`
+          yield `\x00__tool_call__${JSON.stringify(frame)}`
         }
-      }
-
-      if (toolCalls.length > 1 && !hasAskUser) {
-        // 并发：一轮里的多个工具调用同时跑（并行派发多个 subagent 的主路径）。
-        // execOne 内部已吞掉异常，Promise.all 不会因单个工具失败而中断其它工具。
-        await Promise.all(toolCalls.map((_tc, i) => execOne(i)))
-      } else {
-        for (let i = 0; i < toolCalls.length; i++) {
-          // 工具执行前再次检查 abort，避免长时间运行的工具浪费资源
-          if (ctx.signal?.aborted) {
-            ctx.logger.info({ toolName: toolCalls[i].name }, 'Aborted before tool execution')
-            toolResults[i] = { success: false, output: 'Tool execution cancelled before start', error: 'Cancelled', metadata: { status: 'cancelled' } }
-            continue
-          }
-          await execOne(i)
+        } catch (error) {
+          for (const item of registered) yield* this.settleTool(item, {
+            success: false, status: 'interrupted', output: '工具批次登记失败，未执行', durationMs: 0,
+          }, ctx)
+          yield* this.settleUnstarted(calls.slice(registered.length), ctx, '工具批次登记失败，未执行')
+          throw error
         }
-      }
 
-      // ── 步骤 3：按顺序落库 + 推送结束帧 ────────────────────────────────
-      for (let i = 0; i < toolCalls.length; i++) {
-        const toolCall = toolCalls[i]
-        const toolResult = toolResults[i]
-
-        // 结果为 undefined 只有一种可能：执行期间被 abort。
-        // 此时把 assistant tool_call 与一条合成的 tool result 一起落库，
-        // 保持历史配对完整——否则下一轮重建上下文时会出现孤儿 tool_call，
-        // 被 llm-adapter 降级为 "[Intended to call tool: ..., but was interrupted]" 占位文本。
-        if (!toolResult) {
-          ctx.logger.info({ toolName: toolCall.name }, 'Agent loop aborted during tool execution')
+        const batch = await executeToolBatch(registered, ctx)
+        let failedToPersist = false
+        if (batch.pending) {
           try {
-            const abortedMsg: Message & { conversationId?: string } = {
-              role: 'tool',
-              content: '[Tool execution was aborted before completion. The user may retry this operation.]',
-              toolCallId: toolCall.id,
-              toolName: toolCall.name,
-              createdAt: Date.now(),
-              tokens: estimateTokens('[Tool execution was aborted before completion]'),
-              ...(conversationId ? { conversationId } : {}),
-            }
-            await ctx.history.append(abortedMsg, ctx)
-          } catch (appendErr) {
-            ctx.logger.warn({ err: appendErr, toolName: toolCall.name }, 'Failed to persist aborted tool_call pair')
+            // Persist before emitting a request users can answer.
+            await ctx.onPending?.(batch.pending)
+          } catch (error) {
+            const index = registered.findIndex(item => item.call.id === batch.pending!.toolCallId)
+            batch.results[index] = { success: false, status: 'failed', output: `等待请求保存失败: ${error instanceof Error ? error.message : String(error)}`,
+              error: 'PENDING_PERSIST_FAILED', durationMs: 0 }
+            batch.pending = undefined
+            failedToPersist = true
           }
+        }
+        let blocked = false
+        const settledFrames: string[] = []
+        for (let index = 0; index < registered.length; index++) {
+          const result = batch.results[index]
+          const settlement = this.settleTool(registered[index], result, ctx)
+          let step = await settlement.next()
+          while (!step.done) {
+            settledFrames.push(step.value)
+            step = await settlement.next()
+          }
+          const settled = step.value
+          cumulativeToolResultsTokens += settled.tokens
+          failedToPersist ||= settled.failedToPersist
+          blocked ||= Boolean(result.metadata?.blocked)
+          if (result.status === 'failed') globalConsecutiveFailures++
+          else if (result.status === 'succeeded' && !isRepeating) globalConsecutiveFailures = 0
+        }
+        // The consumer may disconnect/return after any frame. All started tool
+        // results must already be durable before yielding the first terminal card.
+        for (const frame of settledFrames) yield frame
+        if (failedToPersist) throw new Error('One or more tool results could not be persisted; all started tools have settled')
+        if (ctx.signal?.aborted) {
+          await ctx.runObserver?.onOutcome?.({ status: 'cancelled', stopReason: 'cancelled' })
           return
         }
-
-
-        if (ctx.runId && toolResult.metadata?.blocked) {
-          await ctx.runObserver?.onOutcome?.({ status: 'blocked', stopReason: 'permission', error: {
-            code: 'TOOL_NOT_ALLOWED', message: toolResult.error ?? toolResult.output, retryable: false,
-          } })
+        if (batch.pending) {
+          const pending = batch.pending
+          yield `\x00__ask_user__${JSON.stringify({ ...pending.args, question: pending.question,
+            options: pending.options, toolCallId: pending.toolCallId, requestId: pending.requestId })}`
+          yield `\x00__permission_request__${JSON.stringify({ ...pending, sessionId: ctx.sessionId,
+            description: pending.question, rootRunId: ctx.rootRunId, turnId: ctx.turnId })}`
+          await ctx.runObserver?.onOutcome?.({ status: 'blocked', stopReason: pending.kind === 'ask' ? 'needs_user' : 'permission',
+            error: { retryable: false, code: pending.kind === 'ask' ? 'NEEDS_USER' : 'PERMISSION_REQUIRED', message: pending.question ?? 'User input required' } })
           return
         }
-        // ── 如果工具返回需要确认，则暂停 Loop，抛给前端审批 ────────────────
-        if (toolResult.needsConfirmation) {
-          ctx.logger.info({ toolName: toolCall.name }, 'Tool execution requires user confirmation')
-          
-          // 构造一个供前端展示的问题描述
-          const reason = toolResult.pendingAction?.reason || toolResult.output
-          const question = `安全策略拦截了此操作，是否允许执行？\n原因：${reason}`
-          
-          yield `\x00__ask_user__${JSON.stringify({
-            question,
-            options: ['approved', 'rejected'],
-            toolCallId: toolCall.id
-          })}`
-
-          yield `\x00__permission_request__${JSON.stringify({
-            requestId: toolCall.id,
-            toolName: toolCall.name,
-            args: toolCall.args,
-            sessionId: ctx.sessionId,
-            messageId: assistantMsgs[i].id,
-            description: question,
-          })}`
-
+        if (ctx.runId && blocked) {
           await ctx.runObserver?.onOutcome?.({ status: 'blocked', stopReason: 'permission',
-            error: { retryable: false, code: 'PERMISSION_REQUIRED', message: String(reason) } })
+            error: { code: 'TOOL_NOT_ALLOWED', message: 'Tool execution was blocked', retryable: false } })
           return
         }
-
-        // ── 思考过程：通知前端工具执行完毕 ──────────────────────────────
-        yield `\x00__tool_end__${JSON.stringify({
-          name: toolCall.name,
-          toolCallId: toolCall.id,
-          success: toolResult.success,
-          outputPreview: String(toolResult.output),
-          error: toolResult.error, metadata: toolResult.metadata,
-        })}`
-        // ★ 别名帧（新版协议）：完整 output（非预览）+ durationMs（如有）
-        yield `\x00__tool_result__${JSON.stringify({
-          toolCallId: toolCall.id,
-          toolName: toolCall.name,
-          success: toolResult.success,
-          output: String(toolResult.output),
-          error: toolResult.error, metadata: toolResult.metadata,
-          ...(typeof toolResult.durationMs === 'number' ? { durationMs: toolResult.durationMs } : {}),
-        })}`
-
-        // ── todo 工具执行后推送最新清单快照（客户端任务托盘实时刷新）──────
-        if (toolCall.name.startsWith('todo_')) {
-          yield* yieldTodoFrame(ctx)
-        }
-
-        // ── 文件改动帧：write_file/delete_file 成功后推送改动记录 ─────────
-        // 客户端据此渲染 git 风格 diff 卡片与「改动确认/撤回」面板
-        if (toolResult.success && toolResult.change) {
-          try {
-            yield `\x00__file_change__${JSON.stringify({ ...toolResult.change, toolCallId: toolCall.id })}`
-          } catch (err) {
-            ctx.logger.warn({ err }, 'Failed to emit file_change frame')
-          }
-        }
-
-        if (!toolResult.success) {
-          globalConsecutiveFailures++
-          ctx.logger.warn({ toolName: toolCall.name, globalFailures: globalConsecutiveFailures }, 'Tool call failed')
-        } else if (!isRepeating) {
-          // 只有当工具执行成功且不是重复调用时，才重置连续失败计数
-          globalConsecutiveFailures = 0
-        }
-
-        // Add tool result to history (truncate oversized output to save tokens).
-        // Image JSON results (containing dataUrl) are exempt from truncation — see
-        // truncateToolOutput for details.
-        const truncatedOutput = truncateToolOutput(stripSubagentMeta(String(toolResult.output)))
-        const toolResultTokenCount = estimateTokens(truncatedOutput)
-        cumulativeToolResultsTokens += toolResultTokenCount
-        const subagent = toolResult.metadata?.subagent as { runId?: string } | undefined
-        const toolMsg: Message & { conversationId?: string } = {
-          ...(subagent?.runId ? { id: 'subagent-result:' + subagent.runId } : {}),
-          role: 'tool',
-          content: truncatedOutput,
-          toolCallId: toolCall.id,
-          toolName: toolCall.name,
-          createdAt: Date.now(),
-          tokens: toolResultTokenCount,
-          metadata: { ...toolResult.metadata, success: toolResult.success, error: toolResult.error },
-          ...(conversationId ? { conversationId } : {}),
-        }
-        await ctx.history.append(toolMsg, ctx)
-
-        // Bail out if tools fail repeatedly or repeat too many times (prevents infinite loops).
-        // 阈值可配（默认 8，见 getMaxConsecutiveFailures）——旧值写死 20 容忍度过高。
         if (globalConsecutiveFailures >= getMaxConsecutiveFailures()) {
-          ctx.logger.error({ toolName: toolCall.name, globalConsecutiveFailures }, 'Consecutive failures or repetitions exceeded limit, stopping')
-          await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'repeated_failure', error: { retryable: false, code: 'REPEATED_FAILURE', message: 'Tool failure or repetition limit exceeded' } })
-          yield `\n\n[Loop detected or tool \`${toolCall.name}\` failed repeatedly. Stopping to prevent token waste.]`
+          await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'repeated_failure',
+            error: { retryable: false, code: 'REPEATED_FAILURE', message: 'Tool failure or repetition limit exceeded' } })
+          yield '\n\n[Loop detected or tools failed repeatedly. Stopping to prevent token waste.]'
           return
         }
+        continue
       }
-
-      if (ctx.signal?.aborted) {
-        await ctx.runObserver?.onOutcome?.({ status: 'cancelled', stopReason: 'cancelled' })
-        return
-      }
-      // Continue to next iteration
-      continue
-    }
-
       if (!String(response.content ?? '').trim()) {
+        await persistPartial('failed', 'empty_output')
         await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'empty_output', error: { code: 'EMPTY_OUTPUT', message: 'Model returned no final answer', retryable: false } })
         return
       }
@@ -1098,12 +1028,12 @@ export class ReActStrategy implements LoopStrategy {
       // 此处只需持久化最终结果并发送 usage 帧即可。
 
       // Yield token usage breakdown as a special __usage__ frame (includes conversationId)
-      const messageId = uuidv4()
+      const messageId = ctx.assistantMessageId ?? uuidv4()
       const finalMsg: Message & { conversationId?: string } = {
         id: messageId,
         role: 'assistant',
         content: finalizationReason ? finalizationNotice + '\n\n' + response.content : response.content || '',
-        ...(finalizationReason ? { metadata: { partial: true, stopReason: finalizationReason } } : {}),
+        metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId, ...(finalizationReason ? { partial: true, stopReason: finalizationReason } : {}) },
         reasoningContent: response.reasoningContent,
         createdAt: Date.now(),
         tokens: completionTokens, // 使用本轮增量生成数
@@ -1112,6 +1042,7 @@ export class ReActStrategy implements LoopStrategy {
         ...(conversationId ? { conversationId } : {}),
       }
       await ctx.history.append(finalMsg, ctx)
+      yield `\x00__assistant_msg_id__${messageId}`
       await ctx.runObserver?.onOutcome?.(ctx.signal?.aborted ? { status: 'cancelled', stopReason: 'cancelled' }
         : finalizationReason ? { status: 'failed', stopReason: finalizationReason, partialOutput: response.content,
           error: { code: finalizationReason === 'budget' ? 'TOKEN_BUDGET_EXCEEDED' : 'MAX_STEPS', message: finalizationNotice, retryable: false } }

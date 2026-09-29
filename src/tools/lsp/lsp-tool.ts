@@ -39,6 +39,15 @@ export const lspDiagnoseTool: Tool = {
         sessionId: ctx.sessionId,
       })
 
+      if (result.status !== 'completed') {
+        return {
+          success: false,
+          output: result.error ?? `诊断未完成: ${result.status}`,
+          error: result.error ?? result.status,
+          metadata: { diagnosticStatus: result.status },
+        }
+      }
+
       if (result.diagnostics.length === 0) {
         return {
           success: true,

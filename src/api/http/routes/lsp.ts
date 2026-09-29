@@ -33,11 +33,21 @@ export async function lspRoutes(fastify: FastifyInstance) {
       abs = path.resolve(filePath)
     }
 
-    const result = await diagnoseFile(abs, {
-      content, adapters, useCache,
-      tenantId, sessionId,
-    })
-    return reply.code(200).send(success(result))
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    const onClose = () => { if (!reply.raw.writableEnded) abort() }
+    request.raw.once('aborted', abort)
+    reply.raw.once('close', onClose)
+    try {
+      const result = await diagnoseFile(abs, {
+        content, adapters, useCache,
+        tenantId, sessionId, signal: controller.signal,
+      })
+      return reply.code(200).send(success(result))
+    } finally {
+      request.raw.removeListener('aborted', abort)
+      reply.raw.removeListener('close', onClose)
+    }
   })
 
   // 清理过期缓存

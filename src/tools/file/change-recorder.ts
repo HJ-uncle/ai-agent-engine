@@ -1,104 +1,93 @@
-import fs from 'node:fs'
 import path from 'node:path'
 import type { AgentContext } from '../../core/agent-context/index.js'
 import { ChangeStore } from '../../storage/changes/index.js'
+import { readFileVersion } from '../../shared/file-version.js'
 
-/**
- * 文件改动快照：write_file / delete_file 执行前后记录旧/新内容，
- * 供客户端渲染 git 风格 diff 与「改动确认 / 撤回」面板。
- *
- * 设计约束：
- * - 内容超过 100KB 或二进制格式只记元数据（truncated=true），这类改动无法回退；
- * - 记录失败绝不影响工具本身的成功/失败（catch 后返回 undefined）。
- */
-
+/** Snapshot payloads are bounded; hashes always describe the complete file bytes. */
 const changeStore = new ChangeStore()
-
-const MAX_CONTENT_CHARS = 100_000
-
-/** 内容没有文本比对意义的格式：只记改动发生这一事实 */
+export const MAX_CHANGE_CONTENT_BYTES = 100_000
 const BINARY_EXTENSIONS = new Set([
   '.xlsx', '.xls', '.docx', '.doc', '.pdf',
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.bmp',
   '.zip', '.gz', '.7z', '.rar', '.tar',
   '.exe', '.dll', '.so', '.dylib', '.node',
   '.woff', '.woff2', '.ttf', '.otf', '.eot',
-  '.mp3', '.mp4', '.avi', '.mov', '.wav', '.flac'
+  '.mp3', '.mp4', '.avi', '.mov', '.wav', '.flac',
 ])
+
+/** Text edits and reversible snapshots must preserve the complete UTF-8 bytes. */
+export function decodeEditableText(filePath: string, content: Buffer): string | null {
+  if (BINARY_EXTENSIONS.has(path.extname(filePath).toLowerCase()) || content.includes(0)) return null
+  const text = content.toString('utf8')
+  return Buffer.from(text, 'utf8').equals(content) ? text : null
+}
 
 export interface ChangeSnapshot {
   oldContent: string | null
+  oldHash: string
+  exists: boolean
   truncated: boolean
 }
 
-/** 执行前调用：读旧内容快照。文件不存在 → null（新建文件）；超限/二进制 → null + truncated */
-export function readOldSnapshot(absPath: string): ChangeSnapshot {
-  try {
-    if (!fs.existsSync(absPath)) return { oldContent: null, truncated: false }
-    const stat = fs.statSync(absPath)
-    if (!stat.isFile()) return { oldContent: null, truncated: false }
-    if (BINARY_EXTENSIONS.has(path.extname(absPath).toLowerCase()) || stat.size > MAX_CONTENT_CHARS) {
-      return { oldContent: null, truncated: true }
-    }
-    return { oldContent: fs.readFileSync(absPath, 'utf-8'), truncated: false }
-  } catch {
-    return { oldContent: null, truncated: true }
+/** Call while holding the canonical file lock. Read failures prevent mutation. */
+export async function readOldSnapshot(absPath: string): Promise<ChangeSnapshot> {
+  const { content, hash } = await readFileVersion(absPath)
+  if (content === null) return { oldContent: null, oldHash: hash, exists: false, truncated: false }
+  const text = content.byteLength > MAX_CHANGE_CONTENT_BYTES ? null : decodeEditableText(absPath, content)
+  // Invalid UTF-8 cannot be faithfully restored from a SQLite text snapshot.
+  const truncated = text === null || !Buffer.from(text, 'utf8').equals(content)
+  return { oldContent: truncated ? null : text, oldHash: hash, exists: true, truncated }
+}
+
+export class ChangeRecordingError extends Error {
+  constructor(cause: unknown) {
+    super(`文件已变更，但改动记录保存失败，无法从改动面板撤回: ${cause instanceof Error ? cause.message : String(cause)}`)
+    this.name = 'ChangeRecordingError'
   }
 }
 
-/** 写入 data 的可存档形态：仅纯文本字符串保留内容，其余（xlsx/docx 模板对象等）只记元数据 */
-function pickNewContent(data: unknown): { newContent: string | null; truncated: boolean } {
-  if (typeof data === 'string') {
-    if (data.length > MAX_CONTENT_CHARS) return { newContent: null, truncated: true }
-    return { newContent: data, truncated: false }
-  }
-  return { newContent: null, truncated: true }
-}
-
-/** write_file 成功后调用：落库 + 组装 ToolResult.change（含 isNew 供前端区分「新建/编辑」） */
+/** Read the handler's actual output, including formatting and generated formats. */
 export async function commitWriteChange(
   ctx: AgentContext,
   displayPath: string,
   absPath: string,
-  data: unknown,
-  snapshot: ChangeSnapshot
-): Promise<Record<string, unknown> | undefined> {
+  snapshot: ChangeSnapshot,
+): Promise<Record<string, unknown>> {
   try {
-    const picked = pickNewContent(data)
+    const after = await readOldSnapshot(absPath)
     const change = await changeStore.record(ctx.tenantId, {
-      sessionId: ctx.sessionId,
-      path: absPath,
-      kind: 'write',
-      oldContent: snapshot.oldContent,
-      newContent: picked.newContent,
-      truncated: snapshot.truncated || picked.truncated
+      sessionId: ctx.rootSessionId ?? ctx.sessionId, path: absPath, kind: 'write',
+      turnId: ctx.turnId ?? ctx.parentConversationId ?? ctx.conversationId, runId: ctx.rootRunId,
+      oldContent: snapshot.oldContent, newContent: after.oldContent,
+      oldHash: snapshot.oldHash, newHash: after.oldHash,
+      truncated: snapshot.truncated || after.truncated,
     })
-    return { ...change, displayPath, isNew: snapshot.oldContent === null && !snapshot.truncated }
-  } catch (err) {
-    ctx.logger.warn({ err }, '[change-recorder] 记录 write 改动失败（不影响工具结果）')
-    return undefined
+    return { ...change, displayPath, isNew: !snapshot.exists }
+  } catch (error) {
+    ctx.logger.warn({ err: error }, '[change-recorder] 文件已写入，但记录失败')
+    throw new ChangeRecordingError(error)
   }
 }
 
-/** delete_file 成功后调用：落库 + 组装 ToolResult.change */
+/** Record only after the trash operation succeeds, using its pre-delete snapshot. */
 export async function commitDeleteChange(
   ctx: AgentContext,
   displayPath: string,
-  absPath: string
-): Promise<Record<string, unknown> | undefined> {
+  absPath: string,
+  snapshot: ChangeSnapshot,
+): Promise<Record<string, unknown>> {
   try {
-    const snapshot = readOldSnapshot(absPath)
+    const after = await readOldSnapshot(absPath)
     const change = await changeStore.record(ctx.tenantId, {
-      sessionId: ctx.sessionId,
-      path: absPath,
-      kind: 'delete',
-      oldContent: snapshot.oldContent,
-      newContent: null,
-      truncated: snapshot.truncated
+      sessionId: ctx.rootSessionId ?? ctx.sessionId, path: absPath, kind: 'delete',
+      turnId: ctx.turnId ?? ctx.parentConversationId ?? ctx.conversationId, runId: ctx.rootRunId,
+      oldContent: snapshot.oldContent, newContent: after.oldContent,
+      oldHash: snapshot.oldHash, newHash: after.oldHash,
+      truncated: snapshot.truncated || after.truncated,
     })
     return { ...change, displayPath, isNew: false }
-  } catch (err) {
-    ctx.logger.warn({ err }, '[change-recorder] 记录 delete 改动失败（不影响工具结果）')
-    return undefined
+  } catch (error) {
+    ctx.logger.warn({ err: error }, '[change-recorder] 文件已删除，但记录失败')
+    throw new ChangeRecordingError(error)
   }
 }

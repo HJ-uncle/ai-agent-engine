@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
+import { EventEmitter } from 'node:events'
 import { sseStream } from '../sse-sink.js'
+import { StreamBus, busToIterable } from '../stream-bus.js'
 import type { FastifyReply } from 'fastify'
 
 // ─── Mock FastifyReply ────────────────────────────────────────────────────────
@@ -44,6 +46,23 @@ function createMockReply(): MockReply {
 
 async function* fromArray<T>(items: T[]): AsyncIterable<T> {
   for (const item of items) yield item
+}
+
+function createEventReply(writeResults: boolean[] = []) {
+  const writes: string[] = []
+  let resolveFirstWrite!: () => void
+  const firstWrite = new Promise<void>(resolve => { resolveFirstWrite = resolve })
+  const raw = Object.assign(new EventEmitter(), {
+    setHeader: vi.fn(),
+    setTimeout: vi.fn(),
+    write: vi.fn((data: string) => {
+      writes.push(data)
+      resolveFirstWrite()
+      return writeResults.shift() ?? true
+    }),
+    end: vi.fn(),
+  })
+  return { raw, writes, firstWrite, reply: { raw } as unknown as FastifyReply }
 }
 
 /**
@@ -222,5 +241,125 @@ describe('sseStream', () => {
 
     const last = mock.writes[mock.writes.length - 1]
     expect(last).toBe('event: done\ndata: [DONE]\n\n')
+  })
+})
+
+describe('sseStream subscription lifecycle', () => {
+  it('detaches an idle subscription on socket close without aborting the producer or another client', async () => {
+    const controller = new AbortController()
+    const bus = new StreamBus(controller)
+    const other = busToIterable(bus)
+    const otherRead = other.next()
+    const socket = createEventReply()
+    const completed = sseStream(busToIterable(bus), socket.reply)
+
+    socket.raw.emit('close')
+    await completed
+    expect(socket.writes).toEqual([])
+    expect(socket.raw.end).toHaveBeenCalledOnce()
+    expect(socket.raw.listenerCount('close')).toBe(0)
+    expect(socket.raw.listenerCount('error')).toBe(0)
+    expect(controller.signal.aborted).toBe(false)
+    const payload = bus.push('still running')!
+    expect(await otherRead).toEqual({ value: payload, done: false })
+    bus.end()
+    await other.return!()
+  })
+
+  it('unblocks a backpressured write on socket close and removes drain listeners', async () => {
+    const controller = new AbortController()
+    const bus = new StreamBus(controller)
+    const payload = bus.push('buffered')!
+    const socket = createEventReply([false])
+    const completed = sseStream(busToIterable(bus), socket.reply)
+    await socket.firstWrite
+    expect(socket.raw.listenerCount('drain')).toBe(1)
+
+    socket.raw.emit('close')
+    await completed
+    expect(socket.writes).toEqual([`id: ${payload.id}\ndata: {"content":"buffered"}\n\n`])
+    expect(socket.raw.listenerCount('drain')).toBe(0)
+    expect(socket.raw.listenerCount('close')).toBe(0)
+    expect(socket.raw.listenerCount('error')).toBe(0)
+    expect(controller.signal.aborted).toBe(false)
+    bus.end()
+  })
+
+  it('unblocks a backpressured write on socket error without emitting a second error frame', async () => {
+    const bus = new StreamBus(new AbortController())
+    bus.push('buffered')
+    const socket = createEventReply([false])
+    const completed = sseStream(busToIterable(bus), socket.reply)
+    await socket.firstWrite
+
+    expect(() => socket.raw.emit('error', new Error('broken pipe'))).not.toThrow()
+    await completed
+    expect(socket.writes).toHaveLength(1)
+    expect(socket.writes[0]).toContain('"content":"buffered"')
+    expect(socket.raw.listenerCount('drain')).toBe(0)
+    expect(socket.raw.listenerCount('error')).toBe(0)
+    bus.end()
+  })
+
+  it('resumes after drain and retains event IDs on body and control envelopes in order', async () => {
+    const bus = new StreamBus(new AbortController())
+    const body = bus.push('hello')!
+    const control = bus.push('\x00__tool_args__{"toolCallId":"tool-1","args":"{\\"path\\":"}')!
+    bus.end()
+    const socket = createEventReply([false, true, true])
+    const completed = sseStream(busToIterable(bus), socket.reply)
+    await socket.firstWrite
+    expect(socket.writes).toHaveLength(1)
+
+    socket.raw.emit('drain')
+    await completed
+    expect(socket.writes).toEqual([
+      `id: ${body.id}\ndata: {"content":"hello"}\n\n`,
+      `id: ${control.id}\ndata: {"toolArgs":{"toolCallId":"tool-1","args":"{\\"path\\":"}}\n\n`,
+      'event: done\ndata: [DONE]\n\n',
+    ])
+    expect(socket.raw.listenerCount('drain')).toBe(0)
+    expect(socket.raw.listenerCount('close')).toBe(0)
+    expect(socket.raw.listenerCount('error')).toBe(0)
+  })
+
+  it('can close while the final done frame is backpressured', async () => {
+    const socket = createEventReply([false])
+    const completed = sseStream(fromArray([]), socket.reply)
+    await socket.firstWrite
+    expect(socket.writes).toEqual(['event: done\ndata: [DONE]\n\n'])
+    socket.raw.emit('close')
+    await completed
+    expect(socket.raw.end).toHaveBeenCalledOnce()
+    expect(socket.raw.listenerCount('drain')).toBe(0)
+  })
+
+  it('finishes on disconnect even when an upstream next and return never settle', async () => {
+    const returned = vi.fn(() => new Promise<IteratorResult<string>>(() => {}))
+    const source: AsyncIterable<string> = {
+      [Symbol.asyncIterator]: () => ({
+        next: () => new Promise<IteratorResult<string>>(() => {}),
+        return: returned,
+      }),
+    }
+    const socket = createEventReply()
+    const completed = sseStream(source, socket.reply)
+    socket.raw.emit('close')
+    await completed
+    expect(returned).toHaveBeenCalledOnce()
+    expect(socket.writes).toEqual([])
+    expect(socket.raw.end).toHaveBeenCalledOnce()
+  })
+
+  it('reports a slow-subscriber snapshot requirement as a coded error followed by done', async () => {
+    const bus = new StreamBus(new AbortController(), { maxSubscriberEvents: 1 })
+    const iterator = busToIterable(bus)
+    bus.push('one')
+    bus.push('two')
+    const socket = createEventReply()
+    await sseStream(iterator, socket.reply)
+    expect(JSON.parse(socket.writes[0]!.slice('data: '.length))).toMatchObject({ code: 'snapshot_required' })
+    expect(socket.writes.at(-1)).toBe('event: done\ndata: [DONE]\n\n')
+    bus.end()
   })
 })

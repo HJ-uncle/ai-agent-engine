@@ -111,4 +111,6 @@ export interface RetryOptions {
 export interface FallbackConfig {
   primary: LLMAdapter
   fallbacks: LLMAdapter[]
+  /** Known model-specific limits; a fallback must fit the unchanged request. */
+  modelContextWindows?: Record<string, number>
 }

@@ -1,0 +1,84 @@
+{
+  "callSites": 48,
+  "matched": 48,
+  "unmatched": [],
+  "probes": [
+    {
+      "method": "GET",
+      "url": "/health",
+      "httpStatus": 200,
+      "body": {
+        "code": 200,
+        "message": "操作成功",
+        "data": {
+          "status": "ok",
+          "timestamp": "2026-09-29T10:02:06.634Z"
+        },
+        "timestamp": 1790676126634
+      }
+    },
+    {
+      "method": "GET",
+      "url": "/meta",
+      "httpStatus": 200,
+      "body": {
+        "code": 200,
+        "message": "操作成功",
+        "data": {
+          "version": "2.0.0"
+        },
+        "timestamp": 1790676126637
+      }
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/subagent/runs?parentSessionId=audit-empty-parent",
+      "httpStatus": 200,
+      "body": {
+        "code": 200,
+        "message": "操作成功",
+        "data": [],
+        "timestamp": 1790676126638
+      }
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/subagent/cancel",
+      "httpStatus": 200,
+      "body": {
+        "code": 200,
+        "message": "Subagent not running or already finished",
+        "data": {
+          "sessionId": "audit-empty-parent",
+          "toolCallId": "missing",
+          "cancelled": false
+        },
+        "timestamp": 1790676126640
+      }
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/subagent/runs/audit-missing-run/cancel",
+      "httpStatus": 200,
+      "body": {
+        "code": 40400,
+        "message": "Subagent run not found",
+        "data": null,
+        "timestamp": 1790676126641
+      }
+    },
+    {
+      "method": "GET",
+      "url": "/meta (cwd=engine/dist; ENGINE_VERSION absent)",
+      "httpStatus": 200,
+      "body": {
+        "code": 200,
+        "message": "操作成功",
+        "data": {
+          "version": "unknown"
+        },
+        "timestamp": 1790676126641
+      }
+    }
+  ]
+}

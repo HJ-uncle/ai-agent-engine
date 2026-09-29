@@ -23,7 +23,7 @@ function sessionKey(tenantId: string, sessionId: string): string {
 }
 
 function commandKey(tenantId: string, sessionId: string, command: string, args: string[]): string {
-  return `${tenantId}:${sessionId}:${command}:${args.join(' ')}`
+  return JSON.stringify([tenantId, sessionId, command, args])
 }
 
 export function approveCommand(tenantId: string, sessionId: string, command: string, args: string[] = []): void {
@@ -83,6 +83,10 @@ export interface PolicyDecisionInput {
   args?: string[]
   tenantId?: string
   sessionId?: string
+  /** Granted by the persisted pending action for this exact tool call. */
+  approved?: boolean
+  /** Code execution must not inherit a legacy session-wide approval. */
+  ignoreSessionApproval?: boolean
 }
 
 export interface PolicyDecision {
@@ -269,10 +273,10 @@ export class PolicyEngine {
     const mode = getSecurityMode(input.tenantId ?? 'default', input.sessionId ?? '')
 
     // 0) 如果用户已经审批过该命令，直接放行
-    if (isCommandApproved(input.tenantId ?? 'default', input.sessionId ?? '', input.command, input.args)) {
+    if (input.approved || (!input.ignoreSessionApproval && isCommandApproved(input.tenantId ?? 'default', input.sessionId ?? '', input.command, input.args))) {
       const decision: PolicyDecision = {
         action: 'allow',
-        reason: '用户已在当前会话中审批通过该命令',
+        reason: input.approved ? '用户已审批通过当前工具调用' : '用户已在当前会话中审批通过该命令',
       }
       await auditLogStore.append({
         tenantId: input.tenantId,

@@ -112,7 +112,7 @@ describe('ReActStrategy', () => {
     const results = await collectYields(strategy.run('What is the answer?', ctx))
 
     expect(results.join('')).toBe('The answer is 42.')
-    expect(llm.stream).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({ maxTokens: undefined }))
+    expect(llm.stream).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({ maxTokens: 8192 }))
     expect(llm.stream).toHaveBeenCalledTimes(1)
   })
 

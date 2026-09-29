@@ -21,6 +21,7 @@ import { exec } from 'node:child_process'
 import path from 'node:path'
 import fs from 'node:fs'
 import type { Tool, ToolResult } from '../../core/agent-context/index.js'
+import { extensionPolicy } from '../../security/tool-policy.js'
 
 const DEFAULT_TIMEOUT_MS = 60_000 // 技能脚本可能需要较长时间（如浏览器操作）
 
@@ -32,6 +33,7 @@ export const runSkillScriptTool: Tool & { source: string } = {
     '当 SKILL.md 指示运行 bash 命令（如 `bash "$SKILLS_ROOT/web-search/scripts/search.sh" "query"`）时使用。' +
     '工具会自动注入 SKILLS_ROOT 环境变量。',
   source: 'skill',
+  preflight: async (_args, ctx) => extensionPolicy(ctx),
   parameters: {
     type: 'object',
     properties: {
@@ -49,7 +51,9 @@ export const runSkillScriptTool: Tool & { source: string } = {
     required: ['command'],
   },
 
-  async execute(rawArgs): Promise<ToolResult> {
+  async execute(rawArgs, ctx): Promise<ToolResult> {
+    const blocked = extensionPolicy(ctx)
+    if (blocked) return blocked
     const { command, timeoutMs = DEFAULT_TIMEOUT_MS } = rawArgs as {
       command: string
       timeoutMs?: number

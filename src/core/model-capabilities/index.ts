@@ -22,6 +22,8 @@
  *   })
  */
 
+import { usesNativeOllama } from '../llm-adapter/protocol.js'
+
 /** 模型能力清单（全部为可选 boolean，未声明视为未知/false） */
 export interface ModelCapabilities {
   /** 多模态：image_url 输入（图片理解） */
@@ -296,9 +298,20 @@ function stripUndef<T extends Record<string, unknown>>(obj: T): Partial<T> {
 /** 全局单例 */
 export const capabilityRegistry = new ModelCapabilityRegistry(DEFAULT_RULES)
 
-/** 便捷 API：等价于 capabilityRegistry.resolve(input) */
+/** Effective capabilities cannot exceed what the selected wire adapter implements. */
 export function resolveCapabilities(input: ResolveInput): ModelCapabilities {
-  return capabilityRegistry.resolve(input)
+  const capabilities = capabilityRegistry.resolve(input)
+  if (usesNativeOllama(input.provider, input.baseUrl)) {
+    // Native Ollama currently serializes text and usage only. Model rules and
+    // manual overrides must not advertise tools/images that this adapter drops.
+    return {
+      ...capabilities,
+      toolCalling: false, parallelTools: false, vision: false, video: false, audio: false,
+      thinking: false, jsonMode: false, search: false, caching: false, prefix: false,
+      streamUsage: true,
+    }
+  }
+  return capabilities
 }
 
 /**

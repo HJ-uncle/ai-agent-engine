@@ -1,8 +1,24 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
-import { ModelsStore } from '../../../storage/sqlite/models.js'
+import { ModelsStore, type ModelConfig } from '../../../storage/sqlite/models.js'
 import { success, fail } from '../response.js'
 import { createLLMAdapter } from '../../../core/llm-adapter/factory.js'
 import { resolveCapabilities, type ModelCapabilities } from '../../../core/model-capabilities/index.js'
+import { capabilityPatchFromInput, mergeCapabilityOverrides, type CapabilityOverridePatch } from '../../../core/model-capabilities/overrides.js'
+
+function presentModel(model: ModelConfig) {
+  const resolvedCapabilities = resolveCapabilities({
+    model: model.modelId, baseUrl: model.baseUrl, provider: model.provider,
+    dbOverrides: model.capabilities,
+  })
+  return {
+    ...model,
+    capabilityOverrides: model.capabilities ?? null,
+    resolvedCapabilities,
+    // Read alias for existing chat consumers; never write resolved values back as overrides.
+    capabilities: resolvedCapabilities,
+    apiKey: model.apiKey ? `...${model.apiKey.slice(-4)}` : '',
+  }
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
@@ -50,21 +66,12 @@ export async function modelsRoutes(fastify: FastifyInstance) {
     const models = await store.getModels(tenantId)
     // Mask API keys；capabilities 与内置规则合并后再返回——DB 里存的是创建时的
     // 快照（可能缺 contextWindow 等后加字段），纯直出会让读取方永远拿不到新字段。
-    const safeModels = models.map(m => ({
-      ...m,
-      capabilities: resolveCapabilities({
-        model: m.modelId,
-        baseUrl: m.baseUrl,
-        provider: m.provider,
-        dbOverrides: (m.capabilities ?? null) as Partial<ModelCapabilities> | null
-      }),
-      apiKey: m.apiKey ? `...${m.apiKey.slice(-4)}` : ''
-    }))
+    const safeModels = models.map(presentModel)
     return reply.code(200).send(success(safeModels))
   })
 
   // 3. POST /api/v1/models
-  fastify.post<{ Body: { provider: string; modelId: string; apiKey: string; baseUrl: string; displayName?: string; version?: string; capabilities?: ModelCapabilities } }>(
+  fastify.post<{ Body: { provider: string; modelId: string; apiKey: string; baseUrl: string; displayName?: string; version?: string; capabilities?: CapabilityOverridePatch | null; capabilityOverrides?: CapabilityOverridePatch | null } }>(
     '/api/v1/models',
     async (request, reply) => {
       const authContext = (request as any).authContext
@@ -72,7 +79,13 @@ export async function modelsRoutes(fastify: FastifyInstance) {
         return reply.code(403).send(fail(40300, 'Forbidden: Admin role required'))
       }
       const tenantId = getTenantId(request)
-      const { provider, modelId, apiKey, baseUrl, displayName, version, capabilities } = request.body
+      const { provider, modelId, apiKey, baseUrl, displayName, version } = request.body
+      let capabilities: ModelCapabilities | null
+      try {
+        capabilities = mergeCapabilityOverrides(null, capabilityPatchFromInput(request.body))
+      } catch (error) {
+        return reply.code(400).send(fail(40001, error instanceof Error ? error.message : 'Invalid capability overrides'))
+      }
 
       // Validation
       if (!isValidChatCompletionsEndpoint(baseUrl)) {
@@ -95,10 +108,7 @@ export async function modelsRoutes(fastify: FastifyInstance) {
           version,
           capabilities: capabilities ?? null,
         })
-        return reply.code(200).send(success({
-          ...newModel,
-          apiKey: `...${newModel.apiKey.slice(-4)}`
-        }))
+        return reply.code(200).send(success(presentModel(newModel)))
       } catch (err: any) {
         return reply.code(500).send(fail(50000, err.message))
       }
@@ -106,7 +116,7 @@ export async function modelsRoutes(fastify: FastifyInstance) {
   )
 
   // 4. PUT /api/v1/models/:id
-  fastify.put<{ Params: { id: string }, Body: { isEnabled?: boolean; apiKey?: string; baseUrl?: string; displayName?: string; version?: string; capabilities?: ModelCapabilities | null } }>(
+  fastify.put<{ Params: { id: string }, Body: { isEnabled?: boolean; apiKey?: string; baseUrl?: string; displayName?: string; version?: string; capabilities?: CapabilityOverridePatch | null; capabilityOverrides?: CapabilityOverridePatch | null } }>(
     '/api/v1/models/:id',
     async (request, reply) => {
       const authContext = (request as any).authContext
@@ -116,6 +126,11 @@ export async function modelsRoutes(fastify: FastifyInstance) {
       const tenantId = getTenantId(request)
       const { id } = request.params
       const data = request.body
+      try {
+        capabilityPatchFromInput(data)
+      } catch (error) {
+        return reply.code(400).send(fail(40001, error instanceof Error ? error.message : 'Invalid capability overrides'))
+      }
 
       if (data.baseUrl && !isValidChatCompletionsEndpoint(data.baseUrl)) {
         return reply.code(400).send(fail(40001, 'Invalid base URL.'))
@@ -134,10 +149,7 @@ export async function modelsRoutes(fastify: FastifyInstance) {
       if (!updated) {
         return reply.code(404).send(fail(40400, 'Model not found.'))
       }
-      return reply.code(200).send(success({
-        ...updated,
-        apiKey: `...${updated.apiKey.slice(-4)}`
-      }))
+      return reply.code(200).send(success(presentModel(updated)))
     }
   )
 

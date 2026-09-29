@@ -1,0 +1,51 @@
+{
+  "capturedAt": "2026-09-29T10:10:17.136Z",
+  "fixture": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\consumer-data-audit-HFurFk",
+  "scope": "Actual route handlers and SQLite stores with synthetic data. No Electron UI or authentication integration in this probe. Revert ordering is deliberately controlled; this demonstrates order sensitivity, not the frequency of a concurrent race.",
+  "modelCapabilityReplacement": {
+    "before": {
+      "vision": true,
+      "thinking": false,
+      "contextWindow": 123456,
+      "toolCalling": true,
+      "parallelTools": true,
+      "streamUsage": true
+    },
+    "submitted": {
+      "displayName": "After",
+      "capabilities": {
+        "vision": true,
+        "thinking": false
+      }
+    },
+    "after": {
+      "vision": true,
+      "thinking": false
+    },
+    "outcome": "Unrepresented capability overrides were removed; later GET may infer defaults but cannot recover the original overrides."
+  },
+  "revertArrivalOrder": [
+    {
+      "order": "oldest-first",
+      "initial": "A",
+      "currentBeforeRevert": "C",
+      "after": "B"
+    },
+    {
+      "order": "newest-first",
+      "initial": "A",
+      "currentBeforeRevert": "C",
+      "after": "A"
+    }
+  ],
+  "revertAfterUserEdit": {
+    "currentBeforeRevert": "USER EDIT AFTER AGENT",
+    "after": "A",
+    "businessCode": 200,
+    "conflictReported": false
+  },
+  "changeListLimit": {
+    "stored": 201,
+    "returned": 200
+  }
+}

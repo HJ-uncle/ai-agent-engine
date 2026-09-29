@@ -9,12 +9,15 @@ import { getSubagentStore } from '../../../core/subagent/store.js'
 import { getSubagentRunner } from '../../../core/subagent/runner.js'
 import { projectPendingSubagents } from '../../../core/subagent/projection.js'
 import { subagentRoutes } from './subagent.js'
+import { rootRunStore } from '../../../storage/root-runs/index.js'
+import { withHistoryLock, invalidateSessionHistory, withSessionHistoryMutation, bindHistoryGeneration } from '../../../storage/conversation/serialization.js'
+import type { Message } from '../../../core/agent-context/types.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
 
 export async function autoCompactSession(tenantId: string, sessionId: string, logger: any) {
-  const history = createConversationHistory()
+  const history = bindHistoryGeneration(createConversationHistory(), tenantId, sessionId)
   const messages = await history.getHistory({ tenantId, sessionId })
   if (messages.length <= 1) return
 
@@ -27,18 +30,16 @@ export async function autoCompactSession(tenantId: string, sessionId: string, lo
   logger.info({ model: llm.model }, 'Starting background auto-compaction')
 
   // 与手动端点同一条路：history.compress 统一落地与保留策略；后台压缩同样按条数保留
-  const stats = await history.compress(
-    { tenantId, sessionId },
-    buildCompactSummarizeFn(llm),
-    6,
-  )
-
-  await history.append({
-    role: 'assistant' as const,
-    content: '（上下文已触发智能压缩以释放空间）',
-    tokens: 15,
-    metadata: { compressedFrom: stats.preTokens, compressedTo: stats.postTokens },
-  }, { tenantId, sessionId })
+  const stats = await withHistoryLock(tenantId, async () => {
+    const result = await history.compress({ tenantId, sessionId }, buildCompactSummarizeFn(llm), 6)
+    await history.append({
+      role: 'assistant' as const,
+      content: '（上下文已触发智能压缩以释放空间）',
+      tokens: 15,
+      metadata: { compressedFrom: result.preTokens, compressedTo: result.postTokens },
+    }, { tenantId, sessionId })
+    return result
+  })
 
   logger.info({ originalTokens: stats.preTokens, compressedTokens: stats.postTokens }, 'Auto-compaction finished')
 }
@@ -47,11 +48,51 @@ export async function conversationRoutes(fastify: FastifyInstance) {
   const history = createConversationHistory()
   await subagentRoutes(fastify)
 
-  async function removeChildRuns(tenantId: string, sessionId: string, parentMessageIds: Set<string>): Promise<void> {
-    await getSubagentRunner().cancelRunsForParent(tenantId, sessionId)
-    const runs = (await getSubagentStore().listRunsForParent(tenantId, sessionId)).filter(run => parentMessageIds.has(run.parentMessageId))
-    for (const run of runs) await history.clear({ tenantId, sessionId: run.childSessionId })
-    await getSubagentStore().deleteRuns(tenantId, runs.map(run => run.runId))
+  async function removeChildRuns(tenantId: string, sessionId: string, parentMessageIds?: Set<string>): Promise<void> {
+    const runs = (await getSubagentStore().listRunsForParent(tenantId, sessionId)).filter(run => !parentMessageIds || parentMessageIds.has(run.parentMessageId))
+    for (const run of runs) {
+      invalidateSessionHistory(tenantId, run.childSessionId)
+      await history.clear({ tenantId, sessionId: run.childSessionId })
+    }
+    if (parentMessageIds) await getSubagentStore().deleteRuns(tenantId, runs.map(run => run.runId))
+    else await getSubagentStore().deleteRunsForParent(tenantId, sessionId)
+  }
+
+  type TurnMessage = Message & { conversationId?: string }
+  const messageIds = (messages: Message[]) => new Set(messages.flatMap(message => message.id ? [message.id] : []))
+
+  async function interruptSession(tenantId: string, sessionId: string, reason: string): Promise<string[]> {
+    invalidateSessionHistory(tenantId, sessionId)
+    abortActiveChat(tenantId, sessionId, reason)
+    const active = (await rootRunStore.list(tenantId, sessionId)).filter(run => run.status === 'running' || run.status === 'waiting')
+    for (const run of active) await rootRunStore.update(tenantId, run.runId, { status: 'cancelled', stopReason: reason })
+    return active.map(run => run.turnId)
+  }
+
+  /** The lease prevents new roots; child completion must run outside the history lock. */
+  async function mutateHistory<T>(tenantId: string, sessionId: string, reason: string,
+    select: () => Promise<TurnMessage[] | null>, apply: (messages: TurnMessage[], interruptedTurns: string[]) => Promise<T>): Promise<T | null> {
+    return withSessionHistoryMutation(tenantId, sessionId, async () => {
+      const initial = await withHistoryLock(tenantId, async () => {
+        if (await select() === null) return null
+        return interruptSession(tenantId, sessionId, reason)
+      })
+      if (initial === null) return null
+      await getSubagentRunner().cancelRunsForParent(tenantId, sessionId)
+      return withHistoryLock(tenantId, async () => {
+        // Re-read after child settlement: no stale message/turn snapshot may drive deletion.
+        const messages = await select()
+        if (messages === null) return null
+        const interrupted = await interruptSession(tenantId, sessionId, reason)
+        return apply(messages, [...new Set([...initial, ...interrupted])])
+      })
+    })
+  }
+
+  async function selectMessages(tenantId: string, sessionId: string, messageId: string, truncate = false): Promise<TurnMessage[] | null> {
+    const messages = await history.getFullHistory({ tenantId, sessionId }) as TurnMessage[]
+    const from = messages.findIndex(message => message.id === messageId)
+    return from < 0 ? null : truncate ? messages.slice(from) : [messages[from]]
   }
 
   // GET /conversation/sessions  — 列出该租户下所有有对话记录的 session
@@ -79,7 +120,7 @@ export async function conversationRoutes(fastify: FastifyInstance) {
     const sessionUsage = await history.getSessionUsage({ tenantId, sessionId })
     
     const response = paginateArray(messages, current, pageSize)
-    response.metadata = { sessionUsage, subagentRuns }
+    response.metadata = { sessionUsage, subagentRuns, runs: await rootRunStore.list(tenantId, sessionId) }
     
     return reply.code(200).send(response)
   })
@@ -91,12 +132,12 @@ export async function conversationRoutes(fastify: FastifyInstance) {
     if (!sessionId) {
       return reply.code(200).send(fail(40001, '参数验证失败：sessionId 不能为空'))
     }
-    abortActiveChat(tenantId, sessionId, 'History cleared by user')
-    await getSubagentRunner().cancelRunsForParent(tenantId, sessionId)
-    const childRuns = await getSubagentStore().listRunsForParent(tenantId, sessionId)
-    for (const run of childRuns) await history.clear({ tenantId, sessionId: run.childSessionId })
-    await getSubagentStore().deleteRunsForParent(tenantId, sessionId)
-    await history.clear({ tenantId, sessionId })
+    await mutateHistory(tenantId, sessionId, 'History cleared by user',
+      () => history.getFullHistory({ tenantId, sessionId }), async () => {
+        await removeChildRuns(tenantId, sessionId)
+        await history.clear({ tenantId, sessionId })
+        await rootRunStore.deleteTurns(tenantId, sessionId)
+      })
     // 注意：Agent 绑定不随历史清空而解除，绑定与会话生命周期一致（仅硬删除 session 时清除）
     return reply.code(200).send(success({ success: true }))
   })
@@ -111,32 +152,23 @@ export async function conversationRoutes(fastify: FastifyInstance) {
       return reply.code(200).send(fail(40001, '参数验证失败：sessionId 不能为空'))
     }
 
-    // 0. 先 abort 该 session 上正在跑的 SSE 流（如果有），防止流式 append 与 clear 竞态
-    //    history.clear() 会同步设置 5s 墓碑，期间任何 append 都被丢弃，再加这一步是双保险。
-    try { abortActiveChat(tenantId, sessionId, 'Session deleted by user') } catch { /* noop */ }
+    await mutateHistory(tenantId, sessionId, 'Session deleted by user',
+      () => history.getFullHistory({ tenantId, sessionId }), async () => {
+        await removeChildRuns(tenantId, sessionId)
+        await history.clear({ tenantId, sessionId })
+        await rootRunStore.deleteTurns(tenantId, sessionId)
+        await new SessionStore().clearBinding(sessionId, tenantId)
 
-    // 1. Delete DB history（内部会先设置墓碑，再 DELETE FROM conversations）
-    await getSubagentRunner().cancelRunsForParent(tenantId, sessionId)
-    const childRuns = await getSubagentStore().listRunsForParent(tenantId, sessionId)
-    for (const run of childRuns) await history.clear({ tenantId, sessionId: run.childSessionId })
-    await getSubagentStore().deleteRunsForParent(tenantId, sessionId)
-    await history.clear({ tenantId, sessionId })
-
-    // 2. 同步清除会话 Agent 绑定，允许重新选择 Agent
-    const sessionStore = new SessionStore()
-    await sessionStore.clearBinding(sessionId, tenantId)
-
-    // 3. Delete physical workspace directory if keepWorkspace is not true
-    if (keepWorkspace !== 'true') {
-      try {
-        const dir = workspaceManager.getPath({ tenantId, sessionId })
-        if (fs.existsSync(dir)) {
-          fs.rmSync(dir, { recursive: true, force: true })
+        // Keep the lease through workspace removal so a new root cannot use it mid-delete.
+        if (keepWorkspace !== 'true') {
+          try {
+            const dir = workspaceManager.getPath({ tenantId, sessionId })
+            if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true })
+          } catch (e: any) {
+            request.log.error(`Failed to cleanup workspace for session ${sessionId}: ${e.message}`)
+          }
         }
-      } catch (e: any) {
-        request.log.error(`Failed to cleanup workspace for session ${sessionId}: ${e.message}`)
-      }
-    }
+      })
 
     return reply.code(200).send(success({ success: true, sessionId }))
   })
@@ -163,19 +195,20 @@ export async function conversationRoutes(fastify: FastifyInstance) {
   // DELETE /conversation/turns/:conversationId — 删除一整轮（该 conversation_id 的所有行）
   fastify.delete<{ Params: { conversationId: string }, Querystring: { sessionId?: string } }>('/conversation/turns/:conversationId', async (request, reply) => {
     const { conversationId } = request.params
+    const { sessionId } = request.query
     const tenantId = getTenantId(request)
-    if (!conversationId) {
-      return reply.code(200).send(fail(40001, '参数验证失败：conversationId 不能为空'))
-    }
-    try { abortActiveChat(tenantId, request.query.sessionId ?? '', 'Turn deleted by user') } catch { /* noop */ }
-    if (request.query.sessionId) {
-      const messages = await history.getByConversationId(conversationId, tenantId)
-      await removeChildRuns(tenantId, request.query.sessionId, new Set(messages.flatMap(message => message.id ? [message.id] : [])))
-    }
-    const removed = await history.deleteByConversationId(conversationId, tenantId)
-    if (removed === 0) {
-      return reply.code(200).send(fail(40400, '该轮对话不存在'))
-    }
+    if (!conversationId || !sessionId) return reply.code(400).send(fail(40001, 'conversationId and sessionId are required'))
+    const removed = await mutateHistory(tenantId, sessionId, 'Turn deleted by user', async () => {
+      const messages = (await history.getFullHistory({ tenantId, sessionId }) as TurnMessage[]).filter(message => message.conversationId === conversationId)
+      return messages.length ? messages : null
+    }, async messages => {
+      await removeChildRuns(tenantId, sessionId, messageIds(messages))
+      await rootRunStore.deleteTurns(tenantId, sessionId, [conversationId])
+      // Delete only the verified session's messages, even if a legacy turn ID was reused.
+      for (const message of messages) if (message.id) await history.deleteMessage(message.id, tenantId)
+      return messages.length
+    })
+    if (removed === null) return reply.code(404).send(fail(40400, 'Turn not found in this session'))
     return reply.code(200).send(success({ success: true, removed }))
   })
 
@@ -184,17 +217,17 @@ export async function conversationRoutes(fastify: FastifyInstance) {
   // 引擎只提供单行删除；删除 assistant/tool 行时前端应连同配对行一起删。
   fastify.delete<{ Params: { messageId: string }, Querystring: { sessionId?: string } }>('/conversation/messages/:messageId', async (request, reply) => {
     const { messageId } = request.params
+    const { sessionId } = request.query
     const tenantId = getTenantId(request)
-    if (!messageId) {
-      return reply.code(200).send(fail(40001, '参数验证失败：messageId 不能为空'))
-    }
-    try { abortActiveChat(tenantId, request.query.sessionId ?? '', 'Message deleted by user') } catch { /* noop */ }
-    const target = await history.getMessageById(messageId, tenantId)
-    if (!target) {
-      return reply.code(200).send(fail(40400, '消息不存在'))
-    }
-    if (request.query.sessionId) await removeChildRuns(tenantId, request.query.sessionId, new Set([messageId]))
-    await history.deleteMessage(messageId, tenantId)
+    if (!messageId || !sessionId) return reply.code(400).send(fail(40001, 'messageId and sessionId are required'))
+    const removed = await mutateHistory(tenantId, sessionId, 'Message deleted by user',
+      () => selectMessages(tenantId, sessionId, messageId), async messages => {
+        await removeChildRuns(tenantId, sessionId, messageIds(messages))
+        if (messages[0].conversationId) await rootRunStore.deleteTurns(tenantId, sessionId, [messages[0].conversationId])
+        await history.deleteMessage(messageId, tenantId)
+        return true
+      })
+    if (removed === null) return reply.code(404).send(fail(40400, 'Message not found in this session'))
     return reply.code(200).send(success({ success: true }))
   })
 
@@ -207,16 +240,22 @@ export async function conversationRoutes(fastify: FastifyInstance) {
     if (!sessionId || !messageId) {
       return reply.code(200).send(fail(40001, '参数验证失败：sessionId 与 messageId 不能为空'))
     }
-    try { abortActiveChat(tenantId, sessionId, 'History truncated by user') } catch { /* noop */ }
-    const target = await history.getMessageById(messageId, tenantId)
-    if (!target) {
-      return reply.code(200).send(fail(40400, '消息不存在'))
-    }
-    const messages = await history.getFullHistory({ tenantId, sessionId })
-    const from = messages.findIndex(message => message.id === messageId)
-    if (from >= 0) await removeChildRuns(tenantId, sessionId, new Set(messages.slice(from).flatMap(message => message.id ? [message.id] : [])))
-    await history.deleteMessagesAfterId(target.dbId, sessionId, tenantId)
-    await history.deleteMessage(messageId, tenantId)
+    const removed = await mutateHistory(tenantId, sessionId, 'History truncated by user',
+      () => selectMessages(tenantId, sessionId, messageId, true), async (messages, interruptedTurns) => {
+        const target = await history.getMessageById(messageId, tenantId)
+        if (!target) return null
+        const turnIds = new Set([...interruptedTurns, ...messages.flatMap(message => message.conversationId ? [message.conversationId] : [])])
+        // A root may have claimed its identity before its first message was appended.
+        const runs = await rootRunStore.list(tenantId, sessionId)
+        const targetRun = runs.find(run => run.turnId === messages[0].conversationId)
+        if (targetRun) for (const run of runs) if (run.seq >= targetRun.seq) turnIds.add(run.turnId)
+        await removeChildRuns(tenantId, sessionId, messageIds(messages))
+        await history.deleteMessagesAfterId(target.dbId, sessionId, tenantId)
+        await history.deleteMessage(messageId, tenantId)
+        await rootRunStore.deleteTurns(tenantId, sessionId, [...turnIds])
+        return true
+      })
+    if (removed === null) return reply.code(404).send(fail(40400, 'Message not found in this session'))
     return reply.code(200).send(success({ success: true, removedFrom: messageId }))
   })
 
@@ -228,7 +267,8 @@ export async function conversationRoutes(fastify: FastifyInstance) {
       return reply.code(200).send(fail(40001, '参数验证失败：sessionId 不能为空'))
     }
 
-    const messages = await history.getHistory({ tenantId, sessionId })
+    const compactHistory = bindHistoryGeneration(history, tenantId, sessionId)
+    const messages = await compactHistory.getHistory({ tenantId, sessionId })
     if (messages.length <= 4) {
       return reply.code(200).send(success({ success: true, message: '消息数量过少，无需压缩' }))
     }
@@ -244,19 +284,16 @@ export async function conversationRoutes(fastify: FastifyInstance) {
       // 经 history.compress 统一处理：两套后端各自落地（SQLite 事务重建 / JSONL 追加 summary 行）。
       // 手动压缩按条数保留（保底一半），保证「点了就一定压缩」——token 预算回溯只用于
       // 自动压缩（react.ts），那里上下文大、预算回溯才有意义。
-      const stats = await history.compress(
-        { tenantId, sessionId },
-        buildCompactSummarizeFn(llm),
-        6,
-      )
-
-      // 增加一条 assistant 消息作为反馈
-      await history.append({
-        role: 'assistant' as const,
-        content: '我已经为您完成了上下文压缩，并保留了核心摘要信息。您可以继续与我对话。',
-        tokens: 20,
-        metadata: { compressedFrom: stats.preTokens, compressedTo: stats.postTokens },
-      }, { tenantId, sessionId })
+      const stats = await withHistoryLock(tenantId, async () => {
+        const result = await compactHistory.compress({ tenantId, sessionId }, buildCompactSummarizeFn(llm), 6)
+        await compactHistory.append({
+          role: 'assistant' as const,
+          content: '我已经为您完成了上下文压缩，并保留了核心摘要信息。您可以继续与我对话。',
+          tokens: 20,
+          metadata: { compressedFrom: result.preTokens, compressedTo: result.postTokens },
+        }, { tenantId, sessionId })
+        return result
+      })
 
       return reply.code(200).send(success({
         success: true,

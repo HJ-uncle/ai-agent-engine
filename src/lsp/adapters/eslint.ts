@@ -1,8 +1,8 @@
-import { spawn } from 'node:child_process'
 import path from 'node:path'
-import os from 'node:os'
 import fs from 'node:fs'
 import type { LspAdapter, Diagnostic } from '../types.js'
+import { runDiagnosticProcess } from './process.js'
+import { throwIfAborted } from '../../core/utils/abort.js'
 
 /**
  * 定位 eslint 的 JS 入口（node 直接跑，绕开 .cmd —— Node 新版禁止
@@ -24,6 +24,21 @@ function resolveEslintJs(fromDir: string): { jsPath: string; projectRoot: string
   return fs.existsSync(fallback) ? { jsPath: fallback, projectRoot: process.cwd() } : null
 }
 
+function hasEslintConfig(filePath: string): boolean {
+  let dir = path.dirname(filePath)
+  for (;;) {
+    if (['eslint.config.js', 'eslint.config.mjs', 'eslint.config.cjs', 'eslint.config.ts', 'eslint.config.mts', 'eslint.config.cts',
+      '.eslintrc', '.eslintrc.js', '.eslintrc.cjs', '.eslintrc.json', '.eslintrc.yaml', '.eslintrc.yml']
+      .some(name => fs.existsSync(path.join(dir, name)))) return true
+    try {
+      if (JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).eslintConfig) return true
+    } catch { /* not a package directory */ }
+    const parent = path.dirname(dir)
+    if (parent === dir) return false
+    dir = parent
+  }
+}
+
 /**
  * ESLint 诊断适配器（基于项目本地 eslint --format json）。
  *
@@ -34,53 +49,25 @@ class ESLintAdapter implements LspAdapter {
   readonly name = 'eslint'
   readonly language = 'javascript'
   readonly extensions = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs']
-  private cachedAvailable: boolean | null = null
-
-  async isAvailable(): Promise<boolean> {
-    if (this.cachedAvailable !== null) return this.cachedAvailable
-    // 粗探测：引擎侧或任意常见位置有 eslint 入口即注册；
-    // 精确按文件定位在 diagnose 时进行（找不到就安静返回空）
-    this.cachedAvailable = fs.existsSync(
-      path.join(process.cwd(), 'node_modules', 'eslint', 'bin', 'eslint.js'),
-    )
-    return this.cachedAvailable
+  async isAvailable(filePath?: string): Promise<boolean> {
+    const target = filePath ?? path.join(process.cwd(), 'index.js')
+    return resolveEslintJs(target) !== null && (!filePath || hasEslintConfig(target))
   }
 
   async diagnose(filePath: string, content?: string, signal?: AbortSignal): Promise<Diagnostic[]> {
+    throwIfAborted(signal)
     const located = resolveEslintJs(filePath)
-    if (!located) return []
-
-    return new Promise((resolve) => {
-      let target = filePath
-      let cleanup: (() => void) | null = null
-      if (content !== undefined) {
-        const tmp = path.join(os.tmpdir(), `lsp-eslint-${Date.now()}-${Math.random().toString(36).slice(2)}${path.extname(filePath)}`)
-        fs.writeFileSync(tmp, content, 'utf-8')
-        target = tmp
-        cleanup = () => { try { fs.unlinkSync(tmp) } catch {} }
-      }
-      // 配置解析以项目根为 cwd
-      const proc = spawn(
-        process.env.AETHER_ENGINE_NODE || process.execPath,
-        [located.jsPath, '--format', 'json', '--no-color', target],
-        { shell: false, cwd: located.projectRoot },
-      )
-      let out = ''
-      proc.stdout.on('data', (b) => { out += b.toString() })
-      proc.stderr.on('data', () => { /* ignore */ })
-      const onAbort = () => proc.kill('SIGTERM')
-      signal?.addEventListener('abort', onAbort)
-      proc.on('close', () => {
-        signal?.removeEventListener('abort', onAbort)
-        cleanup?.()
-        resolve(parseEslintOutput(out))
-      })
-      proc.on('error', () => {
-        signal?.removeEventListener('abort', onAbort)
-        cleanup?.()
-        resolve([])
-      })
-    })
+    if (!located) throw new Error('ESLint 不可用')
+    const args = [located.jsPath, '--format', 'json', '--no-color']
+    // stdin preserves the original filename/config when content is unsaved.
+    if (content !== undefined) args.push('--stdin', '--stdin-filename', filePath)
+    else args.push(filePath)
+    const { stdout, stderr, exitCode } = await runDiagnosticProcess(
+      process.env.AETHER_ENGINE_NODE || process.execPath, args,
+      { cwd: located.projectRoot, input: content, signal },
+    )
+    if (exitCode !== 0 && exitCode !== 1) throw new Error(`ESLint 失败 (${exitCode}): ${stderr.slice(0, 500)}`)
+    return parseEslintOutput(stdout)
   }
 }
 
@@ -107,8 +94,8 @@ function parseEslintOutput(out: string): Diagnostic[] {
       for (const m of r.messages) {
         diagnostics.push({
           severity: m.severity === 2 ? 'error' : 'warning',
-          line: m.line,
-          column: m.column,
+          line: Number.isFinite(m.line) && m.line >= 1 ? m.line : 1,
+          column: Number.isFinite(m.column) && m.column >= 1 ? m.column : 1,
           endLine: m.endLine,
           endColumn: m.endColumn,
           code: m.ruleId ?? undefined,
@@ -119,8 +106,8 @@ function parseEslintOutput(out: string): Diagnostic[] {
       }
     }
     return diagnostics
-  } catch {
-    return []
+  } catch (error) {
+    throw new Error(`ESLint 返回无效诊断: ${error instanceof Error ? error.message : String(error)}`)
   }
 }
 

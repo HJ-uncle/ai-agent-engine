@@ -6,6 +6,8 @@ import { QwenAdapter, type QwenAdapterOptions } from './qwen.js'
 import { RetryingAdapter, FallbackAdapter } from './retry.js'
 import type { LLMAdapter } from './types.js'
 import { systemConfigStore } from '../../storage/sqlite/system-config.js'
+import { declaresAnthropicProtocol, usesNativeOllama } from './protocol.js'
+import { resolveCapabilities } from '../model-capabilities/index.js'
 
 export interface CreateAdapterOptions {
   provider?: string
@@ -52,16 +54,16 @@ function shouldUseQwen(provider: string, model: string, baseUrl?: string): boole
  * `…/anthropic` 兼容端点）。显式声明优先于模型名推断 ——
  * 「DeepSeek 模型 + Anthropic 网关」不应被模型名劫持到 DeepSeek 适配器。
  */
-function declaresAnthropicProtocol(baseUrl?: string): boolean {
-  if (!baseUrl) return false
-  return /\/anthropic(\/|$)/i.test(baseUrl)
-}
-
 function createBaseAdapter(provider: string, model: string, options?: CreateAdapterOptions): LLMAdapter {
   const eh = options?.extraHeaders
   // Anthropic 协议端点显式声明优先：模型名不参与判断，避免被劫持到 DeepSeek/Qwen 适配器
   if (provider === 'anthropic' || declaresAnthropicProtocol(options?.baseUrl)) {
     return new AnthropicAdapter(model, options?.apiKey, options?.baseUrl, eh)
+  }
+
+  // A local qwen/deepseek model still uses Ollama's native /api/chat protocol.
+  if (usesNativeOllama(provider, options?.baseUrl)) {
+    return new OllamaAdapter(model, options?.baseUrl)
   }
 
   // DeepSeek 自动路由（最高优先级，避免 qwen 误判）
@@ -89,16 +91,19 @@ function createBaseAdapter(provider: string, model: string, options?: CreateAdap
 }
 
 export function createLLMAdapter(overrides?: CreateAdapterOptions): LLMAdapter {
-  const provider = overrides?.provider ?? process.env.LLM_PROVIDER ?? 'openai'
+  const provider = (overrides?.provider ?? process.env.LLM_PROVIDER ?? 'openai').toLowerCase()
   const primaryModel = overrides?.model ?? process.env.LLM_PRIMARY_MODEL ?? process.env.LLM_MODEL ?? 'gpt-4o-mini'
   const fallbackModel = process.env.LLM_FALLBACK_MODEL
 
   const primary = new RetryingAdapter(createBaseAdapter(provider, primaryModel, overrides))
 
-  if (fallbackModel) {
+  if (fallbackModel?.trim() && fallbackModel.trim() !== primaryModel) {
     // Use same provider for fallback (can be extended later)
-    const fallback = createBaseAdapter(provider, fallbackModel, overrides)
-    return new FallbackAdapter({ primary, fallbacks: [fallback] })
+    const model = fallbackModel.trim()
+    const fallback = createBaseAdapter(provider, model, overrides)
+    const contextWindow = resolveCapabilities({ model, provider, baseUrl: overrides?.baseUrl }).contextWindow
+    return new FallbackAdapter({ primary, fallbacks: [fallback],
+      modelContextWindows: contextWindow ? { [model]: contextWindow } : undefined })
   }
 
   return primary
@@ -150,18 +155,19 @@ export async function resolveAdapterOptionsWithDbConfig(overrides?: CreateAdapte
     systemConfigStore.get('QWEN_LOG_USAGE'),
   ])
 
-  const provider = overrides?.provider ?? dbProvider ?? process.env.LLM_PROVIDER ?? 'openai'
+  const provider = (overrides?.provider ?? dbProvider ?? process.env.LLM_PROVIDER ?? 'openai').toLowerCase()
   const model    = overrides?.model    ?? dbModel    ?? process.env.LLM_PRIMARY_MODEL ?? process.env.LLM_MODEL ?? 'gpt-4o-mini'
 
   // ── Anthropic 协议端点（baseUrl 显式声明）优先：凭证与路由都按 Anthropic 走 ──
   const effectiveBaseUrl = overrides?.baseUrl ?? dbBaseUrl ?? process.env.OPENAI_BASE_URL
   const isAnthropicEndpoint = provider === 'anthropic' || declaresAnthropicProtocol(effectiveBaseUrl)
+  const isOllama = usesNativeOllama(provider, effectiveBaseUrl)
   // ── DeepSeek 通道自动检测 + 专有凭据优先 ─────────────────────────────────
-  const isDs = !isAnthropicEndpoint && shouldUseDeepSeek(provider, model, effectiveBaseUrl)
+  const isDs = !isAnthropicEndpoint && !isOllama && shouldUseDeepSeek(provider, model, effectiveBaseUrl)
   // ── Qwen 通道自动检测 ─────────────────────────────────────────────────────
-  const isQwen = !isAnthropicEndpoint && !isDs && shouldUseQwen(provider, model, effectiveBaseUrl)
+  const isQwen = !isAnthropicEndpoint && !isOllama && !isDs && shouldUseQwen(provider, model, effectiveBaseUrl)
   // ── Anthropic 通道检测 ────────────────────────────────────────────────────
-  const isAnthropic = isAnthropicEndpoint || (!isDs && !isQwen && /claude/i.test(model))
+  const isAnthropic = isAnthropicEndpoint || (!isOllama && !isDs && !isQwen && /claude/i.test(model))
 
   const apiKey = overrides?.apiKey
     ?? (isDs   ? (dsApiKey   ?? process.env.DEEPSEEK_API_KEY)  : null)
@@ -170,13 +176,12 @@ export async function resolveAdapterOptionsWithDbConfig(overrides?: CreateAdapte
     ?? dbApiKey
     ?? process.env.OPENAI_API_KEY
   const baseUrl = overrides?.baseUrl
+    ?? (isOllama ? (dbBaseUrl ?? process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434') : null)
     ?? (isDs   ? (dsBaseUrl   ?? process.env.DEEPSEEK_BASE_URL) : null)
     ?? (isQwen ? (qwenBaseUrl ?? process.env.QWEN_BASE_URL)     : null)
     ?? (isAnthropic ? (anthropicBaseUrl ?? process.env.ANTHROPIC_BASE_URL) : null)
     ?? dbBaseUrl
     ?? process.env.OPENAI_BASE_URL
-
-  const fallbackModel = process.env.LLM_FALLBACK_MODEL
 
   const deepseekOptions: DeepSeekAdapterOptions = {
     autoThinking:        dsAutoThinking == null ? true  : dsAutoThinking !== 'false',

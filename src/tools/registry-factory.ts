@@ -5,7 +5,8 @@
  * 新增或移除工具只需修改这一处。
  */
 import { ToolRegistry } from '../core/tool-registry/index.js'
-import type { Tool } from '../core/agent-context/index.js'
+import type { Tool, AgentContext } from '../core/agent-context/index.js'
+import { trustBuiltinTool } from '../security/tool-policy.js'
 import { isCodeProfileTool, normalizeAllowedTools, normalizeToolName, type ToolProfile } from './tool-profile.js'
 import { registerBuiltinSkills, skillsRegistry } from '../skills/index.js'
 import {
@@ -14,6 +15,7 @@ import {
   createDirTool,
   readFileTool,
   writeFileTool,
+  editFileTool,
 } from './file/index.js'
 import { cmdTool } from './cmd/index.js'
 import { askUserTool } from './ask-user/index.js'
@@ -46,6 +48,7 @@ import {
 import { logger } from '../observability/index.js'
 
 export interface RegistryFactoryOptions {
+  securityContext?: Pick<AgentContext, 'tenantId' | 'sessionId' | 'toolProfile'>
   /** general preserves service capabilities; code selects the IDE's executable programming tools. */
   toolProfile?: ToolProfile
   /** 允许的 skill 列表，undefined = 全部，[] = 全部，传入列表则过滤 */
@@ -127,7 +130,9 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
 
   /** Helper: register a tool into the registry and track it as builtin */
   const registerBuiltin = (tool: Tool) => {
-    registry.register(tool)
+    const readOnly = [readFileTool, listFilesTool, globTool, grepTool, getCurrentContextTool].includes(tool)
+    const mode = subagentTools.includes(tool) ? 'subagent' : readOnly ? 'readonly' : 'serial'
+    registry.register(trustBuiltinTool(tool, mode))
     if (registry.has(tool.name)) builtinTools.push(tool.name)
   }
 
@@ -185,11 +190,12 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   registerBuiltinSkills(registry)
   skillTools.push(...registry.list().map(tool => tool.name))
 
-  // 2. 文件工具（read_file / write_file / list_files / delete_file / create_dir）
+  // 2. 文件工具（read_file / write_file / edit_file / list_files / delete_file / create_dir）
   // 支持格式：JSON, CSV, XLSX, XLS, PDF, DOC, DOCX, 代码, 文本
   const fileTools = [
     readFileTool,
     writeFileTool,
+    editFileTool,
     listFilesTool,
     deleteFileTool,
     createDirTool,
@@ -254,7 +260,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   }
 
   createSkillTools(externalSkills, { osmMode: mode, hiddenSkills: osmHiddenSkills }).forEach((tool) => {
-    registry.register(tool)
+    registry.register(trustBuiltinTool(tool, 'readonly'))
     if (registry.has(tool.name)) skillTools.push(tool.name)
   })
   if (shouldRegister('run_skill_script')) {
@@ -302,7 +308,8 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
     registry,
     (name: string) => (profile !== 'code' || isCodeProfileTool({ name })) &&
       (explicitAllowedTools === undefined || explicitAllowedTools.includes(name)),
-    opts.inlineMcpServers
+    opts.inlineMcpServers,
+    opts.securityContext
   )
 
   // 17. Agent 系统工具 - 按 allowedTools 过滤；注入 inlineAgents 供查询

@@ -553,7 +553,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
   ): Promise<{ preTokens: number; postTokens: number }> {
     const db = getDb()
     const result = await db.execute({
-      sql: `SELECT message_id, role, content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at
+      sql: `SELECT message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id, model_id, metadata
             FROM conversations
             WHERE tenant_id = ? AND session_id = ?
             ORDER BY created_at ASC, id ASC`,
@@ -592,7 +592,9 @@ export class SQLiteConversationHistory implements ConversationHistory {
 
     // 事务化重建：clear + summary + recent，任一失败整体回滚。
     // ⚠️ 不经 this.clear()：它是独立连接的非事务删除，失败时已无法回滚。
-    const summaryMsg: Message = { role: 'system', content: summaryContent, tokens: summaryTokens }
+    // Keep the summary before the retained rows while preserving their original timestamps.
+    const summaryMsg: Message = { role: 'system', content: summaryContent, tokens: summaryTokens,
+      createdAt: olderMessages.at(-1)?.createdAt ?? Date.now() }
     const rebuilt: Message[] = [summaryMsg, ...recentMessages]
     const tx = await db.transaction('write')
     try {
@@ -603,8 +605,8 @@ export class SQLiteConversationHistory implements ConversationHistory {
       for (const msg of rebuilt) {
         await tx.execute({
           sql: `INSERT INTO conversations
-                (tenant_id, session_id, conversation_id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, model_id, metadata)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                (tenant_id, session_id, conversation_id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, model_id, metadata, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           args: [
             ctx.tenantId,
             ctx.sessionId,
@@ -621,6 +623,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
             msg.usage ? JSON.stringify(msg.usage) : null,
             msg.modelId ?? null,
             msg.metadata ? JSON.stringify(msg.metadata) : null,
+            (msg.createdAt ?? Date.now()) / 1000,
           ],
         })
       }

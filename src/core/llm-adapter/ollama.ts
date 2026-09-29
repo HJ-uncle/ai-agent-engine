@@ -25,9 +25,13 @@ export class OllamaAdapter implements LLMAdapter {
     for (const msg of messages) {
       if (msg.role === 'tool') {
         result.push({ role: 'user', content: `Tool result: ${msg.content}` })
-      } else if (msg.role !== 'system') {
+      } else {
         const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
-        result.push({ role: msg.role, content })
+        // Keep compacted history as conversation context, separate from the
+        // system prompt (some Ollama templates only retain one system message).
+        result.push(msg.role === 'system'
+          ? { role: 'user', content: `[Historical context]\n${content}` }
+          : { role: msg.role, content })
       }
     }
     return result
@@ -55,7 +59,7 @@ export class OllamaAdapter implements LLMAdapter {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody), signal: options?.signal,
       })
-      if (!response.ok) throw new Error(`Ollama API error: ${response.status} ${response.statusText}`)
+      if (!response.ok) throw Object.assign(new Error(`Ollama API error: ${response.status} ${response.statusText}`), { status: response.status })
       return await response.json() as { model: string; message: { content: string }; prompt_eval_count?: number; eval_count?: number; done_reason?: string }
     }, { ...options, model: requestBody.model, requestInputTokenEstimate: Math.max(options?.requestInputTokenEstimate ?? 0, estimateTokens(JSON.stringify({ messages: requestBody.messages, tools: requestBody.tools, system: requestBody.system }))) }, this.provider, requestBody.model,
       data => data.prompt_eval_count === undefined && data.eval_count === undefined ? undefined : { promptTokens: data.prompt_eval_count ?? 0, completionTokens: data.eval_count ?? 0 })
@@ -92,7 +96,8 @@ export class OllamaAdapter implements LLMAdapter {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody), signal: options?.signal,
       })
-      if (!response.ok || !response.body) throw new Error(`Ollama API error: ${response.status}`)
+      if (!response.ok) throw Object.assign(new Error(`Ollama API error: ${response.status}`), { status: response.status })
+      if (!response.body) throw Object.assign(new Error('Ollama stream response has no body'), { code: 'INCOMPLETE_STREAM', retryable: true })
       const reader = response.body.getReader()
       return (async function* () {
         const decoder = new TextDecoder()
@@ -109,7 +114,8 @@ export class OllamaAdapter implements LLMAdapter {
         } finally { await reader.cancel().catch(() => {}); reader.releaseLock() }
       })()
     }, { ...options, model: requestBody.model, requestInputTokenEstimate: Math.max(options?.requestInputTokenEstimate ?? 0, estimateTokens(JSON.stringify({ messages: requestBody.messages, tools: requestBody.tools, system: requestBody.system }))) }, this.provider, requestBody.model,
-      (data): RequestAttemptUsage | undefined => data.prompt_eval_count === undefined && data.eval_count === undefined ? undefined : { promptTokens: data.prompt_eval_count ?? 0, completionTokens: data.eval_count ?? 0 })
+      (data): RequestAttemptUsage | undefined => data.prompt_eval_count === undefined && data.eval_count === undefined ? undefined : { promptTokens: data.prompt_eval_count ?? 0, completionTokens: data.eval_count ?? 0 },
+      data => data.done === true)
     let terminal: Frame | undefined
     for await (const data of observed) {
       if (data.message?.content) yield { content: data.message.content, done: false }
