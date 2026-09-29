@@ -39,6 +39,7 @@ import { initMemoryDb, closeMemoryDb, MEMORY_SCHEMA, MemoryConsolidator } from '
 import { systemConfigStore } from './storage/sqlite/system-config.js'
 import { loadAetherConfig, applyAetherConfigToEnv, loadManagedConfig } from './core/aether-config.js'
 import { networkInterfaces } from 'node:os'
+import { commandJobs } from './core/command-jobs/index.js'
 
 const PORT = parseInt(process.env.PORT ?? '12323', 10)
 const HOST = process.env.HOST ?? '0.0.0.0'
@@ -128,6 +129,7 @@ async function main() {
       logger.info({ signal }, 'Shutting down...')
       consolidator.stopDaemon()
       skillsRegistry.stop()
+      await commandJobs.shutdown('Engine shutdown')
       closeMemoryDb()
       await server.close()
       process.exit(0)

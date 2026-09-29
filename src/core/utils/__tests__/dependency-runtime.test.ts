@@ -5,6 +5,9 @@ import os from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { createClient, type Client } from '@libsql/client'
+import * as database from '../../../storage/sqlite/db.js'
+import { commandJobs } from '../../command-jobs/index.js'
 import type { AgentContext } from '../../agent-context/index.js'
 import { WorkspaceManager } from '../../../workspace/manager.js'
 import { createPool } from '../concurrency-pool.js'
@@ -22,6 +25,7 @@ let tempRoot: string
 let project: string
 let scratch: string
 let ctx: AgentContext
+let commandDb: Client
 beforeEach(() => {
   tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-deps-'))
   project = path.join(tempRoot, 'project')
@@ -29,9 +33,13 @@ beforeEach(() => {
   fs.mkdirSync(project, { recursive: true })
   state.userDir = path.join(tempRoot, 'user')
   state.mode = 'safe'
+  commandDb = createClient({ url: 'file::memory:' })
+  vi.spyOn(database, 'getDb').mockReturnValue(commandDb)
   ctx = { tenantId: 't', sessionId: 's', workspaceDir: scratch, scratchDir: scratch, projectRoot: project, cwd: project, workspacePaths: [project] } as AgentContext
 })
-afterEach(() => {
+afterEach(async () => {
+  await commandJobs.cancelScope({ tenantId: 't', sessionId: 's' }, 'test_cleanup')
+  commandDb.close()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
   const resolved = path.resolve(tempRoot)

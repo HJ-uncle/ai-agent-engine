@@ -17,7 +17,7 @@ import {
   writeFileTool,
   editFileTool,
 } from './file/index.js'
-import { cmdTool } from './cmd/index.js'
+import { cmdTool, commandJobTools } from './cmd/index.js'
 import { askUserTool } from './ask-user/index.js'
 import { createMemoryTools } from './memory/index.js'
 import { registerMCPTools } from './mcp/loader.js'
@@ -130,7 +130,8 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
 
   /** Helper: register a tool into the registry and track it as builtin */
   const registerBuiltin = (tool: Tool) => {
-    const readOnly = [readFileTool, listFilesTool, globTool, grepTool, getCurrentContextTool].includes(tool)
+    const readOnly = [readFileTool, listFilesTool, globTool, grepTool, getCurrentContextTool,
+      ...commandJobTools.filter(candidate => candidate.name === 'command_output')].includes(tool)
     const mode = subagentTools.includes(tool) ? 'subagent' : readOnly ? 'readonly' : 'serial'
     registry.register(trustBuiltinTool(tool, mode))
     if (registry.has(tool.name)) builtinTools.push(tool.name)
@@ -206,6 +207,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
 
   // 3. 命令行工具
   if (shouldRegister(cmdTool.name)) registerBuiltin(cmdTool)
+  commandJobTools.forEach(tool => { if (shouldRegister(tool.name)) registerBuiltin(tool) })
 
   // 4. 向用户提问工具 - 始终注册，交互需要
   registerBuiltin(askUserTool)

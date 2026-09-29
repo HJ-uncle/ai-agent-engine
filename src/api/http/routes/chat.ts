@@ -23,6 +23,7 @@ import { rootRunStore, type RootRun, type RootPending } from '../../../storage/r
 import { persistedTurnProjection } from '../chat-snapshot.js'
 import { TodoStore } from '../../../storage/todo/index.js'
 import { ChangeStore } from '../../../storage/changes/index.js'
+import { commandJobs } from '../../../core/command-jobs/index.js'
 
 /**
  * 主 Agent 的子代理委派纪律（对齐 wuzu-client codeAgent.ts 的「探索预算」章节）。
@@ -305,7 +306,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     const { sessionId } = request.body
     const tenantId = getTenantId(request)
-    const cancelled = await withHistoryLock(tenantId, async () => {
+    let cancelled = await withHistoryLock(tenantId, async () => {
       const key = makeAbortKey(tenantId, sessionId)
       cancellationEpochs.set(key, (cancellationEpochs.get(key) ?? 0) + 1)
       let cancelled = abortActiveChat(tenantId, sessionId, 'Cancelled by user via /chat/cancel')
@@ -318,6 +319,8 @@ export async function chatRoutes(fastify: FastifyInstance) {
       abortActiveChat(tenantId, sessionId, 'Cancelled by user via /chat/cancel')
       return cancelled
     })
+    const jobs = await commandJobs.cancelScope({ tenantId, sessionId }, 'Cancelled by user via /chat/cancel')
+    cancelled ||= jobs.length > 0
     return reply.code(200).send({
       code: 200,
       message: cancelled ? 'OK' : 'No active chat for this session',
@@ -1319,9 +1322,10 @@ ${workspaceInfo}${codegraphBlock}
       const result = await withHistoryLock(tenantId, async () => {
         // An admission can begin while this reader was queued for the history lock.
         if (pendingAdmissions.get(key)?.size) return null
-        const [history, runs, todos, changes] = await Promise.all([
+        const [history, runs, todos, changes, jobs] = await Promise.all([
           createConversationHistory().getFullHistory({ tenantId, sessionId }), rootRunStore.list(tenantId, sessionId),
           new TodoStore().list(tenantId, sessionId), new ChangeStore().list(tenantId, sessionId),
+          commandJobs.list({ tenantId, sessionId }),
         ])
         const bus = activeStreams.get(key)
         if (bus) {
@@ -1330,11 +1334,11 @@ ${workspaceInfo}${codegraphBlock}
           const run = snapshot.projection.find(payload => payload.run)?.run as RootRun | undefined
           if (run && runs.at(-1)?.runId === run.runId) {
             const projectedRuns = [...runs.filter(item => item.runId !== run.runId), run].sort((a, b) => a.seq - b.seq)
-            return { ...snapshot, source: 'live', sessionId, run, runs: projectedRuns, history, todos, changes }
+            return { ...snapshot, source: 'live', sessionId, run, runs: projectedRuns, history, todos, changes, commandJobs: jobs }
           }
         }
         return { schemaVersion: 1, source: 'persisted', sessionId, eventId: null, finished: true,
-          projection: [], run: runs.at(-1), runs, history, todos, changes }
+          projection: [], run: runs.at(-1), runs, history, todos, changes, commandJobs: jobs }
       })
       if (result) return reply.send(success(result))
     }

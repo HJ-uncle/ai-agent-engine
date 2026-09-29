@@ -30,6 +30,8 @@ import { tenantRoutes } from './routes/tenant.js'
 import { flowRoutes } from './routes/flows/index.js'
 import { skillImportRoutes } from './routes/skill-imports.js'
 import { utilityRoutes } from './routes/utility.js'
+import { commandJobRoutes } from './routes/command-jobs.js'
+import { commandJobs } from '../../core/command-jobs/index.js'
 import { cronScheduler } from '../../scheduler/cron-scheduler.js'
 import { globalRequestMiddleware, loggingMiddleware, authMiddlewareHook, WHITELIST_PATHS } from './middleware.js'
 import fastifyWebsocket from '@fastify/websocket'
@@ -57,6 +59,8 @@ export async function buildServer() {
   fastify.addHook('onRequest', globalRequestMiddleware)
   fastify.addHook('onRequest', loggingMiddleware)
   fastify.addHook('onRequest', authMiddlewareHook)
+  await commandJobs.initialize()
+  fastify.addHook('onClose', async () => { await commandJobs.shutdown('Engine shutdown') })
 
   // Global error handler
   fastify.setErrorHandler(async (error, request, reply) => {
@@ -105,6 +109,7 @@ export async function buildServer() {
     await api.register(flowRoutes)
     await api.register(skillImportRoutes)
     await api.register(utilityRoutes)
+    await api.register(commandJobRoutes)
   }, { prefix: '/api/v1' })
 
   // Health and metrics at root level

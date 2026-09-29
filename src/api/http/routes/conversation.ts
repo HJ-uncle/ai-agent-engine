@@ -12,6 +12,7 @@ import { subagentRoutes } from './subagent.js'
 import { rootRunStore } from '../../../storage/root-runs/index.js'
 import { withHistoryLock, invalidateSessionHistory, withSessionHistoryMutation, bindHistoryGeneration } from '../../../storage/conversation/serialization.js'
 import type { Message } from '../../../core/agent-context/types.js'
+import { commandJobs } from '../../../core/command-jobs/index.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
@@ -79,6 +80,7 @@ export async function conversationRoutes(fastify: FastifyInstance) {
       })
       if (initial === null) return null
       await getSubagentRunner().cancelRunsForParent(tenantId, sessionId)
+      await commandJobs.cancelScope({ tenantId, sessionId }, reason)
       return withHistoryLock(tenantId, async () => {
         // Re-read after child settlement: no stale message/turn snapshot may drive deletion.
         const messages = await select()
@@ -113,14 +115,17 @@ export async function conversationRoutes(fastify: FastifyInstance) {
     await projectPendingSubagents(history, tenantId)
     const messages = await history.getFullHistory({ tenantId, sessionId })
     const subagentRuns = await getSubagentStore().listRunsForParent(tenantId, sessionId)
+    const jobs = await commandJobs.list({ tenantId, sessionId })
     for (const message of messages) {
       const run = subagentRuns.find(item => item.parentToolCallId === message.toolCallId)
       if (run) message.metadata = { ...message.metadata, subagent: run, success: run.status === 'succeeded', error: run.error?.message }
+      const job = jobs.find(item => item.toolCallId && item.toolCallId === message.toolCallId && item.ownerSessionId === sessionId)
+      if (job) message.metadata = { ...message.metadata, commandJob: job }
     }
     const sessionUsage = await history.getSessionUsage({ tenantId, sessionId })
     
     const response = paginateArray(messages, current, pageSize)
-    response.metadata = { sessionUsage, subagentRuns, runs: await rootRunStore.list(tenantId, sessionId) }
+    response.metadata = { sessionUsage, subagentRuns, runs: await rootRunStore.list(tenantId, sessionId), commandJobs: jobs }
     
     return reply.code(200).send(response)
   })
