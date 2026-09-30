@@ -1,0 +1,17 @@
+{
+  "status": "failed",
+  "scope": "First supplementary native packaged-runtime probe; separate from successful prepare/verify smoke",
+  "exitCode": -1073741819,
+  "windowsException": "0xC0000005",
+  "stdout": "",
+  "resultJsonGenerated": false,
+  "cwd": "D:\\dev\\ai-agent-engine",
+  "subsequentVerification": {
+    "packagedDirectory": "14/14 passed",
+    "originalDirectory": "14/14 passed",
+    "isolatedModuleImports": "two child processes exited 0",
+    "windowsApplicationErrorMatch": false
+  },
+  "cause": "Not established; subsequent probes did not reproduce. Do not attribute to cwd or claim this native exception was fixed.",
+  "temporaryFixtureCleanedAfterPathAndProcessChecks": true
+}

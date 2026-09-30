@@ -1,0 +1,13 @@
+
+ RUN  v2.1.9 D:/dev/ai-agent-engine
+
+ ✓ src/tools/codegraph/__tests__/codegraph-runtime.test.ts (3 tests) 1452ms
+   ✓ codegraph installed runtime integration > creates a persistent index and resolves actual symbols, calls and impact through the tool 464ms
+   ✓ codegraph installed runtime integration > creates and rebuilds via HTTP and exposes newly indexed source through the shared tool 791ms
+ ✓ src/tools/codegraph/__tests__/codegraph-module.test.ts (7 tests) 3ms
+
+ Test Files  2 passed (2)
+      Tests  10 passed (10)
+   Start at  16:11:21
+   Duration  2.09s (transform 100ms, setup 0ms, collect 259ms, tests 1.45s, environment 0ms, prepare 97ms)
+

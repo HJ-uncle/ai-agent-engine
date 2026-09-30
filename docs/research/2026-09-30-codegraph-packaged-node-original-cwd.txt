@@ -1,0 +1,16 @@
+[runtime] D:\dev\aether-code\resources\engine\win32-x64 Node 24.20.0
+[passed] compiled native ESM loader resolves actual installed SDK
+[passed] screenshot status action reports unindexed without module failure
+[passed] actual HTTP status uses the same loader
+[passed] agent index action parses real TypeScript into SQLite
+[passed] agent status returns actual graph data
+[passed] agent files returns actual graph data
+[passed] agent search returns actual graph data
+[passed] agent callers returns actual graph data
+[passed] agent callees returns actual graph data
+[passed] agent impact returns actual graph data
+[passed] closed graph reopens with persisted rows
+[passed] prompt detector finds the real index
+[passed] HTTP rebuild updates the actual indexed files
+[passed] agent can query symbols added by HTTP rebuild
+{"status":"passed","checks":14,"node":"24.20.0","fixtureRemoved":true,"output":"D:\\dev\\ai-agent-engine\\docs\\research\\2026-09-30-codegraph-packaged-node-original-cwd-result.json"}

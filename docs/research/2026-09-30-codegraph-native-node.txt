@@ -1,0 +1,1 @@
+{"status":"passed","checks":14,"node":"24.20.0","fixtureRemoved":true,"output":"D:\\dev\\ai-agent-engine\\docs\\research\\2026-09-30-codegraph-native-node-result.json"}

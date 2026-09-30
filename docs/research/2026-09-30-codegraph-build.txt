@@ -1,0 +1,26 @@
+
+> aether-engine@2.0.0 build
+> tsx scripts/build.ts
+
+node:os:306
+    throw new ERR_SYSTEM_ERROR(ctx);
+          ^
+
+SystemError [ERR_SYSTEM_ERROR]: A system error occurred: uv_os_get_passwd returned ENOMEM (not enough memory)
+    at Object.userInfo (node:os:306:11)
+    at file:///D:/dev/ai-agent-engine/node_modules/tsx/dist/temporary-directory-Du7LpLp9.mjs:1:659
+    at ModuleJob.run (node:internal/modules/esm/module_job:561:25)
+    at async node:internal/modules/esm/loader:647:26
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5) {
+  code: 'ERR_SYSTEM_ERROR',
+  info: {
+    errno: -4057,
+    code: 'ENOMEM',
+    message: 'not enough memory',
+    syscall: 'uv_os_get_passwd'
+  },
+  errno: [Getter/Setter],
+  syscall: [Getter/Setter]
+}
+
+Node.js v24.20.0

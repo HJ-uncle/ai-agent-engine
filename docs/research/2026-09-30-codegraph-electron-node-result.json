@@ -1,0 +1,27 @@
+{
+  "runtimeRoot": "D:\\dev\\ai-agent-engine",
+  "node": "22.22.1",
+  "electron": "39.8.10",
+  "executable": "D:\\dev\\aether-code\\node_modules\\electron\\dist\\electron.exe",
+  "fixture": "C:\\Users\\wb.xielin02\\AppData\\Local\\Temp\\aether-codegraph-native-cWESuc",
+  "checks": [
+    "compiled native ESM loader resolves actual installed SDK",
+    "screenshot status action reports unindexed without module failure",
+    "actual HTTP status uses the same loader",
+    "agent index action parses real TypeScript into SQLite",
+    "agent status returns actual graph data",
+    "agent files returns actual graph data",
+    "agent search returns actual graph data",
+    "agent callers returns actual graph data",
+    "agent callees returns actual graph data",
+    "agent impact returns actual graph data",
+    "closed graph reopens with persisted rows",
+    "prompt detector finds the real index",
+    "HTTP rebuild updates the actual indexed files",
+    "agent can query symbols added by HTTP rebuild"
+  ],
+  "status": "passed",
+  "network": "loopback fixture only",
+  "modelCalls": 0,
+  "fixtureRemoved": true
+}

@@ -1,9 +1,9 @@
 /**
  * codegraph 模块加载器（共享）
  *
- * 把 named-import 静默陷阱变成显式报错：
- * codegraph 是 CJS、引擎是 ESM，default import 拿到的是整个 module 对象
- * （openSync 为 undefined），必须用 named import 并断言关键方法存在。
+ * npm SDK 通过 module.exports = require(platformBundle) 转出 CJS 对象。
+ * 原生 Node ESM 不一定能推断出命名导出；default 则是整个 CJS exports，
+ * CodeGraph 类位于其 CodeGraph 属性中。两种入口均校验实际所需 API。
  */
 
 /** codegraph 实例的最小类型面（避免依赖其内部 .d.ts 的具体形态） */
@@ -69,14 +69,22 @@ export interface CgStatic {
   recreate(projectRoot: string): Promise<CgInstance>
 }
 
-/** 动态加载并断言 codegraph 模块（包缺失时不炸引擎启动，调用时才报错） */
-export async function loadCodeGraph(): Promise<CgStatic> {
-  const mod = (await import('@colbymchenry/codegraph')) as unknown as { CodeGraph?: CgStatic }
-  const CodeGraph = mod?.CodeGraph
-  if (!CodeGraph || typeof CodeGraph.openSync !== 'function' || typeof CodeGraph.isInitialized !== 'function') {
-    throw new Error(
-      'codegraph 模块加载异常：CodeGraph.openSync 不可用（可能以 default import 拿到了整个 module 对象，或包未正确安装）'
-    )
+/** Resolve native ESM and CJS namespace shapes without treating the module object as the class. */
+export function resolveCodeGraphModule(module: unknown): CgStatic {
+  const property = (value: unknown, key: string): unknown =>
+    value !== null && (typeof value === 'object' || typeof value === 'function')
+      ? Reflect.get(value, key) : undefined
+  const candidates = [property(module, 'CodeGraph'), property(property(module, 'default'), 'CodeGraph')]
+  const required = ['openSync', 'isInitialized', 'init', 'recreate'] as const
+  for (const candidate of candidates) {
+    if (candidate && required.every(method => typeof property(candidate, method) === 'function')) {
+      return candidate as CgStatic
+    }
   }
-  return CodeGraph
+  throw new Error('代码图组件接口不兼容：缺少 CodeGraph.openSync/isInitialized/init/recreate。请更新配套引擎运行时；无需修改项目或连接令牌。')
+}
+
+/** Load lazily: an unavailable optional component must not prevent engine startup. */
+export async function loadCodeGraph(): Promise<CgStatic> {
+  return resolveCodeGraphModule(await import('@colbymchenry/codegraph'))
 }

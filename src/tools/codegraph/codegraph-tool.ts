@@ -15,9 +15,8 @@ import { startIndexing, getIndexRunState, isIndexRunning } from './index-runner.
  *   - 查询类 action 全部只读；action=index 可触发建索引（产品化要求：
  *     终端用户不接触 CLI，允许用户对 Agent 说「给项目建索引」）
  *   - execute 内动态 import codegraph 包：包缺失时不炸引擎启动，优雅降级
- *   - codegraph 是 CJS、引擎是 ESM：必须用 named import（default import
- *     拿到的是整个 module 对象，openSync 为 undefined——静默陷阱），
- *     断言在 codegraph-module.ts 的 loadCodeGraph 内统一完成
+ *   - codegraph 的 CJS/ESM 导出差异由 codegraph-module.ts 统一解析与校验，
+ *     不把 default 上的整个模块对象误当成 CodeGraph 类
  *   - 图查询（callers/callees/impact）入参是 nodeId 而非符号名，传符号名
  *     会静默返回空 → 两步编排（searchNodes → nodeId → 图查询）封装在本工具内，
  *     LLM 只需传人类可读的符号关键词
