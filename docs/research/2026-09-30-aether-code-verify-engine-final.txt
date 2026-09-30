@@ -1,0 +1,5 @@
+
+> aether-code@1.0.0 verify:engine
+> .\resources\engine\win32-x64\runtime\node.exe .\resources\engine\win32-x64\verify-runtime.mjs
+
+{"verified":true,"node":"24.20.0","abi":"137","napi":"10","sqlite":true,"codegraph":true,"pty":true,"typescript":"5.9.3","languageServer":"6.0.1","dependencies":32,"skillCount":7}

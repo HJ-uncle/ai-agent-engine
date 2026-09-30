@@ -1,0 +1,31 @@
+{
+  "Before": [
+    {
+      "Path": "D:\\dev\\aether-code\\out\\main\\index.js",
+      "Hash": "20638614DE3E6A65AB7297DB3EAE2492A773C6891B03469799B4C73073F96B52"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\preload\\index.js",
+      "Hash": "DC796F94E5FCADAE21E0A7BCA8C3C7C18056D1744F95A4FCAF03A7C7081DA959"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\index.html",
+      "Hash": "BC21B6577D7E40F495116139B8917749270B9ECA9E96D37514DC96E4AB019048"
+    }
+  ],
+  "After": [
+    {
+      "Path": "D:\\dev\\aether-code\\out\\main\\index.js",
+      "Hash": "20638614DE3E6A65AB7297DB3EAE2492A773C6891B03469799B4C73073F96B52"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\preload\\index.js",
+      "Hash": "DC796F94E5FCADAE21E0A7BCA8C3C7C18056D1744F95A4FCAF03A7C7081DA959"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\index.html",
+      "Hash": "BC21B6577D7E40F495116139B8917749270B9ECA9E96D37514DC96E4AB019048"
+    }
+  ],
+  "ExitCode": 0
+}

@@ -1,0 +1,77 @@
+
+Running 3 tests using 1 worker
+
+(node:56824) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok 1 e2e\narrow-chat-layout.spec.ts:200:5 › 默认宽度下顶栏按钮完整可见 (16ms)
+  x  2 e2e\narrow-chat-layout.spec.ts:205:5 › 面板压到最小宽度（280）后顶栏按钮不被裁掉 (445ms)
+(node:41040) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  x  3 e2e\narrow-chat-layout.spec.ts:220:5 › 窗口缩到最小尺寸时顶栏按钮依然完整 (676ms)
+
+
+  1) e2e\narrow-chat-layout.spec.ts:205:5 › 面板压到最小宽度（280）后顶栏按钮不被裁掉 ─────────────────────────────────
+
+    Error: 顶栏高度应随换行增长
+
+    expect(received).toBeGreaterThan(expected)
+
+    Expected: > 30
+    Received:   30
+
+      215 |   expectTopbarIntact(probe, '最小宽度面板')
+      216 |   // 面板只有 280px，按钮必然换行 —— 顶栏应当因此变高，而不是把按钮裁掉
+    > 217 |   expect(probe.bar.height, '顶栏高度应随换行增长').toBeGreaterThan(30)
+          |                                          ^
+      218 | })
+      219 |
+      220 | test('窗口缩到最小尺寸时顶栏按钮依然完整', async () => {
+        at D:\dev\aether-code\e2e\narrow-chat-layout.spec.ts:217:42
+
+    Error Context: test-results\narrow-chat-layout-面板压到最小宽度（280）后顶栏按钮不被裁掉\error-context.md
+
+    Error Context: test-results\narrow-chat-layout-面板压到最小宽度（280）后顶栏按钮不被裁掉\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\narrow-chat-layout-面板压到最小宽度（280）后顶栏按钮不被裁掉\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\narrow-chat-layout-面板压到最小宽度（280）后顶栏按钮不被裁掉\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2) e2e\narrow-chat-layout.spec.ts:220:5 › 窗口缩到最小尺寸时顶栏按钮依然完整 ──────────────────────────────────────
+
+    Error: 最小窗口下顶栏高度应随换行增长
+
+    expect(received).toBeGreaterThan(expected)
+
+    Expected: > 30
+    Received:   30
+
+      242 |   const narrowProbe = await probeTopbar(page)
+      243 |   expectTopbarIntact(narrowProbe, '最小窗口 + 最小宽度面板')
+    > 244 |   expect(narrowProbe.bar.height, '最小窗口下顶栏高度应随换行增长').toBeGreaterThan(30)
+          |                                                     ^
+      245 | })
+      246 |
+        at D:\dev\aether-code\e2e\narrow-chat-layout.spec.ts:244:53
+
+    Error Context: test-results\narrow-chat-layout-窗口缩到最小尺寸时顶栏按钮依然完整\error-context.md
+
+    Error Context: test-results\narrow-chat-layout-窗口缩到最小尺寸时顶栏按钮依然完整\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\narrow-chat-layout-窗口缩到最小尺寸时顶栏按钮依然完整\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\narrow-chat-layout-窗口缩到最小尺寸时顶栏按钮依然完整\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2 failed
+    e2e\narrow-chat-layout.spec.ts:205:5 › 面板压到最小宽度（280）后顶栏按钮不被裁掉 ──────────────────────────────────
+    e2e\narrow-chat-layout.spec.ts:220:5 › 窗口缩到最小尺寸时顶栏按钮依然完整 ───────────────────────────────────────
+  1 passed (4.6s)
+
+EXIT_CODE=1

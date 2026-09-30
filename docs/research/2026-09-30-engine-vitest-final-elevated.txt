@@ -1,0 +1,388 @@
+
+ RUN  v2.1.9 D:/dev/ai-agent-engine
+
+ ✓ src/core/agent-loop/__tests__/react.test.ts (23 tests) 30ms
+ ✓ src/api/http/routes/__tests__/changes-revert.test.ts (25 tests) 1085ms
+   ✓ D2 guarded batch revert > lists and reverts the complete server scope beyond 200 operations 678ms
+ ✓ src/core/stream-pipeline/__tests__/stream-bus.test.ts (26 tests) 9ms
+ ✓ src/api/http/routes/__tests__/command-jobs.test.ts (14 tests) 17643ms
+   ✓ D7 command job HTTP and history lifecycle > conceals other tenants and sessions across list, status, output, and cancellation without stopping their process 1343ms
+   ✓ D7 command job HTTP and history lifecycle > awaits real process cancellation and returns the same terminal result on duplicate stop 1406ms
+   ✓ D7 command job HTTP and history lifecycle > chat stop reaches root and child-owned jobs after the model ended, without stopping another session 3127ms
+   ✓ D7 command job HTTP and history lifecycle > history mutation clear settles background processes before deleting history 1426ms
+   ✓ D7 command job HTTP and history lifecycle > history mutation turn settles background processes before deleting history 1416ms
+   ✓ D7 command job HTTP and history lifecycle > history mutation message settles background processes before deleting history 1408ms
+   ✓ D7 command job HTTP and history lifecycle > history mutation truncate settles background processes before deleting history 1480ms
+   ✓ D7 command job HTTP and history lifecycle > history mutation session settles background processes before deleting history 1439ms
+   ✓ D7 command job HTTP and history lifecycle > a foreign turn deletion does not stop the real owner job or mutate its history 1279ms
+   ✓ D7 command job HTTP and history lifecycle > closing the real HTTP server waits for owned background processes to stop 1402ms
+ ✓ src/core/agent-loop/__tests__/react-streaming-context.test.ts (19 tests) 17ms
+ ✓ src/core/command-jobs/__tests__/manager.test.ts (15 tests) 14611ms
+   ✓ D7 durable command job lifecycle > denies foreign 'tenant' reads and cancellation without disturbing the real owner 1238ms
+   ✓ D7 durable command job lifecycle > denies foreign 'session' reads and cancellation without disturbing the real owner 1210ms
+   ✓ D7 durable command job lifecycle > denies foreign 'root run' reads and cancellation without disturbing the real owner 1208ms
+   ✓ D7 durable command job lifecycle > denies foreign 'owner session' reads and cancellation without disturbing the real owner 1195ms
+   ✓ D7 durable command job lifecycle > denies foreign 'owner run' reads and cancellation without disturbing the real owner 1233ms
+   ✓ D7 durable command job lifecycle > settles cancel only after the leader and its real descendant have exited 1563ms
+   ✓ D7 durable command job lifecycle > settles timeout only after the leader and its real descendant have exited 3444ms
+   ✓ D7 durable command job lifecycle > cancels a live descendant after its leader has exited and prevents further marker writes 1188ms
+   ✓ D7 durable command job lifecycle > bounds terminal history per session and globally while retaining active work and isolating other sessions 1627ms
+stdout | src/core/llm-adapter/__tests__/provider-attempts.test.ts > actual request attempts > does not retry a 400 body error even when its message contains a 5
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "inspect project"
+
+stdout | src/core/llm-adapter/__tests__/provider-attempts.test.ts > actual request attempts > records parameter compatibility retries as distinct requests and keeps cache tokens a subset
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "inspect project"
+
+stdout | src/core/llm-adapter/__tests__/provider-attempts.test.ts > actual request attempts > cancels openai before first delta without success or another request
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "inspect project"
+
+stdout | src/core/llm-adapter/__tests__/provider-attempts.test.ts > actual request attempts > retains openai output-limit termination and reported usage
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "inspect project"
+
+stdout | src/core/llm-adapter/__tests__/provider-attempts.test.ts > stream retry boundary > retries a 429 before the first delta and accounts for both physical attempts
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "inspect project"
+
+stdout | src/core/llm-adapter/__tests__/provider-attempts.test.ts > stream retry boundary > retries a 429 before the first delta and accounts for both physical attempts
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "inspect project"
+
+stdout | src/core/llm-adapter/__tests__/provider-attempts.test.ts > stream retry boundary > does not retry a 400 stream body error
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "inspect project"
+
+stdout | src/core/llm-adapter/__tests__/provider-attempts.test.ts > physical request input reservations > openai complete includes serialized system/tool input and preserves the larger caller estimate
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "inspect project"
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "inspect project"
+
+stdout | src/core/llm-adapter/__tests__/provider-attempts.test.ts > physical request input reservations > openai stream includes serialized system/tool input and preserves the larger caller estimate
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "inspect project"
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "inspect project"
+
+ ✓ src/core/llm-adapter/__tests__/provider-attempts.test.ts (19 tests) 33ms
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > returns an explicit empty persisted snapshot without creating a run
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > reopens ended conversations with persisted turns, attachment references, todos and file changes
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > recovers pending approval after the in-memory stream has gone without claiming its answer
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > preserves interrupted terminal outcomes after restart instead of presenting a resumable stream
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > scopes every persisted collection and live stream by tenant and session
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > pairs a live projection with its exact cursor and replays only later tool/result/terminal frames
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > rejects unknown cursors before SSE begins instead of silently replaying the entire turn
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > requires a new snapshot when the consumed cursor has fallen outside bounded replay
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > keeps live root state at the projection watermark when persistence has advanced ahead of delivery
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > cancels server execution and exposes its outcome without invoking the agent or model again
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > cancels a waiting run after SSE finished and advances the snapshot to the persisted terminal outcome
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > does not resurrect a deleted turn from a retained bus or replay its old frames
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+ ✓ src/api/http/routes/__tests__/chat-recovery.test.ts (12 tests) 375ms
+ ✓ src/auth/__tests__/instance-token-http.test.ts (17 tests) 1228ms
+ ✓ src/core/__tests__/osm.test.ts (50 tests) 10ms
+ ✓ src/core/subagent/__tests__/subagent-runtime.test.ts (16 tests) 1482ms
+stderr | src/core/llm-adapter/__tests__/fallback-stream.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+stdout | src/core/llm-adapter/__tests__/fallback-stream.test.ts > D5 actual OpenAI and factory fallback requests > reaches fallback through createAdapterFromResolved, preserves tool schema and records exactly one event pair per physical request
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "Read the requested project file."
+
+stdout | src/core/llm-adapter/__tests__/fallback-stream.test.ts > D5 actual OpenAI and factory fallback requests > reaches fallback through createAdapterFromResolved, preserves tool schema and records exactly one event pair per physical request
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "Read the requested project file."
+
+stdout | src/core/llm-adapter/__tests__/fallback-stream.test.ts > D5 actual OpenAI and factory fallback requests > reaches fallback through createAdapterFromResolved, preserves tool schema and records exactly one event pair per physical request
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "Read the requested project file."
+
+stdout | src/core/llm-adapter/__tests__/fallback-stream.test.ts > D5 actual OpenAI and factory fallback requests > reaches fallback through createAdapterFromResolved, preserves tool schema and records exactly one event pair per physical request
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "Read the requested project file."
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "Read the requested project file."
+
+stdout | src/core/llm-adapter/__tests__/fallback-stream.test.ts > D5 actual OpenAI and factory fallback requests > treats EOF without terminal marker as failed (partial delivery: false)
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "Read the requested project file."
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "Read the requested project file."
+
+stdout | src/core/llm-adapter/__tests__/fallback-stream.test.ts > D5 actual OpenAI and factory fallback requests > treats EOF without terminal marker as failed (partial delivery: true)
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "Read the requested project file."
+
+ ✓ src/core/llm-adapter/__tests__/fallback-stream.test.ts (25 tests) 7037ms
+   ✓ D5 actual OpenAI and factory fallback requests > reaches fallback through createAdapterFromResolved, preserves tool schema and records exactly one event pair per physical request 7024ms
+ ✓ src/storage/__tests__/dev-migration.test.ts (9 tests) 1770ms
+   ✓ D0 minimal model-state migration > exposes a standalone CLI with only counts on stdout and sanitized errors on stderr 699ms
+ ✓ src/core/stream-pipeline/__tests__/sse-sink.test.ts (17 tests) 7ms
+stderr | src/core/agent-loop/__tests__/edit-file-integration.test.ts > D6 exact-edit real runtime integration
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+ ✓ src/core/agent-loop/__tests__/edit-file-integration.test.ts (2 tests) 966ms
+ ✓ src/tools/file/__tests__/edit-file.test.ts (28 tests) 224ms
+ ✓ src/core/agent-loop/__tests__/tool-batch-settlement.test.ts (13 tests) 53ms
+stderr | src/tools/__tests__/tool-profile.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+ ✓ src/tools/__tests__/tool-profile.test.ts (14 tests) 26ms
+ ✓ src/api/http/routes/__tests__/conversation-destructive.test.ts (12 tests) 876ms
+ ✓ src/skills/__tests__/import-pipeline.test.ts (20 tests) 85ms
+ ✓ src/core/subagent/__tests__/subagent-projection.test.ts (10 tests) 1009ms
+ ✓ src/tools/file/__tests__/file-change-producers.test.ts (14 tests) 133ms
+stderr | src/skills/__tests__/skills-registry.test.ts > SkillsRegistry / SDK 真实部署路径 - 模拟 Wuzu Client 子进程 > 模拟 Wuzu Client 子进程：cwd=0.3.6/, 无 SKILLS_ROOT → 自动探测 0.3.6/SKILLs 并加载全部 OSM 技能
+[skip] SDK 部署路径不存在: C:\Users\wb.xielin02\AppData\Roaming\Wuzu Client Dev\agent-engine\0.3.6
+
+ ✓ src/skills/__tests__/skills-registry.test.ts (7 tests) 21ms
+ ✓ src/security/__tests__/code-boundaries.test.ts (11 tests) 135ms
+ ✓ src/core/subagent/__tests__/budget-fork.test.ts (12 tests) 5ms
+ ✓ src/tools/cmd/__tests__/command-jobs.test.ts (7 tests) 3001ms
+   ✓ D7 command tools with real policy and processes > cancels an owned background job while foreign sessions and sibling agents cannot inspect or stop it 1120ms
+   ✓ D7 command tools with real policy and processes > reports timeout as failed foreground work while retaining partial output 1628ms
+stdout | src/storage/root-runs/root-runs.test.ts > history serialization across instances > serializes compaction, concurrent appends and truncate across separately created consumers
+[jsonl-history] compressed session: 80 → 47 tokens
+
+ ✓ src/storage/root-runs/root-runs.test.ts (6 tests) 267ms
+ ✓ src/core/llm-adapter/__tests__/llm-adapter.test.ts (12 tests) 39ms
+stderr | src/tools/subagent/__tests__/subagent-project-overview.test.ts > subagent project overview with real search and history > searches, reads and summarizes above 500000 simulated cumulative tokens without an implicit cap
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+ ✓ src/tools/subagent/__tests__/subagent-project-overview.test.ts (1 test) 1351ms
+   ✓ subagent project overview with real search and history > searches, reads and summarizes above 500000 simulated cumulative tokens without an implicit cap 1181ms
+ ✓ src/lsp/__tests__/process-lifecycle.test.ts (6 tests) 9480ms
+   ✓ D8 diagnostic subprocess lifecycle > settles cancel after stopping the real child and grandchild and their file effects 2138ms
+   ✓ D8 diagnostic subprocess lifecycle > settles timeout after stopping the real child and grandchild and their file effects 4352ms
+   ✓ D8 diagnostic subprocess lifecycle > cancels a descendant retaining output pipes after its leader has already exited 1175ms
+   ✓ D8 diagnostic subprocess lifecycle > rejects combined output overflow and stops the process instead of accepting partial diagnostics 1568ms
+ ✓ src/tools/agent/__tests__/agent-tool.test.ts (13 tests) 4ms
+stderr | src/middleware/memory/__tests__/extractor.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+ ✓ src/middleware/memory/__tests__/extractor.test.ts (22 tests) 4ms
+stderr | src/core/utils/__tests__/dependency-runtime.test.ts > cancellation propagation > aborts the MCP HTTP request and does not convert provider isError into success
+[AuditLog] append failed: SQLITE_ERROR: no such table: security_audit_log
+
+stderr | src/core/utils/__tests__/dependency-runtime.test.ts > cancellation propagation > aborts the MCP HTTP request and does not convert provider isError into success
+[AuditLog] append failed: SQLITE_ERROR: no such table: security_audit_log
+
+ ✓ src/core/utils/__tests__/dependency-runtime.test.ts (5 tests) 1288ms
+   ✓ cancellation propagation > runs commands inside the project and actually terminates a cancelled process 1254ms
+ ✓ src/api/http/routes/__tests__/model-overrides.test.ts (13 tests) 145ms
+ ✓ src/api/http/routes/__tests__/subagent-routes.test.ts (10 tests) 1286ms
+stderr | src/api/http/routes/__tests__/skill-imports.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+stdout | src/api/http/routes/__tests__/skill-imports.test.ts > Skill Import API
+[CronScheduler] started, first tick in 26 s
+
+ ✓ src/api/http/routes/__tests__/skill-imports.test.ts (6 tests) 203ms
+stdout | src/storage/conversation/__tests__/history-compress-identity.test.ts > SQLite compaction preserves retained message identity > preserves current turn metadata, model, tool state and chronological order (retention: 4)
+[history] compress: 440 → 53 tokens (freed 387)
+
+stdout | src/storage/conversation/__tests__/history-compress-identity.test.ts > SQLite compaction preserves retained message identity > preserves current turn metadata, model, tool state and chronological order (retention: {"keepRecentTokens":40})
+[history] compress: 440 → 53 tokens (freed 387)
+
+ ✓ src/storage/conversation/__tests__/history-compress-identity.test.ts (2 tests) 424ms
+stderr | src/core/llm-adapter/__tests__/history-capabilities.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+stdout | src/core/llm-adapter/__tests__/history-capabilities.test.ts > compacted constraints reach the real provider request > openai complete and stream preserve history and system prompt
+[openai.ts] messagesToOpenAI result (2 messages):
+[0] system: "【历史上下文摘要】保留 CRLF；不要改动用户手写文件。"
+[1] user: "继续修复"
+[openai.ts] messagesToOpenAI result (2 messages):
+[0] system: "【历史上下文摘要】保留 CRLF；不要改动用户手写文件。"
+[1] user: "继续修复"
+
+ ✓ src/core/llm-adapter/__tests__/history-capabilities.test.ts (9 tests) 17ms
+stderr | src/tools/subagent/__tests__/subagent-tool.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+ ✓ src/tools/subagent/__tests__/subagent-tool.test.ts (9 tests) 17ms
+stdout | src/storage/conversation/__tests__/history-compress-tombstone.test.ts > compress() 与 tombstone 冲突 — Bug 复现与修复验证 > 【BUG 复现】compress 后 getFullHistory 不应返回空数组
+[history] compress: 2000 → 606 tokens (freed 1394)
+[test] after compress, message count: 7
+[test] roles: system, user, assistant, user, assistant, user, assistant
+
+stdout | src/storage/conversation/__tests__/history-compress-tombstone.test.ts > compress() 与 tombstone 冲突 — Bug 复现与修复验证 > compress 后 recentMessages 是原始最后 6 条
+[history] compress: 2000 → 602 tokens (freed 1398)
+
+ ✓ src/storage/conversation/__tests__/history-compress-tombstone.test.ts (2 tests) 3ms
+ ✓ src/lsp/__tests__/diagnostics.test.ts (6 tests) 66ms
+ ✓ src/core/stream-pipeline/__tests__/pipeline.test.ts (8 tests) 3ms
+ ✓ src/prompt-template/__tests__/store.test.ts (7 tests) 7ms
+ ✓ src/api/http/routes/__tests__/tool-profile-routes.test.ts (16 tests) 118ms
+ ✓ src/core/__tests__/osm-bootstrap.test.ts (10 tests) 3ms
+ ✓ src/skills/__tests__/osm-pack-discovery.test.ts (4 tests) 13ms
+ ✓ src/core/agent-context/__tests__/factory.test.ts (8 tests) 20ms
+ ✓ src/tools/search/__tests__/grep-tool.test.ts (14 tests) 1153ms
+ ✓ src/tools/subagent/__tests__/subagent-reviewer-access.test.ts (2 tests) 10ms
+ ✓ src/lsp/__tests__/typescript-runtime.test.ts (4 tests) 3236ms
+   ✓ D8 real TypeScript diagnostics > reports a real type mismatch with source coordinates 1051ms
+   ✓ D8 real TypeScript diagnostics > checks unsaved text at its original path so relative imports resolve without changing disk contents 926ms
+   ✓ D8 real TypeScript diagnostics > keeps the engine event loop responsive while a running TypeScript diagnostic is cancelled 1258ms
+stderr | src/api/http/routes/__tests__/compress.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+stdout | src/api/http/routes/__tests__/compress.test.ts > Conversation Compression API > should compress history and preserve data integrity
+[jsonl-history] compressed test-session: 0 → 11 tokens
+
+ ✓ src/api/http/routes/__tests__/compress.test.ts (2 tests) 124ms
+ ✓ src/security/__tests__/policy-engine.test.ts (8 tests) 642ms
+   ✓ policy-engine evaluation and approval > allows approved commands even if they are high risk 492ms
+ ✓ src/core/tool-registry/__tests__/registry.test.ts (8 tests) 4ms
+ ✓ src/storage/conversation/__tests__/history-maxTokens.test.ts (6 tests) 2ms
+stderr | src/api/http/routes/flows/__tests__/flow-executor.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+ ✓ src/api/http/routes/flows/__tests__/flow-executor.test.ts (5 tests) 3ms
+ ✓ src/runtime/__tests__/build-identity.test.ts (3 tests) 27ms
+stderr | docs/standard-response.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+stdout | docs/standard-response.test.ts > Standard API Responses > 1. 成功对象响应 (Success Object)
+[CronScheduler] started, first tick in 14 s
+
+ ✓ docs/standard-response.test.ts (5 tests) 264ms
+ ✓ src/api/http/routes/__tests__/workspace-file-lock.test.ts (2 tests) 223ms
+ ✓ src/skills/__tests__/external-loader.test.ts (3 tests) 11ms
+ ✓ src/lsp/__tests__/http-safety.test.ts (2 tests) 97ms
+ ✓ src/tools/get-context/__tests__/get-context-tool.test.ts (3 tests) 56ms
+ ✓ src/security/__tests__/sandbox.test.ts (7 tests) 2ms
+stderr | src/api/http/routes/__tests__/compress-perf.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+stdout | src/api/http/routes/__tests__/compress-perf.test.ts > Conversation Compression API Performance > should complete compression within 2 seconds
+[jsonl-history] compressed perf-session: 553 → 558 tokens
+
+stdout | src/api/http/routes/__tests__/compress-perf.test.ts > Conversation Compression API Performance > should complete compression within 2 seconds
+Compression took 523ms
+
+ ✓ src/api/http/routes/__tests__/compress-perf.test.ts (1 test) 1723ms
+   ✓ Conversation Compression API Performance > should complete compression within 2 seconds 1723ms
+stderr | src/tools/subagent/__tests__/subagent-capabilities.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+ ✓ src/tools/subagent/__tests__/subagent-capabilities.test.ts (7 tests) 3ms
+ ✓ src/lsp/__tests__/eslint.test.ts (4 tests) 4ms
+stderr | src/api/http/routes/__tests__/skill-imports-auth.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+stdout | src/api/http/routes/__tests__/skill-imports-auth.test.ts > Skill Import 权限守卫（AUTH_ENABLED=true）
+[CronScheduler] started, first tick in 8 s
+
+ ✓ src/api/http/routes/__tests__/skill-imports-auth.test.ts (2 tests) 216ms
+ ✓ src/core/llm-adapter/__tests__/resolved-model.test.ts (2 tests) 3ms
+ ✓ src/lsp/__tests__/http-cancellation.test.ts (1 test) 104ms
+stdout | src/storage/memory/__tests__/db.test.ts > memory database schema initialization > creates every graph table and dependent index when vector extensions are unavailable
+[memory-db] Schema initialization complete
+
+ ✓ src/storage/memory/__tests__/db.test.ts (1 test) 136ms
+ ✓ src/storage/knowledge/__tests__/scope.test.ts (2 tests) 11ms
+ ✓ src/lsp/__tests__/process.test.ts (4 tests) 2373ms
+   ✓ diagnostic CLI lifecycle > stops a running child and settles cancellation 1111ms
+   ✓ diagnostic CLI lifecycle > bounds an unresponsive diagnostic process and releases it on timeout 1186ms
+ ✓ src/core/command-jobs/__tests__/process-tree.test.ts (1 test) 2ms
+stderr | src/__tests__/encryption.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+ ✓ src/__tests__/encryption.test.ts (2 tests) 2ms
+
+ Test Files  73 passed (73)
+      Tests  713 passed (713)
+   Start at  02:51:16
+   Duration  99.62s (transform 1.07s, setup 0ms, collect 11.66s, tests 77.06s, environment 7ms, prepare 2.94s)
+
+
+EXIT_CODE=0

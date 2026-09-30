@@ -1,0 +1,47 @@
+
+Running 39 tests using 1 worker
+
+
+
+(node:13224) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[1/39] e2e\engine-host-contract.spec.ts:89:7 › D0 配对运行时与身份 › 端口被占用也启动指定产物，所有业务接口要求实例身份
+[2/39] e2e\engine-host-contract.spec.ts:112:7 › D0 配对运行时与身份 › 取消正在启动的引擎后不再出现迟到 ready，随后可重新启动
+[3/39] e2e\engine-host-contract.spec.ts:132:7 › D0 配对运行时与身份 › remote 的 HTTP200 不足以就绪，协议不匹配会清楚失败
+[4/39] e2e\engine-host-contract.spec.ts:143:7 › D0 配对运行时与身份 › 本机手动连接不强制预设token，但仍验证业务认证与协议
+[5/39] e2e\engine-host-contract.spec.ts:154:7 › D0 配对运行时与身份 › 本机引擎启用token时不绕过认证，配置匹配凭据后才就绪
+[6/39] e2e\engine-host-contract.spec.ts:168:7 › D0 配对运行时与身份 › 远端令牌可从设置加密保存，且不进入普通设置、快照或页面文本
+[7/39] e2e\engine-host-contract.spec.ts:200:7 › D0 配对运行时与身份 › remote 会话经过真实 SSE 返回，主进程隔离本地路径并拒绝文件接口
+[8/39] e2e\engine-host-contract.spec.ts:247:7 › D0 配对运行时与身份 › 连接身份已经变化时普通请求与 SSE 都在主进程拒绝，不发送远端 HTTP
+[9/39] e2e\engine-host-contract.spec.ts:279:7 › D0 配对运行时与身份 › 远端目录与连接一起固定：保存B不改变A，重连和自动启动才使用B目录
+[10/39] e2e\engine-source-isolation.spec.ts:29:5 › 相同会话ID的草稿、名称与占位会话按远端服务隔离
+[11/39] e2e\engine-source-isolation.spec.ts:49:5 › 断开使旧操作失效，进程重启保留endpoint偏好，空连接不覆盖存储来源
+[12/39] e2e\engine-source-isolation.spec.ts:64:5 › 旧模型请求完成后不能覆盖新源列表或清除新请求
+[13/39] e2e\engine-source-isolation.spec.ts:90:5 › embedded显式主进程会话选择优先，旧localStorage会话不能覆盖它
+[14/39] e2e\engine-source-isolation.spec.ts:97:5 › 远端选择仅留在endpoint映射，不持久化到embedded legacy字段
+[15/39] e2e\engine-storage-contract.spec.ts:46:5 › 旧加密密钥暂不可读时保留字节且不创建替代密钥
+[16/39] e2e\engine-storage-contract.spec.ts:59:5 › 旧密钥只复制一次，后续读取目标且不修改源文件
+[17/39] e2e\engine-storage-contract.spec.ts:74:5 › 损坏的当前密钥不能回退旧文件或被自动覆盖
+[18/39] e2e\engine-storage-contract.spec.ts:83:5 › 首次密钥保存后保持稳定，加密能力消失也不覆盖
+[19/39] e2e\engine-storage-contract.spec.ts:95:5 › 开发态只选择显式入口或同级dist，打包态忽略开发覆盖
+[20/39] e2e\engine-storage-contract.spec.ts:121:5 › 握手拒绝错误构建、旧协议、缺少code范围和伪健康信封
+[21/39] e2e\engine-storage-contract.spec.ts:144:5 › 普通HTTP与恢复SSE共用实例头和根路径规则
+[22/39] e2e\engine-storage-contract.spec.ts:155:5 › remote 放行服务端会话聊天，仍阻止客户端路径接口和未开放的改动操作
+[23/39] e2e\remote-connection-contract.spec.ts:8:5 › 手动本机开发地址可无token，非本机仍需明确凭据
+[24/39] e2e\remote-connection-contract.spec.ts:21:5 › 远端令牌在保存和环境变量入口使用同一请求头边界
+[25/39] e2e\remote-connection-contract.spec.ts:29:5 › 远端只开放明确的读取与会话执行接口，未授权修改仍拒绝
+[26/39] e2e\remote-connection-contract.spec.ts:78:5 › 远端目录按服务端语义校验，既有会话目录与空沙箱优先且损坏记录拒绝
+[27/39] e2e\remote-connection-contract.spec.ts:94:5 › 远端审批只携带关联标识与回答，原始工作区交给服务端恢复
+[28/39] e2e\remote-connection-contract.spec.ts:109:5 › 远端附件只接受真实上传登记，路径和类型取主进程登记值且拒绝跨源跨会话
+[29/39] e2e\remote-connection-contract.spec.ts:131:5 › 远端目录查询拒绝跨服务重定向，实例令牌不会送到第二台服务
+[30/39] e2e\remote-connection-contract.spec.ts:167:5 › 非文本远端消息在联网前被拒绝，结构化文件不能绕过附件登记
+[31/39] e2e\remote-token-settings-ui.spec.ts:346:7 › 远端令牌设置真实界面闭环 › 通过设置输入令牌并保存重启，真实鉴权后才进入就绪
+[32/39] e2e\remote-token-settings-ui.spec.ts:370:7 › 远端令牌设置真实界面闭环 › 远端会话、历史和变更可真实加载，输入框可用且无映射拦截红错
+[33/39] e2e\remote-token-settings-ui.spec.ts:414:7 › 远端令牌设置真实界面闭环 › 真实界面发送远端消息并显示 SSE 回答，继续会话保留服务端目录
+[34/39] e2e\remote-token-settings-ui.spec.ts:432:7 › 远端令牌设置真实界面闭环 › 普通与流式 IPC 都净化本地上下文，新会话目录显式配置且旧沙箱不被覆盖
+[35/39] e2e\remote-token-settings-ui.spec.ts:495:7 › 远端令牌设置真实界面闭环 › 页面 reload 后保持已配置且输入为空，重新握手仍能读取密文
+[36/39] e2e\remote-token-settings-ui.spec.ts:509:7 › 远端令牌设置真实界面闭环 › 完整应用重启后自动连接，令牌仍已配置且不回显
+[37/39] e2e\remote-token-settings-ui.spec.ts:521:7 › 远端令牌设置真实界面闭环 › 普通设置落盘失败时回滚密文和连接配置，不重启现有连接
+[38/39] e2e\remote-token-settings-ui.spec.ts:603:7 › 远端令牌设置真实界面闭环 › 替换为错误令牌时认证失败，恢复正确令牌后重新就绪
+[39/39] e2e\remote-token-settings-ui.spec.ts:614:7 › 远端令牌设置真实界面闭环 › 清除并重启后不发送旧令牌，完整应用重启也不会复活凭据
+  39 passed (12.7s)

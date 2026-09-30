@@ -1,0 +1,75 @@
+
+Running 24 tests using 1 worker
+
+
+
+(node:21924) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[1/24] e2e\engine-host-contract.spec.ts:70:7 › D0 配对运行时与身份 › 端口被占用也启动指定产物，所有业务接口要求实例身份
+[2/24] e2e\engine-host-contract.spec.ts:93:7 › D0 配对运行时与身份 › 取消正在启动的引擎后不再出现迟到 ready，随后可重新启动
+[3/24] e2e\engine-host-contract.spec.ts:113:7 › D0 配对运行时与身份 › remote 的 HTTP200 不足以就绪，协议不匹配会清楚失败
+[4/24] e2e\engine-host-contract.spec.ts:124:7 › D0 配对运行时与身份 › 本机手动连接不强制预设token，但仍验证业务认证与协议
+[5/24] e2e\engine-host-contract.spec.ts:135:7 › D0 配对运行时与身份 › 本机引擎启用token时不绕过认证，配置匹配凭据后才就绪
+[6/24] e2e\engine-host-contract.spec.ts:149:7 › D0 配对运行时与身份 › 远端令牌可从设置加密保存，且不进入普通设置、快照或页面文本
+[7/24] e2e\engine-host-contract.spec.ts:181:7 › D0 配对运行时与身份 › remote 正确握手后也明确拒绝无工作区映射的本地文件和聊天请求
+[8/24] e2e\engine-storage-contract.spec.ts:46:5 › 旧加密密钥暂不可读时保留字节且不创建替代密钥
+[9/24] e2e\engine-storage-contract.spec.ts:59:5 › 旧密钥只复制一次，后续读取目标且不修改源文件
+[10/24] e2e\engine-storage-contract.spec.ts:74:5 › 损坏的当前密钥不能回退旧文件或被自动覆盖
+[11/24] e2e\engine-storage-contract.spec.ts:83:5 › 首次密钥保存后保持稳定，加密能力消失也不覆盖
+[12/24] e2e\engine-storage-contract.spec.ts:95:5 › 开发态只选择显式入口或同级dist，打包态忽略开发覆盖
+[13/24] e2e\engine-storage-contract.spec.ts:121:5 › 握手拒绝错误构建、旧协议、缺少code范围和伪健康信封
+[14/24] e2e\engine-storage-contract.spec.ts:144:5 › 普通HTTP与恢复SSE共用实例头和根路径规则
+[15/24] e2e\engine-storage-contract.spec.ts:155:5 › remote 未有共享工作区约定时允许状态读取，不发送本地文件操作
+[16/24] e2e\remote-connection-contract.spec.ts:4:5 › 手动本机开发地址可无token，非本机仍需明确凭据
+[17/24] e2e\remote-connection-contract.spec.ts:17:5 › 远端令牌在保存和环境变量入口使用同一请求头边界
+[18/24] e2e\remote-connection-contract.spec.ts:25:5 › 远端历史和改动快照可读取，读取不会开放文件或修改请求
+[19/24] e2e\remote-token-settings-ui.spec.ts:280:7 › 远端令牌设置真实界面闭环 › 通过设置输入令牌并保存重启，真实鉴权后才进入就绪
+[20/24] e2e\remote-token-settings-ui.spec.ts:304:7 › 远端令牌设置真实界面闭环 › 远端只读会话、历史和变更可真实加载，界面没有映射拦截红错
+[21/24] e2e\remote-token-settings-ui.spec.ts:339:7 › 远端令牌设置真实界面闭环 › 页面 reload 后保持已配置且输入为空，重新握手仍能读取密文
+[22/24] e2e\remote-token-settings-ui.spec.ts:353:7 › 远端令牌设置真实界面闭环 › 完整应用重启后自动连接，令牌仍已配置且不回显
+[23/24] e2e\remote-token-settings-ui.spec.ts:365:7 › 远端令牌设置真实界面闭环 › 替换为错误令牌时认证失败，恢复正确令牌后重新就绪
+  1) e2e\remote-token-settings-ui.spec.ts:365:7 › 远端令牌设置真实界面闭环 › 替换为错误令牌时认证失败，恢复正确令牌后重新就绪 ──────────
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator:  locator('.app-settings .kv dd').filter({ hasText: /^error$/ })
+    Expected: visible
+    Received: hidden
+    Timeout:  20000ms
+
+    Call log:
+      - Expect "toBeVisible" locator('.app-settings .kv dd').filter({ hasText: /^error$/ }) with timeout 20000ms
+      - waiting for locator('.app-settings .kv dd').filter({ hasText: /^error$/ })
+        43 × locator resolved to <dd>error</dd>
+           - unexpected value "hidden"
+
+
+      171 | }
+      172 |
+    > 173 | async function expectPhase(phase: 'ready' | 'error'): Promise<void> {
+          |                                                                      ^
+      174 |   await expect.poll(async () => (await page.evaluate(
+      175 |     () => window.aether.engine.getSnapshot()
+      176 |   )).phase).toBe(phase)
+        at expectPhase (D:\dev\aether-code\e2e\remote-token-settings-ui.spec.ts:173:100)
+        at saveTokenAndExpect (D:\dev\aether-code\e2e\remote-token-settings-ui.spec.ts:218:3)
+        at D:\dev\aether-code\e2e\remote-token-settings-ui.spec.ts:366:5
+
+    Error Context: test-results\remote-token-settings-ui-远-a474f-闭环-替换为错误令牌时认证失败，恢复正确令牌后重新就绪\error-context.md
+
+    Error Context: test-results\remote-token-settings-ui-远-a474f-闭环-替换为错误令牌时认证失败，恢复正确令牌后重新就绪\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\remote-token-settings-ui-远-a474f-闭环-替换为错误令牌时认证失败，恢复正确令牌后重新就绪\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\remote-token-settings-ui-远-a474f-闭环-替换为错误令牌时认证失败，恢复正确令牌后重新就绪\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+[24/24] e2e\remote-token-settings-ui.spec.ts:373:7 › 远端令牌设置真实界面闭环 › 清除并重启后不发送旧令牌，完整应用重启也不会复活凭据
+  1 failed
+    e2e\remote-token-settings-ui.spec.ts:365:7 › 远端令牌设置真实界面闭环 › 替换为错误令牌时认证失败，恢复正确令牌后重新就绪 ───────────
+  1 did not run
+  22 passed (30.6s)

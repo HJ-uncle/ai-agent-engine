@@ -56,22 +56,15 @@ class TypeScriptAdapter implements LspAdapter {
 
   async diagnose(filePath: string, content?: string, signal?: AbortSignal): Promise<Diagnostic[]> {
     throwIfAborted(signal)
-    // 优先用 typescript 编程 API（更快、不需要起子进程）
+    // Run the CLI in a child first. This keeps large TypeScript programs and
+    // unsaved-file diagnostics interruptible; the synchronous compiler API is
+    // only a fallback for installations that do not ship tsc.js.
+    if (resolveTscJs()) return this.diagnoseWithCli(filePath, content, signal)
     const ts = loadTs()
-    if (ts) {
-      try {
-        const diags = await this.diagnoseWithApi(ts, filePath, content)
-        throwIfAborted(signal)
-        console.log(`[LSP][typescript] api: ${diags.length} diag(s), ts=${ts.version}`)
-        return diags
-      } catch (e: any) {
-        if (isAbortError(e, signal)) throw e
-        console.error(`[LSP][typescript] api failed: ${e?.message ?? e}`)
-      }
-    } else {
-      console.error('[LSP][typescript] loadTs() returned null, falling back to CLI')
-    }
-    return this.diagnoseWithCli(filePath, content, signal)
+    if (!ts) throw new Error('TypeScript CLI 不可用')
+    const diags = await this.diagnoseWithApi(ts, filePath, content)
+    throwIfAborted(signal)
+    return diags
   }
 
   private async diagnoseWithApi(ts: any, filePath: string, content?: string): Promise<Diagnostic[]> {
@@ -142,7 +135,9 @@ class TypeScriptAdapter implements LspAdapter {
       let target = filePath
       let cleanup: (() => void) | null = null
       if (content !== undefined) {
-        const tmp = path.join(os.tmpdir(), `lsp-${Date.now()}-${Math.random().toString(36).slice(2)}${path.extname(filePath)}`)
+        // Keep the overlay beside the original so relative imports resolve as
+        // they do in the editor. It is always removed in the finally block.
+        const tmp = path.join(path.dirname(filePath), `.aether-lsp-${Date.now()}-${Math.random().toString(36).slice(2)}${path.extname(filePath)}`)
         fs.writeFileSync(tmp, content, 'utf-8')
         target = tmp
         cleanup = () => { try { fs.unlinkSync(tmp) } catch {} }

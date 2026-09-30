@@ -1,0 +1,6 @@
+
+> aether-code@1.0.0 prepare:engine
+> node scripts/prepare-engine-runtime.mjs
+
+{"verified":true,"node":"24.20.0","abi":"137","napi":"10","sqlite":true,"codegraph":true,"pty":true,"typescript":"5.9.3","languageServer":"6.0.1","dependencies":32,"skillCount":7}
+{"target":"D:\\dev\\aether-code\\resources\\engine\\win32-x64","buildId":"sha256:ab93020802cca9fbb647689e34b839419bae9d8d03ff8ee41ed6e1b02e61741c","packages":414,"files":18709,"bytes":756249396,"node":{"node":"24.20.0","modules":"137","napi":"10","platform":"win32","arch":"x64"}}

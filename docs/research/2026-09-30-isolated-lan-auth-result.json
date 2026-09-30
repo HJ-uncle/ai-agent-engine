@@ -1,0 +1,278 @@
+{
+  "schemaVersion": 1,
+  "startedAt": "2026-09-30T03:36:10.251Z",
+  "scope": "same-machine HTTP to a real isolated engine bound to the LAN IPv4 address; NOT a cross-machine test",
+  "existingUserEndpoint": {
+    "host": "10.219.14.186",
+    "port": 12323,
+    "contacted": false,
+    "modified": false
+  },
+  "host": "10.219.14.186",
+  "runtime": {
+    "executable": "C:\\Program Files\\nodejs\\node.exe",
+    "version": "v24.20.0",
+    "entry": "D:\\dev\\ai-agent-engine\\dist\\main.js",
+    "manifest": {
+      "version": "2.0.0",
+      "buildId": "sha256:ab93020802cca9fbb647689e34b839419bae9d8d03ff8ee41ed6e1b02e61741c",
+      "protocolVersion": 1,
+      "toolProfiles": [
+        "general",
+        "code"
+      ],
+      "subagentSchemaVersion": 1
+    },
+    "entrySha256Before": "6f489a9514262b6559ffbb202b61311bef43edb38eff9d3dccc5c19615021339",
+    "authModuleSha256": "19213ea5bf8307cae460aaff55096fd484c88ac67312c9b651a6f74c958bf10e",
+    "observedIdentity": {
+      "version": "2.0.0",
+      "buildId": "sha256:ab93020802cca9fbb647689e34b839419bae9d8d03ff8ee41ed6e1b02e61741c",
+      "protocolVersion": 1,
+      "toolProfiles": [
+        "general",
+        "code"
+      ],
+      "subagentSchemaVersion": 1,
+      "instanceId": "4f4be6d9-b046-4ffe-8324-10c0f478d911"
+    },
+    "entrySha256After": "6f489a9514262b6559ffbb202b61311bef43edb38eff9d3dccc5c19615021339"
+  },
+  "isolation": {
+    "workingDirectory": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\isolated-lan-auth-1ffd827a-3aba-4905-b297-1a4004043f0b",
+    "fixtureRoot": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\isolated-lan-auth-1ffd827a-3aba-4905-b297-1a4004043f0b",
+    "inheritedEnvironment": "allowlist of OS runtime variables only; no inherited application credentials",
+    "instanceToken": "synthetic random 32-byte token, never recorded",
+    "encryptionKey": "synthetic random 32-byte key, never recorded",
+    "tenantAuthentication": "AUTH_ENABLED=false; verifies instance gate is independent",
+    "state": "fresh main/memory DB, HOME/USERPROFILE/APPDATA/LOCALAPPDATA/PROGRAMDATA, skills, MCP and workspace paths under fixture",
+    "modelRequests": 0,
+    "electronStarted": false
+  },
+  "probes": [
+    {
+      "method": "GET",
+      "path": "/api/v1/models",
+      "authentication": "none",
+      "expectedStatus": 401,
+      "expectedBusinessCode": 40100,
+      "status": 401,
+      "businessCode": 40100,
+      "responseBytes": 98,
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/models",
+      "authentication": "wrong",
+      "expectedStatus": 401,
+      "expectedBusinessCode": 40100,
+      "status": 401,
+      "businessCode": 40100,
+      "responseBytes": 98,
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/models",
+      "authentication": "correct",
+      "expectedStatus": 200,
+      "expectedBusinessCode": 200,
+      "status": 200,
+      "businessCode": 200,
+      "responseBytes": 73,
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/conversation/sessions",
+      "authentication": "none",
+      "expectedStatus": 401,
+      "expectedBusinessCode": 40100,
+      "status": 401,
+      "businessCode": 40100,
+      "responseBytes": 98,
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/conversation/sessions",
+      "authentication": "wrong",
+      "expectedStatus": 401,
+      "expectedBusinessCode": 40100,
+      "status": 401,
+      "businessCode": 40100,
+      "responseBytes": 98,
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/conversation/sessions",
+      "authentication": "correct",
+      "expectedStatus": 200,
+      "expectedBusinessCode": 200,
+      "status": 200,
+      "businessCode": 200,
+      "responseBytes": 73,
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/health",
+      "authentication": "none",
+      "expectedStatus": 200,
+      "expectedBusinessCode": 200,
+      "status": 200,
+      "businessCode": 200,
+      "responseBytes": 125,
+      "pass": true
+    },
+    {
+      "method": "HEAD",
+      "path": "/health",
+      "authentication": "wrong",
+      "expectedStatus": 200,
+      "expectedBusinessCode": null,
+      "status": 200,
+      "businessCode": null,
+      "responseBytes": 0,
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/meta",
+      "authentication": "none",
+      "expectedStatus": 200,
+      "expectedBusinessCode": 200,
+      "status": 200,
+      "businessCode": 200,
+      "responseBytes": 306,
+      "pass": true
+    },
+    {
+      "method": "HEAD",
+      "path": "/meta",
+      "authentication": "wrong",
+      "expectedStatus": 200,
+      "expectedBusinessCode": null,
+      "status": 200,
+      "businessCode": null,
+      "responseBytes": 0,
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/health?fixture=1",
+      "authentication": "none",
+      "expectedStatus": 200,
+      "expectedBusinessCode": 200,
+      "status": 200,
+      "businessCode": 200,
+      "responseBytes": 125,
+      "pass": true
+    },
+    {
+      "method": "HEAD",
+      "path": "/health?fixture=1",
+      "authentication": "wrong",
+      "expectedStatus": 200,
+      "expectedBusinessCode": null,
+      "status": 200,
+      "businessCode": null,
+      "responseBytes": 0,
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/meta?fixture=1",
+      "authentication": "none",
+      "expectedStatus": 200,
+      "expectedBusinessCode": 200,
+      "status": 200,
+      "businessCode": 200,
+      "responseBytes": 306,
+      "pass": true
+    },
+    {
+      "method": "HEAD",
+      "path": "/meta?fixture=1",
+      "authentication": "wrong",
+      "expectedStatus": 200,
+      "expectedBusinessCode": null,
+      "status": 200,
+      "businessCode": null,
+      "responseBytes": 0,
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/metrics",
+      "authentication": "none",
+      "expectedStatus": 401,
+      "expectedBusinessCode": 40100,
+      "status": 401,
+      "businessCode": 40100,
+      "responseBytes": 98,
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/metrics",
+      "authentication": "wrong",
+      "expectedStatus": 401,
+      "expectedBusinessCode": 40100,
+      "status": 401,
+      "businessCode": 40100,
+      "responseBytes": 98,
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/metrics",
+      "authentication": "correct",
+      "expectedStatus": 200,
+      "expectedBusinessCode": null,
+      "status": 200,
+      "businessCode": 500,
+      "responseBytes": 84,
+      "pass": true
+    },
+    {
+      "method": "POST",
+      "path": "/health",
+      "authentication": "none",
+      "expectedStatus": 401,
+      "expectedBusinessCode": 40100,
+      "status": 401,
+      "businessCode": 40100,
+      "responseBytes": 98,
+      "pass": true
+    }
+  ],
+  "cleanup": {
+    "childExited": true,
+    "childExit": {
+      "code": null,
+      "signal": "SIGTERM"
+    },
+    "portReleased": true,
+    "entryUnchanged": true,
+    "fixtureRemoved": true
+  },
+  "port": 61742,
+  "ownedPid": 17640,
+  "status": "passed",
+  "finishedAt": "2026-09-30T03:36:11.633Z",
+  "passedProbes": 18,
+  "totalProbes": 18,
+  "assertionScope": "instance-authentication gate only; endpoint business functionality is asserted only where expectedBusinessCode is provided",
+  "observations": [
+    {
+      "endpoint": "/metrics",
+      "authentication": "correct",
+      "status": 200,
+      "businessCode": 500,
+      "finding": "Instance authentication admitted the request, but endpoint business execution returned an error. This does not establish metrics functionality."
+    }
+  ]
+}

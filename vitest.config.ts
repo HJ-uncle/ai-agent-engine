@@ -4,7 +4,12 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    exclude: ['**/node_modules/**', '**/dist/**', '**/e2e/**', 'multi-agent-console/e2e/**'],
+    // Scratch probes and the legacy multi-agent-console package have their
+    // own dependency/test runners.  Discovering them from the engine root
+    // makes `npm test` execute Playwright helpers and UI tests with the wrong
+    // dependency graph, producing false failures and hiding the engine
+    // regression result.
+    exclude: ['**/node_modules/**', '**/dist/**', '**/e2e/**', '**/.e2e-tmp/**', 'multi-agent-console/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov'],

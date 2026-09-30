@@ -1,0 +1,157 @@
+{
+  "startedAt": "2026-09-30T03:24:36.401Z",
+  "target": "http://10.219.14.186:12323",
+  "topology": "same-host LAN address; not cross-machine",
+  "transport": "real Electron preload IPC and main-process HTTP; no fake server",
+  "credentialSource": "synthetic environment token; no production secret read",
+  "authenticationEnforcementVerified": false,
+  "explicitRemoteMutations": 0,
+  "explicitSseSubscriptions": 0,
+  "actualSessionSelectedInUi": false,
+  "observationLimits": "Only GET requests; server handlers may initialize or migrate storage, project pending history, or discover MCP tools. Snapshot uses a fresh session to avoid clearing a live disconnect timer.",
+  "outputPolicy": "status, counts, and allowlisted metadata only; history screenshot masked",
+  "routes": [
+    {
+      "path": "/health",
+      "method": "GET",
+      "scope": "engine",
+      "ok": true,
+      "code": 200
+    },
+    {
+      "path": "/meta",
+      "method": "GET",
+      "scope": "engine",
+      "ok": true,
+      "code": 200,
+      "metadata": {
+        "version": "2.0.0",
+        "buildId": "sha256:ab93020802cca9fbb647689e34b839419bae9d8d03ff8ee41ed6e1b02e61741c",
+        "protocolVersion": 1,
+        "subagentSchemaVersion": 1,
+        "toolProfileCount": 2
+      }
+    },
+    {
+      "path": "/tools",
+      "method": "GET",
+      "scope": "engine",
+      "ok": true,
+      "code": 200,
+      "count": 25
+    },
+    {
+      "path": "/models",
+      "method": "GET",
+      "scope": "engine",
+      "ok": true,
+      "code": 200,
+      "count": 1
+    },
+    {
+      "path": "/conversation/sessions",
+      "method": "GET",
+      "scope": "engine",
+      "ok": true,
+      "code": 200,
+      "count": 5
+    },
+    {
+      "path": "/conversation/history",
+      "method": "GET",
+      "scope": "existing-session-read-only",
+      "ok": true,
+      "code": 200,
+      "count": 28
+    },
+    {
+      "path": "/chat/snapshot",
+      "method": "GET",
+      "scope": "fresh-observation-session",
+      "ok": true,
+      "code": 200,
+      "counts": {
+        "history": 0,
+        "changes": 0,
+        "runs": 0,
+        "todos": 0,
+        "projection": 0
+      },
+      "finished": true,
+      "source": "persisted"
+    },
+    {
+      "path": "/changes",
+      "method": "GET",
+      "scope": "existing-session-read-only",
+      "ok": true,
+      "code": 200,
+      "count": 0
+    },
+    {
+      "path": "/subagent/runs",
+      "method": "GET",
+      "scope": "existing-session-read-only",
+      "ok": true,
+      "code": 200,
+      "count": 1
+    },
+    {
+      "path": "/command-jobs",
+      "method": "GET",
+      "scope": "existing-session-read-only",
+      "ok": true,
+      "code": 200,
+      "counts": {
+        "jobs": 0
+      }
+    },
+    {
+      "path": "/security/mode",
+      "method": "GET",
+      "scope": "existing-session-read-only",
+      "ok": true,
+      "code": 200
+    },
+    {
+      "path": "/security/policies",
+      "method": "GET",
+      "scope": "engine",
+      "ok": true,
+      "code": 200,
+      "count": 21
+    }
+  ],
+  "errors": [],
+  "ui": {
+    "readyVisible": true,
+    "historyLoaded": true,
+    "visibleHistoryRows": 5,
+    "historyLoadErrors": 0,
+    "changesErrors": 0,
+    "sendDisabled": true,
+    "selectedSessionRemainedFreshObservation": true
+  },
+  "appOutputBytes": {
+    "stdout": 127,
+    "stderr": 1049
+  },
+  "rendererErrorCount": 0,
+  "build": {
+    "mainModifiedAt": "2026-09-30T03:20:01.416Z",
+    "mainSha256": "af5edd1c995612a0fea670e18733b83b8cd96b5975a268b69d5324439cd89789",
+    "rendererModifiedAt": "2026-09-30T03:20:27.441Z"
+  },
+  "engine": {
+    "phase": "ready",
+    "mode": "remote",
+    "baseUrl": "http://10.219.14.186:12323",
+    "adopted": false,
+    "pid": null
+  },
+  "existingSessionUsedForGetOnly": true,
+  "sessionCount": 5,
+  "screenshot": "D:\\dev\\ai-agent-engine\\docs\\research\\2026-09-30-lan-electron-evidence\\lan-electron-observe-YLuUbc\\lan-ready-history-masked.png",
+  "ok": true,
+  "finishedAt": "2026-09-30T03:24:38.331Z"
+}

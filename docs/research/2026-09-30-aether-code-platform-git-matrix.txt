@@ -1,0 +1,94 @@
+
+Running 19 tests using 1 worker
+
+(node:16672) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  x   1 e2e\git-service-matrix.spec.ts:81:5 › repository initialization, unborn HEAD and workspace access boundary (2.0s)
+(node:4064) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok  2 e2e\git-service-matrix.spec.ts:97:5 › status, index/worktree separation, batch operations, ignore, diff and hunk rollback (6.4s)
+  ok  3 e2e\git-service-matrix.spec.ts:128:5 › commit variants, local suggestion, immutable history, blame and file timeline (4.8s)
+  ok  4 e2e\git-service-matrix.spec.ts:156:5 › branch create/checkout/rename/delete and lightweight/annotated tags (2.9s)
+  ok  5 e2e\git-service-matrix.spec.ts:173:5 › stash push/pop/apply/drop/batch/clear and staged-only preservation (6.2s)
+  ok  6 e2e\git-service-matrix.spec.ts:198:5 › merge/rebase/cherry-pick/revert success and each conflict abort preserves original HEAD (6.8s)
+To C:\Users\wb.xielin02\AppData\Local\Temp\aether-git-matrix-z13E8m\remote-7.git
+   979f859..c9a5909  main -> main
+  ok  7 e2e\git-service-matrix.spec.ts:218:5 › local bare remote fetch/pull strategies/push/publish/sync/force/tags and clone progress (13.3s)
+  ok  8 e2e\git-service-matrix.spec.ts:259:5 › coverage inventory includes every Git invoke method through the preload bridge (3ms)
+  ok  9 e2e\platform-feature-matrix.spec.ts:40:7 › 平台 IPC 全功能矩阵 › FS create/read/write/stat/list/copy/rename preserve disk content and reject overwrite (46ms)
+  ok 10 e2e\platform-feature-matrix.spec.ts:68:7 › 平台 IPC 全功能矩阵 › FS binary/base64, oversize preview, text truncation and missing-file errors (345ms)
+  ok 11 e2e\platform-feature-matrix.spec.ts:79:7 › 平台 IPC 全功能矩阵 › FS attachments sanitize names, preserve bytes and avoid collisions (12ms)
+  ok 12 e2e\platform-feature-matrix.spec.ts:89:7 › 平台 IPC 全功能矩阵 › FS outside roots and sibling-prefix paths are rejected for all access operations (11ms)
+  x  13 e2e\platform-feature-matrix.spec.ts:104:7 › 平台 IPC 全功能矩阵 › FS junction cannot escape the authorized workspace (52ms)
+  -  14 e2e\platform-feature-matrix.spec.ts:112:40 › 平台 IPC 全功能矩阵 › search scan include/exclude/case/whole-word/regex and replacement
+  -  15 e2e\platform-feature-matrix.spec.ts:112:40 › 平台 IPC 全功能矩阵 › search git include/exclude/case/whole-word/regex and replacement
+  -  16 e2e\platform-feature-matrix.spec.ts:139:7 › 平台 IPC 全功能矩阵 › search query/preview/replace reject unauthorized roots without modifying outside data
+  -  17 e2e\platform-feature-matrix.spec.ts:150:7 › 平台 IPC 全功能矩阵 › settings update persists, preserves defaults and survives a full application restart
+  -  18 e2e\platform-feature-matrix.spec.ts:161:7 › 平台 IPC 全功能矩阵 › window maximize/restore/minimize IPC changes the actual BrowserWindow
+  -  19 e2e\platform-feature-matrix.spec.ts:172:7 › 平台 IPC 全功能矩阵 › PTY create/data/resize/exit/dispose or explicit environment capability failure
+
+
+  1) e2e\git-service-matrix.spec.ts:81:5 › repository initialization, unborn HEAD and workspace access boundary 
+
+    Error: unstage: {"success":false,"error":"fatal: could not resolve 'HEAD'"}
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: true
+    Received: false
+
+      35 | async function ok<K extends Method>(method: K, ...args: Parameters<AetherIdeApi['git'][K]>): Promise<Result<K>> {
+      36 |   const result = await call(method, ...args)
+    > 37 |   expect(result.success, `${method}: ${JSON.stringify(result)}`).toBe(true)
+         |                                                                  ^
+      38 |   return result
+      39 | }
+      40 | async function repo(empty = false): Promise<string> {
+        at ok (D:\dev\aether-code\e2e\git-service-matrix.spec.ts:37:66)
+        at D:\dev\aether-code\e2e\git-service-matrix.spec.ts:91:3
+
+    Error Context: test-results\git-service-matrix-reposit-4251a-d-workspace-access-boundary\error-context.md
+
+    Error Context: test-results\git-service-matrix-reposit-4251a-d-workspace-access-boundary\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\git-service-matrix-reposit-4251a-d-workspace-access-boundary\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\git-service-matrix-reposit-4251a-d-workspace-access-boundary\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2) e2e\platform-feature-matrix.spec.ts:104:7 › 平台 IPC 全功能矩阵 › FS junction cannot escape the authorized workspace 
+
+    Error: expect(received).toContain(expected) // indexOf
+
+    Expected substring: "拒绝访问工作区之外"
+    Received string:    ""
+
+      105 |     const link = join(workspace, 'outside-link')
+      106 |     symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir')
+    > 107 |     expect(await errorOf(() => page.evaluate(p => window.aether.fs.readFile(p), join(link, 'private.txt')))).toContain('拒绝访问工作区之外')
+          |                                                                                                              ^
+      108 |     expect(await errorOf(() => page.evaluate(p => window.aether.fs.writeFile(p, 'must not write'), join(link, 'new.txt')))).toContain('拒绝访问工作区之外')
+      109 |     expect(existsSync(join(outside, 'new.txt'))).toBe(false)
+      110 |   })
+        at D:\dev\aether-code\e2e\platform-feature-matrix.spec.ts:107:110
+
+    Error Context: test-results\platform-feature-matrix-平台-17bd1-pe-the-authorized-workspace\error-context.md
+
+    Error Context: test-results\platform-feature-matrix-平台-17bd1-pe-the-authorized-workspace\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\platform-feature-matrix-平台-17bd1-pe-the-authorized-workspace\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\platform-feature-matrix-平台-17bd1-pe-the-authorized-workspace\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2 failed
+    e2e\git-service-matrix.spec.ts:81:5 › repository initialization, unborn HEAD and workspace access boundary 
+    e2e\platform-feature-matrix.spec.ts:104:7 › 平台 IPC 全功能矩阵 › FS junction cannot escape the authorized workspace 
+  6 did not run
+  11 passed (47.8s)

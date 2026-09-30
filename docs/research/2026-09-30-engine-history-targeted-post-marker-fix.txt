@@ -1,0 +1,112 @@
+Post-marker-fix history targeted Vitest
+Date: 
+2026-09-30T04:01:40.2904654+08:00
+Command: npx vitest run --maxWorkers=1 --minWorkers=1 src/storage/conversation src/storage/root-runs/root-runs.test.ts src/api/http/routes/__tests__/chat-recovery.test.ts src/api/http/routes/__tests__/conversation-destructive.test.ts src/core/llm-adapter/__tests__/history-capabilities.test.ts
+
+
+ RUN  v2.1.9 D:/dev/ai-agent-engine
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > returns an explicit empty persisted snapshot without creating a run
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > reopens ended conversations with persisted turns, attachment references, todos and file changes
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > recovers pending approval after the in-memory stream has gone without claiming its answer
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > preserves interrupted terminal outcomes after restart instead of presenting a resumable stream
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > scopes every persisted collection and live stream by tenant and session
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > pairs a live projection with its exact cursor and replays only later tool/result/terminal frames
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > rejects unknown cursors before SSE begins instead of silently replaying the entire turn
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > requires a new snapshot when the consumed cursor has fallen outside bounded replay
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > keeps live root state at the projection watermark when persistence has advanced ahead of delivery
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > cancels server execution and exposes its outcome without invoking the agent or model again
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > cancels a waiting run after SSE finished and advances the snapshot to the persisted terminal outcome
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > does not resurrect a deleted turn from a retained bus or replay its old frames
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+ ✓ src/api/http/routes/__tests__/chat-recovery.test.ts (12 tests) 388ms
+ ✓ src/api/http/routes/__tests__/conversation-destructive.test.ts (12 tests) 891ms
+stdout | src/storage/root-runs/root-runs.test.ts > history serialization across instances > serializes compaction, concurrent appends and truncate across separately created consumers
+[jsonl-history] compressed session: 80 → 47 tokens
+
+ ✓ src/storage/root-runs/root-runs.test.ts (6 tests) 244ms
+stdout | src/storage/conversation/__tests__/history-compress-identity.test.ts > SQLite compaction preserves retained message identity > preserves current turn metadata, model, tool state and chronological order (retention: 4)
+[history] compress: 440 → 53 tokens (freed 387)
+
+stdout | src/storage/conversation/__tests__/history-compress-identity.test.ts > SQLite compaction preserves retained message identity > preserves current turn metadata, model, tool state and chronological order (retention: {"keepRecentTokens":40})
+[history] compress: 440 → 53 tokens (freed 387)
+
+ ✓ src/storage/conversation/__tests__/history-compress-identity.test.ts (2 tests) 407ms
+stderr | src/core/llm-adapter/__tests__/history-capabilities.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+stdout | src/core/llm-adapter/__tests__/history-capabilities.test.ts > compacted constraints reach the real provider request > openai complete and stream preserve history and system prompt
+[openai.ts] messagesToOpenAI result (2 messages):
+[0] system: "【历史上下文摘要】保留 CRLF；不要改动用户手写文件。"
+[1] user: "继续修复"
+[openai.ts] messagesToOpenAI result (2 messages):
+[0] system: "【历史上下文摘要】保留 CRLF；不要改动用户手写文件。"
+[1] user: "继续修复"
+
+ ✓ src/core/llm-adapter/__tests__/history-capabilities.test.ts (9 tests) 17ms
+stdout | src/storage/conversation/__tests__/history-compress-tombstone.test.ts > compress() 与 tombstone 冲突 — Bug 复现与修复验证 > 【BUG 复现】compress 后 getFullHistory 不应返回空数组
+[history] compress: 2000 → 606 tokens (freed 1394)
+[test] after compress, message count: 7
+[test] roles: system, user, assistant, user, assistant, user, assistant
+
+stdout | src/storage/conversation/__tests__/history-compress-tombstone.test.ts > compress() 与 tombstone 冲突 — Bug 复现与修复验证 > compress 后 recentMessages 是原始最后 6 条
+[history] compress: 2000 → 602 tokens (freed 1398)
+
+ ✓ src/storage/conversation/__tests__/history-compress-tombstone.test.ts (2 tests) 3ms
+ ✓ src/storage/conversation/__tests__/history-maxTokens.test.ts (6 tests) 2ms
+
+ Test Files  7 passed (7)
+      Tests  49 passed (49)
+   Start at  04:01:41
+   Duration  5.15s (transform 552ms, setup 0ms, collect 2.11s, tests 1.95s, environment 1ms, prepare 287ms)
+
+
+Exit code: 
+0
+Completed: 
+2026-09-30T04:01:46.6006457+08:00
+RESULT: exit code 0; Test Files 7 passed (7); Tests 49 passed (49).

@@ -50,7 +50,6 @@ Thumbs.db
 .idea/
 .trae/
 workspace
-package-lock.json
 .codemap/
 .codemaker/codemap/
 .codemaker/codeindex/
@@ -62,3 +61,6 @@ package-lock.json
 .claude/settings.local.json
 .cowork-temp
 .e2e-tmp
+.e2e-remote-final/
+.e2e-remote-core-final/
+.tmp

@@ -1,0 +1,21 @@
+
+Running 11 tests using 1 worker
+
+(node:53528) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok  1 e2e\platform-feature-matrix.spec.ts:40:7 › 平台 IPC 全功能矩阵 › FS create/read/write/stat/list/copy/rename preserve disk content and reject overwrite (54ms)
+  ok  2 e2e\platform-feature-matrix.spec.ts:68:7 › 平台 IPC 全功能矩阵 › FS binary/base64, oversize preview, text truncation and missing-file errors (319ms)
+  ok  3 e2e\platform-feature-matrix.spec.ts:79:7 › 平台 IPC 全功能矩阵 › FS attachments sanitize names, preserve bytes and avoid collisions (12ms)
+  ok  4 e2e\platform-feature-matrix.spec.ts:89:7 › 平台 IPC 全功能矩阵 › FS outside roots and sibling-prefix paths are rejected for all access operations (11ms)
+  ok  5 e2e\platform-feature-matrix.spec.ts:104:7 › 平台 IPC 全功能矩阵 › FS junction cannot escape the authorized workspace (12ms)
+  ok  6 e2e\platform-feature-matrix.spec.ts:112:40 › 平台 IPC 全功能矩阵 › search scan include/exclude/case/whole-word/regex and replacement (1.3s)
+
+  ok  7 e2e\platform-feature-matrix.spec.ts:112:40 › 平台 IPC 全功能矩阵 › search git include/exclude/case/whole-word/regex and replacement (2.3s)
+  ok  8 e2e\platform-feature-matrix.spec.ts:144:7 › 平台 IPC 全功能矩阵 › search query/preview/replace reject unauthorized roots without modifying outside data (4ms)
+  ok  9 e2e\platform-feature-matrix.spec.ts:155:7 › 平台 IPC 全功能矩阵 › settings update persists, preserves defaults and survives a full application restart (1.0s)
+  ok 10 e2e\platform-feature-matrix.spec.ts:166:7 › 平台 IPC 全功能矩阵 › window maximize/restore/minimize IPC changes the actual BrowserWindow (54ms)
+  ok 11 e2e\platform-feature-matrix.spec.ts:177:7 › 平台 IPC 全功能矩阵 › PTY create/data/resize/exit/dispose or explicit environment capability failure (1.4s)
+
+  11 passed (8.0s)
+
+EXIT_CODE=0

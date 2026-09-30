@@ -59,10 +59,19 @@ export interface DiagnoseOptions {
   tenantId?: string
   sessionId?: string
   useCache?: boolean
+  timeoutMs?: number
 }
 
 export async function diagnoseFile(filePath: string, opts: DiagnoseOptions = {}): Promise<DiagnoseResult> {
-  const { signal, useCache = true } = opts
+  const { useCache = true } = opts
+  const controller = new AbortController()
+  const signal = controller.signal
+  const abort = () => controller.abort(opts.signal?.reason)
+  opts.signal?.addEventListener('abort', abort, { once: true })
+  if (opts.signal?.aborted) abort()
+  const timeoutMs = Number.isFinite(opts.timeoutMs) && opts.timeoutMs! > 0 ? Math.min(opts.timeoutMs!, 120_000) : 30_000
+  const timer = setTimeout(() => controller.abort(Object.assign(new Error(`诊断请求超时 (${timeoutMs}ms)`), { code: 'LSP_TIMEOUT' })), timeoutMs)
+  timer.unref()
   const started = Date.now()
   const ext = path.extname(filePath).toLowerCase()
   let language = ext.slice(1) || 'unknown'
@@ -81,7 +90,7 @@ export async function diagnoseFile(filePath: string, opts: DiagnoseOptions = {})
 
     // Availability is checked before cache lookup: a cached empty result must
     // not turn a missing adapter into a successful diagnostic run.
-    const availability = await Promise.all(candidates.map(async a => ({ a, available: await a.isAvailable(filePath) })))
+    const availability = await withCancellation(Promise.all(candidates.map(async a => ({ a, available: await a.isAvailable(filePath) }))), signal)
     throwIfAborted(signal)
     const available = availability.filter(r => r.available).map(r => r.a)
     adapter = available.map(a => a.name).join('+') || 'none'
@@ -92,7 +101,7 @@ export async function diagnoseFile(filePath: string, opts: DiagnoseOptions = {})
 
     // Versioned and adapter-aware keys invalidate old cached false successes
     // and keep TypeScript-only results out of TypeScript+ESLint requests.
-    const hash = crypto.createHash('sha1').update(JSON.stringify(['lsp-v2', adapter, content])).digest('hex')
+    const hash = tenantCachePrefix(opts.tenantId) + crypto.createHash('sha1').update(JSON.stringify(['lsp-v3', opts.sessionId, adapter, content])).digest('hex')
     if (useCache) {
       const cached = await readCache(filePath, hash, adapter)
       throwIfAborted(signal)
@@ -106,6 +115,7 @@ export async function diagnoseFile(filePath: string, opts: DiagnoseOptions = {})
         throwIfAborted(signal)
         return { name: a.name, diagnostics, error: undefined as string | undefined }
       } catch (error) {
+        if ((error as { code?: string })?.code === 'LSP_TERMINATION_FAILED') throw error
         if (isAbortError(error, signal)) throw error
         return { name: a.name, diagnostics: [] as Diagnostic[], error: `${a.name}: ${error instanceof Error ? error.message : String(error)}` }
       }
@@ -128,14 +138,36 @@ export async function diagnoseFile(filePath: string, opts: DiagnoseOptions = {})
     throwIfAborted(signal)
     return finish('completed', diagnostics)
   } catch (error) {
+    const code = (error as { code?: string })?.code
+    if (code === 'LSP_TERMINATION_FAILED' || (signal.reason as { code?: string })?.code === 'LSP_TIMEOUT') {
+      return { ...finish('error', [], error instanceof Error ? error.message : String(error)), errorCode: code === 'LSP_TERMINATION_FAILED' ? code : 'LSP_TIMEOUT' }
+    }
     return isAbortError(error, signal)
       ? finish('cancelled', [], '诊断已取消')
       : finish('error', [], error instanceof Error ? error.message : String(error))
+  } finally {
+    clearTimeout(timer)
+    opts.signal?.removeEventListener('abort', abort)
   }
 }
 
-export async function purgeLspCache(days: number): Promise<number> {
+function tenantCachePrefix(tenantId = 'default'): string {
+  return crypto.createHash('sha256').update(tenantId).digest('hex') + ':'
+}
+
+function withCancellation<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => { cleanup(); reject(signal.reason ?? new DOMException('诊断已取消', 'AbortError')) }
+    const cleanup = () => signal.removeEventListener('abort', abort)
+    signal.addEventListener('abort', abort, { once: true })
+    if (signal.aborted) { abort(); return }
+    work.then(value => { cleanup(); resolve(value) }, error => { cleanup(); reject(error) })
+  })
+}
+
+export async function purgeLspCache(days: number, tenantId?: string): Promise<number> {
+  if (!Number.isFinite(days) || days < 1 || days > 3650) throw new Error('days must be between 1 and 3650')
   const cutoff = Math.floor(Date.now() / 1000) - days * 86400
-  const res = await getDb().execute({ sql: 'DELETE FROM lsp_diagnostics_cache WHERE created_at < ?', args: [cutoff] })
+  const res = await getDb().execute({ sql: 'DELETE FROM lsp_diagnostics_cache WHERE created_at < ? AND content_hash LIKE ?', args: [cutoff, tenantCachePrefix(tenantId) + '%'] })
   return Number((res as any).rowsAffected ?? 0)
 }

@@ -1,0 +1,53 @@
+
+Running 8 tests using 1 worker
+
+(node:28116) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  x  1 e2e\git-service-matrix.spec.ts:81:5 › repository initialization, unborn HEAD and workspace access boundary (2.0s)
+(node:46240) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok 2 e2e\git-service-matrix.spec.ts:97:5 › status, index/worktree separation, batch operations, ignore, diff and hunk rollback (6.0s)
+  ok 3 e2e\git-service-matrix.spec.ts:128:5 › commit variants, local suggestion, immutable history, blame and file timeline (4.8s)
+  ok 4 e2e\git-service-matrix.spec.ts:156:5 › branch create/checkout/rename/delete and lightweight/annotated tags (2.9s)
+  ok 5 e2e\git-service-matrix.spec.ts:173:5 › stash push/pop/apply/drop/batch/clear and staged-only preservation (6.9s)
+  ok 6 e2e\git-service-matrix.spec.ts:198:5 › merge/rebase/cherry-pick/revert success and each conflict abort preserves original HEAD (6.3s)
+To C:\Users\wb.xielin02\AppData\Local\Temp\aether-git-matrix-PTZSZV\remote-7.git
+   c30ae81..c06a9db  main -> main
+  ok 7 e2e\git-service-matrix.spec.ts:218:5 › local bare remote fetch/pull strategies/push/publish/sync/force/tags and clone progress (12.9s)
+  ok 8 e2e\git-service-matrix.spec.ts:259:5 › coverage inventory includes every Git invoke method through the preload bridge (4ms)
+
+
+  1) e2e\git-service-matrix.spec.ts:81:5 › repository initialization, unborn HEAD and workspace access boundary 
+
+    Error: unstage: {"success":false,"error":"fatal: could not resolve 'HEAD'"}
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: true
+    Received: false
+
+      35 | async function ok<K extends Method>(method: K, ...args: Parameters<AetherIdeApi['git'][K]>): Promise<Result<K>> {
+      36 |   const result = await call(method, ...args)
+    > 37 |   expect(result.success, `${method}: ${JSON.stringify(result)}`).toBe(true)
+         |                                                                  ^
+      38 |   return result
+      39 | }
+      40 | async function repo(empty = false): Promise<string> {
+        at ok (D:\dev\aether-code\e2e\git-service-matrix.spec.ts:37:66)
+        at D:\dev\aether-code\e2e\git-service-matrix.spec.ts:91:3
+
+    Error Context: test-results\git-service-matrix-reposit-4251a-d-workspace-access-boundary\error-context.md
+
+    Error Context: test-results\git-service-matrix-reposit-4251a-d-workspace-access-boundary\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\git-service-matrix-reposit-4251a-d-workspace-access-boundary\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\git-service-matrix-reposit-4251a-d-workspace-access-boundary\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    e2e\git-service-matrix.spec.ts:81:5 › repository initialization, unborn HEAD and workspace access boundary 
+  7 passed (45.3s)

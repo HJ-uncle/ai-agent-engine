@@ -1,0 +1,17 @@
+
+Running 8 tests using 1 worker
+
+(node:30100) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok 1 e2e\git-service-matrix.spec.ts:81:5 › repository initialization, unborn HEAD and workspace access boundary (3.1s)
+  ok 2 e2e\git-service-matrix.spec.ts:97:5 › status, index/worktree separation, batch operations, ignore, diff and hunk rollback (6.0s)
+  ok 3 e2e\git-service-matrix.spec.ts:128:5 › commit variants, local suggestion, immutable history, blame and file timeline (4.7s)
+  ok 4 e2e\git-service-matrix.spec.ts:156:5 › branch create/checkout/rename/delete and lightweight/annotated tags (2.8s)
+  ok 5 e2e\git-service-matrix.spec.ts:173:5 › stash push/pop/apply/drop/batch/clear and staged-only preservation (6.4s)
+  ok 6 e2e\git-service-matrix.spec.ts:198:5 › merge/rebase/cherry-pick/revert success and each conflict abort preserves original HEAD (6.1s)
+To C:\Users\wb.xielin02\AppData\Local\Temp\aether-git-matrix-HMnaCg\remote-9.git
+   349124d..b8b2700  main -> main
+  ok 7 e2e\git-service-matrix.spec.ts:218:5 › local bare remote fetch/pull strategies/push/publish/sync/force/tags and clone progress (13.7s)
+  ok 8 e2e\git-service-matrix.spec.ts:259:5 › coverage inventory includes every Git invoke method through the preload bridge (2ms)
+
+  8 passed (44.8s)

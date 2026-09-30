@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import { getDb } from '../sqlite/db.js'
+import { logger } from '../../observability/index.js'
 import type { Row } from '@libsql/client'
 import type { Job, JobRecord, JobStatus, JobHandler, TaskQueue } from './types.js'
+
+function isJobsTableNotReadyError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /no such table:\s*jobs\b/i.test(message)
+}
 
 function rowToRecord(row: Row): JobRecord {
   const started_at = row['started_at']
@@ -99,7 +105,15 @@ export class SQLiteTaskQueue implements TaskQueue {
   start(): void {
     if (this.running) return
     this.running = true
-    this.timer = setInterval(() => { void this.processPending() }, this.pollIntervalMs)
+    this.timer = setInterval(() => {
+      // Polling runs in the background, so always observe its rejection.  The
+      // jobs table is created by initDb during application startup and may not
+      // exist yet when a queue is constructed from an ESM module initializer.
+      void this.processPending().catch((error: unknown) => {
+        if (isJobsTableNotReadyError(error)) return
+        logger.warn({ err: error }, 'SQLiteTaskQueue polling failed')
+      })
+    }, this.pollIntervalMs)
   }
 
   stop(): void {

@@ -1,0 +1,49 @@
+
+Running 1 test using 1 worker
+
+
+
+(node:23616) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[1/1] e2e\smoke.spec.ts:1169:5 › 资源管理器：剪切/复制/粘贴（Ctrl+X/C/V 与右键菜单）
+  1) e2e\smoke.spec.ts:1169:5 › 资源管理器：剪切/复制/粘贴（Ctrl+X/C/V 与右键菜单） ───────────────────────────────────
+
+    Error: expect(locator).toHaveCount(expected) failed
+
+    Locator:  locator('.tree-row[data-path="D:\\\\dev\\\\aether-code\\\\.e2e-tmp\\\\smoke-fixtures\\\\sub\\\\move-a copy.txt"]')
+    Expected: 0
+    Received: 1
+    Timeout:  15000ms
+
+    Call log:
+      - Expect "toHaveCount" locator('.tree-row[data-path="D:\\\\dev\\\\aether-code\\\\.e2e-tmp\\\\smoke-fixtures\\\\sub\\\\move-a copy.txt"]') with timeout 15000ms
+      - waiting for locator('.tree-row[data-path="D:\\\\dev\\\\aether-code\\\\.e2e-tmp\\\\smoke-fixtures\\\\sub\\\\move-a copy.txt"]')
+        33 × locator resolved to 1 element
+           - unexpected value "1"
+
+
+      171 |     await row.click()
+      172 |     await tree.press('Delete')
+    > 173 |     await expect(row).toHaveCount(0, { timeout: 15_000 })
+          |                       ^
+      174 |   }
+      175 |
+      176 |   const source = page.locator(rowSelector(opts.from))
+        at restoreFixtureViaApp (D:\dev\aether-code\e2e\smoke.spec.ts:173:23)
+        at D:\dev\aether-code\e2e\smoke.spec.ts:1226:3
+
+    Error Context: test-results\smoke-资源管理器：剪切-复制-粘贴（Ctrl-X-C-V-与右键菜单）\error-context.md
+
+    Error Context: test-results\smoke-资源管理器：剪切-复制-粘贴（Ctrl-X-C-V-与右键菜单）\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\smoke-资源管理器：剪切-复制-粘贴（Ctrl-X-C-V-与右键菜单）\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\smoke-资源管理器：剪切-复制-粘贴（Ctrl-X-C-V-与右键菜单）\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+  1 failed
+    e2e\smoke.spec.ts:1169:5 › 资源管理器：剪切/复制/粘贴（Ctrl+X/C/V 与右键菜单） ────────────────────────────────────

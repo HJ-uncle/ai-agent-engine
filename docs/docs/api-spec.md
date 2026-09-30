@@ -434,7 +434,7 @@
 
 ### 12. 监控与健康 Metrics (`/health`, `/metrics`)
 - `GET /health`: 存活探针检查
-- `GET /metrics`: 获取 Prometheus 格式的监控指标
+- `GET /metrics`: 以标准 JSON 响应返回已记录的 Token 用量和工具调用聚合统计（`data.totalRequests`、`data.totalTokens`、`data.toolCallStats`）。此接口不输出 Prometheus 文本格式。
 
 ### 13. 待办任务 Todos (`/api/v1/todos`)
 - `POST /api/v1/todos`: 创建新的待办任务

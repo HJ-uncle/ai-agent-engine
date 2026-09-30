@@ -1,0 +1,47 @@
+
+Running 1 test using 1 worker
+
+
+
+(node:17076) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[1/1] e2e\smoke.spec.ts:414:5 › 文件排除：设置里的规则即时生效，且重开窗口后仍然生效
+  1) e2e\smoke.spec.ts:414:5 › 文件排除：设置里的规则即时生效，且重开窗口后仍然生效 ──────────────────────────────────────────
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: locator('.tree-row[data-path="D:\\\\dev\\\\aether-code\\\\.e2e-tmp\\\\smoke-fixtures"]')
+    Expected: visible
+    Timeout: 15000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" locator('.tree-row[data-path="D:\\\\dev\\\\aether-code\\\\.e2e-tmp\\\\smoke-fixtures"]') with timeout 15000ms
+      - waiting for locator('.tree-row[data-path="D:\\\\dev\\\\aether-code\\\\.e2e-tmp\\\\smoke-fixtures"]')
+
+
+      91 |   }
+      92 |   const row = page.locator(rowSelector(dir))
+    > 93 |   await expect(row).toBeVisible({ timeout: 15_000 })
+         |                     ^
+      94 |   if ((await row.getAttribute('aria-expanded')) === 'true') return
+      95 |   await row.click()
+      96 |   await expect(row).toHaveAttribute('aria-expanded', 'true', { timeout: 15_000 })
+        at ensureDirExpanded (D:\dev\aether-code\e2e\smoke.spec.ts:93:21)
+        at D:\dev\aether-code\e2e\smoke.spec.ts:458:3
+
+    Error Context: test-results\smoke-文件排除：设置里的规则即时生效，且重开窗口后仍然生效\error-context.md
+
+    Error Context: test-results\smoke-文件排除：设置里的规则即时生效，且重开窗口后仍然生效\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\smoke-文件排除：设置里的规则即时生效，且重开窗口后仍然生效\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\smoke-文件排除：设置里的规则即时生效，且重开窗口后仍然生效\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+  1 failed
+    e2e\smoke.spec.ts:414:5 › 文件排除：设置里的规则即时生效，且重开窗口后仍然生效 ───────────────────────────────────────────

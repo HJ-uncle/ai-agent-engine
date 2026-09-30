@@ -1,0 +1,189 @@
+{
+  "schemaVersion": 1,
+  "startedAt": "2026-09-30T04:47:53.977Z",
+  "scope": "Same-machine LAN-address connection to an isolated real engine; NOT a cross-machine or real-model-quality test.",
+  "existingUserEndpoint": {
+    "host": "10.219.14.186",
+    "port": 12323,
+    "contacted": false,
+    "modified": false
+  },
+  "isolation": {
+    "fixture": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\isolated-lan-chat-3b7a2d35-1001-4449-99ac-e740f92fb10a",
+    "remoteWorkspace": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\isolated-lan-chat-3b7a2d35-1001-4449-99ac-e740f92fb10a\\remote-workspace",
+    "localWorkspace": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\isolated-lan-chat-3b7a2d35-1001-4449-99ac-e740f92fb10a\\local-workspace",
+    "syntheticSecrets": true,
+    "inheritedEnvironment": "OS runtime allowlist only",
+    "paidModelRequests": 0
+  },
+  "runtime": {
+    "executable": "C:\\Program Files\\nodejs\\node.exe",
+    "nodeVersion": "v24.20.0",
+    "entry": "D:\\dev\\ai-agent-engine\\dist\\main.js",
+    "manifest": {
+      "version": "2.0.0",
+      "buildId": "sha256:5ff7330ed06d179a23e332332bd811dddc74c00caf65acf712f1fbc07a8e2a83",
+      "protocolVersion": 1,
+      "toolProfiles": [
+        "general",
+        "code"
+      ],
+      "subagentSchemaVersion": 1
+    },
+    "entrySha256Before": "6f489a9514262b6559ffbb202b61311bef43edb38eff9d3dccc5c19615021339",
+    "observedIdentity": {
+      "version": "2.0.0",
+      "buildId": "sha256:5ff7330ed06d179a23e332332bd811dddc74c00caf65acf712f1fbc07a8e2a83",
+      "protocolVersion": 1,
+      "toolProfiles": [
+        "general",
+        "code"
+      ],
+      "subagentSchemaVersion": 1,
+      "instanceId": "ddcaa234-cdea-4e79-86c9-cf346f8a05e2"
+    }
+  },
+  "electron": {
+    "requested": true,
+    "started": true,
+    "ownedPid": 25456,
+    "screenshot": "D:\\dev\\ai-agent-engine\\docs\\research\\2026-09-30-lan-remote-chat-electron-ready.png",
+    "uiErrors": []
+  },
+  "assertions": [
+    {
+      "name": "Only the synthetic model exists in fresh isolated state",
+      "pass": true
+    },
+    {
+      "name": "Authenticated metrics returns a successful JSON business response",
+      "pass": true
+    },
+    {
+      "name": "HTTP missing token cannot start a model request",
+      "pass": true
+    },
+    {
+      "name": "HTTP wrong token cannot start a model request",
+      "pass": true
+    },
+    {
+      "name": "HTTP chat returns real engine SSE with terminal marker",
+      "pass": true
+    },
+    {
+      "name": "http: recorded run uses only explicit server workspace",
+      "pass": true
+    },
+    {
+      "name": "http: real read_file result persists in history",
+      "pass": true
+    },
+    {
+      "name": "http: completed snapshot retains run and history",
+      "pass": true
+    },
+    {
+      "name": "http: real provider received tool result exactly once",
+      "pass": true
+    },
+    {
+      "name": "electron: recorded run uses only explicit server workspace",
+      "pass": true
+    },
+    {
+      "name": "electron: real read_file result persists in history",
+      "pass": true
+    },
+    {
+      "name": "electron: completed snapshot retains run and history",
+      "pass": true
+    },
+    {
+      "name": "electron: real provider received tool result exactly once",
+      "pass": true
+    },
+    {
+      "name": "Electron reload displays real persisted history without another model request",
+      "pass": true
+    },
+    {
+      "name": "Electron has no runtime errors, token echo or client file contents",
+      "pass": true
+    },
+    {
+      "name": "Fixture provider has no unexpected requests or failures",
+      "pass": true
+    },
+    {
+      "name": "Remote and local fixture files retain separate contents",
+      "pass": true
+    }
+  ],
+  "sessions": [
+    {
+      "scenario": "http",
+      "sessionId": "lan-http-d1055bc9-a383-42c0-b133-33b337f48c86",
+      "runId": "3484fb19-1b43-4a6c-be06-a6b2375dd1c1",
+      "status": "succeeded",
+      "workspacePaths": [
+        "D:\\dev\\ai-agent-engine\\.e2e-tmp\\isolated-lan-chat-3b7a2d35-1001-4449-99ac-e740f92fb10a\\remote-workspace"
+      ],
+      "historyRows": 4,
+      "providerCalls": 2
+    },
+    {
+      "scenario": "electron",
+      "sessionId": "b2aca3a1-02f8-4792-b0ba-baa4c9e94b98",
+      "runId": "06999b76-4429-4b18-8a4a-14ce8c7fdb9f",
+      "status": "succeeded",
+      "workspacePaths": [
+        "D:\\dev\\ai-agent-engine\\.e2e-tmp\\isolated-lan-chat-3b7a2d35-1001-4449-99ac-e740f92fb10a\\remote-workspace"
+      ],
+      "historyRows": 4,
+      "providerCalls": 2
+    }
+  ],
+  "cleanup": {
+    "startedAt": "2026-09-30T04:47:58.365Z"
+  },
+  "port": 58408,
+  "host": "10.219.14.186",
+  "providerUrl": "http://127.0.0.1:58409/v1",
+  "ownedPid": 21672,
+  "status": "passed",
+  "evidenceStage": "before-cleanup",
+  "providerRequests": [
+    {
+      "scenario": "http",
+      "model": "lan-remote-chat-fixture",
+      "toolMessages": 0,
+      "remoteMarkerSeen": false,
+      "localMarkerSeen": false
+    },
+    {
+      "scenario": "http",
+      "model": "lan-remote-chat-fixture",
+      "toolMessages": 1,
+      "remoteMarkerSeen": true,
+      "localMarkerSeen": false
+    },
+    {
+      "scenario": "electron",
+      "model": "lan-remote-chat-fixture",
+      "toolMessages": 0,
+      "remoteMarkerSeen": false,
+      "localMarkerSeen": false
+    },
+    {
+      "scenario": "electron",
+      "model": "lan-remote-chat-fixture",
+      "toolMessages": 1,
+      "remoteMarkerSeen": true,
+      "localMarkerSeen": false
+    }
+  ],
+  "providerErrors": [],
+  "passedAssertions": 17,
+  "totalAssertions": 17
+}

@@ -1,0 +1,32 @@
+Aether Code remote connection diagnosis
+Date: 2026-09-30
+
+Target configured in the UI: http://10.219.14.186:12323
+Observed engine process: D:\dev\ai-agent-engine\src\main.ts via tsx watch
+
+Checks:
+- GET http://127.0.0.1:12323/health -> HTTP 200
+- GET http://10.219.14.186:12323/health -> HTTP 200
+- GET http://127.0.0.1:12323/api/v1/tools with X-Aether-Tool-Profile: code and no instance token -> HTTP 200
+
+Interpretation:
+- The engine is listening and healthy.
+- The current development engine has no AETHER_INSTANCE_TOKEN gate enabled.
+- Aether Code rejects the configured LAN address before the HTTP handshake when its own
+  AETHER_IDE_REMOTE_INSTANCE_TOKEN is unset. This is the deliberate non-loopback policy
+  in src/main/engine/protocol.ts:63-70, not an engine availability failure.
+
+Same-machine development fix:
+- Use http://127.0.0.1:12323 (or http://localhost:12323) in Engine Settings, save, then reconnect.
+
+LAN/remote fix:
+- Start the target engine with AETHER_INSTANCE_TOKEN=<generated secret>.
+- Start Aether Code's main process with the same value as
+  AETHER_IDE_REMOTE_INSTANCE_TOKEN.
+- Restart Aether Code after setting the process environment. Do not put the token in the URL,
+  renderer snapshot, ordinary settings JSON, or chat content.
+
+Separate product boundary:
+- Even after a successful remote handshake, the current client only allows health/meta/metrics/
+  models/tools/system-tools/external-skills without a shared workspace mapping. Chat, diagnostics,
+  and local file operations remain intentionally refused in remote mode.

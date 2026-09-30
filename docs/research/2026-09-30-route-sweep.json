@@ -1,0 +1,929 @@
+{
+  "capturedAt": "2026-09-29T16:45:20.626Z",
+  "fixture": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\route-sweep-NjZ2tQ",
+  "calls": 132,
+  "passed": 132,
+  "failed": 0,
+  "records": [
+    {
+      "method": "GET",
+      "url": "/health",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/meta",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/metrics",
+      "status": 200,
+      "code": 500,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/openapi.json",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/tools",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/system-tools",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/external-skills",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/lsp/adapters",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/performance/stats",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/performance/tool-pool",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/workspace/files?sessionId=route-sweep-session",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/workspace/folder/create",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/workspace/file/create",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/workspace/file",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/workspace/file/info?sessionId=route-sweep-session&path=src/a.ts",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/workspace/file/content?sessionId=route-sweep-session&path=src/a.ts",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/workspace/file/download?sessionId=route-sweep-session&path=src/a.ts",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/workspace/file/stream?sessionId=route-sweep-session&path=src/a.ts",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/workspace/file/format",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/workspace/file/move",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/workspace/rename",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/workspace/recent",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "DELETE",
+      "url": "/api/v1/workspace/recent/route-sweep-session",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/workspace/file/trash",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/workspace/image?sessionId=route-sweep-session&path=src/b.ts",
+      "status": 404,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/agents",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/agents",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/agents/73f56592-b561-4941-a468-62f839211404",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "PUT",
+      "url": "/api/v1/agents/73f56592-b561-4941-a468-62f839211404",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "DELETE",
+      "url": "/api/v1/agents/73f56592-b561-4941-a468-62f839211404",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/models",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/models/capability-defs",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/models/whitelist",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/models/detect-capabilities",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/models",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "PUT",
+      "url": "/api/v1/models/819e2714-e72e-44a4-bbec-e746d64c00a2",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/models/819e2714-e72e-44a4-bbec-e746d64c00a2/test",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "DELETE",
+      "url": "/api/v1/models/819e2714-e72e-44a4-bbec-e746d64c00a2",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/tenant/identity",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "PUT",
+      "url": "/api/v1/tenant/identity",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/tenant/identity",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "DELETE",
+      "url": "/api/v1/tenant/identity",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/knowledge/documents",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/knowledge/documents",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/knowledge/search",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "DELETE",
+      "url": "/api/v1/knowledge/documents/43a242fd-854a-4d7a-a6e3-9f2beff55fe4",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/memory/remember",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/memory/list?sessionId=route-sweep-session",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/memory/recall/route-sweep-key?sessionId=route-sweep-session",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/memory/graph?sessionId=route-sweep-session",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/memory/consolidate",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "PUT",
+      "url": "/api/v1/memory/195e2b3f-0088-4fc3-a807-f0768b7c79cf",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/memory/link",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "DELETE",
+      "url": "/api/v1/memory/195e2b3f-0088-4fc3-a807-f0768b7c79cf",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/todos",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/todos?sessionId=route-sweep-session",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "PUT",
+      "url": "/api/v1/todos/228c6d42-f9b3-4de3-b690-166bf7446282",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "DELETE",
+      "url": "/api/v1/todos/228c6d42-f9b3-4de3-b690-166bf7446282",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/cron",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/cron",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "PUT",
+      "url": "/api/v1/cron/2a22fc66-2e1e-4266-bfb7-c189a6b16f56",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/cron/2a22fc66-2e1e-4266-bfb7-c189a6b16f56/enable",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/cron/2a22fc66-2e1e-4266-bfb7-c189a6b16f56/disable",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "DELETE",
+      "url": "/api/v1/cron/2a22fc66-2e1e-4266-bfb7-c189a6b16f56",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/mcp/servers",
+      "status": 200,
+      "code": 40001,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/mcp/servers",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/mcp/servers/missing-mcp",
+      "status": 200,
+      "code": 40400,
+      "ok": true
+    },
+    {
+      "method": "PATCH",
+      "url": "/api/v1/mcp/servers/missing-mcp",
+      "status": 200,
+      "code": 40400,
+      "ok": true
+    },
+    {
+      "method": "PUT",
+      "url": "/api/v1/mcp/servers/missing-mcp",
+      "status": 200,
+      "code": 40400,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/mcp/servers/missing-mcp/enable",
+      "status": 200,
+      "code": 40400,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/mcp/servers/missing-mcp/disable",
+      "status": 200,
+      "code": 40400,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/mcp/servers/missing-mcp/test",
+      "status": 200,
+      "code": 40400,
+      "ok": true
+    },
+    {
+      "method": "DELETE",
+      "url": "/api/v1/mcp/servers/missing-mcp",
+      "status": 200,
+      "code": 40400,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/security/policies",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/security/policies/reset",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/security/network-policy",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/security/network-policy/reset",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/security/mode?sessionId=route-sweep-session",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "PUT",
+      "url": "/api/v1/security/mode",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/security/audit-log",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "DELETE",
+      "url": "/api/v1/security/audit-log?days=1",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/settings",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "PUT",
+      "url": "/api/v1/settings",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/tasks",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/tasks",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/tasks/59419145-3f36-4eda-81b1-4c3554034f1d",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "DELETE",
+      "url": "/api/v1/tasks/59419145-3f36-4eda-81b1-4c3554034f1d",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/chat/status?sessionId=route-sweep-session",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/chat/snapshot?sessionId=route-sweep-session",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/chat/runs?sessionId=route-sweep-session",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/chat/cancel",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/conversation/sessions",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/conversation/history?sessionId=route-sweep-session",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "DELETE",
+      "url": "/api/v1/conversation/history?sessionId=route-sweep-session",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/conversation/compress?sessionId=route-sweep-session",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/sessions/route-sweep-session/binding",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/sessions/route-sweep-session/tokens",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "DELETE",
+      "url": "/api/v1/sessions/route-sweep-session",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/messages/missing-message/tokens",
+      "status": 200,
+      "code": 40400,
+      "ok": true
+    },
+    {
+      "method": "PUT",
+      "url": "/api/v1/messages/missing-message",
+      "status": 200,
+      "code": 40400,
+      "ok": true
+    },
+    {
+      "method": "DELETE",
+      "url": "/api/v1/messages/missing-message",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/messages/missing-message/regenerate",
+      "status": 200,
+      "code": 40001,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/changes?sessionId=route-sweep-session",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/changes/keep-all",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/changes/keep-many",
+      "status": 200,
+      "code": 40001,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/changes/missing-change/keep",
+      "status": 200,
+      "code": 40400,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/changes/missing-change/revert",
+      "status": 200,
+      "code": 40400,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/subagent/runs?parentSessionId=route-sweep-session",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/subagent/cancel",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/subagent/runs/missing-run",
+      "status": 200,
+      "code": 40400,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/subagent/runs/missing-run/events",
+      "status": 200,
+      "code": 40400,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/subagent/runs/missing-run/cancel",
+      "status": 200,
+      "code": 40400,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/command-jobs?sessionId=route-sweep-session",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/command-jobs/missing-job?sessionId=route-sweep-session",
+      "status": 404,
+      "code": 40400,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/command-jobs/missing-job/output?sessionId=route-sweep-session",
+      "status": 404,
+      "code": 40400,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/command-jobs/missing-job/cancel",
+      "status": 404,
+      "code": 40400,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/codegraph/status?sessionId=route-sweep-session",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/codegraph/index",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/lsp/diagnose",
+      "status": 200,
+      "code": 40000,
+      "ok": true
+    },
+    {
+      "method": "DELETE",
+      "url": "/api/v1/lsp/cache?days=1",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/deepseek/status",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/deepseek/prices",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "PUT",
+      "url": "/api/v1/deepseek/prices",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/deepseek/models",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "GET",
+      "url": "/api/v1/deepseek/balance",
+      "status": 200,
+      "code": 40003,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/deepseek/fim",
+      "status": 200,
+      "code": 40001,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/deepseek/json",
+      "status": 200,
+      "code": 40001,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/deepseek/prefix",
+      "status": 200,
+      "code": 40001,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/flows/run",
+      "status": 200,
+      "code": 40000,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/flows/missing-run/stop",
+      "status": 200,
+      "code": 200,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/api/v1/utility/chat",
+      "status": 200,
+      "code": 400,
+      "ok": true
+    },
+    {
+      "method": "POST",
+      "url": "/auth/user",
+      "status": 200,
+      "code": 400,
+      "ok": true
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+
+Running 3 tests using 1 worker
+
+(node:49648) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok 1 e2e\history-replay.spec.ts:175:5 › 首次启动：引擎就绪并完成数据库初始化 (907ms)
+  x  2 e2e\history-replay.spec.ts:183:5 › 重启后回放引擎历史：消息、思考、工具调用逐项还原 (22.6s)
+  -  3 e2e\history-replay.spec.ts:235:5 › 从会话历史删除后引擎侧历史一并删除：重启不会复活
+
+
+  1) e2e\history-replay.spec.ts:183:5 › 重启后回放引擎历史：消息、思考、工具调用逐项还原 ───────────────────────────────────
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: locator('.process__body').first().locator('.logline').filter({ hasText: '读取文件' }).first()
+    Expected: visible
+    Timeout: 20000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" locator('.process__body').first().locator('.logline').filter({ hasText: '读取文件' }).first() with timeout 20000ms
+      - waiting for locator('.process__body').first().locator('.logline').filter({ hasText: '读取文件' }).first()
+
+
+      227 |
+      228 |   const toolRow = processBody.locator('.logline').filter({ hasText: '读取文件' }).first()
+    > 229 |   await expect(toolRow).toBeVisible()
+          |                         ^
+      230 |   await toolRow.click()
+      231 |   // read_file → 读取文件，同时确认工具结果没有只停留在 SQLite/迁移层。
+      232 |   await expect(processBody).toContainText(PROBE_TOOL_RESULT)
+        at D:\dev\aether-code\e2e\history-replay.spec.ts:229:25
+
+    Error Context: test-results\history-replay-重启后回放引擎历史：消息、思考、工具调用逐项还原\error-context.md
+
+    Error Context: test-results\history-replay-重启后回放引擎历史：消息、思考、工具调用逐项还原\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\history-replay-重启后回放引擎历史：消息、思考、工具调用逐项还原\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\history-replay-重启后回放引擎历史：消息、思考、工具调用逐项还原\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    e2e\history-replay.spec.ts:183:5 › 重启后回放引擎历史：消息、思考、工具调用逐项还原 ────────────────────────────────────
+  1 did not run
+  1 passed (25.3s)
+
+EXIT_CODE=1

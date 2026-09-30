@@ -1,0 +1,5 @@
+
+> aether-engine@2.0.0 build
+> tsx scripts/build.ts
+
+Engine build: 2.0.0 sha256:5ff7330ed06d179a23e332332bd811dddc74c00caf65acf712f1fbc07a8e2a83

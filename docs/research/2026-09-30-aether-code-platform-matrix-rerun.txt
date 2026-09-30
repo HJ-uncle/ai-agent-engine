@@ -1,0 +1,50 @@
+
+Running 11 tests using 1 worker
+
+(node:8848) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok  1 e2e\platform-feature-matrix.spec.ts:40:7 › 平台 IPC 全功能矩阵 › FS create/read/write/stat/list/copy/rename preserve disk content and reject overwrite (53ms)
+  ok  2 e2e\platform-feature-matrix.spec.ts:68:7 › 平台 IPC 全功能矩阵 › FS binary/base64, oversize preview, text truncation and missing-file errors (326ms)
+  ok  3 e2e\platform-feature-matrix.spec.ts:79:7 › 平台 IPC 全功能矩阵 › FS attachments sanitize names, preserve bytes and avoid collisions (8ms)
+  ok  4 e2e\platform-feature-matrix.spec.ts:89:7 › 平台 IPC 全功能矩阵 › FS outside roots and sibling-prefix paths are rejected for all access operations (8ms)
+  x   5 e2e\platform-feature-matrix.spec.ts:104:7 › 平台 IPC 全功能矩阵 › FS junction cannot escape the authorized workspace (9ms)
+  -   6 e2e\platform-feature-matrix.spec.ts:112:40 › 平台 IPC 全功能矩阵 › search scan include/exclude/case/whole-word/regex and replacement
+  -   7 e2e\platform-feature-matrix.spec.ts:112:40 › 平台 IPC 全功能矩阵 › search git include/exclude/case/whole-word/regex and replacement
+  -   8 e2e\platform-feature-matrix.spec.ts:139:7 › 平台 IPC 全功能矩阵 › search query/preview/replace reject unauthorized roots without modifying outside data
+  -   9 e2e\platform-feature-matrix.spec.ts:150:7 › 平台 IPC 全功能矩阵 › settings update persists, preserves defaults and survives a full application restart
+  -  10 e2e\platform-feature-matrix.spec.ts:161:7 › 平台 IPC 全功能矩阵 › window maximize/restore/minimize IPC changes the actual BrowserWindow
+  -  11 e2e\platform-feature-matrix.spec.ts:172:7 › 平台 IPC 全功能矩阵 › PTY create/data/resize/exit/dispose or explicit environment capability failure
+
+
+  1) e2e\platform-feature-matrix.spec.ts:104:7 › 平台 IPC 全功能矩阵 › FS junction cannot escape the authorized workspace 
+
+    Error: expect(received).toContain(expected) // indexOf
+
+    Expected substring: "拒绝访问工作区之外"
+    Received string:    ""
+
+      105 |     const link = join(workspace, 'outside-link')
+      106 |     symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir')
+    > 107 |     expect(await errorOf(() => page.evaluate(p => window.aether.fs.readFile(p), join(link, 'private.txt')))).toContain('拒绝访问工作区之外')
+          |                                                                                                              ^
+      108 |     expect(await errorOf(() => page.evaluate(p => window.aether.fs.writeFile(p, 'must not write'), join(link, 'new.txt')))).toContain('拒绝访问工作区之外')
+      109 |     expect(existsSync(join(outside, 'new.txt'))).toBe(false)
+      110 |   })
+        at D:\dev\aether-code\e2e\platform-feature-matrix.spec.ts:107:110
+
+    Error Context: test-results\platform-feature-matrix-平台-17bd1-pe-the-authorized-workspace\error-context.md
+
+    Error Context: test-results\platform-feature-matrix-平台-17bd1-pe-the-authorized-workspace\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\platform-feature-matrix-平台-17bd1-pe-the-authorized-workspace\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\platform-feature-matrix-平台-17bd1-pe-the-authorized-workspace\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    e2e\platform-feature-matrix.spec.ts:104:7 › 平台 IPC 全功能矩阵 › FS junction cannot escape the authorized workspace 
+  6 did not run
+  4 passed (2.1s)

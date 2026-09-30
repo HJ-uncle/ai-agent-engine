@@ -1,0 +1,17 @@
+
+Running 9 tests using 1 worker
+
+
+
+(node:38128) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[1/9] e2e\engine-source-isolation.spec.ts:28:5 › 相同会话ID的草稿、名称与占位会话按远端服务隔离
+[2/9] e2e\engine-source-isolation.spec.ts:48:5 › 断开使旧操作失效，进程重启保留endpoint偏好，空连接不覆盖存储来源
+[3/9] e2e\engine-source-isolation.spec.ts:63:5 › 旧模型请求完成后不能覆盖新源列表或清除新请求
+[4/9] e2e\remote-connection-contract.spec.ts:6:5 › 手动本机开发地址可无token，非本机仍需明确凭据
+[5/9] e2e\remote-connection-contract.spec.ts:19:5 › 远端令牌在保存和环境变量入口使用同一请求头边界
+[6/9] e2e\remote-connection-contract.spec.ts:27:5 › 远端只开放明确的读取与会话执行接口，未授权修改仍拒绝
+[7/9] e2e\remote-connection-contract.spec.ts:76:5 › 远端目录按服务端语义校验，既有会话目录与空沙箱优先且损坏记录拒绝
+[8/9] e2e\remote-connection-contract.spec.ts:92:5 › 远端审批只携带关联标识与回答，原始工作区交给服务端恢复
+[9/9] e2e\remote-connection-contract.spec.ts:107:5 › 远端附件只接受真实上传登记，路径和类型取主进程登记值且拒绝跨源跨会话
+  9 passed (560ms)

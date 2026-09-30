@@ -1,0 +1,46 @@
+
+Running 1 test using 1 worker
+
+
+(node:51040) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+[1/1] e2e\smoke.spec.ts:334:5 › 安全视图：渲染三种会话模式与引擎侧策略规则
+  1) e2e\smoke.spec.ts:334:5 › 安全视图：渲染三种会话模式与引擎侧策略规则 ───────────────────────────────────────────────
+
+    Error: expect(locator).toHaveClass(expected) failed
+
+    Locator: locator('.composer-options__dd-item[role="menuitem"]').filter({ hasText: '标准模式' })
+    Expected pattern: /is-active/
+    Timeout: 20000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toHaveClass" locator('.composer-options__dd-item[role="menuitem"]').filter({ hasText: '标准模式' }) with timeout 20000ms
+      - waiting for locator('.composer-options__dd-item[role="menuitem"]').filter({ hasText: '标准模式' })
+
+
+      347 |
+      348 |   await modeTrigger.click()
+    > 349 |   await expect(page.locator('.composer-options__dd-item[role="menuitem"]', { hasText: '标准模式' })).toHaveClass(/is-active/)
+          |                                                                                                  ^
+      350 |   await page.keyboard.press('Escape')
+      351 |   await expect(page.locator('.composer-options__dd-menu')).toHaveCount(0)
+      352 |
+        at D:\dev\aether-code\e2e\smoke.spec.ts:349:98
+
+    Error Context: test-results\smoke-安全视图：渲染三种会话模式与引擎侧策略规则\error-context.md
+
+    Error Context: test-results\smoke-安全视图：渲染三种会话模式与引擎侧策略规则\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\smoke-安全视图：渲染三种会话模式与引擎侧策略规则\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\smoke-安全视图：渲染三种会话模式与引擎侧策略规则\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+  1 failed
+    e2e\smoke.spec.ts:334:5 › 安全视图：渲染三种会话模式与引擎侧策略规则 ────────────────────────────────────────────────

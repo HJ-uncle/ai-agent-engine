@@ -1,0 +1,66 @@
+
+Running 19 tests using 1 worker
+
+(node:33528) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok  1 e2e\git-service-matrix.spec.ts:81:5 › repository initialization, unborn HEAD and workspace access boundary (3.0s)
+  ok  2 e2e\git-service-matrix.spec.ts:97:5 › status, index/worktree separation, batch operations, ignore, diff and hunk rollback (5.9s)
+  ok  3 e2e\git-service-matrix.spec.ts:128:5 › commit variants, local suggestion, immutable history, blame and file timeline (4.7s)
+  ok  4 e2e\git-service-matrix.spec.ts:156:5 › branch create/checkout/rename/delete and lightweight/annotated tags (2.8s)
+  ok  5 e2e\git-service-matrix.spec.ts:173:5 › stash push/pop/apply/drop/batch/clear and staged-only preservation (6.1s)
+  ok  6 e2e\git-service-matrix.spec.ts:198:5 › merge/rebase/cherry-pick/revert success and each conflict abort preserves original HEAD (6.3s)
+To C:\Users\wb.xielin02\AppData\Local\Temp\aether-git-matrix-OdUI10\remote-9.git
+   2eabd3d..2718aea  main -> main
+  ok  7 e2e\git-service-matrix.spec.ts:218:5 › local bare remote fetch/pull strategies/push/publish/sync/force/tags and clone progress (12.6s)
+  ok  8 e2e\git-service-matrix.spec.ts:259:5 › coverage inventory includes every Git invoke method through the preload bridge (3ms)
+  ok  9 e2e\platform-feature-matrix.spec.ts:40:7 › 平台 IPC 全功能矩阵 › FS create/read/write/stat/list/copy/rename preserve disk content and reject overwrite (41ms)
+  ok 10 e2e\platform-feature-matrix.spec.ts:68:7 › 平台 IPC 全功能矩阵 › FS binary/base64, oversize preview, text truncation and missing-file errors (321ms)
+  ok 11 e2e\platform-feature-matrix.spec.ts:79:7 › 平台 IPC 全功能矩阵 › FS attachments sanitize names, preserve bytes and avoid collisions (12ms)
+  ok 12 e2e\platform-feature-matrix.spec.ts:89:7 › 平台 IPC 全功能矩阵 › FS outside roots and sibling-prefix paths are rejected for all access operations (12ms)
+  ok 13 e2e\platform-feature-matrix.spec.ts:104:7 › 平台 IPC 全功能矩阵 › FS junction cannot escape the authorized workspace (8ms)
+  ok 14 e2e\platform-feature-matrix.spec.ts:112:40 › 平台 IPC 全功能矩阵 › search scan include/exclude/case/whole-word/regex and replacement (1.0s)
+
+  x  15 e2e\platform-feature-matrix.spec.ts:112:40 › 平台 IPC 全功能矩阵 › search git include/exclude/case/whole-word/regex and replacement (534ms)
+  -  16 e2e\platform-feature-matrix.spec.ts:139:7 › 平台 IPC 全功能矩阵 › search query/preview/replace reject unauthorized roots without modifying outside data
+  -  17 e2e\platform-feature-matrix.spec.ts:150:7 › 平台 IPC 全功能矩阵 › settings update persists, preserves defaults and survives a full application restart
+  -  18 e2e\platform-feature-matrix.spec.ts:161:7 › 平台 IPC 全功能矩阵 › window maximize/restore/minimize IPC changes the actual BrowserWindow
+  -  19 e2e\platform-feature-matrix.spec.ts:172:7 › 平台 IPC 全功能矩阵 › PTY create/data/resize/exit/dispose or explicit environment capability failure
+
+
+  1) e2e\platform-feature-matrix.spec.ts:112:40 › 平台 IPC 全功能矩阵 › search git include/exclude/case/whole-word/regex and replacement 
+
+    Error: expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 3
+    + Received  + 1
+
+    - Array [
+    -   "alpha.txt",
+    - ]
+    + Array []
+
+      120 |     const query = (query: string, opts = options, excludes = {}) => page.evaluate(({ directory, query, opts, excludes }) => window.aether.search.query(directory, query, opts, excludes), { directory, query, opts, excludes })
+      121 |     expect((await query('needle')).strategy).toBe(git ? 'git' : 'scan')
+    > 122 |     expect((await query('needle', { ...options, include: '**/*.txt', exclude: '**/beta.txt' })).hits.map(hit => hit.path)).toEqual(['alpha.txt'])
+          |                                                                                                                            ^
+      123 |     expect((await query('Needle', { ...options, caseSensitive: true, wholeWord: true })).hits.map(hit => hit.path)).toEqual(['alpha.txt'])
+      124 |     expect((await query('needle', options, { '*.txt': true })).hits.map(hit => hit.path)).toEqual(['skip.log'])
+      125 |     expect((await query('(?<=ID=)42', { ...options, useRegex: true })).hits[0]?.text).toBe('ID=42')
+        at D:\dev\aether-code\e2e\platform-feature-matrix.spec.ts:122:124
+
+    Error Context: test-results\platform-feature-matrix-平台-f4a1b--word-regex-and-replacement\error-context.md
+
+    Error Context: test-results\platform-feature-matrix-平台-f4a1b--word-regex-and-replacement\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\platform-feature-matrix-平台-f4a1b--word-regex-and-replacement\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\platform-feature-matrix-平台-f4a1b--word-regex-and-replacement\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    e2e\platform-feature-matrix.spec.ts:112:40 › 平台 IPC 全功能矩阵 › search git include/exclude/case/whole-word/regex and replacement 
+  4 did not run
+  14 passed (46.4s)

@@ -1,0 +1,66 @@
+id: dcfb4402-920d-4ae6-b686-d88dda74a8dd:1
+data: {"userMessage":{"id":"875f964a-9763-4582-9a83-9b900a8e616e","role":"user","content":"[lan-chat:http] Read fixture.txt and report its exact text.","conversationId":"1b62874f-f5e7-4516-892e-1a1e7437253e","createdAt":1790743675556,"metadata":{"rootRunId":"3484fb19-1b43-4a6c-be06-a6b2375dd1c1","turnId":"1b62874f-f5e7-4516-892e-1a1e7437253e"}}}
+
+id: dcfb4402-920d-4ae6-b686-d88dda74a8dd:2
+data: {"run":{"schemaVersion":1,"runId":"3484fb19-1b43-4a6c-be06-a6b2375dd1c1","turnId":"1b62874f-f5e7-4516-892e-1a1e7437253e","sessionId":"lan-http-d1055bc9-a383-42c0-b133-33b337f48c86","userMessageId":"875f964a-9763-4582-9a83-9b900a8e616e","assistantMessageId":"f6270971-7db8-4277-b7d0-6d22fff6af26","seq":1,"version":1,"status":"running","modelId":"lan-remote-chat-fixture","workspacePaths":["D:\\dev\\ai-agent-engine\\.e2e-tmp\\isolated-lan-chat-3b7a2d35-1001-4449-99ac-e740f92fb10a\\remote-workspace"],"createdAt":1790743675556,"updatedAt":1790743675556,"pending":[]}}
+
+id: dcfb4402-920d-4ae6-b686-d88dda74a8dd:3
+data: {"userMsgId":"875f964a-9763-4582-9a83-9b900a8e616e"}
+
+id: dcfb4402-920d-4ae6-b686-d88dda74a8dd:4
+data: {"userMsgId":"875f964a-9763-4582-9a83-9b900a8e616e"}
+
+id: dcfb4402-920d-4ae6-b686-d88dda74a8dd:5
+data: {"todo":{"todos":[]}}
+
+id: dcfb4402-920d-4ae6-b686-d88dda74a8dd:6
+data: {"run":{"schemaVersion":1,"runId":"3484fb19-1b43-4a6c-be06-a6b2375dd1c1","turnId":"1b62874f-f5e7-4516-892e-1a1e7437253e","sessionId":"lan-http-d1055bc9-a383-42c0-b133-33b337f48c86","userMessageId":"875f964a-9763-4582-9a83-9b900a8e616e","assistantMessageId":"f6270971-7db8-4277-b7d0-6d22fff6af26","seq":1,"version":2,"status":"running","modelId":"lan-remote-chat-fixture","workspacePaths":["D:\\dev\\ai-agent-engine\\.e2e-tmp\\isolated-lan-chat-3b7a2d35-1001-4449-99ac-e740f92fb10a\\remote-workspace"],"createdAt":1790743675556,"updatedAt":1790743675582,"pending":[],"actualModelId":"lan-remote-chat-fixture"}}
+
+id: dcfb4402-920d-4ae6-b686-d88dda74a8dd:7
+data: {"usage":{"modelId":"lan-remote-chat-fixture"}}
+
+id: dcfb4402-920d-4ae6-b686-d88dda74a8dd:8
+data: {"content":"LAN_HTTP_BEFORE_TOOL"}
+
+id: dcfb4402-920d-4ae6-b686-d88dda74a8dd:9
+data: {"toolStart":{"name":"read_file","toolCallId":"read-http"}}
+
+id: dcfb4402-920d-4ae6-b686-d88dda74a8dd:10
+data: {"toolArgs":{"toolCallId":"read-http","args":"{\"path\":\"fixture.txt\"}"}}
+
+id: dcfb4402-920d-4ae6-b686-d88dda74a8dd:11
+data: {"usage":{"systemPromptTokens":10,"systemToolsTokens":21,"skillTokens":0,"messagesTokens":1,"userInputTokens":0,"promptTokens":32,"completionTokens":8,"totalTokens":40,"ragTokens":0,"builtinToolsTokens":21,"mcpToolsTokens":0,"toolResultsTokens":0,"currentPromptTokens":32,"contextWindow":128000,"conversationId":"b7a4e709-c7cc-4c6d-a5e4-9637069f86c0","modelId":"lan-remote-chat-fixture"}}
+
+id: dcfb4402-920d-4ae6-b686-d88dda74a8dd:12
+data: {"toolStart":{"name":"read_file","toolName":"read_file","args":{"path":"fixture.txt"},"toolCallId":"read-http","messageId":"b7a4e709-c7cc-4c6d-a5e4-9637069f86c0","rootRunId":"3484fb19-1b43-4a6c-be06-a6b2375dd1c1","turnId":"1b62874f-f5e7-4516-892e-1a1e7437253e"}}
+
+id: dcfb4402-920d-4ae6-b686-d88dda74a8dd:13
+data: {"toolCall":{"name":"read_file","toolName":"read_file","args":{"path":"fixture.txt"},"toolCallId":"read-http","messageId":"b7a4e709-c7cc-4c6d-a5e4-9637069f86c0","rootRunId":"3484fb19-1b43-4a6c-be06-a6b2375dd1c1","turnId":"1b62874f-f5e7-4516-892e-1a1e7437253e"}}
+
+id: dcfb4402-920d-4ae6-b686-d88dda74a8dd:14
+data: {"toolEnd":{"toolCallId":"read-http","toolName":"read_file","name":"read_file","messageId":"b7a4e709-c7cc-4c6d-a5e4-9637069f86c0","success":true,"status":"succeeded","output":"[读取监控] 耗时: 2.17ms | 原始大小: 32B | 压缩后: 61B | 压缩率: -90.63%\n[文件版本] {\"path\":\"d:\\\\dev\\\\ai-agent-engine\\\\.e2e-tmp\\\\isolated-lan-chat-3b7a2d35-1001-4449-99ac-e740f92fb10a\\\\remote-workspace\\\\fixture.txt\",\"expectedHash\":\"sha256:d8fccbd4d7aa4bcf2114ba6d0e37769a05bf4047090079a2beb99e01c6dd36ca\",\"encoding\":\"utf-8\",\"lineEnding\":\"none\",\"utf8Bom\":false}\n[精确编辑] 展示行号和格式化内容不是原文；edit_file 前可用 mode=\"exact\" 获取无行号 content。\n\n[文件: fixture.txt]\n   1 | LAN_REMOTE_FILE_6e55528019033a36","outputPreview":"[读取监控] 耗时: 2.17ms | 原始大小: 32B | 压缩后: 61B | 压缩率: -90.63%\n[文件版本] {\"path\":\"d:\\\\dev\\\\ai-agent-engine\\\\.e2e-tmp\\\\isolated-lan-chat-3b7a2d35-1001-4449-99ac-e740f92fb10a\\\\remote-workspace\\\\fixture.txt\",\"expectedHash\":\"sha256:d8fccbd4d7aa4bcf2114ba6d0e37769a05bf4047090079a2beb99e01c6dd36ca\",\"encoding\":\"utf-8\",\"lineEnding\":\"none\",\"utf8Bom\":false}\n[精确编辑] 展示行号和格式化内容不是原文；edit_file 前可用 mode=\"exact\" 获取无行号 content。\n\n[文件: fixture.txt]\n   1 | LAN_REMOTE_FILE_6e55528019033a36","metadata":{"path":"d:\\dev\\ai-agent-engine\\.e2e-tmp\\isolated-lan-chat-3b7a2d35-1001-4449-99ac-e740f92fb10a\\remote-workspace\\fixture.txt","expectedHash":"sha256:d8fccbd4d7aa4bcf2114ba6d0e37769a05bf4047090079a2beb99e01c6dd36ca","encoding":"utf-8","lineEnding":"none","utf8Bom":false,"status":"succeeded","success":true,"durationMs":2,"rootRunId":"3484fb19-1b43-4a6c-be06-a6b2375dd1c1","turnId":"1b62874f-f5e7-4516-892e-1a1e7437253e"},"durationMs":2,"rootRunId":"3484fb19-1b43-4a6c-be06-a6b2375dd1c1","turnId":"1b62874f-f5e7-4516-892e-1a1e7437253e"}}
+
+id: dcfb4402-920d-4ae6-b686-d88dda74a8dd:15
+data: {"toolResult":{"toolCallId":"read-http","toolName":"read_file","name":"read_file","messageId":"b7a4e709-c7cc-4c6d-a5e4-9637069f86c0","success":true,"status":"succeeded","output":"[读取监控] 耗时: 2.17ms | 原始大小: 32B | 压缩后: 61B | 压缩率: -90.63%\n[文件版本] {\"path\":\"d:\\\\dev\\\\ai-agent-engine\\\\.e2e-tmp\\\\isolated-lan-chat-3b7a2d35-1001-4449-99ac-e740f92fb10a\\\\remote-workspace\\\\fixture.txt\",\"expectedHash\":\"sha256:d8fccbd4d7aa4bcf2114ba6d0e37769a05bf4047090079a2beb99e01c6dd36ca\",\"encoding\":\"utf-8\",\"lineEnding\":\"none\",\"utf8Bom\":false}\n[精确编辑] 展示行号和格式化内容不是原文；edit_file 前可用 mode=\"exact\" 获取无行号 content。\n\n[文件: fixture.txt]\n   1 | LAN_REMOTE_FILE_6e55528019033a36","outputPreview":"[读取监控] 耗时: 2.17ms | 原始大小: 32B | 压缩后: 61B | 压缩率: -90.63%\n[文件版本] {\"path\":\"d:\\\\dev\\\\ai-agent-engine\\\\.e2e-tmp\\\\isolated-lan-chat-3b7a2d35-1001-4449-99ac-e740f92fb10a\\\\remote-workspace\\\\fixture.txt\",\"expectedHash\":\"sha256:d8fccbd4d7aa4bcf2114ba6d0e37769a05bf4047090079a2beb99e01c6dd36ca\",\"encoding\":\"utf-8\",\"lineEnding\":\"none\",\"utf8Bom\":false}\n[精确编辑] 展示行号和格式化内容不是原文；edit_file 前可用 mode=\"exact\" 获取无行号 content。\n\n[文件: fixture.txt]\n   1 | LAN_REMOTE_FILE_6e55528019033a36","metadata":{"path":"d:\\dev\\ai-agent-engine\\.e2e-tmp\\isolated-lan-chat-3b7a2d35-1001-4449-99ac-e740f92fb10a\\remote-workspace\\fixture.txt","expectedHash":"sha256:d8fccbd4d7aa4bcf2114ba6d0e37769a05bf4047090079a2beb99e01c6dd36ca","encoding":"utf-8","lineEnding":"none","utf8Bom":false,"status":"succeeded","success":true,"durationMs":2,"rootRunId":"3484fb19-1b43-4a6c-be06-a6b2375dd1c1","turnId":"1b62874f-f5e7-4516-892e-1a1e7437253e"},"durationMs":2,"rootRunId":"3484fb19-1b43-4a6c-be06-a6b2375dd1c1","turnId":"1b62874f-f5e7-4516-892e-1a1e7437253e"}}
+
+id: dcfb4402-920d-4ae6-b686-d88dda74a8dd:16
+data: {"usage":{"modelId":"lan-remote-chat-fixture"}}
+
+id: dcfb4402-920d-4ae6-b686-d88dda74a8dd:17
+data: {"content":"LAN_HTTP_READ_OK: "}
+
+id: dcfb4402-920d-4ae6-b686-d88dda74a8dd:18
+data: {"content":"LAN_REMOTE_FILE_6e55528019033a36"}
+
+id: dcfb4402-920d-4ae6-b686-d88dda74a8dd:19
+data: {"assistantMsgId":"f6270971-7db8-4277-b7d0-6d22fff6af26"}
+
+id: dcfb4402-920d-4ae6-b686-d88dda74a8dd:20
+data: {"run":{"schemaVersion":1,"runId":"3484fb19-1b43-4a6c-be06-a6b2375dd1c1","turnId":"1b62874f-f5e7-4516-892e-1a1e7437253e","sessionId":"lan-http-d1055bc9-a383-42c0-b133-33b337f48c86","userMessageId":"875f964a-9763-4582-9a83-9b900a8e616e","assistantMessageId":"f6270971-7db8-4277-b7d0-6d22fff6af26","seq":1,"version":3,"status":"succeeded","modelId":"lan-remote-chat-fixture","workspacePaths":["D:\\dev\\ai-agent-engine\\.e2e-tmp\\isolated-lan-chat-3b7a2d35-1001-4449-99ac-e740f92fb10a\\remote-workspace"],"createdAt":1790743675556,"updatedAt":1790743675757,"pending":[],"actualModelId":"lan-remote-chat-fixture","stopReason":"completed","finishedAt":1790743675757}}
+
+id: dcfb4402-920d-4ae6-b686-d88dda74a8dd:21
+data: {"usage":{"systemPromptTokens":20,"systemToolsTokens":41,"skillTokens":0,"messagesTokens":2,"userInputTokens":0,"promptTokens":64,"completionTokens":16,"totalTokens":80,"ragTokens":0,"builtinToolsTokens":41,"mcpToolsTokens":0,"toolResultsTokens":1,"currentPromptTokens":32,"contextWindow":128000,"conversationId":"f6270971-7db8-4277-b7d0-6d22fff6af26","modelId":"lan-remote-chat-fixture"}}
+
+event: done
+data: [DONE]
+

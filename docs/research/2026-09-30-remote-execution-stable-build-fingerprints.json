@@ -1,0 +1,998 @@
+{
+  "Before": [
+    {
+      "Path": "D:\\dev\\aether-code\\out\\main\\index.js",
+      "Hash": "09BC20CEE5F3CFF6FED6CF020DF7B234CE4D6E7B0008FBE4AE79241A9B687732",
+      "LastWriteTimeUtc": "2026-09-30T04:38:20.8547103Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\preload\\index.js",
+      "Hash": "DC796F94E5FCADAE21E0A7BCA8C3C7C18056D1744F95A4FCAF03A7C7081DA959",
+      "LastWriteTimeUtc": "2026-09-30T04:38:20.8767507Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\index.html",
+      "Hash": "BC21B6577D7E40F495116139B8917749270B9ECA9E96D37514DC96E4AB019048",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.999723Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\abap-D5KwWAsZ.js",
+      "Hash": "9A0702F7BBBFED5F5B7956F570BC75E16D14989C1C8E44129CF2AA853AB099B7",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9911796Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\apex-DVGUZ64i.js",
+      "Hash": "538EDD0491653F45A9B6C117C0A0FC3440B6E14CFDD8D641EA1DCD8DF1EC499D",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9911796Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\azcli-BEAhqcuE.js",
+      "Hash": "ECD11F534E43AF6C8E031893D7A334F90E9E974423EEF3290F641F1B1549C265",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9911796Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\bat-Bqkp9Cfu.js",
+      "Hash": "3FD52043375275296BDB6C1FBE7C31FF6C92F7EC434EA5959C8DDAA04BC41692",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9911796Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\bicep-DIlfshcM.js",
+      "Hash": "7F4FCA038A435AFC52AD3ECCAE734B9BABA4530976B1E1B852948926F0DD19B8",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9911796Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\cameligo-CLaaYNMV.js",
+      "Hash": "96BA53248C85A88929F57E8D5226B8107A82632F466C42405BADE1AB8B500F9E",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9911796Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\clojure-fcgFaMHx.js",
+      "Hash": "C99B6F24163380C1151F7624CB1D9EEE131DA9670C1D013FFD6C1FDBE3285F8E",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9911796Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\codicon-Brq4_Ui5.ttf",
+      "Hash": "CC2472E239E17062E7760AF87F8F5997720CC0D94AA014A615C418BAAF6333A8",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9685825Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\coffee-CzJ5oEdj.js",
+      "Hash": "145992AC56CC603F11B7A7AE234B40A92E3655A753E74AE3867E4B24317758EE",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9911796Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\cpp-CcN6f0ik.js",
+      "Hash": "73F96424FD9137735331550679F215D9E0BED8E38FF738B27A07773C6929739A",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9911796Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\csharp-BJeIuvde.js",
+      "Hash": "EECFD273316271B620C04842D7B0E503642EB6CAC7FC88FE5BD23FFF9D6DA0D6",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9911796Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\csp-D_3BK2Wp.js",
+      "Hash": "D72DADDD22B9876B7F43E454ADC0C862AA355A2B6621CB67AE9004B799A6B222",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9911796Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\css-i3rI3_64.js",
+      "Hash": "B6C08B9BEFA78E247161C65DF931715C7CE576DD52B0D45E2E565CAADFEA7CA4",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9911796Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\css.worker-D_2p-Q7z.js",
+      "Hash": "188E688471A679D3305F0269C4B56096F6385E7A2559A3C61BFD86EF493DF2F3",
+      "LastWriteTimeUtc": "2026-09-30T04:38:43.0037389Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\cssMode-CCMRowjI.js",
+      "Hash": "D74F3191A89F9F944A54700B0636BCFC08F6868F9E3FF5EAE95304F74A03619C",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9987179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\cypher-D0--_GAN.js",
+      "Hash": "2FEEA4008EB35BE27559E52B375E64A9DCD04FFDD05F6D5D1017F29B0B7E60DA",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9911796Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\dart-vLMHv35g.js",
+      "Hash": "A3177CE042F793F7D643CF20B88955F3D469751BEB93A3AB817D6074A7633028",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9911796Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\dockerfile--oxj0cAH.js",
+      "Hash": "31ED5C0216D0E570F8121AF0AD2F80CD214C2CA7F0E75F3F8703B3821D4AD032",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9921862Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\ecl-CeuUgzaZ.js",
+      "Hash": "139043ADE61E1F81DECF8DF23D5E9C6980D9EB6F18FFA46D44AECB5BC9D9EAAC",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9921862Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\editor.worker-BwBjdhCz.js",
+      "Hash": "19AA9F7F168DA1E58CEDB126A24172F93CCDF9592899A8109046F3BC45C2D5C6",
+      "LastWriteTimeUtc": "2026-09-30T04:38:43.0012275Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\elixir-eLfY1jWH.js",
+      "Hash": "D956B7475C871FA55E92898A7C80177FB4DCF2A307F073C6F9A1C5B1B473EFB8",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9921862Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\flow9-ZSTChSMd.js",
+      "Hash": "ED9BD8AA49F1C6D1942D7A6690735B3D0DE7D2F9800DD51068C0085329ACA398",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9921862Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\freemarker2-BQSdq2Cn.js",
+      "Hash": "EAF79F69AE0D2BD5B397C93B60F33E541C9192259A2CB3FBB1AC212E74053174",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9921862Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\fsharp-D2uoxuLH.js",
+      "Hash": "53EEF949608B983C4C249295ED84D9901A93AB44CC9E6A35CAEA84EAC980F4EC",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9921862Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\go-brnMpFrj.js",
+      "Hash": "51EC81E3FE4ED722EA25BFA1785DDA19BDF69B0B2E642D270A91CCEC410CF40F",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9921862Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\graphql-BeiGgjIU.js",
+      "Hash": "AB9BE553CF7AD12822291B133CFE92BB1E1506A42808BCB71B9CA565C0C787BB",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9921862Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\handlebars-DePMSdD-.js",
+      "Hash": "8FCA0F35D29C7815510BA84169FD678498F67DAE5611358F7D77FEA44E717125",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9921862Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\hcl-CrX1Es2W.js",
+      "Hash": "83328B85960A88E4C66C330578AB59B0E0FB1A016967FF6CCB9868AF181B82F6",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9921862Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\html-DWKK3_cK.js",
+      "Hash": "0E82A1FC16508E848671435CDD489D2B3EB8F45239C7F9AA37E39BE3C774C0A7",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9921862Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\html.worker-1zZHDAzE.js",
+      "Hash": "4B1C7B54F6D38CE713570A5FF344AD95E8D59AA7EDD95A3AECB3CA5E9F8268FC",
+      "LastWriteTimeUtc": "2026-09-30T04:38:43.0022329Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\htmlMode-CSOmBE07.js",
+      "Hash": "33D63F7E6B8676D720333F66F0AF70895B49A78C4E9414A9675D28967C0FB79C",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9987179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\icon-Cf2MTEzk.png",
+      "Hash": "2A1C432F7ED8D78AF6231069652D80F1775EE2108EB30D19818A518CB4620C4D",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9610467Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\index-BjyS_-lZ.js",
+      "Hash": "7C5C5E86D7B6F9B0D6422DD57E64FB772C537548A3429913E47A655687684E08",
+      "LastWriteTimeUtc": "2026-09-30T04:38:43.0430604Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\index-C4wtyr4Y.css",
+      "Hash": "B4D819B9A5DC9F8A83FFF171B27F23634585722DABAD9966D0DBED02F832F75A",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9911796Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\ini-BcQysCTb.js",
+      "Hash": "054867421ACB33D253B78E466463AD2DBED0A270C463046ED86A5CEBEB91E30B",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9921862Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\java-Dt3iMn2o.js",
+      "Hash": "B57D1D340B5587B2CF2C680B95290C00CCCED50795D2A3A481D67EBBAC1613B1",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9936919Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\javascript-8Hzhd8l-.js",
+      "Hash": "0AB57A5927B0B3DB2CF084B8F66FE2F58051B25E326601D08D2D77FB7538B4CA",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9936919Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\json.worker-Cq5111FN.js",
+      "Hash": "5AC3F2642C184561411CCEB03E343A1F363D7B6D9BAA8B42888291675175AFF8",
+      "LastWriteTimeUtc": "2026-09-30T04:38:43.0022329Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\jsonMode-Dwqt4sy8.js",
+      "Hash": "260740DADCF88279A36DE40FE3F0955995D642704BBCAF3DC2CA4C9C6F455FB3",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.999723Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\julia-Cm3ItYL_.js",
+      "Hash": "A22D72944935FD6039A40DCEA5A818FCD70D016C7E35E321C3CF31D0D9543174",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9921862Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\kotlin-Ddo1SjA5.js",
+      "Hash": "A440F155088F75FFCF627B6AEF7D962B941960E0DF80913E5746365A2FB1A1FE",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9936919Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\less-B7Qaxw-O.js",
+      "Hash": "1766C3EFC5A1471C644A68C3CC890F122CFD4AEB32B794B6FF60801D44CB0ED9",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9936919Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\lexon-C1U0m2n9.js",
+      "Hash": "3A9A538868ECC7C698BCEFCED31CE8593D20D0170CAB196BD68D9060A018BE08",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9936919Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\liquid-BvMDgRex.js",
+      "Hash": "A9D04F8234736E10DFD156D514E1B14716FB7481F8F758B299EAB76C45CE2B52",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9936919Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\lspLanguageFeatures-ChZgaqxk.js",
+      "Hash": "D92D59F835FB4167AAFDAF5AC1520975C0DE2767A32344878846E277A02CB191",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9987179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\lua-hNsuGJkO.js",
+      "Hash": "220B07C43BD9C0F89AF29EC10523A128CFCB03EBAF48B68C06AD8E4402624FE4",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9936919Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\m3-6ko6q9-_.js",
+      "Hash": "89425A42EAFFFC4CC12F607D8A44DE0D8277E1BB8B1963EE455CC267CB001ABE",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9936919Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\markdown-B0YTnTxW.js",
+      "Hash": "37BCBA78F0CA8FD6E723379D9956777E2A31756B3D0339D67322D7E5F8FCAF07",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9936919Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\mdx-BgZjy9jK.js",
+      "Hash": "AE4C25352D3A1CDA190DEF52ECD4F85D332F4A6DBE7FB3E18755C3E201C99E67",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9946994Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\mips-CJm71dS3.js",
+      "Hash": "223CEB0F1C8FF92E8B65E82EBF798BDF9FB56B9B03A08857541315EE27AD40D2",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9946994Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\msdax-BBeIktCY.js",
+      "Hash": "117CBFFF7CF0CB9719437332DAEC4E89844C4B91009F6D486DB01EFEE61B9499",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9946994Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\mysql-BWiizXSn.js",
+      "Hash": "7894618F34BB6ACF2D537751D4BBEBB7F3CDEE442C1F8C06E43C7A1C6ED9F5CC",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9946994Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\objective-c-B1L1C5EC.js",
+      "Hash": "821604ADD0E4A82FAF7B7E909D06258756E60335F6E4E618F6CA140892B0E222",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9946994Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\pascal-DMQyD4Xk.js",
+      "Hash": "07F83A1A8671962BEFA33C312461A4BC31E16FED80B1C5F262A922C3EADEA312",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9946994Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\pascaligo-VA_LQ1oU.js",
+      "Hash": "5BEE66FE65331C0608B764C8F2715B08272AE9669D603713CF27C40707EDC8B9",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9946994Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\perl-DC0Z0tlO.js",
+      "Hash": "7CB374E77BA8DDC64F5C46D669F94B86F94ABCD511B6F4DB8FEEB7805CF8D8AD",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9946994Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\pgsql-DaSGFTLp.js",
+      "Hash": "EA7C358B1EC73D96467C6D5115597F0E9783ED32BBF17EF4D698A8D4D890FFF9",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9946994Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\php-Bkx1qpkQ.js",
+      "Hash": "A4121441F69B5D73A2EB0CB2FF16DB2DD4524F4B4CA6FB1DC07C923A9D52045A",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9946994Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\pla-DEV89yYj.js",
+      "Hash": "D58A468512E8DB8E229654AA18EAD7B0C7AB6E1992EE9C3460F87DAD7A1BDBBB",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9946994Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\postiats-CVVurEnu.js",
+      "Hash": "CE448383D3ECA5AD965F363428EC1E886DF16D30601BE3A40B6F598247FD9FC0",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9946994Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\powerquery-BQ_t1ZiQ.js",
+      "Hash": "C8345F3EFCE17FBE95B3D858FC7A7B4DD7B8A752039EF36DED1326FF88BA2483",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9946994Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\powershell-BXiKvz7Z.js",
+      "Hash": "7B17E4299214B17CBECE7FFCA271239A90226674F1404C59864C5969099A3620",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9946994Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\protobuf-CndvAUGu.js",
+      "Hash": "4112401558CB1F367FBE6A7DEB57CE33AC480EBA77294E17A686BD8DD9E4145C",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9962046Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\pug-BxCXwerb.js",
+      "Hash": "771237A4B27CB262EAC010B528A58B3FA0BAFC4C302A34274AB55404DC29C721",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9962046Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\python-CKeqGu3T.js",
+      "Hash": "CDE2F955F01E4BE244443F61326E24CFAF56DDC1FCA0C8042B990662E959A2BB",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9962046Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\qsharp-BWK6YLKm.js",
+      "Hash": "F4C2D0C49068EC849A632AB9E623F90FAA352978561C9DF98692DE6DBFEF3873",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9962046Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\r-CtqYUQ6l.js",
+      "Hash": "40A071C68AC506B7DC02730D1BA1729045DC49C35B97A03000C7EBC9A1BC445A",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9962046Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\razor-7wSfaLYc.js",
+      "Hash": "12A93BF7F31281B47ED7F26BE2A06E17580B8BC94D44BC0BFE27C244F687FEF2",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9962046Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\redis-O7gSt3oh.js",
+      "Hash": "42397EB4E0F5DFC0A962388C3F45B78EED9F6E67FD2285D409DBE2402037EC95",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9962046Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\redshift-CvYMMYZY.js",
+      "Hash": "4E6847E48C0E499C0D2DCD4E6BCC97CD16DC04D2DE82B16821E186888B12A5D6",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9962046Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\restructuredtext-B-KQCVu_.js",
+      "Hash": "22840FBDF575D8FC1072580DE88ED5AB7A0C50AACC599380B80BC7863F7FA1A3",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9962046Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\ruby-DCd4DmAr.js",
+      "Hash": "8E86381844ACCF9BDADD1437494022F149C809480F39D4F73B27C4A285BE6E92",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9962046Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\rust-B1c0VCeq.js",
+      "Hash": "74DDF1037DB1C7DA8AADDA3450880055BF713B901113E238212593A72FE1328F",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9962046Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\sb-Chfc_wZF.js",
+      "Hash": "286AB4FDDA66C6BE304030289D4741CAB495BDE64D0B7D5FC3896A3C2562356B",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9962046Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\scala-DbVzH-3O.js",
+      "Hash": "3AC928A84B2125E5502C2D0C26B4C9198CC1DFA7114373DF41C33130C7A682E2",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9972114Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\scheme-D7PxodDG.js",
+      "Hash": "4C8E17DF03B509320E0669175ED1DA25273D29317234D5BC6E619F050F4D6186",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9972114Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\scss-B42qMyAu.js",
+      "Hash": "0CF4C39E29BE8C17C2E40EC266866A72828B184A4D9B996982293BC674723431",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9972114Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\shell-vZEubQ82.js",
+      "Hash": "3E8E7F1AFC74BAB95F19FF67AEFE10051CAC9FA91354258B8E2DB31E9D2C4DD5",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9972114Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\solidity-yHOxYChb.js",
+      "Hash": "FFC5CB7ADB15FC311B95A105AEEC9E0CA9F651BB5A8CAA219EB522C409F4D70A",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9972114Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\sophia-D7pU0Y1d.js",
+      "Hash": "E6EE0236A442D21372C9E6AA0888D4CC95C751B8F4D115859FE13FED3FB4CBCA",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9972114Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\sparql-DxuVdnRl.js",
+      "Hash": "9A7213C547F075773E06454DE65740A1401BA7883F04268532C6059FB9920EF2",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9972114Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\sql-BAGepFCR.js",
+      "Hash": "3D8142B5345FB48E8A4BCC26887D334261F6671DC9AF96670CCBA5268C6ACD45",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9972114Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\st-C-b0Dh53.js",
+      "Hash": "D0F547CF3A6EDF880013DDFE4362E66582B65BCFEC253B532FC079EBBE6C64D8",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9972114Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\swift-CbF6f74o.js",
+      "Hash": "29443B66B0F2E7D74953C2A3FA2EB946FD5C70F66CEEE4E3F5758324643834F2",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9972114Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\systemverilog-BOC0OOdC.js",
+      "Hash": "D71D7DD152324C2C571796D01B7EAD2155AB0CC277137E255DEFA86E57E49921",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9972114Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\tcl-Bb4GCwBr.js",
+      "Hash": "DD61BA6DADE27E7B7E72DFD6B74B7C2B22ACDE0D3922C62D68FED6C9024B9BA0",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9972114Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\ts.worker-B_w3UDAD.js",
+      "Hash": "3E138F68C2157D7B7BF52ECEB5AC434FB84CC0C3746FC79F93EDAA2C2E482107",
+      "LastWriteTimeUtc": "2026-09-30T04:38:43.0430604Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\tsMode-B8lwsO4r.js",
+      "Hash": "BE1964F95DB70B4D92B7D7923A980F1CEF4FFF9C76FA7C36C9B1AC8110669BE0",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.999723Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\twig-DvgEGWAV.js",
+      "Hash": "E8D39BFE95A99CACD368A1048357D3B08621398F995898F8C73B70CA24B65C96",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9972114Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\typescript-9h-EIQ0d.js",
+      "Hash": "70C1AE879F20D5305F389B67587AED579CAB393FB2701E6A11AFEA503D5F899A",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9936919Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\typespec-R77Ln7Jb.js",
+      "Hash": "24FF2D88DE64A611219D16FB78FC8B6F911968B1806CAF6DB9E8C75DF0D6FA3D",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9972114Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\vb-Bm6ESA0Q.js",
+      "Hash": "DEA7C9AD23F5644EBDC84739626FA4EA98FC8AF08BA2C5C529FDE7B422A126C5",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9987179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\wgsl-_KPae5vw.js",
+      "Hash": "6448968B84CC21319A998E3B356AC1E26104F384526EFD21E31D344EDB9F1338",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9987179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\workers-Cv3FqyGG.js",
+      "Hash": "BCB4F98958090AE88502DC77C93D0ACAF0ABBE23AADC53B3A132393B62183B8A",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9987179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\xml-vB2bify0.js",
+      "Hash": "F599FF391059808FDEB8BC4705A1638D605A7EABCAEA312FF99B5EEDEC9AA867",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9987179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\yaml-SvQVGyPm.js",
+      "Hash": "8FE3F4273FEBD5D85BEB66FF88319A64E7AD4307A642BC09834C67BF1AD28A3E",
+      "LastWriteTimeUtc": "2026-09-30T04:38:42.9987179Z"
+    }
+  ],
+  "After": [
+    {
+      "Path": "D:\\dev\\aether-code\\out\\main\\index.js",
+      "Hash": "20638614DE3E6A65AB7297DB3EAE2492A773C6891B03469799B4C73073F96B52",
+      "LastWriteTimeUtc": "2026-09-30T04:40:58.9500985Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\preload\\index.js",
+      "Hash": "DC796F94E5FCADAE21E0A7BCA8C3C7C18056D1744F95A4FCAF03A7C7081DA959",
+      "LastWriteTimeUtc": "2026-09-30T04:40:58.9708788Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\index.html",
+      "Hash": "BC21B6577D7E40F495116139B8917749270B9ECA9E96D37514DC96E4AB019048",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6241255Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\abap-D5KwWAsZ.js",
+      "Hash": "9A0702F7BBBFED5F5B7956F570BC75E16D14989C1C8E44129CF2AA853AB099B7",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6065441Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\apex-DVGUZ64i.js",
+      "Hash": "538EDD0491653F45A9B6C117C0A0FC3440B6E14CFDD8D641EA1DCD8DF1EC499D",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6191018Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\azcli-BEAhqcuE.js",
+      "Hash": "ECD11F534E43AF6C8E031893D7A334F90E9E974423EEF3290F641F1B1549C265",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6191018Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\bat-Bqkp9Cfu.js",
+      "Hash": "3FD52043375275296BDB6C1FBE7C31FF6C92F7EC434EA5959C8DDAA04BC41692",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6191018Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\bicep-DIlfshcM.js",
+      "Hash": "7F4FCA038A435AFC52AD3ECCAE734B9BABA4530976B1E1B852948926F0DD19B8",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6191018Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\cameligo-CLaaYNMV.js",
+      "Hash": "96BA53248C85A88929F57E8D5226B8107A82632F466C42405BADE1AB8B500F9E",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6191018Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\clojure-fcgFaMHx.js",
+      "Hash": "C99B6F24163380C1151F7624CB1D9EEE131DA9670C1D013FFD6C1FDBE3285F8E",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6191018Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\codicon-Brq4_Ui5.ttf",
+      "Hash": "CC2472E239E17062E7760AF87F8F5997720CC0D94AA014A615C418BAAF6333A8",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6065441Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\coffee-CzJ5oEdj.js",
+      "Hash": "145992AC56CC603F11B7A7AE234B40A92E3655A753E74AE3867E4B24317758EE",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6191018Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\cpp-CcN6f0ik.js",
+      "Hash": "73F96424FD9137735331550679F215D9E0BED8E38FF738B27A07773C6929739A",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6191018Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\csharp-BJeIuvde.js",
+      "Hash": "EECFD273316271B620C04842D7B0E503642EB6CAC7FC88FE5BD23FFF9D6DA0D6",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6191018Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\csp-D_3BK2Wp.js",
+      "Hash": "D72DADDD22B9876B7F43E454ADC0C862AA355A2B6621CB67AE9004B799A6B222",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6191018Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\css-i3rI3_64.js",
+      "Hash": "B6C08B9BEFA78E247161C65DF931715C7CE576DD52B0D45E2E565CAADFEA7CA4",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6191018Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\css.worker-D_2p-Q7z.js",
+      "Hash": "188E688471A679D3305F0269C4B56096F6385E7A2559A3C61BFD86EF493DF2F3",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6266368Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\cssMode-CCMRowjI.js",
+      "Hash": "D74F3191A89F9F944A54700B0636BCFC08F6868F9E3FF5EAE95304F74A03619C",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6231179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\cypher-D0--_GAN.js",
+      "Hash": "2FEEA4008EB35BE27559E52B375E64A9DCD04FFDD05F6D5D1017F29B0B7E60DA",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6191018Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\dart-vLMHv35g.js",
+      "Hash": "A3177CE042F793F7D643CF20B88955F3D469751BEB93A3AB817D6074A7633028",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6191018Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\dockerfile--oxj0cAH.js",
+      "Hash": "31ED5C0216D0E570F8121AF0AD2F80CD214C2CA7F0E75F3F8703B3821D4AD032",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6191018Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\ecl-CeuUgzaZ.js",
+      "Hash": "139043ADE61E1F81DECF8DF23D5E9C6980D9EB6F18FFA46D44AECB5BC9D9EAAC",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6191018Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\editor.worker-BwBjdhCz.js",
+      "Hash": "19AA9F7F168DA1E58CEDB126A24172F93CCDF9592899A8109046F3BC45C2D5C6",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6256306Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\elixir-eLfY1jWH.js",
+      "Hash": "D956B7475C871FA55E92898A7C80177FB4DCF2A307F073C6F9A1C5B1B473EFB8",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6206072Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\flow9-ZSTChSMd.js",
+      "Hash": "ED9BD8AA49F1C6D1942D7A6690735B3D0DE7D2F9800DD51068C0085329ACA398",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6206072Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\freemarker2-BQSdq2Cn.js",
+      "Hash": "EAF79F69AE0D2BD5B397C93B60F33E541C9192259A2CB3FBB1AC212E74053174",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6206072Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\fsharp-D2uoxuLH.js",
+      "Hash": "53EEF949608B983C4C249295ED84D9901A93AB44CC9E6A35CAEA84EAC980F4EC",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6206072Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\go-brnMpFrj.js",
+      "Hash": "51EC81E3FE4ED722EA25BFA1785DDA19BDF69B0B2E642D270A91CCEC410CF40F",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6206072Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\graphql-BeiGgjIU.js",
+      "Hash": "AB9BE553CF7AD12822291B133CFE92BB1E1506A42808BCB71B9CA565C0C787BB",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6206072Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\handlebars-DePMSdD-.js",
+      "Hash": "8FCA0F35D29C7815510BA84169FD678498F67DAE5611358F7D77FEA44E717125",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6206072Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\hcl-CrX1Es2W.js",
+      "Hash": "83328B85960A88E4C66C330578AB59B0E0FB1A016967FF6CCB9868AF181B82F6",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6206072Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\html-DWKK3_cK.js",
+      "Hash": "0E82A1FC16508E848671435CDD489D2B3EB8F45239C7F9AA37E39BE3C774C0A7",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6206072Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\html.worker-1zZHDAzE.js",
+      "Hash": "4B1C7B54F6D38CE713570A5FF344AD95E8D59AA7EDD95A3AECB3CA5E9F8268FC",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6266368Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\htmlMode-CSOmBE07.js",
+      "Hash": "33D63F7E6B8676D720333F66F0AF70895B49A78C4E9414A9675D28967C0FB79C",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6241255Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\icon-Cf2MTEzk.png",
+      "Hash": "2A1C432F7ED8D78AF6231069652D80F1775EE2108EB30D19818A518CB4620C4D",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.5964439Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\index-BjyS_-lZ.js",
+      "Hash": "7C5C5E86D7B6F9B0D6422DD57E64FB772C537548A3429913E47A655687684E08",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6703984Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\index-C4wtyr4Y.css",
+      "Hash": "B4D819B9A5DC9F8A83FFF171B27F23634585722DABAD9966D0DBED02F832F75A",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6065441Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\ini-BcQysCTb.js",
+      "Hash": "054867421ACB33D253B78E466463AD2DBED0A270C463046ED86A5CEBEB91E30B",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6206072Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\java-Dt3iMn2o.js",
+      "Hash": "B57D1D340B5587B2CF2C680B95290C00CCCED50795D2A3A481D67EBBAC1613B1",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6206072Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\javascript-8Hzhd8l-.js",
+      "Hash": "0AB57A5927B0B3DB2CF084B8F66FE2F58051B25E326601D08D2D77FB7538B4CA",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6206072Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\json.worker-Cq5111FN.js",
+      "Hash": "5AC3F2642C184561411CCEB03E343A1F363D7B6D9BAA8B42888291675175AFF8",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6256306Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\jsonMode-Dwqt4sy8.js",
+      "Hash": "260740DADCF88279A36DE40FE3F0955995D642704BBCAF3DC2CA4C9C6F455FB3",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6241255Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\julia-Cm3ItYL_.js",
+      "Hash": "A22D72944935FD6039A40DCEA5A818FCD70D016C7E35E321C3CF31D0D9543174",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6206072Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\kotlin-Ddo1SjA5.js",
+      "Hash": "A440F155088F75FFCF627B6AEF7D962B941960E0DF80913E5746365A2FB1A1FE",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6206072Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\less-B7Qaxw-O.js",
+      "Hash": "1766C3EFC5A1471C644A68C3CC890F122CFD4AEB32B794B6FF60801D44CB0ED9",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6206072Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\lexon-C1U0m2n9.js",
+      "Hash": "3A9A538868ECC7C698BCEFCED31CE8593D20D0170CAB196BD68D9060A018BE08",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6206072Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\liquid-BvMDgRex.js",
+      "Hash": "A9D04F8234736E10DFD156D514E1B14716FB7481F8F758B299EAB76C45CE2B52",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\lspLanguageFeatures-ChZgaqxk.js",
+      "Hash": "D92D59F835FB4167AAFDAF5AC1520975C0DE2767A32344878846E277A02CB191",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6231179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\lua-hNsuGJkO.js",
+      "Hash": "220B07C43BD9C0F89AF29EC10523A128CFCB03EBAF48B68C06AD8E4402624FE4",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6206072Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\m3-6ko6q9-_.js",
+      "Hash": "89425A42EAFFFC4CC12F607D8A44DE0D8277E1BB8B1963EE455CC267CB001ABE",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\markdown-B0YTnTxW.js",
+      "Hash": "37BCBA78F0CA8FD6E723379D9956777E2A31756B3D0339D67322D7E5F8FCAF07",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\mdx-BgZjy9jK.js",
+      "Hash": "AE4C25352D3A1CDA190DEF52ECD4F85D332F4A6DBE7FB3E18755C3E201C99E67",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\mips-CJm71dS3.js",
+      "Hash": "223CEB0F1C8FF92E8B65E82EBF798BDF9FB56B9B03A08857541315EE27AD40D2",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\msdax-BBeIktCY.js",
+      "Hash": "117CBFFF7CF0CB9719437332DAEC4E89844C4B91009F6D486DB01EFEE61B9499",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\mysql-BWiizXSn.js",
+      "Hash": "7894618F34BB6ACF2D537751D4BBEBB7F3CDEE442C1F8C06E43C7A1C6ED9F5CC",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\objective-c-B1L1C5EC.js",
+      "Hash": "821604ADD0E4A82FAF7B7E909D06258756E60335F6E4E618F6CA140892B0E222",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\pascal-DMQyD4Xk.js",
+      "Hash": "07F83A1A8671962BEFA33C312461A4BC31E16FED80B1C5F262A922C3EADEA312",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\pascaligo-VA_LQ1oU.js",
+      "Hash": "5BEE66FE65331C0608B764C8F2715B08272AE9669D603713CF27C40707EDC8B9",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\perl-DC0Z0tlO.js",
+      "Hash": "7CB374E77BA8DDC64F5C46D669F94B86F94ABCD511B6F4DB8FEEB7805CF8D8AD",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\pgsql-DaSGFTLp.js",
+      "Hash": "EA7C358B1EC73D96467C6D5115597F0E9783ED32BBF17EF4D698A8D4D890FFF9",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\php-Bkx1qpkQ.js",
+      "Hash": "A4121441F69B5D73A2EB0CB2FF16DB2DD4524F4B4CA6FB1DC07C923A9D52045A",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\pla-DEV89yYj.js",
+      "Hash": "D58A468512E8DB8E229654AA18EAD7B0C7AB6E1992EE9C3460F87DAD7A1BDBBB",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\postiats-CVVurEnu.js",
+      "Hash": "CE448383D3ECA5AD965F363428EC1E886DF16D30601BE3A40B6F598247FD9FC0",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\powerquery-BQ_t1ZiQ.js",
+      "Hash": "C8345F3EFCE17FBE95B3D858FC7A7B4DD7B8A752039EF36DED1326FF88BA2483",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\powershell-BXiKvz7Z.js",
+      "Hash": "7B17E4299214B17CBECE7FFCA271239A90226674F1404C59864C5969099A3620",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\protobuf-CndvAUGu.js",
+      "Hash": "4112401558CB1F367FBE6A7DEB57CE33AC480EBA77294E17A686BD8DD9E4145C",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\pug-BxCXwerb.js",
+      "Hash": "771237A4B27CB262EAC010B528A58B3FA0BAFC4C302A34274AB55404DC29C721",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\python-CKeqGu3T.js",
+      "Hash": "CDE2F955F01E4BE244443F61326E24CFAF56DDC1FCA0C8042B990662E959A2BB",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\qsharp-BWK6YLKm.js",
+      "Hash": "F4C2D0C49068EC849A632AB9E623F90FAA352978561C9DF98692DE6DBFEF3873",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\r-CtqYUQ6l.js",
+      "Hash": "40A071C68AC506B7DC02730D1BA1729045DC49C35B97A03000C7EBC9A1BC445A",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\razor-7wSfaLYc.js",
+      "Hash": "12A93BF7F31281B47ED7F26BE2A06E17580B8BC94D44BC0BFE27C244F687FEF2",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\redis-O7gSt3oh.js",
+      "Hash": "42397EB4E0F5DFC0A962388C3F45B78EED9F6E67FD2285D409DBE2402037EC95",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\redshift-CvYMMYZY.js",
+      "Hash": "4E6847E48C0E499C0D2DCD4E6BCC97CD16DC04D2DE82B16821E186888B12A5D6",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\restructuredtext-B-KQCVu_.js",
+      "Hash": "22840FBDF575D8FC1072580DE88ED5AB7A0C50AACC599380B80BC7863F7FA1A3",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\ruby-DCd4DmAr.js",
+      "Hash": "8E86381844ACCF9BDADD1437494022F149C809480F39D4F73B27C4A285BE6E92",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\rust-B1c0VCeq.js",
+      "Hash": "74DDF1037DB1C7DA8AADDA3450880055BF713B901113E238212593A72FE1328F",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6231179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\sb-Chfc_wZF.js",
+      "Hash": "286AB4FDDA66C6BE304030289D4741CAB495BDE64D0B7D5FC3896A3C2562356B",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\scala-DbVzH-3O.js",
+      "Hash": "3AC928A84B2125E5502C2D0C26B4C9198CC1DFA7114373DF41C33130C7A682E2",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6216131Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\scheme-D7PxodDG.js",
+      "Hash": "4C8E17DF03B509320E0669175ED1DA25273D29317234D5BC6E619F050F4D6186",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6231179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\scss-B42qMyAu.js",
+      "Hash": "0CF4C39E29BE8C17C2E40EC266866A72828B184A4D9B996982293BC674723431",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6231179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\shell-vZEubQ82.js",
+      "Hash": "3E8E7F1AFC74BAB95F19FF67AEFE10051CAC9FA91354258B8E2DB31E9D2C4DD5",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6231179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\solidity-yHOxYChb.js",
+      "Hash": "FFC5CB7ADB15FC311B95A105AEEC9E0CA9F651BB5A8CAA219EB522C409F4D70A",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6231179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\sophia-D7pU0Y1d.js",
+      "Hash": "E6EE0236A442D21372C9E6AA0888D4CC95C751B8F4D115859FE13FED3FB4CBCA",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6231179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\sparql-DxuVdnRl.js",
+      "Hash": "9A7213C547F075773E06454DE65740A1401BA7883F04268532C6059FB9920EF2",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6231179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\sql-BAGepFCR.js",
+      "Hash": "3D8142B5345FB48E8A4BCC26887D334261F6671DC9AF96670CCBA5268C6ACD45",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6231179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\st-C-b0Dh53.js",
+      "Hash": "D0F547CF3A6EDF880013DDFE4362E66582B65BCFEC253B532FC079EBBE6C64D8",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6231179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\swift-CbF6f74o.js",
+      "Hash": "29443B66B0F2E7D74953C2A3FA2EB946FD5C70F66CEEE4E3F5758324643834F2",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6231179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\systemverilog-BOC0OOdC.js",
+      "Hash": "D71D7DD152324C2C571796D01B7EAD2155AB0CC277137E255DEFA86E57E49921",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6231179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\tcl-Bb4GCwBr.js",
+      "Hash": "DD61BA6DADE27E7B7E72DFD6B74B7C2B22ACDE0D3922C62D68FED6C9024B9BA0",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6231179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\ts.worker-B_w3UDAD.js",
+      "Hash": "3E138F68C2157D7B7BF52ECEB5AC434FB84CC0C3746FC79F93EDAA2C2E482107",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6715431Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\tsMode-B8lwsO4r.js",
+      "Hash": "BE1964F95DB70B4D92B7D7923A980F1CEF4FFF9C76FA7C36C9B1AC8110669BE0",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6241255Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\twig-DvgEGWAV.js",
+      "Hash": "E8D39BFE95A99CACD368A1048357D3B08621398F995898F8C73B70CA24B65C96",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6231179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\typescript-9h-EIQ0d.js",
+      "Hash": "70C1AE879F20D5305F389B67587AED579CAB393FB2701E6A11AFEA503D5F899A",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6206072Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\typespec-R77Ln7Jb.js",
+      "Hash": "24FF2D88DE64A611219D16FB78FC8B6F911968B1806CAF6DB9E8C75DF0D6FA3D",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6231179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\vb-Bm6ESA0Q.js",
+      "Hash": "DEA7C9AD23F5644EBDC84739626FA4EA98FC8AF08BA2C5C529FDE7B422A126C5",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6231179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\wgsl-_KPae5vw.js",
+      "Hash": "6448968B84CC21319A998E3B356AC1E26104F384526EFD21E31D344EDB9F1338",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6231179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\workers-Cv3FqyGG.js",
+      "Hash": "BCB4F98958090AE88502DC77C93D0ACAF0ABBE23AADC53B3A132393B62183B8A",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6241255Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\xml-vB2bify0.js",
+      "Hash": "F599FF391059808FDEB8BC4705A1638D605A7EABCAEA312FF99B5EEDEC9AA867",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6231179Z"
+    },
+    {
+      "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\yaml-SvQVGyPm.js",
+      "Hash": "8FE3F4273FEBD5D85BEB66FF88319A64E7AD4307A642BC09834C67BF1AD28A3E",
+      "LastWriteTimeUtc": "2026-09-30T04:41:27.6231179Z"
+    }
+  ],
+  "TestExitCode": 1,
+  "FinishedAt": "2026-09-30T04:45:24.9382040Z"
+}

@@ -293,7 +293,16 @@ export class JSONLConversationHistory implements ConversationHistory {
 
   private async migrateFromSqlite(ctx: Ctx): Promise<void> {
     const migrated = this.migratedPath(ctx)
-    if (fs.existsSync(migrated)) return
+    // A JSONL clear is authoritative even when the legacy SQLite source still
+    // contains rows.  Without this state, the next startup would see the
+    // renamed JSONL file as missing and import those stale rows back into a
+    // session the user explicitly deleted.
+    try {
+      const marker = (await fs.promises.readFile(migrated, 'utf8')).trim()
+      if (marker === 'cleared' || marker.length > 0) return
+    } catch {
+      // No marker yet; continue with the lazy legacy import below.
+    }
     const { SQLiteConversationHistory } = await import('./history.js')
     const sqlite = new SQLiteConversationHistory()
     let rows: Message[] = []
@@ -303,10 +312,12 @@ export class JSONLConversationHistory implements ConversationHistory {
       rows = []
     }
     await fs.promises.mkdir(path.dirname(migrated), { recursive: true })
-    if (rows.length === 0) {
-      await fs.promises.writeFile(migrated, String(Date.now()))
-      return
-    }
+    // An empty SQLite session is not a durable migration decision. The
+    // session may be populated later by an importer, recovery tool, or a
+    // test/upgrade step; a permanent marker here would make subsequent reads
+    // skip those rows forever. Only a non-empty migration writes a durable
+    // marker, while an explicit clear writes the separate `cleared` marker.
+    if (rows.length === 0) return
     const file = this.filePath(ctx)
     const tmp = `${file}.tmp`
     let seq = 1
@@ -418,6 +429,11 @@ export class JSONLConversationHistory implements ConversationHistory {
           scope: 'clear',
         })
       }
+      // Persist the clear decision next to the JSONL session.  The legacy
+      // SQLite database can remain populated during a gradual migration, but
+      // it must not resurrect a deliberately cleared session on restart.
+      await fs.promises.mkdir(path.dirname(this.migratedPath(ctx)), { recursive: true })
+      await fs.promises.writeFile(this.migratedPath(ctx), 'cleared')
     })
     this.states.delete(key)
   }

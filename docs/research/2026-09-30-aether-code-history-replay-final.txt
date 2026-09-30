@@ -1,0 +1,193 @@
+
+Running 3 tests using 1 worker
+
+(node:19076) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok 1 e2e\history-replay.spec.ts:132:5 › 首次启动：引擎就绪并完成数据库初始化 (924ms)
+  x  2 e2e\history-replay.spec.ts:140:5 › 重启后回放引擎历史：消息、思考、工具调用逐项还原 (22.6s)
+(node:19448) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  x  3 e2e\history-replay.spec.ts:181:5 › 清空后引擎侧历史一并删除：重启不会复活 (20.0s)
+
+
+  1) e2e\history-replay.spec.ts:140:5 › 重启后回放引擎历史：消息、思考、工具调用逐项还原 ───────────────────────────────────
+
+    Error: expect(locator).toContainText(expected) failed
+
+    Locator: locator('.chat-panel')
+    Expected substring: "读取文件"
+    Received string:    "对话aether-code新建多选E2E历史回放探针-用户消息过程 · 思考 1 段E2E历史回放探针-助手回答过程 · 工具调用 1尚未配置模型，对话会失败。去添加模型全部任务已完成建索引默认模型⌃"
+    Timeout: 20000ms
+
+    Call log:
+      - Expect "toContainText" locator('.chat-panel') with timeout 20000ms
+      - waiting for locator('.chat-panel')
+        43 × locator resolved to <section aria-label="对话" class="chat-panel">…</section>
+           - unexpected value "对话aether-code新建多选E2E历史回放探针-用户消息过程 · 思考 1 段E2E历史回放探针-助手回答过程 · 工具调用 1尚未配置模型，对话会失败。去添加模型全部任务已完成建索引默认模型⌃"
+
+
+      175 |
+      176 |   // 工具调用还原为中文工具卡片（read_file → 读取文件），并回填了结果
+    > 177 |   await expect(page.locator('.chat-panel')).toContainText('读取文件')
+          |                                             ^
+      178 |   await expect(page.locator('.chat-panel')).toContainText(PROBE_TOOL_RESULT)
+      179 | })
+      180 |
+        at D:\dev\aether-code\e2e\history-replay.spec.ts:177:45
+
+    Error Context: test-results\history-replay-重启后回放引擎历史：消息、思考、工具调用逐项还原\error-context.md
+
+    Error Context: test-results\history-replay-重启后回放引擎历史：消息、思考、工具调用逐项还原\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\history-replay-重启后回放引擎历史：消息、思考、工具调用逐项还原\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\history-replay-重启后回放引擎历史：消息、思考、工具调用逐项还原\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2) e2e\history-replay.spec.ts:181:5 › 清空后引擎侧历史一并删除：重启不会复活 ────────────────────────────────────────
+
+    Error: expect(locator).toBeEnabled() failed
+
+    Locator: locator('.chat__toolbar-btn').filter({ hasText: '清空' })
+    Expected: enabled
+    Timeout: 20000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeEnabled" locator('.chat__toolbar-btn').filter({ hasText: '清空' }) with timeout 20000ms
+      - waiting for locator('.chat__toolbar-btn').filter({ hasText: '清空' })
+
+
+      181 | test('清空后引擎侧历史一并删除：重启不会复活', async () => {
+      182 |   const clearButton = page.locator('.chat__toolbar-btn', { hasText: '清空' })
+    > 183 |   await expect(clearButton).toBeEnabled()
+          |                             ^
+      184 |   await clearButton.click()
+      185 |   await expect(page.locator('.chat-panel')).not.toContainText(PROBE_USER)
+      186 |
+        at D:\dev\aether-code\e2e\history-replay.spec.ts:183:29
+
+    Error Context: test-results\history-replay-清空后引擎侧历史一并删除：重启不会复活\error-context.md
+
+    Error Context: test-results\history-replay-清空后引擎侧历史一并删除：重启不会复活\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\history-replay-清空后引擎侧历史一并删除：重启不会复活\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\history-replay-清空后引擎侧历史一并删除：重启不会复活\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2 failed
+    e2e\history-replay.spec.ts:140:5 › 重启后回放引擎历史：消息、思考、工具调用逐项还原 ────────────────────────────────────
+    e2e\history-replay.spec.ts:181:5 › 清空后引擎侧历史一并删除：重启不会复活 ─────────────────────────────────────────
+  1 passed (46.7s)
+
+ RUN  v2.1.9 D:/dev/ai-agent-engine
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > returns an explicit empty persisted snapshot without creating a run
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > reopens ended conversations with persisted turns, attachment references, todos and file changes
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > recovers pending approval after the in-memory stream has gone without claiming its answer
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > preserves interrupted terminal outcomes after restart instead of presenting a resumable stream
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > scopes every persisted collection and live stream by tenant and session
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > pairs a live projection with its exact cursor and replays only later tool/result/terminal frames
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > rejects unknown cursors before SSE begins instead of silently replaying the entire turn
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > requires a new snapshot when the consumed cursor has fallen outside bounded replay
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > keeps live root state at the projection watermark when persistence has advanced ahead of delivery
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > cancels server execution and exposes its outcome without invoking the agent or model again
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > cancels a waiting run after SSE finished and advances the snapshot to the persisted terminal outcome
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > does not resurrect a deleted turn from a retained bus or replay its old frames
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+ ✓ src/api/http/routes/__tests__/chat-recovery.test.ts (12 tests) 392ms
+ ✓ src/api/http/routes/__tests__/conversation-destructive.test.ts (12 tests) 918ms
+stdout | src/storage/conversation/__tests__/history-compress-identity.test.ts > SQLite compaction preserves retained message identity > preserves current turn metadata, model, tool state and chronological order (retention: 4)
+[history] compress: 440 → 53 tokens (freed 387)
+
+stdout | src/storage/conversation/__tests__/history-compress-identity.test.ts > SQLite compaction preserves retained message identity > preserves current turn metadata, model, tool state and chronological order (retention: {"keepRecentTokens":40})
+[history] compress: 440 → 53 tokens (freed 387)
+
+ ✓ src/storage/conversation/__tests__/history-compress-identity.test.ts (2 tests) 440ms
+stderr | src/core/llm-adapter/__tests__/history-capabilities.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+stdout | src/core/llm-adapter/__tests__/history-capabilities.test.ts > compacted constraints reach the real provider request > openai complete and stream preserve history and system prompt
+[openai.ts] messagesToOpenAI result (2 messages):
+[0] system: "【历史上下文摘要】保留 CRLF；不要改动用户手写文件。"
+[1] user: "继续修复"
+[openai.ts] messagesToOpenAI result (2 messages):
+[0] system: "【历史上下文摘要】保留 CRLF；不要改动用户手写文件。"
+[1] user: "继续修复"
+
+ ✓ src/core/llm-adapter/__tests__/history-capabilities.test.ts (9 tests) 17ms
+stdout | src/storage/conversation/__tests__/history-compress-tombstone.test.ts > compress() 与 tombstone 冲突 — Bug 复现与修复验证 > 【BUG 复现】compress 后 getFullHistory 不应返回空数组
+[history] compress: 2000 → 606 tokens (freed 1394)
+[test] after compress, message count: 7
+[test] roles: system, user, assistant, user, assistant, user, assistant
+
+stdout | src/storage/conversation/__tests__/history-compress-tombstone.test.ts > compress() 与 tombstone 冲突 — Bug 复现与修复验证 > compress 后 recentMessages 是原始最后 6 条
+[history] compress: 2000 → 602 tokens (freed 1398)
+
+ ✓ src/storage/conversation/__tests__/history-compress-tombstone.test.ts (2 tests) 4ms
+ ✓ src/storage/conversation/__tests__/history-maxTokens.test.ts (6 tests) 2ms
+
+ Test Files  6 passed (6)
+      Tests  43 passed (43)
+   Start at  02:27:33
+   Duration  4.90s (transform 593ms, setup 0ms, collect 2.15s, tests 1.77s, environment 1ms, prepare 262ms)
+
+
+=== Verification metadata ===
+- Engine source marker fix present in src/storage/conversation/jsonl-history.ts: migrateFromSqlite no longer returns on an existing .migrated marker and no longer writes a permanent marker when SQLite rows are empty.
+- Engine compile: direct `node node_modules/typescript/bin/tsc --noEmitOnError` passed. `npm run build` wrapper first hit transient `uv_os_get_passwd returned ENOMEM`; the direct compiler refreshed dist JavaScript for this verification. No source or test files were changed by this run.
+- Playwright command: `npx playwright test e2e/history-replay.spec.ts --workers=1 --reporter=list`.
+- Playwright result: 1 passed, 2 failed, exit code 1. The first startup/readiness test passed. After marker fix, user and assistant probe messages replayed successfully. Remaining replay failure is the stale expectation for a localized `读取文件` tool card/result; rendered UI shows `过程 · 工具调用 1` but no tool name/result text. The clear-history test fails because `.chat__toolbar-btn` no longer contains a `清空` button in the current ChatView; this is a selector/behavior contract drift.
+- Related engine history command: `npx vitest --run --maxWorkers=1 --minWorkers=1 src/storage/conversation/__tests__ src/api/http/routes/__tests__/chat-recovery.test.ts src/api/http/routes/__tests__/conversation-destructive.test.ts src/core/llm-adapter/__tests__/history-capabilities.test.ts`.
+- Related engine history result: 6 files, 43 tests passed, exit code 0.

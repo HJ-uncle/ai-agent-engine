@@ -1,0 +1,10 @@
+D:\dev\aether-code\node_modules\playwright-core\lib\coreBundle.js:64027
+    return dispatcherConnection._dispatcherByGuid.get(x._guid)._object;
+                                                              ^
+
+TypeError: Cannot read properties of undefined (reading '_object')
+    at clientConnection.toImpl (D:\dev\aether-code\node_modules\playwright-core\lib\coreBundle.js:64027:63)
+    at ElectronApplication2.process (D:\dev\aether-code\node_modules\playwright-core\lib\coreBundle.js:63507:41)
+    at file:///D:/dev/ai-agent-engine/docs/research/2026-09-30-lan-remote-chat-probe.mjs:373:47
+
+Node.js v24.20.0

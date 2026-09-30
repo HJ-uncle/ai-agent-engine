@@ -1,0 +1,51 @@
+
+Running 2 tests using 1 worker
+
+(node:34712) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok 1 e2e\smoke.spec.ts:1001:5 › 全局替换：include 过滤后批量替换并写盘 (2.0s)
+  x  2 e2e\smoke.spec.ts:1031:5 › 搜索排除：设置里的规则减少搜索结果，取消勾选后放回 (21.1s)
+
+
+  1) e2e\smoke.spec.ts:1031:5 › 搜索排除：设置里的规则减少搜索结果，取消勾选后放回 ──────────────────────────────────────────
+
+    Error: expect(locator).toHaveCount(expected) failed
+
+    Locator:  locator('.exclude-row').filter({ has: locator('input[value="**/node_modules"]') })
+    Expected: 1
+    Received: 0
+    Timeout:  20000ms
+
+    Call log:
+      - Expect "toHaveCount" locator('.exclude-row').filter({ has: locator('input[value="**/node_modules"]') }) with timeout 20000ms
+      - waiting for locator('.exclude-row').filter({ has: locator('input[value="**/node_modules"]') })
+        43 × locator resolved to 0 elements
+           - unexpected value "0"
+
+
+      1057 |   await expect(
+      1058 |     page.locator('.exclude-row').filter({ has: page.locator('input[value="**/node_modules"]') })
+    > 1059 |   ).toHaveCount(1)
+           |     ^
+      1060 |
+      1061 |   // 加一条挡住 sub/ 的规则：目录命中即剪枝，sub/nested.txt 应立刻从结果里消失
+      1062 |   await page.locator('.settings-view__actions .btn', { hasText: '添加规则' }).click()
+        at D:\dev\aether-code\e2e\smoke.spec.ts:1059:5
+
+    Error Context: test-results\smoke-搜索排除：设置里的规则减少搜索结果，取消勾选后放回\error-context.md
+
+    Error Context: test-results\smoke-搜索排除：设置里的规则减少搜索结果，取消勾选后放回\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\smoke-搜索排除：设置里的规则减少搜索结果，取消勾选后放回\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\smoke-搜索排除：设置里的规则减少搜索结果，取消勾选后放回\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    e2e\smoke.spec.ts:1031:5 › 搜索排除：设置里的规则减少搜索结果，取消勾选后放回 ───────────────────────────────────────────
+  1 passed (24.9s)
+
+EXIT_CODE=1

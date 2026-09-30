@@ -13,24 +13,32 @@ export async function lspRoutes(fastify: FastifyInstance) {
 
   // 对一个文件运行诊断
   fastify.post<{
-    Body: { filePath: string; content?: string; adapters?: string[]; sessionId?: string; useCache?: boolean }
+    Body: { filePath: string; content?: string; adapters?: string[]; sessionId?: string; workspacePaths?: string[]; useCache?: boolean; timeoutMs?: number }
   }>('/lsp/diagnose', async (request, reply) => {
-    const { filePath, content, adapters, sessionId, useCache } = request.body ?? ({} as any)
+    const { filePath, content, adapters, sessionId, workspacePaths, useCache, timeoutMs } = request.body ?? ({} as any)
     if (!filePath) return reply.code(200).send(fail(40000, '缺少 filePath'))
 
     const tenantId = (request as any).authContext?.tenantId
-    // 若给了 sessionId，用 workspace 目录做相对路径解析
+    if (timeoutMs !== undefined && (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
+      return reply.code(200).send(fail(40000, 'timeoutMs 必须为正数'))
+    }
+    // A session-bound diagnosis must resolve through the same workspace containment
+    // check as file tools; raw path.resolve would permit an absolute escape.
     let abs = filePath
     if (!path.isAbsolute(filePath) && sessionId) {
       try {
-        const ctx: any = { tenantId, sessionId }
-        const cwd = workspaceManager.init(ctx)
-        abs = path.resolve(cwd, filePath)
+        const ctx: any = { tenantId, sessionId, workspacePaths }
+        workspaceManager.init(ctx)
+        abs = workspaceManager.resolveSafePath(ctx, filePath)
       } catch {
-        abs = path.resolve(filePath)
+        return reply.code(200).send(fail(40300, '文件路径不在当前工作区内'))
       }
     } else if (!path.isAbsolute(filePath)) {
+      if (sessionId) return reply.code(200).send(fail(40300, '文件路径不在当前工作区内'))
       abs = path.resolve(filePath)
+    } else if (sessionId) {
+      try { abs = workspaceManager.resolveSafePath({ tenantId, sessionId, workspacePaths } as any, filePath) }
+      catch { return reply.code(403).send(fail(40300, '文件路径不在当前工作区内')) }
     }
 
     const controller = new AbortController()
@@ -42,6 +50,7 @@ export async function lspRoutes(fastify: FastifyInstance) {
       const result = await diagnoseFile(abs, {
         content, adapters, useCache,
         tenantId, sessionId, signal: controller.signal,
+        timeoutMs: timeoutMs === undefined ? undefined : Math.min(Math.floor(timeoutMs), 120_000),
       })
       return reply.code(200).send(success(result))
     } finally {
@@ -52,8 +61,13 @@ export async function lspRoutes(fastify: FastifyInstance) {
 
   // 清理过期缓存
   fastify.delete<{ Querystring: { days?: number } }>('/lsp/cache', async (request, reply) => {
-    const days = Math.max(1, parseInt(String(request.query.days ?? 7), 10))
-    const removed = await purgeLspCache(days)
+    const parsedDays = Number(request.query.days ?? 7)
+    if (!Number.isFinite(parsedDays) || !Number.isInteger(parsedDays) || parsedDays < 1 || parsedDays > 3650) {
+      return reply.code(200).send(fail(40000, 'days 必须是 1 到 3650 的整数'))
+    }
+    const days = parsedDays
+    const tenantId = (request as any).authContext?.tenantId
+    const removed = await purgeLspCache(days, tenantId)
     return reply.code(200).send(success({ removed, days }))
   })
 }

@@ -1,0 +1,793 @@
+{
+  "capturedAt": "2026-09-29T16:38:49.886Z",
+  "root": "D:/dev/ai-agent-engine",
+  "operationCount": 157,
+  "uniquePathCount": 124,
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/agents",
+      "module": "src/api/http/routes/agents.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/agents",
+      "module": "src/api/http/routes/agents.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/agents/:id",
+      "module": "src/api/http/routes/agents.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/agents/:id",
+      "module": "src/api/http/routes/agents.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/agents/:id",
+      "module": "src/api/http/routes/agents.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/models",
+      "module": "src/api/http/routes/models.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/models",
+      "module": "src/api/http/routes/models.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/models/:id",
+      "module": "src/api/http/routes/models.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/models/:id",
+      "module": "src/api/http/routes/models.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/models/:id/test",
+      "module": "src/api/http/routes/models.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/models/capability-defs",
+      "module": "src/api/http/routes/models.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/models/detect-capabilities",
+      "module": "src/api/http/routes/models.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/models/whitelist",
+      "module": "src/api/http/routes/models.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/user",
+      "module": "src/api/http/routes/auth.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/changes",
+      "module": "src/api/http/routes/changes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/changes/:id/keep",
+      "module": "src/api/http/routes/changes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/changes/:id/revert",
+      "module": "src/api/http/routes/changes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/changes/keep-all",
+      "module": "src/api/http/routes/changes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/changes/keep-many",
+      "module": "src/api/http/routes/changes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/changes/revert-batch",
+      "module": "src/api/http/routes/changes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/chat",
+      "module": "src/api/http/routes/chat.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/chat/cancel",
+      "module": "src/api/http/routes/chat.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/chat/runs",
+      "module": "src/api/http/routes/chat.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/chat/snapshot",
+      "module": "src/api/http/routes/chat.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/chat/status",
+      "module": "src/api/http/routes/chat.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/chat/stream",
+      "module": "src/api/http/routes/chat.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/codegraph/index",
+      "module": "src/api/http/routes/codegraph.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/codegraph/status",
+      "module": "src/api/http/routes/codegraph.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/command-jobs",
+      "module": "src/api/http/routes/command-jobs.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/command-jobs/:jobId",
+      "module": "src/api/http/routes/command-jobs.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/command-jobs/:jobId/cancel",
+      "module": "src/api/http/routes/command-jobs.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/command-jobs/:jobId/output",
+      "module": "src/api/http/routes/command-jobs.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/conversation/compress",
+      "module": "src/api/http/routes/conversation.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/conversation/history",
+      "module": "src/api/http/routes/conversation.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/conversation/history",
+      "module": "src/api/http/routes/conversation.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/conversation/messages/:messageId",
+      "module": "src/api/http/routes/conversation.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/conversation/sessions",
+      "module": "src/api/http/routes/conversation.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/conversation/truncate",
+      "module": "src/api/http/routes/conversation.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/conversation/turns/:conversationId",
+      "module": "src/api/http/routes/conversation.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/conversations/:conversationId",
+      "module": "src/api/http/routes/conversation.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/cron",
+      "module": "src/api/http/routes/cron.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/cron",
+      "module": "src/api/http/routes/cron.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/cron/:id",
+      "module": "src/api/http/routes/cron.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/cron/:id",
+      "module": "src/api/http/routes/cron.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/cron/:id/disable",
+      "module": "src/api/http/routes/cron.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/cron/:id/enable",
+      "module": "src/api/http/routes/cron.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/deepseek/balance",
+      "module": "src/api/http/routes/deepseek.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/deepseek/fim",
+      "module": "src/api/http/routes/deepseek.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/deepseek/json",
+      "module": "src/api/http/routes/deepseek.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/deepseek/models",
+      "module": "src/api/http/routes/deepseek.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/deepseek/prefix",
+      "module": "src/api/http/routes/deepseek.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/deepseek/prices",
+      "module": "src/api/http/routes/deepseek.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/deepseek/prices",
+      "module": "src/api/http/routes/deepseek.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/deepseek/status",
+      "module": "src/api/http/routes/deepseek.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/external-skills",
+      "module": "src/api/http/routes/tools.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/flows/:runId/stop",
+      "module": "src/api/http/routes/flows/flow-routes.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/flows/run",
+      "module": "src/api/http/routes/flows/flow-routes.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/health",
+      "module": "src/api/http/routes/metrics.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/knowledge/documents",
+      "module": "src/api/http/routes/knowledge.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/knowledge/documents",
+      "module": "src/api/http/routes/knowledge.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/knowledge/documents/:id",
+      "module": "src/api/http/routes/knowledge.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/knowledge/search",
+      "module": "src/api/http/routes/knowledge.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/lsp/adapters",
+      "module": "src/api/http/routes/lsp.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/lsp/cache",
+      "module": "src/api/http/routes/lsp.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/lsp/diagnose",
+      "module": "src/api/http/routes/lsp.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/mcp/servers",
+      "module": "src/api/http/routes/mcp.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/mcp/servers",
+      "module": "src/api/http/routes/mcp.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/mcp/servers/:id",
+      "module": "src/api/http/routes/mcp.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/mcp/servers/:id",
+      "module": "src/api/http/routes/mcp.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/mcp/servers/:id",
+      "module": "src/api/http/routes/mcp.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/mcp/servers/:id",
+      "module": "src/api/http/routes/mcp.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/mcp/servers/:id/disable",
+      "module": "src/api/http/routes/mcp.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/mcp/servers/:id/enable",
+      "module": "src/api/http/routes/mcp.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/mcp/servers/:id/test",
+      "module": "src/api/http/routes/mcp.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/memory/:id",
+      "module": "src/api/http/routes/memory.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/memory/:id",
+      "module": "src/api/http/routes/memory.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/memory/consolidate",
+      "module": "src/api/http/routes/memory.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/memory/graph",
+      "module": "src/api/http/routes/memory.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/memory/link",
+      "module": "src/api/http/routes/memory.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/memory/list",
+      "module": "src/api/http/routes/memory.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/memory/recall/:key",
+      "module": "src/api/http/routes/memory.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/memory/remember",
+      "module": "src/api/http/routes/memory.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/messages/:messageId",
+      "module": "src/api/http/routes/messages.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/messages/:messageId",
+      "module": "src/api/http/routes/messages.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/messages/:messageId/regenerate",
+      "module": "src/api/http/routes/messages.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/messages/:messageId/tokens",
+      "module": "src/api/http/routes/messages.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/meta",
+      "module": "src/api/http/routes/metrics.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/metrics",
+      "module": "src/api/http/routes/metrics.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/openapi.json",
+      "module": "src/api/http/routes/metrics.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/performance/stats",
+      "module": "src/api/http/routes/performance.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/performance/tool-pool",
+      "module": "src/api/http/routes/performance.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/security/audit-log",
+      "module": "src/api/http/routes/security.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/security/audit-log",
+      "module": "src/api/http/routes/security.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/security/mode",
+      "module": "src/api/http/routes/security.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/security/mode",
+      "module": "src/api/http/routes/security.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/security/network-policy",
+      "module": "src/api/http/routes/security.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/security/network-policy",
+      "module": "src/api/http/routes/security.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/security/network-policy/reset",
+      "module": "src/api/http/routes/security.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/security/policies",
+      "module": "src/api/http/routes/security.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/security/policies",
+      "module": "src/api/http/routes/security.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/security/policies/:id",
+      "module": "src/api/http/routes/security.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/security/policies/:id",
+      "module": "src/api/http/routes/security.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/security/policies/reset",
+      "module": "src/api/http/routes/security.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/sessions/:sessionId",
+      "module": "src/api/http/routes/conversation.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/sessions/:sessionId/binding",
+      "module": "src/api/http/routes/sessions.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/sessions/:sessionId/tokens",
+      "module": "src/api/http/routes/messages.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/settings",
+      "module": "src/api/http/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/settings",
+      "module": "src/api/http/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/skills",
+      "module": "src/api/http/routes/skill-imports.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/skills",
+      "module": "src/api/http/routes/skill-imports.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/skills/:name",
+      "module": "src/api/http/routes/skill-imports.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/skills/:name",
+      "module": "src/api/http/routes/skill-imports.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/skills/imports",
+      "module": "src/api/http/routes/skill-imports.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/skills/imports",
+      "module": "src/api/http/routes/skill-imports.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/skills/imports/:id",
+      "module": "src/api/http/routes/skill-imports.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/skills/imports/:id",
+      "module": "src/api/http/routes/skill-imports.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/skills/imports/chunks",
+      "module": "src/api/http/routes/skill-imports.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/skills/imports/chunks",
+      "module": "src/api/http/routes/skill-imports.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/skills/imports/chunks/merge",
+      "module": "src/api/http/routes/skill-imports.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/subagent/cancel",
+      "module": "src/api/http/routes/chat.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/subagent/runs",
+      "module": "src/api/http/routes/subagent.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/subagent/runs/:runId",
+      "module": "src/api/http/routes/subagent.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/subagent/runs/:runId/cancel",
+      "module": "src/api/http/routes/subagent.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/subagent/runs/:runId/events",
+      "module": "src/api/http/routes/subagent.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/system-tools",
+      "module": "src/api/http/routes/tools.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks",
+      "module": "src/api/http/routes/tasks.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/tasks",
+      "module": "src/api/http/routes/tasks.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/tasks/:jobId",
+      "module": "src/api/http/routes/tasks.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/:jobId",
+      "module": "src/api/http/routes/tasks.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/tenant/identity",
+      "module": "src/api/http/routes/tenant.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/tenant/identity",
+      "module": "src/api/http/routes/tenant.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/tenant/identity",
+      "module": "src/api/http/routes/tenant.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/terminal/:id",
+      "module": "src/api/http/routes/terminal.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/terminal/create",
+      "module": "src/api/http/routes/terminal.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/terminal/ws/:id",
+      "module": "src/api/http/routes/terminal.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/todos",
+      "module": "src/api/http/routes/todos.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/todos",
+      "module": "src/api/http/routes/todos.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/todos/:id",
+      "module": "src/api/http/routes/todos.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/todos/:id",
+      "module": "src/api/http/routes/todos.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/tools",
+      "module": "src/api/http/routes/tools.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/utility/chat",
+      "module": "src/api/http/routes/utility.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/workspace/file",
+      "module": "src/api/http/routes/workspace.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/workspace/file/content",
+      "module": "src/api/http/routes/workspace.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/workspace/file/create",
+      "module": "src/api/http/routes/workspace.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/workspace/file/download",
+      "module": "src/api/http/routes/workspace.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/workspace/file/format",
+      "module": "src/api/http/routes/workspace.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/workspace/file/info",
+      "module": "src/api/http/routes/workspace.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/workspace/file/move",
+      "module": "src/api/http/routes/workspace.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/workspace/file/stream",
+      "module": "src/api/http/routes/workspace.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/workspace/file/trash",
+      "module": "src/api/http/routes/workspace.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/workspace/files",
+      "module": "src/api/http/routes/workspace.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/workspace/folder/create",
+      "module": "src/api/http/routes/workspace.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/workspace/image",
+      "module": "src/api/http/routes/workspace.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/workspace/recent",
+      "module": "src/api/http/routes/workspace.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/workspace/recent/:sessionId",
+      "module": "src/api/http/routes/workspace.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/workspace/rename",
+      "module": "src/api/http/routes/workspace.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/workspace/upload",
+      "module": "src/api/http/routes/workspace.ts"
+    }
+  ]
+}

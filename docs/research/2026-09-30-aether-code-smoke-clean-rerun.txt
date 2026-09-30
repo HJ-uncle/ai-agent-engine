@@ -1,0 +1,433 @@
+
+Running 39 tests using 1 worker
+
+(node:7956) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok  1 e2e\smoke.spec.ts:257:5 › 工作台骨架渲染：菜单栏、活动栏、侧边栏、主区、对话面板、状态栏均存在 (38ms)
+  x   2 e2e\smoke.spec.ts:271:5 › 资源管理器：恢复上次打开的文件夹并列出文件 (20.0s)
+(node:33152) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok  3 e2e\smoke.spec.ts:280:5 › 资源管理器：点击目录可展开 (193ms)
+  ok  4 e2e\smoke.spec.ts:299:5 › 编辑器：打开文件后 Monaco 挂载并显示内容 (211ms)
+  ok  5 e2e\smoke.spec.ts:323:5 › 引擎：自动启动并进入就绪状态 (307ms)
+  x   6 e2e\smoke.spec.ts:327:5 › 安全视图：渲染三种会话模式与引擎侧策略规则 (20.0s)
+(node:47932) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok  7 e2e\smoke.spec.ts:373:5 › 输出面板：中文经 IPC 保持完整（终端乱码并非数据损坏） (1.0s)
+  ok  8 e2e\smoke.spec.ts:389:5 › 资源管理器右键菜单：列出可用操作，Esc 可关闭 (45ms)
+  x   9 e2e\smoke.spec.ts:404:5 › 文件排除：设置里的规则即时生效，且重开窗口后仍然生效 (30.2s)
+(node:20436) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok 10 e2e\smoke.spec.ts:464:5 › 资源管理器：右键新建文件后出现在树中 (266ms)
+  ok 11 e2e\smoke.spec.ts:481:5 › 资源管理器：多选（Ctrl 加选、Shift 连选、Ctrl+A 全选、Esc 清除） (384ms)
+  ok 12 e2e\smoke.spec.ts:514:5 › 资源管理器：选中行按焦点降级，树持有焦点时当前行有描边 (207ms)
+  ok 13 e2e\smoke.spec.ts:581:5 › 资源管理器：缩进参考线与排序/收起全部入口可用 (157ms)
+  x  14 e2e\smoke.spec.ts:615:5 › 资源管理器：拖拽把多选项移入目标目录，Ctrl+Z 撤销回滚 (15.0s)
+(node:13248) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok 15 e2e\smoke.spec.ts:663:5 › 资源管理器：虚拟滚动只挂载可见行 (375ms)
+  ok 16 e2e\smoke.spec.ts:716:5 › 预览：PNG 走图片预览，未知二进制走十六进制 (184ms)
+  x  17 e2e\smoke.spec.ts:745:5 › 版本控制：状态栏入口打开侧边栏视图并给出仓库信息 (30.0s)
+(node:24160) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok 18 e2e\smoke.spec.ts:764:5 › 命令面板：Ctrl+Shift+P 唤出、中文过滤、回车执行、Esc 关闭 (325ms)
+  ok 19 e2e\smoke.spec.ts:806:5 › 快速打开：Ctrl+P 唤出、文件名过滤、回车打开文件 (1.3s)
+  ok 20 e2e\smoke.spec.ts:858:5 › 内置终端：Ctrl+` 打开面板、执行命令并回显 (826ms)
+  ok 21 e2e\smoke.spec.ts:896:5 › 内置终端多标签：新建、切换后会话与回显互不串扰 (1.4s)
+  ok 22 e2e\smoke.spec.ts:943:5 › 全局搜索：命中分组展示，点击结果打开文件 (934ms)
+  ok 23 e2e\smoke.spec.ts:959:5 › 全局搜索：自动聚焦、定位高亮、状态保留与大小写开关 (291ms)
+  x  24 e2e\smoke.spec.ts:1001:5 › 全局替换：include 过滤后批量替换并写盘 (20.1s)
+(node:18080) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  x  25 e2e\smoke.spec.ts:1031:5 › 搜索排除：设置里的规则减少搜索结果，取消勾选后放回 (15.2s)
+(node:18612) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  x  26 e2e\smoke.spec.ts:1079:5 › 键盘快捷方式：编辑器入口、录制生效、冲突提示、清除与重置 (20.1s)
+(node:51480) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  x  27 e2e\smoke.spec.ts:1155:5 › 资源管理器：剪切/复制/粘贴（Ctrl+X/C/V 与右键菜单） (15.7s)
+(node:50916) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok 28 e2e\smoke.spec.ts:1221:5 › 资源管理器：拖拽悬停在收起目录上会自动展开 (1.2s)
+  x  29 e2e\smoke.spec.ts:1263:5 › 资源管理器：git 徽章只在仓库内出现且与仓库信息一致 (30.0s)
+(node:55576) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok 30 e2e\smoke.spec.ts:1336:5 › 编辑器标签：多标签打开、切换与激活态 (643ms)
+  ok 31 e2e\smoke.spec.ts:1360:5 › 编辑器标签：右键菜单「关闭其他 / 关闭右侧 / 全部关闭」 (553ms)
+  ok 32 e2e\smoke.spec.ts:1409:5 › 编辑器标签：中键关闭与 Ctrl+W 关闭当前 (211ms)
+  ok 33 e2e\smoke.spec.ts:1426:5 › 编辑器标签：Ctrl+W 关闭当前标签 (279ms)
+  ok 34 e2e\smoke.spec.ts:1455:5 › 编辑器标签：Ctrl+Shift+T 重开刚关闭的标签 (199ms)
+  ok 35 e2e\smoke.spec.ts:1480:5 › 编辑器标签：Ctrl+Shift+S 保存全部脏文档 (621ms)
+  ok 36 e2e\smoke.spec.ts:1520:5 › 编辑器标签：Ctrl+Tab / Ctrl+PageUp/Down 切换激活标签 (522ms)
+  ok 37 e2e\smoke.spec.ts:1568:5 › 编辑器标签：光标位置读数与跨标签恢复 (605ms)
+  ok 38 e2e\smoke.spec.ts:1607:5 › 编辑器标签：Ctrl+B 切换侧边栏可见性 (20ms)
+  ok 39 e2e\smoke.spec.ts:1619:5 › 渲染进程无未捕获错误 (0ms)
+
+
+  1) e2e\smoke.spec.ts:271:5 › 资源管理器：恢复上次打开的文件夹并列出文件 ───────────────────────────────────────────────
+
+    Error: expect(locator).toContainText(expected) failed
+
+    Locator: locator('.explorer__root')
+    Expected substring: "aether-code"
+    Received string:    "资源AETHER-CODE"
+    Timeout: 20000ms
+
+    Call log:
+      - Expect "toContainText" locator('.explorer__root') with timeout 20000ms
+      - waiting for locator('.explorer__root')
+        43 × locator resolved to <span class="explorer__root" title="D:\dev\aether-code">…</span>
+           - unexpected value "资源AETHER-CODE"
+
+
+      270 |
+      271 | test('资源管理器：恢复上次打开的文件夹并列出文件', async () => {
+    > 272 |   await expect(page.locator('.explorer__root')).toContainText('aether-code')
+          |                                                 ^
+      273 |
+      274 |   // 根目录条目应该被加载出来（package.json 必然存在）
+      275 |   const packageRow = page.locator('.tree-row[title$="package.json"]')
+        at D:\dev\aether-code\e2e\smoke.spec.ts:272:49
+
+    Error Context: test-results\smoke-资源管理器：恢复上次打开的文件夹并列出文件\error-context.md
+
+    Error Context: test-results\smoke-资源管理器：恢复上次打开的文件夹并列出文件\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\smoke-资源管理器：恢复上次打开的文件夹并列出文件\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\smoke-资源管理器：恢复上次打开的文件夹并列出文件\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2) e2e\smoke.spec.ts:327:5 › 安全视图：渲染三种会话模式与引擎侧策略规则 ───────────────────────────────────────────────
+
+    Error: expect(locator).toBeEnabled() failed
+
+    Locator: locator('.sec-picker__trigger')
+    Expected: enabled
+    Timeout: 20000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeEnabled" locator('.sec-picker__trigger') with timeout 20000ms
+      - waiting for locator('.sec-picker__trigger')
+
+
+      328 |   // 对话右面板常驻，底部就能切模式：被拦时用户正盯着输入框，不该被迫切页
+      329 |   const modeTrigger = page.locator('.sec-picker__trigger')
+    > 330 |   await expect(modeTrigger).toBeEnabled()
+          |                             ^
+      331 |   await modeTrigger.click()
+      332 |   await expect(page.locator('.sec-picker__item')).toHaveCount(3)
+      333 |
+        at D:\dev\aether-code\e2e\smoke.spec.ts:330:29
+
+    Error Context: test-results\smoke-安全视图：渲染三种会话模式与引擎侧策略规则\error-context.md
+
+    Error Context: test-results\smoke-安全视图：渲染三种会话模式与引擎侧策略规则\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\smoke-安全视图：渲染三种会话模式与引擎侧策略规则\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\smoke-安全视图：渲染三种会话模式与引擎侧策略规则\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  3) e2e\smoke.spec.ts:404:5 › 文件排除：设置里的规则即时生效，且重开窗口后仍然生效 ──────────────────────────────────────────
+
+    TimeoutError: locator.fill: Timeout 30000ms exceeded.
+    Call log:
+      - waiting for locator('.exclude-row').last().locator('.exclude-row__pattern')
+
+
+      424 |   // 新增一条 *.txt 规则。输入是逐字符落盘的，等树真的少掉这些行再断言
+      425 |   await page.locator('.settings-view__actions .btn', { hasText: '添加规则' }).click()
+    > 426 |   await page.locator('.exclude-row').last().locator('.exclude-row__pattern').fill('*.txt')
+          |                                                                              ^
+      427 |
+      428 |   await expect(fixtureRow).toHaveCount(0, { timeout: 15_000 })
+      429 |   await expect(page.locator(rowSelector(join(FIXTURE_DIR, 'replace.txt')))).toHaveCount(0)
+        at D:\dev\aether-code\e2e\smoke.spec.ts:426:78
+
+    Error Context: test-results\smoke-文件排除：设置里的规则即时生效，且重开窗口后仍然生效\error-context.md
+
+    Error Context: test-results\smoke-文件排除：设置里的规则即时生效，且重开窗口后仍然生效\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\smoke-文件排除：设置里的规则即时生效，且重开窗口后仍然生效\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\smoke-文件排除：设置里的规则即时生效，且重开窗口后仍然生效\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  4) e2e\smoke.spec.ts:615:5 › 资源管理器：拖拽把多选项移入目标目录，Ctrl+Z 撤销回滚 ──────────────────────────────────────
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: locator('.tree-row[data-path="D:\\\\dev\\\\aether-code\\\\.e2e-tmp"]')
+    Expected: visible
+    Timeout: 15000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" locator('.tree-row[data-path="D:\\\\dev\\\\aether-code\\\\.e2e-tmp"]') with timeout 15000ms
+      - waiting for locator('.tree-row[data-path="D:\\\\dev\\\\aether-code\\\\.e2e-tmp"]')
+
+
+      84 | async function ensureDirExpanded(dir: string): Promise<void> {
+      85 |   const row = page.locator(rowSelector(dir))
+    > 86 |   await expect(row).toBeVisible({ timeout: 15_000 })
+         |                     ^
+      87 |   if ((await row.getAttribute('aria-expanded')) === 'true') return
+      88 |   await row.click()
+      89 |   await expect(row).toHaveAttribute('aria-expanded', 'true', { timeout: 15_000 })
+        at ensureDirExpanded (D:\dev\aether-code\e2e\smoke.spec.ts:86:21)
+        at D:\dev\aether-code\e2e\smoke.spec.ts:617:9
+
+    Error Context: test-results\smoke-资源管理器：拖拽把多选项移入目标目录，Ctrl-Z-撤销回滚\error-context.md
+
+    Error Context: test-results\smoke-资源管理器：拖拽把多选项移入目标目录，Ctrl-Z-撤销回滚\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\smoke-资源管理器：拖拽把多选项移入目标目录，Ctrl-Z-撤销回滚\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\smoke-资源管理器：拖拽把多选项移入目标目录，Ctrl-Z-撤销回滚\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  5) e2e\smoke.spec.ts:745:5 › 版本控制：状态栏入口打开侧边栏视图并给出仓库信息 ────────────────────────────────────────────
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: locator('.status-bar__item[title^="打开版本控制视图"]')
+    Expected: visible
+    Timeout: 30000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" locator('.status-bar__item[title^="打开版本控制视图"]') with timeout 30000ms
+      - waiting for locator('.status-bar__item[title^="打开版本控制视图"]')
+
+
+      745 | test('版本控制：状态栏入口打开侧边栏视图并给出仓库信息', async () => {
+      746 |   const gitItem = page.locator('.status-bar__item[title^="打开版本控制视图"]')
+    > 747 |   await expect(gitItem).toBeVisible({ timeout: 30_000 })
+          |                         ^
+      748 |
+      749 |   await gitItem.click()
+      750 |   await expect(page.locator('.sidebar__header', { hasText: '版本控制' })).toBeVisible()
+        at D:\dev\aether-code\e2e\smoke.spec.ts:747:25
+
+    Error Context: test-results\smoke-版本控制：状态栏入口打开侧边栏视图并给出仓库信息\error-context.md
+
+    Error Context: test-results\smoke-版本控制：状态栏入口打开侧边栏视图并给出仓库信息\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\smoke-版本控制：状态栏入口打开侧边栏视图并给出仓库信息\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\smoke-版本控制：状态栏入口打开侧边栏视图并给出仓库信息\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  6) e2e\smoke.spec.ts:1001:5 › 全局替换：include 过滤后批量替换并写盘 ────────────────────────────────────────────
+
+    Error: expect(locator).toContainText(expected) failed
+
+    Locator: locator('.search-view__summary')
+    Expected substring: "2 处命中"
+    Received string:    "0 个文件 0 处命中"
+    Timeout: 20000ms
+
+    Call log:
+      - Expect "toContainText" locator('.search-view__summary') with timeout 20000ms
+      - waiting for locator('.search-view__summary')
+        4 × locator resolved to <div class="search-view__summary">6 个文件 14 处命中</div>
+          - unexpected value "6 个文件 14 处命中"
+        - locator resolved to <div class="search-view__summary">搜索中…</div>
+        - unexpected value "搜索中…"
+        38 × locator resolved to <div class="search-view__summary">0 个文件 0 处命中</div>
+           - unexpected value "0 个文件 0 处命中"
+
+
+      1008 |   await page.locator('.search-view__filter-input').first().fill('.e2e-tmp')
+      1009 |   await expect(page.locator('.search-view__hit').first()).toBeVisible({ timeout: 15000 })
+    > 1010 |   await expect(page.locator('.search-view__summary')).toContainText('2 处命中')
+           |                                                       ^
+      1011 |
+      1012 |   // 展开替换条：全部替换先出预览确认（VS Code Replace Preview 流程）
+      1013 |   await page.locator('.search-view__reveal').click()
+        at D:\dev\aether-code\e2e\smoke.spec.ts:1010:55
+
+    Error Context: test-results\smoke-全局替换：include-过滤后批量替换并写盘\error-context.md
+
+    Error Context: test-results\smoke-全局替换：include-过滤后批量替换并写盘\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\smoke-全局替换：include-过滤后批量替换并写盘\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\smoke-全局替换：include-过滤后批量替换并写盘\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  7) e2e\smoke.spec.ts:1031:5 › 搜索排除：设置里的规则减少搜索结果，取消勾选后放回 ──────────────────────────────────────────
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: locator('.search-view__hit').first()
+    Expected: visible
+    Timeout: 15000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" locator('.search-view__hit').first() with timeout 15000ms
+      - waiting for locator('.search-view__hit').first()
+
+
+      1042 |   // 夹具的 «nested» 只在 sub/nested.txt 里出现，用它钉死"整棵目录被跳过"
+      1043 |   await input.fill('nested')
+    > 1044 |   await expect(page.locator('.search-view__hit').first()).toBeVisible({ timeout: 15_000 })
+           |                                                           ^
+      1045 |   await expect(page.locator('.search-view__summary')).toContainText('1 处命中')
+      1046 |
+      1047 |   // 走真实用户路径：命令面板 → 设置 → 搜索分区
+        at D:\dev\aether-code\e2e\smoke.spec.ts:1044:59
+
+    Error Context: test-results\smoke-搜索排除：设置里的规则减少搜索结果，取消勾选后放回\error-context.md
+
+    Error Context: test-results\smoke-搜索排除：设置里的规则减少搜索结果，取消勾选后放回\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\smoke-搜索排除：设置里的规则减少搜索结果，取消勾选后放回\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\smoke-搜索排除：设置里的规则减少搜索结果，取消勾选后放回\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  8) e2e\smoke.spec.ts:1079:5 › 键盘快捷方式：编辑器入口、录制生效、冲突提示、清除与重置 ───────────────────────────────────────
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: locator('.editor-tab').filter({ hasText: '键盘快捷方式' })
+    Expected: visible
+    Timeout: 20000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" locator('.editor-tab').filter({ hasText: '键盘快捷方式' }) with timeout 20000ms
+      - waiting for locator('.editor-tab').filter({ hasText: '键盘快捷方式' })
+
+
+      1083 |   await page.keyboard.press('Enter')
+      1084 |   await expect(page.locator('.palette')).toHaveCount(0)
+    > 1085 |   await expect(page.locator('.editor-tab', { hasText: '键盘快捷方式' })).toBeVisible()
+           |                                                                    ^
+      1086 |   const editor = page.locator('.keybindings')
+      1087 |   await expect(editor).toBeVisible()
+      1088 |
+        at D:\dev\aether-code\e2e\smoke.spec.ts:1085:68
+
+    Error Context: test-results\smoke-键盘快捷方式：编辑器入口、录制生效、冲突提示、清除与重置\error-context.md
+
+    Error Context: test-results\smoke-键盘快捷方式：编辑器入口、录制生效、冲突提示、清除与重置\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\smoke-键盘快捷方式：编辑器入口、录制生效、冲突提示、清除与重置\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\smoke-键盘快捷方式：编辑器入口、录制生效、冲突提示、清除与重置\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  9) e2e\smoke.spec.ts:1155:5 › 资源管理器：剪切/复制/粘贴（Ctrl+X/C/V 与右键菜单） ───────────────────────────────────
+
+    Error: expect(locator).toHaveCount(expected) failed
+
+    Locator:  locator('.tree-row[data-path="D:\\\\dev\\\\aether-code\\\\.e2e-tmp\\\\sub\\\\move-a copy.txt"]')
+    Expected: 0
+    Received: 1
+    Timeout:  15000ms
+
+    Call log:
+      - Expect "toHaveCount" locator('.tree-row[data-path="D:\\\\dev\\\\aether-code\\\\.e2e-tmp\\\\sub\\\\move-a copy.txt"]') with timeout 15000ms
+      - waiting for locator('.tree-row[data-path="D:\\\\dev\\\\aether-code\\\\.e2e-tmp\\\\sub\\\\move-a copy.txt"]')
+        33 × locator resolved to 1 element
+           - unexpected value "1"
+
+
+      164 |     await row.click()
+      165 |     await tree.press('Delete')
+    > 166 |     await expect(row).toHaveCount(0, { timeout: 15_000 })
+          |                       ^
+      167 |   }
+      168 |
+      169 |   const source = page.locator(rowSelector(opts.from))
+        at restoreFixtureViaApp (D:\dev\aether-code\e2e\smoke.spec.ts:166:23)
+        at D:\dev\aether-code\e2e\smoke.spec.ts:1212:3
+
+    Error Context: test-results\smoke-资源管理器：剪切-复制-粘贴（Ctrl-X-C-V-与右键菜单）\error-context.md
+
+    Error Context: test-results\smoke-资源管理器：剪切-复制-粘贴（Ctrl-X-C-V-与右键菜单）\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\smoke-资源管理器：剪切-复制-粘贴（Ctrl-X-C-V-与右键菜单）\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\smoke-资源管理器：剪切-复制-粘贴（Ctrl-X-C-V-与右键菜单）\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  10) e2e\smoke.spec.ts:1263:5 › 资源管理器：git 徽章只在仓库内出现且与仓库信息一致 ───────────────────────────────────────
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: locator('.status-bar__item[title^="打开版本控制视图"]')
+    Expected: visible
+    Timeout: 30000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" locator('.status-bar__item[title^="打开版本控制视图"]') with timeout 30000ms
+      - waiting for locator('.status-bar__item[title^="打开版本控制视图"]')
+
+
+      1266 |   // 先读状态栏的判断：本机这份仓库是否被 git 跟踪，决定徽章该出现还是该缺席
+      1267 |   const gitItem = page.locator('.status-bar__item[title^="打开版本控制视图"]')
+    > 1268 |   await expect(gitItem).toBeVisible({ timeout: 30_000 })
+           |                         ^
+      1269 |   const isRepo = !(await gitItem.innerText()).includes('非 Git 仓库')
+      1270 |
+      1271 |   if (!isRepo) {
+        at D:\dev\aether-code\e2e\smoke.spec.ts:1268:25
+
+    Error Context: test-results\smoke-资源管理器：git-徽章只在仓库内出现且与仓库信息一致\error-context.md
+
+    Error Context: test-results\smoke-资源管理器：git-徽章只在仓库内出现且与仓库信息一致\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\smoke-资源管理器：git-徽章只在仓库内出现且与仓库信息一致\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\smoke-资源管理器：git-徽章只在仓库内出现且与仓库信息一致\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  10 failed
+    e2e\smoke.spec.ts:271:5 › 资源管理器：恢复上次打开的文件夹并列出文件 ────────────────────────────────────────────────
+    e2e\smoke.spec.ts:327:5 › 安全视图：渲染三种会话模式与引擎侧策略规则 ────────────────────────────────────────────────
+    e2e\smoke.spec.ts:404:5 › 文件排除：设置里的规则即时生效，且重开窗口后仍然生效 ───────────────────────────────────────────
+    e2e\smoke.spec.ts:615:5 › 资源管理器：拖拽把多选项移入目标目录，Ctrl+Z 撤销回滚 ───────────────────────────────────────
+    e2e\smoke.spec.ts:745:5 › 版本控制：状态栏入口打开侧边栏视图并给出仓库信息 ─────────────────────────────────────────────
+    e2e\smoke.spec.ts:1001:5 › 全局替换：include 过滤后批量替换并写盘 ─────────────────────────────────────────────
+    e2e\smoke.spec.ts:1031:5 › 搜索排除：设置里的规则减少搜索结果，取消勾选后放回 ───────────────────────────────────────────
+    e2e\smoke.spec.ts:1079:5 › 键盘快捷方式：编辑器入口、录制生效、冲突提示、清除与重置 ────────────────────────────────────────
+    e2e\smoke.spec.ts:1155:5 › 资源管理器：剪切/复制/粘贴（Ctrl+X/C/V 与右键菜单） ────────────────────────────────────
+    e2e\smoke.spec.ts:1263:5 › 资源管理器：git 徽章只在仓库内出现且与仓库信息一致 ─────────────────────────────────────────
+  29 passed (4.2m)

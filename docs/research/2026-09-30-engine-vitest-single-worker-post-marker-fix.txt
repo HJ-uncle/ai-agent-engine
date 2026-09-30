@@ -1,0 +1,1131 @@
+Engine Vitest single-worker verification
+Date: 
+2026-09-30T03:58:21.2367382+08:00
+Command: npx vitest run --maxWorkers=1 --minWorkers=1
+Scope: vitest.config.ts excludes node_modules, dist, e2e, .e2e-tmp, multi-agent-console
+
+
+ RUN  v2.1.9 D:/dev/ai-agent-engine
+
+ ✓ src/core/agent-loop/__tests__/react.test.ts (23 tests) 30ms
+ ✓ src/api/http/routes/__tests__/changes-revert.test.ts (25 tests) 1099ms
+   ✓ D2 guarded batch revert > lists and reverts the complete server scope beyond 200 operations 687ms
+ ✓ src/core/stream-pipeline/__tests__/stream-bus.test.ts (26 tests) 9ms
+ ❯ src/api/http/routes/__tests__/command-jobs.test.ts (14 tests | 10 failed) 7614ms
+   × D7 command job HTTP and history lifecycle > conceals other tenants and sessions across list, status, output, and cancellation without stopping their process 662ms
+     → Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 20944 /T /F
+����: �ܾ�����
+
+
+   × D7 command job HTTP and history lifecycle > awaits real process cancellation and returns the same terminal result on duplicate stop 548ms
+     → expected null to match object { …(2) }
+   × D7 command job HTTP and history lifecycle > chat stop reaches root and child-owned jobs after the model ended, without stopping another session 843ms
+     → expected null to match object { …(2) }
+   × D7 command job HTTP and history lifecycle > history mutation clear settles background processes before deleting history 570ms
+     → expected 500 to be 200 // Object.is equality
+   × D7 command job HTTP and history lifecycle > history mutation turn settles background processes before deleting history 579ms
+     → expected 500 to be 200 // Object.is equality
+   × D7 command job HTTP and history lifecycle > history mutation message settles background processes before deleting history 567ms
+     → expected 500 to be 200 // Object.is equality
+   × D7 command job HTTP and history lifecycle > history mutation truncate settles background processes before deleting history 564ms
+     → expected 500 to be 200 // Object.is equality
+   × D7 command job HTTP and history lifecycle > history mutation session settles background processes before deleting history 574ms
+     → expected 500 to be 200 // Object.is equality
+   × D7 command job HTTP and history lifecycle > a foreign turn deletion does not stop the real owner job or mutate its history 630ms
+     → Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 28020 /T /F
+����: �ܾ�����
+
+
+   × D7 command job HTTP and history lifecycle > closing the real HTTP server waits for owned background processes to stop 145ms
+     → Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 20944 /T /F
+����: �ܾ�����
+
+
+ ✓ src/core/agent-loop/__tests__/react-streaming-context.test.ts (19 tests) 16ms
+ ❯ src/core/command-jobs/__tests__/manager.test.ts (15 tests | 9 failed) 21293ms
+   × D7 durable command job lifecycle > denies foreign 'tenant' reads and cancellation without disturbing the real owner 603ms
+     → Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 14656 /T /F
+����: �ܾ�����
+
+
+     → Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 14656 /T /F
+����: �ܾ�����
+
+
+   × D7 durable command job lifecycle > denies foreign 'session' reads and cancellation without disturbing the real owner 583ms
+     → Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 28832 /T /F
+����: �ܾ�����
+
+
+     → Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 28832 /T /F
+����: �ܾ�����
+
+
+   × D7 durable command job lifecycle > denies foreign 'root run' reads and cancellation without disturbing the real owner 601ms
+     → Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 51612 /T /F
+����: �ܾ�����
+
+
+     → Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 51612 /T /F
+����: �ܾ�����
+
+
+   × D7 durable command job lifecycle > denies foreign 'owner session' reads and cancellation without disturbing the real owner 605ms
+     → Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 51672 /T /F
+����: �ܾ�����
+
+
+     → Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 51672 /T /F
+����: �ܾ�����
+
+
+   × D7 durable command job lifecycle > denies foreign 'owner run' reads and cancellation without disturbing the real owner 594ms
+     → Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 12792 /T /F
+����: �ܾ�����
+
+
+     → Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 12792 /T /F
+����: �ܾ�����
+
+
+   × D7 durable command job lifecycle > settles cancel only after the leader and its real descendant have exited 720ms
+     → Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 22272 /T /F
+����: �ܾ�����
+
+
+     → Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 22272 /T /F
+����: �ܾ�����
+
+
+   × D7 durable command job lifecycle > settles timeout only after the leader and its real descendant have exited 15153ms
+     → Test timed out in 15000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+     → Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 9316 /T /F
+����: �ܾ�����
+
+
+   × D7 durable command job lifecycle > cancels a live descendant after its leader has exited and prevents further marker writes 679ms
+     → Cannot inspect descendants of exited command: Error: Command failed: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInteractive -Command Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,@{Name="Created";Expression={$_.CreationDate.ToUniversalTime().ToString("o")}} | ConvertTo-Json -Compress
+Get-CimInstance : �ܾ����� 
+����λ�� ��:1 �ַ�: 1
++ Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcess ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : PermissionDenied: (root\cimv2:Win32_Process:String) [Get-CimInstance], CimException
+    + FullyQualifiedErrorId : HRESULT 0x80041003,Microsoft.Management.Infrastructure.CimCmdlets.GetCimInstanceCommand
+ 
+
+     → Cannot inspect descendants of exited command: Error: Command failed: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInteractive -Command Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,@{Name="Created";Expression={$_.CreationDate.ToUniversalTime().ToString("o")}} | ConvertTo-Json -Compress
+Get-CimInstance : �ܾ����� 
+����λ�� ��:1 �ַ�: 1
++ Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcess ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : PermissionDenied: (root\cimv2:Win32_Process:String) [Get-CimInstance], CimException
+    + FullyQualifiedErrorId : HRESULT 0x80041003,Microsoft.Management.Infrastructure.CimCmdlets.GetCimInstanceCommand
+ 
+
+   × D7 durable command job lifecycle > bounds terminal history per session and globally while retaining active work and isolating other sessions 1053ms
+     → Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 12976 /T /F
+����: �ܾ�����
+
+
+     → Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 12976 /T /F
+����: �ܾ�����
+
+
+stdout | src/core/llm-adapter/__tests__/provider-attempts.test.ts > actual request attempts > does not retry a 400 body error even when its message contains a 5
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "inspect project"
+
+stdout | src/core/llm-adapter/__tests__/provider-attempts.test.ts > actual request attempts > records parameter compatibility retries as distinct requests and keeps cache tokens a subset
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "inspect project"
+
+stdout | src/core/llm-adapter/__tests__/provider-attempts.test.ts > actual request attempts > cancels openai before first delta without success or another request
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "inspect project"
+
+stdout | src/core/llm-adapter/__tests__/provider-attempts.test.ts > actual request attempts > retains openai output-limit termination and reported usage
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "inspect project"
+
+stdout | src/core/llm-adapter/__tests__/provider-attempts.test.ts > stream retry boundary > retries a 429 before the first delta and accounts for both physical attempts
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "inspect project"
+
+stdout | src/core/llm-adapter/__tests__/provider-attempts.test.ts > stream retry boundary > retries a 429 before the first delta and accounts for both physical attempts
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "inspect project"
+
+stdout | src/core/llm-adapter/__tests__/provider-attempts.test.ts > stream retry boundary > does not retry a 400 stream body error
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "inspect project"
+
+stdout | src/core/llm-adapter/__tests__/provider-attempts.test.ts > physical request input reservations > openai complete includes serialized system/tool input and preserves the larger caller estimate
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "inspect project"
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "inspect project"
+
+stdout | src/core/llm-adapter/__tests__/provider-attempts.test.ts > physical request input reservations > openai stream includes serialized system/tool input and preserves the larger caller estimate
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "inspect project"
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "inspect project"
+
+ ✓ src/core/llm-adapter/__tests__/provider-attempts.test.ts (19 tests) 33ms
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > returns an explicit empty persisted snapshot without creating a run
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > reopens ended conversations with persisted turns, attachment references, todos and file changes
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > recovers pending approval after the in-memory stream has gone without claiming its answer
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > preserves interrupted terminal outcomes after restart instead of presenting a resumable stream
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > scopes every persisted collection and live stream by tenant and session
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > pairs a live projection with its exact cursor and replays only later tool/result/terminal frames
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > rejects unknown cursors before SSE begins instead of silently replaying the entire turn
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > requires a new snapshot when the consumed cursor has fallen outside bounded replay
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > keeps live root state at the projection watermark when persistence has advanced ahead of delivery
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > cancels server execution and exposes its outcome without invoking the agent or model again
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > cancels a waiting run after SSE finished and advances the snapshot to the persisted terminal outcome
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+stderr | src/api/http/routes/__tests__/chat-recovery.test.ts > D4 chat snapshot and replay HTTP contract > does not resurrect a deleted turn from a retained bus or replay its old frames
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/message" (strictTypes)
+strict mode: use allowUnionTypes to allow union type keyword at "#/properties/thinkingMode" (strictTypes)
+
+ ✓ src/api/http/routes/__tests__/chat-recovery.test.ts (12 tests) 372ms
+ ✓ src/auth/__tests__/instance-token-http.test.ts (17 tests) 1245ms
+ ✓ src/core/__tests__/osm.test.ts (50 tests) 9ms
+ ✓ src/core/subagent/__tests__/subagent-runtime.test.ts (16 tests) 2474ms
+   ✓ SubagentRunner: typed outcome and durable lifecycle > enforces tenant ownership and cancellation wins against late model success 1161ms
+stderr | src/core/llm-adapter/__tests__/fallback-stream.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+stdout | src/core/llm-adapter/__tests__/fallback-stream.test.ts > D5 actual OpenAI and factory fallback requests > reaches fallback through createAdapterFromResolved, preserves tool schema and records exactly one event pair per physical request
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "Read the requested project file."
+
+stdout | src/core/llm-adapter/__tests__/fallback-stream.test.ts > D5 actual OpenAI and factory fallback requests > reaches fallback through createAdapterFromResolved, preserves tool schema and records exactly one event pair per physical request
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "Read the requested project file."
+
+stdout | src/core/llm-adapter/__tests__/fallback-stream.test.ts > D5 actual OpenAI and factory fallback requests > reaches fallback through createAdapterFromResolved, preserves tool schema and records exactly one event pair per physical request
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "Read the requested project file."
+
+stdout | src/core/llm-adapter/__tests__/fallback-stream.test.ts > D5 actual OpenAI and factory fallback requests > reaches fallback through createAdapterFromResolved, preserves tool schema and records exactly one event pair per physical request
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "Read the requested project file."
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "Read the requested project file."
+
+stdout | src/core/llm-adapter/__tests__/fallback-stream.test.ts > D5 actual OpenAI and factory fallback requests > treats EOF without terminal marker as failed (partial delivery: false)
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "Read the requested project file."
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "Read the requested project file."
+
+stdout | src/core/llm-adapter/__tests__/fallback-stream.test.ts > D5 actual OpenAI and factory fallback requests > treats EOF without terminal marker as failed (partial delivery: true)
+[openai.ts] messagesToOpenAI result (1 messages):
+[0] user: "Read the requested project file."
+
+ ✓ src/core/llm-adapter/__tests__/fallback-stream.test.ts (25 tests) 7036ms
+   ✓ D5 actual OpenAI and factory fallback requests > reaches fallback through createAdapterFromResolved, preserves tool schema and records exactly one event pair per physical request 7024ms
+node:os:306
+    throw new ERR_SYSTEM_ERROR(ctx);
+          ^
+
+SystemError [ERR_SYSTEM_ERROR]: A system error occurred: uv_os_get_passwd returned ENOMEM (not enough memory)
+    at Object.userInfo (node:os:306:11)
+    at Object.<anonymous> (D:\dev\ai-agent-engine\node_modules\tsx\dist\client-XItNFmsq.cjs:1:198)
+    at Module._compile (node:internal/modules/cjs/loader:1929:14)
+    at Object..js (node:internal/modules/cjs/loader:2060:10)
+    at Module.load (node:internal/modules/cjs/loader:1651:32)
+    at Module._load (node:internal/modules/cjs/loader:1443:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+    at Module.require (node:internal/modules/cjs/loader:1674:12)
+    at require (node:internal/modules/helpers:157:16)
+    at Object.<anonymous> (D:\dev\ai-agent-engine\node_modules\tsx\dist\register-B1c7OH6V.cjs:1:317) {
+  code: 'ERR_SYSTEM_ERROR',
+  info: {
+    errno: -4057,
+    code: 'ENOMEM',
+    message: 'not enough memory',
+    syscall: 'uv_os_get_passwd'
+  },
+  errno: [Getter/Setter],
+  syscall: [Getter/Setter]
+}
+
+Node.js v24.20.0
+ ❯ src/storage/__tests__/dev-migration.test.ts (9 tests | 1 failed) 1333ms
+   × D0 minimal model-state migration > exposes a standalone CLI with only counts on stdout and sanitized errors on stderr 178ms
+     → Command failed: C:\Program Files\nodejs\node.exe --import tsx D:\dev\ai-agent-engine\src\storage\dev-migration.ts --source-db C:\Users\wb.xielin02\AppData\Local\Temp\aether-dev-migration-qtwBSf\legacy.db --dest-db C:\Users\wb.xielin02\AppData\Local\Temp\aether-dev-migration-qtwBSf\state\agent.db
+node:os:306
+    throw new ERR_SYSTEM_ERROR(ctx);
+          ^
+
+SystemError [ERR_SYSTEM_ERROR]: A system error occurred: uv_os_get_passwd returned ENOMEM (not enough memory)
+    at Object.userInfo (node:os:306:11)
+    at Object.<anonymous> (D:\dev\ai-agent-engine\node_modules\tsx\dist\client-XItNFmsq.cjs:1:198)
+    at Module._compile (node:internal/modules/cjs/loader:1929:14)
+    at Object..js (node:internal/modules/cjs/loader:2060:10)
+    at Module.load (node:internal/modules/cjs/loader:1651:32)
+    at Module._load (node:internal/modules/cjs/loader:1443:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+    at Module.require (node:internal/modules/cjs/loader:1674:12)
+    at require (node:internal/modules/helpers:157:16)
+    at Object.<anonymous> (D:\dev\ai-agent-engine\node_modules\tsx\dist\register-B1c7OH6V.cjs:1:317) {
+  code: 'ERR_SYSTEM_ERROR',
+  info: {
+    errno: -4057,
+    code: 'ENOMEM',
+    message: 'not enough memory',
+    syscall: 'uv_os_get_passwd'
+  },
+  errno: [Getter/Setter],
+  syscall: [Getter/Setter]
+}
+
+Node.js v24.20.0
+
+ ✓ src/core/stream-pipeline/__tests__/sse-sink.test.ts (17 tests) 7ms
+stderr | src/core/agent-loop/__tests__/edit-file-integration.test.ts > D6 exact-edit real runtime integration
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+ ✓ src/core/agent-loop/__tests__/edit-file-integration.test.ts (2 tests) 954ms
+ ✓ src/tools/file/__tests__/edit-file.test.ts (28 tests) 245ms
+ ✓ src/core/agent-loop/__tests__/tool-batch-settlement.test.ts (13 tests) 54ms
+stderr | src/tools/__tests__/tool-profile.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+ ✓ src/tools/__tests__/tool-profile.test.ts (14 tests) 26ms
+ ✓ src/api/http/routes/__tests__/conversation-destructive.test.ts (12 tests) 873ms
+ ✓ src/skills/__tests__/import-pipeline.test.ts (20 tests) 85ms
+ ✓ src/core/subagent/__tests__/subagent-projection.test.ts (10 tests) 1130ms
+ ✓ src/tools/file/__tests__/file-change-producers.test.ts (14 tests) 134ms
+stderr | src/skills/__tests__/skills-registry.test.ts > SkillsRegistry / SDK 真实部署路径 - 模拟 Wuzu Client 子进程 > 模拟 Wuzu Client 子进程：cwd=0.3.6/, 无 SKILLS_ROOT → 自动探测 0.3.6/SKILLs 并加载全部 OSM 技能
+[skip] SDK 部署路径不存在: C:\Users\wb.xielin02\AppData\Roaming\Wuzu Client Dev\agent-engine\0.3.6
+
+ ✓ src/skills/__tests__/skills-registry.test.ts (7 tests) 20ms
+ ✓ src/security/__tests__/code-boundaries.test.ts (11 tests) 131ms
+ ✓ src/core/subagent/__tests__/budget-fork.test.ts (12 tests) 5ms
+ ❯ src/tools/cmd/__tests__/command-jobs.test.ts (7 tests | 2 failed) 15701ms
+   × D7 command tools with real policy and processes > cancels an owned background job while foreign sessions and sibling agents cannot inspect or stop it 444ms
+     → expected false to be true // Object.is equality
+     → Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 53864 /T /F
+����: �ܾ�����
+
+
+   × D7 command tools with real policy and processes > reports timeout as failed foreground work while retaining partial output 15004ms
+     → Test timed out in 15000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+     → Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 7992 /T /F
+����: �ܾ�����
+
+
+stdout | src/storage/root-runs/root-runs.test.ts > history serialization across instances > serializes compaction, concurrent appends and truncate across separately created consumers
+[jsonl-history] compressed session: 80 → 47 tokens
+
+ ✓ src/storage/root-runs/root-runs.test.ts (6 tests) 260ms
+ ✓ src/core/llm-adapter/__tests__/llm-adapter.test.ts (12 tests) 54ms
+ ↓ src/tools/subagent/__tests__/subagent-project-overview.test.ts (1 test | 1 skipped)
+ ❯ src/lsp/__tests__/process-lifecycle.test.ts (6 tests | 4 failed) 19848ms
+   × D8 diagnostic subprocess lifecycle > settles cancel after stopping the real child and grandchild and their file effects 708ms
+     → expected 'Error' to be 'AbortError' // Object.is equality
+   × D8 diagnostic subprocess lifecycle > settles timeout after stopping the real child and grandchild and their file effects 2966ms
+     → expected '诊断进程树终止失败: Error: Could not stop comm…' to match /超时|timed?\s*out|timeout/i
+   × D8 diagnostic subprocess lifecycle > cancels a descendant retaining output pipes after its leader has already exited 15186ms
+     → Test timed out in 15000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+     → EPERM, Permission denied: \\?\C:\Users\wb.xielin02\AppData\Local\Temp\aether-d8-diagnostics-RoSPvr '\\?\C:\Users\wb.xielin02\AppData\Local\Temp\aether-d8-diagnostics-RoSPvr'
+   × D8 diagnostic subprocess lifecycle > rejects combined output overflow and stops the process instead of accepting partial diagnostics 758ms
+     → expected '诊断进程树终止失败: Error: Could not stop comm…' to match /输出|output|limit/i
+ ✓ src/tools/agent/__tests__/agent-tool.test.ts (13 tests) 4ms
+stderr | src/middleware/memory/__tests__/extractor.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+ ✓ src/middleware/memory/__tests__/extractor.test.ts (22 tests) 4ms
+stderr | src/core/utils/__tests__/dependency-runtime.test.ts > cancellation propagation > aborts the MCP HTTP request and does not convert provider isError into success
+[AuditLog] append failed: SQLITE_ERROR: no such table: security_audit_log
+
+stderr | src/core/utils/__tests__/dependency-runtime.test.ts > cancellation propagation > aborts the MCP HTTP request and does not convert provider isError into success
+[AuditLog] append failed: SQLITE_ERROR: no such table: security_audit_log
+
+ ❯ src/core/utils/__tests__/dependency-runtime.test.ts (5 tests | 1 failed) 15048ms
+   × cancellation propagation > runs commands inside the project and actually terminates a cancelled process 15013ms
+     → Test timed out in 15000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+     → Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 49484 /T /F
+����: �ܾ�����
+
+
+ ✓ src/api/http/routes/__tests__/model-overrides.test.ts (13 tests) 146ms
+ ✓ src/api/http/routes/__tests__/subagent-routes.test.ts (10 tests) 1337ms
+stderr | src/api/http/routes/__tests__/skill-imports.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+stdout | src/api/http/routes/__tests__/skill-imports.test.ts > Skill Import API
+[CronScheduler] started, first tick in 48 s
+
+ ✓ src/api/http/routes/__tests__/skill-imports.test.ts (6 tests) 209ms
+stdout | src/storage/conversation/__tests__/history-compress-identity.test.ts > SQLite compaction preserves retained message identity > preserves current turn metadata, model, tool state and chronological order (retention: 4)
+[history] compress: 440 → 53 tokens (freed 387)
+
+stdout | src/storage/conversation/__tests__/history-compress-identity.test.ts > SQLite compaction preserves retained message identity > preserves current turn metadata, model, tool state and chronological order (retention: {"keepRecentTokens":40})
+[history] compress: 440 → 53 tokens (freed 387)
+
+ ✓ src/storage/conversation/__tests__/history-compress-identity.test.ts (2 tests) 418ms
+stderr | src/core/llm-adapter/__tests__/history-capabilities.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+stdout | src/core/llm-adapter/__tests__/history-capabilities.test.ts > compacted constraints reach the real provider request > openai complete and stream preserve history and system prompt
+[openai.ts] messagesToOpenAI result (2 messages):
+[0] system: "【历史上下文摘要】保留 CRLF；不要改动用户手写文件。"
+[1] user: "继续修复"
+[openai.ts] messagesToOpenAI result (2 messages):
+[0] system: "【历史上下文摘要】保留 CRLF；不要改动用户手写文件。"
+[1] user: "继续修复"
+
+ ✓ src/core/llm-adapter/__tests__/history-capabilities.test.ts (9 tests) 17ms
+stderr | src/tools/subagent/__tests__/subagent-tool.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+ ✓ src/tools/subagent/__tests__/subagent-tool.test.ts (9 tests) 17ms
+stdout | src/storage/conversation/__tests__/history-compress-tombstone.test.ts > compress() 与 tombstone 冲突 — Bug 复现与修复验证 > 【BUG 复现】compress 后 getFullHistory 不应返回空数组
+[history] compress: 2000 → 606 tokens (freed 1394)
+[test] after compress, message count: 7
+[test] roles: system, user, assistant, user, assistant, user, assistant
+
+stdout | src/storage/conversation/__tests__/history-compress-tombstone.test.ts > compress() 与 tombstone 冲突 — Bug 复现与修复验证 > compress 后 recentMessages 是原始最后 6 条
+[history] compress: 2000 → 602 tokens (freed 1398)
+
+ ✓ src/storage/conversation/__tests__/history-compress-tombstone.test.ts (2 tests) 3ms
+ ✓ src/lsp/__tests__/diagnostics.test.ts (6 tests) 62ms
+ ✓ src/core/stream-pipeline/__tests__/pipeline.test.ts (8 tests) 3ms
+ ✓ src/prompt-template/__tests__/store.test.ts (7 tests) 7ms
+ ✓ src/api/http/routes/__tests__/tool-profile-routes.test.ts (16 tests) 118ms
+ ✓ src/core/__tests__/osm-bootstrap.test.ts (10 tests) 4ms
+ ✓ src/skills/__tests__/osm-pack-discovery.test.ts (4 tests) 13ms
+ ✓ src/core/agent-context/__tests__/factory.test.ts (8 tests) 22ms
+ ↓ src/tools/search/__tests__/grep-tool.test.ts (14 tests | 14 skipped)
+ ✓ src/tools/subagent/__tests__/subagent-reviewer-access.test.ts (2 tests) 9ms
+ ❯ src/lsp/__tests__/typescript-runtime.test.ts (4 tests | 1 failed) 2510ms
+   ✓ D8 real TypeScript diagnostics > reports a real type mismatch with source coordinates 1047ms
+   ✓ D8 real TypeScript diagnostics > checks unsaved text at its original path so relative imports resolve without changing disk contents 939ms
+   × D8 real TypeScript diagnostics > keeps the engine event loop responsive while a running TypeScript diagnostic is cancelled 521ms
+     → expected 'Error' to be 'AbortError' // Object.is equality
+stderr | src/api/http/routes/__tests__/compress.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+stdout | src/api/http/routes/__tests__/compress.test.ts > Conversation Compression API > should compress history and preserve data integrity
+[jsonl-history] compressed test-session: 0 → 11 tokens
+
+ ✓ src/api/http/routes/__tests__/compress.test.ts (2 tests) 131ms
+ ✓ src/security/__tests__/policy-engine.test.ts (8 tests) 662ms
+   ✓ policy-engine evaluation and approval > allows approved commands even if they are high risk 499ms
+ ✓ src/core/tool-registry/__tests__/registry.test.ts (8 tests) 5ms
+ ✓ src/storage/conversation/__tests__/history-maxTokens.test.ts (6 tests) 2ms
+stderr | src/api/http/routes/flows/__tests__/flow-executor.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+ ✓ src/api/http/routes/flows/__tests__/flow-executor.test.ts (5 tests) 3ms
+ ✓ src/runtime/__tests__/build-identity.test.ts (3 tests) 30ms
+stderr | docs/standard-response.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+stdout | docs/standard-response.test.ts > Standard API Responses > 1. 成功对象响应 (Success Object)
+[CronScheduler] started, first tick in 37 s
+
+ ✓ docs/standard-response.test.ts (5 tests) 261ms
+ ✓ src/api/http/routes/__tests__/workspace-file-lock.test.ts (2 tests) 221ms
+ ✓ src/skills/__tests__/external-loader.test.ts (3 tests) 11ms
+ ✓ src/lsp/__tests__/http-safety.test.ts (2 tests) 97ms
+ ✓ src/tools/get-context/__tests__/get-context-tool.test.ts (3 tests) 57ms
+ ✓ src/security/__tests__/sandbox.test.ts (7 tests) 3ms
+stderr | src/api/http/routes/__tests__/compress-perf.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+stdout | src/api/http/routes/__tests__/compress-perf.test.ts > Conversation Compression API Performance > should complete compression within 2 seconds
+[jsonl-history] compressed perf-session: 629 → 634 tokens
+
+stdout | src/api/http/routes/__tests__/compress-perf.test.ts > Conversation Compression API Performance > should complete compression within 2 seconds
+Compression took 528ms
+
+ ✓ src/api/http/routes/__tests__/compress-perf.test.ts (1 test) 1700ms
+   ✓ Conversation Compression API Performance > should complete compression within 2 seconds 1699ms
+stderr | src/tools/subagent/__tests__/subagent-capabilities.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+ ✓ src/tools/subagent/__tests__/subagent-capabilities.test.ts (7 tests) 3ms
+ ✓ src/lsp/__tests__/eslint.test.ts (4 tests) 4ms
+stderr | src/api/http/routes/__tests__/skill-imports-auth.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+stdout | src/api/http/routes/__tests__/skill-imports-auth.test.ts > Skill Import 权限守卫（AUTH_ENABLED=true）
+[CronScheduler] started, first tick in 31 s
+
+ ✓ src/api/http/routes/__tests__/skill-imports-auth.test.ts (2 tests) 217ms
+ ✓ src/core/llm-adapter/__tests__/resolved-model.test.ts (2 tests) 3ms
+ ✓ src/lsp/__tests__/http-cancellation.test.ts (1 test) 102ms
+stdout | src/storage/memory/__tests__/db.test.ts > memory database schema initialization > creates every graph table and dependent index when vector extensions are unavailable
+[memory-db] Schema initialization complete
+
+ ✓ src/storage/memory/__tests__/db.test.ts (1 test) 142ms
+ ✓ src/storage/knowledge/__tests__/scope.test.ts (2 tests) 11ms
+ ❯ src/lsp/__tests__/process.test.ts (4 tests | 2 failed) 1033ms
+   × diagnostic CLI lifecycle > stops a running child and settles cancellation 459ms
+     → expected Error: 诊断进程树终止失败: Error: Could not stop c… { code: '…' } to match object { name: 'AbortError' }
+(1 matching property omitted from actual)
+   × diagnostic CLI lifecycle > bounds an unresponsive diagnostic process and releases it on timeout 500ms
+     → expected [Function] to throw error including '诊断进程超时' but got '诊断进程树终止失败: Error: Could not stop comm…'
+ ✓ src/storage/task-queue/__tests__/sqlite-queue.test.ts (1 test) 2ms
+ ✓ src/core/command-jobs/__tests__/process-tree.test.ts (1 test) 2ms
+stderr | src/__tests__/encryption.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+ ✓ src/__tests__/encryption.test.ts (2 tests) 2ms
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/api/http/routes/__tests__/command-jobs.test.ts [ src/api/http/routes/__tests__/command-jobs.test.ts ]
+Error: Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 20944 /T /F
+����: �ܾ�����
+
+
+ ❯ Module.stopCommandProcessTree src/core/command-jobs/process-tree.ts:70:46
+     68|     if (!alive(target)) continue
+     69|     try { await execute(taskkill, ['/PID', String(target), '/T', '/F']…
+     70|     catch (error) { if (alive(target)) throw new Error(`Could not stop…
+       |                                              ^
+     71|   }
+     72|   for (let attempt = 0; attempt < 20 && targets.some(alive); attempt++…
+ ❯ src/core/command-jobs/manager.ts:270:31
+ ❯ CommandJobManager.stop src/core/command-jobs/manager.ts:279:5
+ ❯ src/api/http/routes/__tests__/command-jobs.test.ts:159:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/44]⎯
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 30 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/lsp/__tests__/process-lifecycle.test.ts > D8 diagnostic subprocess lifecycle > settles cancel after stopping the real child and grandchild and their file effects
+AssertionError: expected 'Error' to be 'AbortError' // Object.is equality
+
+Expected: "AbortError"
+Received: "Error"
+
+ ❯ src/lsp/__tests__/process-lifecycle.test.ts:99:60
+     97|     const result = await running
+     98|     expect(result.value).toBeUndefined()
+     99|     if (operation === 'cancel') expect(result.error?.name).toBe('Abort…
+       |                                                            ^
+    100|     else expect(result.error?.message).toMatch(/超时|timed?\s*out|time…
+    101|     expect([leaderPid, childPid, grandchildPid].some(alive)).toBe(fals…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/44]⎯
+
+ FAIL  src/lsp/__tests__/process-lifecycle.test.ts > D8 diagnostic subprocess lifecycle > settles timeout after stopping the real child and grandchild and their file effects
+AssertionError: expected '诊断进程树终止失败: Error: Could not stop comm…' to match /超时|timed?\s*out|timeout/i
+
+- Expected: 
+/超时|timed?\s*out|timeout/i
+
++ Received: 
+"诊断进程树终止失败: Error: Could not stop command process tree: Error: Command failed: C:\\Windows\\System32\\taskkill.exe /PID 36104 /T /F
+����: �ܾ�����
+
+"
+
+ ❯ src/lsp/__tests__/process-lifecycle.test.ts:100:40
+     98|     expect(result.value).toBeUndefined()
+     99|     if (operation === 'cancel') expect(result.error?.name).toBe('Abort…
+    100|     else expect(result.error?.message).toMatch(/超时|timed?\s*out|time…
+       |                                        ^
+    101|     expect([leaderPid, childPid, grandchildPid].some(alive)).toBe(fals…
+    102|     await markerHasStopped()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/44]⎯
+
+ FAIL  src/lsp/__tests__/process-lifecycle.test.ts > D8 diagnostic subprocess lifecycle > cancels a descendant retaining output pipes after its leader has already exited
+ FAIL  src/core/command-jobs/__tests__/manager.test.ts > D7 durable command job lifecycle > settles timeout only after the leader and its real descendant have exited
+ FAIL  src/core/utils/__tests__/dependency-runtime.test.ts > cancellation propagation > runs commands inside the project and actually terminates a cancelled process
+ FAIL  src/tools/cmd/__tests__/command-jobs.test.ts > D7 command tools with real policy and processes > reports timeout as failed foreground work while retaining partial output
+Error: Test timed out in 15000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/44]⎯
+
+ FAIL  src/lsp/__tests__/process-lifecycle.test.ts > D8 diagnostic subprocess lifecycle > cancels a descendant retaining output pipes after its leader has already exited
+Error: EPERM, Permission denied: \\?\C:\Users\wb.xielin02\AppData\Local\Temp\aether-d8-diagnostics-RoSPvr '\\?\C:\Users\wb.xielin02\AppData\Local\Temp\aether-d8-diagnostics-RoSPvr'
+ ❯ src/lsp/__tests__/process-lifecycle.test.ts:69:6
+     67|   const resolved = path.resolve(fixture)
+     68|   if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !path.ba…
+     69|   fs.rmSync(resolved, { recursive: true, force: true, maxRetries: 3, r…
+       |      ^
+     70| })
+     71| 
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/44]⎯
+
+ FAIL  src/lsp/__tests__/process-lifecycle.test.ts > D8 diagnostic subprocess lifecycle > rejects combined output overflow and stops the process instead of accepting partial diagnostics
+AssertionError: expected '诊断进程树终止失败: Error: Could not stop comm…' to match /输出|output|limit/i
+
+- Expected: 
+/输出|output|limit/i
+
++ Received: 
+"诊断进程树终止失败: Error: Could not stop command process tree: Error: Command failed: C:\\Windows\\System32\\taskkill.exe /PID 59132 /T /F
+����: �ܾ�����
+
+"
+
+ ❯ src/lsp/__tests__/process-lifecycle.test.ts:165:36
+    163|     const settled = await result
+    164|     expect(settled.value).toBeUndefined()
+    165|     expect(settled.error?.message).toMatch(/输出|output|limit/i)
+       |                                    ^
+    166|     expect(alive(pid)).toBe(false)
+    167|     await markerHasStopped()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/44]⎯
+
+ FAIL  src/lsp/__tests__/process.test.ts > diagnostic CLI lifecycle > stops a running child and settles cancellation
+AssertionError: expected Error: 诊断进程树终止失败: Error: Could not stop c… { code: '…' } to match object { name: 'AbortError' }
+(1 matching property omitted from actual)
+
+- Expected
++ Received
+
+- Object {
+-   "name": "AbortError",
+- }
++ [Error: 诊断进程树终止失败: Error: Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 38352 /T /F
++ ����: �ܾ�����
+
++ ]
+
+ ❯ src/lsp/__tests__/process.test.ts:17:5
+     15|     const assertion = expect(result).rejects.toMatchObject({ name: 'Ab…
+     16|     controller.abort()
+     17|     await assertion
+       |     ^
+     18|   })
+     19|   it('bounds an unresponsive diagnostic process and releases it on tim…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/44]⎯
+
+ FAIL  src/lsp/__tests__/process.test.ts > diagnostic CLI lifecycle > bounds an unresponsive diagnostic process and releases it on timeout
+AssertionError: expected [Function] to throw error including '诊断进程超时' but got '诊断进程树终止失败: Error: Could not stop comm…'
+
+- Expected
++ Received
+
+- 诊断进程超时
++ 诊断进程树终止失败: Error: Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 36064 /T /F
++ ����: �ܾ�����
+
++
+
+ ❯ src/lsp/__tests__/process.test.ts:20:5
+     18|   })
+     19|   it('bounds an unresponsive diagnostic process and releases it on tim…
+     20|     await expect(runDiagnosticProcess(process.execPath, ['-e', 'setInt…
+       |     ^
+     21|       .rejects.toThrow('诊断进程超时')
+     22|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/44]⎯
+
+ FAIL  src/lsp/__tests__/typescript-runtime.test.ts > D8 real TypeScript diagnostics > keeps the engine event loop responsive while a running TypeScript diagnostic is cancelled
+AssertionError: expected 'Error' to be 'AbortError' // Object.is equality
+
+Expected: "AbortError"
+Received: "Error"
+
+ ❯ src/lsp/__tests__/typescript-runtime.test.ts:73:35
+     71|       expect(timerFiredAt - startedAt).toBeLessThan(1_500)
+     72|       expect(outcome.value).toBeUndefined()
+     73|       expect(outcome.error?.name).toBe('AbortError')
+       |                                   ^
+     74|       expect(Date.now() - timerFiredAt).toBeLessThan(8_000)
+     75|       expect(fs.readFileSync(file, 'utf8')).toBe(source)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/44]⎯
+
+ FAIL  src/storage/__tests__/dev-migration.test.ts > D0 minimal model-state migration > exposes a standalone CLI with only counts on stdout and sanitized errors on stderr
+Error: Command failed: C:\Program Files\nodejs\node.exe --import tsx D:\dev\ai-agent-engine\src\storage\dev-migration.ts --source-db C:\Users\wb.xielin02\AppData\Local\Temp\aether-dev-migration-qtwBSf\legacy.db --dest-db C:\Users\wb.xielin02\AppData\Local\Temp\aether-dev-migration-qtwBSf\state\agent.db
+node:os:306
+    throw new ERR_SYSTEM_ERROR(ctx);
+          ^
+
+SystemError [ERR_SYSTEM_ERROR]: A system error occurred: uv_os_get_passwd returned ENOMEM (not enough memory)
+    at Object.userInfo (node:os:306:11)
+    at Object.<anonymous> (D:\dev\ai-agent-engine\node_modules\tsx\dist\client-XItNFmsq.cjs:1:198)
+    at Module._compile (node:internal/modules/cjs/loader:1929:14)
+    at Object..js (node:internal/modules/cjs/loader:2060:10)
+    at Module.load (node:internal/modules/cjs/loader:1651:32)
+    at Module._load (node:internal/modules/cjs/loader:1443:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+    at Module.require (node:internal/modules/cjs/loader:1674:12)
+    at require (node:internal/modules/helpers:157:16)
+    at Object.<anonymous> (D:\dev\ai-agent-engine\node_modules\tsx\dist\register-B1c7OH6V.cjs:1:317) {
+  code: 'ERR_SYSTEM_ERROR',
+  info: {
+    errno: -4057,
+    code: 'ENOMEM',
+    message: 'not enough memory',
+    syscall: 'uv_os_get_passwd'
+  },
+  errno: [Getter/Setter],
+  syscall: [Getter/Setter]
+}
+
+Node.js v24.20.0
+
+ ❯ Object.<anonymous> node_modules/tsx/dist/client-XItNFmsq.cjs:1:198
+ ❯ src/storage/__tests__/dev-migration.test.ts:202:20
+    200|     const args = ['--import', 'tsx', script, '--source-db', input.sour…
+    201|     const environment = { ...process.env, ENCRYPTION_KEY: KEY }
+    202|     const output = execFileSync(process.execPath, args, { env: environ…
+       |                    ^
+    203|     expect(JSON.parse(output)).toEqual({ status: 'migrated', importedM…
+    204|     expect(output).not.toContain(SECRET)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/44]⎯
+
+ FAIL  src/core/command-jobs/__tests__/manager.test.ts > D7 durable command job lifecycle > denies foreign 'tenant' reads and cancellation without disturbing the real owner
+ FAIL  src/core/command-jobs/__tests__/manager.test.ts > D7 durable command job lifecycle > denies foreign 'tenant' reads and cancellation without disturbing the real owner
+Error: Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 14656 /T /F
+����: �ܾ�����
+
+
+ ❯ Module.stopCommandProcessTree src/core/command-jobs/process-tree.ts:70:46
+     68|     if (!alive(target)) continue
+     69|     try { await execute(taskkill, ['/PID', String(target), '/T', '/F']…
+     70|     catch (error) { if (alive(target)) throw new Error(`Could not stop…
+       |                                              ^
+     71|   }
+     72|   for (let attempt = 0; attempt < 20 && targets.some(alive); attempt++…
+ ❯ src/core/command-jobs/manager.ts:270:31
+ ❯ CommandJobManager.stop src/core/command-jobs/manager.ts:279:5
+ ❯ src/core/command-jobs/__tests__/manager.test.ts:204:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/44]⎯
+
+ FAIL  src/core/command-jobs/__tests__/manager.test.ts > D7 durable command job lifecycle > denies foreign 'session' reads and cancellation without disturbing the real owner
+ FAIL  src/core/command-jobs/__tests__/manager.test.ts > D7 durable command job lifecycle > denies foreign 'session' reads and cancellation without disturbing the real owner
+Error: Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 28832 /T /F
+����: �ܾ�����
+
+
+ ❯ Module.stopCommandProcessTree src/core/command-jobs/process-tree.ts:70:46
+     68|     if (!alive(target)) continue
+     69|     try { await execute(taskkill, ['/PID', String(target), '/T', '/F']…
+     70|     catch (error) { if (alive(target)) throw new Error(`Could not stop…
+       |                                              ^
+     71|   }
+     72|   for (let attempt = 0; attempt < 20 && targets.some(alive); attempt++…
+ ❯ src/core/command-jobs/manager.ts:270:31
+ ❯ CommandJobManager.stop src/core/command-jobs/manager.ts:279:5
+ ❯ src/core/command-jobs/__tests__/manager.test.ts:204:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/44]⎯
+
+ FAIL  src/core/command-jobs/__tests__/manager.test.ts > D7 durable command job lifecycle > denies foreign 'root run' reads and cancellation without disturbing the real owner
+ FAIL  src/core/command-jobs/__tests__/manager.test.ts > D7 durable command job lifecycle > denies foreign 'root run' reads and cancellation without disturbing the real owner
+Error: Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 51612 /T /F
+����: �ܾ�����
+
+
+ ❯ Module.stopCommandProcessTree src/core/command-jobs/process-tree.ts:70:46
+     68|     if (!alive(target)) continue
+     69|     try { await execute(taskkill, ['/PID', String(target), '/T', '/F']…
+     70|     catch (error) { if (alive(target)) throw new Error(`Could not stop…
+       |                                              ^
+     71|   }
+     72|   for (let attempt = 0; attempt < 20 && targets.some(alive); attempt++…
+ ❯ src/core/command-jobs/manager.ts:270:31
+ ❯ CommandJobManager.stop src/core/command-jobs/manager.ts:279:5
+ ❯ src/core/command-jobs/__tests__/manager.test.ts:204:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[13/44]⎯
+
+ FAIL  src/core/command-jobs/__tests__/manager.test.ts > D7 durable command job lifecycle > denies foreign 'owner session' reads and cancellation without disturbing the real owner
+ FAIL  src/core/command-jobs/__tests__/manager.test.ts > D7 durable command job lifecycle > denies foreign 'owner session' reads and cancellation without disturbing the real owner
+Error: Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 51672 /T /F
+����: �ܾ�����
+
+
+ ❯ Module.stopCommandProcessTree src/core/command-jobs/process-tree.ts:70:46
+     68|     if (!alive(target)) continue
+     69|     try { await execute(taskkill, ['/PID', String(target), '/T', '/F']…
+     70|     catch (error) { if (alive(target)) throw new Error(`Could not stop…
+       |                                              ^
+     71|   }
+     72|   for (let attempt = 0; attempt < 20 && targets.some(alive); attempt++…
+ ❯ src/core/command-jobs/manager.ts:270:31
+ ❯ CommandJobManager.stop src/core/command-jobs/manager.ts:279:5
+ ❯ src/core/command-jobs/__tests__/manager.test.ts:204:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[14/44]⎯
+
+ FAIL  src/core/command-jobs/__tests__/manager.test.ts > D7 durable command job lifecycle > denies foreign 'owner run' reads and cancellation without disturbing the real owner
+ FAIL  src/core/command-jobs/__tests__/manager.test.ts > D7 durable command job lifecycle > denies foreign 'owner run' reads and cancellation without disturbing the real owner
+Error: Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 12792 /T /F
+����: �ܾ�����
+
+
+ ❯ Module.stopCommandProcessTree src/core/command-jobs/process-tree.ts:70:46
+     68|     if (!alive(target)) continue
+     69|     try { await execute(taskkill, ['/PID', String(target), '/T', '/F']…
+     70|     catch (error) { if (alive(target)) throw new Error(`Could not stop…
+       |                                              ^
+     71|   }
+     72|   for (let attempt = 0; attempt < 20 && targets.some(alive); attempt++…
+ ❯ src/core/command-jobs/manager.ts:270:31
+ ❯ CommandJobManager.stop src/core/command-jobs/manager.ts:279:5
+ ❯ src/core/command-jobs/__tests__/manager.test.ts:204:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[15/44]⎯
+
+ FAIL  src/core/command-jobs/__tests__/manager.test.ts > D7 durable command job lifecycle > settles cancel only after the leader and its real descendant have exited
+ FAIL  src/core/command-jobs/__tests__/manager.test.ts > D7 durable command job lifecycle > settles cancel only after the leader and its real descendant have exited
+Error: Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 22272 /T /F
+����: �ܾ�����
+
+
+ ❯ Module.stopCommandProcessTree src/core/command-jobs/process-tree.ts:70:46
+     68|     if (!alive(target)) continue
+     69|     try { await execute(taskkill, ['/PID', String(target), '/T', '/F']…
+     70|     catch (error) { if (alive(target)) throw new Error(`Could not stop…
+       |                                              ^
+     71|   }
+     72|   for (let attempt = 0; attempt < 20 && targets.some(alive); attempt++…
+ ❯ src/core/command-jobs/manager.ts:270:31
+ ❯ CommandJobManager.stop src/core/command-jobs/manager.ts:279:5
+ ❯ src/core/command-jobs/__tests__/manager.test.ts:222:33
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[16/44]⎯
+
+ FAIL  src/core/command-jobs/__tests__/manager.test.ts > D7 durable command job lifecycle > settles timeout only after the leader and its real descendant have exited
+Error: Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 9316 /T /F
+����: �ܾ�����
+
+
+ ❯ Module.stopCommandProcessTree src/core/command-jobs/process-tree.ts:70:46
+     68|     if (!alive(target)) continue
+     69|     try { await execute(taskkill, ['/PID', String(target), '/T', '/F']…
+     70|     catch (error) { if (alive(target)) throw new Error(`Could not stop…
+       |                                              ^
+     71|   }
+     72|   for (let attempt = 0; attempt < 20 && targets.some(alive); attempt++…
+ ❯ src/core/command-jobs/manager.ts:270:31
+ ❯ CommandJobManager.stop src/core/command-jobs/manager.ts:279:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[17/44]⎯
+
+ FAIL  src/core/command-jobs/__tests__/manager.test.ts > D7 durable command job lifecycle > cancels a live descendant after its leader has exited and prevents further marker writes
+ FAIL  src/core/command-jobs/__tests__/manager.test.ts > D7 durable command job lifecycle > cancels a live descendant after its leader has exited and prevents further marker writes
+Error: Cannot inspect descendants of exited command: Error: Command failed: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInteractive -Command Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,@{Name="Created";Expression={$_.CreationDate.ToUniversalTime().ToString("o")}} | ConvertTo-Json -Compress
+Get-CimInstance : �ܾ����� 
+����λ�� ��:1 �ַ�: 1
++ Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcess ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : PermissionDenied: (root\cimv2:Win32_Process:String) [Get-CimInstance], CimException
+    + FullyQualifiedErrorId : HRESULT 0x80041003,Microsoft.Management.Infrastructure.CimCmdlets.GetCimInstanceCommand
+ 
+
+ ❯ Module.stopCommandProcessTree src/core/command-jobs/process-tree.ts:64:31
+     62|     if (leaderExited()) targets = targets.filter(target => target !== …
+     63|   } catch (error) {
+     64|     if (leaderExited()) throw new Error(`Cannot inspect descendants of…
+       |                               ^
+     65|     // taskkill /T can still discover the tree while the original lead…
+     66|   }
+ ❯ src/core/command-jobs/manager.ts:270:31
+ ❯ CommandJobManager.stop src/core/command-jobs/manager.ts:279:5
+ ❯ src/core/command-jobs/__tests__/manager.test.ts:259:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[18/44]⎯
+
+ FAIL  src/core/command-jobs/__tests__/manager.test.ts > D7 durable command job lifecycle > bounds terminal history per session and globally while retaining active work and isolating other sessions
+ FAIL  src/core/command-jobs/__tests__/manager.test.ts > D7 durable command job lifecycle > bounds terminal history per session and globally while retaining active work and isolating other sessions
+Error: Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 12976 /T /F
+����: �ܾ�����
+
+
+ ❯ Module.stopCommandProcessTree src/core/command-jobs/process-tree.ts:70:46
+     68|     if (!alive(target)) continue
+     69|     try { await execute(taskkill, ['/PID', String(target), '/T', '/F']…
+     70|     catch (error) { if (alive(target)) throw new Error(`Could not stop…
+       |                                              ^
+     71|   }
+     72|   for (let attempt = 0; attempt < 20 && targets.some(alive); attempt++…
+ ❯ src/core/command-jobs/manager.ts:270:31
+ ❯ CommandJobManager.stop src/core/command-jobs/manager.ts:279:5
+ ❯ src/core/command-jobs/__tests__/manager.test.ts:325:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[19/44]⎯
+
+ FAIL  src/core/utils/__tests__/dependency-runtime.test.ts > cancellation propagation > runs commands inside the project and actually terminates a cancelled process
+Error: Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 49484 /T /F
+����: �ܾ�����
+
+
+ ❯ Module.stopCommandProcessTree src/core/command-jobs/process-tree.ts:70:46
+     68|     if (!alive(target)) continue
+     69|     try { await execute(taskkill, ['/PID', String(target), '/T', '/F']…
+     70|     catch (error) { if (alive(target)) throw new Error(`Could not stop…
+       |                                              ^
+     71|   }
+     72|   for (let attempt = 0; attempt < 20 && targets.some(alive); attempt++…
+ ❯ src/core/command-jobs/manager.ts:270:31
+ ❯ CommandJobManager.stop src/core/command-jobs/manager.ts:279:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[20/44]⎯
+
+ FAIL  src/tools/cmd/__tests__/command-jobs.test.ts > D7 command tools with real policy and processes > cancels an owned background job while foreign sessions and sibling agents cannot inspect or stop it
+AssertionError: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ src/tools/cmd/__tests__/command-jobs.test.ts:117:31
+    115|       expect((await commandJobs.get(commandJobScope(ctx), job.jobId))?…
+    116|       const stopped = await cancelCommandTool.execute({ jobId: job.job…
+    117|       expect(stopped.success).toBe(true)
+       |                               ^
+    118|       expect(jobOf(stopped).status).toBe('cancelled')
+    119|     } finally { clearSecurityMode(childCtx.tenantId, childCtx.sessionI…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[21/44]⎯
+
+ FAIL  src/tools/cmd/__tests__/command-jobs.test.ts > D7 command tools with real policy and processes > cancels an owned background job while foreign sessions and sibling agents cannot inspect or stop it
+Error: Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 53864 /T /F
+����: �ܾ�����
+
+
+ ❯ Module.stopCommandProcessTree src/core/command-jobs/process-tree.ts:70:46
+     68|     if (!alive(target)) continue
+     69|     try { await execute(taskkill, ['/PID', String(target), '/T', '/F']…
+     70|     catch (error) { if (alive(target)) throw new Error(`Could not stop…
+       |                                              ^
+     71|   }
+     72|   for (let attempt = 0; attempt < 20 && targets.some(alive); attempt++…
+ ❯ src/core/command-jobs/manager.ts:270:31
+ ❯ CommandJobManager.stop src/core/command-jobs/manager.ts:279:5
+ ❯ Object.execute src/tools/cmd/job-tools.ts:33:19
+ ❯ src/tools/cmd/__tests__/command-jobs.test.ts:116:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[22/44]⎯
+
+ FAIL  src/tools/cmd/__tests__/command-jobs.test.ts > D7 command tools with real policy and processes > reports timeout as failed foreground work while retaining partial output
+Error: Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 7992 /T /F
+����: �ܾ�����
+
+
+ ❯ Module.stopCommandProcessTree src/core/command-jobs/process-tree.ts:70:46
+     68|     if (!alive(target)) continue
+     69|     try { await execute(taskkill, ['/PID', String(target), '/T', '/F']…
+     70|     catch (error) { if (alive(target)) throw new Error(`Could not stop…
+       |                                              ^
+     71|   }
+     72|   for (let attempt = 0; attempt < 20 && targets.some(alive); attempt++…
+ ❯ src/core/command-jobs/manager.ts:270:31
+ ❯ CommandJobManager.stop src/core/command-jobs/manager.ts:279:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[23/44]⎯
+
+ FAIL  src/api/http/routes/__tests__/command-jobs.test.ts > D7 command job HTTP and history lifecycle > conceals other tenants and sessions across list, status, output, and cancellation without stopping their process
+ FAIL  src/api/http/routes/__tests__/command-jobs.test.ts > D7 command job HTTP and history lifecycle > closing the real HTTP server waits for owned background processes to stop
+Error: Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 20944 /T /F
+����: �ܾ�����
+
+
+ ❯ Module.stopCommandProcessTree src/core/command-jobs/process-tree.ts:70:46
+     68|     if (!alive(target)) continue
+     69|     try { await execute(taskkill, ['/PID', String(target), '/T', '/F']…
+     70|     catch (error) { if (alive(target)) throw new Error(`Could not stop…
+       |                                              ^
+     71|   }
+     72|   for (let attempt = 0; attempt < 20 && targets.some(alive); attempt++…
+ ❯ src/core/command-jobs/manager.ts:270:31
+ ❯ CommandJobManager.stop src/core/command-jobs/manager.ts:279:5
+ ❯ src/api/http/routes/__tests__/command-jobs.test.ts:159:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[24/44]⎯
+
+ FAIL  src/api/http/routes/__tests__/command-jobs.test.ts > D7 command job HTTP and history lifecycle > awaits real process cancellation and returns the same terminal result on duplicate stop
+AssertionError: expected null to match object { …(2) }
+
+- Expected: 
+Object {
+  "jobId": "bae685ae-65d6-4dbc-9510-59158bd27203",
+  "status": "cancelled",
+}
+
++ Received: 
+null
+
+ ❯ src/api/http/routes/__tests__/command-jobs.test.ts:201:31
+    199|     const first = await request({ method: 'POST', url: `/command-jobs/…
+    200|     expect(first.statusCode, first.body).toBe(200)
+    201|     expect(first.json().data).toMatchObject({ jobId: job.jobId, status…
+       |                               ^
+    202|     await assertStopped(marker)
+    203|     const again = await request({ method: 'POST', url: `/command-jobs/…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[25/44]⎯
+
+ FAIL  src/api/http/routes/__tests__/command-jobs.test.ts > D7 command job HTTP and history lifecycle > chat stop reaches root and child-owned jobs after the model ended, without stopping another session
+AssertionError: expected null to match object { …(2) }
+
+- Expected: 
+Object {
+  "cancelled": true,
+  "sessionId": "chat-stop-background",
+}
+
++ Received: 
+null
+
+ ❯ src/api/http/routes/__tests__/command-jobs.test.ts:214:32
+    212|     const result = await request({ method: 'POST', url: '/chat/cancel'…
+    213|     expect(result.statusCode, result.body).toBe(200)
+    214|     expect(result.json().data).toMatchObject({ sessionId, cancelled: t…
+       |                                ^
+    215|     for (const item of [root, child]) {
+    216|       expect((await getJob(item.job)).json().data.status).toBe('cancel…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[26/44]⎯
+
+ FAIL  src/api/http/routes/__tests__/command-jobs.test.ts > D7 command job HTTP and history lifecycle > history mutation clear settles background processes before deleting history
+ FAIL  src/api/http/routes/__tests__/command-jobs.test.ts > D7 command job HTTP and history lifecycle > history mutation turn settles background processes before deleting history
+ FAIL  src/api/http/routes/__tests__/command-jobs.test.ts > D7 command job HTTP and history lifecycle > history mutation message settles background processes before deleting history
+ FAIL  src/api/http/routes/__tests__/command-jobs.test.ts > D7 command job HTTP and history lifecycle > history mutation truncate settles background processes before deleting history
+ FAIL  src/api/http/routes/__tests__/command-jobs.test.ts > D7 command job HTTP and history lifecycle > history mutation session settles background processes before deleting history
+AssertionError: expected 500 to be 200 // Object.is equality
+
+- Expected
++ Received
+
+- 200
++ 500
+
+ ❯ src/api/http/routes/__tests__/command-jobs.test.ts:241:34
+    239|       const result = await request(routes[operation])
+    240|       expect(result.statusCode, result.body).toBe(200)
+    241|       expect(result.json().code).toBe(200)
+       |                                  ^
+    242|       expect((await commandJobs.get({ tenantId, sessionId }, job.jobId…
+    243|       await assertStopped(marker)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[27/44]⎯
+
+ FAIL  src/api/http/routes/__tests__/command-jobs.test.ts > D7 command job HTTP and history lifecycle > a foreign turn deletion does not stop the real owner job or mutate its history
+Error: Could not stop command process tree: Error: Command failed: C:\Windows\System32\taskkill.exe /PID 28020 /T /F
+����: �ܾ�����
+
+
+ ❯ Module.stopCommandProcessTree src/core/command-jobs/process-tree.ts:70:46
+     68|     if (!alive(target)) continue
+     69|     try { await execute(taskkill, ['/PID', String(target), '/T', '/F']…
+     70|     catch (error) { if (alive(target)) throw new Error(`Could not stop…
+       |                                              ^
+     71|   }
+     72|   for (let attempt = 0; attempt < 20 && targets.some(alive); attempt++…
+ ❯ src/core/command-jobs/manager.ts:270:31
+ ❯ CommandJobManager.stop src/core/command-jobs/manager.ts:279:5
+ ❯ src/api/http/routes/__tests__/command-jobs.test.ts:258:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[28/44]⎯
+
+ Test Files  8 failed | 64 passed | 2 skipped (74)
+      Tests  30 failed | 669 passed | 15 skipped (714)
+   Start at  03:58:22
+   Duration  129.45s (transform 1.10s, setup 0ms, collect 11.73s, tests 106.74s, environment 7ms, prepare 2.98s)
+
+
+Exit code: 
+1
+Completed: 
+2026-09-30T04:00:31.8941040+08:00
+RESULT: exit code 1; Test Files 8 failed, 64 passed, 2 skipped (74); Tests 30 failed, 669 passed, 15 skipped (714).

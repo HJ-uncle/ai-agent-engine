@@ -1,0 +1,42 @@
+
+Running 22 tests using 1 worker
+
+
+
+(node:8016) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[1/22] e2e\change-revert-ui.spec.ts:112:7 › D2 文件回退真机闭环 › 初始无任务/队列也能发现全部205条；一次撤回有序恢复并保护人工修改
+e2e\change-revert-ui.spec.ts:112:7 › D2 文件回退真机闭环 › 初始无任务/队列也能发现全部205条；一次撤回有序恢复并保护人工修改
+
+(node:26992) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:26992) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[2/22] e2e\change-revert-ui.spec.ts:129:7 › D2 文件回退真机闭环 › 消息回退有冲突或缺失快照时，真实历史及消息仍保留
+[3/22] e2e\change-revert-ui.spec.ts:140:7 › D2 文件回退真机闭环 › 消息回退包含已保留改动；完全成功才删历史；零待确认仍能查看结果
+[4/22] e2e\chat-recovery-ui.spec.ts:63:7 › D4 快照和消费游标真机验收 › 部分思考和工具参数刷新恢复，工具执行后再刷新不会重发或重复写入
+[5/22] e2e\chat-recovery-ui.spec.ts:93:7 › D4 快照和消费游标真机验收 › 结束后重启从持久化快照恢复附件待办和改动，过期游标透传恢复信号
+[6/22] e2e\chat-recovery-ui.spec.ts:107:7 › D4 快照和消费游标真机验收 › 停止先取消引擎运行，重开保持cancelled且不创建新请求
+[7/22] e2e\command-job-ui.spec.ts:86:7 › D7 后台命令真实进程闭环 › 父回复结束后stdout/stderr持续增量，刷新与切换会话保持同一任务且完成不重跑
+
+e2e\command-job-ui.spec.ts:86:7 › D7 后台命令真实进程闭环 › 父回复结束后stdout/stderr持续增量，刷新与切换会话保持同一任务且完成不重跑
+(node:52532) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:52532) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[8/22] e2e\command-job-ui.spec.ts:99:7 › D7 后台命令真实进程闭环 › 停止命令等待真实退出，刷新保留已取消且不执行后续文件副作用
+[9/22] e2e\command-job-ui.spec.ts:106:7 › D7 后台命令真实进程闭环 › 非零退出和超时保留各自终态/退出码/stderr，前台命令维持普通工具展示
+[10/22] e2e\command-job-ui.spec.ts:113:7 › D7 后台命令真实进程闭环 › 子代理派发后父/子结束仍能发现后台命令，归属恢复且可单独停止
+[11/22] e2e\command-job-ui.spec.ts:129:7 › D7 后台命令真实进程闭环 › 引擎进程意外退出后任务恢复为中断且不自动重新执行
+[12/22] e2e\command-job-ui.spec.ts:143:7 › D7 后台命令真实进程闭环 › 过期历史任务真实404显示输出和停止失败，不能伪装为已取消或重新派发
+[13/22] e2e\edit-file-ui.spec.ts:126:7 › D6 精确编辑真机闭环 › 实际工具schema与精确读取版本驱动两文件编辑，live/刷新/重启diff和路径跳转一致，UI撤回恢复字节
+[14/22] e2e\edit-file-ui.spec.ts:165:7 › D6 精确编辑真机闭环 › 读取后人工修改导致版本冲突，拒绝写入且刷新保持失败和人工内容
+[15/22] e2e\edit-file-ui.spec.ts:173:7 › D6 精确编辑真机闭环 › 同一原文重复匹配拒绝整批编辑，之前的唯一匹配也不写入或生成改动
+[16/22] e2e\narrow-chat-layout.spec.ts:200:5 › 默认宽度下顶栏按钮完整可见
+[17/22] e2e\narrow-chat-layout.spec.ts:205:5 › 面板压到最小宽度（280）后顶栏按钮不被裁掉
+[18/22] e2e\narrow-chat-layout.spec.ts:220:5 › 窗口缩到最小尺寸时顶栏按钮依然完整
+[19/22] e2e\streaming-model-ui.spec.ts:62:7 › D5 真流式与模型切换真机验收 › 首段正文在provider结束前显示，刷新接续不重复且用量live/history一致
+[20/22] e2e\streaming-model-ui.spec.ts:70:7 › D5 真流式与模型切换真机验收 › 工具前正文保持原位且只出现一次，后续正文与调用用量正确累计
+[21/22] e2e\streaming-model-ui.spec.ts:78:7 › D5 真流式与模型切换真机验收 › 交付前503允许fallback，实际模型在正文结束前和重启历史中一致
+[22/22] e2e\streaming-model-ui.spec.ts:88:7 › D5 真流式与模型切换真机验收 › 已有正文后断开不切备用模型，保留部分输出和实际模型并标失败
+  22 passed (1.1m)

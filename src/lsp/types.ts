@@ -24,6 +24,7 @@ export interface DiagnoseResult {
   /** Empty diagnostics mean a pass only when status is completed. */
   status: 'completed' | 'unsupported' | 'error' | 'cancelled'
   error?: string
+  errorCode?: string
   filePath: string
   language: string
   adapter: string

@@ -1,0 +1,15 @@
+
+> aether-code@1.0.0 build
+> npm run typecheck && electron-vite build
+
+
+> aether-code@1.0.0 typecheck
+> npm run typecheck:node && npm run typecheck:web
+
+
+> aether-code@1.0.0 typecheck:node
+> tsc --noEmit -p tsconfig.node.json --composite false
+
+src/main/code-oss/host.ts(153,16): error TS2339: Property 'ELECTRON_RUN_AS_NODE' does not exist on type '{ NODE_ENV: string; ELECTRON_RENDERER_URL?: string | undefined; }'.
+src/main/code-oss/host.ts(154,34): error TS2339: Property 'VSCODE_DEV' does not exist on type '{ NODE_ENV: string; ELECTRON_RENDERER_URL?: string | undefined; }'.
+src/main/code-oss/host.ts(155,21): error TS2339: Property 'VSCODE_DEV' does not exist on type '{ NODE_ENV: string; ELECTRON_RENDERER_URL?: string | undefined; }'.

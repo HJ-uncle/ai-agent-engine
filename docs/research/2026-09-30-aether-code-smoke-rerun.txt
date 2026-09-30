@@ -1,0 +1,86 @@
+
+Running 39 tests using 1 worker
+
+(node:39300) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  x   1 e2e\smoke.spec.ts:257:5 › 工作台骨架渲染：菜单栏、活动栏、侧边栏、主区、对话面板、状态栏均存在 (0ms)
+  -   2 e2e\smoke.spec.ts:271:5 › 资源管理器：恢复上次打开的文件夹并列出文件
+  -   3 e2e\smoke.spec.ts:280:5 › 资源管理器：点击目录可展开
+  -   4 e2e\smoke.spec.ts:299:5 › 编辑器：打开文件后 Monaco 挂载并显示内容
+  -   5 e2e\smoke.spec.ts:323:5 › 引擎：自动启动并进入就绪状态
+  -   6 e2e\smoke.spec.ts:327:5 › 安全视图：渲染三种会话模式与引擎侧策略规则
+  -   7 e2e\smoke.spec.ts:373:5 › 输出面板：中文经 IPC 保持完整（终端乱码并非数据损坏）
+  -   8 e2e\smoke.spec.ts:389:5 › 资源管理器右键菜单：列出可用操作，Esc 可关闭
+  -   9 e2e\smoke.spec.ts:404:5 › 文件排除：设置里的规则即时生效，且重开窗口后仍然生效
+  -  10 e2e\smoke.spec.ts:464:5 › 资源管理器：右键新建文件后出现在树中
+  -  11 e2e\smoke.spec.ts:481:5 › 资源管理器：多选（Ctrl 加选、Shift 连选、Ctrl+A 全选、Esc 清除）
+  -  12 e2e\smoke.spec.ts:514:5 › 资源管理器：选中行按焦点降级，树持有焦点时当前行有描边
+  -  13 e2e\smoke.spec.ts:581:5 › 资源管理器：缩进参考线与排序/收起全部入口可用
+  -  14 e2e\smoke.spec.ts:615:5 › 资源管理器：拖拽把多选项移入目标目录，Ctrl+Z 撤销回滚
+  -  15 e2e\smoke.spec.ts:663:5 › 资源管理器：虚拟滚动只挂载可见行
+  -  16 e2e\smoke.spec.ts:716:5 › 预览：PNG 走图片预览，未知二进制走十六进制
+  -  17 e2e\smoke.spec.ts:745:5 › 版本控制：状态栏入口打开侧边栏视图并给出仓库信息
+  -  18 e2e\smoke.spec.ts:764:5 › 命令面板：Ctrl+Shift+P 唤出、中文过滤、回车执行、Esc 关闭
+  -  19 e2e\smoke.spec.ts:806:5 › 快速打开：Ctrl+P 唤出、文件名过滤、回车打开文件
+  -  20 e2e\smoke.spec.ts:858:5 › 内置终端：Ctrl+` 打开面板、执行命令并回显
+  -  21 e2e\smoke.spec.ts:896:5 › 内置终端多标签：新建、切换后会话与回显互不串扰
+  -  22 e2e\smoke.spec.ts:943:5 › 全局搜索：命中分组展示，点击结果打开文件
+  -  23 e2e\smoke.spec.ts:959:5 › 全局搜索：自动聚焦、定位高亮、状态保留与大小写开关
+  -  24 e2e\smoke.spec.ts:1001:5 › 全局替换：include 过滤后批量替换并写盘
+  -  25 e2e\smoke.spec.ts:1031:5 › 搜索排除：设置里的规则减少搜索结果，取消勾选后放回
+  -  26 e2e\smoke.spec.ts:1079:5 › 键盘快捷方式：编辑器入口、录制生效、冲突提示、清除与重置
+  -  27 e2e\smoke.spec.ts:1155:5 › 资源管理器：剪切/复制/粘贴（Ctrl+X/C/V 与右键菜单）
+  -  28 e2e\smoke.spec.ts:1221:5 › 资源管理器：拖拽悬停在收起目录上会自动展开
+  -  29 e2e\smoke.spec.ts:1263:5 › 资源管理器：git 徽章只在仓库内出现且与仓库信息一致
+  -  30 e2e\smoke.spec.ts:1336:5 › 编辑器标签：多标签打开、切换与激活态
+  -  31 e2e\smoke.spec.ts:1360:5 › 编辑器标签：右键菜单「关闭其他 / 关闭右侧 / 全部关闭」
+  -  32 e2e\smoke.spec.ts:1409:5 › 编辑器标签：中键关闭与 Ctrl+W 关闭当前
+  -  33 e2e\smoke.spec.ts:1426:5 › 编辑器标签：Ctrl+W 关闭当前标签
+  -  34 e2e\smoke.spec.ts:1455:5 › 编辑器标签：Ctrl+Shift+T 重开刚关闭的标签
+  -  35 e2e\smoke.spec.ts:1480:5 › 编辑器标签：Ctrl+Shift+S 保存全部脏文档
+  -  36 e2e\smoke.spec.ts:1520:5 › 编辑器标签：Ctrl+Tab / Ctrl+PageUp/Down 切换激活标签
+  -  37 e2e\smoke.spec.ts:1568:5 › 编辑器标签：光标位置读数与跨标签恢复
+  -  38 e2e\smoke.spec.ts:1607:5 › 编辑器标签：Ctrl+B 切换侧边栏可见性
+  -  39 e2e\smoke.spec.ts:1619:5 › 渲染进程无未捕获错误
+
+
+  1) e2e\smoke.spec.ts:257:5 › 工作台骨架渲染：菜单栏、活动栏、侧边栏、主区、对话面板、状态栏均存在 ──────────────────────────────────
+
+    Error: EPERM, Permission denied: \\?\C:\Users\wb.xielin02\AppData\Local\Temp\aether-ide-e2e-userdata '\\?\C:\Users\wb.xielin02\AppData\Local\Temp\aether-ide-e2e-userdata'
+
+      186 | function prepareUserData(): string {
+      187 |   const dir = join(tmpdir(), 'aether-ide-e2e-userdata')
+    > 188 |   rmSync(dir, { recursive: true, force: true })
+          |         ^
+      189 |   mkdirSync(dir, { recursive: true })
+      190 |
+      191 |   // 预置 lastFolder：应用启动时会自动恢复并授权该目录。
+        at prepareUserData (D:\dev\aether-code\e2e\smoke.spec.ts:188:9)
+        at D:\dev\aether-code\e2e\smoke.spec.ts:226:23
+
+    Error: EPERM, Permission denied: \\?\C:\Users\wb.xielin02\AppData\Local\Temp\aether-ide-e2e-userdata '\\?\C:\Users\wb.xielin02\AppData\Local\Temp\aether-ide-e2e-userdata'
+
+      252 |   // 关掉应用后再清掉这份配置，否则下一次运行会带着上一次的规则启动。
+      253 |   // 不放在用例内部兜底：规则要留到「关窗 → 重开」的用例里验证真的持久化了。
+    > 254 |   rmSync(join(tmpdir(), 'aether-ide-e2e-userdata'), { recursive: true, force: true })
+          |         ^
+      255 | })
+      256 |
+      257 | test('工作台骨架渲染：菜单栏、活动栏、侧边栏、主区、对话面板、状态栏均存在', async () => {
+        at D:\dev\aether-code\e2e\smoke.spec.ts:254:9
+
+    Error Context: test-results\smoke-工作台骨架渲染：菜单栏、活动栏、侧边栏、主区、对话面板、状态栏均存在\error-context.md
+
+    Error Context: test-results\smoke-工作台骨架渲染：菜单栏、活动栏、侧边栏、主区、对话面板、状态栏均存在\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\smoke-工作台骨架渲染：菜单栏、活动栏、侧边栏、主区、对话面板、状态栏均存在\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\smoke-工作台骨架渲染：菜单栏、活动栏、侧边栏、主区、对话面板、状态栏均存在\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    e2e\smoke.spec.ts:257:5 › 工作台骨架渲染：菜单栏、活动栏、侧边栏、主区、对话面板、状态栏均存在 ───────────────────────────────────
+  38 did not run

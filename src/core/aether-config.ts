@@ -53,7 +53,12 @@ export function getProjectAetherDir(): string {
 }
 
 export function getUserAetherDir(): string {
-  return path.join(os.homedir(), '.aether')
+  // Packaged hosts provide an installation-owned writable global directory so
+  // the engine never reads a developer's home configuration from a read-only
+  // application launch. Development keeps the historical ~/.aether default.
+  return process.env.AETHER_GLOBAL_DIR
+    ? path.resolve(process.env.AETHER_GLOBAL_DIR)
+    : path.join(os.homedir(), '.aether')
 }
 
 export function getManagedAetherDir(): string {

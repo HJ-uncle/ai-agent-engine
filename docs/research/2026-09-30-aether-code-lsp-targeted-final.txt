@@ -1,0 +1,12 @@
+
+Running 4 tests using 1 worker
+
+
+(node:12564) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+[1/4] e2e\lsp-diagnostics.spec.ts:109:5 › 引擎：自动启动并进入就绪状态
+[2/4] e2e\lsp-diagnostics.spec.ts:113:5 › LSP 诊断：保存触发引擎诊断，问题面板可见且点击可跳转
+[3/4] e2e\lsp-diagnostics.spec.ts:155:5 › 不支持的文件不会被显示为诊断通过，关闭后清除状态
+[4/4] e2e\lsp-diagnostics.spec.ts:172:5 › 渲染进程无未捕获错误
+  4 passed (11.3s)

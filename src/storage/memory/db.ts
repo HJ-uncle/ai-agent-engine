@@ -74,27 +74,16 @@ export async function initMemoryDb(schemaStatements: string[]): Promise<void> {
     db.execute('PRAGMA foreign_keys = ON').catch(() => {}),
   ])
 
-  // 将语句分为「普通」和「需回退」两类
-  const normalStatements: string[] = []
-  const fallbackStatements: string[] = []
-
+  // Schema statements must run in declaration order.  The memory graph has
+  // indexes and foreign keys that depend on the tables declared immediately
+  // before them.  Splitting statements into a normal batch and a fallback
+  // batch (the old implementation) reordered those dependencies: SQLite
+  // rejected the first index on `memory_nodes`, rolled back the whole batch,
+  // and left the graph only partially initialized on machines without the
+  // vector extension.  Execute each statement in order and apply the F32_BLOB
+  // fallback per statement so a single optional vector feature cannot erase
+  // the rest of the schema.
   for (const sql of schemaStatements) {
-    if (sql.toUpperCase().includes('F32_BLOB') || sql.toUpperCase().includes('LIBSQL_VECTOR_IDX')) {
-      fallbackStatements.push(sql)
-    } else {
-      normalStatements.push(sql)
-    }
-  }
-
-  // 1. 普通语句批量执行（效率最高）
-  if (normalStatements.length > 0) {
-    await db.batch(normalStatements.map(sql => ({ sql })), 'write').catch((err) => {
-      console.warn('[memory-db] batch schema warning:', (err as Error)?.message)
-    })
-  }
-
-  // 2. 需回退语句逐条执行
-  for (const sql of fallbackStatements) {
     await tryExecuteWithF32BlobFallback(db, sql)
   }
 

@@ -19,7 +19,7 @@ export async function metricsRoutes(fastify: FastifyInstance) {
   fastify.get('/metrics', async (request, reply) => {
     const tenantId = (request as any).authContext?.tenantId
     const metrics = await getMetrics(tenantId)
-    return reply.type('text/plain').send(metrics)
+    return reply.send(success(metrics))
   })
 
   // Serve openapi.json dynamically from docs/docs/openapi.json

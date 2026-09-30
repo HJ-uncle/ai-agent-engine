@@ -1,0 +1,9 @@
+
+Running 1 test using 1 worker
+
+
+
+(node:812) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[1/1] e2e\smoke.spec.ts:414:5 › 文件排除：设置里的规则即时生效，且重开窗口后仍然生效
+  1 passed (3.8s)

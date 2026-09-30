@@ -1,0 +1,53 @@
+
+Running 3 tests using 1 worker
+
+(node:55496) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok 1 e2e\history-replay.spec.ts:183:5 › 首次启动：引擎就绪并完成数据库初始化 (883ms)
+  x  2 e2e\history-replay.spec.ts:191:5 › 重启后回放引擎历史：消息、思考、工具调用逐项还原 (22.6s)
+  -  3 e2e\history-replay.spec.ts:248:5 › 从会话历史删除后引擎侧历史一并删除：重启不会复活
+
+
+  1) e2e\history-replay.spec.ts:191:5 › 重启后回放引擎历史：消息、思考、工具调用逐项还原 ───────────────────────────────────
+
+    Error: expect(locator).toContainText(expected) failed
+
+    Locator: locator('.process__summary').filter({ hasText: '工具调用 1' }).first().locator('xpath=following-sibling::div[contains(@class,"process__body")]')
+    Expected substring: "E2E历史回放探针-工具结果"
+    Received string:    "读取文件成功e2e-probe.txt"
+    Timeout: 20000ms
+
+    Call log:
+      - Expect "toContainText" locator('.process__summary').filter({ hasText: '工具调用 1' }).first().locator('xpath=following-sibling::div[contains(@class,"process__body")]') with timeout 20000ms
+      - waiting for locator('.process__summary').filter({ hasText: '工具调用 1' }).first().locator('xpath=following-sibling::div[contains(@class,"process__body")]')
+        43 × locator resolved to <div class="process__body">…</div>
+           - unexpected value "读取文件成功e2e-probe.txt"
+
+
+      243 |   await toolRow.click()
+      244 |   // read_file → 读取文件，同时确认工具结果没有只停留在 SQLite/迁移层。
+    > 245 |   await expect(toolBody).toContainText(PROBE_TOOL_RESULT)
+          |                          ^
+      246 | })
+      247 |
+      248 | test('从会话历史删除后引擎侧历史一并删除：重启不会复活', async () => {
+        at D:\dev\aether-code\e2e\history-replay.spec.ts:245:26
+
+    Error Context: test-results\history-replay-重启后回放引擎历史：消息、思考、工具调用逐项还原\error-context.md
+
+    Error Context: test-results\history-replay-重启后回放引擎历史：消息、思考、工具调用逐项还原\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\history-replay-重启后回放引擎历史：消息、思考、工具调用逐项还原\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\history-replay-重启后回放引擎历史：消息、思考、工具调用逐项还原\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    e2e\history-replay.spec.ts:191:5 › 重启后回放引擎历史：消息、思考、工具调用逐项还原 ────────────────────────────────────
+  1 did not run
+  1 passed (25.3s)
+
+EXIT_CODE=1
