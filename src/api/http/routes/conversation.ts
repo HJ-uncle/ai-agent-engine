@@ -130,6 +130,52 @@ export async function conversationRoutes(fastify: FastifyInstance) {
     return reply.code(200).send(response)
   })
 
+  // GET /conversation/archive?sessionId=xxx — 显式读取压缩前的 JSONL 归档。
+  //
+  // /conversation/history 保持为模型/快速恢复使用的紧凑投影；归档必须由
+  // 用户主动请求，避免把所有旧工具输出重新灌进上下文窗口。SQLite 后端
+  // 只能返回其当前事务重建后的可用消息，JSONL 会在这里展开 summary 之前
+  // 仍保留在 append-only 文件中的消息。
+  fastify.get<{ Querystring: { sessionId: string; current?: number; pageSize?: number } }>('/conversation/archive', async (request, reply) => {
+    const { sessionId, current, pageSize } = request.query
+    const tenantId = getTenantId(request)
+    if (!sessionId) {
+      return reply.code(200).send(fail(40001, '参数验证失败：sessionId 不能为空'))
+    }
+    const getArchive = history.getArchive
+    if (typeof getArchive !== 'function') {
+      return reply.code(501).send(fail(50101, '当前历史后端不支持归档读取'))
+    }
+    // Keep archive replay as rich as the compact history endpoint: tool rows
+    // need their persisted child-run/job metadata for the UI cards to render.
+    await projectPendingSubagents(history, tenantId)
+    const archive = await getArchive.call(history, { tenantId, sessionId })
+    const subagentRuns = await getSubagentStore().listRunsForParent(tenantId, sessionId)
+    const jobs = await commandJobs.list({ tenantId, sessionId })
+    for (const message of archive.messages) {
+      const run = subagentRuns.find(item => item.parentToolCallId === message.toolCallId)
+      if (run) message.metadata = { ...message.metadata, subagent: run, success: run.status === 'succeeded', error: run.error?.message }
+      const job = jobs.find(item => item.toolCallId && item.toolCallId === message.toolCallId && item.ownerSessionId === sessionId)
+      if (job) message.metadata = { ...message.metadata, commandJob: job }
+    }
+    const response = paginateArray(archive.messages, current, pageSize)
+    response.metadata = {
+      compressed: archive.compressed,
+      currentMessageCount: archive.currentMessageCount,
+      archiveMessageCount: archive.messages.length,
+      backend: archive.backend,
+      ...(archive.summary ? {
+        summary: {
+          content: archive.summary.content,
+          ...(archive.summary.leafSeq !== undefined ? { leafSeq: archive.summary.leafSeq } : {}),
+          ...(archive.summary.preTokens !== undefined ? { preTokens: archive.summary.preTokens } : {}),
+          ...(archive.summary.postTokens !== undefined ? { postTokens: archive.summary.postTokens } : {}),
+        },
+      } : {}),
+    }
+    return reply.code(200).send(response)
+  })
+
   // DELETE /conversation/history?sessionId=xxx  — 清空 session 历史
   fastify.delete<{ Querystring: { sessionId: string } }>('/conversation/history', async (request, reply) => {
     const { sessionId } = request.query

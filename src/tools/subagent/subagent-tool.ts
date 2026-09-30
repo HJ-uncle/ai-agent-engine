@@ -101,7 +101,7 @@ export const subagentTool: Tool = {
       description: { type: 'string', description: '简短任务标题' },
       systemPrompt: { type: 'string' },
       model: { type: 'string' },
-      maxSteps: { type: 'integer', minimum: 1, maximum: 64, description: '默认24，上限64；最后一轮用于交回已有结论。' },
+      maxSteps: { type: 'integer', minimum: 1, description: '可选。不传则不限制步数，子代理跑到任务完成或 token 预算耗尽为止；传入则作为该子任务的迭代上限。' },
       role: { type: 'string', enum: [...ROLE_VALUES] },
       access: { type: 'string', enum: ['read-only', 'inherit'], description: '默认read-only；implementer默认inherit，始终受父工具权限限制' },
     },
@@ -116,11 +116,14 @@ export const subagentTool: Tool = {
     if (!task) return { success: false, output: 'subagent: task 参数为空。请传入完整任务描述。' }
     if (args.role !== undefined && !ROLE_VALUES.includes(args.role as SubagentRole)) return { success: false, output: `subagent: 未知 role '${String(args.role)}'，可选值为 ${ROLE_VALUES.join(' / ')}` }
     if (args.access !== undefined && args.access !== 'read-only' && args.access !== 'inherit') return { success: false, output: 'subagent: access 必须为 read-only 或 inherit。' }
-    if (args.maxSteps !== undefined && (typeof args.maxSteps !== 'number' || !Number.isInteger(args.maxSteps) || args.maxSteps < 1 || args.maxSteps > 64)) return { success: false, output: 'subagent: maxSteps 必须是 1 到 64 的整数。' }
+    if (args.maxSteps !== undefined && (typeof args.maxSteps !== 'number' || !Number.isInteger(args.maxSteps) || args.maxSteps < 1)) return { success: false, output: 'subagent: maxSteps 必须是大于等于 1 的整数（不传则不限步数）。' }
     const role = args.role as SubagentRole | undefined
     const reviewer = role === 'spec-reviewer' || role === 'code-quality-reviewer'
     const readOnly = reviewer || (args.access ? args.access === 'read-only' : role !== 'implementer')
-    const maxSteps = typeof args.maxSteps === 'number' ? args.maxSteps : 24
+    // 不传 maxSteps = 不限步数：子代理跑到任务完成或 token 预算耗尽为止。
+    // 原来默认 24（后提到 100）会在长调研半途硬截断，把"没查完"包装成"已完成"。
+    // 真正需要收口的循环由 requestBudget / token 预算兜底，不靠一个人为步数天花板。
+    const maxSteps = typeof args.maxSteps === 'number' ? args.maxSteps : Number.POSITIVE_INFINITY
     const requestedModel = typeof args.model === 'string' && args.model.trim() ? args.model.trim() : ctx.subagentModel || ctx.modelName
     const description = (typeof args.description === 'string' && args.description.trim() ? args.description.trim() : task.replace(/\s+/g, ' ')).slice(0, 100)
     const mode = resolveOSMMode(ctx.logger)
@@ -146,6 +149,12 @@ export const subagentTool: Tool = {
     }, ctx, async ({ snapshot, signal, observer, onRequestAttempt, requestBudget }) => {
       const resolved = await resolveModelConfig({ tenantId: ctx.tenantId, model: requestedModel, parent: ctx.resolvedModel })
       const llm = createAdapterFromResolved(resolved)
+      // 子代理预算 = 父/子模型窗口中已知的较小者；都未知则不注入本地预算（undefined），
+      // 避免把"未配置"误当成 0 传给 createAgentContext 反而把子代理卡死。
+      const subagentWindow = Math.min(
+        ctx.modelCaps?.contextWindow ?? ctx.tokenBudget ?? Number.POSITIVE_INFINITY,
+        resolved.capabilities.contextWindow ?? Number.POSITIVE_INFINITY)
+      const subagentTokenBudget = Number.isFinite(subagentWindow) ? subagentWindow : undefined
       const child = createAgentContext({
         sessionId: snapshot.childSessionId,
         tenantId: ctx.tenantId,
@@ -155,7 +164,7 @@ export const subagentTool: Tool = {
         tools: createSubagentToolRegistry(ctx.tools, readOnly),
         history: createConversationHistory(),
         logger: ctx.logger.child({ runId: snapshot.runId, subSessionId: snapshot.childSessionId }),
-        tokenBudget: Math.min(ctx.modelCaps?.contextWindow ?? ctx.tokenBudget, resolved.capabilities.contextWindow ?? Infinity),
+        tokenBudget: subagentTokenBudget,
         signal,
         modelName: resolved.model,
         modelCaps: resolved.capabilities,

@@ -18,7 +18,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import type { AgentContext, ConversationHistory, Message } from '../../core/agent-context/types.js'
+import type { AgentContext, ConversationArchive, ConversationHistory, Message } from '../../core/agent-context/types.js'
 import { estimateTokens } from '../../core/utils/tokens.js'
 
 type Ctx = Pick<AgentContext, 'tenantId' | 'sessionId'>
@@ -162,9 +162,12 @@ export class JSONLConversationHistory implements ConversationHistory {
 
     const raw = await fs.promises.readFile(file, 'utf8')
     const rows: JsonlRow[] = []
+    const rowOrdinals = new Map<JsonlRow, number>()
     const tombstoneRows: JsonlRow[] = []
     const updates = new Map<string, JsonlRow>()
     let lastSummary: JsonlRow | null = null
+    let lastSummaryOrdinal = -1
+    let rawOrdinal = 0
     let maxSeq = 0
 
     for (const line of raw.split('\n')) {
@@ -178,10 +181,12 @@ export class JSONLConversationHistory implements ConversationHistory {
         console.warn(`[jsonl-history] skip corrupted line in ${file}`)
         continue
       }
+      const currentOrdinal = rawOrdinal++
+      rowOrdinals.set(row, currentOrdinal)
       if (typeof row.dbSeq === 'number' && row.dbSeq > maxSeq) maxSeq = row.dbSeq
       if (row.type === 'tombstone') tombstoneRows.push(row)
       else if (row.type === 'update' && row.targetUuid) updates.set(row.targetUuid, row)
-      else if (row.type === 'summary') lastSummary = row
+      else if (row.type === 'summary') { lastSummary = row; lastSummaryOrdinal = currentOrdinal }
       else rows.push(row)
     }
 
@@ -190,12 +195,14 @@ export class JSONLConversationHistory implements ConversationHistory {
     // 折叠 tombstone
     let cutoffSeq = Infinity
     let clearSeq = -1
+    let clearOrdinal = -1
     const deletedUuids = new Set<string>()
     const deletedConvIds = new Set<string>()
     for (const t of tombstoneRows) {
       if (t.scope === 'clear') {
         // clear 视为截断到该行 dbSeq：只保留其后的消息（正常 clear 后文件已 rename，不会走到这）
         clearSeq = Math.max(clearSeq, t.dbSeq ?? 0)
+        clearOrdinal = Math.max(clearOrdinal, rowOrdinals.get(t) ?? -1)
       } else if (t.scope === 'truncate' && typeof t.afterSeq === 'number') {
         cutoffSeq = Math.min(cutoffSeq, t.afterSeq)
       } else if (t.scope === 'message' && t.targetUuid) {
@@ -211,6 +218,7 @@ export class JSONLConversationHistory implements ConversationHistory {
     let lastUuid: string | null = null
     for (const row of rows) {
       if (row.dbSeq <= clearSeq) continue
+      if ((rowOrdinals.get(row) ?? -1) <= clearOrdinal) continue
       if (row.dbSeq > cutoffSeq) continue
       if (row.dbSeq <= summaryFloor) continue
       if (deletedUuids.has(row.uuid)) continue
@@ -229,7 +237,7 @@ export class JSONLConversationHistory implements ConversationHistory {
     }
 
     // summary 行转成一条 system 消息插到最前（与 SQLite 压缩后形态一致）
-    if (lastSummary?.summary) {
+    if (lastSummary && lastSummaryOrdinal > clearOrdinal && lastSummary.summary) {
       const summaryMsg: Message = {
         id: lastSummary.uuid,
         role: 'system',
@@ -394,6 +402,103 @@ export class JSONLConversationHistory implements ConversationHistory {
   async getFullHistory(ctx: Ctx): Promise<Message[]> {
     const state = await this.loadSession(ctx)
     return state.messages
+  }
+
+  /**
+   * Read the append-only transcript without applying the latest compaction
+   * summary floor.  The normal history projection intentionally hides those
+   * rows so they never consume the model context; this method is for an
+   * explicit user archive view only.
+   */
+  async getArchive(ctx: Ctx): Promise<ConversationArchive> {
+    // Trigger lazy migration and use the same cache/clear semantics as the
+    // normal read path before opening the transcript directly.
+    const current = await this.loadSession(ctx)
+    const file = this.filePath(ctx)
+    let raw: string
+    try {
+      raw = await fs.promises.readFile(file, 'utf8')
+    } catch {
+      return {
+        messages: [],
+        compressed: false,
+        currentMessageCount: current.messages.length,
+        backend: 'jsonl',
+      }
+    }
+
+    const entries: Array<{ row: JsonlRow; ordinal: number }> = []
+    let ordinal = 0
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      try {
+        entries.push({ row: JSON.parse(trimmed) as JsonlRow, ordinal: ordinal++ })
+      } catch {
+        // Match loadSession's crash-tolerant behavior: an incomplete line is
+        // not a recoverable message and must not break the archive endpoint.
+      }
+    }
+
+    const updates = new Map<string, JsonlRow>()
+    const deletedUuids = new Set<string>()
+    const deletedConvIds = new Set<string>()
+    let truncateAfter = Infinity
+    let clearAfterOrdinal = -1
+    let latestSummary: JsonlRow | undefined
+
+    for (const { row, ordinal: rowOrdinal } of entries) {
+      if (row.type === 'update' && row.targetUuid) {
+        updates.set(row.targetUuid, row)
+      } else if (row.type === 'tombstone') {
+        if (row.scope === 'clear') {
+          // clear() normally renames the file.  The fallback tombstone uses
+          // dbSeq=0, so line order is the only reliable boundary here.
+          clearAfterOrdinal = Math.max(clearAfterOrdinal, rowOrdinal)
+        } else if (row.scope === 'truncate' && typeof row.afterSeq === 'number') {
+          truncateAfter = Math.min(truncateAfter, row.afterSeq)
+        } else if (row.scope === 'message' && row.targetUuid) {
+          deletedUuids.add(row.targetUuid)
+        } else if (row.scope === 'conversation' && row.conversationId) {
+          deletedConvIds.add(row.conversationId)
+        }
+      } else if (row.type === 'summary' && rowOrdinal > clearAfterOrdinal) {
+        latestSummary = row
+      }
+    }
+
+    const messages: Message[] = []
+    for (const { row, ordinal: rowOrdinal } of entries) {
+      if (row.type === 'summary' || row.type === 'update' || row.type === 'tombstone') continue
+      if (rowOrdinal <= clearAfterOrdinal) continue
+      if (typeof row.dbSeq === 'number' && row.dbSeq > truncateAfter) continue
+      if (deletedUuids.has(row.uuid)) continue
+      if (row.conversationId && deletedConvIds.has(row.conversationId)) continue
+      const message = this.rowToMessage(row)
+      const update = updates.get(row.uuid)
+      if (update) {
+        if (update.content !== undefined) message.content = update.content
+        if (typeof update.tokens === 'number') message.tokens = update.tokens
+        if (update.metadata !== undefined) message.metadata = update.metadata
+      }
+      messages.push(message)
+    }
+
+    return {
+      messages,
+      compressed: Boolean(latestSummary),
+      ...(latestSummary?.summary ? {
+        summary: {
+          content: latestSummary.summary,
+          ...(typeof latestSummary.leafSeq === 'number' ? { leafSeq: latestSummary.leafSeq } : {}),
+          ...(typeof latestSummary.preTokens === 'number' ? { preTokens: latestSummary.preTokens } : {}),
+          ...(typeof latestSummary.postTokens === 'number' ? { postTokens: latestSummary.postTokens } : {}),
+          ...(latestSummary.transcriptPath ? { transcriptPath: latestSummary.transcriptPath } : {}),
+        },
+      } : {}),
+      currentMessageCount: current.messages.length,
+      backend: 'jsonl',
+    }
   }
 
   async getTokenCount(ctx: Ctx): Promise<number> {

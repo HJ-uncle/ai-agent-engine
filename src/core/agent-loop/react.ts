@@ -320,17 +320,23 @@ export class ReActStrategy implements LoopStrategy {
   }
 
   private async *runInternal(input: string | any[] | null, ctx: AgentContext): AsyncIterable<string> {
-    // maxIterations 决策顺序（与 agent-context/factory.ts 的 tokenBudget 规则对齐）：
-    //   1. this.options.maxIterations 显式传入 → 原样使用
+    // 迭代上限决策顺序（与 agent-context/factory.ts 的 tokenBudget 规则对齐）：
+    //   1. this.options.maxIterations 显式传入 → 原样使用（NaN = 调用方声明"不限"）
     //      （调用方已经推导过了，例如 subagent-tool 的 maxSteps；不应再被
     //       superpower 倍率干预，否则会把子代理步数悄悄放大 4×）
-    //   2. 未显式传入 → 读 env 默认值（50），再按 superpower 模式放大
+    //   2. 未显式传入 → 读 env MAX_ITERATIONS
+    //   3. env 未配置 → 不限步数（原先写死 50，经 balanced 倍率 2 得到 100，
+    //      会在长任务中途硬截断；真正收口交给 token 预算，不设人为天花板）
     const hasExplicitIterations = typeof this.options.maxIterations === 'number'
-    const baseMaxIterations = this.options.maxIterations ??
-      parseInt(process.env.MAX_ITERATIONS ?? '50', 10)
+    const configuredIterations = parseInt(process.env.MAX_ITERATIONS ?? '', 10)
+    const envDefaultIterations = Number.isFinite(configuredIterations) && configuredIterations > 0
+      ? configuredIterations
+      : undefined
     const maxIterations = hasExplicitIterations
-      ? baseMaxIterations
-      : applyOSMMultiplier('maxIterations', baseMaxIterations)
+      ? (this.options.maxIterations as number)
+      : envDefaultIterations === undefined
+        ? Number.POSITIVE_INFINITY
+        : applyOSMMultiplier('maxIterations', envDefaultIterations)
 
     const maxAskUserCount = this.options.maxAskUserCount ?? 5
     const conversationId = ctx.turnId ?? this.options.conversationId ?? ctx.conversationId
@@ -438,7 +444,16 @@ export class ReActStrategy implements LoopStrategy {
       let effectiveTools = toolList.filter(tool => tool.name !== 'ask_user' || askUserCount < maxAskUserCount)
       const compressRatio = getOSMCompressRatio(
         parseFloat(process.env.COMPRESS_THRESHOLD_RATIO ?? '0.92'))
-      const effectiveBudget = Math.min(ctx.tokenBudget, ctx.modelCaps?.contextWindow ?? Infinity)
+      // 有效上限 = 已知预算与模型窗口中的较小者；两者都未知才不设上限。
+      // 窗口这一侧必须保留：装不下的请求要在本地拒发（而不是静默丢掉存储的强制
+      // 约束，或明知会被服务端拒还硬发一次）。真正要消除的是**被人为推导出来的
+      // 预算**压低下限 —— 历史上 env 缺省 60000 经 balanced 倍率 2 得到 120000，
+      // 比模型 128k 窗口还小 8k，于是引擎比模型更早拒答
+      // （"Request input (112210) plus output reservation (8192) exceeds context window
+      // (120000)"）。该默认值已在 agent-context/factory.ts 移除，这里不再引入新的推导预算。
+      const effectiveBudget = Math.min(
+        typeof ctx.tokenBudget === 'number' ? ctx.tokenBudget : Number.POSITIVE_INFINITY,
+        ctx.modelCaps?.contextWindow ?? Number.POSITIVE_INFINITY)
       let maxOutputTokens = this.options.maxOutputTokens ?? Math.min(8192, Math.max(256, Math.floor(effectiveBudget / 4)))
       const fixedInputTokens = estimateRequestInput(messages.filter(message => message.role === 'system'), this.options.systemPrompt, effectiveTools)
       if (!Number.isFinite(maxOutputTokens) || maxOutputTokens <= 0 || fixedInputTokens + maxOutputTokens > effectiveBudget) {
@@ -447,6 +462,8 @@ export class ReActStrategy implements LoopStrategy {
         yield '\n\n[Response truncated: token budget exceeded]'
         return
       }
+      // 压缩基准与有效上限同源（预算与窗口的较小者）；两者都没有时不触发压缩
+      // （既无窗口也无预算时无从判断何时该压缩，交给服务端错误反馈）。
       const compressThreshold = Math.floor(effectiveBudget * compressRatio)
       let rawTokens = estimateRequestInput(messages, this.options.systemPrompt, effectiveTools) + maxOutputTokens
       if (rawTokens > compressThreshold && typeof ctx.history.microCompactToolResults === 'function') {
@@ -515,7 +532,7 @@ export class ReActStrategy implements LoopStrategy {
       const historyTokens = messages.reduce((sum, m) => sum + (m.tokens ?? estimateTokens(m.content)), 0)
       const conservativeHistoryTokens = Math.ceil(historyTokens * 1.1)
 
-      if (conservativeHistoryTokens >= ctx.tokenBudget) {
+      if (typeof ctx.tokenBudget === 'number' && conservativeHistoryTokens >= ctx.tokenBudget) {
         ctx.logger.warn({ historyTokens, conservativeHistoryTokens, tokenBudget: ctx.tokenBudget }, 'Token budget exhausted')
         await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'context_limit', error: { retryable: false, code: 'CONTEXT_LIMIT', message: 'Context window exceeded' } })
         yield '\n\n[Response truncated: token budget exceeded]'

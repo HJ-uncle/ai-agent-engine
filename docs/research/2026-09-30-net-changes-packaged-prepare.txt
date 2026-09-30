@@ -1,0 +1,26 @@
+
+> aether-code@1.0.0 prepare:engine
+> node scripts/prepare-engine-runtime.mjs
+
+node:fs:1771
+  const stats = binding.lstat(
+                        ^
+
+Error: ENOENT: no such file or directory, lstat 'D:\dev\aether-code\resources\engine\win32-x64\node_modules\@colbymchenry\codegraph-win32-x64\lib\dist\resolution\frameworks\expo-modules.js.map'
+    at lstatSync (node:fs:1771:25)
+    at stableStat (file:///D:/dev/aether-code/scripts/prepare-engine-runtime.mjs:117:18)
+    at inventory (file:///D:/dev/aether-code/scripts/prepare-engine-runtime.mjs:125:25)
+    at inventory (file:///D:/dev/aether-code/scripts/prepare-engine-runtime.mjs:124:29)
+    at inventory (file:///D:/dev/aether-code/scripts/prepare-engine-runtime.mjs:124:29)
+    at inventory (file:///D:/dev/aether-code/scripts/prepare-engine-runtime.mjs:124:29)
+    at inventory (file:///D:/dev/aether-code/scripts/prepare-engine-runtime.mjs:124:29)
+    at inventory (file:///D:/dev/aether-code/scripts/prepare-engine-runtime.mjs:124:29)
+    at inventory (file:///D:/dev/aether-code/scripts/prepare-engine-runtime.mjs:124:29)
+    at inventory (file:///D:/dev/aether-code/scripts/prepare-engine-runtime.mjs:124:29) {
+  errno: -4058,
+  code: 'ENOENT',
+  syscall: 'lstat',
+  path: 'D:\\dev\\aether-code\\resources\\engine\\win32-x64\\node_modules\\@colbymchenry\\codegraph-win32-x64\\lib\\dist\\resolution\\frameworks\\expo-modules.js.map'
+}
+
+Node.js v24.20.0

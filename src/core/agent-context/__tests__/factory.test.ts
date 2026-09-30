@@ -131,4 +131,11 @@ describe('createAgentContext / tokenBudget', () => {
       expect(ctx.tokenBudget).toBe(60000)
     })
   })
+
+  it('env 与调用方都未给预算 → 不设置本地上限（undefined，交给模型窗口/服务端）', () => {
+    withEnv({ SUPERPOWER_MODE: 'balanced', SUPERPOWER_ENABLED: undefined, TOKEN_BUDGET: undefined }, () => {
+      const ctx = createAgentContext(deps())
+      expect(ctx.tokenBudget).toBeUndefined()
+    })
+  })
 })

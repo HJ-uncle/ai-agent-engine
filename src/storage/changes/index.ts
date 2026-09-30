@@ -5,6 +5,9 @@ import type { Client, InValue } from '@libsql/client'
 import { getDb } from '../sqlite/db.js'
 import { rootRunStore } from '../root-runs/index.js'
 import { canonicalFilePathSync, hashFileContent, readFileVersionSync, withFileLocks } from '../../shared/file-version.js'
+import { hasTrustedVersions, partitionChangeHistory, projectSegment, type NetFileChange, type ProjectionIssue } from './net-projection.js'
+
+export type { NetFileChange, ProjectionIssue } from './net-projection.js'
 
 export type ChangeKind = 'write' | 'delete'
 export type ChangeStatus = 'pending' | 'kept' | 'reverted'
@@ -94,6 +97,11 @@ function summarize(results: RevertResult[]): RevertBatchResult {
   }
 }
 
+function storedPathIdentity(filePath: string): string {
+  const absolute = path.resolve(filePath)
+  return process.platform === 'win32' ? absolute.toLowerCase() : absolute
+}
+
 export class ChangeStore {
   private get db() { return getDb() }
 
@@ -166,18 +174,113 @@ export class ChangeStore {
     return (await this.db.execute({ sql, args })).rows.map(rowToChange)
   }
 
+  private async storedPaths(): Promise<string[]> {
+    return (await this.db.execute('SELECT DISTINCT path FROM file_changes')).rows.map(row => String(row.path))
+  }
+
+  private pathAliases(filePath: string, storedPaths: readonly string[]): string[] {
+    const identity = storedPathIdentity(filePath)
+    // JavaScript lowercasing matches the recorder on Windows; SQLite NOCASE
+    // only folds ASCII and can otherwise silently lose legacy Unicode paths.
+    return [...new Set([filePath, ...storedPaths.filter(candidate => storedPathIdentity(candidate) === identity)])]
+  }
+
+  private async pathHistory(filePath: string, storedPaths: readonly string[]): Promise<FileChange[]> {
+    return (await this.db.execute({ sql: 'SELECT * FROM file_changes WHERE path IN (SELECT value FROM json_each(?)) ORDER BY seq ASC',
+      args: [JSON.stringify(this.pathAliases(filePath, storedPaths))] })).rows.map(rowToChange)
+  }
+
+  /** Complete pending-file projection, independent of operation-log pagination. */
+  async listNet(tenantId: string, sessionId: string, createdAfter?: number): Promise<NetFileChange[]> {
+    const selected = await this.list(tenantId, sessionId, 'pending', createdAfter)
+    const storedPaths = await this.storedPaths()
+    const paths = [...new Set(selected.map(change => storedPathIdentity(change.path)))]
+    const projected: NetFileChange[] = []
+    for (const filePath of paths) {
+      const project = async (canonical?: string, lockIssue?: ProjectionIssue) => {
+        const history = await this.pathHistory(filePath, storedPaths)
+        const ids = new Set(history.filter(change => change.tenantId === tenantId && change.sessionId === sessionId &&
+          change.status === 'pending' && (createdAfter === undefined || change.createdAt > createdAfter)).map(change => change.id))
+        let fileIssue = lockIssue
+        let currentHash: string | undefined
+        if (!fileIssue) {
+          try {
+            if (canonical !== storedPathIdentity(filePath)) fileIssue = 'path-changed'
+            else currentHash = readFileVersionSync(canonical!).hash
+          } catch { fileIssue = 'unreadable' }
+        }
+        for (const segment of partitionChangeHistory(history, ids)) {
+          const first = segment.changes[0]
+          const last = segment.changes.at(-1)!
+          const trusted = segment.changes.every(hasTrustedVersions)
+          const later = history.some(change => change.seq > last.seq && change.status !== 'reverted')
+          const issue: ProjectionIssue | undefined = fileIssue ?? (!trusted ? 'snapshot-unavailable' : later ? 'later-change' :
+            currentHash !== last.newHash ? 'disk-diverged' : segment.discontinuous ? 'discontinuous-history' : undefined)
+          // Equality includes existence (missing != empty), and only a verified live
+          // endpoint can disappear. Keep untrusted or broken chains reviewable.
+          if (!issue && first.oldHash === last.newHash) continue
+          projected.push(projectSegment(segment, issue ?? (segment.changes.some(change => change.truncated) ? 'snapshot-unavailable' : undefined)))
+        }
+      }
+      try {
+        await withFileLocks([filePath], async ([canonical]) => project(canonical))
+      } catch (error) {
+        // A retargeted/dangling/unreadable path must remain visible, not fail the panel.
+        await project(undefined, error instanceof Error && /target|symbolic link/.test(error.message) ? 'path-changed' : 'unreadable')
+      }
+    }
+    return projected.sort((a, b) => b.seq - a.seq)
+  }
+
+  /** Validate the entire request before changing any row, and serialize with reverts. */
+  async keepMany(tenantId: string, ids: readonly string[], sessionId?: string): Promise<number> {
+    await this.ensureTable()
+    const uniqueIds = [...new Set(ids)]
+    if (uniqueIds.length === 0) return 0
+    const selected = await Promise.all(uniqueIds.map(id => this.getById(id, tenantId)))
+    const invalid = () => Object.assign(new Error('改动不存在、不属于同一会话或已经撤回；未保留任何改动'), { statusCode: 409 })
+    const expectedSession = sessionId ?? selected.find(change => change !== null)?.sessionId
+    if (selected.some(change => !change || change.sessionId !== expectedSession || change.status === 'reverted')) throw invalid()
+    return withFileLocks(selected.map(change => change!.path), async () => {
+      // One atomic statement validates the full scope and updates it together.
+      // JSON avoids SQLite's parameter limit without partial-update chunks.
+      const result = await this.db.execute({
+        sql: `WITH requested AS MATERIALIZED (SELECT value AS id FROM json_each(?)),
+          eligible AS MATERIALIZED (SELECT id FROM file_changes WHERE tenant_id=? AND session_id=? AND status IN ('pending','kept') AND id IN (SELECT id FROM requested))
+          UPDATE file_changes SET status='kept' WHERE id IN (SELECT id FROM eligible)
+          AND (SELECT COUNT(*) FROM eligible)=(SELECT COUNT(*) FROM requested) RETURNING id`,
+        args: [JSON.stringify(uniqueIds), tenantId, expectedSession!]
+      })
+      if (result.rows.length !== uniqueIds.length) throw invalid()
+      return uniqueIds.length
+    })
+  }
+
   async markStatus(id: string, tenantId: string, status: ChangeStatus): Promise<FileChange | null> {
     await this.ensureTable()
+    if (status === 'kept') {
+      const existing = await this.getById(id, tenantId)
+      if (!existing || existing.status === 'reverted') return existing
+      await this.keepMany(tenantId, [id], existing.sessionId)
+      return this.getById(id, tenantId)
+    }
     await this.db.execute({ sql: `UPDATE file_changes SET status=? WHERE id=? AND tenant_id=? AND status!='reverted'`, args: [status, id, tenantId] })
     return this.getById(id, tenantId)
   }
 
   async keepAll(tenantId: string, sessionId: string): Promise<number> {
-    await this.ensureTable()
+    return this.keepMany(tenantId, (await this.list(tenantId, sessionId, 'pending')).map(change => change.id), sessionId)
+  }
+
+  private async markNetZeroReverted(tenantId: string, changes: readonly FileChange[]): Promise<void> {
     const result = await this.db.execute({
-      sql: `UPDATE file_changes SET status='kept' WHERE tenant_id=? AND session_id=? AND status='pending'`, args: [tenantId, sessionId]
+      sql: `WITH requested AS MATERIALIZED (SELECT value AS id FROM json_each(?)),
+        eligible AS MATERIALIZED (SELECT id FROM file_changes WHERE tenant_id=? AND status!='reverted' AND id IN (SELECT id FROM requested))
+        UPDATE file_changes SET status='reverted' WHERE id IN (SELECT id FROM eligible)
+        AND (SELECT COUNT(*) FROM eligible)=(SELECT COUNT(*) FROM requested) RETURNING id`,
+      args: [JSON.stringify(changes.map(change => change.id)), tenantId]
     })
-    return result.rowsAffected ?? 0
+    if (result.rows.length !== changes.length) throw new Error('改动状态已变化，零净变化回退未保存')
   }
 
   async revertBatch(tenantId: string, input: RevertBatchInput): Promise<RevertBatchResult> {
@@ -207,7 +310,26 @@ export class ChangeStore {
         const ordered = targets.map((change, index) => ({ change, canonical: canonicalPaths[index] }))
           .sort((a, b) => a.canonical.localeCompare(b.canonical) || b.change.seq - a.change.seq)
         const blocked = new Set<string>()
+        const selectedIds = new Set(targets.map(change => change.id))
+        const storedPaths = await this.storedPaths()
+        const pendingScope = ids === undefined && input.scope !== 'all'
+        const noOpChains = new Map<string, FileChange[]>()
+        // Only whole, selected, globally contiguous chains can be marked reverted
+        // without replaying temporary creates/deletes. Partial historical scopes
+        // continue to restore their actual boundary snapshot.
+        for (const filePath of new Set(targets.map(change => change.path))) {
+          const history = await this.pathHistory(filePath, storedPaths)
+          const liveIds = new Set(history.filter(change => selectedIds.has(change.id) && change.tenantId === tenantId &&
+            change.sessionId === input.sessionId && change.status !== 'reverted' && (!pendingScope || change.status === 'pending')).map(change => change.id))
+          for (const segment of partitionChangeHistory(history, liveIds)) {
+            if (!segment.discontinuous && segment.changes.every(hasTrustedVersions) && segment.changes[0].oldHash === segment.changes.at(-1)!.newHash) {
+              noOpChains.set(segment.changes.at(-1)!.id, segment.changes)
+            }
+          }
+        }
+        const handled = new Set<string>()
         for (const target of ordered) {
+          if (handled.has(target.change.id)) continue
           const { canonical } = target
           // Re-read after waiting: another request may already have reverted this change.
           const change = await this.getById(target.change.id, tenantId)
@@ -218,8 +340,14 @@ export class ChangeStore {
             continue
           }
           if (change.status === 'reverted') { results.push({ ...base, status: 'already_reverted' }); continue }
-          if (change.truncated || !change.oldHash || !change.newHash ||
-            hashFileContent(change.oldContent) !== change.oldHash || hashFileContent(change.newContent) !== change.newHash) {
+          if (pendingScope && change.status !== 'pending') {
+            results.push({ ...base, status: 'conflict', message: '改动已被保留，请刷新后选择需要撤回的范围' })
+            blocked.add(canonical)
+            continue
+          }
+          const noOp = noOpChains.get(change.id)
+          if (!noOp && (change.truncated || !change.oldHash || !change.newHash ||
+            hashFileContent(change.oldContent) !== change.oldHash || hashFileContent(change.newContent) !== change.newHash)) {
             results.push({ ...base, status: 'unavailable', message: '未保存可验证的完整文件快照，无法自动撤回' })
             blocked.add(canonical)
             continue
@@ -230,13 +358,11 @@ export class ChangeStore {
             // Any later live operation on this physical file must be reverted first,
             // including operations owned by another session/tenant; reveal no owner data.
             const later = await this.db.execute({
-              sql: `SELECT 1 FROM file_changes WHERE path=? AND seq>? AND status!='reverted' LIMIT 1`,
-              args: [change.path, change.seq]
+              sql: `SELECT 1 FROM file_changes WHERE path IN (SELECT value FROM json_each(?)) AND seq>? AND status!='reverted' LIMIT 1`,
+              args: [JSON.stringify(this.pathAliases(change.path, storedPaths)), change.seq]
             })
-            const identity = path.resolve(change.path)
-            const storedIdentity = process.platform === 'win32' ? identity.toLowerCase() : identity
-            if (canonicalFilePathSync(change.path) !== canonical || storedIdentity !== canonical) {
-              results.push({ ...base, status: 'conflict', message: '文件路径的实际目标已变化，未写入文件', expectedHash: change.newHash })
+            if (canonicalFilePathSync(change.path) !== canonical || storedPathIdentity(change.path) !== canonical) {
+              results.push({ ...base, status: 'conflict', message: '文件路径的实际目标已变化，未写入文件', expectedHash: change.newHash ?? undefined })
               blocked.add(canonical)
               continue
             }
@@ -244,8 +370,16 @@ export class ChangeStore {
             if (blocked.has(canonical) || later.rows.length > 0 || current.hash !== change.newHash) {
               results.push({ ...base, status: 'conflict', message: blocked.has(canonical) || later.rows.length > 0
                 ? '该文件存在尚未撤回的较新改动，未覆盖后续版本'
-                : '文件已被后续修改，当前版本与改动记录不一致', expectedHash: change.newHash, actualHash: current.hash })
+                : '文件已被后续修改，当前版本与改动记录不一致', expectedHash: change.newHash ?? undefined, actualHash: current.hash })
               blocked.add(canonical)
+              continue
+            }
+            if (noOp) {
+              await this.markNetZeroReverted(tenantId, noOp)
+              for (const item of [...noOp].reverse()) {
+                handled.add(item.id)
+                results.push({ id: item.id, path: item.path, status: 'reverted' })
+              }
               continue
             }
             // No await between byte verification and the synchronous write.

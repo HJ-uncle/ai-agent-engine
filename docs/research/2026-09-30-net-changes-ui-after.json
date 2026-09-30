@@ -1,0 +1,18 @@
+[
+  {
+    "Path": "D:\\dev\\aether-code\\out\\main\\index.js",
+    "Hash": "E6621870C82F44FE6D28E29231B118E8A2CFFA3BA4B7883868276408C832985E"
+  },
+  {
+    "Path": "D:\\dev\\aether-code\\out\\preload\\index.js",
+    "Hash": "973A1F6262EB8B17A97F8001EACD63B43A0570F8D7085AEBE17CF62DF210E642"
+  },
+  {
+    "Path": "D:\\dev\\aether-code\\out\\renderer\\index.html",
+    "Hash": "709F57FB6BB6A960FA59951CF860233BFD1475BF359207B5825F4752308A88C9"
+  },
+  {
+    "Path": "D:\\dev\\aether-code\\out\\renderer\\assets\\index-B1Ps2-c4.js",
+    "Hash": "F120A10AA6639FBC0D5AF7A735F712BED536306E5AFF85C01A96CE311BC205BD"
+  }
+]

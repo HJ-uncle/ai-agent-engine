@@ -126,6 +126,8 @@ describe('D0 owned instance handshake and route gate', () => {
     expect(names).toEqual(expect.arrayContaining(['read_file', 'execute_cmd', 'subagent']))
     expect(names).not.toContain('remember')
     expect(names).not.toContain('agent_list')
+    expect(modelRequests[0].systemPrompt).toContain('## Aether Code 模式执行协议')
+    expect(modelRequests[0].systemPrompt).toContain('没有新鲜验证证据时，不得声称“已完成”')
     expect(body).not.toContain(token)
   })
 

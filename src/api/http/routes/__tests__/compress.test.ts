@@ -64,6 +64,16 @@ describe('Conversation Compression API', () => {
     expect(messages[0].content).toContain('Mocked Summary')
     expect(messages[7].role).toBe('assistant')
     expect(messages[7].content).toContain('我已经为您完成了上下文压缩')
+
+    const archive = await fastify.inject({
+      method: 'GET',
+      url: '/conversation/archive?sessionId=test-session'
+    })
+    expect(archive.statusCode).toBe(200)
+    const archiveJson = archive.json()
+    expect(archiveJson.metadata.compressed).toBe(true)
+    expect(archiveJson.metadata.archiveMessageCount).toBeGreaterThan(messages.length)
+    expect(archiveJson.data.some((message: { content?: string }) => message.content === 'Message 1')).toBe(true)
   })
 
   it('should rollback history if LLM completion fails', async () => {

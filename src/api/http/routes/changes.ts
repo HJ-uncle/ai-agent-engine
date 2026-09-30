@@ -8,11 +8,17 @@ const getTenantId = (req: FastifyRequest): string =>
 
 /** Complete scopes and file version checks live on the server, shared by all callers. */
 export async function changeRoutes(fastify: FastifyInstance) {
-  fastify.get<{ Querystring: { sessionId: string; status?: ChangeStatus; createdAfter?: number } }>('/changes', {
+  fastify.get<{ Querystring: { sessionId: string; status?: ChangeStatus; createdAfter?: number; view?: 'net' } }>('/changes', {
     schema: { querystring: { type: 'object', required: ['sessionId'], properties: {
-      sessionId: { type: 'string', minLength: 1 }, status: { type: 'string', enum: ['pending', 'kept', 'reverted'] }, createdAfter: { type: 'number' }
+      sessionId: { type: 'string', minLength: 1 }, status: { type: 'string', enum: ['pending', 'kept', 'reverted'] }, createdAfter: { type: 'number' }, view: { type: 'string', enum: ['net'] }
     } } }
-  }, async (req, reply) => reply.send(success(await store.list(getTenantId(req), req.query.sessionId, req.query.status, req.query.createdAfter))))
+  }, async (req, reply) => {
+    if (req.query.view === 'net') {
+      if (req.query.status !== undefined && req.query.status !== 'pending') return reply.code(400).send(fail(40001, '净变化视图仅支持 pending 状态'))
+      return reply.send(success(await store.listNet(getTenantId(req), req.query.sessionId, req.query.createdAfter)))
+    }
+    return reply.send(success(await store.list(getTenantId(req), req.query.sessionId, req.query.status, req.query.createdAfter)))
+  })
 
   fastify.post<{ Body: RevertBatchInput }>('/changes/revert-batch', {
     schema: { body: { type: 'object', required: ['sessionId'], additionalProperties: false, properties: {
@@ -51,13 +57,11 @@ export async function changeRoutes(fastify: FastifyInstance) {
     const tenantId = getTenantId(req)
     const { ids, sessionId } = req.body ?? {}
     if (!Array.isArray(ids) || ids.length === 0 || ids.some(id => typeof id !== 'string' || !id)) return reply.send(fail(40001, 'ids 不能为空'))
-    let kept = 0
-    for (const id of new Set(ids)) {
-      const existing = await store.getById(id, tenantId)
-      if (!existing || (sessionId !== undefined && existing.sessionId !== sessionId)) continue
-      const updated = await store.markStatus(id, tenantId, 'kept')
-      if (updated?.status === 'kept') kept++
+    try {
+      return reply.send(success({ kept: await store.keepMany(tenantId, ids, sessionId) }))
+    } catch (error) {
+      if ((error as { statusCode?: number }).statusCode === 409) return reply.send(fail(40901, error instanceof Error ? error.message : '无法保留改动'))
+      throw error
     }
-    return reply.send(success({ kept }))
   })
 }

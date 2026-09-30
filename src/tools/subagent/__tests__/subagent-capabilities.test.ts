@@ -28,9 +28,9 @@ describe('subagent capability intersection', () => {
     expect(parent.execute).toHaveBeenCalledWith('inline_mcp_query', { query: 'fixture' }, ctx)
   })
 
-  it.each([0, -1, 1.5, 65, '24'])('rejects invalid maxSteps %s before any model call', async (maxSteps) => {
+  it.each([0, -1, 1.5, '24'])('rejects invalid maxSteps %s before any model call', async (maxSteps) => {
     const result = await subagentTool.execute({ task: 'fixture', maxSteps }, {} as AgentContext)
     expect(result.success).toBe(false)
-    expect(result.output).toContain('1 到 64')
+    expect(result.output).toContain('大于等于 1')
   })
 })

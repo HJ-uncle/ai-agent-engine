@@ -68,8 +68,10 @@ export const getCurrentContextTool: Tool = {
         ...(primaryWorkspace !== ctx.workspaceDir
           ? [`- **本会话私有目录**: ${ctx.workspaceDir}`]
           : []),
-        `- **Token 预算**: ${ctx.tokenBudget}`,
-        `- **Token 剩余**: ${ctx.tokenBudget - (ctx as any)._usedTokens || ctx.tokenBudget}`,
+        `- **Token 预算**: ${typeof ctx.tokenBudget === 'number' ? ctx.tokenBudget : '未设置（由模型窗口/服务端决定上限）'}`,
+        ...(typeof ctx.tokenBudget === 'number'
+          ? [`- **Token 剩余**: ${ctx.tokenBudget - ((ctx as any)._usedTokens || 0)}`]
+          : []),
       ]
 
       // 获取工具列表

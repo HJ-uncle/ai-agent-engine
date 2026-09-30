@@ -1,4 +1,4 @@
-import type { ConversationHistory, Message, AgentContext } from '../../core/agent-context/index.js'
+import type { ConversationArchive, ConversationHistory, Message, AgentContext } from '../../core/agent-context/index.js'
 import { getDb } from '../sqlite/db.js'
 import type { Row } from '@libsql/client'
 import { v4 as uuidv4 } from 'uuid'
@@ -202,6 +202,30 @@ export class SQLiteConversationHistory implements ConversationHistory {
 
   async getFullHistory(ctx: Ctx): Promise<Message[]> {
     return this.getRawMessages(ctx)
+  }
+
+  /**
+   * SQLite compaction is a transactional rebuild, so rows summarized in a
+   * previous compaction are no longer recoverable from this backend.  Expose
+   * the current durable projection through the same archive contract so the
+   * API remains backend-neutral; JSONL can additionally expand its retained
+   * append-only transcript.
+   */
+  async getArchive(ctx: Ctx): Promise<ConversationArchive> {
+    const messages = await this.getFullHistory(ctx)
+    const summaryMessage = messages.find((message) => {
+      const metadata = message.metadata as Record<string, unknown> | undefined
+      return message.role === 'system' && metadata?.isCompactSummary === true
+    })
+    return {
+      messages,
+      compressed: Boolean(summaryMessage),
+      ...(summaryMessage && typeof summaryMessage.content === 'string'
+        ? { summary: { content: summaryMessage.content } }
+        : {}),
+      currentMessageCount: messages.length,
+      backend: 'sqlite',
+    }
   }
 
   private async getRawMessages(ctx: Ctx): Promise<Message[]> {
@@ -594,6 +618,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
     // ⚠️ 不经 this.clear()：它是独立连接的非事务删除，失败时已无法回滚。
     // Keep the summary before the retained rows while preserving their original timestamps.
     const summaryMsg: Message = { role: 'system', content: summaryContent, tokens: summaryTokens,
+      metadata: { isCompactSummary: true },
       createdAt: olderMessages.at(-1)?.createdAt ?? Date.now() }
     const rebuilt: Message[] = [summaryMsg, ...recentMessages]
     const tx = await db.transaction('write')

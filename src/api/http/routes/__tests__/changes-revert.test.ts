@@ -201,7 +201,7 @@ describe('D2 guarded batch revert', () => {
     expect((await batch({ scope: 'all', createdAfter: 100 })).reverted).toBe(1)
     expect(fs.readFileSync(file, 'utf8')).toBe('B')
     expect((await app.inject({ method: 'POST', url: `/changes/${second.id}/keep` })).json().code).toBe(40901)
-    expect((await app.inject({ method: 'POST', url: '/changes/keep-many', payload: { sessionId: session, ids: [second.id] } })).json().data.kept).toBe(0)
+    expect((await app.inject({ method: 'POST', url: '/changes/keep-many', payload: { sessionId: session, ids: [second.id] } })).json().code).toBe(40901)
     expect((await store.getById(second.id, tenant))?.status).toBe('reverted')
     expect((await batch({ ids: [first.id] })).reverted).toBe(1)
   })

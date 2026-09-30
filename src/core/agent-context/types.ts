@@ -136,6 +136,13 @@ export interface ConversationHistory {
   getHistory(ctx: Pick<AgentContext, 'tenantId' | 'sessionId' | 'inheritContext'>): Promise<Message[]>
   /** Returns ALL stored messages without any windowing/truncation. */
   getFullHistory(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<Message[]>
+  /**
+   * Returns the user-visible transcript, including messages hidden by a
+   * JSONL compaction summary.  This is deliberately separate from
+   * getFullHistory(): archive data must never be fed back into the model
+   * context automatically.
+   */
+  getArchive?(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<ConversationArchive>
   clear(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>, options?: { tombstone?: boolean }): Promise<void>
   summarize(ctx: AgentContext): Promise<void>
   /** 物理删除某条消息（及其对应的数据库行） */
@@ -182,6 +189,24 @@ export interface ConversationHistory {
     ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>,
     opts?: { keepRecent?: number },
   ): Promise<{ cleared: number; freedTokens: number }>
+}
+
+export interface ConversationArchive {
+  messages: Message[]
+  /** True when the current context is a compacted projection of the archive. */
+  compressed: boolean
+  /** The latest summary marker, when the backend retained one. */
+  summary?: {
+    content: string
+    leafSeq?: number
+    preTokens?: number
+    postTokens?: number
+    transcriptPath?: string
+  }
+  /** Number of messages in the compacted context projection. */
+  currentMessageCount: number
+  /** Backend identifier, useful for diagnostics and UI copy. */
+  backend: 'jsonl' | 'sqlite'
 }
 
 // ─── Tool Registry Interface ───────────────────────────────────────────────────
@@ -232,7 +257,8 @@ export interface AgentContext {
   tools: IToolRegistry
   history: ConversationHistory
   logger: Logger
-  tokenBudget: number
+  /** 本地 token 预算；未配置（env/调用方都没给）时不设本地上限，由模型窗口/服务端决定 */
+  tokenBudget?: number
   requestId?: string
   signal?: AbortSignal
   /** 当前正在执行的工具调用 ID（ReAct 循环执行前注入），供子代理等工具按调用粒度注册取消句柄 */

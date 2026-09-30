@@ -1,0 +1,72 @@
+
+Running 12 tests using 1 worker
+
+(node:43976) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: will change to "main" in Git 3.0. To configure the initial branch name
+hint: to use in all of your new repositories, which will suppress this warning,
+hint: call:
+hint:
+hint: 	git config --global init.defaultBranch <name>
+hint:
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint:
+hint: 	git branch -m <name>
+hint:
+hint: Disable this message with "git config set advice.defaultBranchName false"
+(node:33908) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok  1 e2e\change-net-ui.spec.ts:101:7 › 净文件改动真机闭环 › 17条流水按净变化显示6行，新增删除/恢复原内容消失，人工编辑不隐藏；重启一致 (2.5s)
+  ok  2 e2e\change-net-ui.spec.ts:114:7 › 净文件改动真机闭环 › 单行撤回整组恢复初始内容，单行保留确认整组 (215ms)
+  ok  3 e2e\change-net-ui.spec.ts:126:7 › 净文件改动真机闭环 › 绝对路径含方括号及已删除文件都可真实暂存，整组标记保留 (1.2s)
+  x   4 e2e\change-net-ui.spec.ts:137:7 › 净文件改动真机闭环 › 非仓库错误如实返回；全忽略不暂存；其它文件的原暂存保留 (240ms)
+  -   5 e2e\change-net-ui.spec.ts:149:7 › 净文件改动真机闭环 › 全部保留包括已抵消记录，计数归零，刷新后不复现旧行
+  -   6 e2e\change-net-ui.spec.ts:161:7 › 净文件改动真机闭环 › 仅创建然后删除的会话不显示待确认托盘，原始历史仍存在
+(node:25364) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:61128) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:61128) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok  7 e2e\change-revert-ui.spec.ts:112:7 › D2 文件回退真机闭环 › 205条操作汇总为4个文件；一次撤回仍覆盖全部操作并保护人工修改 (436ms)
+  ok  8 e2e\change-revert-ui.spec.ts:134:7 › D2 文件回退真机闭环 › 消息回退有冲突或缺失快照时，真实历史及消息仍保留 (207ms)
+  ok  9 e2e\change-revert-ui.spec.ts:145:7 › D2 文件回退真机闭环 › 消息回退包含已保留改动；完全成功才删历史；零待确认仍能查看结果 (768ms)
+  ok 10 e2e\edit-file-ui.spec.ts:126:7 › D6 精确编辑真机闭环 › 实际工具schema与精确读取版本驱动两文件编辑，live/刷新/重启diff和路径跳转一致，UI撤回恢复字节 (4.2s)
+  ok 11 e2e\edit-file-ui.spec.ts:165:7 › D6 精确编辑真机闭环 › 读取后人工修改导致版本冲突，拒绝写入且刷新保持失败和人工内容 (1.4s)
+  ok 12 e2e\edit-file-ui.spec.ts:173:7 › D6 精确编辑真机闭环 › 同一原文重复匹配拒绝整批编辑，之前的唯一匹配也不写入或生成改动 (1.4s)
+
+
+  1) e2e\change-net-ui.spec.ts:137:7 › 净文件改动真机闭环 › 非仓库错误如实返回；全忽略不暂存；其它文件的原暂存保留 ─────────────────────
+
+    Error: expect(received).toBe(expected) // Object.is equality
+
+    Expected: false
+    Received: true
+
+      142 |     await page.evaluate(plain => window.aether.fs.allowRoot(plain), plain)
+      143 |     const failed = await page.evaluate(plain => window.aether.git.stageFiles(plain, [plain + '/file.txt']), plain)
+    > 144 |     expect(failed.success).toBe(false)
+          |                            ^
+      145 |     expect(failed.error).toBeTruthy()
+      146 |     expect(git('show', ':stage[1].txt')).toBe('final')
+      147 |   })
+        at D:\dev\aether-code\e2e\change-net-ui.spec.ts:144:28
+
+    Error Context: .e2e-tmp\net-changes-ui-results\change-net-ui-净文件改动真机闭环-非仓库错误如实返回；全忽略不暂存；其它文件的原暂存保留\error-context.md
+
+    Error Context: .e2e-tmp\net-changes-ui-results\change-net-ui-净文件改动真机闭环-非仓库错误如实返回；全忽略不暂存；其它文件的原暂存保留\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    .e2e-tmp\net-changes-ui-results\change-net-ui-净文件改动真机闭环-非仓库错误如实返回；全忽略不暂存；其它文件的原暂存保留\trace.zip
+    Usage:
+
+        npx playwright show-trace .e2e-tmp\net-changes-ui-results\change-net-ui-净文件改动真机闭环-非仓库错误如实返回；全忽略不暂存；其它文件的原暂存保留\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    e2e\change-net-ui.spec.ts:137:7 › 净文件改动真机闭环 › 非仓库错误如实返回；全忽略不暂存；其它文件的原暂存保留 ──────────────────────
+  2 did not run
+  9 passed (24.9s)

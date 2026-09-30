@@ -127,10 +127,16 @@ const DEFAULT_RULES: CapabilityRule[] = [
   },
 
   // ── DeepSeek 系列 ───────────────────────────────────────────────────────
+  // contextWindow 是**启发式上限**，不是模型真实能力的权威声明：这条规则按 provider
+  // 名粗匹配，会套到该 provider 下所有模型（新老代际窗口差异很大）。写死 128_000 会让
+  // 引擎比模型更早拒答大窗口型号（报 "Request input (...) plus output reservation (...)
+  // exceeds context window (128000)"）。这里取一个足够宽的占位值，让本地预检只拦住
+  // 明显异常的请求，真实上限交给服务端判定；需要精确控制时用 DB 的 model
+  // capabilityOverrides.contextWindow 覆盖（优先级高于本表）。
   {
     id: 'deepseek:base',
     match: { provider: ['deepseek'], baseUrl: [/deepseek/i], model: [/deepseek/i] },
-    caps: { toolCalling: true, jsonMode: true, caching: true, streamUsage: true, prefix: true, vision: false, contextWindow: 128_000 },
+    caps: { toolCalling: true, jsonMode: true, caching: true, streamUsage: true, prefix: true, vision: false, contextWindow: 1_000_000 },
   },
   {
     id: 'deepseek:reasoner',
@@ -139,11 +145,17 @@ const DEFAULT_RULES: CapabilityRule[] = [
   },
 
   // ── Qwen / 通义千问 / 百炼 ──────────────────────────────────────────────
+  // 匹配语义是 provider / model / baseUrl **三者取 OR**（任一命中即整条生效），
+  // 所以 baseUrl 正则不能写成 /aliyuncs\.com/i 这类宽泛域名 —— 阿里云 MaaS 上
+  // 挂的不止通义（例如 token-plan.cn-beijing.maas.aliyuncs.com 上跑的是 DeepSeek），
+  // 一条宽泛正则会把它们全部套上 qwen 能力集，连带把 contextWindow 覆盖成 128k，
+  // 让别的 provider 的模型被错误地按 qwen 窗口限制。只认官方 DashScope API 域名，
+  // 其余阿里云通路交给 provider / model 名匹配。
   {
     id: 'qwen:base',
     match: {
       provider: ['qwen'],
-      baseUrl: [/dashscope/i, /aliyuncs\.com/i],
+      baseUrl: [/dashscope/i],
       model: [/^qwen/i, /^qwq/i],
     },
     caps: { vision: true, toolCalling: true, search: true, streamUsage: true, caching: true, contextWindow: 128_000 },

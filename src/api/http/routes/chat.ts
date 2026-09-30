@@ -24,6 +24,7 @@ import { persistedTurnProjection } from '../chat-snapshot.js'
 import { TodoStore } from '../../../storage/todo/index.js'
 import { ChangeStore } from '../../../storage/changes/index.js'
 import { commandJobs } from '../../../core/command-jobs/index.js'
+import { CODE_AGENT_EXECUTION_PROMPT } from '../../../core/code-agent-prompt.js'
 
 /**
  * 主 Agent 的子代理委派纪律（对齐 wuzu-client codeAgent.ts 的「探索预算」章节）。
@@ -48,8 +49,10 @@ const SUBAGENT_DISPATCH_PROMPT = [
   '2. 范围：限定要看的目录/文件，禁止全仓乱扫；',
   '3. 深度：快扫定位还是深挖实现；',
   '4. 已知线索与输出格式：已确认的路径/结论一并给出，要求结论先行、发现带 文件路径+行号、不贴大段源码。',
+  '委派时同时写明父任务的只读/方案约束、验收标准和不可做事项，子代理不得越过父任务权限。',
   '',
-  '回收纪律：子代理已经查过的东西不要再读一遍复核；拿到带定位的结论就直接用。',
+  '回收纪律：已有路径和行号证据可以直接复用；如果当前工作树、时间或证据状态发生冲突，只做最小范围复核，不要整段重做。',
+  '子代理结果必须包含 status、facts、evidence、actions、verification、unverified 和 next；主 Agent 根据结果决定是否继续，不把未核实项当成完成。',
   '子任务因引擎本地预算或步数结束时，使用它返回的部分证据完成总结，并说明未核实范围。不要把本地预算解释为模型服务商欠费，也不要再次派发或接管同一探索。',
 ].join('\n')
 import { prependBootstrapToSystemPrompt } from '../../../core/osm-bootstrap.js'
@@ -578,9 +581,10 @@ export async function chatRoutes(fastify: FastifyInstance) {
     // 放在末尾追加：不改变上层 prompt 的相对优先级，只补充默认缺失的行为约束。
     // 已注册的 agent / inlineAgent 提示词若自带委派说明，此段会与之共存而非冲突
     // （二者语义一致，重复无害）。
-    effectiveSystemPrompt = effectiveSystemPrompt
-      ? `${effectiveSystemPrompt}\n\n${SUBAGENT_DISPATCH_PROMPT}`
-      : SUBAGENT_DISPATCH_PROMPT
+    effectiveSystemPrompt = [
+      effectiveSystemPrompt,
+      SUBAGENT_DISPATCH_PROMPT,
+    ].filter(Boolean).join('\n\n')
 
     // ── inlineAgents 诊断日志 ─────────────────────────────────────────────────
     if (Array.isArray(requestedInlineAgents) && requestedInlineAgents.length > 0) {
@@ -958,13 +962,14 @@ export async function chatRoutes(fastify: FastifyInstance) {
       allWorkspacePaths[0]
     )
 
+    const codeExecutionPrompt = toolProfile === 'code' ? `\n\n${CODE_AGENT_EXECUTION_PROMPT}` : ''
     const fullSystemPrompt = baseSystemPrompt + ragPrompt + memoryRecallBlock + `
 ---
 # Rules
 1. **Use the \`ask_user\` tool ONLY** when you need the user to make a critical decision among specific options to continue a complex task. For normal conversational questions, open-ended clarifications, or when chatting naturally, DO NOT use the \`ask_user\` tool — just output your question as plain text.
 1a. When calling \`ask_user\`, you MUST provide **at least 2 meaningful, specific options**. NEVER call it with only one option (e.g. only "其他").
 1b. **能自行查证的一律自行查证，禁止用 \`ask_user\` 代替探索。** 只要信息可以通过工具获得（读文件、列目录、grep、看诊断、读代码图），就必须先去查，而不是先问用户。典型反例：不给路径就问「你指哪个文件」、不读代码就问「是哪个组件」、不跑测试就问「是不是这里错了」。只有在**信息确实只存在于用户脑子里**（业务偏好、优先级取舍、无法从仓库推断的需求）时才用 \`ask_user\`。
-2. Use Chinese tool names in replies (e.g. 写入文件, not write_file).
+2. 用户可见说明使用中文；工具调用必须使用已注册的原始 name，不编造中文别名或不存在的工具。
 3. You are ${currentModelName}.
 4. When providing a downloadable file to the user, ALWAYS present it as an HTTP download link using this exact Markdown format:
    [文件名](/api/v1/workspace/file/download?sessionId=${sessionId}&path=文件名)
@@ -972,7 +977,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
 5. 多步任务（≥3 步）必须先用 todo 工具建清单：用 \`todo_create\` 逐项创建步骤（标题用简短中文），开始某项前用 \`todo_update\` 置为 in_progress，完成后立即置为 done；全部完成才算任务结束。
 6. **先给结论，再说理由。** 不要在回答里反复自我怀疑或把同一假设推演多遍；一旦确认了一件事，就把它当既定事实继续推进，不要回头重复论证。
 7. **禁止绕过工具链自造轮子。** 当现有工具做不到某件事时（例如看不到图片），**不要**自己写脚本去实现底层能力（手写 PNG/JPEG 解码器、二进制解析、像素取证、OCR 引擎等）。这类自造轮子几乎必然失败，且会烧掉几十轮工具调用。正确做法：① 换用受支持的路径（如 \`read_file mode:"ocr"\`）；② 确认该路径确实不可用后，直接向用户说明限制并给出替代方案。**同一件事尝试失败一次就换路径，绝不允许用「再换个脚本试试」的方式反复试探。**
-${workspaceInfo}${codegraphBlock}${attachments && attachments.length > 0 ? `\n\n## 本次消息已附带以下文件\n${attachments.map(a => `- ${a.name}`).join('\n')}${visionCapabilityNote}` : ''}
+${workspaceInfo}${codegraphBlock}${attachments && attachments.length > 0 ? `\n\n## 本次消息已附带以下文件\n${attachments.map(a => `- ${a.name}`).join('\n')}${visionCapabilityNote}` : ''}${codeExecutionPrompt}
 `
 
     // ── Estimate token counts for each injected prompt section ──────────
@@ -983,7 +988,7 @@ ${workspaceInfo}${codegraphBlock}${attachments && attachments.length > 0 ? `\n\n
 1. **Use the \`ask_user\` tool ONLY** when you need the user to make a critical decision among specific options to continue a complex task. For normal conversational questions, open-ended clarifications, or when chatting naturally, DO NOT use the \`ask_user\` tool — just output your question as plain text.
 1a. When calling \`ask_user\`, you MUST provide **at least 2 meaningful, specific options**. NEVER call it with only one option (e.g. only "其他").
 1b. **能自行查证的一律自行查证，禁止用 \`ask_user\` 代替探索。** 只要信息可以通过工具获得（读文件、列目录、grep、看诊断、读代码图），就必须先去查，而不是先问用户。典型反例：不给路径就问「你指哪个文件」、不读代码就问「是哪个组件」、不跑测试就问「是不是这里错了」。只有在**信息确实只存在于用户脑子里**（业务偏好、优先级取舍、无法从仓库推断的需求）时才用 \`ask_user\`。
-2. Use Chinese tool names in replies (e.g. 写入文件, not write_file).
+2. 用户可见说明使用中文；工具调用必须使用已注册的原始 name，不编造中文别名或不存在的工具。
 3. You are ${currentModelName}.
 4. When providing a downloadable file to the user, ALWAYS present it as an HTTP download link using this exact Markdown format:
    [文件名](/api/v1/workspace/file/download?sessionId=${sessionId}&path=文件名)
@@ -991,7 +996,7 @@ ${workspaceInfo}${codegraphBlock}${attachments && attachments.length > 0 ? `\n\n
 5. 多步任务（≥3 步）必须先用 todo 工具建清单：用 \`todo_create\` 逐项创建步骤（标题用简短中文），开始某项前用 \`todo_update\` 置为 in_progress，完成后立即置为 done；全部完成才算任务结束。
 6. **先给结论，再说理由。** 不要在回答里反复自我怀疑或把同一假设推演多遍；一旦确认了一件事，就把它当既定事实继续推进，不要回头重复论证。
 7. **禁止绕过工具链自造轮子。** 当现有工具做不到某件事时（例如看不到图片），**不要**自己写脚本去实现底层能力（手写 PNG/JPEG 解码器、二进制解析、像素取证、OCR 引擎等）。这类自造轮子几乎必然失败，且会烧掉几十轮工具调用。正确做法：① 换用受支持的路径（如 \`read_file mode:"ocr"\`）；② 确认该路径确实不可用后，直接向用户说明限制并给出替代方案。**同一件事尝试失败一次就换路径，绝不允许用「再换个脚本试试」的方式反复试探。**
-${workspaceInfo}${codegraphBlock}
+${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
 `
     const systemPromptTokens = estimateTokens(pureSystemPrompt)
     const ragTokens = estimateTokens(ragPrompt)
@@ -1327,6 +1332,12 @@ ${workspaceInfo}${codegraphBlock}
           new TodoStore().list(tenantId, sessionId), new ChangeStore().list(tenantId, sessionId),
           commandJobs.list({ tenantId, sessionId }),
         ])
+        // JSONL keeps the pre-compaction transcript on disk but exposes only
+        // the summary + recent tail to the model/UI snapshot.  Tell the UI
+        // that an explicit archive read is available without embedding the
+        // archive itself in the snapshot response.
+        const historyCompacted = history.some(message =>
+          message.role === 'system' && message.metadata?.isCompactSummary === true)
         const bus = activeStreams.get(key)
         if (bus) {
           // No await between state projection and cursor: they describe exactly the same delivered prefix.
@@ -1334,11 +1345,11 @@ ${workspaceInfo}${codegraphBlock}
           const run = snapshot.projection.find(payload => payload.run)?.run as RootRun | undefined
           if (run && runs.at(-1)?.runId === run.runId) {
             const projectedRuns = [...runs.filter(item => item.runId !== run.runId), run].sort((a, b) => a.seq - b.seq)
-            return { ...snapshot, source: 'live', sessionId, run, runs: projectedRuns, history, todos, changes, commandJobs: jobs }
+            return { ...snapshot, source: 'live', sessionId, run, runs: projectedRuns, history, historyCompacted, todos, changes, commandJobs: jobs }
           }
         }
         return { schemaVersion: 1, source: 'persisted', sessionId, eventId: null, finished: true,
-          projection: [], run: runs.at(-1), runs, history, todos, changes, commandJobs: jobs }
+          projection: [], run: runs.at(-1), runs, history, historyCompacted, todos, changes, commandJobs: jobs }
       })
       if (result) return reply.send(success(result))
     }
