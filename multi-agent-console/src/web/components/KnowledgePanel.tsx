@@ -1,24 +1,30 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import {
   Button, Input, Tooltip, Popconfirm, Modal, Form,
-  Spin, Tag, message as antMsg,
+  Spin, Tag, Select, message as antMsg,
 } from 'antd'
 import {
   PlusOutlined, ReloadOutlined, DeleteOutlined,
   SearchOutlined, FileTextOutlined, DatabaseOutlined,
 } from '@ant-design/icons'
 import { knowledgeApi } from '@core/api'
-import type { KnowledgeDocument, KnowledgeSearchResult } from '@core/types'
+import type { KnowledgeBase, KnowledgeDocument, KnowledgeSearchResult } from '@core/types'
 import styles from './KnowledgePanel.module.css'
 
 // ── Ingest Modal ───────────────────────────────────────────────────────────────
-function IngestModal({ open, onClose, onSaved }: {
+function IngestModal({ open, onClose, onSaved, bases, defaultBaseId }: {
   open: boolean
   onClose: () => void
   onSaved: (doc: KnowledgeDocument) => void
+  bases: KnowledgeBase[]
+  defaultBaseId?: string
 }) {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (open) form.setFieldsValue({ knowledgeBaseId: defaultBaseId })
+  }, [open, defaultBaseId, form])
 
   const submit = async () => {
     const values = await form.validateFields()
@@ -28,6 +34,7 @@ function IngestModal({ open, onClose, onSaved }: {
         filename: values.filename,
         content: values.content,
         contentType: 'text/plain',
+        knowledgeBaseId: values.knowledgeBaseId,
       })
       antMsg.success('文档已入库')
       form.resetFields()
@@ -44,6 +51,9 @@ function IngestModal({ open, onClose, onSaved }: {
       <Form form={form} layout="vertical" size="small">
         <Form.Item name="filename" label="文件名 / 标题" rules={[{ required: true }]}>
           <Input placeholder="例如：产品手册.txt" />
+        </Form.Item>
+        <Form.Item name="knowledgeBaseId" label="知识库">
+          <Select allowClear placeholder="可选：选择知识库" options={bases.map((base) => ({ value: base.id, label: base.name }))} />
         </Form.Item>
         <Form.Item name="content" label="文档内容" rules={[{ required: true }]}>
           <Input.TextArea placeholder="粘贴文档内容..." autoSize={{ minRows: 8, maxRows: 16 }} />
@@ -65,7 +75,7 @@ function SearchResults({ results }: { results: KnowledgeSearchResult[] }) {
             <FileTextOutlined style={{ color: '#60a5fa', fontSize: 12 }} />
             <span className={styles.resultFile}>{r.filename}</span>
             <Tag color="green" style={{ fontSize: 10, padding: '0 4px', lineHeight: '16px', height: 16 }}>
-              {(r.score * 100).toFixed(0)}%
+              {r.score > 0 && r.score <= 1 ? `${(r.score * 100).toFixed(0)}%` : '匹配'}
             </Tag>
           </div>
           <div className={styles.resultContent}>{r.content}</div>
@@ -78,6 +88,8 @@ function SearchResults({ results }: { results: KnowledgeSearchResult[] }) {
 // ── Main ────────────────────────────────────────────────────────────────────────
 export default function KnowledgePanel() {
   const [docs, setDocs] = useState<KnowledgeDocument[]>([])
+  const [bases, setBases] = useState<KnowledgeBase[]>([])
+  const [selectedBaseId, setSelectedBaseId] = useState<string | undefined>()
   const [loading, setLoading] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -87,13 +99,16 @@ export default function KnowledgePanel() {
   const fetchDocs = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await knowledgeApi.listDocuments()
+      const res = await knowledgeApi.listDocuments({ knowledgeBaseId: selectedBaseId })
       setDocs(res.list)
     } catch { /* ignore */ }
     finally { setLoading(false) }
-  }, [])
+  }, [selectedBaseId])
 
-  useEffect(() => { fetchDocs() }, [fetchDocs])
+  useEffect(() => {
+    fetchDocs()
+    knowledgeApi.listBases().then(setBases).catch(() => setBases([]))
+  }, [fetchDocs])
 
   const handleDelete = async (id: string) => {
     try {
@@ -107,7 +122,7 @@ export default function KnowledgePanel() {
     if (!searchQuery.trim()) return
     setSearching(true)
     try {
-      const results = await knowledgeApi.search(searchQuery, 5)
+      const results = await knowledgeApi.search(searchQuery, 5, selectedBaseId ? [selectedBaseId] : undefined)
       setSearchResults(results)
       if (!results.length) antMsg.info('未找到相关内容')
     } catch (err: any) { antMsg.error(err.message) }
@@ -119,6 +134,15 @@ export default function KnowledgePanel() {
       <div className={styles.header}>
         <span className={styles.title}>Knowledge Base</span>
         <div style={{ display: 'flex', gap: 4 }}>
+          <Select
+            size="small"
+            allowClear
+            value={selectedBaseId}
+            placeholder="全部知识库"
+            onChange={setSelectedBaseId}
+            options={bases.map((base) => ({ value: base.id, label: base.name }))}
+            style={{ minWidth: 120 }}
+          />
           <Tooltip title="刷新">
             <Button type="text" size="small" icon={<ReloadOutlined />} className={styles.headerBtn} onClick={fetchDocs} loading={loading} />
           </Tooltip>
@@ -168,7 +192,6 @@ export default function KnowledgePanel() {
                 <div className={styles.docName}>{doc.filename}</div>
                 <div className={styles.docMeta}>
                   {doc.chunkCount != null && <span>{doc.chunkCount} 块</span>}
-                  {doc.size != null && <span>{(doc.size / 1024).toFixed(1)}KB</span>}
                   <span>{new Date(doc.createdAt).toLocaleDateString('zh-CN')}</span>
                 </div>
               </div>
@@ -183,7 +206,9 @@ export default function KnowledgePanel() {
       <IngestModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
-        onSaved={(doc) => { setDocs((d) => [doc, ...d]); setModalOpen(false) }}
+        bases={bases}
+        defaultBaseId={selectedBaseId}
+        onSaved={() => { void fetchDocs(); setModalOpen(false) }}
       />
     </div>
   )

@@ -49,6 +49,8 @@ import { logger } from '../observability/index.js'
 
 export interface RegistryFactoryOptions {
   securityContext?: Pick<AgentContext, 'tenantId' | 'sessionId' | 'toolProfile'>
+  /** Project root used to resolve project-scoped MCP configuration. */
+  workspaceRoot?: string
   /** general preserves service capabilities; code selects the IDE's executable programming tools. */
   toolProfile?: ToolProfile
   /** 允许的 skill 列表，undefined = 全部，[] = 全部，传入列表则过滤 */
@@ -76,8 +78,8 @@ export interface RegistryFactoryOptions {
    * 客户端透传的内联 MCP server 配置（请求级临时挂载）
    *
    * 行为：
-   *   - 仅支持 http / sse / streamableHttp 三种远程协议（stdio 跳过——
-   *     端启动的 stdio 子进程 agent-engine 接不到）
+   *   - 支持 stdio / http / sse / streamableHttp；stdio 子进程由引擎
+   *     按本次请求临时启动，不写入配置文件。
    *   - 在 mcp loader 已注册的 server 之外追加这些 inline server
    *   - 连接失败的 inline server 仅 warn，不阻断 chat 流程
    */
@@ -90,6 +92,7 @@ export interface RegistryFactoryOptions {
     env?: Record<string, string>
     url?: string
     headers?: Record<string, string>
+    disabledTools?: string[]
   }>
   /**
    * 客户端透传的内联 Agent 列表（请求级；用户端把用户 agent 列表随请求下发）。
@@ -142,7 +145,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   // 获取所有自定义技能名称/ID（含本地 SKILLS_ROOT 与客户端透传的 inlineSkills）
   // 注意：allowedSkills 白名单里可能是 skill 目录名/ID，也可能是显示名。
   // 为支持两种匹配方式，这里同时收集 name 和 id。
-  const externalSkillNames = skillsRegistry.getSkills().map(s => s.name)
+  const externalSkillNames = skillsRegistry.getSkills(opts.workspaceRoot).map(s => s.name)
   const inlineSkillNamesAndIds = Array.isArray(opts.inlineSkills)
     ? opts.inlineSkills.filter(s => s && s.name).flatMap(s => s.id ? [s.name, s.id] : [s.name])
     : []
@@ -218,7 +221,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   })
 
   // 6. 外部 Skill 工具（按 allowedSkills 过滤；合并 inlineSkills）
-  let externalSkills = skillsRegistry.getSkills()
+  let externalSkills = skillsRegistry.getSkills(opts.workspaceRoot)
 
   // ── OSM 方法论 过滤 ──────────────────────────────────────────
   // methodology / max 档以外，隐藏所有方法论技能（os-* 系列），
@@ -311,7 +314,8 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
     (name: string) => (profile !== 'code' || isCodeProfileTool({ name })) &&
       (explicitAllowedTools === undefined || explicitAllowedTools.includes(name)),
     opts.inlineMcpServers,
-    opts.securityContext
+    opts.securityContext,
+    opts.workspaceRoot
   )
 
   // 17. Agent 系统工具 - 按 allowedTools 过滤；注入 inlineAgents 供查询

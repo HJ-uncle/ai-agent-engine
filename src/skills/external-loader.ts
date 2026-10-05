@@ -79,7 +79,7 @@ function parseFrontmatter(raw: string): {
 /**
  * 扫描并加载所有外部技能（只读元数据，不读全文）
  */
-export function loadExternalSkills(skillsRoot?: string): ExternalSkill[] {
+export function loadExternalSkills(skillsRoot?: string, options: { includeDisabled?: boolean } = {}): ExternalSkill[] {
   const rawRoot = skillsRoot ?? process.env.SKILLS_ROOT
   if (!rawRoot) {
     logger.debug('SKILLS_ROOT not set, skipping external skill loading')
@@ -166,9 +166,9 @@ export function loadExternalSkills(skillsRoot?: string): ExternalSkill[] {
 
     const cfg = defaults[dirName] ?? {}
     const order = manifest.order ?? cfg.order ?? 999
-    const enabled = manifest.enabled ?? cfg.enabled ?? true
+    const enabled = cfg.enabled ?? manifest.enabled ?? true
 
-    if (!enabled) {
+    if (!enabled && !options.includeDisabled) {
       logger.debug({ name }, 'Skill disabled in config, skipping')
       continue
     }

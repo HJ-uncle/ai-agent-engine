@@ -32,6 +32,7 @@ import { skillImportRoutes } from './routes/skill-imports.js'
 import { utilityRoutes } from './routes/utility.js'
 import { commandJobRoutes } from './routes/command-jobs.js'
 import { commandJobs } from '../../core/command-jobs/index.js'
+import { closeKnowledgeDb } from '../../storage/knowledge/db.js'
 import { cronScheduler } from '../../scheduler/cron-scheduler.js'
 import { globalRequestMiddleware, loggingMiddleware, authMiddlewareHook, WHITELIST_PATHS } from './middleware.js'
 import fastifyWebsocket from '@fastify/websocket'
@@ -60,7 +61,10 @@ export async function buildServer() {
   fastify.addHook('onRequest', loggingMiddleware)
   fastify.addHook('onRequest', authMiddlewareHook)
   await commandJobs.initialize()
-  fastify.addHook('onClose', async () => { await commandJobs.shutdown('Engine shutdown') })
+  fastify.addHook('onClose', async () => {
+    await commandJobs.shutdown('Engine shutdown')
+    closeKnowledgeDb()
+  })
 
   // Global error handler
   fastify.setErrorHandler(async (error, request, reply) => {

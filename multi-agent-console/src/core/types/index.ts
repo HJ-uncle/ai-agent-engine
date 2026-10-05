@@ -149,23 +149,41 @@ export interface SseEvent {
 }
 
 // ── Knowledge 类型 ────────────────────────────────────────────────────────────
+export interface KnowledgeBase {
+  id: string
+  tenantId: string
+  name: string
+  description: string
+  documentCount: number
+  createdAt: number
+  updatedAt: number
+}
+
 export interface KnowledgeDocument {
   id: string
   filename: string
-  contentType?: string
-  size?: number
-  chunkCount?: number
   tenantId: string
+  knowledgeBaseId: string | null
+  contentType: string
+  chunkCount: number
+  status: 'ready'
+  contentExact: boolean
   createdAt: number
-  updatedAt?: number
+  updatedAt: number
+}
+
+export interface KnowledgeDocumentDetail extends KnowledgeDocument {
+  content: string
 }
 
 export interface KnowledgeSearchResult {
-  id: string
+  chunkId: string
+  documentId: string
+  knowledgeBaseId: string | null
   filename: string
   content: string
   score: number
-  chunkIndex?: number
+  chunkIndex: number
 }
 
 // ── MCP Server 类型（对齐后端 McpServerRecord）────────────────────────────────

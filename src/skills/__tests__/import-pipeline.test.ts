@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { gzipSync } from 'node:zlib'
 import { zipSync, strToU8 } from 'fflate'
 import {
   runSkillImport,
@@ -32,6 +33,32 @@ const SKILL_MD = (name: string, desc = 'Test skill') =>
 
 function makeZip(entries: Record<string, Uint8Array>): Buffer {
   return Buffer.from(zipSync(entries))
+}
+
+function makeTar(entries: Record<string, Uint8Array>): Buffer {
+  const blocks: Buffer[] = []
+  for (const [name, value] of Object.entries(entries)) {
+    const header = Buffer.alloc(512)
+    header.write(name, 0, 100, 'utf8')
+    header.write('0000644\0', 100, 8, 'ascii')
+    header.write('0000000\0', 108, 8, 'ascii')
+    header.write('0000000\0', 116, 8, 'ascii')
+    header.write(`${value.length.toString(8).padStart(11, '0')}\0`, 124, 12, 'ascii')
+    header.write('00000000000\0', 136, 12, 'ascii')
+    header[156] = 0
+    header.write('ustar\0', 257, 6, 'ascii')
+    header.write('00', 263, 2, 'ascii')
+    header.write('test', 265, 4, 'ascii')
+    header.write('test', 297, 4, 'ascii')
+    // checksum field is spaces while calculating, then octal value + NUL/space
+    header.fill(0x20, 148, 156)
+    const checksum = header.reduce((sum, byte) => sum + byte, 0)
+    header.write(`${checksum.toString(8).padStart(6, '0')}\0 `, 148, 8, 'ascii')
+    const body = Buffer.from(value)
+    blocks.push(header, body, Buffer.alloc((512 - (body.length % 512)) % 512))
+  }
+  blocks.push(Buffer.alloc(1024))
+  return Buffer.concat(blocks)
 }
 
 function run(buffer: Buffer, opts: Partial<Parameters<typeof runSkillImport>[0]> = {}) {
@@ -94,6 +121,21 @@ describe('runSkillImport — 正常导入', () => {
     expect(summary.importedCount).toBe(1)
     expect(fs.existsSync(path.join(tmpRoot, 'my-pack', 'SKILL.md'))).toBe(true)
     expect(fs.existsSync(path.join(tmpRoot, 'my-pack', 'assets', 'logo.png'))).toBe(true)
+  })
+
+  it('单个 SKILL.md：按上传文件名适配为技能目录', () => {
+    const content = Buffer.from(`---\nname: standalone\ndescription: Standalone\n---\n\n# standalone\n`)
+    const summary = run(content, { filename: 'standalone.md' })
+    expect(summary.skillNames).toEqual(['standalone'])
+    expect(fs.readFileSync(path.join(tmpRoot, 'standalone', 'SKILL.md'), 'utf8')).toContain('name: standalone')
+  })
+
+  it('TAR 与 GZIP TAR：导入与 ZIP 使用同一安全管线', () => {
+    const tar = makeTar({ 'tar-skill/SKILL.md': SKILL_MD('tar-skill'), 'tar-skill/readme.txt': strToU8('ok') })
+    const tarSummary = run(tar, { filename: 'tar-skill.tar' })
+    expect(tarSummary.skillNames).toEqual(['tar-skill'])
+    const gzSummary = run(gzipSync(tar), { filename: 'tar-skill.tgz', importId: 'gzip-import' })
+    expect(gzSummary.skillNames).toEqual(['tar-skill'])
   })
 
   it('成功后 staging 目录零残留', () => {
@@ -204,14 +246,9 @@ describe('runSkillImport — 格式与安全防护', () => {
     }
   })
 
-  it('frontmatter 缺 description → BAD_STRUCTURE', () => {
+  it('frontmatter 缺字段仍可导入，并由注册表回退元数据', () => {
     const zip = makeZip({ 'a/SKILL.md': strToU8('---\nname: only-name\n---\n# x') })
-    try {
-      run(zip)
-      expect.unreachable('should throw')
-    } catch (e) {
-      expect((e as SkillImportError).message).toContain('description')
-    }
+    expect(run(zip).skillNames).toEqual(['a'])
   })
 
   it('保留目录名 → BAD_STRUCTURE', () => {
@@ -225,7 +262,7 @@ describe('runSkillImport — 格式与安全防护', () => {
   })
 
   it('失败后 staging 零残留（磁盘一致性）', () => {
-    const zip = makeZip({ 'a/SKILL.md': SKILL_MD('a'), 'b/SKILL.md': strToU8('no frontmatter') })
+    const zip = makeZip({ 'a/SKILL.md': SKILL_MD('a'), 'b/payload.exe': strToU8('MZ') })
     try {
       run(zip)
       expect.unreachable('should throw')

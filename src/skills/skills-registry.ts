@@ -22,17 +22,25 @@ function globalLayerRoot(): string {
   return path.join(os.homedir(), '.aether', 'skills')
 }
 
-class SkillsRegistry {
+export class SkillsRegistry {
   private skills: ExternalSkill[] = []
+  private allSkills: ExternalSkill[] = []
   private watchers: fs.FSWatcher[] = []
   private debounceTimer: ReturnType<typeof setTimeout> | null = null
   private skillsRoot: string | null = null   // 项目层（或显式 SKILLS_ROOT 单 root）
   private globalRoot: string | null = null   // 全局层
   private singleRootMode = false             // SKILLS_ROOT 显式指定：禁用多层
+  private explicitRoot: string | null = null
   private readonly DEBOUNCE_MS = 500
 
   /** 初始化并启动文件监听 */
   start(skillsRoot?: string): void {
+    this.stop()
+    this.skillsRoot = null
+    this.globalRoot = null
+    this.skills = []
+    this.allSkills = []
+    this.explicitRoot = skillsRoot || process.env.SKILLS_ROOT ? path.resolve(skillsRoot || process.env.SKILLS_ROOT!) : null
     // 优先级：参数 > 环境变量 > cwd/.aether/skills（新约定）> cwd/SKILLs（旧位置回退）
     let rawRoot = skillsRoot ?? process.env.SKILLS_ROOT ?? ''
     if (!rawRoot) {
@@ -50,7 +58,10 @@ class SkillsRegistry {
     }
 
     // 单 root 模式：显式指定时禁用全局层（保持部署确定性）
-    this.singleRootMode = Boolean(skillsRoot || process.env.SKILLS_ROOT)
+    // An explicit argument is a deliberately isolated single-root deployment.
+    // SKILLS_ROOT from the environment is a built-in layer and still coexists
+    // with user-managed global skills imported into ~/.aether/skills.
+    this.singleRootMode = Boolean(skillsRoot)
 
     if (rawRoot) {
       this.skillsRoot = path.resolve(process.cwd(), rawRoot)
@@ -91,8 +102,7 @@ class SkillsRegistry {
         root,
         { recursive: true },
         (eventType, filename) => {
-          // 只响应 SKILL.md 的变动
-          if (!filename || !filename.endsWith('SKILL.md')) return
+          if (!filename || !['SKILL.md', 'skills.config.json', 'plugin.json'].includes(path.basename(filename))) return
           logger.debug({ eventType, filename, root }, 'SkillsRegistry: change detected')
           this.scheduleReload()
         },
@@ -112,6 +122,15 @@ class SkillsRegistry {
    * 动态探测：出现即采纳、补挂监听并重扫，无需重启服务。
    */
   ensureGlobalLayer(): void {
+    if (!this.skillsRoot) {
+      const project = process.env.SKILLS_ROOT || (fs.existsSync(path.join(process.cwd(), '.aether', 'skills'))
+        ? path.join(process.cwd(), '.aether', 'skills') : path.join(process.cwd(), 'SKILLs'))
+      if (fs.existsSync(project)) {
+        this.skillsRoot = path.resolve(project)
+        this.watchLayer(this.skillsRoot)
+        this.reload()
+      }
+    }
     if (this.globalRoot || this.singleRootMode) return
     const g = globalLayerRoot()
     if (!fs.existsSync(g)) return
@@ -154,14 +173,15 @@ class SkillsRegistry {
     ] as const) {
       if (!root) continue
       try {
-        for (const s of loadExternalSkills(root)) {
+        for (const s of loadExternalSkills(root, { includeDisabled: true })) {
           merged.set(s.name.toLowerCase(), { ...s, scope })
         }
       } catch (err) {
         logger.warn({ err, root }, 'SkillsRegistry: failed to load layer')
       }
     }
-    this.skills = [...merged.values()]
+    this.allSkills = [...merged.values()]
+    this.skills = this.allSkills.filter((skill) => skill.enabled)
     const after = this.skills.length
 
     if (before !== after) {
@@ -175,8 +195,70 @@ class SkillsRegistry {
   }
 
   /** 获取当前技能列表（始终最新） */
-  getSkills(): ExternalSkill[] {
-    return this.skills
+  getSkills(workspaceRoot?: string): ExternalSkill[] {
+    this.ensureGlobalLayer()
+    return workspaceRoot ? this.loadWorkspaceSkills(workspaceRoot, false) : this.skills
+  }
+
+  /** Management must retain disabled entries so they can be re-enabled. */
+  getAllSkills(workspaceRoot?: string): ExternalSkill[] {
+    this.ensureGlobalLayer()
+    return workspaceRoot ? this.loadWorkspaceSkills(workspaceRoot, true) : this.allSkills
+  }
+
+  /**
+   * Return one management layer without applying project-over-global name
+   * shadowing.  The effective registry intentionally collapses duplicate
+   * names so the agent sees one skill, but settings CRUD must still be able to
+   * inspect and mutate a global copy hidden by a project copy.
+   */
+  getAllSkillsByScope(workspaceRoot: string | undefined, scope: 'project' | 'global'): ExternalSkill[] {
+    this.ensureGlobalLayer()
+    const roots: string[] = []
+    if (scope === 'global') {
+      if (this.globalRoot) roots.push(this.globalRoot)
+      if (this.explicitRoot && this.explicitRoot !== this.globalRoot) roots.push(this.explicitRoot)
+    } else if (workspaceRoot) {
+      const requested = path.resolve(workspaceRoot)
+      roots.push([path.join(requested, '.aether', 'skills'), path.join(requested, 'SKILLs')].find((root) => fs.existsSync(root)) ?? path.join(requested, '.aether', 'skills'))
+    } else if (this.skillsRoot) {
+      roots.push(this.skillsRoot)
+    }
+    const byName = new Map<string, ExternalSkill>()
+    for (const root of roots) {
+      for (const skill of loadExternalSkills(root, { includeDisabled: true })) byName.set(skill.name.toLowerCase(), { ...skill, scope })
+    }
+    return [...byName.values()]
+  }
+
+  /**
+   * Request-scoped project skill loading. The process singleton is still used
+   * for the default cwd (and tool registry), while HTTP management calls can
+   * inspect the IDE's active workspace without leaking one project's skills
+   * into another project's prompt.
+   */
+  private loadWorkspaceSkills(workspaceRoot: string, includeDisabled: boolean): ExternalSkill[] {
+    const requested = path.resolve(workspaceRoot)
+    const project = [path.join(requested, '.aether', 'skills'), path.join(requested, 'SKILLs')].find((root) => fs.existsSync(root))
+    const roots: Array<[string | null, 'global' | 'project']> = []
+    // A request-scoped workspace always gets its own project layer. An
+    // explicitly configured SKILLS_ROOT remains available as a built-in layer
+    // for compatibility; the workspace project wins on name collisions.
+    // Auto-detected cwd skills belong only to cwd. Only explicitly configured
+    // built-ins are shared with requests targeting another workspace.
+    if (this.explicitRoot && this.explicitRoot !== path.resolve(project ?? '')) roots.push([this.explicitRoot, 'global'])
+    if (this.globalRoot && this.globalRoot !== this.explicitRoot) roots.push([this.globalRoot, 'global'])
+    roots.push([project ?? path.join(requested, '.aether', 'skills'), 'project'])
+    const merged = new Map<string, ExternalSkill>()
+    for (const [root, scope] of roots) {
+      if (!root) continue
+      // Load disabled entries while merging so a disabled project skill still
+      // shadows a same-named global skill. Filter only after precedence is
+      // resolved; otherwise the global copy incorrectly reappears.
+      for (const skill of loadExternalSkills(root, { includeDisabled: true })) merged.set(skill.name.toLowerCase(), { ...skill, scope })
+    }
+    const values = [...merged.values()]
+    return includeDisabled ? values : values.filter((skill) => skill.enabled)
   }
 
   /** 按名称获取技能文件路径（供 get_skill 工具用） */
@@ -196,6 +278,10 @@ class SkillsRegistry {
   /** 全局层实际生效路径（未启用时为 null，供 API 如实上报） */
   get globalRootPath(): string | null {
     return this.globalRoot
+  }
+
+  get builtinRootPath(): string | null {
+    return this.explicitRoot
   }
 
   get isWatching(): boolean {

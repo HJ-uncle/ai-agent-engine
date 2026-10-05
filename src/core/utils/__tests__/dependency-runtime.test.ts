@@ -92,20 +92,35 @@ describe('cancellation propagation', () => {
     expect(cancelledWork).not.toHaveBeenCalled()
   })
 
-  it('aborts the MCP HTTP request and does not convert provider isError into success', async () => {
+  it.each(['initialize', 'tools/call'])('aborts MCP during %s and does not convert provider isError into success', async blockedMethod => {
     state.mode = 'full-access'
     const controller = new AbortController()
     let started!: () => void
     const ready = new Promise<void>(resolve => { started = resolve })
-    let requests = 0
+    const methods: string[] = []
     let respond = false
-    const server = http.createServer((_request, response) => {
-      requests++
-      started()
-      if (respond) {
-        response.setHeader('content-type', 'application/json')
-        response.end(JSON.stringify({jsonrpc:'2.0', id:1, result:{isError:true, content:[{type:'text',text:'remote rejected'}]}}))
+    const server = http.createServer(async (request, response) => {
+      let input = ''
+      for await (const part of request) input += part.toString()
+      const rpc = JSON.parse(input) as { id?: number; method: string }
+      methods.push(rpc.method)
+      if (rpc.method === blockedMethod && !respond) { started(); return }
+      if (rpc.method === 'notifications/initialized') {
+        response.writeHead(202)
+        response.end()
+        return
       }
+      const result = rpc.method === 'initialize'
+        ? { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'fixture', version: '1.0.0' } }
+        : rpc.method === 'tools/list'
+          ? { tools: [{ name: 'lookup', description: 'synthetic', inputSchema: { type: 'object' } }] }
+          : rpc.method === 'tools/call'
+            ? { isError: true, content: [{ type: 'text', text: 'remote rejected' }] }
+            : undefined
+      response.setHeader('content-type', 'application/json')
+      response.end(JSON.stringify(result === undefined
+        ? { jsonrpc: '2.0', id: rpc.id, error: { code: -32601, message: 'Method not found' } }
+        : { jsonrpc: '2.0', id: rpc.id, result }))
     })
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     try {
@@ -115,10 +130,14 @@ describe('cancellation propagation', () => {
       await ready
       controller.abort()
       await rejected
-      expect(requests).toBe(1)
+      const discoveryMethods = ['initialize', 'notifications/initialized', 'tools/list']
+      const cancelledMethods = blockedMethod === 'initialize' ? ['initialize'] : [...discoveryMethods, 'tools/call']
+      expect(methods).toEqual(cancelledMethods)
       respond = true
       await expect(client.callTool('lookup', {})).rejects.toThrow('remote rejected')
-      expect(requests).toBe(2)
+      expect(methods).toEqual(blockedMethod === 'initialize'
+        ? [...cancelledMethods, ...discoveryMethods, 'tools/call']
+        : [...cancelledMethods, 'tools/call'])
     } finally {
       server.closeAllConnections()
       await new Promise<void>(resolve => server.close(() => resolve()))

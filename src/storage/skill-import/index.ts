@@ -36,6 +36,7 @@ export interface SkillImportRecord {
   errorCode: string | null
   errorMessage: string | null
   uploadedChunks: number[]
+  projectRoot: string
   createdAt: number
   updatedAt: number
 }
@@ -59,6 +60,7 @@ function rowToRecord(row: Record<string, unknown>): SkillImportRecord {
     errorCode: (row['error_code'] as string) ?? null,
     errorMessage: (row['error_message'] as string) ?? null,
     uploadedChunks: row['uploaded_chunks'] ? JSON.parse(row['uploaded_chunks'] as string) : [],
+    projectRoot: String(row['project_root'] ?? ''),
     createdAt: Number(row['created_at'] ?? 0),
     updatedAt: Number(row['updated_at'] ?? 0),
   }
@@ -75,11 +77,13 @@ export class SkillImportStore {
     fileSize: number
     conflictStrategy?: ConflictStrategy
     scope?: SkillScope
+    projectRoot?: string
+    fileSha256?: string
   }): Promise<SkillImportRecord> {
     const db = getDb()
     await db.execute({
-      sql: `INSERT INTO skill_imports (id, tenant_id, user_id, filename, file_size, status, conflict_strategy, scope)
-            VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`,
+      sql: `INSERT INTO skill_imports (id, tenant_id, user_id, filename, file_size, status, conflict_strategy, scope, project_root, file_sha256)
+            VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
       args: [
         input.id,
         input.tenantId,
@@ -88,6 +92,8 @@ export class SkillImportStore {
         input.fileSize,
         input.conflictStrategy ?? 'versioned',
         input.scope ?? 'project',
+        input.projectRoot ?? '',
+        input.fileSha256 ?? null,
       ],
     })
     return (await this.get(input.id))!
@@ -146,23 +152,28 @@ export class SkillImportStore {
     return next
   }
 
-  async list(tenantId: string, limit = 20): Promise<SkillImportRecord[]> {
+  async list(tenantId: string, limit = 20, filter?: { scope?: SkillScope; projectRoot?: string }): Promise<SkillImportRecord[]> {
     const db = getDb()
+    const where = ['tenant_id = ?']
+    const args: (string | number)[] = [tenantId]
+    if (filter?.scope) { where.push('scope = ?'); args.push(filter.scope) }
+    if (filter?.projectRoot !== undefined) { where.push('project_root = ?'); args.push(filter.projectRoot) }
+    args.push(limit)
     const result = await db.execute({
-      sql: 'SELECT * FROM skill_imports WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?',
-      args: [tenantId, limit],
+      sql: `SELECT * FROM skill_imports WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT ?`,
+      args,
     })
     return result.rows.map((r) => rowToRecord(r as Record<string, unknown>))
   }
 
   /** 按分片会话键（租户+文件名+大小）找最近一次未完成的分片导入（断点续传） */
-  async findResumable(tenantId: string, filename: string, fileSize: number): Promise<SkillImportRecord | null> {
+  async findResumable(tenantId: string, filename: string, fileSize: number, identity: { fileSha256: string; scope: SkillScope; projectRoot?: string }): Promise<SkillImportRecord | null> {
     const db = getDb()
     const result = await db.execute({
       sql: `SELECT * FROM skill_imports
-            WHERE tenant_id = ? AND filename = ? AND file_size = ? AND status IN ('pending', 'uploading')
+            WHERE tenant_id = ? AND filename = ? AND file_size = ? AND file_sha256 = ? AND scope = ? AND project_root = ? AND status IN ('pending', 'uploading')
             ORDER BY created_at DESC LIMIT 1`,
-      args: [tenantId, filename, fileSize],
+      args: [tenantId, filename, fileSize, identity.fileSha256, identity.scope, identity.projectRoot ?? ''],
     })
     const row = result.rows[0]
     return row ? rowToRecord(row as Record<string, unknown>) : null

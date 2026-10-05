@@ -13,6 +13,8 @@ export interface GuardedHttpOptions {
   signal?: AbortSignal
   timeoutMs?: number
   followRedirects?: boolean
+  /** Resolve on headers and expose a bounded, cancellable body for MCP SSE. */
+  stream?: boolean
 }
 
 /** One transport for every code-reachable HTTP tool: validate each hop and pin checked DNS. */
@@ -40,6 +42,49 @@ export async function guardedHttp(url: string, ctx: NetworkContext, source: stri
         path: target.pathname + target.search, method, headers: requestHeaders, signal,
         ...(target.protocol === 'https:' && !net.isIP(target.hostname) ? { servername: target.hostname } : {})
       }, incoming => {
+        if (options.stream) {
+          const responseHeaders = new Headers()
+          for (const [key, value] of Object.entries(incoming.headers)) {
+            if (Array.isArray(value)) value.forEach(entry => responseHeaders.append(key, entry))
+            else if (value !== undefined) responseHeaders.set(key, value)
+          }
+          const status = incoming.statusCode ?? 500
+          if ([204, 205, 304].includes(status) || method === 'HEAD') {
+            incoming.resume()
+            resolve(new Response(null, { status, headers: responseHeaders }))
+            return
+          }
+          let bytes = 0
+          let done = false
+          const stream = new ReadableStream<Uint8Array>({
+            start(controller) {
+              const fail = (error: Error) => {
+                if (done) return
+                done = true
+                controller.error(error)
+              }
+              incoming.on('data', (chunk: Buffer) => {
+                bytes += chunk.length
+                if (policy.maxResponseBytes > 0 && bytes > policy.maxResponseBytes) {
+                  const error = new Error(`HTTP response exceeds ${policy.maxResponseBytes} bytes`)
+                  fail(error); incoming.destroy(error); request.destroy(error)
+                  return
+                }
+                if (done) return
+                controller.enqueue(chunk)
+                if ((controller.desiredSize ?? 0) <= 0) incoming.pause()
+              })
+              incoming.once('error', fail)
+              request.once('error', fail)
+              incoming.once('end', () => { if (!done) { done = true; controller.close() } })
+              incoming.once('close', () => { if (!done) fail(new Error('HTTP response closed before completion')) })
+            },
+            pull() { incoming.resume() },
+            cancel() { done = true; incoming.destroy(); request.destroy() }
+          })
+          resolve(new Response(stream, { status, headers: responseHeaders, statusText: incoming.statusMessage }))
+          return
+        }
         const chunks: Buffer[] = []
         let bytes = 0
         incoming.on('data', (chunk: Buffer) => {
@@ -68,6 +113,7 @@ export async function guardedHttp(url: string, ctx: NetworkContext, source: stri
     })
     const location = response.headers.get('location')
     if (options.followRedirects === false || !location || ![301, 302, 303, 307, 308].includes(response.status)) return response
+    await response.body?.cancel()
     const next = new URL(location, target)
     if (next.origin !== target.origin) {
       // API keys may use arbitrary custom header names; do not forward them to a new origin.

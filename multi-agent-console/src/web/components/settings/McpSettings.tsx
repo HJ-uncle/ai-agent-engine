@@ -83,7 +83,7 @@ export default function McpSettings() {
       payload.args = values.args ? values.args.split(/\s+/).filter(Boolean) : undefined
 
       if (editing) {
-        await mcpApi.update(editing.id, payload)
+        await mcpApi.update(editing.id, payload, { scope: editing.scope })
         message.success('更新成功')
       } else {
         await mcpApi.create(payload as CreateMcpServerInput)
@@ -99,7 +99,7 @@ export default function McpSettings() {
   // ── 启用 / 禁用 ──────────────────────────────────────────────────────────────
   const handleToggle = async (record: McpServer, enabled: boolean) => {
     try {
-      enabled ? await mcpApi.enable(record.id) : await mcpApi.disable(record.id)
+      enabled ? await mcpApi.enable(record.id, record.scope) : await mcpApi.disable(record.id, record.scope)
       setServers((prev) => prev.map((s) => s.id === record.id ? { ...s, enabled } : s))
     } catch (e: any) {
       message.error(e.message || '操作失败')
@@ -109,7 +109,8 @@ export default function McpSettings() {
   // ── 删除 ─────────────────────────────────────────────────────────────────────
   const handleDelete = async (id: string) => {
     try {
-      await mcpApi.delete(id)
+      const record = servers.find((s) => s.id === id)
+      await mcpApi.delete(id, record?.scope)
       message.success('删除成功')
       load()
     } catch (e: any) {
@@ -121,7 +122,7 @@ export default function McpSettings() {
   const handleTest = async (record: McpServer) => {
     setTesting(record.id)
     try {
-      const res = await mcpApi.test(record.id) as any
+      const res = await mcpApi.test(record.id, { scope: record.scope }) as any
       setTestResult((prev) => ({
         ...prev,
         [record.id]: { success: true, toolCount: res.toolCount, tools: res.tools },

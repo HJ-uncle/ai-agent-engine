@@ -21,6 +21,8 @@ import {
   updateServer,
   deleteServer,
   toggleServer,
+  importConfigDocument,
+  exportConfigDocument,
 } from '../../../storage/mcp/mcp-config.js'
 import { HTTPMCPClient } from '../../../tools/mcp/client.js'
 import { logger } from '../../../observability/index.js'
@@ -41,6 +43,7 @@ const McpBaseSchema = z.object({
   args: z.array(z.string()).optional(),
   env: z.record(z.string()).optional(),
   headers: z.record(z.string()).optional(),
+  disabledTools: z.array(z.string().min(1)).optional().default([]),
   enabled: z.boolean().optional().default(true),
   isBuiltIn: z.boolean().optional().default(false),
   /** 保存层级：project（默认）| global（~/.aether/mcp.json，多项目共享） */
@@ -55,17 +58,43 @@ const CreateMcpSchema = McpBaseSchema.refine(data => {
   message: '非 stdio 传输必须提供 url，stdio 传输必须提供 command',
 })
 
-const UpdateMcpSchema = McpBaseSchema.partial()
+const UpdateMcpSchema = McpBaseSchema.omit({ id: true, isBuiltIn: true, scope: true }).partial()
 
 export async function mcpRoutes(fastify: FastifyInstance) {
   // ── List ────────────────────────────────────────────────────────────────────
-  fastify.get<{ Querystring: { current?: number; pageSize?: number } }>('/mcp/servers', async (req, reply) => {
+  type ProjectQuery = { path?: string; scope?: 'project' | 'global' }
+  const projectPath = (req: FastifyRequest<{ Querystring: ProjectQuery }>): string | undefined => {
+    const value = req.query?.path
+    return typeof value === 'string' && value.trim() ? value : undefined
+  }
+
+  fastify.get<{ Querystring: ProjectQuery & { current?: number; pageSize?: number } }>('/mcp/servers', async (req, reply) => {
     const { current, pageSize } = req.query
-    return reply.code(200).send(paginateArray(listServers(), current, pageSize))
+    return reply.code(200).send(paginateArray(listServers(projectPath(req), req.query.scope), current, pageSize))
+  })
+
+  // JSON-first import/export. Import validates the entire document before the
+  // single atomic rename performed by the storage layer.
+  fastify.get<{ Querystring: ProjectQuery }>('/mcp/config/export', async (req, reply) => {
+    const scope = req.query.scope
+    return reply.code(200).send(success(exportConfigDocument(projectPath(req), scope)))
+  })
+
+  fastify.post<{ Querystring: ProjectQuery; Body: { scope?: 'project' | 'global'; config?: unknown } }>('/mcp/config/import', async (req, reply) => {
+    const body = req.body ?? {}
+    const scope = body.scope ?? req.query.scope ?? 'project'
+    if (scope !== 'project' && scope !== 'global') return reply.code(200).send(fail(40001, 'scope 必须是 project 或 global'))
+    try {
+      const config = body.config ?? body
+      const servers = importConfigDocument(config, scope, projectPath(req))
+      return reply.code(200).send(success({ servers }, 'MCP 配置已原子导入'))
+    } catch (err) {
+      return reply.code(200).send(fail(40001, err instanceof Error ? err.message : 'MCP 配置无效'))
+    }
   })
 
   // ── Create ──────────────────────────────────────────────────────────────────
-  fastify.post('/mcp/servers', async (req, reply) => {
+  fastify.post<{ Querystring: ProjectQuery }>('/mcp/servers', async (req, reply) => {
     const result = CreateMcpSchema.safeParse(req.body)
     if (!result.success) {
       const firstError = result.error.errors[0]
@@ -73,7 +102,7 @@ export async function mcpRoutes(fastify: FastifyInstance) {
     }
 
     try {
-      const entry = createServer(result.data)
+      const entry = createServer(result.data, projectPath(req))
       return reply.code(200).send(success(entry))
     } catch (err: any) {
       return reply.code(200).send(fail(40900, err instanceof Error ? err.message : 'Conflict'))
@@ -81,8 +110,8 @@ export async function mcpRoutes(fastify: FastifyInstance) {
   })
 
   // ── Get one ─────────────────────────────────────────────────────────────────
-  fastify.get<{ Params: { id: string } }>('/mcp/servers/:id', async (req, reply) => {
-    const server = getServer(req.params.id)
+  fastify.get<{ Params: { id: string }; Querystring: ProjectQuery }>('/mcp/servers/:id', async (req, reply) => {
+    const server = getServer(req.params.id, projectPath(req), req.query.scope)
     if (!server) {
       return reply.code(200).send(fail(40400, `MCP server "${req.params.id}" not found`))
     }
@@ -90,14 +119,19 @@ export async function mcpRoutes(fastify: FastifyInstance) {
   })
 
   // ── Full update ─────────────────────────────────────────────────────────────
-  fastify.put<{ Params: { id: string } }>('/mcp/servers/:id', async (req, reply) => {
+  fastify.put<{ Params: { id: string }; Querystring: ProjectQuery }>('/mcp/servers/:id', async (req, reply) => {
     const result = UpdateMcpSchema.safeParse(req.body)
     if (!result.success) {
       const firstError = result.error.errors[0]
       return reply.code(200).send(fail(40001, `参数验证失败：${firstError.message}`))
     }
 
-    const updated = updateServer(req.params.id, result.data)
+    const existing = getServer(req.params.id, projectPath(req), req.query.scope)
+    if (!existing) return reply.code(200).send(fail(40400, `MCP server "${req.params.id}" not found`))
+    const merged = existing ? { ...existing, ...result.data } : null
+    const valid = merged ? CreateMcpSchema.safeParse(merged) : null
+    if (!valid?.success) return reply.code(200).send(fail(40001, valid?.error.errors[0]?.message ?? 'MCP server not found'))
+    const updated = updateServer(req.params.id, result.data, projectPath(req), req.query.scope)
     if (!updated) {
       return reply.code(200).send(fail(40400, `MCP server "${req.params.id}" not found`))
     }
@@ -105,14 +139,19 @@ export async function mcpRoutes(fastify: FastifyInstance) {
   })
 
   // ── Partial update ──────────────────────────────────────────────────────────
-  fastify.patch<{ Params: { id: string } }>('/mcp/servers/:id', async (req, reply) => {
+  fastify.patch<{ Params: { id: string }; Querystring: ProjectQuery }>('/mcp/servers/:id', async (req, reply) => {
     const result = UpdateMcpSchema.safeParse(req.body)
     if (!result.success) {
       const firstError = result.error.errors[0]
       return reply.code(200).send(fail(40001, `参数验证失败：${firstError.message}`))
     }
 
-    const updated = updateServer(req.params.id, result.data)
+    const existing = getServer(req.params.id, projectPath(req), req.query.scope)
+    if (!existing) return reply.code(200).send(fail(40400, `MCP server "${req.params.id}" not found`))
+    const merged = existing ? { ...existing, ...result.data } : null
+    const valid = merged ? CreateMcpSchema.safeParse(merged) : null
+    if (!valid?.success) return reply.code(200).send(fail(40001, valid?.error.errors[0]?.message ?? 'MCP server not found'))
+    const updated = updateServer(req.params.id, result.data, projectPath(req), req.query.scope)
     if (!updated) {
       return reply.code(200).send(fail(40400, `MCP server "${req.params.id}" not found`))
     }
@@ -120,9 +159,9 @@ export async function mcpRoutes(fastify: FastifyInstance) {
   })
 
   // ── Delete ───────────────────────────────────────────────────────────────────
-  fastify.delete<{ Params: { id: string }; Querystring: { scope?: string } }>('/mcp/servers/:id', async (req, reply) => {
+  fastify.delete<{ Params: { id: string }; Querystring: ProjectQuery }>('/mcp/servers/:id', async (req, reply) => {
     // ?scope=global 删除全局层定义；默认删项目层（项目层删除后同名全局定义重新生效）
-    const ok = deleteServer(req.params.id, req.query.scope === 'global' ? 'global' : 'project')
+    const ok = deleteServer(req.params.id, req.query.scope === 'global' ? 'global' : 'project', projectPath(req))
     if (!ok) {
       return reply.code(200).send(fail(40400, `MCP server "${req.params.id}" not found`))
     }
@@ -130,8 +169,8 @@ export async function mcpRoutes(fastify: FastifyInstance) {
   })
 
   // ── Enable ───────────────────────────────────────────────────────────────────
-  fastify.post<{ Params: { id: string } }>('/mcp/servers/:id/enable', async (req, reply) => {
-    const updated = toggleServer(req.params.id, true)
+  fastify.post<{ Params: { id: string }; Querystring: ProjectQuery }>('/mcp/servers/:id/enable', async (req, reply) => {
+    const updated = toggleServer(req.params.id, true, projectPath(req), req.query.scope)
     if (!updated) {
       return reply.code(200).send(fail(40400, `MCP server "${req.params.id}" not found`))
     }
@@ -139,8 +178,8 @@ export async function mcpRoutes(fastify: FastifyInstance) {
   })
 
   // ── Disable ──────────────────────────────────────────────────────────────────
-  fastify.post<{ Params: { id: string } }>('/mcp/servers/:id/disable', async (req, reply) => {
-    const updated = toggleServer(req.params.id, false)
+  fastify.post<{ Params: { id: string }; Querystring: ProjectQuery }>('/mcp/servers/:id/disable', async (req, reply) => {
+    const updated = toggleServer(req.params.id, false, projectPath(req), req.query.scope)
     if (!updated) {
       return reply.code(200).send(fail(40400, `MCP server "${req.params.id}" not found`))
     }
@@ -148,18 +187,19 @@ export async function mcpRoutes(fastify: FastifyInstance) {
   })
 
   // ── Test connection ───────────────────────────────────────────────────────────
-  fastify.post<{ Params: { id: string } }>('/mcp/servers/:id/test', async (req, reply) => {
-    const server = getServer(req.params.id)
+  fastify.post<{ Params: { id: string }; Querystring: ProjectQuery }>('/mcp/servers/:id/test', async (req, reply) => {
+    const server = getServer(req.params.id, projectPath(req), req.query.scope)
     if (!server) {
       return reply.code(200).send(fail(40400, `MCP server "${req.params.id}" not found`))
     }
 
     try {
-      if (!server.url) {
+      if (server.transportType !== 'stdio' && !server.url) {
         return reply.code(200).send(fail(40001, 'Server has no URL configured'))
       }
-      const client = new HTTPMCPClient({ name: server.name || server.id, url: server.url, headers: server.headers })
+      const client = new HTTPMCPClient({ id: server.id, name: server.name || server.id, url: server.url, command: server.command, args: server.args, env: server.env, transportType: server.transportType, headers: server.headers })
       const tools = await client.toTools()
+      await client.disconnect()
       return reply.code(200).send(success({
         success: true,
         toolCount: tools.length,

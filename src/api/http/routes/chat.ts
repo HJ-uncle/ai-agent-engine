@@ -638,7 +638,8 @@ export async function chatRoutes(fastify: FastifyInstance) {
       allowedTools,
       inlineSkills: requestedInlineSkills,
       inlineMcpServers: requestedInlineMcpServers,
-      inlineAgents: requestedInlineAgents
+      inlineAgents: requestedInlineAgents,
+      workspaceRoot: workspacePaths?.[0]
     })
 
     const abortController = new AbortController()

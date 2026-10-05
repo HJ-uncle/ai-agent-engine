@@ -27,6 +27,7 @@ let ctx: AgentContext
 let server: http.Server
 let baseUrl: string
 let calls: string[]
+let mcpMethods: string[]
 
 beforeEach(async () => {
   fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-d3-policy-'))
@@ -38,6 +39,7 @@ beforeEach(async () => {
     cwd: fixture, toolProfile: 'code', currentToolCallId: 'tool-1', logger: pino({ level: 'silent' }) } as AgentContext
   setSecurityMode(ctx.tenantId, ctx.sessionId, 'safe')
   calls = []
+  mcpMethods = []
   server = http.createServer(async (request, response) => {
     calls.push(request.url ?? '')
     if (request.url === '/redirect') { response.writeHead(302, { location: baseUrl.replace('127.0.0.1', 'localhost') + '/private' }); response.end(); return }
@@ -45,11 +47,20 @@ beforeEach(async () => {
     if (request.url === '/mcp') {
       let input = ''
       for await (const part of request) input += part.toString()
-      const rpc = JSON.parse(input) as { id: number; method: string }
+      const rpc = JSON.parse(input) as { id?: number; method: string }
+      mcpMethods.push(rpc.method)
+      if (rpc.method === 'notifications/initialized') { response.writeHead(202); response.end(); return }
       response.setHeader('Content-Type', 'application/json')
-      response.end(JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result: rpc.method === 'tools/list'
-        ? { tools: [{ name: 'side_effect', description: 'synthetic', inputSchema: { type: 'object' } }] }
-        : { content: [{ type: 'text', text: 'executed' }] } }))
+      const result = rpc.method === 'initialize'
+        ? { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'fixture', version: '1.0.0' } }
+        : rpc.method === 'tools/list'
+          ? { tools: [{ name: 'side_effect', description: 'synthetic', inputSchema: { type: 'object' } }] }
+          : rpc.method === 'tools/call'
+            ? { content: [{ type: 'text', text: 'executed' }] }
+            : undefined
+      response.end(JSON.stringify(result === undefined
+        ? { jsonrpc: '2.0', id: rpc.id, error: { code: -32601, message: 'Method not found' } }
+        : { jsonrpc: '2.0', id: rpc.id, result }))
       return
     }
     response.end('ok')
@@ -172,14 +183,20 @@ describe('D3 common execution boundaries', () => {
     const client = new HTTPMCPClient({ name: 'fixture', url: baseUrl + '/mcp' }, ctx)
     await expect(client.toTools()).rejects.toThrow('connect')
     expect(calls).toEqual([])
+    expect(mcpMethods).toEqual([])
     setSecurityMode(ctx.tenantId, ctx.sessionId, 'standard')
     const tools = await client.toTools()
-    expect(calls).toEqual(['/mcp'])
+    const discoveryMethods = ['initialize', 'notifications/initialized', 'tools/list']
+    expect(calls).toEqual(['/mcp', '/mcp', '/mcp'])
+    expect(mcpMethods).toEqual(discoveryMethods)
+    expect(tools).toHaveLength(1)
     setSecurityMode(ctx.tenantId, ctx.sessionId, 'safe')
     expect((await tools[0].execute({}, ctx)).success).toBe(false)
-    expect(calls).toEqual(['/mcp'])
+    expect(calls).toEqual(['/mcp', '/mcp', '/mcp'])
+    expect(mcpMethods).toEqual(discoveryMethods)
     setSecurityMode(ctx.tenantId, ctx.sessionId, 'standard')
     expect((await tools[0].execute({}, ctx)).output).toBe('executed')
-    expect(calls).toEqual(['/mcp', '/mcp'])
+    expect(calls).toEqual(['/mcp', '/mcp', '/mcp', '/mcp'])
+    expect(mcpMethods).toEqual([...discoveryMethods, 'tools/call'])
   })
 })

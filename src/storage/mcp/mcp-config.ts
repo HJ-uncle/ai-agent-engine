@@ -21,6 +21,8 @@ export interface McpServerRecord {
   env?: Record<string, string>
   url?: string
   headers?: Record<string, string>
+  /** Optional per-server tool allow list. Names here are MCP definition names. */
+  disabledTools?: string[]
   isBuiltIn: boolean
   githubUrl?: string
   registryId?: string
@@ -50,15 +52,15 @@ interface MCPConfigFile {
  * 首次创建（两处都不存在）时写入 .aether/mcp.json（自动建目录）。
  *
  * 全局层：~/.aether/mcp.json（AETHER_GLOBAL_DIR 可覆盖）在读取时合并，
- * 同名 server 项目级覆盖全局级；写操作永远只落项目级文件，避免多项目写穿透。
+ * 同名 server 项目级覆盖全局级；写操作默认落项目级文件，显式 global 才修改共享配置。
  */
-function resolveConfigPath(): string {
+function resolveConfigPath(projectRoot?: string): string {
   if (process.env.MCP_CONFIG_PATH) {
     return path.resolve(process.env.MCP_CONFIG_PATH)
   }
-  const newPath = path.resolve(process.cwd(), '.aether', 'mcp.json')
+  const newPath = path.resolve(projectRoot ?? process.cwd(), '.aether', 'mcp.json')
   if (fs.existsSync(newPath)) return newPath
-  const legacyPath = path.resolve(process.cwd(), 'mcp.config.json')
+  const legacyPath = path.resolve(projectRoot ?? process.cwd(), 'mcp.config.json')
   if (fs.existsSync(legacyPath)) return legacyPath
   return newPath
 }
@@ -84,8 +86,8 @@ function readGlobalConfig(): MCPConfigFile {
   }
 }
 
-function getConfigPath(): string {
-  return resolveConfigPath()
+function getConfigPath(projectRoot?: string): string {
+  return resolveConfigPath(projectRoot)
 }
 
 /** 单文件读取 + 旧格式兼容 */
@@ -124,9 +126,9 @@ function readOneConfig(configPath: string): MCPConfigFile {
 }
 
 /** 读取（双层合并）：全局层 ~/.aether/mcp.json + 项目级，同名项目级覆盖 */
-function readConfig(): MCPConfigFile {
+function readConfig(projectRoot?: string): MCPConfigFile {
   const globalCfg = readOneConfig(resolveGlobalConfigPath())
-  const projectCfg = readOneConfig(getConfigPath())
+  const projectCfg = readOneConfig(getConfigPath(projectRoot))
   if (Object.keys(globalCfg.mcpServers).length === 0) return projectCfg
   // MCP_CONFIG_PATH 显式指定时为单文件模式，不合并全局层
   if (process.env.MCP_CONFIG_PATH) return projectCfg
@@ -135,11 +137,12 @@ function readConfig(): MCPConfigFile {
   }
 }
 
-function writeConfig(config: MCPConfigFile): void {
-  const configPath = getConfigPath()
+function writeConfigAt(config: MCPConfigFile, configPath = getConfigPath()): void {
   // 新约定位置在 .aether/ 子目录下，写入前确保目录存在
   fs.mkdirSync(path.dirname(configPath), { recursive: true })
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
+  const tmp = `${configPath}.${process.pid}.${Date.now()}.tmp`
+  fs.writeFileSync(tmp, JSON.stringify(config, null, 2), 'utf-8')
+  fs.renameSync(tmp, configPath)
   logger.info({ configPath }, 'MCP config file updated')
 }
 
@@ -147,8 +150,84 @@ function writeConfig(config: MCPConfigFile): void {
 function writeGlobalConfig(config: MCPConfigFile): void {
   const p = resolveGlobalConfigPath()
   fs.mkdirSync(path.dirname(p), { recursive: true })
-  fs.writeFileSync(p, JSON.stringify(config, null, 2), 'utf-8')
+  const tmp = `${p}.${process.pid}.${Date.now()}.tmp`
+  fs.writeFileSync(tmp, JSON.stringify(config, null, 2), 'utf-8')
+  fs.renameSync(tmp, p)
   logger.info({ path: p }, 'MCP global config file updated')
+}
+
+/**
+ * Validate and atomically merge one complete MCP JSON document into a layer.
+ * Import is intentionally separate from CRUD: paste/import must never leave a
+ * half-written configuration when one of several servers is malformed. An
+ * imported id replaces the same id in that layer; unrelated servers remain
+ * available so importing one server does not silently delete the rest.
+ * Unknown keys are retained for forward compatibility, but the runtime only
+ * consumes the documented transport/connection fields.
+ */
+export function importConfigDocument(
+  document: unknown,
+  scope: 'project' | 'global' = 'project',
+  projectRoot?: string,
+): McpServerRecord[] {
+  if (!document || typeof document !== 'object' || Array.isArray(document)) {
+    throw new Error('MCP 配置必须是 JSON 对象')
+  }
+  const root = document as Record<string, unknown>
+  const rawServers = root.mcpServers
+  if (!rawServers || typeof rawServers !== 'object' || Array.isArray(rawServers)) {
+    throw new Error('MCP 配置必须包含 mcpServers 对象')
+  }
+  const entries = Object.entries(rawServers as Record<string, unknown>)
+  const existingConfig = scope === 'global' ? readOneConfig(resolveGlobalConfigPath()) : projectLayerConfig(projectRoot)
+  const normalized: Record<string, Omit<McpServerRecord, 'id'>> = { ...existingConfig.mcpServers }
+  const now = Math.floor(Date.now() / 1000)
+  for (const [id, raw] of entries) {
+    if (!/^[a-z0-9][a-z0-9_-]*$/.test(id)) throw new Error(`服务器 id 无效：${id}`)
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error(`服务器 ${id} 必须是对象`)
+    const source = raw as Record<string, unknown>
+    const transportType = (source.transportType ?? source.type ?? source.transport) as unknown
+    if (!['stdio', 'sse', 'http', 'streamableHttp'].includes(String(transportType))) {
+      throw new Error(`服务器 ${id} 的 transport/type 不受支持`)
+    }
+    const name = typeof source.name === 'string' ? source.name : id
+    const description = typeof source.description === 'string' ? source.description : ''
+    if (transportType === 'stdio') {
+      if (typeof source.command !== 'string' || !source.command.trim()) throw new Error(`服务器 ${id} 缺少 command`)
+      if (source.args !== undefined && (!Array.isArray(source.args) || source.args.some(item => typeof item !== 'string'))) throw new Error(`服务器 ${id} 的 args 必须是字符串数组`)
+      if (source.env !== undefined && (!source.env || typeof source.env !== 'object' || Array.isArray(source.env) || Object.values(source.env as object).some(item => typeof item !== 'string'))) throw new Error(`服务器 ${id} 的 env 必须是字符串对象`)
+    } else {
+      if (typeof source.url !== 'string' || !/^https?:\/\//i.test(source.url)) throw new Error(`服务器 ${id} 缺少有效 url`)
+      if (source.headers !== undefined && (!source.headers || typeof source.headers !== 'object' || Array.isArray(source.headers) || Object.values(source.headers as object).some(item => typeof item !== 'string'))) throw new Error(`服务器 ${id} 的 headers 必须是字符串对象`)
+    }
+    if (source.disabledTools !== undefined && (!Array.isArray(source.disabledTools) || source.disabledTools.some(item => typeof item !== 'string'))) throw new Error(`服务器 ${id} 的 disabledTools 必须是字符串数组`)
+    const existing = existingConfig.mcpServers[id]
+    const { transport: _transport, type: _type, ...rest } = source
+    normalized[id] = {
+      ...rest as Omit<McpServerRecord, 'id'>,
+      name,
+      description,
+      enabled: source.enabled !== false,
+      transportType: String(transportType) as McpServerRecord['transportType'],
+      isBuiltIn: source.isBuiltIn === true,
+      createdAt: typeof source.createdAt === 'number' ? source.createdAt : (existing?.createdAt ?? now),
+      updatedAt: now,
+    }
+  }
+  const target: MCPConfigFile = { mcpServers: normalized }
+  if (scope === 'global') writeGlobalConfig(target)
+  else writeConfigAt(target, getConfigPath(projectRoot))
+  return Object.entries(normalized).map(([id, entry]) => toRecord(id, { ...entry, scope }))
+}
+
+/** Return the editable JSON shape, preserving standard names used by MCP clients. */
+export function exportConfigDocument(projectRoot?: string, scope?: 'project' | 'global'): { mcpServers: Record<string, unknown> } {
+  const config = scope === 'global' ? readOneConfig(resolveGlobalConfigPath()) : scope === 'project' ? projectLayerConfig(projectRoot) : readConfig(projectRoot)
+  const mcpServers = Object.fromEntries(Object.entries(config.mcpServers).map(([id, entry]) => {
+    const { id: _id, createdAt: _createdAt, updatedAt: _updatedAt, isBuiltIn: _isBuiltIn, scope: _scope, transportType, ...editable } = { id, ...entry } as McpServerRecord
+    return [id, { ...editable, type: transportType }]
+  }))
+  return { mcpServers }
 }
 
 function toRecord(id: string, entry: Omit<McpServerRecord, 'id'>): McpServerRecord {
@@ -160,60 +239,97 @@ function toRecord(id: string, entry: Omit<McpServerRecord, 'id'>): McpServerReco
 // 覆盖语义：项目层 create/update 同名 id 即覆盖全局层定义（git config local 语义）。
 
 /** 写操作基底：仅项目层文件内容 */
-function projectLayerConfig(): MCPConfigFile {
-  return readOneConfig(getConfigPath())
+function projectLayerConfig(projectRoot?: string): MCPConfigFile {
+  return readOneConfig(getConfigPath(projectRoot))
 }
 
-export function listServers(): McpServerRecord[] {
-  const config = readConfig()
+export function listServers(projectRoot?: string, scope?: 'project' | 'global'): McpServerRecord[] {
+  // An explicit layer query is management-oriented: expose the raw layer so a
+  // project override does not hide the global definition from an administrator.
+  if (scope === 'global') {
+    return Object.entries(readOneConfig(resolveGlobalConfigPath()).mcpServers)
+      .map(([id, e]) => toRecord(id, { ...e, scope: 'global' }))
+  }
+  if (scope === 'project') {
+    return Object.entries(projectLayerConfig(projectRoot).mcpServers)
+      .map(([id, e]) => toRecord(id, { ...e, scope: 'project' }))
+  }
+  const config = readConfig(projectRoot)
   // 标注来源层级：项目文件里有的 key → project，其余来自全局层 → global
-  const projectKeys = new Set(Object.keys(projectLayerConfig().mcpServers))
-  return Object.entries(config.mcpServers).map(([id, e]) =>
-    toRecord(id, { ...e, scope: projectKeys.has(id) ? 'project' : 'global' }),
-  )
+  const projectKeys = new Set(Object.keys(projectLayerConfig(projectRoot).mcpServers))
+  return Object.entries(config.mcpServers)
+    .map(([id, e]) => toRecord(id, { ...e, scope: projectKeys.has(id) ? 'project' : 'global' }))
 }
 
-export function getServer(id: string): McpServerRecord | null {
-  const config = readConfig()
+export function getServer(id: string, projectRoot?: string, scope?: 'project' | 'global'): McpServerRecord | null {
+  const config = scope === 'global' ? readOneConfig(resolveGlobalConfigPath()) : readConfig(projectRoot)
   const e = config.mcpServers[id]
-  return e ? toRecord(id, e) : null
+  const effectiveScope = scope ?? (projectLayerConfig(projectRoot).mcpServers[id] ? 'project' : 'global')
+  return e ? toRecord(id, { ...e, scope: effectiveScope }) : null
 }
 
-export function createServer(input: CreateMcpServerInput & { scope?: 'project' | 'global' }): McpServerRecord {
+/** A transport switch must not retain credentials from the previous transport. */
+function transportFields(entry: Omit<McpServerRecord, 'id'>): Omit<McpServerRecord, 'id'> {
+  const result = { ...entry }
+  delete result.scope
+  if (result.transportType === 'stdio') {
+    delete result.url
+    delete result.headers
+  } else {
+    delete result.command
+    delete result.args
+    delete result.env
+  }
+  return result
+}
+
+export function createServer(input: CreateMcpServerInput & { scope?: 'project' | 'global' }, projectRoot?: string): McpServerRecord {
   const { scope = 'project', ...rest } = input
-  const target = scope === 'global' ? readOneConfig(resolveGlobalConfigPath()) : projectLayerConfig()
+  const target = scope === 'global' ? readOneConfig(resolveGlobalConfigPath()) : projectLayerConfig(projectRoot)
   if (target.mcpServers[input.id]) {
     throw new Error(`MCP server "${input.id}" already exists`)
   }
   const now = Math.floor(Date.now() / 1000)
   const { id, ...entry } = rest
-  const full: Omit<McpServerRecord, 'id'> = { ...entry, createdAt: now, updatedAt: now }
+  const full = transportFields({ ...entry, createdAt: now, updatedAt: now })
   target.mcpServers[id] = full
   if (scope === 'global') writeGlobalConfig(target)
-  else writeConfig(target)
+  else writeConfigAt(target, getConfigPath(projectRoot))
   return toRecord(id, { ...full, scope })
 }
 
-export function updateServer(id: string, patch: UpdateMcpServerInput): McpServerRecord | null {
-  const config = projectLayerConfig()
+export function updateServer(
+  id: string,
+  patch: UpdateMcpServerInput,
+  projectRoot?: string,
+  scope: 'project' | 'global' = 'project',
+): McpServerRecord | null {
+  // The effective list merges global and project layers. A caller that edits a
+  // global entry must explicitly select global; otherwise an edit would
+  // silently create a project override and leave the shared definition stale.
+  const config = scope === 'global'
+    ? readOneConfig(resolveGlobalConfigPath())
+    : projectLayerConfig(projectRoot)
   if (!config.mcpServers[id]) {
-    // 项目层无此 server：若全局层有，则提升全局定义为项目级覆盖后再改；
-    // 两层都没有才返回 null
+    if (scope === 'global') return null
+    // Project edits preserve the existing overlay semantics: if only a global
+    // definition exists, promote it into this project's config before patching.
     const globalEntry = readGlobalConfig().mcpServers[id]
     if (!globalEntry) return null
     logger.info({ id }, 'mcp-config: promoting global server to project-level override')
     config.mcpServers[id] = globalEntry
   }
-  config.mcpServers[id] = {
+  config.mcpServers[id] = transportFields({
     ...config.mcpServers[id],
     ...patch,
     updatedAt: Math.floor(Date.now() / 1000),
-  }
-  writeConfig(config)
-  return toRecord(id, config.mcpServers[id])
+  })
+  if (scope === 'global') writeGlobalConfig(config)
+  else writeConfigAt(config, getConfigPath(projectRoot))
+  return toRecord(id, { ...config.mcpServers[id], scope })
 }
 
-export function deleteServer(id: string, scope: 'project' | 'global' = 'project'): boolean {
+export function deleteServer(id: string, scope: 'project' | 'global' = 'project', projectRoot?: string): boolean {
   if (scope === 'global') {
     const config = readOneConfig(resolveGlobalConfigPath())
     if (!config.mcpServers[id]) return false
@@ -221,13 +337,13 @@ export function deleteServer(id: string, scope: 'project' | 'global' = 'project'
     writeGlobalConfig(config)
     return true
   }
-  const config = projectLayerConfig()
+  const config = projectLayerConfig(projectRoot)
   if (!config.mcpServers[id]) return false
   delete config.mcpServers[id]
-  writeConfig(config)
+  writeConfigAt(config, getConfigPath(projectRoot))
   return true
 }
 
-export function toggleServer(id: string, enabled: boolean): McpServerRecord | null {
-  return updateServer(id, { enabled })
+export function toggleServer(id: string, enabled: boolean, projectRoot?: string, scope: 'project' | 'global' = 'project'): McpServerRecord | null {
+  return updateServer(id, { enabled }, projectRoot, scope)
 }

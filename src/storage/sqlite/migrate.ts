@@ -17,6 +17,7 @@ import { up as up015 } from './migrations/015_add_metadata.js'
 import { up as up016 } from './migrations/016_add_tenant_configs.js'
 import { up as up017 } from './migrations/017_add_skill_imports.js'
 import { up as up018 } from './migrations/018_skill_imports_scope.js'
+import { up as up020 } from './migrations/020_skill_import_identity.js'
 
 const BUILTIN_TEMPLATES = [
   {
@@ -182,6 +183,13 @@ async function migrate() {
       console.log('✓ Migration 018_skill_imports_scope complete')
     } catch (err: any) {
       console.log('✓ Migration 018_skill_imports_scope skipped:', err.message)
+    }
+
+    try {
+      await up020(db)
+      console.log('✓ Migration 020_skill_import_identity complete')
+    } catch (err: any) {
+      console.log('✓ Migration 020_skill_import_identity skipped:', err.message)
     }
 
     // Seed built-in prompt templates

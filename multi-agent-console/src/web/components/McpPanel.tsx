@@ -6,7 +6,7 @@ import {
 import {
   PlusOutlined, ReloadOutlined, DeleteOutlined,
   EditOutlined, StopOutlined,
-  CheckCircleOutlined, CloseCircleOutlined, SyncOutlined,
+  CheckCircleOutlined, CloseCircleOutlined,
   ApiOutlined, ThunderboltOutlined,
 } from '@ant-design/icons'
 import { mcpApi } from '@core/api'
@@ -135,14 +135,13 @@ function McpFormModal({
 
 // ── MCP Server Card ────────────────────────────────────────────────────────────
 function McpCard({
-  server, onEdit, onDelete, onToggle, onTest, onRestart,
+  server, onEdit, onDelete, onToggle, onTest,
 }: {
   server: McpServer
   onEdit: (s: McpServer) => void
   onDelete: (s: McpServer) => void
   onToggle: (s: McpServer) => void
   onTest: (s: McpServer) => void
-  onRestart: (s: McpServer) => void
 }) {
   return (
     <div className={styles.card}>
@@ -172,9 +171,6 @@ function McpCard({
         </Tooltip>
         <Tooltip title="测试连接">
           <Button type="text" size="small" icon={<ThunderboltOutlined />} className={styles.btn} onClick={() => onTest(server)} />
-        </Tooltip>
-        <Tooltip title="重启">
-          <Button type="text" size="small" icon={<SyncOutlined />} className={styles.btn} onClick={() => onRestart(server)} />
         </Tooltip>
         <Tooltip title="编辑">
           <Button type="text" size="small" icon={<EditOutlined />} className={styles.btn} onClick={() => onEdit(server)} />
@@ -224,28 +220,20 @@ export default function McpPanel() {
   const handleToggle = async (server: McpServer) => {
     try {
       const updated = server.enabled
-        ? await mcpApi.disable(server.id)
-        : await mcpApi.enable(server.id)
+        ? await mcpApi.disable(server.id, server.scope)
+        : await mcpApi.enable(server.id, server.scope)
       setServers((s) => s.map((x) => x.id === server.id ? { ...x, ...updated } : x))
     } catch (err: any) { antMsg.error(err.message) }
   }
 
   const handleTest = async (server: McpServer) => {
     try {
-      const res = await mcpApi.test(server.id)
+      const res = await mcpApi.test(server.id, { scope: server.scope })
       if (res?.success) {
         antMsg.success(`连接成功，发现 ${res.toolCount ?? 0} 个工具`)
       } else {
         antMsg.warning('连接测试失败')
       }
-    } catch (err: any) { antMsg.error(err.message) }
-  }
-
-  const handleRestart = async (server: McpServer) => {
-    try {
-      await mcpApi.restart(server.name)
-      antMsg.success('重启指令已发送')
-      setTimeout(fetchServers, 1500)
     } catch (err: any) { antMsg.error(err.message) }
   }
 
@@ -278,7 +266,6 @@ export default function McpPanel() {
               onDelete={handleDelete}
               onToggle={handleToggle}
               onTest={handleTest}
-              onRestart={handleRestart}
             />
           ))
         )}

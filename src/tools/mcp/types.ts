@@ -7,8 +7,13 @@ export interface MCPToolDefinition {
 }
 
 export interface MCPServerConfig {
+  id?: string
   name: string
-  url: string
+  transportType?: 'stdio' | 'sse' | 'http' | 'streamableHttp'
+  url?: string
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
   headers?: Record<string, string>
 }
 

@@ -17,6 +17,7 @@ interface InlineMcpServer {
   env?: Record<string, string>
   url?: string
   headers?: Record<string, string>
+  disabledTools?: string[]
 }
 
 /**
@@ -33,10 +34,11 @@ export async function registerMCPTools(
   registry: IToolRegistry,
   toolFilter?: (name: string) => boolean,
   inlineServers?: InlineMcpServer[],
-  securityContext?: NetworkContext
+  securityContext?: NetworkContext,
+  workspaceRoot?: string
 ): Promise<string[]> {
   const registeredNames: string[] = []
-  const localServers = listServers()
+  const localServers = listServers(workspaceRoot)
 
   // ── 合并 inlineServers（去重 + 仅保留远程协议） ─────────────────────────
   const localIds = new Set(localServers.map(s => s.id))
@@ -48,11 +50,11 @@ export async function registerMCPTools(
         logger.debug({ id: s.id }, 'Inline MCP server overridden by local config, skipping')
         continue
       }
-      if (s.transportType === 'stdio') {
-        logger.info({ id: s.id }, 'Inline MCP stdio transport not supported across processes, skipping')
+      if (s.transportType === 'stdio' && !s.command) {
+        logger.warn({ id: s.id }, 'Inline MCP stdio server has no command, skipping')
         continue
       }
-      if (!s.url) {
+      if (s.transportType !== 'stdio' && !s.url) {
         logger.warn({ id: s.id }, 'Inline MCP server has no url, skipping')
         continue
       }
@@ -70,26 +72,27 @@ export async function registerMCPTools(
         logger.info({ id: server.id }, 'MCP server disabled, skipping')
         return
       }
-      // stdio 类型暂不支持（需要子进程）
-      if (server.transportType === 'stdio') {
-        logger.info({ id: server.id }, 'MCP stdio transport not yet supported, skipping')
-        return
-      }
-      if (!server.url) {
+      if (server.transportType !== 'stdio' && !server.url) {
         logger.warn({ id: server.id }, 'MCP server has no url, skipping')
         return
       }
 
       const client = new HTTPMCPClient({
+        id: server.id,
         name: server.name || server.id,
         url: server.url,
+        command: server.command,
+        args: server.args,
+        env: server.env,
+        transportType: server.transportType,
         headers: server.headers,
       }, securityContext)
 
       try {
         const tools = await client.toTools()
         tools.forEach((t) => {
-          if (toolFilter && !toolFilter(t.name)) return
+          const definitionName = t.name.startsWith(`mcp_${server.id}_`) ? t.name.slice(`mcp_${server.id}_`.length) : t.name
+          if (server.disabledTools?.includes(definitionName) || (toolFilter && !toolFilter(t.name))) return
           try {
             registry.register(t)
             registeredNames.push(t.name)
@@ -106,14 +109,20 @@ export async function registerMCPTools(
   await Promise.allSettled(
     validInlineServers.map(async (server) => {
       const client = new HTTPMCPClient({
+        id: server.id,
         name: server.name || server.id,
-        url: server.url!,
+        url: server.url,
+        command: server.command,
+        args: server.args,
+        env: server.env,
+        transportType: server.transportType,
         headers: server.headers,
       }, securityContext)
       try {
         const tools = await client.toTools()
         tools.forEach((t) => {
-          if (toolFilter && !toolFilter(t.name)) return
+          const definitionName = t.name.startsWith(`mcp_${server.id}_`) ? t.name.slice(`mcp_${server.id}_`.length) : t.name
+          if (server.disabledTools?.includes(definitionName) || (toolFilter && !toolFilter(t.name))) return
           try {
             registry.register(t)
             registeredNames.push(t.name)

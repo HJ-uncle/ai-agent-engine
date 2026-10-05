@@ -22,8 +22,24 @@ import path from 'node:path'
 import fs from 'node:fs'
 import type { Tool, ToolResult } from '../../core/agent-context/index.js'
 import { extensionPolicy } from '../../security/tool-policy.js'
+import { globalSkillsRoot } from '../../skills/import-pipeline.js'
 
 const DEFAULT_TIMEOUT_MS = 60_000 // 技能脚本可能需要较长时间（如浏览器操作）
+
+/** Resolve the layer containing the skill named in a `$SKILLS_ROOT/...` path. */
+export function resolveSkillRoot(command: string, projectRoot?: string): string {
+  const candidates = [
+    projectRoot ? path.join(projectRoot, '.aether', 'skills') : '',
+    projectRoot ? path.join(projectRoot, 'SKILLs') : '',
+    process.env.SKILLS_ROOT ? path.resolve(process.cwd(), process.env.SKILLS_ROOT) : '',
+    globalSkillsRoot(),
+  ].filter((candidate, index, all): candidate is string => Boolean(candidate) && all.indexOf(candidate) === index)
+  const skillMatch = command.match(/\$SKILLS_ROOT[\\/]([^\s/\\"']+)/)
+  const matchingRoot = skillMatch
+    ? candidates.find((candidate) => fs.existsSync(path.join(candidate, skillMatch[1])))
+    : undefined
+  return matchingRoot ?? candidates.find((candidate) => fs.existsSync(candidate)) ?? path.resolve(process.cwd(), './skills')
+}
 
 export const runSkillScriptTool: Tool & { source: string } = {
   name: 'run_skill_script',
@@ -59,9 +75,11 @@ export const runSkillScriptTool: Tool & { source: string } = {
       timeoutMs?: number
     }
 
-    // 解析 SKILLS_ROOT 路径
-    const rawRoot = process.env.SKILLS_ROOT ?? './skills'
-    const skillsRoot = path.resolve(process.cwd(), rawRoot)
+    // Resolve the skill layer that actually contains the requested script. A
+    // process may have deployment built-ins in SKILLS_ROOT plus project/global
+    // user skills; always using env SKILLS_ROOT made imported skills invisible
+    // to run_skill_script.
+    const skillsRoot = resolveSkillRoot(command, ctx.projectRoot)
 
     if (!fs.existsSync(skillsRoot)) {
       return {

@@ -14,6 +14,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
 import { loadExternalSkills } from '../external-loader.js'
+import { skillsRegistry } from '../skills-registry.js'
 
 // ─── 辅助：在临时目录构造 mock skill ────────────────────────────────────────
 function createTempSkillsDir(skillNames: string[]): string {
@@ -275,6 +276,65 @@ describe('SkillsRegistry / 集成 - 真实 SKILLs 目录 + cwd 自动探测', ()
     }
 
     reg.stop()
+  })
+})
+
+describe('SkillsRegistry / env builtins + global/project precedence', () => {
+  let originalSkillsRoot: string | undefined
+  let originalGlobalDir: string | undefined
+
+  afterEach(() => {
+    skillsRegistry.stop()
+    if (originalSkillsRoot === undefined) delete process.env.SKILLS_ROOT
+    else process.env.SKILLS_ROOT = originalSkillsRoot
+    if (originalGlobalDir === undefined) delete process.env.AETHER_GLOBAL_DIR
+    else process.env.AETHER_GLOBAL_DIR = originalGlobalDir
+  })
+
+  it('SKILLS_ROOT 内置层不阻止全局导入层被采纳', () => {
+    originalSkillsRoot = process.env.SKILLS_ROOT
+    originalGlobalDir = process.env.AETHER_GLOBAL_DIR
+    const envRoot = createTempSkillsDir(['env-built-in'])
+    const globalDir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-global-'))
+    const globalRoot = path.join(globalDir, 'skills')
+    fs.mkdirSync(path.join(globalRoot, 'global-skill'), { recursive: true })
+    fs.writeFileSync(path.join(globalRoot, 'global-skill', 'SKILL.md'), '---\nname: global-skill\ndescription: Global\n---\n', 'utf8')
+    process.env.SKILLS_ROOT = envRoot
+    process.env.AETHER_GLOBAL_DIR = globalDir
+    try {
+      skillsRegistry.start()
+      const names = skillsRegistry.getSkills().map((skill) => skill.name)
+      expect(names).toEqual(expect.arrayContaining(['env-built-in', 'global-skill']))
+    } finally {
+      fs.rmSync(envRoot, { recursive: true, force: true })
+      fs.rmSync(globalDir, { recursive: true, force: true })
+    }
+  })
+
+  it('停用项目技能仍覆盖同名全局技能，启用过滤发生在合并之后', () => {
+    originalSkillsRoot = process.env.SKILLS_ROOT
+    originalGlobalDir = process.env.AETHER_GLOBAL_DIR
+    const envRoot = createTempSkillsDir(['env-built-in'])
+    const globalDir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-global-'))
+    const globalRoot = path.join(globalDir, 'skills')
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'test-workspace-'))
+    fs.mkdirSync(path.join(globalRoot, 'same'), { recursive: true })
+    fs.writeFileSync(path.join(globalRoot, 'same', 'SKILL.md'), '---\nname: same\ndescription: Global\n---\n', 'utf8')
+    const projectRoot = path.join(workspace, '.aether', 'skills')
+    fs.mkdirSync(path.join(projectRoot, 'same'), { recursive: true })
+    fs.writeFileSync(path.join(projectRoot, 'same', 'SKILL.md'), '---\nname: same\ndescription: Project\n---\n', 'utf8')
+    fs.writeFileSync(path.join(projectRoot, 'skills.config.json'), JSON.stringify({ defaults: { same: { enabled: false } } }), 'utf8')
+    process.env.SKILLS_ROOT = envRoot
+    process.env.AETHER_GLOBAL_DIR = globalDir
+    try {
+      skillsRegistry.start()
+      expect(skillsRegistry.getSkills(workspace).some((skill) => skill.name === 'same')).toBe(false)
+      expect(skillsRegistry.getAllSkills(workspace).find((skill) => skill.name === 'same')?.description).toBe('Project')
+    } finally {
+      fs.rmSync(envRoot, { recursive: true, force: true })
+      fs.rmSync(globalDir, { recursive: true, force: true })
+      fs.rmSync(workspace, { recursive: true, force: true })
+    }
   })
 })
 

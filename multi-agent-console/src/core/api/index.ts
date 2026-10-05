@@ -1,6 +1,6 @@
 import type {
   Agent, CreateAgentInput, UpdateAgentInput, SseEvent,
-  KnowledgeDocument, KnowledgeSearchResult,
+  KnowledgeBase, KnowledgeDocument, KnowledgeDocumentDetail, KnowledgeSearchResult,
   McpServer, CreateMcpServerInput,
   MemoryEntry, Task, CreateTaskInput, Tool,
 } from '@core/types'
@@ -497,8 +497,42 @@ async function parseSseStream(
 
 // ── Knowledge API ─────────────────────────────────────────────────────────────
 export const knowledgeApi = {
+  // GET /knowledge/bases
+  listBases: async () => {
+    const res = await request<KnowledgeBase[]>('/knowledge/bases')
+    return (res.data ?? []) as KnowledgeBase[]
+  },
+
+  // GET /knowledge/bases/:id
+  getBase: async (id: string) => {
+    const res = await request<KnowledgeBase>(`/knowledge/bases/${encodeURIComponent(id)}`)
+    return res.data as KnowledgeBase
+  },
+
+  // POST /knowledge/bases
+  createBase: async (payload: { name: string; description?: string }) => {
+    const res = await request<KnowledgeBase>('/knowledge/bases', {
+      method: 'POST', body: JSON.stringify(payload),
+    })
+    return res.data as KnowledgeBase
+  },
+
+  // PUT /knowledge/bases/:id
+  updateBase: async (id: string, payload: { name?: string; description?: string }) => {
+    const res = await request<KnowledgeBase>(`/knowledge/bases/${encodeURIComponent(id)}`, {
+      method: 'PUT', body: JSON.stringify(payload),
+    })
+    return res.data as KnowledgeBase
+  },
+
+  // DELETE /knowledge/bases/:id
+  deleteBase: async (id: string) => {
+    const res = await request<{ deleted: boolean }>(`/knowledge/bases/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    return res.data
+  },
+
   // GET /knowledge/documents
-  listDocuments: async (params?: { current?: number; pageSize?: number }) => {
+  listDocuments: async (params?: { current?: number; pageSize?: number; knowledgeBaseId?: string }) => {
     const qs = params ? `?${new URLSearchParams(params as any).toString()}` : ''
     const res = await request<KnowledgeDocument[]>(`/knowledge/documents${qs}`)
     return {
@@ -508,26 +542,40 @@ export const knowledgeApi = {
     }
   },
 
-  // POST /knowledge/documents  (JSON 方式：{ filename, content })
-  ingest: async (payload: { filename: string; content: string; contentType?: string }) => {
-    const res = await request<KnowledgeDocument>('/knowledge/documents', {
+  // GET /knowledge/documents/:id
+  getDocument: async (id: string) => {
+    const res = await request<KnowledgeDocumentDetail>(`/knowledge/documents/${encodeURIComponent(id)}`)
+    return res.data as KnowledgeDocumentDetail
+  },
+
+  // POST /knowledge/documents (JSON 方式：{ filename, content, knowledgeBaseId? })
+  ingest: async (payload: { filename: string; content: string; contentType?: string; knowledgeBaseId?: string | null }) => {
+    const res = await request<KnowledgeDocumentDetail>('/knowledge/documents', {
       method: 'POST',
       body: JSON.stringify(payload),
     })
-    return res.data as KnowledgeDocument
+    return res.data as KnowledgeDocumentDetail
+  },
+
+  // PUT /knowledge/documents/:id
+  updateDocument: async (id: string, payload: { filename?: string; content?: string; contentType?: string; knowledgeBaseId?: string | null }) => {
+    const res = await request<KnowledgeDocumentDetail>(`/knowledge/documents/${encodeURIComponent(id)}`, {
+      method: 'PUT', body: JSON.stringify(payload),
+    })
+    return res.data as KnowledgeDocumentDetail
   },
 
   // DELETE /knowledge/documents/:id
   deleteDocument: async (id: string) => {
-    const res = await request<{ success: boolean }>(`/knowledge/documents/${id}`, { method: 'DELETE' })
+    const res = await request<{ deleted: boolean }>(`/knowledge/documents/${encodeURIComponent(id)}`, { method: 'DELETE' })
     return res.data
   },
 
   // POST /knowledge/search
-  search: async (query: string, topK = 5) => {
+  search: async (query: string, limit = 5, knowledgeBaseIds?: string[]) => {
     const res = await request<KnowledgeSearchResult[]>('/knowledge/search', {
       method: 'POST',
-      body: JSON.stringify({ query, topK }),
+      body: JSON.stringify({ query, limit, knowledgeBaseIds }),
     })
     return (res.data ?? []) as KnowledgeSearchResult[]
   },
@@ -535,9 +583,25 @@ export const knowledgeApi = {
 
 // ── MCP Server API ────────────────────────────────────────────────────────────
 export const mcpApi = {
+  // All methods accept path/scope so callers editing a selected project or
+  // global layer do not silently operate on the process cwd/default layer.
+  _query: (params?: { path?: string; scope?: 'project' | 'global' }) => {
+    const qs = new URLSearchParams()
+    if (params?.path) qs.set('path', params.path)
+    if (params?.scope) qs.set('scope', params.scope)
+    const encoded = qs.toString()
+    return encoded ? `?${encoded}` : ''
+  },
+
   // GET /mcp/servers
-  list: async (params?: { current?: number; pageSize?: number }) => {
-    const qs = params ? `?${new URLSearchParams(params as any).toString()}` : ''
+  list: async (params?: { current?: number; pageSize?: number; path?: string; scope?: 'project' | 'global' }) => {
+    const qsParams = new URLSearchParams()
+    if (params?.current != null) qsParams.set('current', String(params.current))
+    if (params?.pageSize != null) qsParams.set('pageSize', String(params.pageSize))
+    if (params?.path) qsParams.set('path', params.path)
+    if (params?.scope) qsParams.set('scope', params.scope)
+    const encoded = qsParams.toString()
+    const qs = encoded ? `?${encoded}` : ''
     const res = await request<McpServer[]>(`/mcp/servers${qs}`)
     return {
       list: (res.data ?? []) as McpServer[],
@@ -547,8 +611,8 @@ export const mcpApi = {
   },
 
   // GET /mcp/servers/:id
-  get: async (id: string) => {
-    const res = await request<McpServer>(`/mcp/servers/${id}`)
+  get: async (id: string, params?: { path?: string; scope?: 'project' | 'global' }) => {
+    const res = await request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}${mcpApi._query(params)}`)
     return res.data as McpServer
   },
 
@@ -562,8 +626,8 @@ export const mcpApi = {
   },
 
   // PUT /mcp/servers/:id
-  update: async (id: string, input: Partial<CreateMcpServerInput>) => {
-    const res = await request<McpServer>(`/mcp/servers/${id}`, {
+  update: async (id: string, input: Partial<CreateMcpServerInput>, params?: { path?: string; scope?: 'project' | 'global' }) => {
+    const res = await request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}${mcpApi._query(params)}`, {
       method: 'PUT',
       body: JSON.stringify(input),
     })
@@ -571,8 +635,8 @@ export const mcpApi = {
   },
 
   // PATCH /mcp/servers/:id
-  patch: async (id: string, input: Partial<CreateMcpServerInput>) => {
-    const res = await request<McpServer>(`/mcp/servers/${id}`, {
+  patch: async (id: string, input: Partial<CreateMcpServerInput>, params?: { path?: string; scope?: 'project' | 'global' }) => {
+    const res = await request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}${mcpApi._query(params)}`, {
       method: 'PATCH',
       body: JSON.stringify(input),
     })
@@ -580,38 +644,33 @@ export const mcpApi = {
   },
 
   // DELETE /mcp/servers/:id（?scope=global 删除全局层定义）
-  delete: async (id: string, scope?: 'project' | 'global') => {
-    const qs = scope === 'global' ? '?scope=global' : ''
-    const res = await request<{ success: boolean }>(`/mcp/servers/${id}${qs}`, { method: 'DELETE' })
+  delete: async (id: string, scope?: 'project' | 'global', path?: string) => {
+    const qs = mcpApi._query({ scope, path })
+    const res = await request<boolean>(`/mcp/servers/${encodeURIComponent(id)}${qs}`, { method: 'DELETE' })
     return res.data
   },
 
   // POST /mcp/servers/:id/enable
-  enable: async (id: string) => {
-    const res = await request<McpServer>(`/mcp/servers/${id}/enable`, { method: 'POST', body: '{}' })
+  enable: async (id: string, scope?: 'project' | 'global', path?: string) => {
+    const res = await request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}/enable${mcpApi._query({ scope, path })}`, { method: 'POST', body: '{}' })
     return res.data as McpServer
   },
 
   // POST /mcp/servers/:id/disable
-  disable: async (id: string) => {
-    const res = await request<McpServer>(`/mcp/servers/${id}/disable`, { method: 'POST', body: '{}' })
+  disable: async (id: string, scope?: 'project' | 'global', path?: string) => {
+    const res = await request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}/disable${mcpApi._query({ scope, path })}`, { method: 'POST', body: '{}' })
     return res.data as McpServer
   },
 
   // POST /mcp/servers/:id/test
-  test: async (id: string) => {
+  test: async (id: string, params?: { path?: string; scope?: 'project' | 'global' }) => {
     const res = await request<{ success: boolean; toolCount?: number; tools?: string[] }>(
-      `/mcp/servers/${id}/test`,
+      `/mcp/servers/${encodeURIComponent(id)}/test${mcpApi._query(params)}`,
       { method: 'POST', body: '{}' }
     )
     return res.data
   },
 
-  // POST /mcp/servers/:name/restart
-  restart: async (name: string) => {
-    const res = await request<{ success: boolean }>(`/mcp/servers/${name}/restart`, { method: 'POST', body: '{}' })
-    return res.data
-  },
 }
 
 // ── Memory API ────────────────────────────────────────────────────────────────

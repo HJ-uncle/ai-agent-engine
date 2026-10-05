@@ -1,7 +1,7 @@
 /**
- * Skill 压缩包导入管线
+ * Skill 包导入管线（ZIP/TAR/GZIP/standalone SKILL.md）
  *
- * 职责：zip 安全校验 → 结构校验 → 冲突处理 → staging 解压 → 原子落盘。
+ * 职责：归一化上传格式 → 安全校验 → 结构校验 → 冲突处理 → staging 解压 → 原子落盘。
  * 落盘到 skills 根目录后由 SkillsRegistry 的 fs.watch 自动热加载，即时生效。
  *
  * 安全校验链：
@@ -17,6 +17,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { gunzipSync } from 'node:zlib'
 import { unzipSync } from 'fflate'
 
 // ─── 错误码与常量 ─────────────────────────────────────────────────────────────
@@ -74,6 +75,8 @@ export interface RunImportOptions {
   importId: string
   zipBuffer: Buffer
   filename: string
+  /** Optional name for a root-level SKILL.md (used by standalone-file uploads). */
+  skillName?: string
   skillsRoot?: string // 覆盖技能根目录（测试用）
   scope?: SkillScope // 落盘层级：project（默认）| global
   conflictStrategy?: ConflictStrategy
@@ -100,8 +103,10 @@ export function globalSkillsRoot(): string {
  */
 export function resolveSkillsRoot(explicit?: string, scope: SkillScope = 'project'): string {
   if (explicit) return path.resolve(explicit)
-  if (process.env.SKILLS_ROOT) return path.resolve(process.env.SKILLS_ROOT)
+  // Global imports must remain in the global layer even when the process also
+  // exposes a deployment-level SKILLS_ROOT containing built-in skills.
   if (scope === 'global') return globalSkillsRoot()
+  if (process.env.SKILLS_ROOT) return path.resolve(process.env.SKILLS_ROOT)
   const projectAether = path.join(process.cwd(), '.aether', 'skills')
   const legacy = path.join(process.cwd(), 'SKILLs')
   if (fs.existsSync(projectAether)) return projectAether
@@ -131,6 +136,116 @@ function isMacJunk(name: string): boolean {
   return base === '.DS_Store' || base.startsWith('._')
 }
 
+/** Remove an archive/document suffix and turn an uploaded filename into a safe
+ * skill directory name. The directory is still checked by the normal
+ * reserved-name/character validation below. */
+function filenameSkillName(filename: string, explicit?: string): string {
+  const candidate = explicit?.trim() || path.basename(filename).replace(/\.(?:tar\.gz|tar\.tgz|tgz|zip|tar|gz|md)$/i, '')
+  const cleaned = candidate.replace(/[^A-Za-z0-9_.-]+/g, '-').replace(/^[^A-Za-z0-9]+/, '').slice(0, 80)
+  return !cleaned || cleaned.toLowerCase() === 'skill' ? 'imported-skill' : cleaned
+}
+
+type ArchiveEntries = Record<string, Uint8Array>
+
+/** Parse the small, deliberately conservative subset of POSIX/GNU tar needed
+ * for skill packages. We parse in memory so the existing size and zip-slip
+ * checks apply equally to zip and tar uploads and no archive can write outside
+ * the staging directory. */
+function parseTar(buffer: Buffer): ArchiveEntries {
+  const entries: ArchiveEntries = {}
+  const readString = (start: number, length: number) => {
+    const end = Math.min(buffer.length, start + length)
+    let value = buffer.subarray(start, end).toString('utf8')
+    const nul = value.indexOf('\0')
+    if (nul >= 0) value = value.slice(0, nul)
+    return value.trim()
+  }
+  const readOctal = (start: number, length: number) => {
+    const raw = readString(start, length).replace(/[^0-7]/g, '')
+    return raw ? parseInt(raw, 8) : 0
+  }
+
+  let offset = 0
+  let longName: string | undefined
+  let paxPath: string | undefined
+  while (offset + 512 <= buffer.length) {
+    const header = buffer.subarray(offset, offset + 512)
+    if (header.every((v) => v === 0)) break
+    const name = readString(offset, 100)
+    const prefix = readString(offset + 345, 155)
+    const size = readOctal(offset + 124, 12)
+    const type = String.fromCharCode(buffer[offset + 156] || 0)
+    const dataStart = offset + 512
+    const dataEnd = dataStart + size
+    if (dataEnd > buffer.length) throw new SkillImportError(SKILL_IMPORT_ERRORS.BAD_FORMAT, 'TAR 条目超出文件范围')
+    const data = buffer.subarray(dataStart, dataEnd)
+    offset = dataStart + Math.ceil(size / 512) * 512
+
+    // GNU long-name and POSIX PAX records carry the real path in their data.
+    if (type === 'L') {
+      longName = data.toString('utf8').replace(/\0+$/, '')
+      continue
+    }
+    if (type === 'x' || type === 'g') {
+      const pax = data.toString('utf8')
+      const match = pax.match(/(?:^|\n)\d+ path=([^\n]*)/)
+      if (match) paxPath = match[1]
+      continue
+    }
+    const entryName = paxPath || longName || (prefix ? `${prefix}/${name}` : name)
+    longName = undefined
+    paxPath = undefined
+    // Directories are represented by a trailing slash and do not need to be
+    // materialised. Symlinks/hardlinks/devices are rejected by the importer.
+    if (type === '5' || entryName.endsWith('/')) continue
+    if (type === '1' || type === '2' || type === '3' || type === '4' || type === '6') {
+      throw new SkillImportError(SKILL_IMPORT_ERRORS.BAD_STRUCTURE, `TAR 包包含不支持的特殊条目: ${entryName}`)
+    }
+    entries[entryName] = new Uint8Array(data)
+  }
+  if (Object.keys(entries).length === 0) throw new SkillImportError(SKILL_IMPORT_ERRORS.BAD_FORMAT, 'TAR 压缩包为空或已损坏')
+  return entries
+}
+
+function extractArchive(buffer: Buffer, filename: string, skillName?: string): ArchiveEntries {
+  const lower = filename.toLowerCase()
+  // A standalone SKILL.md is adapted to the same <name>/SKILL.md shape used by
+  // archives. This lets all subsequent validation and atomic-write logic stay
+  // shared and avoids a separate, less-safe file-writing path.
+  if (lower.endsWith('.md') && buffer.slice(0, 2).toString('utf8') !== 'PK') {
+    return { [`${filenameSkillName(filename, skillName)}/SKILL.md`]: new Uint8Array(buffer) }
+  }
+  if (buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b) {
+    let expanded: Buffer
+    try {
+      expanded = gunzipSync(buffer)
+    } catch (err) {
+      throw new SkillImportError(SKILL_IMPORT_ERRORS.BAD_FORMAT, `GZIP 解析失败（文件可能已损坏）: ${(err as Error).message}`)
+    }
+    // .gz is commonly a tarball, but accepting a gzipped SKILL.md is useful
+    // for drag-and-drop and remains subject to frontmatter validation.
+    if (expanded.slice(0, 2).toString('utf8') === 'PK') return extractArchive(expanded, filename.replace(/\.gz$/i, '.zip'), skillName)
+    if (expanded.length >= 512 && (expanded.subarray(257, 262).toString('ascii') === 'ustar' || /\.(?:tar|tgz|tar\.gz)$/i.test(lower))) {
+      return parseTar(expanded)
+    }
+    if (expanded.toString('utf8').startsWith('---')) {
+      return { [`${filenameSkillName(filename, skillName)}/SKILL.md`]: new Uint8Array(expanded) }
+    }
+    throw new SkillImportError(SKILL_IMPORT_ERRORS.BAD_FORMAT, 'GZIP 内容不是有效的 TAR 压缩包或 SKILL.md')
+  }
+  if (buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b) {
+    try {
+      return unzipSync(buffer)
+    } catch (err) {
+      throw new SkillImportError(SKILL_IMPORT_ERRORS.BAD_FORMAT, `ZIP 解析失败（文件可能已损坏）: ${(err as Error).message}`)
+    }
+  }
+  if (buffer.length >= 512 && (buffer.subarray(257, 262).toString('ascii') === 'ustar' || /\.(?:tar|tgz|tar\.gz)$/i.test(lower))) {
+    return parseTar(buffer)
+  }
+  throw new SkillImportError(SKILL_IMPORT_ERRORS.BAD_FORMAT, '文件格式不受支持，请上传 ZIP、TAR/TGZ/TAR.GZ 或 SKILL.md')
+}
+
 // ─── 单条目路径安全检查（zip-slip 防护）──────────────────────────────────────
 
 function safeEntryName(rawName: string): string | null {
@@ -153,6 +268,7 @@ export function runSkillImport(options: RunImportOptions): ImportSummary {
     importId,
     zipBuffer,
     filename,
+    skillName,
     skillsRoot,
     scope = 'project',
     conflictStrategy = 'versioned',
@@ -160,21 +276,10 @@ export function runSkillImport(options: RunImportOptions): ImportSummary {
     onProgress,
   } = options
 
-  // ── 1. 格式校验（magic number: PK\x03\x04）────────────────────────────────
+  // ── 1. 格式校验与归一化（ZIP/TAR/GZIP/standalone SKILL.md）───────────────
   onProgress?.({ progress: 5, stage: '校验压缩包格式' })
-  if (zipBuffer.length < 4 || zipBuffer[0] !== 0x50 || zipBuffer[1] !== 0x4b) {
-    throw new SkillImportError(SKILL_IMPORT_ERRORS.BAD_FORMAT, '文件不是有效的 ZIP 压缩包')
-  }
-
-  let entries: Record<string, Uint8Array>
-  try {
-    entries = unzipSync(zipBuffer)
-  } catch (err) {
-    throw new SkillImportError(
-      SKILL_IMPORT_ERRORS.BAD_FORMAT,
-      `ZIP 解析失败（文件可能已损坏）: ${(err as Error).message}`,
-    )
-  }
+  if (zipBuffer.length === 0) throw new SkillImportError(SKILL_IMPORT_ERRORS.BAD_FORMAT, '上传文件为空')
+  const entries = extractArchive(zipBuffer, filename, skillName)
 
   // 目录条目（以 / 结尾，macOS `zip -r` / Finder 压缩必带）与 macOS 元数据垃圾
   // （__MACOSX/、._* AppleDouble、.DS_Store）跳过；否则 extname 为空会被白名单拒绝，
@@ -222,7 +327,7 @@ export function runSkillImport(options: RunImportOptions): ImportSummary {
   for (const safeName of safeFiles.keys()) {
     if (safeName === 'SKILL.md') {
       // 根级单技能包：用 zip 文件名作为技能名
-      const base = filename.replace(/\.zip$/i, '').replace(/[^\w-]/g, '-') || 'imported-skill'
+      const base = filenameSkillName(filename, skillName)
       skillDirs.push({ name: base, prefix: '' })
       break
     }
@@ -244,13 +349,12 @@ export function runSkillImport(options: RunImportOptions): ImportSummary {
     }
     const skillMdKey = dir.prefix ? `${dir.prefix}/SKILL.md` : 'SKILL.md'
     const content = Buffer.from(safeFiles.get(skillMdKey)!).toString('utf-8')
-    const fm = parseFrontmatter(content)
-    if (!fm || !fm['name'] || !fm['description']) {
-      throw new SkillImportError(
-        SKILL_IMPORT_ERRORS.BAD_STRUCTURE,
-        `${dir.name}/SKILL.md 的 frontmatter 缺少必填字段（需要 name 与 description）`,
-      )
-    }
+    // Frontmatter is useful metadata, but it is not required for a skill to
+    // be usable. The registry already falls back to the directory/file name
+    // and a generated description, so imports should preserve ordinary
+    // Markdown documents instead of rejecting them for missing metadata.
+    // Keep only the structural and byte/path checks above as hard failures.
+    void parseFrontmatter(content)
   }
 
   // ── 5. 冲突检测 ────────────────────────────────────────────────────────────

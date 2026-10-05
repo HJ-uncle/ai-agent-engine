@@ -139,10 +139,10 @@ function AgentFormModal({ open, editing, onClose, onSaved }: AgentFormModalProps
       })
 
       // Load Knowledge Bases
-      knowledgeApi.listDocuments().then(data => {
-        setKnowledgeOptions(data.list.map((d: any) => ({
-          value: d.id,
-          label: d.filename || d.id
+      knowledgeApi.listBases().then(data => {
+        setKnowledgeOptions(data.map((base: any) => ({
+          value: base.id,
+          label: base.name || base.id
         })))
       }).catch(err => {
         console.error('Failed to load knowledge bases:', err)
