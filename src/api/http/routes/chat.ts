@@ -65,10 +65,13 @@ import { searchChunks } from '../../../storage/knowledge/kb-repo.js'
 import { ModelsStore } from '../../../storage/sqlite/models.js'
 import { resolveCapabilities, loadDbCapabilityOverrides } from '../../../core/model-capabilities/index.js'
 import { extractAndStoreMemories, buildMemoryRecallBlock } from '../../../middleware/memory/index.js'
+import { getSessionMemorySettings, setSessionMemoryScope, type MemoryMode } from '../../../storage/memory/settings.js'
 
 interface ChatBody {
   message: string
   sessionId?: string
+  /** Per-conversation memory policy. Omitted means the stored session policy/default. */
+  memoryScope?: MemoryMode
   agentId?: string
   systemPrompt?: string
   maxAskUserCount?: number
@@ -258,6 +261,53 @@ function makeAbortKey(tenantId: string, sessionId: string): string {
 const cancellationEpochs = new Map<string, number>()
 const pendingAdmissions = new Map<string, Set<Promise<void>>>()
 
+/**
+ * Wait until a previous tool batch has durably settled before accepting a
+ * pending answer.  A waiting frame can reach the client before sibling tool
+ * results have been persisted, so resuming immediately could race the old
+ * batch and duplicate or reorder history.
+ *
+ * Code runs are durable jobs and may contain long running commands.  The old
+ * fixed 30 second timeout turned a healthy long command into a spurious 409
+ * and forced the user to retry the answer.  Keep the bounded guard for the
+ * interactive profile, while Code waits for the producer's terminal event.
+ */
+export async function waitForPriorToolBatch(
+  prior: Pick<StreamBus, 'finished' | 'emitter'>,
+  toolProfile: string,
+): Promise<void> {
+  if (prior.finished) return
+  await new Promise<void>((resolve, reject) => {
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const cleanup = () => {
+      if (timer) clearTimeout(timer)
+      prior.emitter.off('end', finish)
+      prior.emitter.off('error', failed)
+    }
+    const finish = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve()
+    }
+    const failed = () => finish()
+
+    prior.emitter.once('end', finish)
+    prior.emitter.once('error', failed)
+    if (toolProfile !== 'code') {
+      timer = setTimeout(() => {
+        if (settled) return
+        settled = true
+        cleanup()
+        reject(Object.assign(new Error('Previous tool batch is still settling; retry this answer'), { statusCode: 409 }))
+      }, 30_000)
+    }
+    // The producer can finish between the initial check and listener setup.
+    if (prior.finished) finish()
+  })
+}
+
 export function registerActiveChat(tenantId: string, sessionId: string, controller: AbortController) {
   const key = makeAbortKey(tenantId, sessionId)
   // 如果已有同会话的旧流，先终止它
@@ -401,6 +451,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
           inlineAgent: { type: 'object' },
           inlineKnowledgeBases: { type: 'array' },
           inlineMemoriesXml: { type: 'string' },
+          memoryScope: { type: 'string', enum: ['off', 'global', 'session'] },
           metadata: { type: 'object' },
           extraHeaders: { type: 'object' }
         },
@@ -432,20 +483,14 @@ export async function chatRoutes(fastify: FastifyInstance) {
       }
       // The waiting frame may arrive before sibling result persistence finishes.
       const prior = activeStreams.get(makeAbortKey(getTenantId(request), resumeRecord.sessionId))
-      if (prior && !prior.finished) await new Promise<void>((resolve, reject) => {
-        const finish = () => { cleanup(); resolve() }
-        const failed = () => { cleanup(); resolve() }
-        const timer = setTimeout(() => { cleanup(); reject(Object.assign(new Error('Previous tool batch is still settling; retry this answer'), { statusCode: 409 })) }, 30_000)
-        const cleanup = () => { clearTimeout(timer); prior.emitter.off('end', finish); prior.emitter.off('error', failed) }
-        prior.emitter.once('end', finish); prior.emitter.once('error', failed)
-        if (prior.finished) finish()
-      })
+      if (prior && !prior.finished) await waitForPriorToolBatch(prior, toolProfile)
       request.body = { ...resumeRecord.request, message: '', sessionId: resumeRecord.sessionId,
         model: resumeRecord.modelId, workspacePaths: resumeRecord.workspacePaths, toolResponse: response } as ChatBody
     }
     const { 
       message, 
       sessionId = uuidv4(), 
+      memoryScope: requestedMemoryScope,
       agentId, 
       systemPrompt, 
       maxAskUserCount, 
@@ -479,6 +524,19 @@ export async function chatRoutes(fastify: FastifyInstance) {
     // Get tenant from auth context (set by auth middleware)
     const tenantId = getTenantId(request)
     const reqLogger = createRequestLogger(requestId, tenantId, sessionId)
+
+    // Memory policy is stored per tenant/session so a client that omits the
+    // field on a later turn cannot silently fall back to a different scope.
+    // An explicit request value updates the session policy for subsequent turns.
+    const storedMemorySettings = await getSessionMemorySettings(tenantId, sessionId, toolProfile as 'code' | 'general')
+    const selectedMemoryScope: MemoryMode = requestedMemoryScope ?? storedMemorySettings.memoryScope
+    if (requestedMemoryScope !== undefined && requestedMemoryScope !== storedMemorySettings.memoryScope) {
+      await setSessionMemoryScope(tenantId, sessionId, requestedMemoryScope)
+    }
+    const effectiveMemoryScope: MemoryMode = process.env.ENABLE_LONG_TERM_MEMORY === 'false'
+      ? 'off'
+      : selectedMemoryScope
+    reqLogger.info({ memoryScope: selectedMemoryScope, effectiveMemoryScope }, 'Conversation memory policy resolved')
 
     // ── 会话 Agent 锁定校验 ────────────────────────────────────────────────────
     // 会话一旦发送过第一条消息，就锁定绑定的 agentId，后续不允许切换。
@@ -634,6 +692,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     const { registry, externalSkills, toolCategories } = await createToolRegistry({
       toolProfile,
       securityContext: { tenantId, sessionId, toolProfile },
+      memoryScope: effectiveMemoryScope,
       allowedSkills,
       allowedTools,
       inlineSkills: requestedInlineSkills,
@@ -644,7 +703,9 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
     const abortController = new AbortController()
 
-    const streamBus = new StreamBus(abortController)
+    // Code runs are durable root jobs: an SSE viewer may disconnect while the
+    // model/tools continue working and reconnect through /chat/stream later.
+    const streamBus = new StreamBus(abortController, { retainOnDisconnect: toolProfile === 'code' })
     // Published only after the root run has been claimed below.
 
     // ── 客户端断开检测：给予重连宽限期 ───────────────────────────────────────
@@ -652,6 +713,10 @@ export async function chatRoutes(fastify: FastifyInstance) {
     const onClientClose = () => {
       if (aborted || streamBus.finished) return
       aborted = true
+      if (streamBus.retainOnDisconnect) {
+        reqLogger.info({ sessionId }, 'Client connection closed; retaining Code run for replay')
+        return
+      }
       reqLogger.info({ sessionId }, 'Client connection closed, entering grace period')
       streamBus.disconnectTimeout = setTimeout(() => {
         if (streamBus.emitter.listenerCount('data') > 0) return
@@ -660,10 +725,23 @@ export async function chatRoutes(fastify: FastifyInstance) {
     }
     reply.raw.on('close', onClientClose)
     request.raw.on('aborted', onClientClose)
+    const cleanupRequestListeners = (options: { clearDisconnectTimeout?: boolean } = {}) => {
+      reply.raw.off('close', onClientClose)
+      request.raw.off('aborted', onClientClose)
+      // A non-Code viewer disconnect starts a grace timer.  The SSE sink
+      // returns immediately after the socket closes, so keep that timer alive
+      // until the producer finishes or the timer aborts it.  Clearing it here
+      // would turn a transient disconnect into an unbounded background run.
+      if (options.clearDisconnectTimeout !== false && streamBus.disconnectTimeout) {
+        clearTimeout(streamBus.disconnectTimeout)
+        streamBus.disconnectTimeout = null
+      }
+    }
 
     // Build agent context
     const ctx = createAgentContext({
       toolProfile,
+      memoryScope: effectiveMemoryScope,
       sessionId,
       tenantId,
       workspacePaths,
@@ -678,7 +756,9 @@ export async function chatRoutes(fastify: FastifyInstance) {
     ctx.emitSubagentEvent = (event) => { streamBus.push('\x00__subagent_event__' + JSON.stringify(event)) }
     ctx.rootSessionId = sessionId
     // Spend accounting is shared by parent/children and independent of context capacity.
-    const requestBudget = new RequestBudget(parseRequestTokenLimit(process.env.AGENT_TOTAL_TOKEN_LIMIT))
+    // Code mode must not inherit an operator's cumulative token cap. The
+    // provider and the model context window remain the only physical limits.
+    const requestBudget = new RequestBudget(toolProfile === 'code' ? Infinity : parseRequestTokenLimit(process.env.AGENT_TOTAL_TOKEN_LIMIT))
     ctx.requestBudget = requestBudget
     ctx.onRequestAttempt = (event) => requestBudget.observe(event)
     const skillsPrompt = buildSkillsSystemPrompt(externalSkills)
@@ -711,7 +791,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
     // ── 客户端透传用户长期记忆（lobster-core buildAllMemoriesXml 直出）──────────
     let inlineMemoriesBlock = ''
-    if (toolProfile !== 'code' && typeof requestedInlineMemoriesXml === 'string' && requestedInlineMemoriesXml.trim()) {
+    if (effectiveMemoryScope !== 'off' && typeof requestedInlineMemoriesXml === 'string' && requestedInlineMemoriesXml.trim()) {
       inlineMemoriesBlock =
         '\n\n## 用户长期记忆（User Memories）\n' +
         '以下记忆由客户端持久化并随每次会话同步，可作为回答的上下文参考：\n' +
@@ -892,13 +972,15 @@ export async function chatRoutes(fastify: FastifyInstance) {
       thinkingMode === 'low' || thinkingMode === 'medium' || thinkingMode === 'high'
         ? thinkingMode
         : undefined
+    const thinkingEnabled = thinkingMode === false ? false
+      : thinkingMode === true || effortTier !== undefined ? true : undefined
     const wantThinking =
       thinkingMode === true ||
       effortTier !== undefined ||
       (thinkingMode !== false && modelCaps.thinking === true)
     // 请求级 effort 优先；未指定时强制开启走 high、能力驱动走 env 配置（缺省 medium）
     const effectiveReasoningEffort: 'low' | 'medium' | 'high' | undefined =
-      effortTier ??
+      thinkingEnabled === false ? undefined : effortTier ??
       (thinkingMode === true
         ? 'high'
         : (process.env.REASONING_EFFORT as 'low' | 'medium' | 'high' | undefined) ?? 'medium')
@@ -926,7 +1008,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     }
 
     // 并行执行 RAG 和 记忆检索
-    const enableMemory = toolProfile !== 'code' && process.env.ENABLE_LONG_TERM_MEMORY !== 'false'
+    const enableMemory = effectiveMemoryScope !== 'off'
     const [ragChunks, memoryRecallBlock] = await Promise.all([
       (async () => {
         return await searchChunks(tenantId, plainTextQuery, ragTopK, boundKnowledgeBases ?? (toolProfile === 'code' ? [] : undefined))
@@ -936,7 +1018,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
         apiKey: modelApiKey,
         baseUrl: modelBaseUrl,
         provider: modelProvider,
-      }) : Promise.resolve('')
+      }, { sessionId, scope: effectiveMemoryScope === 'session' ? 'session' : 'global' }) : Promise.resolve('')
     ])
     
     let ragPrompt = ''
@@ -1032,7 +1114,9 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
     const admissions = pendingAdmissions.get(admissionKey) ?? new Set<Promise<void>>()
     admissions.add(pendingAdmission)
     pendingAdmissions.set(admissionKey, admissions)
-    const admission = await (async () => {
+    let admission: 'duplicate' | 'stopped' | 'started'
+    try {
+      admission = await (async () => {
       try {
         if (toolResponse) {
           const accepted = await rootRunStore.answer(tenantId, sessionId, toolResponse.runId, toolResponse.requestId, toolResponse.toolCallId, toolResponse.name, toolResponse.output)
@@ -1093,13 +1177,23 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
         if (!admissions.size) pendingAdmissions.delete(admissionKey)
         finishAdmission()
       }
-    })()
+      })()
+    } catch (error) {
+      // Admission can fail before the SSE producer is attached (for example
+      // after a restart or a database error). Do not leave request listeners or
+      // a disconnect timer retaining the request and stream bus indefinitely.
+      cleanupRequestListeners()
+      throw error
+    }
     if (admission === 'duplicate') {
       async function* duplicate() { yield '\x00__run__' + JSON.stringify(rootRun) }
-      await sseStream(duplicate(), reply)
+      try { await sseStream(duplicate(), reply) } finally { cleanupRequestListeners() }
       return
     }
-    if (admission === 'stopped') { await sseStream(busToIterable(streamBus), reply); return }
+    if (admission === 'stopped') {
+      try { await sseStream(busToIterable(streamBus), reply) } finally { cleanupRequestListeners() }
+      return
+    }
     let assistantResponse = ''
     let reasoningContent = ''
     let finalUsage: any = null
@@ -1133,15 +1227,17 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
         ctx.resolvedModel = await resolveModelConfig({ tenantId, model: resolvedModel, overrides: {
           apiKey: modelApiKey, baseUrl: modelBaseUrl, provider: modelProvider,
           capabilities: modelCaps, extraHeaders: requestedExtraHeaders,
-          thinkingConfig: finalThinkingConfig, responseThinkingField: finalResponseThinkingField,
+          thinkingEnabled, thinkingConfig: finalThinkingConfig, responseThinkingField: finalResponseThinkingField,
         } })
         const llm = createAdapterFromResolved(ctx.resolvedModel)
         const strategy = new ReActStrategy(llm, {
           systemPrompt: fullSystemPrompt || undefined,
           temperature: effectiveTemperature,
+          unboundedCode: toolProfile === 'code',
           maxAskUserCount,
           conversationId,
           promptBreakdown: { systemPromptTokens, systemToolsTokens, skillTokens, ragTokens, builtinToolsTokens, mcpToolsTokens },
+          thinkingEnabled,
           thinkingConfig: finalThinkingConfig,
           responseThinkingField: finalResponseThinkingField,
           reasoningEffort: effectiveReasoningEffort,
@@ -1229,7 +1325,8 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
         })
 
         setImmediate(() => {
-          // Reuse the request's capability decision; code runs must not write memories in the background.
+          // Reuse the request's capability decision; an explicit conversation
+          // memory policy also applies to code-profile runs.
           if (enableMemory) {
             extractAndStoreMemories({
               messages: fullHistory.map((m: any) => ({
@@ -1238,6 +1335,7 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
               })),
               sessionId,
               tenantId,
+              memoryScope: effectiveMemoryScope === 'session' ? 'session' : 'global',
               llm: {
                 model: resolvedModel,
                 apiKey: modelApiKey,
@@ -1301,6 +1399,10 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
           error: { code: 'CHAT_FAILED', message: err instanceof Error ? err.message : String(err), retryable: false } }, attemptId))
         streamBus.error(err)
       } finally {
+        if (streamBus.disconnectTimeout) {
+          clearTimeout(streamBus.disconnectTimeout)
+          streamBus.disconnectTimeout = null
+        }
         unregisterActiveChat(tenantId, sessionId, abortController)
         setTimeout(() => {
           const key = makeAbortKey(tenantId, sessionId)
@@ -1312,7 +1414,9 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
     try {
       await sseStream(busToIterable(streamBus), reply)
     } finally {
-      // 这里的 finally 只代表请求结束，不清理 activeChatAborters
+      // The stream bus owns the durable producer; these request-local listeners
+      // must still be detached after every viewer disconnects or completes.
+      cleanupRequestListeners({ clearDisconnectTimeout: !aborted })
     }
   })
 
@@ -1425,6 +1529,7 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
     const onClientClose = () => {
       if (aborted || streamBus.finished) return
       aborted = true
+      if (streamBus.retainOnDisconnect) return
       streamBus.disconnectTimeout = setTimeout(() => {
         if (streamBus.emitter.listenerCount('data') > 0) return
         try { streamBus.abortController.abort(new Error('Client disconnected timeout')) } catch {}
@@ -1433,6 +1538,11 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
     reply.raw.on('close', onClientClose)
     request.raw.on('aborted', onClientClose)
 
-    await sseStream(source, reply)
+    try {
+      await sseStream(source, reply)
+    } finally {
+      reply.raw.off('close', onClientClose)
+      request.raw.off('aborted', onClientClose)
+    }
   })
 }

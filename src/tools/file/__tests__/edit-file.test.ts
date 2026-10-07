@@ -18,6 +18,7 @@ let ctx: AgentContext
 let store: ChangeStore
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-d6-edit-'))
+  vi.stubEnv('DATA_DIR', path.join(root, 'agent.db'))
   db = createClient({ url: 'file::memory:' })
   vi.spyOn(database, 'getDb').mockReturnValue(db)
   store = new ChangeStore()
@@ -33,6 +34,7 @@ afterEach(() => {
   vi.restoreAllMocks()
   if (path.dirname(root) !== path.resolve(os.tmpdir()) || !path.basename(root).startsWith('aether-d6-edit-')) throw new Error('Unsafe fixture path')
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 })
+  vi.unstubAllEnvs()
 })
 
 function seed(content: string | Buffer = 'alpha=1\r\nbeta=2\r\n', name = 'file.txt') {
@@ -103,7 +105,6 @@ describe('D6 exact text edits with full byte versions', () => {
     { name: 'empty edit list', content: 'alpha', edits: [], code: 'EDIT_INVALID_ARGUMENTS' },
     { name: 'binary replacement', content: 'alpha', edits: [{ oldText: 'alpha', newText: 'new\0value' }], code: 'EDIT_NOT_TEXT' },
     { name: 'invalid unicode replacement', content: 'alpha', edits: [{ oldText: 'alpha', newText: '\ud800' }], code: 'EDIT_NOT_TEXT' },
-    { name: 'oversized replacement', content: 'alpha', edits: [{ oldText: 'alpha', newText: 'x'.repeat(100_001) }], code: 'EDIT_FILE_TOO_LARGE' },
   ])('rejects $name before any file or record mutation', async ({ content, edits, code }) => {
     const { file, expectedHash } = seed(content)
     const before = fs.statSync(file)
@@ -129,13 +130,25 @@ describe('D6 exact text edits with full byte versions', () => {
     { name: 'invalid.txt', content: Buffer.from([0xff, 0xfe, 0x61]), code: 'EDIT_NOT_TEXT' },
     { name: 'binary.txt', content: Buffer.from([0x61, 0x00, 0x62]), code: 'EDIT_NOT_TEXT' },
     { name: 'pretend.pdf', content: Buffer.from('alpha'), code: 'EDIT_NOT_TEXT' },
-    { name: 'large.txt', content: Buffer.from('x'.repeat(100_001)), code: 'EDIT_FILE_TOO_LARGE' },
   ])('rejects unsupported source $name with no mutation', async ({ name, content, code }) => {
     const { file, expectedHash } = seed(content, name)
     const result = await editFileTool.execute({ path: file, expectedHash, edits: [{ oldText: 'a', newText: 'b' }] }, ctx)
     expect(result).toMatchObject({ success: false, error: code })
     expect(fs.readFileSync(file)).toEqual(content)
     expect(await store.list(ctx.tenantId, ctx.sessionId)).toEqual([])
+  })
+
+  it('edits and reverts a text file larger than the legacy 100KB snapshot limit', async () => {
+    const original = `${'x'.repeat(100_000)}\nUNIQUE_TARGET\n${'y'.repeat(10_000)}`
+    const { file, expectedHash } = seed(original, 'large.txt')
+    const result = await editFileTool.execute({ path: file, expectedHash,
+      edits: [{ oldText: 'UNIQUE_TARGET', newText: 'UPDATED_TARGET' }] }, ctx)
+    expect(result.success).toBe(true)
+    expect(result.change).toMatchObject({ truncated: true, oldContent: null, newContent: null,
+      oldHash: expectedHash, newHash: hashFileContent(fs.readFileSync(file)), oldSnapshotRef: expect.any(String) })
+    const rollback = await store.revertBatch(ctx.tenantId, { sessionId: ctx.sessionId, ids: [String(result.change!.id)] })
+    expect(rollback).toMatchObject({ total: 1, reverted: 1, failed: 0, unavailable: 0 })
+    expect(fs.readFileSync(file, 'utf8')).toBe(original)
   })
 
   it('rejects missing files, directories and traversal outside the safe workspace', async () => {

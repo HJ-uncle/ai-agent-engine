@@ -180,6 +180,24 @@ describe('SubagentRunner: typed outcome and durable lifecycle', () => {
     expect(run.partialOutput).toBe('已经读取项目入口')
   })
 
+  it('keeps a Code child alive until explicit cancellation when no deadline is configured', async () => {
+    vi.stubEnv('SUBAGENT_DEADLINE_MS', '')
+    ;(parent as unknown as { toolProfile: string }).toolProfile = 'code'
+    let started = false
+    let runId = ''
+    const result = runner.run(input(), parent, async ({ signal, snapshot, observer }) => {
+      started = true
+      runId = snapshot.runId
+      await observer.onOutput?.('持续工作中')
+      await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }))
+    })
+    await vi.waitFor(() => expect(started).toBe(true))
+    await new Promise(resolve => setTimeout(resolve, 75))
+    expect((await store.getRun('tenant-a', runId))?.status).toBe('running')
+    await runner.cancel('tenant-a', runId, 'test_cancel')
+    expect((await result).status).toBe('cancelled')
+  })
+
   it('bounds stored summaries and flushes partial output at terminal failure', async () => {
     const text = 'A'.repeat(20_000)
     const run = await runner.run(input(), parent, async ({ observer }) => {

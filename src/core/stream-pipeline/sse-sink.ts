@@ -15,8 +15,9 @@ export async function sseStream(source: AsyncIterable<SseEventPayload | string>,
   let clientGone = false
   let returned = false
   let heartbeat: ReturnType<typeof setTimeout> | undefined
-  let disconnect!: () => void
-  const disconnected = new Promise<null>(resolve => { disconnect = () => resolve(null) })
+  // Create a fresh wake-up promise for each pending read. Reusing one promise
+  // for the whole stream leaves one reaction attached per frame on long runs.
+  let wakeDisconnected: (() => void) | undefined
   const returnSource = () => {
     if (returned) return
     returned = true
@@ -26,7 +27,7 @@ export async function sseStream(source: AsyncIterable<SseEventPayload | string>,
   const onClientClose = () => {
     clientGone = true
     if (heartbeat) clearTimeout(heartbeat)
-    disconnect()
+    wakeDisconnected?.()
     returnSource()
   }
   reply.raw.once('error', onClientClose)
@@ -61,7 +62,10 @@ export async function sseStream(source: AsyncIterable<SseEventPayload | string>,
 
   try {
     while (!clientGone) {
-      const next = await Promise.race([iterator.next(), disconnected])
+      let wake!: Promise<null>
+      wake = new Promise<null>(resolve => { wakeDisconnected = () => resolve(null) })
+      const next = await Promise.race([iterator.next(), wake])
+      if (wakeDisconnected) wakeDisconnected = undefined
       if (next === null || next.done || clientGone) break
       const item = next.value
       const chunk = typeof item === 'string' ? item : item.chunk

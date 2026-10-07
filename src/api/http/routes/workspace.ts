@@ -11,6 +11,16 @@ import { withFileLocks } from '../../../shared/file-version.js'
 
 const execFileAsync = promisify(execFile)
 
+// Keep remote binary previews within the same memory budget as the embedded
+// file service.  The client only needs a small sample to classify a file; a
+// large binary is reported as tooLarge instead of being base64-expanded.
+const BINARY_SAMPLE_BYTES = 8 * 1024
+const MAX_BINARY_BYTES = 32 * 1024 * 1024
+const KNOWN_BINARY_EXTENSIONS = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'avif', 'apng',
+  'mp4', 'm4v', 'webm', 'ogv', 'mov', 'pdf', 'zip', 'tar', 'gz'
+])
+
 interface FileInfo {
   name: string
   path: string
@@ -33,6 +43,43 @@ interface WorkspaceItem {
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
 
 export async function workspaceRoutes(fastify: FastifyInstance) {
+  // The client may select a server directory only when it is inside the
+  // engine's operator-declared AETHER_ALLOWED_WORKSPACE_ROOTS.
+  fastify.post<{ Body: { sessionId: string; workspaceRoot: string } }>('/workspace/bind', async (request, reply) => {
+    const tenantId = getTenantId(request)
+    const { sessionId, workspaceRoot } = request.body ?? ({} as any)
+    if (!sessionId || !workspaceRoot) return reply.code(200).send(fail(40001, 'sessionId and workspaceRoot are required'))
+    try {
+      return reply.code(200).send(success({ workspaceRoot: workspaceManager.bind({ tenantId, sessionId }, workspaceRoot) }))
+    } catch (e: any) {
+      return reply.code(200).send(fail(40300, e?.message ?? '无法绑定远端工作区'))
+    }
+  })
+
+  // Directory-scoped listing used by the IDE. Unlike /workspace/files this
+  // endpoint is lazy and preserves hidden files; the manager still enforces
+  // the bound session workspace for every path.
+  fastify.get<{ Querystring: { sessionId?: string; path?: string } }>('/workspace/directory', async (request, reply) => {
+    const tenantId = getTenantId(request)
+    const sessionId = request.query.sessionId || 'default'
+    const relative = request.query.path || '.'
+    try {
+      const dir = workspaceManager.resolveSafePath({ tenantId, sessionId }, relative)
+      const stat = await fsp.stat(dir)
+      if (!stat.isDirectory()) return reply.code(200).send(fail(40000, 'path is not a directory'))
+      const entries = (await fsp.readdir(dir, { withFileTypes: true })).filter(entry => !entry.isSymbolicLink()).map(entry => ({
+        name: entry.name,
+        path: path.relative(workspaceManager.getWorkingDirectory({ tenantId, sessionId }), path.join(dir, entry.name)).replace(/\\/g, '/'),
+        isDirectory: entry.isDirectory(),
+        size: entry.isFile() ? fs.statSync(path.join(dir, entry.name)).size : 0,
+        mtimeMs: fs.statSync(path.join(dir, entry.name)).mtimeMs
+      }))
+      return reply.code(200).send(success({ root: workspaceManager.getWorkingDirectory({ tenantId, sessionId }), entries }))
+    } catch (e: any) {
+      return reply.code(200).send(fail(40400, e?.message ?? '无法读取远端目录'))
+    }
+  })
+
   // GET /workspace/files
   // Returns a tree of files and directories in the current workspace
   fastify.get<{ Querystring: { sessionId?: string } }>('/workspace/files', async (request, reply) => {
@@ -46,10 +93,11 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
     }
 
     function buildTree(dir: string, name: string): WorkspaceItem {
-      const stats = fs.statSync(dir)
+      const stats = fs.lstatSync(dir)
+      if (stats.isSymbolicLink()) return { name, type: 'file', size: 0, path: path.relative(baseDir, dir) }
       if (stats.isDirectory()) {
         const children = fs.readdirSync(dir)
-          .filter(f => !f.startsWith('.'))
+          .filter(f => !f.startsWith('.') && !fs.lstatSync(path.join(dir, f)).isSymbolicLink())
           .map(f => buildTree(path.join(dir, f), f))
         return { name, type: 'dir', children, path: path.relative(baseDir, dir) }
       }
@@ -118,8 +166,7 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
         isImage,
         workspacePath: safePath
       }
-      
-      return reply.code(200).send(success(fileInfo))
+      return reply.code(200).send(success({ ...fileInfo, isDirectory: stat.isDirectory(), mtimeMs: stat.mtimeMs }))
     } catch (e: any) {
       return reply.code(200).send(fail(50000, `Failed to get file info: ${e.message}`))
     }
@@ -137,11 +184,20 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
       if (!fs.existsSync(safePath)) return reply.code(200).send(fail(40400, 'File not found'))
       
       const stat = fs.statSync(safePath)
-      const ext = path.extname(safePath).toLowerCase()
-      const isBinary = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.pdf', '.zip', '.tar', '.gz'].includes(ext)
+      const ext = path.extname(safePath).toLowerCase().slice(1)
+      // Match the embedded service's NUL-byte probe while recognizing common
+      // media formats whose first sample may contain no NUL byte at all.
+      const sample = Buffer.alloc(Math.min(BINARY_SAMPLE_BYTES, stat.size))
+      if (sample.length > 0) {
+        const descriptor = fs.openSync(safePath, 'r')
+        try { fs.readSync(descriptor, sample, 0, sample.length, 0) } finally { fs.closeSync(descriptor) }
+      }
+      const isBinary = sample.includes(0) || KNOWN_BINARY_EXTENSIONS.has(ext)
       
       if (isBinary) {
-        // 二进制文件直接返回，大小已经在之前 FileCard 里有显示
+        if (stat.size > MAX_BINARY_BYTES) {
+          return reply.code(200).send(success({ content: '', isBinary, totalSize: stat.size, tooLarge: true, truncated: false }))
+        }
         const content = fs.readFileSync(safePath, 'base64')
         return reply.code(200).send(success({ content, isBinary, totalSize: stat.size }))
       } else {
@@ -152,11 +208,12 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
         const MAX_TEXT_SIZE = 500 * 1024 // 500KB
 
         // 仅在超过 500KB 时截断，避免浏览器/网络传输过大
-        if (content.length > MAX_TEXT_SIZE) {
+        const truncated = content.length > MAX_TEXT_SIZE
+        if (truncated) {
           content = content.slice(0, MAX_TEXT_SIZE) + '\n\n... (截断，完整大小: ' + originalSize + ' 字节)'
         }
         
-        return reply.code(200).send(success({ content, isBinary, totalSize: stat.size, originalLength }))
+        return reply.code(200).send(success({ content, isBinary, totalSize: stat.size, originalLength, truncated }))
       }
     } catch (e: any) {
       return reply.code(200).send(fail(50000, `Failed to read file: ${e.message}`))
@@ -249,6 +306,23 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
       return reply.code(200).send(success({ path: filePath, size: buffer.length }))
     } catch (e: any) {
       return reply.code(200).send(fail(50000, `Failed to write file: ${e.message}`))
+    }
+  })
+
+  fastify.post<{ Body: { sessionId: string; srcPath: string; destPath: string } }>('/workspace/file/copy', async (request, reply) => {
+    const tenantId = getTenantId(request)
+    const { sessionId, srcPath, destPath } = request.body
+    if (!sessionId || !srcPath || !destPath) return reply.code(200).send(fail(40001, 'sessionId, srcPath and destPath are required'))
+    try {
+      const source = workspaceManager.resolveSafePath({ tenantId, sessionId }, srcPath)
+      const destination = workspaceManager.resolveSafePath({ tenantId, sessionId }, destPath)
+      if (!fs.existsSync(source)) return reply.code(200).send(fail(40400, 'Source not found'))
+      if (fs.existsSync(destination)) return reply.code(200).send(fail(40000, 'Destination already exists'))
+      await fsp.mkdir(path.dirname(destination), { recursive: true })
+      await fsp.cp(source, destination, { recursive: true, errorOnExist: true })
+      return reply.code(200).send(success({ path: destPath }))
+    } catch (e: any) {
+      return reply.code(200).send(fail(50000, `Failed to copy: ${e?.message ?? e}`))
     }
   })
 

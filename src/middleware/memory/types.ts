@@ -1,4 +1,4 @@
-import type { MemoryNodeType } from '../../storage/memory/types.js'
+import type { MemoryNodeType, MemoryScope } from '../../storage/memory/types.js'
 
 export interface MemoryExtractorOptions {
   enabled: boolean
@@ -18,6 +18,7 @@ export interface ExtractedMemory {
 export interface MemoryExtractContext {
   sessionId: string
   tenantId: string
+  scope?: MemoryScope
   messages: Array<{ role: string; content: string }>
 }
 

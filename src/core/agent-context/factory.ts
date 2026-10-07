@@ -47,9 +47,10 @@ export function createAgentContext(options: CreateAgentContextOptions): AgentCon
   // window (120000)"，而模型真实窗口远大于此，或者能力表本身就低估了窗口）。
   // 让人为推导出来的预算去限制实际可用空间是本末倒置：没有显式配置时不注入预算，
   // 由模型窗口/服务端决定上限，避免"引擎比模型更早拒答"。
-  const hasExplicitBudget = typeof options.tokenBudget === 'number'
+  const unboundedCode = options.toolProfile === 'code'
+  const hasExplicitBudget = !unboundedCode && typeof options.tokenBudget === 'number'
   const configuredBudget = parseInt(process.env.TOKEN_BUDGET ?? '', 10)
-  const hasEnvBudget = Number.isFinite(configuredBudget) && configuredBudget > 0
+  const hasEnvBudget = !unboundedCode && Number.isFinite(configuredBudget) && configuredBudget > 0
   const tokenBudget = hasExplicitBudget
     ? (options.tokenBudget as number)
     : hasEnvBudget

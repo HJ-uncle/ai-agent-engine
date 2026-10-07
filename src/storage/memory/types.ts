@@ -16,9 +16,13 @@ export type MemoryEdgeType =
   | 'similar_to'
   | 'tagged_with'
 
+/** The visibility boundary used by every memory operation. */
+export type MemoryScope = 'global' | 'session'
+
 export interface MemoryNode {
   id: string
   tenantId: string
+  scope: MemoryScope
   sessionId: string
   type: MemoryNodeType
   timestamp: number
@@ -46,6 +50,8 @@ export interface MemoryNode {
 export interface MemoryEdge {
   id: string
   tenantId: string
+  scope: MemoryScope
+  sessionId: string
   sourceNodeId: string
   targetNodeId: string
   type: MemoryEdgeType
@@ -124,6 +130,8 @@ export interface MemoryNodeFilter {
 export interface MemoryContext {
   tenantId: string
   sessionId: string
+  /** Defaults to global to preserve the pre-scope API behaviour. */
+  scope?: MemoryScope
 }
 
 // ─── MemoryManager Interface ─────────────────────────────────────────────────

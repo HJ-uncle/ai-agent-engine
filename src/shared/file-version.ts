@@ -13,8 +13,12 @@ export function canonicalFilePathSync(filePath: string): string {
   const suffix: string[] = []
   for (;;) {
     try {
-      const resolved = path.join(fs.realpathSync.native(cursor), ...suffix)
-      return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+      // Preserve the filesystem's spelling for I/O and user-visible change
+      // records.  Windows paths are case-insensitive, but lower-casing this
+      // value changes the name of a newly-created file (for example
+      // `App.tsx` became `app.tsx`).  Case folding belongs only to the lock
+      // identity below.
+      return path.join(fs.realpathSync.native(cursor), ...suffix)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       // realpath also returns ENOENT for dangling symlinks. Treating such a link
@@ -75,11 +79,14 @@ export async function withFileLocks<T>(
   action: (canonicalPaths: readonly string[]) => Promise<T>
 ): Promise<T> {
   const canonicalPaths = paths.map(canonicalFilePathSync)
-  const keys = [...new Set(canonicalPaths)].sort()
+  // Lock identity is case-insensitive on Windows; the paths passed to the
+  // callback retain their real spelling so writes and change records do too.
+  const keyFor = (value: string): string => process.platform === 'win32' ? value.toLowerCase() : value
+  const keys = [...new Set(canonicalPaths.map(keyFor))].sort()
   const releases: Array<() => void> = []
   try {
     for (const key of keys) releases.push(await acquire(key))
-    if (paths.some((filePath, index) => canonicalFilePathSync(filePath) !== canonicalPaths[index])) {
+    if (paths.some((filePath, index) => keyFor(canonicalFilePathSync(filePath)) !== keyFor(canonicalPaths[index]))) {
       throw new Error('File path target changed while waiting for its lock')
     }
     return await action(canonicalPaths)

@@ -104,14 +104,21 @@ export const getCurrentContextTool: Tool = {
         }
       }
 
-      // Code sessions use project context; do not open the general-purpose memory store for them.
-      if (ctx.toolProfile !== 'code') {
+      // Code conversations access memory only after an explicit per-conversation selection.
+      if (ctx.memoryScope !== 'off' && (ctx.toolProfile !== 'code' || ctx.memoryScope !== undefined)) {
         contextInfo.push(``)
         contextInfo.push(`### 记忆信息`)
         try {
           const { SQLiteMemoryManager } = await import('../../storage/memory/memory-manager.js')
           const manager = new SQLiteMemoryManager()
-          const memories = await manager.listNodes({ limit: 5, orderBy: 'timestamp', orderDir: 'DESC' }, { tenantId: ctx.tenantId, sessionId: ctx.sessionId })
+          // Memory visibility follows the context that is executing the tool.
+          // A subagent carries rootSessionId for run lineage, but that value is
+          // not its conversation scope; using it here would expose parent
+          // session memories while memory tools correctly use ctx.sessionId.
+          const memories = await manager.listNodes({ limit: 5, orderBy: 'timestamp', orderDir: 'DESC' }, {
+            tenantId: ctx.tenantId, sessionId: ctx.sessionId,
+            ...(ctx.memoryScope ? { scope: ctx.memoryScope } : {}),
+          })
           contextInfo.push(`**已存储近期记忆**\n`)
           for (const mem of memories) {
             const value = typeof mem.summary === 'string' ? mem.summary.slice(0, 80) : ''

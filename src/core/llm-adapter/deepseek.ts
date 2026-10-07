@@ -1,3 +1,4 @@
+import { isThinkingDisabled } from './thinking.js'
 import { abortableDelay, isAbortError, throwIfAborted } from '../utils/abort.js'
 /**
  * DeepSeek 专有通道适配器
@@ -110,16 +111,22 @@ export class DeepSeekAdapter extends OpenAIAdapter {
   /** 把 DeepSeek 默认参数注入到 LLMAdapterOptions */
   private wrapOptions(options?: LLMAdapterOptions): LLMAdapterOptions {
     const model = options?.model ?? this.model
+    // `null` is an explicit opt-out used by one-shot utility calls.  Keeping
+    // the distinction between an omitted option and `null` prevents the
+    // adapter's model-name heuristic from silently turning reasoning back on
+    // after the caller requested a visible, low-latency answer.
+    const thinkingConfigExplicit = options != null && Object.prototype.hasOwnProperty.call(options, 'thinkingConfig')
+    const responseThinkingFieldExplicit = options != null && Object.prototype.hasOwnProperty.call(options, 'responseThinkingField')
     const wrapped: LLMAdapterOptions = {
       ...(options ?? { model }),
       includeStreamUsage: options?.includeStreamUsage ?? this.dsOptions.includeStreamUsage,
       responseFormat: options?.responseFormat ?? (this.dsOptions.defaultJsonMode ? 'json' : undefined),
       // R1/reasoner 模型默认拿到 reasoning_content
-      responseThinkingField: options?.responseThinkingField ?? 'reasoning_content',
+      responseThinkingField: responseThinkingFieldExplicit ? options?.responseThinkingField : 'reasoning_content',
     }
 
     // 自动 thinking-mode（reasoner 模型）
-    if (this.dsOptions.autoThinking && DeepSeekAdapter.isReasoner(model)) {
+    if (!isThinkingDisabled(options) && this.dsOptions.autoThinking && DeepSeekAdapter.isReasoner(model) && (!thinkingConfigExplicit || options?.thinkingConfig !== null)) {
       const baseThinking = (options?.thinkingConfig as Record<string, unknown> | null) ?? {}
       wrapped.thinkingConfig = {
         ...baseThinking,

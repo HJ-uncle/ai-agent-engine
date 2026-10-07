@@ -44,7 +44,7 @@ describe('SQLite compaction preserves retained message identity', () => {
       { id: 'current-user', role: 'user', content: 'Continue this precise turn', tokens: 10,
         conversationId: 'current-turn', metadata: { rootRunId: 'current-run', turnId: 'current-turn', attachments: [{ name: '设计.md', type: 'text/markdown' }] } },
       { id: 'current-tool-call', role: 'assistant', content: 'Editing the file.', reasoningContent: 'Keep the specified target.',
-        toolCall: { id: 'edit-1', name: 'write_file', args: { path: 'file.txt', content: 'updated' } }, toolCallId: 'edit-1',
+        toolCall: { id: 'edit-1', name: 'write_file', args: { path: 'file.txt', data: 'updated' } }, toolCallId: 'edit-1',
         modelId: 'actual-fallback-model', usage: { promptTokens: 9, completionTokens: 1, totalTokens: 10 }, tokens: 10,
         conversationId: 'current-turn', metadata: { rootRunId: 'current-run', turnId: 'current-turn' } },
       { id: 'current-tool-result', role: 'tool', content: 'File updated', toolCallId: 'edit-1', toolName: 'write_file', tokens: 10,

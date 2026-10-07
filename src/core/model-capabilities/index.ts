@@ -140,7 +140,7 @@ const DEFAULT_RULES: CapabilityRule[] = [
   },
   {
     id: 'deepseek:reasoner',
-    match: { model: [/deepseek.*reasoner/i, /deepseek.*r1/i, /v4[.-]?(pro|flash)/i, /v3.*think/i] },
+    match: { model: [/deepseek.*reasoner/i, /deepseek.*r1/i, /v4(?:\.\d+)?[.-]?(pro|flash)/i, /v3.*think/i] },
     caps: { thinking: true },
   },
 

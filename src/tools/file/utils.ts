@@ -73,7 +73,9 @@ export function listRecursive(baseDir: string, currentDir: string): string[] {
   for (const name of fs.readdirSync(currentDir)) {
     const fullPath = path.join(currentDir, name)
     const rel = path.relative(baseDir, fullPath)
-    const stat = fs.statSync(fullPath)
+    // Treat symlinks as leaf entries so a workspace link cannot create a
+    // recursive cycle or make list_files escape the requested tree.
+    const stat = fs.lstatSync(fullPath)
     if (stat.isDirectory()) {
       entries.push(`${rel}/`)
       entries.push(...listRecursive(baseDir, fullPath))

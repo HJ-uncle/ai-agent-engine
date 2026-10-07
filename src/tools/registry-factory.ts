@@ -53,6 +53,8 @@ export interface RegistryFactoryOptions {
   workspaceRoot?: string
   /** general preserves service capabilities; code selects the IDE's executable programming tools. */
   toolProfile?: ToolProfile
+  /** Explicit memory extension for a conversation, independent of the programming profile. */
+  memoryScope?: import('../storage/memory/settings.js').MemoryMode
   /** 允许的 skill 列表，undefined = 全部，[] = 全部，传入列表则过滤 */
   allowedSkills?: string[] | null
   /** undefined/null 使用 profile 默认集；[] 显式禁用；列表只能缩窄。general 保留原有始终注册的基础工具例外。 */
@@ -122,8 +124,11 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
 }> {
   const profile = opts.toolProfile ?? 'general'
   const explicitAllowedTools = normalizeAllowedTools(opts.allowedTools)
+  const memoryTools = createMemoryTools()
+  const memoryEnabled = opts.memoryScope !== 'off' && (profile !== 'code' || opts.memoryScope !== undefined)
+  const memoryImplementations = new Set(memoryTools)
   const registry = new ToolRegistry(profile === 'code' ? (tool) =>
-    isCodeProfileTool(tool as Tool & { source?: string }) &&
+    (isCodeProfileTool(tool as Tool & { source?: string }) || (memoryEnabled && memoryImplementations.has(tool))) &&
     (explicitAllowedTools === undefined || explicitAllowedTools.includes(tool.name))
     : undefined)
 
@@ -215,8 +220,8 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   // 4. 向用户提问工具 - 始终注册，交互需要
   registerBuiltin(askUserTool)
 
-  // 5. 记忆工具（remember / recall / search_memory / list_memories / forget）
-  createMemoryTools().forEach(t => {
+  // Only these builtin implementations may extend the code profile, not an extension with the same name.
+  if (memoryEnabled) memoryTools.forEach(t => {
     if (shouldRegister(t.name)) registerBuiltin(t)
   })
 

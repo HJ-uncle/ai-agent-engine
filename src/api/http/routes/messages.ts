@@ -3,7 +3,7 @@ import { createConversationHistory } from '../../../storage/conversation/factory
 import { ReActStrategy } from '../../../core/agent-loop/index.js'
 import { createPipeline, sseStream } from '../../../core/stream-pipeline/index.js'
 import { createAgentContext } from '../../../core/agent-context/index.js'
-import { createLLMAdapterWithDbConfig } from '../../../core/llm-adapter/index.js'
+import { createAdapterFromResolved, resolveModelConfig } from '../../../core/llm-adapter/resolve-model.js'
 import { createRequestLogger } from '../../../observability/index.js'
 import { buildSkillsSystemPrompt } from '../../../skills/index.js'
 import type { ToolProfile } from '../../../tools/tool-profile.js'
@@ -18,6 +18,8 @@ import { v4 as uuidv4 } from 'uuid'
 import { success, fail } from '../response.js'
 import { registerActiveChat, unregisterActiveChat } from './chat.js'
 import { z } from 'zod'
+import { getSessionMemorySettings, setSessionMemoryScope, type MemoryMode } from '../../../storage/memory/settings.js'
+import { buildMemoryRecallBlock, extractAndStoreMemories } from '../../../middleware/memory/index.js'
 
 // ── Validation Schemas ──────────────────────────────────────────────────────
 const UpdateMessageSchema = z.object({
@@ -25,6 +27,7 @@ const UpdateMessageSchema = z.object({
   systemPrompt: z.string().optional(),
   maxAskUserCount: z.number().optional(),
   thinkingMode: z.boolean().optional(),
+  memoryScope: z.enum(['off', 'global', 'session']).optional(),
   metadata: z.any().optional(),
 })
 
@@ -32,6 +35,7 @@ const RegenerateSchema = z.object({
   systemPrompt: z.string().optional(),
   maxAskUserCount: z.number().optional(),
   thinkingMode: z.boolean().optional(),
+  memoryScope: z.enum(['off', 'global', 'session']).optional(),
   metadata: z.any().optional(),
 })
 
@@ -113,9 +117,20 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     thinkingMode?: boolean,
     effectiveModel?: string,
     metadata?: any,
-    toolProfile: ToolProfile = 'general'
+    toolProfile: ToolProfile = 'general',
+    requestedMemoryScope?: MemoryMode,
   ) {
     const reqLogger = createRequestLogger(requestId, tenantId, sessionId)
+
+    // The legacy edit/regenerate endpoint shares the same session as /chat.
+    // Resolve its persisted memory policy as well, otherwise memory tools
+    // would silently fall back to global memory (and code sessions would lose
+    // an explicitly enabled session scope).
+    if (requestedMemoryScope !== undefined) {
+      await setSessionMemoryScope(tenantId, sessionId, requestedMemoryScope)
+    }
+    const memorySettings = await getSessionMemorySettings(tenantId, sessionId, toolProfile)
+    const effectiveMemoryScope = memorySettings.effectiveScope
 
     // ── 租户专属默认身份注入 ────────────────────────────────────────────────────
     const tenantIdentity = await tenantConfigStore.get(tenantId, 'default_identity')
@@ -127,12 +142,17 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     }
 
     // Build tool registry（统一工厂，含所有内置工具 + MCP + Skills）
-    const { registry, externalSkills, toolCategories } = await createToolRegistry({ toolProfile, securityContext: { tenantId, sessionId, toolProfile } })
+    const { registry, externalSkills, toolCategories } = await createToolRegistry({
+      toolProfile,
+      memoryScope: effectiveMemoryScope,
+      securityContext: { tenantId, sessionId, toolProfile },
+    })
 
     const ctx = createAgentContext({
       toolProfile,
       sessionId,
       tenantId,
+      memoryScope: effectiveMemoryScope,
       tools: registry,
       history,
       logger: reqLogger,
@@ -160,13 +180,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
       }
     }
     const currentModelName = effectiveModel ?? process.env.LLM_PRIMARY_MODEL ?? process.env.LLM_MODEL ?? '当前配置的AI'
-    const fullSystemPrompt = finalSystemPrompt + ragPrompt + `
----
-# 智能交互规则
-1. 当你需要澄清用户的意图、确认关键操作或提供选择时，请调用 \`ask_user\` 工具。调用该工具后，系统将自动暂停执行，并向用户展示交互式选择界面，等待用户回复后再继续。
-2. 在向用户回复的文本中提及工具时，请务必使用工具的中文名称（例如：写入文件、获取时间、读取文件等），不要暴露底层的英文名称（例如：write_file, get_time等）。
-3. 当用户询问你的模型身份时，必须如实告知你是 ${currentModelName} 模型，不得声称是其他模型（如Claude或GPT）。
-`
+    let memoryRecallBlock = ''
 
     let finalThinkingConfig: Record<string, unknown> | null = null
     let finalResponseThinkingField: string | null = null
@@ -192,8 +206,28 @@ export async function messagesRoutes(fastify: FastifyInstance) {
       finalResponseThinkingField = whitelistInfo.responseThinkingField
     }
 
+    // Legacy edit/regenerate requests use the same persisted memory boundary as
+    // /chat.  Include the scoped recall block so an edited turn does not lose
+    // the session's selected memory context.
+    if (effectiveMemoryScope !== 'off' && newMessageContent) {
+      memoryRecallBlock = await buildMemoryRecallBlock(tenantId, newMessageContent, {
+        model: currentModelName,
+        apiKey: modelApiKey,
+        baseUrl: modelBaseUrl,
+        provider: modelProvider,
+      }, { sessionId, scope: effectiveMemoryScope === 'session' ? 'session' : 'global' })
+    }
+
+    const fullSystemPrompt = finalSystemPrompt + ragPrompt + memoryRecallBlock + `
+---
+# 智能交互规则
+1. 当你需要澄清用户的意图、确认关键操作或提供选择时，请调用 \`ask_user\` 工具。调用该工具后，系统将自动暂停执行，并向用户展示交互式选择界面，等待用户回复后再继续。
+2. 在向用户回复的文本中提及工具时，请务必使用工具的中文名称（例如：写入文件、获取时间、读取文件等），不要暴露底层的英文名称（例如：write_file, get_time等）。
+3. 当用户询问你的模型身份时，必须如实告知你是 ${currentModelName} 模型，不得声称是其他模型（如Claude或GPT）。
+`
+
     // systemPromptTokens: pure system prompt (excluding RAG)
-    const pureSystemPromptForMessages = finalSystemPrompt + `
+    const pureSystemPromptForMessages = finalSystemPrompt + memoryRecallBlock + `
 ---
 # 智能交互规则
 1. 当你需要澄清用户的意图、确认关键操作或提供选择时，请调用 \`ask_user\` 工具。调用该工具后，系统将自动暂停执行，并向用户展示交互式选择界面，等待用户回复后再继续。
@@ -244,17 +278,19 @@ export async function messagesRoutes(fastify: FastifyInstance) {
       // ★ 注册到全局 cancel 表，使 POST /chat/cancel 能中止此流（regenerate/edit 场景）
       registerActiveChat(tenantId, sessionId, abortController)
       try {
-        const llm = await createLLMAdapterWithDbConfig({
-          model: effectiveModel,
-          apiKey: modelApiKey,
-          baseUrl: modelBaseUrl,
-          provider: modelProvider
-        })
+        ctx.resolvedModel = await resolveModelConfig({ tenantId, model: effectiveModel, overrides: {
+          apiKey: modelApiKey, baseUrl: modelBaseUrl, provider: modelProvider,
+          thinkingEnabled: thinkingMode, thinkingConfig: finalThinkingConfig,
+          responseThinkingField: finalResponseThinkingField,
+        } })
+        const llm = createAdapterFromResolved(ctx.resolvedModel)
         const strategy = new ReActStrategy(llm, {
           systemPrompt: fullSystemPrompt || undefined,
+          unboundedCode: toolProfile === 'code',
           maxAskUserCount,
           conversationId,
           promptBreakdown: { systemPromptTokens, systemToolsTokens, skillTokens, ragTokens, builtinToolsTokens, mcpToolsTokens },
+          thinkingEnabled: thinkingMode,
           thinkingConfig: finalThinkingConfig,
           responseThinkingField: finalResponseThinkingField,
           metadata: metadata,
@@ -291,6 +327,25 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     })()
 
     await sseStream(busToIterable(streamBus), reply)
+
+    // Keep the legacy endpoint's automatic extraction semantics aligned with
+    // /chat.  Extraction is deliberately detached from the response so an LLM
+    // failure here cannot change the already delivered turn result.
+    if (effectiveMemoryScope !== 'off') {
+      setImmediate(() => {
+        void ctx.history.getFullHistory(ctx).then((messages) => extractAndStoreMemories({
+          messages: messages.map((m: any) => ({
+            role: m.role as string,
+            content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+          })),
+          sessionId,
+          tenantId,
+          memoryScope: effectiveMemoryScope === 'session' ? 'session' : 'global',
+          llm: { model: currentModelName, apiKey: modelApiKey, baseUrl: modelBaseUrl, provider: modelProvider },
+          minImportance: 0.3,
+        })).catch((error) => reqLogger.warn({ err: error }, 'Legacy memory extraction failed silently'))
+      })
+    }
   }
 
   // 3. 编辑用户消息并重新生成响应
@@ -306,7 +361,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
       return reply.code(200).send(fail(40001, `参数验证失败：${firstError.message}`))
     }
 
-    const { content, systemPrompt, maxAskUserCount, thinkingMode, metadata } = result.data
+    const { content, systemPrompt, maxAskUserCount, thinkingMode, memoryScope, metadata } = result.data
 
     const message = await history.getMessageById(messageId, tenantId)
     if (!message) {
@@ -337,7 +392,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 
     // Then run AI to generate a response for the updated history
     const requestId = uuidv4()
-    await runAIForSession(sessionId, tenantId, requestId, systemPrompt, reply, maxAskUserCount, content, thinkingMode, undefined, metadata ?? message.metadata, toolProfile)
+    await runAIForSession(sessionId, tenantId, requestId, systemPrompt, reply, maxAskUserCount, content, thinkingMode, undefined, metadata ?? message.metadata, toolProfile, memoryScope)
   })
 
   // 4. 重新生成最后一条 AI 回复
@@ -353,7 +408,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
       return reply.code(200).send(fail(40001, `参数验证失败：${firstError.message}`))
     }
 
-    const { systemPrompt, maxAskUserCount, thinkingMode, metadata } = result.data
+    const { systemPrompt, maxAskUserCount, thinkingMode, memoryScope, metadata } = result.data
 
     const message = await history.getMessageById(messageId, tenantId)
     if (!message) {
@@ -388,7 +443,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 
     const requestId = uuidv4()
     
-    await runAIForSession(sessionId, tenantId, requestId, systemPrompt, reply, maxAskUserCount, undefined, thinkingMode, undefined, metadata, toolProfile)
+    await runAIForSession(sessionId, tenantId, requestId, systemPrompt, reply, maxAskUserCount, undefined, thinkingMode, undefined, metadata, toolProfile, memoryScope)
     return reply
   })
 }

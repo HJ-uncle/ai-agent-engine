@@ -673,9 +673,10 @@ export class SQLiteConversationHistory implements ConversationHistory {
    */
   async microCompactToolResults(
     ctx: Ctx,
-    opts: { keepRecent?: number } = {},
+    opts: { keepRecent?: number; maxChars?: number } = {},
   ): Promise<{ cleared: number; freedTokens: number }> {
     const keepRecent = opts.keepRecent ?? 10
+    const maxChars = Number.isFinite(opts.maxChars) && (opts.maxChars ?? 0) > 0 ? Math.floor(opts.maxChars!) : undefined
     const placeholder = '[tool result cleared]'
     const placeholderTokens = estimateTokens(placeholder)
     const db = getDb()
@@ -688,8 +689,13 @@ export class SQLiteConversationHistory implements ConversationHistory {
       args: [ctx.tenantId, ctx.sessionId],
     })
     const rows = all.rows
-    if (rows.length <= keepRecent) return { cleared: 0, freedTokens: 0 }
-    const cutoffId = Number(rows[rows.length - keepRecent]['id'])
+    // When the session is shorter than the retention window there is no
+    // "old" row to compact.  Infinity used to make `id >= cutoffId` false
+    // for every row, so even a short conversation lost all of its tool
+    // evidence during the first micro-compact pass.
+    const cutoffId = rows.length > keepRecent
+      ? Number(rows[rows.length - keepRecent]['id'])
+      : Number.NEGATIVE_INFINITY
 
     const tx = await db.transaction('write')
     let cleared = 0
@@ -697,10 +703,10 @@ export class SQLiteConversationHistory implements ConversationHistory {
     try {
       for (const row of rows) {
         const id = Number(row['id'])
-        if (id >= cutoffId) break
         if (row['role'] !== 'tool') continue
         const content = row['content'] as string | null
         if (!content || content === placeholder) continue
+        if (id >= cutoffId && (maxChars === undefined || content.length <= maxChars)) continue
         const oldTokens = Number(row['tokens'] ?? 0) || estimateTokens(content)
         await tx.execute({
           sql: `UPDATE conversations SET content = ?, tokens = ? WHERE id = ?`,

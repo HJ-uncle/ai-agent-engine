@@ -65,3 +65,25 @@ it('racing manual creates cannot truncate an existing file', async () => {
   expect((await pending).json().code).toBe(40000)
   expect(fs.readFileSync(target, 'utf8')).toBe('created by another operation')
 })
+
+it('remote content classifies media extensions and NUL samples as binary', async () => {
+  const media = path.join(fixture, 'clip.mp4')
+  const opaque = path.join(fixture, 'payload.bin')
+  fs.writeFileSync(media, Buffer.from('media fixture without a NUL byte'))
+  fs.writeFileSync(opaque, Buffer.from([0, 1, 2, 3, 4]))
+
+  const mediaResponse = await app.inject({ method: 'GET', url: '/workspace/file/content?sessionId=test&path=clip.mp4' })
+  expect(mediaResponse.json().data).toMatchObject({ isBinary: true, tooLarge: undefined })
+  expect(mediaResponse.json().data.content).toBe(Buffer.from('media fixture without a NUL byte').toString('base64'))
+
+  const opaqueResponse = await app.inject({ method: 'GET', url: '/workspace/file/content?sessionId=test&path=payload.bin' })
+  expect(opaqueResponse.json().data).toMatchObject({ isBinary: true })
+})
+
+it('remote content refuses to base64-expand oversized binaries', async () => {
+  const target = path.join(fixture, 'large.zip')
+  fs.writeFileSync(target, Buffer.alloc(1))
+  fs.truncateSync(target, 33 * 1024 * 1024)
+  const response = await app.inject({ method: 'GET', url: '/workspace/file/content?sessionId=test&path=large.zip' })
+  expect(response.json().data).toMatchObject({ content: '', isBinary: true, tooLarge: true, totalSize: 33 * 1024 * 1024 })
+})

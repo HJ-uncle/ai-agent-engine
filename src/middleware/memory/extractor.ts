@@ -2,6 +2,7 @@ import { SQLiteMemoryManager } from '../../storage/memory/memory-manager.js'
 import { createLLMAdapterWithDbConfig, type LLMAdapter, type LLMAdapterOptions } from '../../core/llm-adapter/index.js'
 import type { ExtractedMemory, LLMCredentials } from './types.js'
 import type { Message } from '../../core/agent-context/index.js'
+import type { MemoryScope } from '../../storage/memory/types.js'
 
 // ============================================================================
 // Types & Constants
@@ -100,6 +101,7 @@ export async function extractAndStoreMemories(opts: {
   tenantId: string
   llm: LLMCredentials
   minImportance?: number
+  memoryScope?: MemoryScope
 }): Promise<{ extracted: number; stored: number; errors: string[] }> {
   const result = { extracted: 0, stored: 0, errors: [] as string[] }
   const minImp = opts.minImportance ?? 0.3
@@ -150,7 +152,7 @@ export async function extractAndStoreMemories(opts: {
     if (filtered.length === 0) return result
 
     const manager = new SQLiteMemoryManager()
-    const ctx = { tenantId: opts.tenantId, sessionId: opts.sessionId }
+    const ctx = { tenantId: opts.tenantId, sessionId: opts.sessionId, scope: opts.memoryScope ?? 'global' as MemoryScope }
     const nodeMap = new Map<string, string>()
 
     for (const memory of filtered) {
@@ -273,6 +275,7 @@ export async function buildMemoryRecallBlock(
   tenantId: string,
   query?: string,
   llm?: LLMCredentials,
+  memoryContext?: { sessionId?: string; scope?: MemoryScope },
 ): Promise<string> {
   try {
     if (!query || !llm) return ''
@@ -302,7 +305,11 @@ export async function buildMemoryRecallBlock(
     // ==================================================
     const nodeMap = new Map<string, any>()
     let anchorIds: string[] = []
-    const ctx = { tenantId, sessionId: '' }
+    const ctx = {
+      tenantId,
+      sessionId: memoryContext?.sessionId ?? '',
+      scope: memoryContext?.scope ?? 'global' as MemoryScope,
+    }
 
     // 1. 向量数据库 (海马体) - 语义直觉与模糊联想
     if (adapter?.embed && aiQuery) {

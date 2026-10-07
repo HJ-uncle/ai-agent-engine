@@ -1,3 +1,4 @@
+import { applyThinkingPreference, isThinkingDisabled, isProtectedThinkingParameter } from './thinking.js'
 import { observeRequest, observeStreamRequest, openAIUsage } from './request-attempt.js'
 import { throwIfAborted } from '../utils/abort.js'
 import OpenAI from 'openai'
@@ -17,6 +18,7 @@ const keepAliveFetch = async (url: RequestInfo | URL, init?: RequestInit) => {
 import type { Message, Tool } from '../agent-context/index.js'
 import { estimateTokens } from '../utils/tokens.js'
 import { repairJson } from '../utils/json.js'
+import { normalizeWriteFileArgs } from '../../shared/write-file-args.js'
 
 /**
  * Normalize a base URL for use with the OpenAI SDK.
@@ -103,7 +105,7 @@ function buildReasoningField(
  *   依据 thinkingConfig 或 responseThinkingField 是否存在。
  */
 function isThinkingMode(options?: LLMAdapterOptions): boolean {
-  return !!(options?.thinkingConfig || options?.responseThinkingField)
+  return !isThinkingDisabled(options) && !!(options?.thinkingConfig || options?.responseThinkingField)
 }
 
 /**
@@ -124,7 +126,23 @@ function modelRejectsTemperature(model?: string): boolean {
  * @param model 实际请求的模型 ID
  */
 function modelUsesMaxCompletionTokens(model?: string): boolean {
-  return modelRejectsTemperature(model)
+  return modelRejectsTemperature(model) || modelRequiresPositiveMaxCompletionTokens(model)
+}
+
+/**
+ * DeepSeek V4 网关即使调用方不设输出上限，也要求请求体带一个合法的
+ * max_completion_tokens。这个值是网关协议的最大值，不是引擎给 Code
+ * 模式施加的任务上限；Code 模式仍然通过 unboundedOutput 保持无固定预算。
+ */
+const DEEPSEEK_V4_MAX_COMPLETION_TOKENS = 393_216
+
+function modelRequiresPositiveMaxCompletionTokens(model?: string): boolean {
+  return /(?:^|[\/-])deepseek-v4(?:\.\d+)?-(?:flash|pro)(?:$|[\/-])/i.test(model ?? '')
+}
+
+function normalizeTokenLimit(value: number | undefined, fallback?: number): number | undefined {
+  if (value == null || !Number.isFinite(value)) return fallback
+  return Math.max(1, Math.floor(value))
 }
 
 /**
@@ -143,9 +161,17 @@ function buildSamplingParams(
   if (!modelRejectsTemperature(model) && temperature != null) {
     out.temperature = temperature
   }
-  if (maxTokens != null) {
-    if (modelUsesMaxCompletionTokens(model)) out.max_completion_tokens = maxTokens
-    else out.max_tokens = maxTokens
+  const normalizedMaxTokens = normalizeTokenLimit(maxTokens)
+  if (normalizedMaxTokens != null) {
+    if (modelUsesMaxCompletionTokens(model)) out.max_completion_tokens = normalizedMaxTokens
+    else out.max_tokens = normalizedMaxTokens
+  } else if (modelRequiresPositiveMaxCompletionTokens(model)) {
+    // The gateway requires a positive field. Do not derive it from the
+    // caller's estimated remaining context: estimates include serialization
+    // overhead and can turn a normal request into values such as 400, which
+    // becomes an accidental completion cap. Context admission/compaction is
+    // handled by the agent loop; this is only the provider wire limit.
+    out.max_completion_tokens = DEEPSEEK_V4_MAX_COMPLETION_TOKENS
   }
   return out
 }
@@ -210,7 +236,7 @@ async function createWithParamFallback<T>(
       const msg: string =
         error?.error?.message ?? error?.response?.data?.error?.message ?? error?.message ?? ''
       const bad = detectUnsupportedParam(msg, current)
-      if (!bad || dropped.has(bad)) throw error
+      if (!bad || dropped.has(bad) || isProtectedThinkingParameter(bad, options)) throw error
       dropped.add(bad)
       const next = { ...current }
       delete next[bad]
@@ -251,7 +277,7 @@ async function streamWithParamFallback(
       const msg: string =
         error?.error?.message ?? error?.response?.data?.error?.message ?? error?.message ?? ''
       const bad = detectUnsupportedParam(msg, current)
-      if (!bad || dropped.has(bad)) throw error
+      if (!bad || dropped.has(bad) || isProtectedThinkingParameter(bad, options)) throw error
       dropped.add(bad)
       const next = { ...current }
       delete next[bad]
@@ -385,10 +411,13 @@ function messagesToOpenAI(
             imageInjected = true
           } else if (parsed?.dataUrlStripped) {
             // dataUrl was stripped before saving to history (too large); just emit a summary
+            const payloadOmitted = parsed.hasDataUrl === false
             result.push({
               role: 'tool',
               tool_call_id: tcId,
-              content: `Image "${parsed.filename ?? 'image'}" (${parsed.mimeType ?? ''}, ${parsed.size ?? 0} bytes) was read. The image content was delivered to the model via the vision channel in the previous turn.`,
+              content: payloadOmitted
+                ? `Image "${parsed.filename ?? 'image'}" (${parsed.mimeType ?? ''}, ${parsed.size ?? 0} bytes) was read, but its image payload was omitted from context. Use OCR or a smaller image if pixel-level inspection is needed.`
+                : `Image "${parsed.filename ?? 'image'}" (${parsed.mimeType ?? ''}, ${parsed.size ?? 0} bytes) was read. The image content was delivered to the model via the vision channel in the previous turn.`,
             })
             imageInjected = true
             console.log(`[openai.ts] ℹ️ dataUrl stripped in history for "${parsed.filename}", emitting summary tool result`)
@@ -523,12 +552,19 @@ interface ParsedToolCall {
   args: Record<string, unknown>
 }
 
+function normalizeParsedToolArgs(name: string, args: Record<string, unknown>): Record<string, unknown> {
+  if (name !== 'write_file') return args
+  const normalized = normalizeWriteFileArgs(args)
+  return normalized.ok ? { path: normalized.args.path, data: normalized.args.data } : args
+}
+
 // Parameter-key → tool-name heuristics for when the model emits <function=> with empty name
 const PARAM_TO_TOOL_HEURISTICS: Array<{ keys: string[]; tool: string }> = [
   { keys: ['command'],              tool: 'run_skill_script' },
   { keys: ['key', 'value'],         tool: 'remember' },
   { keys: ['key'],                  tool: 'recall' },
-  { keys: ['path', 'content'],      tool: 'write_file' },
+  { keys: ['path', 'data'],         tool: 'write_file' },
+  { keys: ['path', 'content'],      tool: 'write_file' }, // legacy XML emitters
   { keys: ['path'],                 tool: 'smart_read' },
   { keys: ['query'],                tool: 'search_memory' },
   { keys: ['name'],                 tool: 'get_skill' },
@@ -544,7 +580,7 @@ function inferToolName(args: Record<string, unknown>): string {
   return ''
 }
 
-function parseXmlToolCalls(content: string): ParsedToolCall[] {
+export function parseXmlToolCalls(content: string): ParsedToolCall[] {
   const results: ParsedToolCall[] = []
   const blockRe = /<tool_call>([\s\S]*?)<\/tool_call>/g
   let blockMatch: RegExpExecArray | null
@@ -556,10 +592,11 @@ function parseXmlToolCalls(content: string): ParsedToolCall[] {
     try {
       const json = JSON.parse(block.trim()) as { name?: string; arguments?: Record<string, unknown> }
       if (json.name) {
+        const args = json.arguments ?? {}
         results.push({
           id: `call_${Date.now()}_${results.length}`,
           name: json.name,
-          args: json.arguments ?? {},
+          args: normalizeParsedToolArgs(json.name, args),
         })
         continue
       }
@@ -583,7 +620,10 @@ function parseXmlToolCalls(content: string): ParsedToolCall[] {
       // Use explicit name, or infer from parameters when name is empty
       const name = rawName || inferToolName(args)
       if (name) {
-        results.push({ id: `call_${Date.now()}_${results.length}`, name, args })
+        // Older Qwen/vLLM XML templates call the write payload `content`.
+        // Normalize it before it reaches the generic tool registry so the
+        // fallback has the same contract as structured tool calls.
+        results.push({ id: `call_${Date.now()}_${results.length}`, name, args: normalizeParsedToolArgs(name, args) })
       }
     }
   }
@@ -661,6 +701,7 @@ export class OpenAIAdapter implements LLMAdapter {
 
   async complete(messages: Message[], options?: LLMAdapterOptions): Promise<LLMResponse> {
     this.assertApiKey()
+    options = applyThinkingPreference(options, this.provider, options?.model ?? this.model, this.client.baseURL)
     const oaiMessages = messagesToOpenAI(messages, this.supportsVision, isThinkingMode(options))
     if (options?.systemPrompt) {
       oaiMessages.unshift({ role: 'system', content: options.systemPrompt })
@@ -772,6 +813,7 @@ export class OpenAIAdapter implements LLMAdapter {
 
   async *stream(messages: Message[], options?: LLMAdapterOptions): AsyncIterable<LLMStreamChunk> {
     this.assertApiKey()
+    options = applyThinkingPreference(options, this.provider, options?.model ?? this.model, this.client.baseURL)
     const oaiMessages = messagesToOpenAI(messages, this.supportsVision, isThinkingMode(options))
     if (options?.systemPrompt) {
       oaiMessages.unshift({ role: 'system', content: options.systemPrompt })

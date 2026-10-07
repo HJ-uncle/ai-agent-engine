@@ -69,6 +69,17 @@ describe('file mutation producers', () => {
     expect(hashFileContent('')).not.toBe(hashFileContent(null))
   })
 
+  it('accepts the legacy content alias but rejects an undefined payload before mutation', async () => {
+    const legacy = await writeFileTool.execute({ path: 'legacy.tsx', content: 'export const ok = true' }, ctx)
+    expect(legacy.success).toBe(true)
+    expect(fs.readFileSync(path.join(root, 'legacy.tsx'), 'utf8')).toBe('export const ok = true')
+    expect(legacy.metadata).toMatchObject({ compatibilityAlias: 'content' })
+
+    const malformed = await writeFileTool.execute({ path: 'malformed.tsx' }, ctx)
+    expect(malformed).toMatchObject({ success: false, error: 'WRITE_INVALID_ARGUMENTS', metadata: { fileMutationApplied: false } })
+    expect(fs.existsSync(path.join(root, 'malformed.tsx'))).toBe(false)
+  })
+
   it.each([
     ['large.txt', Buffer.from('中文'.repeat(50_001))],
     ['invalid.txt', Buffer.from([0xff, 0xfe, 0x61])],

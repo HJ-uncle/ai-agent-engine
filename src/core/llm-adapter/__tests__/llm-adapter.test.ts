@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { OllamaAdapter } from '../ollama.js'
 import { OpenAIAdapter } from '../openai.js'
+import { DeepSeekAdapter } from '../deepseek.js'
 import { withRetry, FallbackAdapter } from '../retry.js'
 import type { LLMAdapter, LLMResponse, LLMAdapterOptions } from '../types.js'
 import type { Message } from '../../agent-context/index.js'
@@ -216,5 +217,54 @@ describe('OpenAIAdapter.countTokens', () => {
     expect(adapter.countTokens('12345')).toBe(2)      // ceil(5/4) = 2
     expect(adapter.countTokens('hello world')).toBe(Math.ceil('hello world'.length / 4))
     expect(adapter.countTokens('a'.repeat(100))).toBe(25)
+  })
+})
+
+describe('DeepSeekAdapter utility opt-out', () => {
+  it('passes the explicit gateway no-thinking switches through to the request body', async () => {
+    const adapter = new DeepSeekAdapter('deepseek-v4.1-flash', 'test-key', 'http://model.invalid')
+    const create = vi.fn().mockResolvedValue({
+      model: 'deepseek-v4.1-flash',
+      choices: [{ message: { role: 'assistant', content: 'visible answer' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 4, completion_tokens: 3 },
+    })
+    ;(adapter as any).client = { chat: { completions: { create } } }
+
+    await adapter.complete([{ role: 'user', content: 'write a title' }], {
+      model: 'deepseek-v4.1-flash',
+      maxTokens: 4000,
+      thinkingConfig: { enable_thinking: false, reasoning_effort: 'low' },
+      responseThinkingField: null,
+    })
+
+    const params = create.mock.calls[0][0] as Record<string, unknown>
+    expect(params).toMatchObject({
+      enable_thinking: false,
+      reasoning_effort: 'low',
+      max_completion_tokens: 4000,
+    })
+  })
+
+  it('does not inject reasoning parameters when utility explicitly disables thinking', async () => {
+    const adapter = new DeepSeekAdapter('deepseek-v4.1-flash', 'test-key', 'http://model.invalid')
+    const create = vi.fn().mockResolvedValue({
+      model: 'deepseek-v4.1-flash',
+      choices: [{ message: { role: 'assistant', content: 'visible answer' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 4, completion_tokens: 3 },
+    })
+    ;(adapter as any).client = { chat: { completions: { create } } }
+
+    const result = await adapter.complete([{ role: 'user', content: 'write a title' }], {
+      model: 'deepseek-v4.1-flash',
+      maxTokens: 200,
+      thinkingConfig: null,
+      responseThinkingField: null,
+    })
+
+    expect(result.content).toBe('visible answer')
+    const params = create.mock.calls[0][0] as Record<string, unknown>
+    expect(params).not.toHaveProperty('reasoning_effort')
+    expect(params).not.toHaveProperty('thinking')
+    expect(params).toMatchObject({ model: 'deepseek-v4.1-flash', max_completion_tokens: 200 })
   })
 })

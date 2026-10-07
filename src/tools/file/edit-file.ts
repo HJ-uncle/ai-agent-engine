@@ -3,7 +3,8 @@ import type { AgentContext, Tool, ToolResult } from '../../core/agent-context/in
 import { workspaceManager } from '../../workspace/index.js'
 import { hashFileContent, readFileVersionSync, withFileLocks } from '../../shared/file-version.js'
 import { throwIfAborted } from '../../core/utils/abort.js'
-import { ChangeRecordingError, commitWriteChange, decodeEditableText, MAX_CHANGE_CONTENT_BYTES, type ChangeSnapshot } from './change-recorder.js'
+import { MAX_FILE_SIZE } from './constants.js'
+import { ChangeRecordingError, commitWriteChange, decodeEditableText, readOldSnapshot } from './change-recorder.js'
 
 interface TextEdit { oldText: string; newText: string }
 interface EditFileArgs { path: string; expectedHash: string; edits: TextEdit[] }
@@ -24,7 +25,7 @@ function validArgs(value: unknown): value is EditFileArgs {
 
 export const editFileTool: Tool = {
   name: 'edit_file', displayName: '精确编辑文件',
-  description: '对已有 UTF-8 文本文件做精确替换（修改前后均不超过 100000 bytes）。先 read_file mode="exact" 获取完整字节 expectedHash 和无行号 content；正文必须逐字匹配，保留 CRLF、Unicode 和 BOM，不自动格式化。所有 edits 都匹配同一原文件：每个 oldText 必须非空且唯一，多项不可重叠。版本不一致、匹配不存在或不唯一时整次修改失败，不猜位置。',
+  description: '对已有 UTF-8 文本文件做精确替换。先 read_file mode="exact" 获取完整字节 expectedHash 和无行号 content；正文必须逐字匹配，保留 CRLF、Unicode 和 BOM，不自动格式化。所有 edits 都匹配同一原文件：每个 oldText 必须非空且唯一，多项不可重叠。版本不一致、匹配不存在或不唯一时整次修改失败，不猜位置。大文件的改动快照保存到磁盘并可安全撤回。',
   parameters: {
     type: 'object', additionalProperties: false,
     properties: {
@@ -54,13 +55,13 @@ export const editFileTool: Tool = {
           throw error
         }
         if (!stat.isFile()) return failure('EDIT_NOT_TEXT', 'Exact editing requires a regular text file, not a directory or device.')
-        if (stat.size > MAX_CHANGE_CONTENT_BYTES) return failure('EDIT_FILE_TOO_LARGE', `Exact editing supports at most ${MAX_CHANGE_CONTENT_BYTES} bytes so every edit can be reviewed and reverted.`)
+        if (stat.size > MAX_FILE_SIZE) return failure('EDIT_FILE_TOO_LARGE', `File too large: exact editing supports files up to ${MAX_FILE_SIZE} bytes to keep memory bounded.`)
         const before = readFileVersionSync(canonicalPath)
         if (!before.content) return failure('EDIT_FILE_MISSING', 'The file does not exist; use write_file to create it.')
+        if (before.content.byteLength > MAX_FILE_SIZE) return failure('EDIT_FILE_TOO_LARGE', `File too large: exact editing supports files up to ${MAX_FILE_SIZE} bytes to keep memory bounded.`)
         if (before.hash !== args.expectedHash) return failure('EDIT_VERSION_CONFLICT', 'File changed after it was read. Read it again before editing.', {
           expectedHash: args.expectedHash, actualHash: before.hash,
         })
-        if (before.content.byteLength > MAX_CHANGE_CONTENT_BYTES) return failure('EDIT_FILE_TOO_LARGE', `Exact editing supports at most ${MAX_CHANGE_CONTENT_BYTES} bytes so every edit can be reviewed and reverted.`)
         const original = decodeEditableText(canonicalPath, before.content)
         if (original === null) return failure('EDIT_NOT_TEXT', 'The file must be valid UTF-8 text, without binary content.')
 
@@ -82,13 +83,20 @@ export const editFileTool: Tool = {
         for (const match of [...matches].reverse()) updated = updated.slice(0, match.start) + match.newText + updated.slice(match.end)
         const afterBytes = Buffer.from(updated, 'utf8')
         if (afterBytes.toString('utf8') !== updated || afterBytes.includes(0)) return failure('EDIT_NOT_TEXT', 'Replacement must remain valid UTF-8 text without binary content.')
-        if (afterBytes.byteLength > MAX_CHANGE_CONTENT_BYTES) return failure('EDIT_FILE_TOO_LARGE', `The edited file would exceed ${MAX_CHANGE_CONTENT_BYTES} bytes; no changes were written.`)
         if (before.content.equals(afterBytes)) return { success: true, output: `No change: ${canonicalPath}\nexpectedHash: ${before.hash}`, metadata: { noChange: true, oldHash: before.hash, newHash: before.hash } }
 
         // No await from the full-byte version read above through this write. In-process
         // editor writes, agent writes and reverts also hold this canonical path lock.
         throwIfAborted(ctx.signal)
-        const snapshot: ChangeSnapshot = { oldContent: original, oldHash: before.hash, exists: true, truncated: false }
+        // Keep a durable byte snapshot for large files before mutating them. The
+        // text used for matching is already in memory, but the rollback record
+        // must survive the process and database lifecycle as well.
+        const snapshot = await readOldSnapshot(canonicalPath)
+        if (snapshot.oldHash !== before.hash || !snapshot.exists) {
+          return failure('EDIT_VERSION_CONFLICT', 'File changed while preparing its rollback snapshot. Read it again before editing.', {
+            expectedHash: args.expectedHash, actualHash: snapshot.oldHash,
+          })
+        }
         try { fs.writeFileSync(canonicalPath, afterBytes) }
         catch (error) {
           const actual = readFileVersionSync(canonicalPath)

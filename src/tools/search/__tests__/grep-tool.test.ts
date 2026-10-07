@@ -38,6 +38,14 @@ describe.skipIf(!rgAvailable)('grep_search with real ripgrep', () => {
   it.each([1, 7, 60])('limits the entire search to %s matching lines', async (maxResults) => { await assertCount(maxResults, maxResults) })
   it('returns all matches when fewer than the explicit limit exist', async () => { await assertCount(100, 80) })
 
+  it('continues a broad search through offset pages with hasMore metadata', async () => {
+    const first = await grepTool.execute({ pattern: 'needle', maxResults: 7 }, ctx)
+    const next = await grepTool.execute({ pattern: 'needle', maxResults: 7, offset: 7 }, ctx)
+    expect(first).toMatchObject({ success: true, metadata: { count: 7, hasMore: true, nextOffset: 7 } })
+    expect(next).toMatchObject({ success: true, metadata: { count: 7, offset: 7, hasMore: true, nextOffset: 14 } })
+    expect(first.output).not.toContain(next.output.split('\n')[1])
+  })
+
   it('can return more than 1000 matches from one file when explicitly requested', async () => {
     fs.writeFileSync(path.join(fixtureDir, 'many.txt'), 'many matches\n'.repeat(1400))
     const result = await grepTool.execute({ pattern: 'many', path: 'many.txt', maxResults: 1200 }, ctx)

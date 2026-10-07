@@ -8,6 +8,7 @@ export interface ResolvedModelConfig extends CreateAdapterOptions {
   readonly model: string
   readonly provider: string
   readonly capabilities: ModelCapabilities
+  readonly thinkingEnabled?: boolean
   readonly thinkingConfig?: Record<string, unknown> | null
   readonly responseThinkingField?: string | null
 }
@@ -17,6 +18,7 @@ export interface ResolveModelOptions {
   model?: string
   parent?: ResolvedModelConfig
   overrides?: CreateAdapterOptions & {
+    thinkingEnabled?: boolean
     thinkingConfig?: Record<string, unknown> | null
     responseThinkingField?: string | null
   }
@@ -40,11 +42,13 @@ export async function resolveModelConfig({tenantId, model, parent, overrides}: R
     dbOverrides: record?.capabilities ?? await loadDbCapabilityOverrides(resolvedModel),
     overrides: overrides?.capabilities,
   })
+  // Preserve intent across model changes without copying another provider's wire parameters.
+  const thinkingEnabled = overrides?.thinkingEnabled ?? parent?.thinkingEnabled
   const whitelist = capabilities.thinking ? (await store.getWhitelists()).find(value => value.modelId === resolvedModel && value.thinkingMode) : undefined
   return Object.freeze({
-    ...resolved, model: resolvedModel, provider, capabilities,
-    thinkingConfig: overrides?.thinkingConfig !== undefined ? overrides.thinkingConfig : whitelist?.thinkingConfig,
-    responseThinkingField: overrides?.responseThinkingField !== undefined ? overrides.responseThinkingField : whitelist?.responseThinkingField,
+    ...resolved, model: resolvedModel, provider, capabilities, thinkingEnabled,
+    thinkingConfig: thinkingEnabled === false ? null : overrides?.thinkingConfig !== undefined ? overrides.thinkingConfig : whitelist?.thinkingConfig,
+    responseThinkingField: thinkingEnabled === false ? null : overrides?.responseThinkingField !== undefined ? overrides.responseThinkingField : whitelist?.responseThinkingField,
   })
 }
 

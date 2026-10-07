@@ -1,5 +1,5 @@
 import { vi } from 'vitest'
-import { ReActStrategy } from '../react.js'
+import { ReActStrategy, truncateToolOutput } from '../react.js'
 import type { AgentContext, Message } from '../../agent-context/index.js'
 import type { LLMAdapter, LLMResponse } from '../../llm-adapter/index.js'
 
@@ -386,6 +386,57 @@ describe('ReActStrategy', () => {
     expect(toolMsg![0].content).toContain('Tool error: Tool crashed')
   })
 
+  it('bounds oversized Code tool results before they re-enter the model context', async () => {
+    const llm = makeLLMAdapter([
+      {
+        content: '',
+        toolCalls: [{ id: 'huge-1', name: 'execute_cmd', args: { command: 'build' } }],
+        promptTokens: 10,
+        completionTokens: 5,
+        finishReason: 'tool_calls',
+      },
+      { content: '继续处理。', promptTokens: 20, completionTokens: 4, finishReason: 'stop' },
+    ])
+    const ctx = makeCtx({
+      toolProfile: 'code',
+      tools: {
+        register: vi.fn(),
+        unregister: vi.fn(),
+        list: vi.fn().mockReturnValue([{ name: 'execute_cmd', description: 'run', parameters: { type: 'object' } }]),
+        execute: vi.fn().mockResolvedValue({ success: true, output: 'x'.repeat(200_000) }),
+        has: vi.fn().mockReturnValue(true),
+      } as unknown as AgentContext['tools'],
+    })
+
+    await collectYields(new ReActStrategy(llm, { maxIterations: 3 }).run('执行构建', ctx))
+
+    const toolMessage = (ctx.history.append as ReturnType<typeof vi.fn>).mock.calls
+      .map((call) => call[0] as Message)
+      .find((message) => message.role === 'tool')
+    expect(toolMessage).toBeDefined()
+    expect(typeof toolMessage?.content).toBe('string')
+    expect((toolMessage?.content as string).length).toBeLessThanOrEqual(64 * 1024)
+    expect(toolMessage?.content).toContain('[truncated')
+  })
+
+  it('keeps a valid image data URL for the multimodal adapter', () => {
+    const raw = JSON.stringify({
+      filename: 'diagram.png', mimeType: 'image/png', size: 2_000_000,
+      dataUrl: `data:image/png;base64,${'A'.repeat(200_000)}`, hasDataUrl: true,
+    })
+    const compact = truncateToolOutput(raw, 1_024)
+    expect(JSON.parse(compact)).toMatchObject({ filename: 'diagram.png', mimeType: 'image/png', size: 2_000_000,
+      hasDataUrl: true, dataUrl: expect.stringMatching(/^data:image\/png;base64,/) })
+  })
+
+  it('does not let a fake hasDataUrl marker bypass the transcript cap', () => {
+    const raw = JSON.stringify({ hasDataUrl: true, dataUrl: `not-an-image-${'x'.repeat(200_000)}` })
+    const compact = truncateToolOutput(raw, 1_024)
+    expect(compact.length).toBeLessThanOrEqual(1_024)
+    expect(JSON.parse(compact)).toMatchObject({ hasDataUrl: false, dataUrlStripped: true })
+    expect(JSON.parse(compact).dataUrl).toBeUndefined()
+  })
+
   // ── 7. systemPrompt and temperature are forwarded to LLM ────────────────────
   it('passes systemPrompt and temperature options to LLM complete()', async () => {
     const llm = makeLLMAdapter([
@@ -556,7 +607,7 @@ describe('ReAct bounded finalization with opt-in cumulative budgets', () => {
   it('never executes a tool returned against the reserved no-tools finalization request', async () => {
     const llm = makeLLMAdapter([
       { content: '', toolCalls: [{ id: 'first', name: 'read_file', args: { path: 'a' } }], promptTokens: 10, completionTokens: 3, finishReason: 'tool_calls' },
-      { content: '', toolCalls: [{ id: 'illegal-write', name: 'write_file', args: { path: 'b', content: 'bad' } }], promptTokens: 10, completionTokens: 3, finishReason: 'tool_calls' },
+      { content: '', toolCalls: [{ id: 'illegal-write', name: 'write_file', args: { path: 'b', data: 'bad' } }], promptTokens: 10, completionTokens: 3, finishReason: 'tool_calls' },
     ])
     const ctx = makeCtx()
     const output = await collectYields(new ReActStrategy(llm, { maxIterations: 2, finalizeOnLimit: true }).run('Inspect', ctx))

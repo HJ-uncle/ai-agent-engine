@@ -3,8 +3,37 @@ import path from 'node:path'
 import { success, fail } from '../response.js'
 import { diagnoseFile, listLspAdapters, purgeLspCache } from '../../../lsp/index.js'
 import { workspaceManager } from '../../../workspace/index.js'
+import { disposeLanguageProject, handleLanguageRequest } from '../../../lsp/language-service.js'
 
 export async function lspRoutes(fastify: FastifyInstance) {
+  /**
+   * Session-scoped JSON-RPC over HTTP for remote editor language features.
+   * The desktop client sends one request per LSP message; notifications are
+   * accepted as well and return a null result.  Paths are resolved by the same
+   * WorkspaceManager binding used by file tools, so a client cannot query a
+   * different session or escape the configured workspace roots.
+   */
+  fastify.post<{
+    Body: { sessionId: string; workspaceRoot?: string; method: string; params?: Record<string, unknown> }
+  }>('/lsp/request', async (request, reply) => {
+    const { sessionId, workspaceRoot, method, params } = request.body ?? ({} as any)
+    if (!sessionId || typeof method !== 'string' || method.length > 160) return reply.code(200).send(fail(40000, 'sessionId 与 method 必填'))
+    const tenantId = (request as any).authContext?.tenantId
+    try {
+      const result = handleLanguageRequest({ tenantId, sessionId, workspaceRoot }, method, params ?? {})
+      return reply.code(200).send(success(result))
+    } catch (error) {
+      return reply.code(200).send(fail(40000, error instanceof Error ? error.message : String(error)))
+    }
+  })
+
+  fastify.delete<{ Querystring: { sessionId: string } }>('/lsp/session', async (request, reply) => {
+    const sessionId = request.query.sessionId
+    if (!sessionId) return reply.code(200).send(fail(40000, '缺少 sessionId'))
+    disposeLanguageProject({ tenantId: (request as any).authContext?.tenantId, sessionId })
+    return reply.code(200).send(success({ disposed: true }))
+  })
+
   // 列出已安装的诊断 adapter 及其可用性
   fastify.get('/lsp/adapters', async (_request, reply) => {
     const list = await listLspAdapters()

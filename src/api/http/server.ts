@@ -13,6 +13,7 @@ import { knowledgeRoutes } from './routes/knowledge.js'
 import { messagesRoutes } from './routes/messages.js'
 import { agentRoutes } from './routes/agents.js'
 import { workspaceRoutes } from './routes/workspace.js'
+import { gitRoutes } from './routes/git.js'
 import { terminalRoutes } from './routes/terminal.js'
 import { settingsRoutes } from './routes/settings.js'
 import { modelsRoutes } from './routes/models.js'
@@ -97,6 +98,7 @@ export async function buildServer() {
     await api.register(messagesRoutes)
     await api.register(agentRoutes)
     await api.register(workspaceRoutes)
+    await api.register(gitRoutes)
     // 终端路由：POST /api/v1/terminal/create, WS /api/v1/terminal/ws/:id
     await api.register(terminalRoutes)
     await api.register(settingsRoutes)

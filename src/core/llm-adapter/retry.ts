@@ -106,7 +106,7 @@ export class FallbackAdapter implements LLMAdapter {
     if (Number.isFinite(contextWindow) && contextWindow > 0) {
       const input = Math.max(options?.requestInputTokenEstimate ?? 0,
         estimateRequestInput(messages, options?.systemPrompt, options?.tools ?? []))
-      const requested = input + (options?.maxTokens ?? 4096)
+      const requested = input + (options?.maxTokens ?? (options?.unboundedOutput ? 0 : 4096))
       if (requested > contextWindow) throw Object.assign(new Error(
         `Model ${adapter.model} context window ${contextWindow} cannot fit estimated input and output reserve ${requested}`,
       ), { code: 'CONTEXT_WINDOW_EXCEEDED', retryable: false, model: adapter.model, contextWindow, requested })

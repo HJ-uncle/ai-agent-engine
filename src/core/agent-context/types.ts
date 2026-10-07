@@ -187,7 +187,7 @@ export interface ConversationHistory {
    */
   microCompactToolResults(
     ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>,
-    opts?: { keepRecent?: number },
+    opts?: { keepRecent?: number; maxChars?: number },
   ): Promise<{ cleared: number; freedTokens: number }>
 }
 
@@ -237,6 +237,8 @@ export interface AgentContext {
   resolvedModel?: ResolvedModelConfig
   onRequestAttempt?: (event: LLMRequestAttemptEvent) => void | Promise<void>
   toolProfile?: ToolProfile
+  /** Memory mode is selected by the root request; each context uses its own sessionId boundary. */
+  memoryScope?: import('../../storage/memory/settings.js').MemoryMode
   requestBudget?: RequestBudget
   finalizationReserveTokens?: number
   runObserver?: Partial<RunObserver>
@@ -290,6 +292,7 @@ export interface CreateAgentContextOptions {
   resolvedModel?: ResolvedModelConfig
   onRequestAttempt?: (event: LLMRequestAttemptEvent) => void | Promise<void>
   toolProfile?: ToolProfile
+  memoryScope?: import('../../storage/memory/settings.js').MemoryMode
   requestBudget?: RequestBudget
   finalizationReserveTokens?: number
   runObserver?: Partial<RunObserver>

@@ -7,7 +7,11 @@ export interface StreamBusOptions {
   maxReplayEvents?: number
   maxReplayBytes?: number
   maxSubscriberEvents?: number
+  /** Maximum bytes queued for one subscriber before it must reload a snapshot. */
+  maxSubscriberBytes?: number
   initialProjection?: StreamEnvelope[]
+  /** Keep the producer alive when an SSE viewer disconnects (the client can replay later). */
+  retainOnDisconnect?: boolean
 }
 export interface StreamSnapshot {
   schemaVersion: 1
@@ -15,6 +19,8 @@ export interface StreamSnapshot {
   eventId: string
   finished: boolean
   error?: string
+  /** Older frames remain available from the persisted history snapshot. */
+  projectionTruncated?: boolean
   projection: StreamEnvelope[]
 }
 
@@ -32,6 +38,8 @@ export class StreamBus {
   public errorObj: unknown = null
   public disconnectTimeout: NodeJS.Timeout | null = null
   public readonly maxSubscriberEvents: number
+  public readonly maxSubscriberBytes: number
+  public readonly retainOnDisconnect: boolean
   private sequence = 0
   private replayBytes = 0
   private readonly maxReplayEvents: number
@@ -43,6 +51,8 @@ export class StreamBus {
     this.maxReplayEvents = Math.max(1, options.maxReplayEvents ?? 2048)
     this.maxReplayBytes = Math.max(1, options.maxReplayBytes ?? 8 * 1024 * 1024)
     this.maxSubscriberEvents = Math.max(1, options.maxSubscriberEvents ?? 2048)
+    this.maxSubscriberBytes = Math.max(1, options.maxSubscriberBytes ?? 8 * 1024 * 1024)
+    this.retainOnDisconnect = options.retainOnDisconnect === true
     this.projection = new CurrentTurnProjection(structuredClone(options.initialProjection ?? []))
   }
 
@@ -84,6 +94,7 @@ export class StreamBus {
   snapshot(): StreamSnapshot {
     return { schemaVersion: 1, streamId: this.streamId, eventId: this.lastEventId,
       finished: this.finished, ...(this.errorObj ? { error: this.errorObj instanceof Error ? this.errorObj.message : String(this.errorObj) } : {}),
+      ...(this.projection.truncated ? { projectionTruncated: true } : {}),
       projection: this.projection.snapshot() }
   }
 
@@ -119,20 +130,28 @@ export function busToIterable(bus: StreamBus, lastEventId?: string): AsyncIterab
   const cursor = bus.assertReplayCursor(lastEventId)
   const prefixLength = bus.streamId.length + 1
   const queue = bus.events.filter(event => Number(event.id.slice(prefixLength)) > cursor)
+  let queuedBytes = queue.reduce((total, event) => total + Buffer.byteLength(event.chunk, 'utf8'), 0)
   let closed = false
-  let failure: unknown
+  let failure: unknown = queue.length > bus.maxSubscriberEvents || queuedBytes > bus.maxSubscriberBytes
+    ? new SnapshotRequiredError('Subscriber replay exceeds its queue budget; load the current snapshot')
+    : undefined
   let waiting: { resolve: (value: IteratorResult<SseEventPayload>) => void; reject: (error: unknown) => void } | undefined
   const cleanup = () => {
     bus.emitter.off('data', onData)
     bus.emitter.off('end', onEnd)
     bus.emitter.off('error', onError)
   }
-  const finish = () => { closed = true; cleanup(); queue.length = 0 }
+  const finish = () => { closed = true; cleanup(); queue.length = 0; queuedBytes = 0 }
   const settle = () => {
     if (!waiting) return
     const waiter = waiting
     if (failure) { waiting = undefined; finish(); waiter.reject(failure) }
-    else if (queue.length) { waiting = undefined; waiter.resolve({ done: false, value: queue.shift()! }) }
+    else if (queue.length) {
+      waiting = undefined
+      const value = queue.shift()!
+      queuedBytes -= Buffer.byteLength(value.chunk, 'utf8')
+      waiter.resolve({ done: false, value })
+    }
     else if (closed || bus.finished) {
       waiting = undefined
       finish()
@@ -143,10 +162,12 @@ export function busToIterable(bus: StreamBus, lastEventId?: string): AsyncIterab
   const onData = (payload: SseEventPayload) => {
     if (closed) return
     queue.push(payload)
-    if (queue.length > bus.maxSubscriberEvents) {
+    queuedBytes += Buffer.byteLength(payload.chunk, 'utf8')
+    if (queue.length > bus.maxSubscriberEvents || queuedBytes > bus.maxSubscriberBytes) {
       failure = new SnapshotRequiredError('Subscriber fell behind; load the current snapshot')
       cleanup()
       queue.length = 0
+      queuedBytes = 0
     }
     settle()
   }

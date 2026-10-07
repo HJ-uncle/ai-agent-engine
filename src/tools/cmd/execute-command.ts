@@ -35,14 +35,14 @@ export async function preflightCommand(rawArgs: unknown, ctx: AgentContext): Pro
 
 export const cmdTool: Tool = {
   name: 'execute_cmd', displayName: '执行命令',
-  description: '按当前安全策略执行命令。默认前台等待退出；background=true 启动后台命令并返回 jobId，成功启动不等于命令成功。使用 command_output 查看输出/真实退出状态，cancel_command 停止。后台默认超时10分钟；只保留最后256KiB输出，重启后不重跑或接管原进程。',
+  description: '按当前安全策略执行命令。默认前台等待退出；background=true 启动后台命令并返回 jobId，成功启动不等于命令成功。Code 模式未指定 timeoutMs 时持续运行直到退出或取消；使用 command_output 查看完整分页输出/真实退出状态，cancel_command 停止。重启后不重跑或接管原进程。',
   preflight: preflightCommand,
   parameters: {
     type: 'object',
     properties: {
       command: { type: 'string' }, args: { type: 'array', items: { type: 'string' } },
       cwd: { type: 'string', description: '工作目录，仍受当前工作区安全策略限制' },
-      timeoutMs: { type: 'number', description: '超时毫秒数，上限600000；默认后台600s，前台safe/standard 30s、full-access 120s' },
+      timeoutMs: { type: 'number', description: '可选超时毫秒数；省略时 Code 模式持续运行直到退出或取消，其他模式使用安全默认值' },
       background: { type: 'boolean', description: '默认false；true在成功启动后立即返回jobId，后续读取输出或取消' },
     }, required: ['command'],
   },
@@ -58,8 +58,9 @@ export const cmdTool: Tool = {
     workspaceManager.resolveSafePath(ctx, cwd)
     throwIfAborted(ctx.signal)
     const defaultTimeout = background ? 600_000 : mode === 'full-access' ? 120_000 : 30_000
-    const configuredTimeout = timeoutMs ?? Number(process.env.CMD_TIMEOUT_MS ?? defaultTimeout)
-    const timeout = Number.isFinite(configuredTimeout) && configuredTimeout > 0 ? Math.min(Math.max(1, Math.floor(configuredTimeout)), 600_000) : defaultTimeout
+    // Code runs are durable work: an omitted deadline must not terminate a legitimate long build, test, or server.
+    const configuredTimeout = timeoutMs ?? (ctx.toolProfile === 'code' ? undefined : Number(process.env.CMD_TIMEOUT_MS ?? defaultTimeout))
+    const timeout = configuredTimeout === undefined ? undefined : (Number.isFinite(configuredTimeout) && configuredTimeout > 0 ? Math.max(1, Math.floor(configuredTimeout)) : defaultTimeout)
     const scope = commandJobScope(ctx)
     const launched = await commandJobs.start({ ...scope, ownerSessionId: ctx.sessionId,
       runId: ctx.rootRunId, ownerRunId: ctx.runId, turnId: ctx.turnId ?? ctx.conversationId, toolCallId: ctx.currentToolCallId,

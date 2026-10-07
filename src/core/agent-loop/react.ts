@@ -1,3 +1,4 @@
+import { isThinkingDisabled } from '../llm-adapter/thinking.js'
 import type { LoopStrategy } from './strategy.js'
 import type { AgentContext } from '../agent-context/index.js'
 import type { LLMAdapter, LLMAdapterOptions } from '../llm-adapter/index.js'
@@ -24,6 +25,20 @@ import { resolveCapabilities } from '../model-capabilities/index.js'
 function getToolOutputMaxChars(): number {
   const base = parseInt(process.env.TOOL_OUTPUT_MAX_CHARS ?? '4000', 10)
   return applyOSMMultiplier('toolOutputMaxChars', base)
+}
+
+/**
+ * Code mode needs a larger window for source and compiler diagnostics, but its
+ * transcript still has to be bounded.  A command can legally emit megabytes
+ * of minified assets or base64 data; forwarding that entire result to the next
+ * model request can exceed the provider's real tokenizer limit even when the
+ * character based estimate says it fits.  Keep the cap configurable while
+ * giving Code mode a useful default for ordinary source files.
+ */
+function getCodeToolOutputMaxChars(): number {
+  const configured = parseInt(process.env.CODE_TOOL_OUTPUT_MAX_CHARS ?? '', 10)
+  if (Number.isFinite(configured) && configured > 0) return configured
+  return 64 * 1024
 }
 
 /**
@@ -74,35 +89,74 @@ function fingerprintToolCall(tc: { name?: string; args?: unknown }): string {
   return `${tc?.name ?? ''}:${normalized}`
 }
 
+/** A transient tool outage should be retried by the model instead of tripping
+ * the no-progress circuit. Permanent failures and repeated successful calls
+ * remain subject to the existing safety stop. */
+function isTransientToolFailure(result: ToolResult): boolean {
+  if (result.status !== 'failed') return false
+  if (result.metadata?.retryable === true) return true
+  const metadataCode = result.metadata?.code ?? result.metadata?.errorCode ?? result.metadata?.errorType
+  const text = `${metadataCode ?? ''} ${result.error ?? ''} ${result.output ?? ''}`.toLowerCase()
+  return /(?:timeout|timed out|time\s*out|econnreset|econnrefused|ehostunreach|enetunreach|enetreset|socket hang up|network|temporar|rate.?limit|too many requests|service unavailable|gateway (?:timeout|unavailable)|(?:^|[^a-z])5\d\d(?:[^a-z]|$))/.test(text)
+}
+
 
 /**
  * Truncate tool output that is too long.
  *
- * Special case: if the output is a JSON object that contains a `dataUrl` field
- * (smart_read / read_image image result), do NOT truncate at all.  Truncating
- * JSON mid-string corrupts the structure, causing JSON.parse to fail in the
- * LLM adapter — which then passes garbled base64 as plain text to the model,
- * leading to hallucination.  The base64 data is necessary for the adapter to
- * inject an image_url message part so the vision model can actually see the image.
+ * Real image data URLs must remain intact: adapters convert them to image
+ * blocks, not model text. A boolean `hasDataUrl` marker or a non-image data
+ * URL must not let arbitrary large text bypass the ordinary transcript cap.
  */
-function truncateToolOutput(output: string, maxChars: number = getToolOutputMaxChars()): string {
-  // Never truncate image JSON results — the adapter needs the full dataUrl intact.
-  if (output.includes('"dataUrl"') || output.includes('"hasDataUrl"')) {
+export function truncateToolOutput(output: string, maxChars: number = getToolOutputMaxChars()): string {
+  if (output.length > maxChars && (output.includes('"dataUrl"') || output.includes('"hasDataUrl"'))) {
     try {
-      const parsed = JSON.parse(output)
-      if (parsed && typeof parsed === 'object' && (parsed.dataUrl || parsed.hasDataUrl)) {
-        return output  // pass through unchanged
+      const parsed = JSON.parse(output) as unknown
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const record = parsed as Record<string, unknown>
+        const imageData = typeof record.dataUrl === 'string'
+          ? /^data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/]+={0,2})$/i.exec(record.dataUrl)
+          : null
+        if (imageData && imageData[2].length % 4 === 0) {
+          // Keep the payload and bounded identity fields; unrelated metadata
+          // alongside a genuine image must not smuggle a megabyte text log.
+          return JSON.stringify({
+            filename: typeof record.filename === 'string' ? record.filename.slice(0, 512) : undefined,
+            mimeType: imageData[1],
+            size: typeof record.size === 'number' ? record.size : undefined,
+            dataUrl: record.dataUrl,
+            hasDataUrl: true,
+          })
+        }
+        if (typeof record.dataUrl === 'string' || record.hasDataUrl === true) {
+          const compact: Record<string, unknown> = { ...record }
+          delete compact.dataUrl
+          compact.hasDataUrl = false
+          compact.dataUrlStripped = true
+          const compactText = JSON.stringify(compact)
+          if (compactText.length <= maxChars) return compactText
+          const minimal = JSON.stringify({
+            filename: typeof record.filename === 'string' ? record.filename.slice(0, 512) : undefined,
+            mimeType: typeof record.mimeType === 'string' ? record.mimeType : undefined,
+            size: typeof record.size === 'number' ? record.size : undefined,
+            hasDataUrl: false,
+            dataUrlStripped: true,
+          })
+          if (minimal.length <= maxChars) return minimal
+        }
       }
     } catch {
-      // Could not parse — fall through to normal truncation
+      // Could not parse — fall through to the ordinary head/tail truncation.
     }
   }
   if (output.length <= maxChars) return output
-  const half = Math.floor(maxChars / 2)
+  const marker = `\n\n... [truncated ${output.length - maxChars} chars] ...\n\n`
+  if (maxChars <= marker.length) return output.slice(0, maxChars)
+  const available = Math.max(0, maxChars - marker.length)
+  const half = Math.floor(available / 2)
   const head = output.slice(0, half)
   const tail = output.slice(-half)
-  const truncatedChars = output.length - maxChars
-  return `${head}\n\n... [truncated ${truncatedChars} chars] ...\n\n${tail}`
+  return `${head}${marker}${tail}`
 }
 
 /** 子代理输出末尾的执行元数据标记（subagent 工具附带，客户端专用，不进 LLM 历史） */
@@ -156,6 +210,8 @@ export interface TokenUsage {
 export interface ReActOptions {
   /** Reserve the final child iteration for returning evidence instead of starting more tools. */
   finalizeOnLimit?: boolean
+  /** Code mode leaves completion length and local cumulative budgets to the provider/context window. */
+  unboundedCode?: boolean
   maxOutputTokens?: number
   maxIterations?: number
   maxAskUserCount?: number
@@ -165,6 +221,7 @@ export interface ReActOptions {
   conversationId?: string
   /** Pre-computed token counts for the injected prompts (optional) */
   promptBreakdown?: Pick<TokenUsage, 'systemPromptTokens' | 'systemToolsTokens' | 'skillTokens' | 'ragTokens' | 'builtinToolsTokens' | 'mcpToolsTokens'>
+  thinkingEnabled?: boolean
   thinkingConfig?: Record<string, unknown> | null
   responseThinkingField?: string | null
   reasoningEffort?: 'low' | 'medium' | 'high'
@@ -235,7 +292,15 @@ export class ReActStrategy implements LoopStrategy {
       durationMs: result.durationMs, rootRunId: ctx.rootRunId, turnId: ctx.turnId,
       ...(result.change ? { change: { ...result.change, toolCallId: call.id } } : {}) }
     let failedToPersist = false
-    const truncated = truncateToolOutput(stripSubagentMeta(output))
+    // Code mode gets a larger cap for source and compiler diagnostics, but it
+    // must still be bounded.  A complete build log can contain megabytes of
+    // base64/minified text whose provider token count is far above our cheap
+    // character estimate; persisting it verbatim makes the next request fail
+    // before the loop has a chance to compact the history.
+    const outputLimit = ctx.toolProfile === 'code' ? getCodeToolOutputMaxChars() : getToolOutputMaxChars()
+    const truncated = truncateToolOutput(stripSubagentMeta(output), outputLimit)
+    const outputWasTruncated = truncated.length < output.length
+    if (outputWasTruncated) (metadata as Record<string, unknown>).outputTruncated = true
     const tokens = estimateTokens(truncated)
     if (result.status !== 'waiting') {
       const subagent = result.metadata?.subagent as { runId?: string } | undefined
@@ -251,7 +316,7 @@ export class ReActStrategy implements LoopStrategy {
       }
       try {
         await ctx.runObserver?.onToolEnd?.({ toolCallId: call.id, name: call.name,
-          success: result.success, output, durationMs: result.durationMs,
+          success: result.success, output: truncated, durationMs: result.durationMs,
           error: result.error ? { code: result.status === 'cancelled' ? 'CANCELLED' : 'TOOL_ERROR', message: result.error, retryable: false } : undefined })
       } catch (error) {
         failedToPersist = true
@@ -259,7 +324,7 @@ export class ReActStrategy implements LoopStrategy {
       }
     }
     const frame = { toolCallId: call.id, toolName: call.name, name: call.name, messageId,
-      success: result.success, status: result.status, output, outputPreview: output,
+      success: result.success, status: result.status, output: truncated, outputPreview: truncated,
       error: result.error, metadata, durationMs: result.durationMs,
       rootRunId: ctx.rootRunId, turnId: ctx.turnId }
     yield `\x00__tool_end__${JSON.stringify(frame)}`
@@ -320,6 +385,7 @@ export class ReActStrategy implements LoopStrategy {
   }
 
   private async *runInternal(input: string | any[] | null, ctx: AgentContext): AsyncIterable<string> {
+    const unboundedCode = this.options.unboundedCode === true || ctx.toolProfile === 'code'
     // 迭代上限决策顺序（与 agent-context/factory.ts 的 tokenBudget 规则对齐）：
     //   1. this.options.maxIterations 显式传入 → 原样使用（NaN = 调用方声明"不限"）
     //      （调用方已经推导过了，例如 subagent-tool 的 maxSteps；不应再被
@@ -334,11 +400,11 @@ export class ReActStrategy implements LoopStrategy {
       : undefined
     const maxIterations = hasExplicitIterations
       ? (this.options.maxIterations as number)
-      : envDefaultIterations === undefined
+      : unboundedCode || envDefaultIterations === undefined
         ? Number.POSITIVE_INFINITY
         : applyOSMMultiplier('maxIterations', envDefaultIterations)
 
-    const maxAskUserCount = this.options.maxAskUserCount ?? 5
+    const maxAskUserCount = unboundedCode ? Number.POSITIVE_INFINITY : this.options.maxAskUserCount ?? 5
     const conversationId = ctx.turnId ?? this.options.conversationId ?? ctx.conversationId
     ctx.conversationId = conversationId
 
@@ -451,12 +517,21 @@ export class ReActStrategy implements LoopStrategy {
       // 比模型 128k 窗口还小 8k，于是引擎比模型更早拒答
       // （"Request input (112210) plus output reservation (8192) exceeds context window
       // (120000)"）。该默认值已在 agent-context/factory.ts 移除，这里不再引入新的推导预算。
-      const effectiveBudget = Math.min(
-        typeof ctx.tokenBudget === 'number' ? ctx.tokenBudget : Number.POSITIVE_INFINITY,
-        ctx.modelCaps?.contextWindow ?? Number.POSITIVE_INFINITY)
-      let maxOutputTokens = this.options.maxOutputTokens ?? Math.min(8192, Math.max(256, Math.floor(effectiveBudget / 4)))
+      const effectiveBudget = unboundedCode
+        ? (ctx.modelCaps?.contextWindow ?? Number.POSITIVE_INFINITY)
+        : Math.min(
+          typeof ctx.tokenBudget === 'number' ? ctx.tokenBudget : Number.POSITIVE_INFINITY,
+          ctx.modelCaps?.contextWindow ?? Number.POSITIVE_INFINITY)
+      // Code mode deliberately omits maxTokens. OpenAI-compatible adapters then
+      // let the upstream model choose its available completion capacity instead
+      // of stopping at the old engine-side 8192-token reservation.
+      let maxOutputTokens = unboundedCode
+        ? undefined
+        : this.options.maxOutputTokens ?? Math.min(8192, Math.max(256, Math.floor(effectiveBudget / 4)))
+      const outputReservation = maxOutputTokens ?? 0
       const fixedInputTokens = estimateRequestInput(messages.filter(message => message.role === 'system'), this.options.systemPrompt, effectiveTools)
-      if (!Number.isFinite(maxOutputTokens) || maxOutputTokens <= 0 || fixedInputTokens + maxOutputTokens > effectiveBudget) {
+      if ((!unboundedCode && (!Number.isFinite(maxOutputTokens) || maxOutputTokens! <= 0))
+        || (Number.isFinite(effectiveBudget) && fixedInputTokens + outputReservation > effectiveBudget)) {
         await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'context_limit',
           error: { code: 'CONTEXT_LIMIT', message: 'System instructions, tools and output reservation exceed the context window', retryable: false } })
         yield '\n\n[Response truncated: token budget exceeded]'
@@ -465,15 +540,16 @@ export class ReActStrategy implements LoopStrategy {
       // 压缩基准与有效上限同源（预算与窗口的较小者）；两者都没有时不触发压缩
       // （既无窗口也无预算时无从判断何时该压缩，交给服务端错误反馈）。
       const compressThreshold = Math.floor(effectiveBudget * compressRatio)
-      let rawTokens = estimateRequestInput(messages, this.options.systemPrompt, effectiveTools) + maxOutputTokens
+      let rawTokens = estimateRequestInput(messages, this.options.systemPrompt, effectiveTools) + outputReservation
       if (rawTokens > compressThreshold && typeof ctx.history.microCompactToolResults === 'function') {
         // 先做 micro-compact：清理旧工具结果（不调 LLM），省下的空间可能足以
         // 避免全量压缩——对齐 Claude Code「先轻量清理再考虑总结」的分级策略。
         try {
-          const micro = await ctx.history.microCompactToolResults(ctx, { keepRecent: 10 })
+          const microOutputLimit = ctx.toolProfile === 'code' ? getCodeToolOutputMaxChars() : getToolOutputMaxChars()
+          const micro = await ctx.history.microCompactToolResults(ctx, { keepRecent: 10, maxChars: microOutputLimit })
           if (micro.cleared > 0) {
             messages = await requestHistory(ctx)
-            rawTokens = estimateRequestInput(messages, this.options.systemPrompt, effectiveTools) + maxOutputTokens
+            rawTokens = estimateRequestInput(messages, this.options.systemPrompt, effectiveTools) + outputReservation
             ctx.logger.info({ ...micro, rawTokens }, 'Micro-compact done')
           }
         } catch (err: any) {
@@ -498,7 +574,7 @@ export class ReActStrategy implements LoopStrategy {
         try {
           const summarizeWindow = resolveCapabilities({ model: summarizeLlm.model, provider: summarizeLlm.provider }).contextWindow
           const summarize = buildCompactSummarizeFn(summarizeLlm, { signal: ctx.signal, onRequestAttempt: ctx.onRequestAttempt,
-            contextWindow: Math.min(effectiveBudget, summarizeWindow ?? Infinity), maxOutputTokens: Math.min(4096, maxOutputTokens) })
+            contextWindow: Math.min(effectiveBudget, summarizeWindow ?? Infinity), maxOutputTokens: unboundedCode ? undefined : Math.min(4096, maxOutputTokens!) })
           const stats = await ctx.history.compress(
             ctx,
             summarize,
@@ -532,7 +608,7 @@ export class ReActStrategy implements LoopStrategy {
       const historyTokens = messages.reduce((sum, m) => sum + (m.tokens ?? estimateTokens(m.content)), 0)
       const conservativeHistoryTokens = Math.ceil(historyTokens * 1.1)
 
-      if (typeof ctx.tokenBudget === 'number' && conservativeHistoryTokens >= ctx.tokenBudget) {
+      if (!unboundedCode && typeof ctx.tokenBudget === 'number' && conservativeHistoryTokens >= ctx.tokenBudget) {
         ctx.logger.warn({ historyTokens, conservativeHistoryTokens, tokenBudget: ctx.tokenBudget }, 'Token budget exhausted')
         await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'context_limit', error: { retryable: false, code: 'CONTEXT_LIMIT', message: 'Context window exceeded' } })
         yield '\n\n[Response truncated: token budget exceeded]'
@@ -543,9 +619,9 @@ export class ReActStrategy implements LoopStrategy {
       let systemPrompt = this.options.systemPrompt
       let requestInputTokenEstimate = estimateRequestInput(messages, systemPrompt, effectiveTools)
       // One more exploration request must leave enough for a summary, including likely tool-result growth.
-      const summaryReserve = estimateRequestInput(messages, systemPrompt, []) + 4096 + 8192
-      ctx.finalizationReserveTokens = summaryReserve + 8192
-      if (ctx.requestBudget && !ctx.requestBudget.canAfford(requestInputTokenEstimate + maxOutputTokens + summaryReserve)) {
+      const summaryReserve = unboundedCode ? 0 : estimateRequestInput(messages, systemPrompt, []) + 4096 + 8192
+      ctx.finalizationReserveTokens = unboundedCode ? 0 : summaryReserve + 8192
+      if (!unboundedCode && ctx.requestBudget && !ctx.requestBudget.canAfford(requestInputTokenEstimate + maxOutputTokens! + summaryReserve)) {
         finalizationReason = 'budget'
       } else if (this.options.finalizeOnLimit && iteration > 0 && iteration === maxIterations - 1) {
         finalizationReason = 'max_steps'
@@ -557,13 +633,13 @@ export class ReActStrategy implements LoopStrategy {
       if (finalizationReason) {
         effectiveTools = []
         systemPrompt = [systemPrompt, FINALIZATION_PROMPT].filter(Boolean).join('\n\n')
-        maxOutputTokens = Math.min(maxOutputTokens, 4096)
+        if (!unboundedCode) maxOutputTokens = Math.min(maxOutputTokens!, 4096)
         requestInputTokenEstimate = estimateRequestInput(messages, systemPrompt, [])
-        if (ctx.requestBudget && !ctx.requestBudget.canAfford(requestInputTokenEstimate + maxOutputTokens)) {
+        if (!unboundedCode && ctx.requestBudget && !ctx.requestBudget.canAfford(requestInputTokenEstimate + maxOutputTokens!)) {
           messages = [...messages.filter(message => message.role === 'system'), ...finalizationMessages(messages)]
           requestInputTokenEstimate = estimateRequestInput(messages, systemPrompt, [])
         }
-        if (ctx.requestBudget && !ctx.requestBudget.canAfford(requestInputTokenEstimate + maxOutputTokens)) {
+        if (!unboundedCode && ctx.requestBudget && !ctx.requestBudget.canAfford(requestInputTokenEstimate + maxOutputTokens!)) {
           const evidence = recordedEvidence
           await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'budget', partialOutput: evidence,
             error: { code: 'TOKEN_BUDGET_EXCEEDED', message: finalizationNotice, retryable: false } })
@@ -573,7 +649,10 @@ export class ReActStrategy implements LoopStrategy {
         yield '\n\n' + finalizationNotice + '\n\n'
       }
 
-      if (requestInputTokenEstimate + maxOutputTokens > effectiveBudget) {
+      const exceedsContext = Number.isFinite(effectiveBudget) && (unboundedCode
+        ? requestInputTokenEstimate >= effectiveBudget
+        : requestInputTokenEstimate + (maxOutputTokens ?? 0) > effectiveBudget)
+      if (exceedsContext) {
         await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'context_limit',
           error: { code: 'CONTEXT_LIMIT', message: `Request input (${requestInputTokenEstimate}) plus output reservation (${maxOutputTokens}) exceeds context window (${effectiveBudget})`, retryable: false } })
         yield '\n\n[Response truncated: token budget exceeded]'
@@ -585,11 +664,15 @@ export class ReActStrategy implements LoopStrategy {
       const llmOptions: LLMAdapterOptions = {
         model: this.llm.model,
         maxTokens: maxOutputTokens,
+        unboundedOutput: unboundedCode,
+        contextWindow: Number.isFinite(effectiveBudget) ? effectiveBudget : undefined,
         requestInputTokenEstimate,
         onRequestAttempt: ctx.onRequestAttempt,
         systemPrompt,
         temperature: this.options.temperature,
-        thinkingConfig: finalizationReason ? undefined : this.options.thinkingConfig,
+        thinkingEnabled: this.options.thinkingEnabled,
+        // Finalization must retain an explicit Off instead of restoring provider defaults.
+        thinkingConfig: finalizationReason && !isThinkingDisabled(this.options) ? undefined : this.options.thinkingConfig,
         responseThinkingField: this.options.responseThinkingField,
         reasoningEffort: this.options.reasoningEffort,
         tools: effectiveTools.map((t) => ({
@@ -940,7 +1023,6 @@ export class ReActStrategy implements LoopStrategy {
         lastUsedToolNames = new Set(calls.map(call => call.name))
         const fingerprints = calls.map(fingerprintToolCall)
         const isRepeating = fingerprints.length > 0 && fingerprints.every(value => lastToolFingerprints.includes(value))
-        if (isRepeating) globalConsecutiveFailures++
         lastToolFingerprints = fingerprints
         const registered: RegisteredToolCall[] = []
         try {
@@ -989,6 +1071,7 @@ export class ReActStrategy implements LoopStrategy {
         }
         let blocked = false
         const settledFrames: string[] = []
+        let transientFailures = 0
         for (let index = 0; index < registered.length; index++) {
           const result = batch.results[index]
           const settlement = this.settleTool(registered[index], result, ctx)
@@ -1001,9 +1084,14 @@ export class ReActStrategy implements LoopStrategy {
           cumulativeToolResultsTokens += settled.tokens
           failedToPersist ||= settled.failedToPersist
           blocked ||= Boolean(result.metadata?.blocked)
-          if (result.status === 'failed') globalConsecutiveFailures++
+          if (isTransientToolFailure(result)) transientFailures++
+          else if (result.status === 'failed') globalConsecutiveFailures++
           else if (result.status === 'succeeded' && !isRepeating) globalConsecutiveFailures = 0
         }
+        // Repeating calls are a no-progress signal only when they produced a
+        // durable/permanent failure. A transient outage must get a chance to
+        // recover without burning the global circuit-breaker budget.
+        if (isRepeating && transientFailures === 0) globalConsecutiveFailures++
         // The consumer may disconnect/return after any frame. All started tool
         // results must already be durable before yielding the first terminal card.
         for (const frame of settledFrames) yield frame

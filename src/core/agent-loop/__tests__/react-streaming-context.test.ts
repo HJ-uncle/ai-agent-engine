@@ -169,6 +169,20 @@ describe('D5 provider streaming and partial evidence', () => {
 })
 
 describe('D5 complete request context admission', () => {
+  it('Code mode omits the fixed output cap and ignores the local token budget', async () => {
+    const f = fixture()
+    f.ctx.toolProfile = 'code'
+    f.ctx.tokenBudget = 1
+    f.ctx.modelCaps = { contextWindow: 20_000 }
+    await f.run({ maxOutputTokens: 100 }, 'Give a short answer.')
+    expect(f.llm.stream).toHaveBeenCalledTimes(1)
+    const options = vi.mocked(f.llm.stream).mock.calls[0][1]!
+    expect(options.maxTokens).toBeUndefined()
+    expect(options.unboundedOutput).toBe(true)
+    expect(options.contextWindow).toBe(20_000)
+    expect(f.outcomes.at(-1)).toMatchObject({ status: 'succeeded' })
+  })
+
   it('uses a positive default output reservation that permits a simple request in a 4096-token window', async () => {
     const f = fixture()
     f.ctx.modelCaps = { contextWindow: 4_096 }
@@ -344,5 +358,31 @@ describe('D5 complete request context admission', () => {
     expect(compacted).toContain(original)
     expect(f.llm.stream).not.toHaveBeenCalled()
     expect(f.outcomes.at(-1)).toMatchObject({ status: 'failed', stopReason: 'context_limit' })
+  })
+})
+
+
+describe('thinking Off during finalization', () => {
+  it('keeps Off after tools finish and the final summary disables further tools', async () => {
+    const f = fixture()
+    const requests: LLMAdapterOptions[] = []
+    f.ctx.tools.list = () => [{ name: 'read_file', description: 'Read a project file', parameters: { type: 'object' } }]
+    f.llm.stream = vi.fn(async function* (_messages: Message[], options?: LLMAdapterOptions) {
+      requests.push(options!)
+      if (requests.length === 1) {
+        yield { done: true, finishReason: 'tool_calls' as const,
+          toolCalls: [{ id: 'read-1', name: 'read_file', args: '{"path":"README.md"}' }] }
+      } else {
+        yield { done: true, content: 'Verified project description.', finishReason: 'stop' as const }
+      }
+    })
+    const offConfig = { enable_thinking: false, reasoning_effort: 'low' }
+    await f.run({ maxIterations: 2, finalizeOnLimit: true, thinkingEnabled: false, thinkingConfig: offConfig })
+    expect(requests).toHaveLength(2)
+    expect(requests[0].tools).toHaveLength(1)
+    expect(requests[1].tools).toEqual([])
+    expect(requests[1].thinkingEnabled).toBe(false)
+    expect(requests[1].thinkingConfig).toEqual(offConfig)
+    expect(requests[1].systemPrompt).toContain('探索已停止')
   })
 })

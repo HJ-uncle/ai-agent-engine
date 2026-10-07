@@ -1,184 +1,186 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { SQLiteMemoryManager } from '../../../storage/memory/memory-manager.js'
-import { getMemoryDb } from '../../../storage/memory/db.js'
+import type { MemoryContext, MemoryEdgeType, MemoryNodeType, MemoryScope } from '../../../storage/memory/types.js'
 import { success, fail, paginateArray } from '../response.js'
-import { MemoryConsolidator } from '../../../storage/memory/consolidation.js'
-
-import crypto from 'crypto'
+import { getRequestToolProfile } from '../tool-profile.js'
+import { getSessionMemorySettings, setSessionMemoryScope } from '../../../storage/memory/settings.js'
 
 const manager = new SQLiteMemoryManager()
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+type ScopeInput = { scope?: string; sessionId?: string }
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
 
+/** Resolve one explicit visibility boundary at the HTTP edge. */
+function resolveContext(req: FastifyRequest, input: ScopeInput = {}):
+  | { context: MemoryContext; scope: MemoryScope; sessionId: string }
+  | { error: string } {
+  const rawScope = input.scope ?? 'global'
+  if (rawScope !== 'global' && rawScope !== 'session') return { error: 'scope must be global or session' }
+  const scope = rawScope as MemoryScope
+  const sessionId = typeof input.sessionId === 'string' ? input.sessionId.trim() : ''
+  if (scope === 'session' && !sessionId) return { error: 'sessionId is required when scope=session' }
+  return {
+    scope,
+    sessionId,
+    context: { tenantId: getTenantId(req), sessionId: scope === 'session' ? sessionId : '', scope },
+  }
+}
+
+function badScope(reply: any, message: string) {
+  return reply.code(400).send(fail(40000, message))
+}
+
+function nodeResponse(node: any) {
+  return {
+    ...node,
+    // Keep the old key/value shape available to existing Aether clients.
+    key: node.type,
+    value: node.summary,
+    updated_at: node.updatedAt,
+    scope: node.scope ?? 'global',
+  }
+}
+
+function edgeResponse(edge: any) {
+  return { ...edge, source: edge.sourceNodeId, target: edge.targetNodeId, scope: edge.scope ?? 'global' }
+}
+
+async function scopedNode(id: string, ctx: MemoryContext) {
+  return manager.getNode(id, ctx)
+}
+
 export async function memoryRoutes(fastify: FastifyInstance) {
+  // Per-session setting is a capability switch; CRUD scope remains explicit.
+  fastify.get<{ Querystring: { sessionId?: string } }>('/memory/settings', async (request, reply) => {
+    const sessionId = String(request.query.sessionId ?? '').trim()
+    if (!sessionId) return badScope(reply, 'sessionId is required')
+    const settings = await getSessionMemorySettings(getTenantId(request), sessionId, getRequestToolProfile(request))
+    return reply.code(200).send(success({ sessionId, ...settings }))
+  })
 
-  fastify.post<{ Body: { key: string; value: string; sessionId: string } }>('/memory/remember', async (request, reply) => {
-    const { key, value, sessionId } = request.body
-    const tenantId = getTenantId(request)
+  fastify.put<{ Body: { sessionId?: string; memoryScope?: string } }>('/memory/settings', async (request, reply) => {
+    const sessionId = String(request.body?.sessionId ?? '').trim()
+    const memoryScope = request.body?.memoryScope
+    if (!sessionId) return badScope(reply, 'sessionId is required')
+    if (memoryScope !== 'off' && memoryScope !== 'global' && memoryScope !== 'session') {
+      return badScope(reply, 'memoryScope must be off, global, or session')
+    }
+    if (process.env.ENABLE_LONG_TERM_MEMORY === 'false' && memoryScope !== 'off') {
+      return reply.code(409).send(fail(40900, 'Long-term memory is disabled by server configuration; choose memoryScope=off or enable ENABLE_LONG_TERM_MEMORY'))
+    }
+    try {
+      await setSessionMemoryScope(getTenantId(request), sessionId, memoryScope)
+    } catch (err: any) {
+      const status = Number(err?.statusCode ?? 40900)
+      return reply.code(status >= 400 && status < 600 ? status : 409).send(fail(status, err?.message ?? 'Unable to update memory settings'))
+    }
+    const settings = await getSessionMemorySettings(getTenantId(request), sessionId, getRequestToolProfile(request))
+    return reply.code(200).send(success({ sessionId, ...settings }))
+  })
 
+  fastify.post<{ Querystring: ScopeInput; Body: { key: string; value: string; sessionId?: string; scope?: string } }>('/memory/remember', async (request, reply) => {
+    const { key, value, scope, sessionId } = request.body ?? ({} as any)
+    if (!key || typeof value !== 'string') return badScope(reply, 'key and value are required')
+    const resolved = resolveContext(request, { scope: scope ?? request.query.scope, sessionId: sessionId ?? request.query.sessionId })
+    if ('error' in resolved) return badScope(reply, resolved.error)
     const node = await manager.createNode(
       {
         type: 'fact',
         summary: `${key}: ${value}`,
         importance: 0.7,
-        sourceSessionId: sessionId,
+        sourceSessionId: sessionId ?? null,
         tags: ['memory_remember', key],
       },
-      { tenantId, sessionId },
+      resolved.context,
     )
-
-    return reply.code(200).send(success({ success: true, id: node.id }))
+    return reply.code(200).send(success({ success: true, id: node.id, scope: resolved.scope, sessionId: resolved.sessionId }))
   })
 
-  fastify.get<{ Params: { key: string }; Querystring: { sessionId: string } }>(
+  fastify.get<{ Params: { key: string }; Querystring: { sessionId?: string; scope?: string } }>(
     '/memory/recall/:key',
     async (request, reply) => {
-      const { key } = request.params
-      const { sessionId } = request.query
-      const tenantId = getTenantId(request)
-      
-      const nodes = await manager.recallByTags([key], { tenantId, sessionId })
-      const value = nodes.length > 0 ? nodes[0].summary.replace(`${key}: `, '') : null
-
-      return reply.code(200).send(success({ key, value }))
-    }
+      const resolved = resolveContext(request, request.query)
+      if ('error' in resolved) return badScope(reply, resolved.error)
+      const nodes = await manager.recallByTags([request.params.key], resolved.context)
+      const value = nodes.length > 0 ? nodes[0].summary.replace(`${request.params.key}: `, '') : null
+      return reply.code(200).send(success({ key: request.params.key, value, scope: resolved.scope, sessionId: resolved.sessionId }))
+    },
   )
 
-  fastify.get<{ Querystring: { sessionId?: string; current?: number; pageSize?: number } }>('/memory/list', async (request, reply) => {
-    const { sessionId, current, pageSize } = request.query
-    const tenantId = getTenantId(request)
-    
-    const nodes = await manager.listNodes({ sessionId, orderBy: 'timestamp', orderDir: 'DESC', limit: 1000 }, { tenantId, sessionId: sessionId ?? '' })
-    const items = nodes.map(n => ({
-      id: n.id,
-      key: n.type, // 将新的类型作为分类标题
-      value: n.summary, // 将完整的摘要显示出来
-      updated_at: n.updatedAt
-    }))
-    
-    return reply.code(200).send(paginateArray(items, current, pageSize))
+  fastify.get<{ Querystring: { sessionId?: string; scope?: string; current?: number; pageSize?: number } }>('/memory/list', async (request, reply) => {
+    const resolved = resolveContext(request, request.query)
+    if ('error' in resolved) return badScope(reply, resolved.error)
+    const nodes = await manager.listNodes({ orderBy: 'timestamp', orderDir: 'DESC', limit: 1000 }, resolved.context)
+    return reply.code(200).send(paginateArray(nodes.map(nodeResponse), request.query.current, request.query.pageSize))
   })
 
-  fastify.get<{ Querystring: { sessionId?: string } }>('/memory/graph', async (request, reply) => {
-    const { sessionId } = request.query
-    const tenantId = getTenantId(request)
-    
-    // 获取所有的节点
-    const nodes = await manager.listNodes({ sessionId, limit: 1000 }, { tenantId, sessionId: sessionId ?? '' })
-    
-    // 我们也需要边 (edges) 数据，因为我们需要展示关系图谱
-    const db = (manager as any).db || getMemoryDb()
-    let edges: any[] = []
-    
-    try {
-      let sql = 'SELECT * FROM memory_edges WHERE tenant_id = ?'
-      let args = [tenantId]
-      
-      if (sessionId) {
-        // 如果指定了 sessionId，我们只查询涉及到属于该 session 节点的边
-        sql += ` AND (source_node_id IN (SELECT id FROM memory_nodes WHERE source_session_id = ?) 
-                  OR target_node_id IN (SELECT id FROM memory_nodes WHERE source_session_id = ?))`
-        args.push(sessionId, sessionId)
+  fastify.get<{ Querystring: { sessionId?: string; scope?: string } }>('/memory/graph', async (request, reply) => {
+    const resolved = resolveContext(request, request.query)
+    if ('error' in resolved) return badScope(reply, resolved.error)
+    const nodes = await manager.listNodes({ limit: 1000 }, resolved.context)
+    const nodeIds = new Set(nodes.map(node => node.id))
+    const edgeMap = new Map<string, any>()
+    // Both endpoints must be in this scope; this also protects old databases
+    // that may contain an incorrectly scoped edge.
+    for (const node of nodes) {
+      const edges = await manager.getEdges(node.id, resolved.context)
+      for (const edge of edges) {
+        if (nodeIds.has(edge.sourceNodeId) && nodeIds.has(edge.targetNodeId)) edgeMap.set(edge.id, edgeResponse(edge))
       }
-      
-      const result = await db.execute({ sql, args })
-      edges = result.rows.map((row: any) => ({
-        id: row.id,
-        source: row.source_node_id,
-        target: row.target_node_id,
-        type: row.type,
-        strength: row.strength,
-        description: row.description
-      }))
-    } catch (e) {
-      console.error('获取记忆图谱边失败:', e)
     }
-
-    return reply.code(200).send(success({
-      nodes: nodes.map(n => ({
-        id: n.id,
-        name: n.type, // UI 显示的主标题
-        type: n.type,
-        summary: n.summary,
-        tags: n.tags,
-        strength: n.strength
-      })),
-      edges
-    }))
+    return reply.code(200).send(success({ nodes: nodes.map(nodeResponse), edges: [...edgeMap.values()], scope: resolved.scope, sessionId: resolved.sessionId }))
   })
 
-  fastify.delete<{ Params: { id: string } }>('/memory/:id', async (request, reply) => {
-    const { id } = request.params
-    const tenantId = getTenantId(request)
-    
-    await manager.deleteNode(id, { tenantId, sessionId: '' })
-    return reply.code(200).send(success({ success: true }))
+  fastify.delete<{ Params: { id: string }; Querystring: { sessionId?: string; scope?: string } }>('/memory/:id', async (request, reply) => {
+    const resolved = resolveContext(request, request.query)
+    if ('error' in resolved) return badScope(reply, resolved.error)
+    if (!await scopedNode(request.params.id, resolved.context)) return reply.code(404).send(fail(40400, 'Memory not found'))
+    await manager.deleteNode(request.params.id, resolved.context)
+    return reply.code(200).send(success({ success: true, id: request.params.id }))
   })
 
-  // 新增：编辑记忆节点
-  fastify.put<{ Params: { id: string }, Body: { summary: string, type?: string, importance?: number } }>('/memory/:id', async (request, reply) => {
-    const { id } = request.params
-    const { summary, type, importance } = request.body
-    const tenantId = getTenantId(request)
-    const db = (manager as any).db || getMemoryDb()
-    
-    const updates: string[] = []
-    const args: any[] = []
-    
-    if (summary !== undefined) { updates.push('summary = ?'); args.push(summary) }
-    if (type !== undefined) { updates.push('type = ?'); args.push(type) }
-    if (importance !== undefined) { updates.push('importance = ?'); args.push(importance) }
-    
-    if (updates.length > 0) {
-      updates.push('updated_at = unixepoch()')
-      args.push(id, tenantId)
-      await db.execute({
-        sql: `UPDATE memory_nodes SET ${updates.join(', ')} WHERE id = ? AND tenant_id = ?`,
-        args
-      })
+  fastify.put<{
+    Params: { id: string }
+    Querystring: { sessionId?: string; scope?: string }
+    Body: { summary?: string; type?: MemoryNodeType; importance?: number; detail?: string | null; scope?: unknown }
+  }>('/memory/:id', async (request, reply) => {
+    const resolved = resolveContext(request, request.query)
+    if ('error' in resolved) return badScope(reply, resolved.error)
+    if (Object.prototype.hasOwnProperty.call(request.body ?? {}, 'scope')) return badScope(reply, 'scope cannot be changed in an update; use the request scope')
+    if (!await scopedNode(request.params.id, resolved.context)) return reply.code(404).send(fail(40400, 'Memory not found'))
+    const { summary, type, importance, detail } = request.body ?? {}
+    const updated = await manager.updateNode(request.params.id, { summary, type, importance, detail }, resolved.context)
+    if (!updated) return reply.code(404).send(fail(40400, 'Memory not found'))
+    return reply.code(200).send(success(nodeResponse(updated)))
+  })
+
+  fastify.post<{
+    Querystring: ScopeInput
+    Body: { sourceId: string; targetId: string; type: MemoryEdgeType; description?: string; strength?: number; scope?: string; sessionId?: string }
+  }>('/memory/link', async (request, reply) => {
+    const body = request.body ?? ({} as any)
+    const resolved = resolveContext(request, { scope: body.scope ?? request.query.scope, sessionId: body.sessionId ?? request.query.sessionId })
+    if ('error' in resolved) return badScope(reply, resolved.error)
+    if (!body.sourceId || !body.targetId || body.sourceId === body.targetId) return badScope(reply, 'sourceId and targetId must be different')
+    const [source, target] = await Promise.all([scopedNode(body.sourceId, resolved.context), scopedNode(body.targetId, resolved.context)])
+    if (!source || !target) return reply.code(404).send(fail(40400, 'Both memory nodes must exist in the requested scope'))
+    try {
+      const edge = await manager.createEdge({ sourceNodeId: body.sourceId, targetNodeId: body.targetId, type: body.type, strength: body.strength, description: body.description ?? '用户手动关联' }, resolved.context)
+      return reply.code(200).send(success({ success: true, id: edge.id, edge: edgeResponse(edge) }))
+    } catch (err: any) {
+      return reply.code(400).send(fail(40000, err?.message ?? 'Unable to link memories'))
     }
-    
-    return reply.code(200).send(success({ success: true }))
   })
 
-  // 新增：手动建立关联 (Link)
-  fastify.post<{ Body: { sourceId: string, targetId: string, type: string, description: string } }>('/memory/link', async (request, reply) => {
-    const { sourceId, targetId, type, description } = request.body
-    const tenantId = getTenantId(request)
-    const db = (manager as any).db || getMemoryDb()
-    const id = 'EDGE-' + crypto.randomUUID()
-    
-    await db.execute({
-      sql: `INSERT INTO memory_edges (id, tenant_id, source_node_id, target_node_id, type, strength, description) 
-            VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      args: [id, tenantId, sourceId, targetId, type, 0.8, description || '用户手动关联']
-    })
-    
-    return reply.code(200).send(success({ success: true, id }))
-  })
-
-  // 新增：手动触发反思整理 (Consolidation) 与衰减模拟
-  fastify.post('/memory/consolidate', async (request, reply) => {
-    const tenantId = getTenantId(request)
-    const consolidator = new MemoryConsolidator()
-    
-    // 执行衰减
-    await consolidator.runConsolidation(tenantId)
-    
-    // 查询被筛选出的“待遗忘清单”
-    const threshold = parseFloat(process.env.MEMORY_DECAY_THRESHOLD || '0.05')
-    const safeThreshold = isNaN(threshold) ? 0.05 : threshold
-    const db = getMemoryDb()
-    const weakNodes = await db.execute({
-      sql: `SELECT id, summary, strength FROM memory_nodes WHERE tenant_id = ? AND strength <= ? AND type NOT IN ('preference', 'decision')`,
-      args: [tenantId, safeThreshold]
-    })
-    
-    return reply.code(200).send(success({ 
-      success: true, 
-      message: '记忆衰减与整理已完成',
-      forgottenCandidates: weakNodes.rows.map(r => ({ id: r.id, summary: r.summary, strength: r.strength }))
-    }))
+  fastify.post<{ Querystring: ScopeInput; Body: { scope?: string; sessionId?: string } }>('/memory/consolidate', async (request, reply) => {
+    const body = request.body ?? ({} as any)
+    const resolved = resolveContext(request, { scope: body.scope ?? request.query.scope, sessionId: body.sessionId ?? request.query.sessionId })
+    if ('error' in resolved) return badScope(reply, resolved.error)
+    const decayed = await manager.decayNodes(resolved.context)
+    const report = await manager.consolidate(resolved.context)
+    const parsedThreshold = Number.parseFloat(process.env.MEMORY_DECAY_THRESHOLD || '0.05')
+    const threshold = Number.isFinite(parsedThreshold) ? parsedThreshold : 0.05
+    const weakNodes = await manager.listNodes({ maxStrength: threshold, limit: 1000 }, resolved.context)
+    return reply.code(200).send(success({ success: true, message: '记忆衰减与整理已完成', decayed, report, forgottenCandidates: weakNodes.filter(node => node.type !== 'preference' && node.type !== 'decision').map(node => ({ id: node.id, summary: node.summary, strength: node.strength })), scope: resolved.scope, sessionId: resolved.sessionId }))
   })
 }

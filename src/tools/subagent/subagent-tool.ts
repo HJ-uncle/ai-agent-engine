@@ -154,7 +154,9 @@ export const subagentTool: Tool = {
       const subagentWindow = Math.min(
         ctx.modelCaps?.contextWindow ?? ctx.tokenBudget ?? Number.POSITIVE_INFINITY,
         resolved.capabilities.contextWindow ?? Number.POSITIVE_INFINITY)
-      const subagentTokenBudget = Number.isFinite(subagentWindow) ? subagentWindow : undefined
+      const subagentTokenBudget = ctx.toolProfile === 'code'
+        ? undefined
+        : Number.isFinite(subagentWindow) ? subagentWindow : undefined
       const child = createAgentContext({
         sessionId: snapshot.childSessionId,
         tenantId: ctx.tenantId,
@@ -179,6 +181,7 @@ export const subagentTool: Tool = {
         parentMessageId: snapshot.parentMessageId,
         parentToolCallId: snapshot.parentToolCallId,
         toolProfile: ctx.toolProfile,
+        memoryScope: ctx.memoryScope,
         runObserver: observer,
         onRequestAttempt,
         requestBudget,
@@ -189,7 +192,8 @@ export const subagentTool: Tool = {
         const strategy = new ReActStrategy(llm, {
           maxIterations: maxSteps,
           finalizeOnLimit: true,
-          maxOutputTokens: 8192,
+          unboundedCode: ctx.toolProfile === 'code',
+          thinkingEnabled: resolved.thinkingEnabled,
           thinkingConfig: resolved.thinkingConfig,
           responseThinkingField: resolved.responseThinkingField,
           systemPrompt: [systemPrompt, '项目根目录：' + child.projectRoot, '当前工作目录：' + child.cwd, projectContext].filter(Boolean).join('\n\n'),

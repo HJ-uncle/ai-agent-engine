@@ -1,4 +1,12 @@
 export const MEMORY_SCHEMA: string[] = [
+  `CREATE TABLE IF NOT EXISTS memory_session_settings (
+    tenant_id  TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    scope      TEXT NOT NULL DEFAULT 'global' CHECK(scope IN ('off','global','session')),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (tenant_id, session_id)
+  )`,
+
   // ─── 图谱元信息 ──────────────────────────────────────────────────────────
   `CREATE TABLE IF NOT EXISTS memory_graph_meta (
     key   TEXT PRIMARY KEY,
@@ -10,6 +18,7 @@ export const MEMORY_SCHEMA: string[] = [
   `CREATE TABLE IF NOT EXISTS memory_nodes (
     id                TEXT PRIMARY KEY,
     tenant_id         TEXT NOT NULL DEFAULT 'default',
+    scope             TEXT NOT NULL DEFAULT 'global' CHECK(scope IN ('global','session')),
     session_id        TEXT NOT NULL,
     type              TEXT NOT NULL CHECK(type IN (
                         'preference','decision','fact','lesson','narrative','milestone'
@@ -38,6 +47,9 @@ export const MEMORY_SCHEMA: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_memory_nodes_tenant
     ON memory_nodes(tenant_id)`,
 
+  `CREATE INDEX IF NOT EXISTS idx_memory_nodes_scope
+    ON memory_nodes(tenant_id, scope, session_id)`,
+
   `CREATE INDEX IF NOT EXISTS idx_memory_nodes_embedding
     ON memory_nodes(libsql_vector_idx(embedding))`,
 
@@ -63,6 +75,8 @@ export const MEMORY_SCHEMA: string[] = [
   `CREATE TABLE IF NOT EXISTS memory_edges (
     id              TEXT PRIMARY KEY,
     tenant_id       TEXT NOT NULL DEFAULT 'default',
+    scope           TEXT NOT NULL DEFAULT 'global' CHECK(scope IN ('global','session')),
+    session_id      TEXT NOT NULL DEFAULT '',
     source_node_id  TEXT NOT NULL,
     target_node_id  TEXT NOT NULL,
     type            TEXT NOT NULL CHECK(type IN (
@@ -78,6 +92,9 @@ export const MEMORY_SCHEMA: string[] = [
 
   `CREATE INDEX IF NOT EXISTS idx_memory_edges_tenant
     ON memory_edges(tenant_id)`,
+
+  `CREATE INDEX IF NOT EXISTS idx_memory_edges_scope
+    ON memory_edges(tenant_id, scope, session_id)`,
 
   `CREATE INDEX IF NOT EXISTS idx_memory_edges_source
     ON memory_edges(source_node_id)`,

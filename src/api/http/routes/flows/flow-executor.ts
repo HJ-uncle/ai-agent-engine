@@ -124,7 +124,10 @@ async function executeNode(
 
     const llm = createLLMAdapter({ model: node.model || 'gpt-4o-mini' })
     const strategy = new ReActStrategy(llm, {
-      maxIterations: 10,
+      // Code flows use the same unbounded local policy as interactive Code
+      // sessions; general flows keep their explicit workflow safety cap.
+      maxIterations: toolProfile === 'code' ? undefined : 10,
+      unboundedCode: toolProfile === 'code',
       systemPrompt: finalSystemPrompt
     })
 

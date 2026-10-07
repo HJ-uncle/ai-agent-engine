@@ -61,7 +61,7 @@ describe('reviewer role access through subagentTool.execute', () => {
     expect(child).toBeDefined()
     if (!child) throw new Error('Child execution was not reached')
     expect(child.tools.list().map((tool) => tool.name)).toEqual(['read_file'])
-    const blocked = await child.tools.execute('write_file', { path: 'README.md', content: 'unexpected mutation' }, child)
+    const blocked = await child.tools.execute('write_file', { path: 'README.md', data: 'unexpected mutation' }, child)
     expect(blocked).toMatchObject({ success: false, metadata: { blocked: true, code: 'TOOL_NOT_ALLOWED' } })
     expect(tools.execute).not.toHaveBeenCalled()
     await child.tools.execute('read_file', { path: 'README.md' }, child)

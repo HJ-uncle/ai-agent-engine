@@ -7,7 +7,7 @@ const parameters = { type: 'object' as const, properties: { jobId: { type: 'stri
 
 export const commandOutputTool: Tool = {
   name: 'command_output', displayName: '读取命令输出',
-  description: '读取当前会话后台命令的状态与增量stdout/stderr。首次cursor=0，后续传nextCursor；hasMore时继续读取。truncated=true表示旧输出已超出256KiB尾部限制，不能声称已读完整日志。',
+  description: '读取当前会话后台命令的状态与增量stdout/stderr。首次cursor=0，后续传nextCursor；hasMore时继续读取。输出完整持久化到磁盘并分页返回；服务内存只保留有限尾部。',
   parameters: { ...parameters, properties: { ...parameters.properties, cursor: { type: 'integer', minimum: 0 } } },
   async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
     const args = rawArgs as { jobId?: unknown; cursor?: unknown }

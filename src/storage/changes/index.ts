@@ -22,11 +22,13 @@ export interface FileChange {
   runId?: string
   path: string
   kind: ChangeKind
-  /** null means absent only when truncated is false and a hash is available. */
+  /** Large/binary contents may be null while their exact bytes live in a snapshotRef. */
   oldContent: string | null
   newContent: string | null
   oldHash: string | null
   newHash: string | null
+  oldSnapshotRef?: string
+  newSnapshotRef?: string
   truncated: boolean
   status: ChangeStatus
   createdAt: number
@@ -42,6 +44,8 @@ export interface RecordChangeInput {
   newContent: string | null
   oldHash?: string | null
   newHash?: string | null
+  oldSnapshotRef?: string
+  newSnapshotRef?: string
   truncated?: boolean
 }
 
@@ -74,6 +78,27 @@ export interface RevertBatchResult {
 const MAX_CONTENT_CHARS = 100_000
 const schemas = new WeakMap<Client, Promise<void>>()
 
+/** Durable byte snapshots live beside the configured database, not in SQLite text cells. */
+function snapshotRoot(): string {
+  const dataDir = process.env.DATA_DIR ? path.dirname(path.resolve(process.env.DATA_DIR)) : path.resolve('data')
+  return path.join(dataDir, 'change-snapshots')
+}
+
+function readSnapshot(ref: string): Buffer {
+  if (!/^[a-zA-Z0-9:_-]+\.bin$/.test(ref)) throw new Error('Invalid change snapshot reference')
+  return fs.readFileSync(path.join(snapshotRoot(), ref))
+}
+
+function discardSnapshot(ref: string | undefined): void {
+  if (!ref || !/^[a-zA-Z0-9_-]+\.bin$/.test(ref)) return
+  try { fs.unlinkSync(path.join(snapshotRoot(), ref)) } catch { /* best effort cleanup */ }
+}
+
+function discardChangeSnapshots(change: Pick<FileChange, 'oldSnapshotRef' | 'newSnapshotRef'>): void {
+  discardSnapshot(change.oldSnapshotRef)
+  discardSnapshot(change.newSnapshotRef)
+}
+
 function rowToChange(row: Record<string, unknown>): FileChange {
   return {
     id: String(row.id), seq: Number(row.seq), tenantId: String(row.tenant_id), sessionId: String(row.session_id),
@@ -83,6 +108,8 @@ function rowToChange(row: Record<string, unknown>): FileChange {
     newContent: row.new_content == null ? null : String(row.new_content),
     oldHash: row.old_hash == null ? null : String(row.old_hash),
     newHash: row.new_hash == null ? null : String(row.new_hash),
+    oldSnapshotRef: row.old_snapshot_ref == null ? undefined : String(row.old_snapshot_ref),
+    newSnapshotRef: row.new_snapshot_ref == null ? undefined : String(row.new_snapshot_ref),
     truncated: Number(row.truncated) === 1, status: row.status as ChangeStatus, createdAt: Number(row.created_at)
   }
 }
@@ -114,7 +141,8 @@ export class ChangeStore {
           seq INTEGER PRIMARY KEY AUTOINCREMENT,
           id TEXT NOT NULL UNIQUE, tenant_id TEXT NOT NULL, session_id TEXT NOT NULL, turn_id TEXT, run_id TEXT,
           path TEXT NOT NULL, kind TEXT NOT NULL, old_content TEXT, new_content TEXT,
-          old_hash TEXT, new_hash TEXT, truncated INTEGER NOT NULL DEFAULT 0,
+          old_hash TEXT, new_hash TEXT, old_snapshot_ref TEXT, new_snapshot_ref TEXT,
+          truncated INTEGER NOT NULL DEFAULT 0,
           status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL
         )`)
         const columns = new Set((await db.execute('PRAGMA table_info(file_changes)')).rows.map(row => String(row.name)))
@@ -127,6 +155,8 @@ export class ChangeStore {
         if (!columns.has('new_hash')) await db.execute('ALTER TABLE file_changes ADD COLUMN new_hash TEXT')
         if (!columns.has('turn_id')) await db.execute('ALTER TABLE file_changes ADD COLUMN turn_id TEXT')
         if (!columns.has('run_id')) await db.execute('ALTER TABLE file_changes ADD COLUMN run_id TEXT')
+        if (!columns.has('old_snapshot_ref')) await db.execute('ALTER TABLE file_changes ADD COLUMN old_snapshot_ref TEXT')
+        if (!columns.has('new_snapshot_ref')) await db.execute('ALTER TABLE file_changes ADD COLUMN new_snapshot_ref TEXT')
         await db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_file_changes_seq ON file_changes(seq)')
         await db.execute('CREATE INDEX IF NOT EXISTS idx_file_changes_session ON file_changes(tenant_id, session_id, seq)')
       })()
@@ -147,12 +177,12 @@ export class ChangeStore {
     }
     const result = await this.db.execute({
       // One SQL statement allocates order, including in old development tables.
-      sql: `INSERT INTO file_changes (seq, id, tenant_id, session_id, turn_id, run_id, path, kind, old_content, new_content, old_hash, new_hash, truncated, status, created_at)
-        SELECT COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ? FROM file_changes RETURNING *`,
+      sql: `INSERT INTO file_changes (seq, id, tenant_id, session_id, turn_id, run_id, path, kind, old_content, new_content, old_hash, new_hash, old_snapshot_ref, new_snapshot_ref, truncated, status, created_at)
+        SELECT COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ? FROM file_changes RETURNING *`,
       args: [uuidv4(), tenantId, input.sessionId, input.turnId ?? null, input.runId ?? null, canonicalFilePathSync(input.path), input.kind,
         (input.oldContent?.length ?? 0) > MAX_CONTENT_CHARS ? null : input.oldContent,
         (input.newContent?.length ?? 0) > MAX_CONTENT_CHARS ? null : input.newContent,
-        oldHash, newHash, truncated ? 1 : 0, Date.now()]
+        oldHash, newHash, input.oldSnapshotRef ?? null, input.newSnapshotRef ?? null, truncated ? 1 : 0, Date.now()]
     })
     return rowToChange(result.rows[0])
   }
@@ -205,8 +235,13 @@ export class ChangeStore {
         let currentHash: string | undefined
         if (!fileIssue) {
           try {
-            if (canonical !== storedPathIdentity(filePath)) fileIssue = 'path-changed'
-            else currentHash = readFileVersionSync(canonical!).hash
+            // `canonicalFilePathSync` preserves the on-disk casing on Windows so
+            // it can still be used for the actual read/write operation.  Path
+            // identity comparisons, however, are case-insensitive on Windows;
+            // compare normalized identities here to avoid marking every file as
+            // changed solely because the casing differs.
+            if (!canonical || storedPathIdentity(canonical) !== storedPathIdentity(filePath)) fileIssue = 'path-changed'
+            else currentHash = readFileVersionSync(canonical).hash
           } catch { fileIssue = 'unreadable' }
         }
         for (const segment of partitionChangeHistory(history, ids)) {
@@ -219,7 +254,7 @@ export class ChangeStore {
           // Equality includes existence (missing != empty), and only a verified live
           // endpoint can disappear. Keep untrusted or broken chains reviewable.
           if (!issue && first.oldHash === last.newHash) continue
-          projected.push(projectSegment(segment, issue ?? (segment.changes.some(change => change.truncated) ? 'snapshot-unavailable' : undefined)))
+          projected.push(projectSegment(segment, issue ?? (segment.changes.some(change => change.truncated && !change.oldSnapshotRef && !change.newSnapshotRef) ? 'snapshot-unavailable' : undefined)))
         }
       }
       try {
@@ -264,7 +299,9 @@ export class ChangeStore {
       await this.keepMany(tenantId, [id], existing.sessionId)
       return this.getById(id, tenantId)
     }
+    const existing = await this.getById(id, tenantId)
     await this.db.execute({ sql: `UPDATE file_changes SET status=? WHERE id=? AND tenant_id=? AND status!='reverted'`, args: [status, id, tenantId] })
+    if (status === 'reverted' && existing) discardChangeSnapshots(existing)
     return this.getById(id, tenantId)
   }
 
@@ -281,6 +318,7 @@ export class ChangeStore {
       args: [JSON.stringify(changes.map(change => change.id)), tenantId]
     })
     if (result.rows.length !== changes.length) throw new Error('改动状态已变化，零净变化回退未保存')
+    for (const change of changes) discardChangeSnapshots(change)
   }
 
   async revertBatch(tenantId: string, input: RevertBatchInput): Promise<RevertBatchResult> {
@@ -346,8 +384,13 @@ export class ChangeStore {
             continue
           }
           const noOp = noOpChains.get(change.id)
-          if (!noOp && (change.truncated || !change.oldHash || !change.newHash ||
-            hashFileContent(change.oldContent) !== change.oldHash || hashFileContent(change.newContent) !== change.newHash)) {
+          const oldVersionValid = change.oldSnapshotRef
+            ? hashFileContent(readSnapshot(change.oldSnapshotRef)) === change.oldHash
+            : hashFileContent(change.oldContent) === change.oldHash
+          const newVersionValid = change.newSnapshotRef
+            ? hashFileContent(readSnapshot(change.newSnapshotRef)) === change.newHash
+            : hashFileContent(change.newContent) === change.newHash
+          if (!noOp && (!change.oldHash || !change.newHash || !oldVersionValid || !newVersionValid)) {
             results.push({ ...base, status: 'unavailable', message: '未保存可验证的完整文件快照，无法自动撤回' })
             blocked.add(canonical)
             continue
@@ -361,7 +404,12 @@ export class ChangeStore {
               sql: `SELECT 1 FROM file_changes WHERE path IN (SELECT value FROM json_each(?)) AND seq>? AND status!='reverted' LIMIT 1`,
               args: [JSON.stringify(this.pathAliases(change.path, storedPaths)), change.seq]
             })
-            if (canonicalFilePathSync(change.path) !== canonical || storedPathIdentity(change.path) !== canonical) {
+            // canonicalFilePathSync preserves the filesystem's spelling for
+            // I/O, while storedPathIdentity applies Windows case folding for
+            // comparisons. Compare identities here so `App.tsx` and `app.tsx`
+            // are treated as the same target without rejecting every Windows
+            // rollback because of casing.
+            if (storedPathIdentity(change.path) !== storedPathIdentity(canonical)) {
               results.push({ ...base, status: 'conflict', message: '文件路径的实际目标已变化，未写入文件', expectedHash: change.newHash ?? undefined })
               blocked.add(canonical)
               continue
@@ -383,7 +431,11 @@ export class ChangeStore {
               continue
             }
             // No await between byte verification and the synchronous write.
-            if (change.oldContent === null) {
+            if (change.oldSnapshotRef) {
+              const snapshot = readSnapshot(change.oldSnapshotRef)
+              fs.mkdirSync(path.dirname(canonical), { recursive: true })
+              fs.writeFileSync(canonical, snapshot)
+            } else if (change.oldContent === null) {
               if (current.content !== null) fs.unlinkSync(canonical)
             } else {
               fs.mkdirSync(path.dirname(canonical), { recursive: true })

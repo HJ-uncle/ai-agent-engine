@@ -196,6 +196,28 @@ describe('StreamBus resumable subscriptions', () => {
     expect(await fast.next()).toMatchObject({ done: true })
   })
 
+  it('requires a snapshot when a subscriber queue exceeds the byte budget', async () => {
+    const bus = new StreamBus(new AbortController(), { maxSubscriberEvents: 100, maxSubscriberBytes: 8 })
+    const iterator = busToIterable(bus)
+    bus.push('1234')
+    bus.push('56789')
+    await expect(iterator.next()).rejects.toMatchObject({ statusCode: 409, code: 'snapshot_required' })
+    expect(bus.abortController.signal.aborted).toBe(false)
+    bus.end()
+  })
+
+  it('bounds semantic projection slots while marking persisted history as the source of older frames', () => {
+    const bus = new StreamBus(new AbortController())
+    for (let index = 0; index < 4_200; index++) {
+      bus.push(frame('file_change', { id: `change-${index}`, path: `file-${index}.txt` }))
+    }
+    const snapshot = bus.snapshot()
+    expect(snapshot.projectionTruncated).toBe(true)
+    expect(snapshot.projection.length).toBeLessThanOrEqual(4_096)
+    expect(JSON.stringify(snapshot.projection)).not.toContain('change-0')
+    expect(JSON.stringify(snapshot.projection)).toContain('change-4199')
+  })
+
   it('records producer errors safely before any subscriber exists and replays evidence before failing', async () => {
     const bus = new StreamBus(new AbortController())
     const payload = bus.push('partial')!

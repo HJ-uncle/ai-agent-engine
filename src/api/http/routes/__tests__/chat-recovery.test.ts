@@ -13,7 +13,7 @@ import { ChangeStore } from '../../../../storage/changes/index.js'
 import { hashFileContent } from '../../../../shared/file-version.js'
 import { StreamBus, activeStreams } from '../../../../core/stream-pipeline/stream-bus.js'
 import { ReActStrategy } from '../../../../core/agent-loop/index.js'
-import { chatRoutes, registerActiveChat, unregisterActiveChat } from '../chat.js'
+import { chatRoutes, registerActiveChat, unregisterActiveChat, waitForPriorToolBatch } from '../chat.js'
 
 const tenantId = 'd4-recovery-tenant'
 const sessionId = 'd4-recovery-session'
@@ -100,6 +100,38 @@ async function replay(lastEventId: string, targetTenant = tenantId) {
 }
 
 describe('D4 chat snapshot and replay HTTP contract', () => {
+  it('does not impose a 30 second answer wait on durable Code tool batches', async () => {
+    vi.useFakeTimers()
+    try {
+      const bus = attachBus()
+      const waiting = waitForPriorToolBatch(bus, 'code')
+      await vi.advanceTimersByTimeAsync(30_001)
+
+      let settled = false
+      void waiting.then(() => { settled = true })
+      await Promise.resolve()
+      expect(settled).toBe(false)
+
+      bus.end()
+      await expect(waiting).resolves.toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the bounded answer wait for interactive profiles', async () => {
+    vi.useFakeTimers()
+    try {
+      const bus = attachBus()
+      const waiting = waitForPriorToolBatch(bus, 'chat')
+      const rejected = expect(waiting).rejects.toMatchObject({ statusCode: 409 })
+      await vi.advanceTimersByTimeAsync(30_001)
+      await rejected
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('returns an explicit empty persisted snapshot without creating a run', async () => {
     expect(await snapshot()).toMatchObject({ schemaVersion: 1, source: 'persisted', sessionId,
       eventId: null, finished: true, projection: [], runs: [], history: [], todos: [], changes: [] })

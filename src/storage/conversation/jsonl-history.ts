@@ -642,23 +642,23 @@ export class JSONLConversationHistory implements ConversationHistory {
    */
   async microCompactToolResults(
     ctx: Ctx,
-    opts: { keepRecent?: number } = {},
+    opts: { keepRecent?: number; maxChars?: number } = {},
   ): Promise<{ cleared: number; freedTokens: number }> {
     const keepRecent = opts.keepRecent ?? 10
+    const maxChars = Number.isFinite(opts.maxChars) && (opts.maxChars ?? 0) > 0 ? Math.floor(opts.maxChars!) : undefined
     const placeholder = '[tool result cleared]'
     const placeholderTokens = estimateTokens(placeholder)
     const state = await this.loadSession(ctx)
     const all = state.messages
-    if (all.length <= keepRecent) return { cleared: 0, freedTokens: 0 }
-
     const cutoff = all.length - keepRecent
     let cleared = 0
     let freedTokens = 0
-    for (let i = 0; i < cutoff; i++) {
+    for (let i = 0; i < all.length; i++) {
       const msg = all[i]
       if (msg.role !== 'tool' || !msg.id) continue
       const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
       if (!content || content === placeholder) continue
+      if (i >= cutoff && (maxChars === undefined || content.length <= maxChars)) continue
       const oldTokens = msg.tokens ?? estimateTokens(msg.content)
       await this.appendRow(ctx, {
         uuid: crypto.randomUUID(),

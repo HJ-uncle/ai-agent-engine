@@ -47,5 +47,26 @@ export function estimateTokens(content: string | any[] | null | undefined): numb
   const otherCount = text.length - chineseCount;
 
   // 估算公式
-  return Math.ceil(chineseCount * 1.5 + otherCount * 0.25);
+  const baseline = Math.ceil(chineseCount * 1.5 + otherCount * 0.25)
+
+  // Base64/data-URI/minified asset output is deliberately handled more
+  // conservatively.  Random-looking strings have very few BPE merges, so the
+  // usual "four characters per token" estimate can be off by several times.
+  // That mismatch previously let a 1.5 MB Vite warning through local context
+  // admission even though the upstream gateway rejected the next request at
+  // its one-million-token input boundary.  Only apply the expensive estimate
+  // to long dense segments; ordinary source and prose keep the historical
+  // estimate.
+  if (text.length >= 8_192) {
+    const denseSegments = text.match(/[A-Za-z0-9+/=_%~-]{1,}/g) ?? []
+    const denseChars = denseSegments.reduce((sum, segment) => sum + (segment.length >= 1_024 ? segment.length : 0), 0)
+    const hasDataMarker = /data:(?:image|font|application)\//i.test(text) || /(?:base64,|sourceMappingURL=|new URL\(\s*["']data:)/i.test(text)
+    if (hasDataMarker || denseChars >= 32_768 && denseChars / text.length >= 0.35) {
+      const ordinaryChars = Math.max(0, text.length - denseChars)
+      const conservative = Math.ceil(denseChars * 0.75 + ordinaryChars * 0.25 + chineseCount * 1.5)
+      return Math.max(baseline, conservative)
+    }
+  }
+
+  return baseline;
 }

@@ -1,4 +1,10 @@
-export const MAX_FILE_SIZE = parseInt(process.env.MAX_FILE_SIZE_BYTES ?? '10485760', 10)
+// Format handlers still materialize their decoded representation. 64 MiB is a
+// practical default for a long-running agent; deployments handling larger
+// artifacts can raise this explicitly without changing code.
+const configuredFileSize = Number.parseInt(process.env.MAX_FILE_SIZE_BYTES ?? '67108864', 10)
+export const MAX_FILE_SIZE = Number.isSafeInteger(configuredFileSize) && configuredFileSize > 0
+  ? configuredFileSize
+  : 67_108_864
 
 export const IMAGE_MIME_TYPES: Record<string, string> = {
   '.png': 'image/png',

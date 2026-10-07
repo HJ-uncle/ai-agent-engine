@@ -87,7 +87,40 @@ export async function initMemoryDb(schemaStatements: string[]): Promise<void> {
     await tryExecuteWithF32BlobFallback(db, sql)
   }
 
+  // Older installations pre-date scoped memories.  Keep their data visible in
+  // the global scope while adding the columns lazily (SQLite does not support
+  // `ADD COLUMN IF NOT EXISTS`).  This migration is deliberately idempotent so
+  // a process restart cannot change existing records.
+  await migrateMemoryScopes(db)
+
   console.log('[memory-db] Schema initialization complete')
+}
+
+async function migrateMemoryScopes(db: Client): Promise<void> {
+  const columns = async (table: string): Promise<Set<string>> => {
+    const result = await db.execute(`PRAGMA table_info(${table})`)
+    return new Set(result.rows.map((row) => String(row.name)))
+  }
+
+  const nodeColumns = await columns('memory_nodes')
+  if (!nodeColumns.has('scope')) {
+    await db.execute("ALTER TABLE memory_nodes ADD COLUMN scope TEXT NOT NULL DEFAULT 'global'")
+  }
+  // Existing rows were created before scopes existed and are intentionally
+  // treated as global memories.  Do not infer scope from the legacy session_id.
+  await db.execute("UPDATE memory_nodes SET scope = 'global' WHERE scope IS NULL OR scope NOT IN ('global','session')")
+
+  const edgeColumns = await columns('memory_edges')
+  if (!edgeColumns.has('scope')) {
+    await db.execute("ALTER TABLE memory_edges ADD COLUMN scope TEXT NOT NULL DEFAULT 'global'")
+  }
+  if (!edgeColumns.has('session_id')) {
+    await db.execute("ALTER TABLE memory_edges ADD COLUMN session_id TEXT NOT NULL DEFAULT ''")
+  }
+  await db.execute("UPDATE memory_edges SET scope = 'global', session_id = '' WHERE scope IS NULL OR scope NOT IN ('global','session')")
+
+  await db.execute('CREATE INDEX IF NOT EXISTS idx_memory_nodes_scope ON memory_nodes(tenant_id, scope, session_id)')
+  await db.execute('CREATE INDEX IF NOT EXISTS idx_memory_edges_scope ON memory_edges(tenant_id, scope, session_id)')
 }
 
 export function closeMemoryDb(): void {

@@ -150,15 +150,17 @@ describe('D7 durable command job lifecycle', () => {
     expect(outputText(page)).not.toContain('\uFFFD')
   })
 
-  it('bounds retained output, reports a gap, and pages the retained tail without duplicate entries', async () => {
+  it('keeps memory bounded while persisting the complete output for paging', async () => {
     manager = makeManager({ maxOutputBytes: 96, maxPageBytes: 24 })
     await manager.initialize()
     const expected = Array.from({ length: 40 }, (_, index) => `${index.toString().padStart(2, '0')}:中🙂\n`).join('')
     const job = await manager.start(launch(`process.stdout.write(${JSON.stringify(expected)})`))
     await manager.wait(scope, job.jobId)
+    const durable = await db.execute({ sql: 'SELECT COUNT(*) AS count FROM command_job_output WHERE job_id=?', args: [job.jobId] })
+    expect(Number(durable.rows[0]?.count)).toBeGreaterThan(1)
     let page = await output(job.jobId, { cursor: 0, maxBytes: 24 })
-    expect(page.truncated).toBe(true)
-    expect(page.earliestCursor).toBeGreaterThan(0)
+    expect(page.truncated).toBe(false)
+    expect(page.earliestCursor).toBe(0)
     expect(Buffer.byteLength(outputText(page), 'utf8')).toBeLessThanOrEqual(24)
     const entries = [...page.entries]
     let count = 0
@@ -172,9 +174,8 @@ describe('D7 durable command job lifecycle', () => {
       entries.push(...page.entries)
     }
     const retained = entries.map(entry => entry.text).join('')
-    expect(Buffer.byteLength(retained, 'utf8')).toBeLessThanOrEqual(96)
-    expect(retained.length).toBeGreaterThan(0)
-    expect(expected.endsWith(retained)).toBe(true)
+    expect(Buffer.byteLength(retained, 'utf8')).toBe(Buffer.byteLength(expected, 'utf8'))
+    expect(retained).toBe(expected)
     expect(retained).not.toContain('\uFFFD')
     expect(entries.every((entry, index) => index === 0 || entry.seq > entries[index - 1].seq)).toBe(true)
     const empty = await output(job.jobId, { cursor: page.nextCursor })
@@ -228,6 +229,13 @@ describe('D7 durable command job lifecycle', () => {
     const stable = await manager.cancel(exactScope, job.jobId, 'duplicate_cancel')
     expect(stable).toEqual(finished)
   }, 15_000)
+
+  it('accepts an explicit deadline beyond Node timer range without overflowing or ending early', async () => {
+    const job = await manager.start(launch('setInterval(() => {}, 1000)', { timeoutMs: 2_147_483_648 }))
+    expect(job.status).toBe('running')
+    await manager.cancel(exactScope, job.jobId, 'long_deadline_test')
+    expect((await manager.wait(scope, job.jobId))?.status).toBe('cancelled')
+  })
 
   it('cancels a live descendant after its leader has exited and prevents further marker writes', async () => {
     const descendantCode = `

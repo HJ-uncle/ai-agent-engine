@@ -59,7 +59,8 @@ export interface CommandJobLaunch {
   args: string[]
   cwd: string
   background: boolean
-  timeoutMs: number
+  /** Optional deadline. Omit for a command that runs until it exits or is cancelled. */
+  timeoutMs?: number
   env: NodeJS.ProcessEnv
   signal?: AbortSignal
 }

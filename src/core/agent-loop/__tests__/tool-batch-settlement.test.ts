@@ -39,6 +39,16 @@ const call = (id: string, name = 'write_file'): ToolCall => ({ id, name, args: {
 const toolResults = (frames: string[]) => frames.filter(frame => frame.startsWith('\x00__tool_result__')).map(frame => JSON.parse(frame.slice('\x00__tool_result__'.length)))
 
 describe('D3 batch side effects and terminal evidence', () => {
+  it('keeps the complete tool result in Code mode instead of applying the chat truncation cap', async () => {
+    const f = fixture([call('large', 'read_file')])
+    const content = 'source line\n'.repeat(1_000)
+    f.ctx.toolProfile = 'code'
+    f.ctx.tools.execute = vi.fn(async () => ({ success: true, output: content }))
+    await f.run()
+    const result = f.history.find(message => message.role === 'tool')
+    expect(result?.content).toBe(content)
+  })
+
   it('preflights the entire batch before writing, persists pending before its event, and pairs every skipped sibling', async () => {
     const f = fixture([call('write-first'), call('approve', 'execute_cmd'), call('read-last', 'read_file')])
     let persisted = false
@@ -92,6 +102,20 @@ describe('D3 batch side effects and terminal evidence', () => {
     expect(f.ctx.tools.execute).toHaveBeenCalledTimes(3)
     expect(toolResults(frames).map(frame => frame.status)).toEqual(['waiting', 'failed', 'succeeded'])
     expect(f.history.filter(message => message.role === 'tool').map(message => message.toolCallId)).toEqual(['failed', 'finished'])
+  })
+
+  it('does not trip the repeated-failure circuit for retryable transient outages', async () => {
+    vi.stubEnv('MAX_CONSECUTIVE_FAILURES', '1')
+    const retry = call('retry', 'read_file')
+    const f = fixture([retry])
+    f.llm.stream = vi.fn(async function* () {
+      yield { done: true, toolCalls: [{ ...retry, args: JSON.stringify(retry.args) }] }
+    })
+    f.ctx.tools.execute = vi.fn(async () => ({ success: false, status: 'failed', output: 'temporary network timeout',
+      error: 'ETIMEDOUT', metadata: { retryable: true } } as ToolResult))
+    await f.run()
+    expect(f.outcomes.at(-1)).not.toMatchObject({ stopReason: 'repeated_failure' })
+    expect(f.outcomes.at(-1)).toMatchObject({ stopReason: 'max_steps' })
   })
 
   it('continues settling siblings if one history append fails', async () => {

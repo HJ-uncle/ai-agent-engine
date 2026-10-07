@@ -16,6 +16,76 @@ async function consume(adapter: LLMAdapter, signal: AbortSignal, events: LLMRequ
 }
 
 describe('actual request attempts', () => {
+  it('omits the engine-side max_tokens field for an unbounded Code request', async () => {
+    const wire = 'data: ' + JSON.stringify({ id: 'm', choices: [{ index: 0, delta: { content: 'done' }, finish_reason: null }] }) + '\n\n'
+      + 'data: ' + JSON.stringify({ id: 'm', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 3, completion_tokens: 1 } }) + '\n\ndata: [DONE]\n\n'
+    const fetchMock = vi.fn(async () => new Response(wire, { headers: { 'content-type': 'text/event-stream' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const adapter = new OpenAIAdapter('test-model', 'fake-key', 'http://model.invalid')
+    for await (const _chunk of adapter.stream(messages, {
+      model: adapter.model,
+      signal: new AbortController().signal,
+      unboundedOutput: true,
+    })) { /* consume the complete request */ }
+    const body = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body)) as Record<string, unknown>
+    expect(body).not.toHaveProperty('max_tokens')
+    expect(body).not.toHaveProperty('max_completion_tokens')
+  })
+
+  it('uses the gateway maximum for an unbounded DeepSeek V4 Code request', async () => {
+    const wire = 'data: ' + JSON.stringify({ id: 'm', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 3, completion_tokens: 1 } }) + '\n\ndata: [DONE]\n\n'
+    const fetchMock = vi.fn(async () => new Response(wire, { headers: { 'content-type': 'text/event-stream' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const adapter = new OpenAIAdapter('deepseek-v4.1-flash', 'fake-key', 'http://model.invalid')
+    for await (const _chunk of adapter.stream(messages, {
+      model: adapter.model,
+      signal: new AbortController().signal,
+      unboundedOutput: true,
+      // A near-full context used to turn the protocol field into 400. The
+      // provider fallback must remain its wire maximum instead of inheriting
+      // that estimate as an accidental completion cap.
+      contextWindow: 1_000_000,
+      requestInputTokenEstimate: 999_600,
+    })) { /* consume the complete request */ }
+    const body = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body)) as Record<string, unknown>
+    expect(body.max_completion_tokens).toBe(393216)
+    expect(Number.isInteger(body.max_completion_tokens)).toBe(true)
+  })
+
+  it('preserves an explicitly requested DeepSeek V4 completion limit', async () => {
+    const wire = 'data: ' + JSON.stringify({ id: 'm', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 3, completion_tokens: 1 } }) + '\n\ndata: [DONE]\n\n'
+    const fetchMock = vi.fn(async () => new Response(wire, { headers: { 'content-type': 'text/event-stream' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const adapter = new OpenAIAdapter('deepseek-v4.1-flash', 'fake-key', 'http://model.invalid')
+    for await (const _chunk of adapter.stream(messages, {
+      model: adapter.model,
+      signal: new AbortController().signal,
+      maxTokens: 400,
+      unboundedOutput: true,
+    })) { /* consume the complete request */ }
+    const body = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body)) as Record<string, unknown>
+    expect(body.max_completion_tokens).toBe(400)
+  })
+
+  it('caps an oversized unbounded Anthropic-compatible request at the gateway limit', async () => {
+    const streamMock = vi.fn(() => ({
+      async *[Symbol.asyncIterator]() { yield { type: 'message_stop' } },
+      finalMessage: async () => ({ model: 'deepseek-v4.1-flash', stop_reason: 'end_turn', usage: { input_tokens: 3, output_tokens: 1 } }),
+      abort: vi.fn(),
+    }))
+    const adapter = new AnthropicAdapter('deepseek-v4.1-flash', 'fake-key', 'http://model.invalid', { 'X-Access-Token': 'fake-token' })
+    ;(adapter as any).client = { messages: { stream: streamMock } }
+    for await (const _chunk of adapter.stream(messages, {
+      model: adapter.model,
+      signal: new AbortController().signal,
+      unboundedOutput: true,
+      contextWindow: 1_000_000,
+      requestInputTokenEstimate: 999_600,
+    })) { /* consume the complete request */ }
+    const request = (streamMock.mock.calls[0] as unknown as [Record<string, unknown>])[0]
+    expect(request.max_tokens).toBe(393216)
+  })
+
   it('does not retry a 400 body error even when its message contains a 5', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({error:{message:'Request 512 body format invalid',type:'invalid_request_error'}}),{status:400,headers:{'content-type':'application/json'}}))
     vi.stubGlobal('fetch', fetchMock)

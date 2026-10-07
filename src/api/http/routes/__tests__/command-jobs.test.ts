@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { FastifyInstance, InjectOptions } from 'fastify'
-import type { Client, InStatement } from '@libsql/client'
+import type { Client } from '@libsql/client'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { CommandJobLaunch, CommandJobSnapshot } from '../../../../core/command-jobs/types.js'
 
@@ -268,17 +268,20 @@ describe('D7 command job HTTP and history lifecycle', () => {
     const gate = new Promise<void>(resolve => { release = resolve })
     const persisting = new Promise<void>(resolve => { entered = resolve })
     const cancelling = new Promise<void>(resolve => { stopping = resolve })
-    const originalExecute = db.execute.bind(db)
+    const originalBatch = db.batch.bind(db)
     let held = false
-    const dbSpy = vi.spyOn(db, 'execute').mockImplementation(async (...args) => {
-      const statement = args[0] as unknown as InStatement
-      if (!held && typeof statement === 'object' && statement.sql.includes('INSERT INTO command_jobs') &&
-        Array.isArray(statement.args) && statement.args[1] === sessionId) {
-        held = true
-        entered()
-        await gate
+    const dbSpy = vi.spyOn(db, 'batch').mockImplementation(async (statements, mode) => {
+      const statement = (statements as unknown[]).find(item => {
+        if (!item || typeof item !== 'object') return false
+        const sql = (item as { sql?: unknown }).sql
+        return typeof sql === 'string' && sql.includes('INSERT INTO command_jobs')
+      }) as { sql: string; args?: unknown[] } | undefined
+      if (!held && statement && Array.isArray(statement.args) && statement.args[1] === sessionId) {
+          held = true
+          entered()
+          await gate
       }
-      return originalExecute(...args)
+      return originalBatch(statements, mode)
     })
     const originalCancel = commandJobs.cancelScope.bind(commandJobs)
     const cancelSpy = vi.spyOn(commandJobs, 'cancelScope').mockImplementation(async (...args) => {

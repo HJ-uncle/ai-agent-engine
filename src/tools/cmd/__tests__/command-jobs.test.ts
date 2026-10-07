@@ -126,4 +126,14 @@ describe('D7 command tools with real policy and processes', () => {
     expect(result.output).toContain('partial evidence')
     expect(result.output).toContain('timed out')
   }, 15_000)
+
+  it('does not impose a synthetic deadline on an omitted Code timeout', async () => {
+    const launchSpy = vi.spyOn(commandJobs, 'start')
+    const file = script('long-code.cjs', "setTimeout(() => process.stdout.write('completed after the normal timeout window'), 150)")
+    const result = await cmdTool.execute({ command: process.execPath, args: [file] }, ctx)
+    expect(result.success).toBe(true)
+    expect(result.output).toContain('completed after the normal timeout window')
+    expect(launchSpy.mock.calls.at(-1)?.[0].timeoutMs).toBeUndefined()
+    launchSpy.mockRestore()
+  })
 })

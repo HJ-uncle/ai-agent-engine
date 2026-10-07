@@ -5,8 +5,9 @@ import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/in
 import { workspaceManager } from '../../workspace/index.js'
 import { MAX_FILE_SIZE } from './constants.js'
 import { handlerRegistry } from './handlers/registry.js'
-import { readOldSnapshot, commitWriteChange, ChangeRecordingError, decodeEditableText } from './change-recorder.js'
+import { readOldSnapshot, commitWriteChange, ChangeRecordingError, decodeEditableText, restoreSnapshot } from './change-recorder.js'
 import { readFileVersionSync, withFileLocks } from '../../shared/file-version.js'
+import { normalizeWriteFileArgs } from '../../shared/write-file-args.js'
 import { throwIfAborted } from '../../core/utils/abort.js'
 
 export const readFileTool: Tool = {
@@ -153,7 +154,12 @@ export const writeFileTool: Tool = {
     required: ['path', 'data'],
   },
   async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
-    const { path: filePath, data } = rawArgs as { path: string; data: any }
+    const normalized = normalizeWriteFileArgs(rawArgs)
+    if (!normalized.ok) {
+      return { success: false, output: normalized.error.message, error: normalized.error.code,
+        metadata: { code: normalized.error.code, fileMutationApplied: false } }
+    }
+    const { path: filePath, data, usedContentAlias } = normalized.args
     try {
       const safePath = workspaceManager.resolveSafePath(ctx, filePath)
       return await withFileLocks([safePath], async ([canonicalPath]) => {
@@ -167,6 +173,18 @@ export const writeFileTool: Tool = {
         } catch (error) {
           // Some format writers can fail after touching the destination. Keep
           // evidence of those bytes too, while preserving the failed outcome.
+          try {
+            if (fs.statSync(canonicalPath).size > MAX_FILE_SIZE) {
+              restoreSnapshot(canonicalPath, snapshot)
+              return { success: false, output: `Write failed and produced an oversized file; the original was restored: ${error instanceof Error ? error.message : String(error)}`,
+                error: 'WRITE_FILE_TOO_LARGE', metadata: { code: 'WRITE_FILE_TOO_LARGE', fileMutationApplied: false } }
+            }
+          } catch (sizeError) {
+            if ((sizeError as NodeJS.ErrnoException).code !== 'ENOENT') {
+              return { success: false, output: `Write failed and its result could not be inspected: ${error instanceof Error ? error.message : String(error)}`,
+                error: 'WRITE_FAILED', metadata: { code: 'WRITE_FAILED', fileMutationApplied: true, rollbackAvailable: false } }
+            }
+          }
           const after = await readOldSnapshot(canonicalPath)
           if (after.oldHash !== snapshot.oldHash) {
             const change = await commitWriteChange(ctx, filePath, canonicalPath, snapshot)
@@ -179,8 +197,23 @@ export const writeFileTool: Tool = {
           }
           throw error
         }
+        const written = fs.statSync(canonicalPath)
+        if (written.size > MAX_FILE_SIZE) {
+          // Format writers may expand structured input substantially. Restore
+          // the pre-write state before returning so a rejected oversized
+          // artifact cannot leave an untracked mutation on disk.
+          try {
+            restoreSnapshot(canonicalPath, snapshot)
+            return { success: false, output: `File too large: write_file supports files up to ${MAX_FILE_SIZE} bytes.`,
+              error: 'WRITE_FILE_TOO_LARGE', metadata: { code: 'WRITE_FILE_TOO_LARGE', fileMutationApplied: false } }
+          } catch (restoreError) {
+            return { success: false, output: `File too large and could not be restored: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`,
+              error: 'WRITE_FILE_TOO_LARGE', metadata: { code: 'WRITE_FILE_TOO_LARGE', fileMutationApplied: true, rollbackAvailable: false } }
+          }
+        }
         const change = await commitWriteChange(ctx, filePath, canonicalPath, snapshot)
-        return { success: true, output: `Successfully written to ${filePath}`, change }
+        return { success: true, output: `Successfully written to ${filePath}`, change,
+          ...(usedContentAlias ? { metadata: { compatibilityAlias: 'content' } } : {}) }
       })
     } catch (err) {
       return {

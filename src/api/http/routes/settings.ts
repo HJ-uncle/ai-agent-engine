@@ -6,6 +6,7 @@ import { setGlobalToolPoolLimit } from '../../../core/utils/concurrency-pool.js'
 import { resolveOSMMode, isValidMode, OSM_MODES } from '../../../core/osm.js'
 import { logger as engineLogger } from '../../../observability/index.js'
 import { MANAGED_KEYS } from '../../../core/aether-config.js'
+import { MAX_FILE_SIZE } from '../../../tools/file/constants.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
@@ -61,7 +62,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       BASH_PATH:     getStr('BASH_PATH',     ''),
       // ── Tools ────────────────────────────────────────────────────────────
       CMD_TIMEOUT_MS:      parseInt(getStr('CMD_TIMEOUT_MS',      '5000'),    10),
-      MAX_FILE_SIZE_BYTES: parseInt(getStr('MAX_FILE_SIZE_BYTES', '10485760'), 10),
+      MAX_FILE_SIZE_BYTES: parseInt(getStr('MAX_FILE_SIZE_BYTES', String(MAX_FILE_SIZE)), 10),
       WEB_SEARCH_SERVER:   getStr('WEB_SEARCH_SERVER', 'http://127.0.0.1:8923'),
       // ── Workspace ────────────────────────────────────────────────────────
       WORKSPACE_ROOT: getStr('WORKSPACE_ROOT', './workspace'),

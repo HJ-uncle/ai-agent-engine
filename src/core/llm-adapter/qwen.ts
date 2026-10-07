@@ -1,3 +1,4 @@
+import { isThinkingDisabled } from './thinking.js'
 /**
  * Qwen (通义千问 / 百炼) 专有通道适配器
  * ============================================================================
@@ -119,17 +120,23 @@ export class QwenAdapter extends OpenAIAdapter {
   /** 把 Qwen 默认参数注入到 LLMAdapterOptions */
   private wrapOptions(options?: LLMAdapterOptions): LLMAdapterOptions {
     const model = options?.model ?? this.model
+    // Preserve an explicit null so utility calls can opt out of the model's
+    // default thinking mode instead of being re-enabled by this wrapper.
+    const thinkingConfigExplicit = options != null && Object.prototype.hasOwnProperty.call(options, 'thinkingConfig')
+    const responseThinkingFieldExplicit = options != null && Object.prototype.hasOwnProperty.call(options, 'responseThinkingField')
     const wrapped: LLMAdapterOptions = {
       ...(options ?? { model }),
       includeStreamUsage: options?.includeStreamUsage ?? this.qwenOptions.includeStreamUsage,
       // Qwen 推理内容字段与 DeepSeek 相同
-      responseThinkingField: options?.responseThinkingField ?? 'reasoning_content',
+      responseThinkingField: responseThinkingFieldExplicit ? options?.responseThinkingField : 'reasoning_content',
     }
 
     // 自动思考模式：qwen3 / QwQ + autoThinking=true 时注入 enable_thinking
     if (
+      !isThinkingDisabled(options) &&
       this.qwenOptions.autoThinking &&
       QwenAdapter.isThinkingModel(model) &&
+      (!thinkingConfigExplicit || options?.thinkingConfig !== null) &&
       !options?.thinkingConfig
     ) {
       wrapped.thinkingConfig = { enable_thinking: true }

@@ -73,9 +73,23 @@ export class SubagentRunner {
     parent.signal?.addEventListener('abort', onParentAbort, { once: true })
     if (parent.signal?.aborted) onParentAbort()
     let timedOut = false
-    const timeout = options.deadlineMs ?? Math.max(1000, Number(process.env.SUBAGENT_DEADLINE_MS) || 10 * 60_000)
-    const timer = setTimeout(() => { timedOut = true; cancelPromise = this.cancel(tenantId, runId, 'deadline_exceeded') }, timeout)
-    timer.unref?.()
+    // Code work is allowed to run until it finishes or is explicitly cancelled.
+    // An operator may still opt into a deadline through the request or env var;
+    // the ten-minute default is retained for other profiles for safety.
+    const configuredDeadline = Number(process.env.SUBAGENT_DEADLINE_MS)
+    const requestedTimeout = options.deadlineMs !== undefined
+      ? options.deadlineMs
+      : parent.toolProfile === 'code'
+        ? (Number.isFinite(configuredDeadline) && configuredDeadline > 0 ? configuredDeadline : undefined)
+        : Math.max(1000, configuredDeadline || 10 * 60_000)
+    const timeout = requestedTimeout === undefined || requestedTimeout === Infinity
+      ? undefined
+      : Math.max(1, Number.isFinite(requestedTimeout) ? requestedTimeout : 10 * 60_000)
+    const timer = timeout === undefined ? undefined : setTimeout(() => {
+      timedOut = true
+      cancelPromise = this.cancel(tenantId, runId, 'deadline_exceeded')
+    }, Math.max(1, timeout))
+    timer?.unref?.()
     let release: (() => void) | undefined
     let requestBudget: RequestBudget | undefined
     let outcome: RunOutcome | undefined
@@ -149,7 +163,9 @@ export class SubagentRunner {
         if (!controller.signal.aborted) controller.abort(new Error('Run no longer queued'))
       } else {
         await emit(started)
-        const configuredChildLimit = parseRequestTokenLimit(process.env.SUBAGENT_TOKEN_LIMIT)
+        const configuredChildLimit = parent.toolProfile === 'code'
+          ? Infinity
+          : parseRequestTokenLimit(process.env.SUBAGENT_TOKEN_LIMIT)
         if (parent.requestBudget && (Number.isFinite(parent.requestBudget.limit) || Number.isFinite(configuredChildLimit))) {
           // Only explicitly enabled budgets allocate slices; the default unlimited parent/child path only records usage.
           const finiteParent = Number.isFinite(parent.requestBudget.limit)
@@ -165,7 +181,7 @@ export class SubagentRunner {
     } finally {
       requestBudget?.close()
       release?.()
-      clearTimeout(timer)
+      if (timer) clearTimeout(timer)
       parent.signal?.removeEventListener('abort', onParentAbort)
       if (cancelPromise) await cancelPromise
       const users = (this.budgetUsers.get(group) ?? 1) - 1

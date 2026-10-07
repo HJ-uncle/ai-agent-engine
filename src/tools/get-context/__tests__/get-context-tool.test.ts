@@ -49,4 +49,21 @@ describe('get_current_context memory isolation', () => {
     expect(memory.constructed).toHaveBeenCalledTimes(1)
     expect(memory.list).toHaveBeenCalledWith({ limit: 5, orderBy: 'timestamp', orderDir: 'DESC' }, { tenantId: 'context-tenant', sessionId: 'context-session' })
   })
+
+  it('session memory follows the executing subagent session, not rootSessionId', async () => {
+    const ctx = {
+      ...context('general'),
+      rootSessionId: 'parent-session',
+      sessionId: 'child-session',
+      memoryScope: 'session',
+    } as AgentContext
+
+    const result = await getCurrentContextTool.execute({}, ctx)
+
+    expect(result.success).toBe(true)
+    expect(memory.list).toHaveBeenCalledWith(
+      { limit: 5, orderBy: 'timestamp', orderDir: 'DESC' },
+      { tenantId: 'context-tenant', sessionId: 'child-session', scope: 'session' },
+    )
+  })
 })

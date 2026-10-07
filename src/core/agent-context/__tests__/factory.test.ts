@@ -110,6 +110,13 @@ describe('createAgentContext / artifact directories', () => {
 })
 
 describe('createAgentContext / tokenBudget', () => {
+  it('Code mode ignores configured local token budgets', () => {
+    withEnv({ SUPERPOWER_MODE: 'max', SUPERPOWER_ENABLED: undefined, TOKEN_BUDGET: '60000' }, () => {
+      const ctx = createAgentContext({ ...deps(), toolProfile: 'code', tokenBudget: 30000 })
+      expect(ctx.tokenBudget).toBeUndefined()
+    })
+  })
+
   it('options.tokenBudget 显式传入时不被倍率放大（子代理预算保真）', () => {
     withEnv({ SUPERPOWER_MODE: 'max', SUPERPOWER_ENABLED: undefined }, () => {
       const d = { ...deps(), tokenBudget: 30000 }

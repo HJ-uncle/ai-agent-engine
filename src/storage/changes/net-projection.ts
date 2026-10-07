@@ -15,10 +15,10 @@ export interface ChangeSegment {
   discontinuous: boolean
 }
 
-/** Large/binary snapshots may be omitted, but their full byte hashes are still useful. */
+/** Large/binary snapshots may be stored out-of-line; hashes still verify the chain. */
 export function hasTrustedVersions(change: FileChange): boolean {
   const valid = (hash: string | null): hash is string => hash === 'missing' || /^sha256:[a-f0-9]{64}$/.test(hash ?? '')
-  return valid(change.oldHash) && valid(change.newHash) && (change.truncated ||
+  return valid(change.oldHash) && valid(change.newHash) && (change.oldSnapshotRef !== undefined || change.newSnapshotRef !== undefined || change.truncated ||
     (hashFileContent(change.oldContent) === change.oldHash && hashFileContent(change.newContent) === change.newHash))
 }
 
@@ -47,7 +47,7 @@ export function projectSegment(segment: ChangeSegment, issue?: ProjectionIssue):
   const truncated = segment.changes.some(change => change.truncated)
   return {
     ...last,
-    oldContent: first.oldContent, oldHash: first.oldHash,
+    oldContent: first.oldContent, oldHash: first.oldHash, oldSnapshotRef: first.oldSnapshotRef,
     kind: last.newHash === 'missing' ? 'delete' : last.kind,
     truncated,
     isNew: first.oldHash === 'missing' && last.newHash !== 'missing',

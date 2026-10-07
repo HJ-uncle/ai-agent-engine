@@ -1,3 +1,4 @@
+import { applyThinkingPreference } from './thinking.js'
 import { observeRequest, observeStreamRequest, anthropicUsage } from './request-attempt.js'
 import Anthropic from '@anthropic-ai/sdk'
 import type { LLMAdapter, LLMResponse, LLMAdapterOptions, LLMStreamChunk } from './types.js'
@@ -42,6 +43,19 @@ interface AnthropicMessageParam {
 }
 
 /**
+ * Anthropic-compatible gateways may expose a larger context window than the
+ * provider's output parameter accepts. DeepSeek V4's Anthropic endpoint, for
+ * example, rejects max_tokens above 393216. This is a wire-protocol ceiling,
+ * not an engine-side Code-mode budget.
+ */
+const MAX_ANTHROPIC_OUTPUT_TOKENS = 393_216
+
+function normalizeOutputTokenLimit(value: number | undefined, fallback: number): number {
+  const candidate = Number.isFinite(value) ? Math.floor(value!) : fallback
+  return Math.max(1, Math.min(MAX_ANTHROPIC_OUTPUT_TOKENS, candidate))
+}
+
+/**
  * Convert a single Message to Anthropic format.
  *
  * Returns null when the message must be dropped:
@@ -82,6 +96,10 @@ function messageToAnthropic(
               } 
             }
           ]
+        } else if (parsed.dataUrlStripped) {
+          toolContent = parsed.hasDataUrl === false
+            ? `图片文件 ${parsed.filename || 'image'} 已读取，但图像内容未写入上下文。需要像素级检查时请改用 OCR 或较小图片。`
+            : `图片文件 ${parsed.filename || 'image'} 已读取，图像内容已通过视觉通道提供。`
         } else {
           toolContent = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
         }
@@ -225,6 +243,7 @@ export class AnthropicAdapter implements LLMAdapter {
   }
 
   async complete(messages: Message[], options?: LLMAdapterOptions): Promise<LLMResponse> {
+    options = applyThinkingPreference(options, this.provider, options?.model ?? this.model)
     // Two-pass orphan filtering:
     // Pass 1 — collect all valid tool_use ids from assistant messages
     // and collect all valid tool_result ids from tool messages
@@ -250,9 +269,19 @@ export class AnthropicAdapter implements LLMAdapter {
       console.log('[anthropic] messages sent:', JSON.stringify(anthropicMessages, null, 2))
     }
 
+    const requestedMaxTokens = options?.maxTokens
+      ?? (options?.unboundedOutput
+        // Anthropic-compatible DeepSeek V4 gateways require a positive
+        // max_tokens field. Keep this at the wire maximum instead of using
+        // the estimated remaining context, which can silently become 400
+        // near a full context window. Context admission/compaction belongs to
+        // the agent loop; this is only the provider protocol ceiling.
+        ? MAX_ANTHROPIC_OUTPUT_TOKENS
+        : 4096)
+    const maxTokens = normalizeOutputTokenLimit(requestedMaxTokens, MAX_ANTHROPIC_OUTPUT_TOKENS)
     const params: Record<string, unknown> = {
       model: options?.model ?? this.model,
-      max_tokens: options?.maxTokens ?? 4096,
+      max_tokens: maxTokens,
       messages: anthropicMessages,
       system: options?.systemPrompt,
     }
@@ -266,7 +295,17 @@ export class AnthropicAdapter implements LLMAdapter {
     }
 
     type CreateFn = (p: Record<string, unknown>, requestOptions: { signal?: AbortSignal }) => Promise<{
-      content: Array<{ type: string; text?: string; id?: string; name?: string; input?: unknown }>
+      content: Array<{
+        type: string
+        text?: string
+        thinking?: string
+        reasoning?: string
+        reasoning_content?: string
+        id?: string
+        name?: string
+        input?: unknown
+        [key: string]: unknown
+      }>
       usage: { 
         input_tokens: number; 
         output_tokens: number;
@@ -282,7 +321,7 @@ export class AnthropicAdapter implements LLMAdapter {
     const toolCalls: LLMResponse['toolCalls'] = []
 
     for (const block of response.content) {
-      if (block.type === 'text' && block.text !== undefined) {
+      if (block.type === 'text' && typeof block.text === 'string') {
         content += block.text
       } else if (block.type === 'tool_use') {
         toolCalls.push({
@@ -290,8 +329,25 @@ export class AnthropicAdapter implements LLMAdapter {
           name: block.name ?? '',
           args: block.input as Record<string, unknown>,
         })
-      } else if (block.type === 'thinking' || (options?.responseThinkingField && block.type === options.responseThinkingField)) {
-        reasoningContent += (block as any)[options?.responseThinkingField || 'thinking']
+      } else if (
+        block.type === 'thinking'
+        || block.type === 'redacted_thinking'
+        || block.type === 'reasoning'
+        || block.type === 'reasoning_content'
+        || (options?.responseThinkingField && block.type === options.responseThinkingField)
+      ) {
+        // Different Anthropic-compatible gateways use different names for the
+        // hidden block. Keep it diagnostic-only; utility callers must never
+        // expose reasoning as the generated visible text.
+        const field = options?.responseThinkingField && block.type === options.responseThinkingField
+          ? options.responseThinkingField
+          : block.type === 'reasoning_content'
+            ? 'reasoning_content'
+            : block.type === 'reasoning'
+              ? 'reasoning'
+              : 'thinking'
+        const hidden = block[field]
+        if (typeof hidden === 'string') reasoningContent += hidden
       }
     }
 
@@ -313,6 +369,7 @@ export class AnthropicAdapter implements LLMAdapter {
   }
 
   async *stream(messages: Message[], options?: LLMAdapterOptions): AsyncIterable<LLMStreamChunk> {
+    options = applyThinkingPreference(options, this.provider, options?.model ?? this.model)
     // Two-pass orphan filtering (same as complete())
     const validToolUseIds = new Set<string>()
     const validToolResultIds = new Set<string>()
@@ -330,9 +387,14 @@ export class AnthropicAdapter implements LLMAdapter {
         .filter((m): m is AnthropicMessageParam => m !== null),
     )
 
+    const requestedStreamMaxTokens = options?.maxTokens
+      ?? (options?.unboundedOutput
+        ? MAX_ANTHROPIC_OUTPUT_TOKENS
+        : 4096)
+    const streamMaxTokens = normalizeOutputTokenLimit(requestedStreamMaxTokens, MAX_ANTHROPIC_OUTPUT_TOKENS)
     const streamParams: Record<string, unknown> = {
       model: options?.model ?? this.model,
-      max_tokens: options?.maxTokens ?? 4096,
+      max_tokens: streamMaxTokens,
       messages: anthropicMessages,
       system: options?.systemPrompt,
     }

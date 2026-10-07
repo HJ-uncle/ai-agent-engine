@@ -1,4 +1,6 @@
 import path from 'node:path'
+import fs from 'node:fs'
+import crypto from 'node:crypto'
 import type { AgentContext } from '../../core/agent-context/index.js'
 import { ChangeStore } from '../../storage/changes/index.js'
 import { readFileVersion } from '../../shared/file-version.js'
@@ -27,6 +29,50 @@ export interface ChangeSnapshot {
   oldHash: string
   exists: boolean
   truncated: boolean
+  /** Opaque durable byte snapshot for large/binary files. */
+  snapshotRef?: string
+}
+
+function snapshotRoot(): string {
+  const dataDir = process.env.DATA_DIR
+    ? path.dirname(path.resolve(process.env.DATA_DIR))
+    : path.resolve('data')
+  const root = path.join(dataDir, 'change-snapshots')
+  fs.mkdirSync(root, { recursive: true })
+  return root
+}
+
+function writeSnapshot(bytes: Buffer, hash: string): string {
+  // Keep references portable across Windows and POSIX filesystems.
+  const ref = `${hash.replace(/[^a-zA-Z0-9_-]/g, '_')}-${crypto.randomUUID()}.bin`
+  const destination = path.join(snapshotRoot(), ref)
+  const temporary = `${destination}.${process.pid}.tmp`
+  fs.writeFileSync(temporary, bytes, { flag: 'wx' })
+  fs.renameSync(temporary, destination)
+  return ref
+}
+
+function discardSnapshot(ref: string | undefined): void {
+  if (!ref || !/^[a-zA-Z0-9_-]+\.bin$/.test(ref)) return
+  try { fs.unlinkSync(path.join(snapshotRoot(), ref)) } catch { /* best effort cleanup */ }
+}
+
+/** Restore a pre-write snapshot without materializing a large file in JS memory. */
+export function restoreSnapshot(absPath: string, snapshot: ChangeSnapshot): void {
+  if (snapshot.snapshotRef) {
+    if (!/^[a-zA-Z0-9_-]+\.bin$/.test(snapshot.snapshotRef)) throw new Error('Invalid change snapshot reference')
+    fs.mkdirSync(path.dirname(absPath), { recursive: true })
+    fs.copyFileSync(path.join(snapshotRoot(), snapshot.snapshotRef), absPath)
+    return
+  }
+  if (snapshot.oldContent === null) {
+    try { fs.unlinkSync(absPath) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    return
+  }
+  fs.mkdirSync(path.dirname(absPath), { recursive: true })
+  fs.writeFileSync(absPath, snapshot.oldContent, 'utf8')
 }
 
 /** Call while holding the canonical file lock. Read failures prevent mutation. */
@@ -36,7 +82,8 @@ export async function readOldSnapshot(absPath: string): Promise<ChangeSnapshot> 
   const text = content.byteLength > MAX_CHANGE_CONTENT_BYTES ? null : decodeEditableText(absPath, content)
   // Invalid UTF-8 cannot be faithfully restored from a SQLite text snapshot.
   const truncated = text === null || !Buffer.from(text, 'utf8').equals(content)
-  return { oldContent: truncated ? null : text, oldHash: hash, exists: true, truncated }
+  return { oldContent: truncated ? null : text, oldHash: hash, exists: true, truncated,
+    snapshotRef: truncated ? writeSnapshot(content, hash) : undefined }
 }
 
 export class ChangeRecordingError extends Error {
@@ -53,17 +100,22 @@ export async function commitWriteChange(
   absPath: string,
   snapshot: ChangeSnapshot,
 ): Promise<Record<string, unknown>> {
+  let afterSnapshotRef: string | undefined
   try {
     const after = await readOldSnapshot(absPath)
+    afterSnapshotRef = after.snapshotRef
     const change = await changeStore.record(ctx.tenantId, {
       sessionId: ctx.rootSessionId ?? ctx.sessionId, path: absPath, kind: 'write',
       turnId: ctx.turnId ?? ctx.parentConversationId ?? ctx.conversationId, runId: ctx.rootRunId,
       oldContent: snapshot.oldContent, newContent: after.oldContent,
       oldHash: snapshot.oldHash, newHash: after.oldHash,
+      oldSnapshotRef: snapshot.snapshotRef, newSnapshotRef: after.snapshotRef,
       truncated: snapshot.truncated || after.truncated,
     })
     return { ...change, displayPath, isNew: !snapshot.exists }
   } catch (error) {
+    discardSnapshot(snapshot.snapshotRef)
+    discardSnapshot(afterSnapshotRef)
     ctx.logger.warn({ err: error }, '[change-recorder] 文件已写入，但记录失败')
     throw new ChangeRecordingError(error)
   }
@@ -76,17 +128,22 @@ export async function commitDeleteChange(
   absPath: string,
   snapshot: ChangeSnapshot,
 ): Promise<Record<string, unknown>> {
+  let afterSnapshotRef: string | undefined
   try {
     const after = await readOldSnapshot(absPath)
+    afterSnapshotRef = after.snapshotRef
     const change = await changeStore.record(ctx.tenantId, {
       sessionId: ctx.rootSessionId ?? ctx.sessionId, path: absPath, kind: 'delete',
       turnId: ctx.turnId ?? ctx.parentConversationId ?? ctx.conversationId, runId: ctx.rootRunId,
       oldContent: snapshot.oldContent, newContent: after.oldContent,
       oldHash: snapshot.oldHash, newHash: after.oldHash,
+      oldSnapshotRef: snapshot.snapshotRef, newSnapshotRef: after.snapshotRef,
       truncated: snapshot.truncated || after.truncated,
     })
     return { ...change, displayPath, isNew: false }
   } catch (error) {
+    discardSnapshot(snapshot.snapshotRef)
+    discardSnapshot(afterSnapshotRef)
     ctx.logger.warn({ err: error }, '[change-recorder] 文件已删除，但记录失败')
     throw new ChangeRecordingError(error)
   }
