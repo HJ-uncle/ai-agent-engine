@@ -4,10 +4,10 @@
  * AE.md 是注入 system prompt 的项目说明文件（对标 Claude Code 的 CLAUDE.md、
  * Codex 的 AGENTS.md），用于告诉 Agent 本项目的技术栈、约定与注意事项。
  *
- * 查找顺序（均可存在，内容依次拼接）：
+ * 查找顺序（全局上下文与项目上下文拼接，新位置优先）：
  *   1. ~/.aether/AE.md       用户级全局上下文
- *   2. <project>/.aether/AE.md  项目级（推荐位置）
- *   3. <project>/AE.md          项目根目录（兼容直觉写法）
+ *   2. <project>/.ae/AE.md      项目级（推荐位置）
+ *   3. .ae/AE.md 不存在时兼容 .aether/AE.md 与根目录 AE.md
  *
  * 每次请求实时读取（文件通常很小），无缓存，改完即生效。
  */
@@ -15,6 +15,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { getUserAetherDir } from './aether-config.js'
+import { legacyProjectDataPath, projectDataPath } from './project-storage.js'
 
 const MAX_CONTEXT_CHARS = 32 * 1024
 
@@ -33,10 +34,17 @@ function readIfExist(file: string): string | null {
  * 无任何 AE.md 时返回空字符串。
  */
 export function getProjectContextBlock(projectRoot: string = process.cwd()): string {
+  const canonical = projectDataPath(projectRoot, 'AE.md')
+  // Once migrated, old instructions must not be injected twice or reappear after an intentional clear.
+  const projectFiles = fs.existsSync(canonical)
+    ? [{ file: canonical, label: 'project' }]
+    : [
+        { file: legacyProjectDataPath(projectRoot, 'AE.md'), label: 'project' },
+        { file: path.resolve(projectRoot, 'AE.md'), label: 'root' },
+      ]
   const candidates: Array<{ file: string; label: string }> = [
     { file: path.join(getUserAetherDir(), 'AE.md'), label: 'user' },
-    { file: path.resolve(projectRoot, '.aether', 'AE.md'), label: 'project' },
-    { file: path.resolve(projectRoot, 'AE.md'), label: 'root' },
+    ...projectFiles,
   ]
 
   const sections: string[] = []

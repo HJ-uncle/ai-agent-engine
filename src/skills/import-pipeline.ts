@@ -17,6 +17,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { projectDataPath } from '../core/project-storage.js'
 import { gunzipSync } from 'node:zlib'
 import { unzipSync } from 'fflate'
 
@@ -97,9 +98,9 @@ export function globalSkillsRoot(): string {
 
 /**
  * 解析目标落盘根目录。
- *  - project（默认）：<cwd>/.aether/skills（回退旧 SKILLs/，与 registry 探测一致）
+ *  - project（默认）：<cwd>/.ae/skills（旧目录仅用于读取）
  *  - global：~/.aether/skills（AETHER_GLOBAL_DIR 可覆盖，集群共享卷场景）
- *  - SKILLS_ROOT 显式指定时两个 scope 都落它（单 root 部署）
+ *  - SKILLS_ROOT 显式指定时项目 scope 使用该配置路径
  */
 export function resolveSkillsRoot(explicit?: string, scope: SkillScope = 'project'): string {
   if (explicit) return path.resolve(explicit)
@@ -107,11 +108,7 @@ export function resolveSkillsRoot(explicit?: string, scope: SkillScope = 'projec
   // exposes a deployment-level SKILLS_ROOT containing built-in skills.
   if (scope === 'global') return globalSkillsRoot()
   if (process.env.SKILLS_ROOT) return path.resolve(process.env.SKILLS_ROOT)
-  const projectAether = path.join(process.cwd(), '.aether', 'skills')
-  const legacy = path.join(process.cwd(), 'SKILLs')
-  if (fs.existsSync(projectAether)) return projectAether
-  if (fs.existsSync(legacy)) return legacy
-  return projectAether
+  return projectDataPath(process.cwd(), 'skills')
 }
 
 // ─── frontmatter 轻量解析 ─────────────────────────────────────────────────────

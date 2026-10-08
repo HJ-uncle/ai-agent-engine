@@ -143,17 +143,186 @@ function getPrompt() {
   return `${C.yellow}?${C.reset} ${C.cyan}$${C.reset} `
 }
 
-// ── 格式化文件大小 ─────────────────────────────────────────────────────────
+// ── 列表排版 ──────────────────────────────────────────────────────────────
+// Match the client's default xterm Unicode V6 wide-character ranges. In
+// particular, supplementary emoji are one cell there (not Unicode 11's two).
+// Measure plain text before applying ANSI styles; JS string.length counts UTF-16
+// code units, not terminal cells.
+/*
+ * Frozen zero-width ranges from xterm.js 6.0.0, src/common/input/UnicodeV6.ts.
+ * Modern Unicode property escapes differ from this provider's frozen tables.
+ *
+ * Copyright (c) 2019 The xterm.js authors. All rights reserved.
+ * Copyright (c) 2017-2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)
+ * Copyright (c) 2014-2016, SourceLair Private Company (https://www.sourcelair.com)
+ * Copyright (c) 2012-2013, Christopher Jeffrey (https://github.com/chjj/)
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+const ZERO_WIDTH_RANGES = [
+  [0x0300, 0x036F], [0x0483, 0x0486], [0x0488, 0x0489],
+  [0x0591, 0x05BD], [0x05BF, 0x05BF], [0x05C1, 0x05C2],
+  [0x05C4, 0x05C5], [0x05C7, 0x05C7], [0x0600, 0x0603],
+  [0x0610, 0x0615], [0x064B, 0x065E], [0x0670, 0x0670],
+  [0x06D6, 0x06E4], [0x06E7, 0x06E8], [0x06EA, 0x06ED],
+  [0x070F, 0x070F], [0x0711, 0x0711], [0x0730, 0x074A],
+  [0x07A6, 0x07B0], [0x07EB, 0x07F3], [0x0901, 0x0902],
+  [0x093C, 0x093C], [0x0941, 0x0948], [0x094D, 0x094D],
+  [0x0951, 0x0954], [0x0962, 0x0963], [0x0981, 0x0981],
+  [0x09BC, 0x09BC], [0x09C1, 0x09C4], [0x09CD, 0x09CD],
+  [0x09E2, 0x09E3], [0x0A01, 0x0A02], [0x0A3C, 0x0A3C],
+  [0x0A41, 0x0A42], [0x0A47, 0x0A48], [0x0A4B, 0x0A4D],
+  [0x0A70, 0x0A71], [0x0A81, 0x0A82], [0x0ABC, 0x0ABC],
+  [0x0AC1, 0x0AC5], [0x0AC7, 0x0AC8], [0x0ACD, 0x0ACD],
+  [0x0AE2, 0x0AE3], [0x0B01, 0x0B01], [0x0B3C, 0x0B3C],
+  [0x0B3F, 0x0B3F], [0x0B41, 0x0B43], [0x0B4D, 0x0B4D],
+  [0x0B56, 0x0B56], [0x0B82, 0x0B82], [0x0BC0, 0x0BC0],
+  [0x0BCD, 0x0BCD], [0x0C3E, 0x0C40], [0x0C46, 0x0C48],
+  [0x0C4A, 0x0C4D], [0x0C55, 0x0C56], [0x0CBC, 0x0CBC],
+  [0x0CBF, 0x0CBF], [0x0CC6, 0x0CC6], [0x0CCC, 0x0CCD],
+  [0x0CE2, 0x0CE3], [0x0D41, 0x0D43], [0x0D4D, 0x0D4D],
+  [0x0DCA, 0x0DCA], [0x0DD2, 0x0DD4], [0x0DD6, 0x0DD6],
+  [0x0E31, 0x0E31], [0x0E34, 0x0E3A], [0x0E47, 0x0E4E],
+  [0x0EB1, 0x0EB1], [0x0EB4, 0x0EB9], [0x0EBB, 0x0EBC],
+  [0x0EC8, 0x0ECD], [0x0F18, 0x0F19], [0x0F35, 0x0F35],
+  [0x0F37, 0x0F37], [0x0F39, 0x0F39], [0x0F71, 0x0F7E],
+  [0x0F80, 0x0F84], [0x0F86, 0x0F87], [0x0F90, 0x0F97],
+  [0x0F99, 0x0FBC], [0x0FC6, 0x0FC6], [0x102D, 0x1030],
+  [0x1032, 0x1032], [0x1036, 0x1037], [0x1039, 0x1039],
+  [0x1058, 0x1059], [0x1160, 0x11FF], [0x135F, 0x135F],
+  [0x1712, 0x1714], [0x1732, 0x1734], [0x1752, 0x1753],
+  [0x1772, 0x1773], [0x17B4, 0x17B5], [0x17B7, 0x17BD],
+  [0x17C6, 0x17C6], [0x17C9, 0x17D3], [0x17DD, 0x17DD],
+  [0x180B, 0x180D], [0x18A9, 0x18A9], [0x1920, 0x1922],
+  [0x1927, 0x1928], [0x1932, 0x1932], [0x1939, 0x193B],
+  [0x1A17, 0x1A18], [0x1B00, 0x1B03], [0x1B34, 0x1B34],
+  [0x1B36, 0x1B3A], [0x1B3C, 0x1B3C], [0x1B42, 0x1B42],
+  [0x1B6B, 0x1B73], [0x1DC0, 0x1DCA], [0x1DFE, 0x1DFF],
+  [0x200B, 0x200F], [0x202A, 0x202E], [0x2060, 0x2063],
+  [0x206A, 0x206F], [0x20D0, 0x20EF], [0x302A, 0x302F],
+  [0x3099, 0x309A], [0xA806, 0xA806], [0xA80B, 0xA80B],
+  [0xA825, 0xA826], [0xFB1E, 0xFB1E], [0xFE00, 0xFE0F],
+  [0xFE20, 0xFE23], [0xFEFF, 0xFEFF], [0xFFF9, 0xFFFB],
+  [0x10A01, 0x10A03], [0x10A05, 0x10A06], [0x10A0C, 0x10A0F],
+  [0x10A38, 0x10A3A], [0x10A3F, 0x10A3F], [0x1D167, 0x1D169],
+  [0x1D173, 0x1D182], [0x1D185, 0x1D18B], [0x1D1AA, 0x1D1AD],
+  [0x1D242, 0x1D244], [0xE0001, 0xE0001], [0xE0020, 0xE007F],
+  [0xE0100, 0xE01EF],
+]
+
+function isZeroWidth(cp) {
+  if (cp < 32 || (cp >= 0x7f && cp < 0xa0)) return true
+  let low = 0, high = ZERO_WIDTH_RANGES.length - 1
+  while (low <= high) {
+    const mid = (low + high) >>> 1
+    const [start, end] = ZERO_WIDTH_RANGES[mid]
+    if (cp < start) high = mid - 1
+    else if (cp > end) low = mid + 1
+    else return true
+  }
+  return false
+}
+
+function cellWidth(char) {
+  const cp = char.codePointAt(0)
+  if (isZeroWidth(cp)) return 0
+  return cp >= 0x1100 && (cp <= 0x115f || cp === 0x2329 || cp === 0x232a ||
+    (cp >= 0x2e80 && cp <= 0xa4cf && cp !== 0x303f) ||
+    (cp >= 0xac00 && cp <= 0xd7a3) || (cp >= 0xf900 && cp <= 0xfaff) ||
+    (cp >= 0xfe10 && cp <= 0xfe19) || (cp >= 0xfe30 && cp <= 0xfe6f) ||
+    (cp >= 0xff00 && cp <= 0xff60) || (cp >= 0xffe0 && cp <= 0xffe6) ||
+    (cp >= 0x20000 && cp <= 0x2fffd) || (cp >= 0x30000 && cp <= 0x3fffd)) ? 2 : 1
+}
+
+function textWidth(text) {
+  let width = 0
+  for (const char of text) width += cellWidth(char)
+  return width
+}
+
+function padCells(text, width, right = false) {
+  const padding = ' '.repeat(Math.max(0, width - textWidth(text)))
+  return right ? padding + text : text + padding
+}
+
+function wrapCells(text, width) {
+  const lines = []
+  let line = '', used = 0
+  for (const char of text) {
+    const cells = cellWidth(char)
+    if (cells && used && used + cells > width) {
+      lines.push(line)
+      line = ''; used = 0
+    }
+    line += char
+    used += cells
+  }
+  lines.push(line)
+  return lines
+}
+
+function listingWidth() {
+  // Re-read on every command, including after a PTY resize. Leave one spare
+  // cell so terminals do not auto-wrap the last column before our newline.
+  return Math.max(1, (process.stdout.columns || 80) - 1)
+}
+
+function visibleName(name) {
+  // Remote Unix filenames may contain newlines or terminal escape sequences.
+  // Show them literally instead of letting a name move the cursor or hide rows.
+  const display = name.replace(/\\/g, '\\\\').replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g,
+    char => ({ '\n': '\\n', '\r': '\\r', '\t': '\\t' })[char] ?? `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)
+  // A leading combining character has no preceding cell to join in xterm.
+  // Give it a visible base without changing the underlying filesystem name.
+  return display && cellWidth(display) === 0 ? `◌${display}` : display
+}
+
+function listingName(entry) {
+  return visibleName(entry.name) + (entry.isDirectory() ? '/' : '')
+}
+
+function styledName(text, entry) {
+  return entry.isDirectory() ? `${C.cyan}${C.bold}${text}${C.reset}` : text
+}
+
+function readListing(target, showHidden) {
+  const all = readEntriesBounded(target)
+  const entries = all.filter(e => showHidden || !e.name.startsWith('.')).sort((a, b) => {
+    if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1
+    return a.name.localeCompare(b.name)
+  })
+  if (!entries.length) {
+    for (const line of wrapCells(all.length ? '无可见项目（存在隐藏项，使用 -a 查看）' : '目录为空', listingWidth())) outln(line)
+  }
+  return entries
+}
+
 function fmtSize(bytes) {
-  if (bytes == null) return '     -'
-  if (bytes < 1024) return String(bytes).padStart(6)
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1).padStart(5) + 'K'
-  if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1).padStart(5) + 'M'
-  return (bytes / 1024 / 1024 / 1024).toFixed(1).padStart(5) + 'G'
+  if (bytes == null) return '—'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+  let value = bytes, unit = 0
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++ }
+  return `${unit ? value.toFixed(1) : value} ${units[unit]}`
 }
 
 function fmtDate(d) {
-  if (!d) return '                '
+  if (!d) return '—'
   const pad = n => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
@@ -205,53 +374,70 @@ const BUILTINS = {
 
   // ── 列表 ──────────────────────────────────────────────────────────────
   ls(args) {
+    if (args.some(a => /^-[al]*l[al]*$/.test(a))) return BUILTINS.ll(args)
     const showHidden = args.includes('-a') || args.includes('-la') || args.includes('-al')
     const targetArg = args.find(a => !a.startsWith('-')) 
     const target = targetArg ? safeResolve(targetArg) : cwd
     if (!target) { outln(`${C.red}⛔ 禁止访问工作空间外路径${C.reset}`); return }
     try {
-      const entries = readEntriesBounded(target)
-        .filter(e => showHidden || !e.name.startsWith('.'))
-        .sort((a, b) => {
-          if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1
-          return a.name.localeCompare(b.name)
-        })
-      const cols = Math.floor((process.stdout.columns || 80) / 22) || 1
-      const names = entries.map(e => {
-        const color = e.isDirectory() ? C.blue + C.bold : C.reset
-        const suffix = e.isDirectory() ? '/' : ''
-        return `${color}${e.name}${suffix}${C.reset}`
-      })
-      // 按列排列
-      for (let i = 0; i < names.length; i += cols) {
-        outln(names.slice(i, i + cols).join('  '))
+      const entries = readListing(target, showHidden)
+      if (!entries.length) return
+      const width = listingWidth()
+      const names = entries.map(listingName)
+      const columnWidth = Math.max(...names.map(textWidth))
+      const columns = Math.max(1, Math.floor((width + 2) / (columnWidth + 2)))
+      for (let i = 0; i < names.length; i += columns) {
+        if (columns === 1) {
+          for (const line of wrapCells(names[i], width)) outln(styledName(line, entries[i]))
+        } else {
+          const row = names.slice(i, i + columns)
+          outln(row.map((name, j) => styledName(j < row.length - 1 ? padCells(name, columnWidth) : name, entries[i + j])).join('  '))
+        }
       }
     } catch (e) { outln(`ls: ${e.message}`) }
   },
 
   ll(args) {
-    const showHidden = args.includes('-a')
+    const showHidden = args.includes('-a') || args.includes('-la') || args.includes('-al')
     const targetArg = args.find(a => !a.startsWith('-'))
     const target = targetArg ? safeResolve(targetArg) : cwd
     if (!target) { outln(`${C.red}⛔ 禁止访问工作空间外路径${C.reset}`); return }
     try {
-      const entries = readEntriesBounded(target)
-        .filter(e => showHidden || !e.name.startsWith('.'))
-        .sort((a, b) => {
-          if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1
-          return a.name.localeCompare(b.name)
-        })
-      outln(`${C.dim}${'类型'.padEnd(6)} ${'大小'.padStart(6)}  ${'修改时间'.padEnd(16)}  名称${C.reset}`)
-      outln(`${C.dim}${'-'.repeat(55)}${C.reset}`)
-      for (const e of entries) {
-        let stat, size, mtime
-        try { stat = fs.statSync(path.join(target, e.name)); size = stat.size; mtime = stat.mtime } catch {}
-        const type = e.isDirectory() ? `${C.blue}dir${C.reset}  ` : `${C.dim}file${C.reset} `
-        const color = e.isDirectory() ? C.blue + C.bold : C.reset
-        const suffix = e.isDirectory() ? '/' : ''
-        outln(`${type} ${fmtSize(size)}  ${C.dim}${fmtDate(mtime)}${C.reset}  ${color}${e.name}${suffix}${C.reset}`)
+      const entries = readListing(target, showHidden)
+      if (!entries.length) return
+      const width = listingWidth()
+      const rows = entries.map(entry => {
+        let stat
+        // Inspect the entry itself, including broken/out-of-workspace links.
+        try { stat = fs.lstatSync(path.join(target, entry.name)) } catch {}
+        return {
+          entry, name: listingName(entry),
+          type: entry.isDirectory() ? '目录' : entry.isSymbolicLink() ? '链接' : '文件',
+          size: fmtSize(entry.isFile() ? stat?.size : null),
+          date: fmtDate(stat?.mtime),
+        }
+      })
+      const sizeWidth = Math.max(4, ...rows.map(row => textWidth(row.size)))
+      const metadataWidth = 4 + sizeWidth + 16 + 6
+      const nameWidth = Math.min(Math.max(12, ...rows.map(row => textWidth(row.name))), width - metadataWidth)
+      if (nameWidth >= 12) {
+        outln(`${C.bold}${padCells('名称', nameWidth)}  类型  ${padCells('大小', sizeWidth, true)}  修改时间${C.reset}`)
+        for (const row of rows) {
+          const lines = wrapCells(row.name, nameWidth)
+          outln(`${styledName(padCells(lines[0], nameWidth), row.entry)}  ${row.type}  ${padCells(row.size, sizeWidth, true)}  ${row.date}`)
+          for (const line of lines.slice(1)) outln(styledName(line, row.entry))
+        }
+      } else {
+        for (const row of rows) {
+          for (const line of wrapCells(row.name, width)) outln(styledName(line, row.entry))
+          const indent = width > 4 ? '  ' : ''
+          for (const detail of [`${row.type} · ${row.size}`, `修改时间 ${row.date}`]) {
+            for (const line of wrapCells(detail, width - indent.length)) outln(indent + line)
+          }
+          outln()
+        }
       }
-      outln(`${C.dim}共 ${entries.length} 项${C.reset}`)
+      for (const line of wrapCells(`共 ${entries.length} 项`, width)) outln(line)
     } catch (e) { outln(`ll: ${e.message}`) }
   },
 
@@ -460,7 +646,7 @@ const BUILTINS = {
     if (topic) {
       const topics = {
         cd:    [`${C.bold}cd${C.reset} — 切换目录`,`  cd <目录>    进入子目录`, `  cd ..        返回上级目录`, `  cd ~         回到主工作空间根目录`, `  cd @ws2      切换到第 2 个工作空间`, `${C.dim}注：不允许跳出工作空间范围${C.reset}`],
-        ls:    [`${C.bold}ls${C.reset} — 列出目录内容`, `  ls           列出当前目录`, `  ls -a        包含隐藏文件（. 开头）`, `  ls <目录>    列出指定目录`],
+        ls:    [`${C.bold}ls${C.reset} — 列出目录内容`, `  ls           列出当前目录`, `  ls -a        包含隐藏文件（. 开头）`, `  ls -l        详细列表（同 ll）`, `  ls -la       详细列表，包含隐藏文件`, `  ls <目录>    列出指定目录`],
         ll:    [`${C.bold}ll${C.reset} — 详细文件列表`, `  ll           显示文件类型、大小、修改时间`, `  ll -a        包含隐藏文件`],
         tree:  [`${C.bold}tree${C.reset} — 目录树`, `  tree              显示当前目录树（深度 3）`, `  tree -L 5         指定深度为 5`, `  tree <目录>        指定目录`],
         cat:   [`${C.bold}cat${C.reset} — 查看文件内容`, `  cat <文件>    输出文件全部内容`, `${C.dim}提示：大文件建议用 head/tail（外部命令）${C.reset}`],
@@ -549,6 +735,14 @@ if (WORKSPACE_ROOTS.length > 1) {
   outln(`${C.dim}附加工作空间: ${WORKSPACE_ROOTS.slice(1).join(', ')}${C.reset}`)
 }
 outln(`${C.dim}仅提供工作区内置文件操作；外部命令需使用隔离执行器${C.reset}`)
+for (const hint of [
+  '输入 help 查看命令菜单，help <命令> 查看详细用法',
+  'Tab 补全 · ↑/↓ 历史 · Ctrl+L 清屏',
+]) {
+  for (const line of wrapCells(hint, listingWidth())) {
+    outln(line.replace(/help(?: <命令>)?/g, command => `${C.bold}${C.cyan}${command}${C.reset}`))
+  }
+}
 outln()
 
 // ── Tab 补全 ──────────────────────────────────────────────────────────────

@@ -28,7 +28,7 @@ You MUST create a task for each of these items and complete them in order:
 3. **Ask clarifying questions** — one at a time, understand purpose/constraints/success criteria
 4. **Propose 2-3 approaches** — with trade-offs and your recommendation
 5. **Present design** — in sections scaled to their complexity, get user approval after each section
-6. **Write OpenSpec documents** — save to `.openspec/changes/<feature-name>/` directory.
+6. **Write OpenSpec documents** — save to `.ae/openspec/changes/<feature-name>/` directory.
    - `proposal.md`: Why, What, Capabilities, Impact.
    - `design.md`: Context, Goals, Decisions (D1, D2...), Risks.
    - `specs/<sub-module>/spec.md`: Detailed technical requirements.
@@ -120,7 +120,7 @@ digraph brainstorming {
 
 **Documentation:**
 
-- Write the validated design to `.openspec/changes/<feature-name>/`
+- Write the validated design to `.ae/openspec/changes/<feature-name>/`
   - `proposal.md`: Summary of Why/What/Impact
   - `design.md`: Technical decisions and architecture
   - `specs/<sub-module>/spec.md`: Formal requirements
@@ -140,7 +140,7 @@ Fix any issues inline. No need to re-review — just fix and move on.
 **User Review Gate:**
 After the spec review loop passes, ask the user to review the written OpenSpec before proceeding:
 
-> "OpenSpec documents written and committed to `.openspec/changes/<feature-name>/`. Please review the proposal and design, and let me know if you want to make any changes before we start writing out the implementation plan and `tasks.md`."
+> "OpenSpec documents written and committed to `.ae/openspec/changes/<feature-name>/`. Please review the proposal and design, and let me know if you want to make any changes before we start writing out the implementation plan and `tasks.md`."
 
 Wait for the user's response. If they request changes, make them and re-run the spec review loop. Only proceed once the user approves.
 

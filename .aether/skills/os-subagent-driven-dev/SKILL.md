@@ -49,7 +49,7 @@ subagent({
 ```
 subagent({
   task: "Review the changes in <files touched> against the OpenSpec at\n
-         .openspec/changes/<feature-name>/proposal.md and design.md.\n
+         .ae/openspec/changes/<feature-name>/proposal.md and design.md.\n
          Report gaps, deviations, and missing acceptance criteria.",
   role: "spec-reviewer",
   maxSteps: 12
@@ -75,7 +75,7 @@ A task is only complete when:
 1. implementer subagent reports **GREEN** with full suite passing.
 2. spec-reviewer reports **no gaps** (confirmed against OpenSpec).
 3. code-quality-reviewer reports **no blocking findings**.
-4. **OpenSpec task status** is updated to `completed` in `.openspec/changes/<feature-name>/tasks.md`.
+4. **OpenSpec task status** is updated to `completed` in `.ae/openspec/changes/<feature-name>/tasks.md`.
 
 If any reviewer flags something:
 

@@ -1,9 +1,9 @@
 /**
- * Aether Engine 统一配置目录（.aether/）加载器
+ * Aether Engine 统一项目配置目录（.ae/）加载器
  *
  * 目录约定（对标 Claude Code 的 .claude/、Codex 的 .codex/）：
  *
- *   <project>/.aether/
+ *   <project>/.ae/
  *   ├── aether.json   项目级配置基线（可 git 提交，团队共享）
  *   ├── mcp.json      项目级 MCP servers
  *   ├── skills/       项目级技能包
@@ -12,7 +12,7 @@
  *   ~/.aether/        用户级配置（全局技能/AE.md/aether.json，优先级低于项目级）
  *
  * 优先级（低 → 高）：
- *   内置默认 → .env → ~/.aether/aether.json → <project>/.aether/aether.json
+ *   内置默认 → .env → ~/.aether/aether.json → <project>/.ae/aether.json
  *   → DB system_config（UI 设置页） → 请求级透传
  */
 
@@ -20,6 +20,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { logger } from '../observability/index.js'
+import { firstExistingProjectDataPath, projectDataPath } from './project-storage.js'
 
 // ─── 配置结构 ─────────────────────────────────────────────────────────────────
 
@@ -39,7 +40,7 @@ export interface AetherConfig {
   defaultSecurityMode?: 'safe' | 'standard' | 'full-access'
   /** OSM 能力档位：off | balanced | methodology | max（→ OSM_MODE） */
   osmMode?: 'off' | 'balanced' | 'methodology' | 'max'
-  /** 技能根目录覆盖（→ SKILLS_ROOT），默认自动探测 .aether/skills → SKILLs/ */
+  /** 技能根目录覆盖（→ SKILLS_ROOT），默认自动探测 .ae/skills → .aether/skills → SKILLs/ */
   skillsPath?: string
   agent?: AetherAgentConfig
   /** 任意额外的环境变量覆盖（常用于企业受管配置强制注入 API_KEY 等） */
@@ -49,7 +50,7 @@ export interface AetherConfig {
 // ─── 文件定位 ─────────────────────────────────────────────────────────────────
 
 export function getProjectAetherDir(): string {
-  return path.resolve(process.cwd(), '.aether')
+  return projectDataPath(process.cwd())
 }
 
 export function getUserAetherDir(): string {
@@ -108,7 +109,7 @@ function mergeConfig(base: Partial<AetherConfig>, override: Partial<AetherConfig
  */
 export function loadAetherConfig(): Partial<AetherConfig> {
   const userCfg = readAetherJson(getUserAetherDir())
-  const projectCfg = readAetherJson(getProjectAetherDir())
+  const projectCfg = readAetherJson(path.dirname(firstExistingProjectDataPath(process.cwd(), 'aether.json')))
   if (!userCfg && !projectCfg) return {}
   let cfg: Partial<AetherConfig> = {}
   if (userCfg) cfg = mergeConfig(cfg, userCfg)
@@ -149,7 +150,7 @@ export function applyAetherConfigToEnv(cfg: Partial<AetherConfig>, isManaged = f
   }
 
   if (applied.length > 0) {
-    const label = isManaged ? 'managed settings' : '.aether/aether.json'
+    const label = isManaged ? 'managed settings' : 'project/user aether.json'
     logger.info({ keys: applied }, `aether-config: applied ${label} overrides to process.env`)
   }
   return applied

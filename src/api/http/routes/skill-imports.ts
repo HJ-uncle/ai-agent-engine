@@ -19,6 +19,8 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import fs from 'node:fs'
 import path from 'node:path'
+import { projectDataPath } from '../../../core/project-storage.js'
+import { projectSkillRoots, withProjectSkillDeletion } from '../../../skills/project-skills.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { success, fail } from '../response.js'
@@ -79,9 +81,7 @@ function parseContentHash(raw: unknown): string {
 
 function workspaceSkillsRoot(projectRoot: string | undefined, scope: SkillScope): string {
   if (!projectRoot || scope === 'global') return resolveSkillsRoot(undefined, scope)
-  const modern = path.join(projectRoot, '.aether', 'skills')
-  const legacy = path.join(projectRoot, 'SKILLs')
-  return fs.existsSync(modern) || !fs.existsSync(legacy) ? modern : legacy
+  return projectDataPath(projectRoot, 'skills')
 }
 
 function canonicalProjectRoot(projectRoot: string | undefined, scope: SkillScope): string | undefined {
@@ -334,7 +334,7 @@ export async function skillImportRoutes(fastify: FastifyInstance) {
     const skillDir = path.dirname(skill.skillMdPath)
 
     // 路径安全：目录必须位于项目层或全局层 skills root 之内，防止任意目录删除
-    const allowedRoots = [workspaceSkillsRoot(projectRoot, 'project'), skillsRegistry.globalRootPath, skillsRegistry.builtinRootPath].filter(
+    const allowedRoots = [...projectSkillRoots(projectRoot ?? process.cwd()), workspaceSkillsRoot(projectRoot, 'project'), skillsRegistry.globalRootPath, skillsRegistry.builtinRootPath].filter(
       (r): r is string => typeof r === 'string' && r.length > 0,
     )
     const isUnderAllowedRoot = allowedRoots.some((root) => {
@@ -347,10 +347,16 @@ export async function skillImportRoutes(fastify: FastifyInstance) {
     }
 
     try {
-      // 删除技能目录 + 同名版本备份（<skillsRoot>/.versions/<dirName>）
-      fs.rmSync(skillDir, { recursive: true, force: true })
-      const versionsDir = path.join(path.dirname(skillDir), '.versions', path.basename(skillDir))
-      fs.rmSync(versionsDir, { recursive: true, force: true })
+      const remove = (): void => {
+        // Delete only the selected physical copy; older same-name project
+        // copies remain intact and are excluded by the canonical marker.
+        fs.rmSync(skillDir, { recursive: true, force: true })
+        const versionsDir = path.join(path.dirname(skillDir), '.versions', path.basename(skillDir))
+        fs.rmSync(versionsDir, { recursive: true, force: true })
+      }
+      if (projectSkillRoots(projectRoot ?? process.cwd()).includes(path.dirname(skillDir))) {
+        withProjectSkillDeletion(projectRoot ?? process.cwd(), skill.name, remove)
+      } else remove()
     } catch (err: any) {
       logger.error({ err, skillDir }, 'skill-delete: failed to remove directory')
       return reply.code(200).send(fail(50000, `删除失败：${err instanceof Error ? err.message : String(err)}`))
@@ -370,7 +376,9 @@ export async function skillImportRoutes(fastify: FastifyInstance) {
     const skill = managementSkills(projectRoot, scope).find((entry) => matchesSkill(entry, request.params.name))
     if (!skill) return reply.code(200).send(fail(40400, `技能 "${request.params.name}" 不存在`))
     const skillDir = path.dirname(skill.skillMdPath)
-    const root = [workspaceSkillsRoot(projectRoot, 'project'), skillsRegistry.globalRootPath, skillsRegistry.builtinRootPath].find((candidate) => candidate && path.dirname(skillDir) === path.resolve(candidate))
+    const projectRoots = projectSkillRoots(projectRoot ?? process.cwd())
+    const sourceRoot = [...projectRoots, workspaceSkillsRoot(projectRoot, 'project'), skillsRegistry.globalRootPath, skillsRegistry.builtinRootPath].find((candidate) => candidate && path.dirname(skillDir) === path.resolve(candidate))
+    const root = sourceRoot && projectRoots.includes(sourceRoot) ? projectDataPath(projectRoot ?? process.cwd(), 'skills') : sourceRoot
     if (!root) return reply.code(200).send(fail(40001, '非法的技能目录，拒绝更新'))
     const configPath = path.join(root, 'skills.config.json')
     try {
@@ -380,6 +388,7 @@ export async function skillImportRoutes(fastify: FastifyInstance) {
       if (!defaults || typeof defaults !== 'object' || Array.isArray(defaults)) throw new Error('skills.config.json defaults 必须为 JSON 对象')
       const dirName = path.basename(skillDir)
       config.defaults = { ...defaults, [dirName]: { ...defaults[dirName], enabled: request.body.enabled } }
+      fs.mkdirSync(path.dirname(configPath), { recursive: true })
       const temporary = `${configPath}.${randomUUID()}.tmp`
       try {
         fs.writeFileSync(temporary, JSON.stringify(config, null, 2), 'utf8')

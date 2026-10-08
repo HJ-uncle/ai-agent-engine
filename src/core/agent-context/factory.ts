@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { projectDataPath } from '../project-storage.js'
 import fs from 'node:fs'
 import type { AgentContext, CreateAgentContextOptions } from './types.js'
 import { applyOSMMultiplier, resolveOSMMode, OSM_MODE_CONFIG } from '../osm.js'
@@ -17,17 +18,17 @@ export function createAgentContext(options: CreateAgentContextOptions): AgentCon
   }
 
   // ── OSM 方法论 artifact 目录 ──────────────────────────────────────
-  // 当模式为 methodology / max 时，确保 .openspec/ 根目录存在。
+  // 当模式为 methodology / max 时，确保 .ae/openspec/ 根目录存在。
   // 具体的 feature 目录由技能（如 brainstorming）在运行时根据任务名创建。
   const mode = resolveOSMMode(options.logger)
   if (OSM_MODE_CONFIG[mode].artifactDirs) {
-    const p = path.join(workspaceDir, '.openspec', 'changes')
+    const p = projectDataPath(workspaceDir, 'openspec', 'changes')
     try {
       fs.mkdirSync(p, { recursive: true })
     } catch (err) {
       options.logger.warn(
         { path: p, err: (err as Error)?.message ?? String(err) },
-        'OSM: failed to create .openspec directory',
+        'OSM: failed to create .ae/openspec directory',
       )
     }
   }

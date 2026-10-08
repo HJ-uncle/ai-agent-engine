@@ -111,15 +111,15 @@ describe('MCP configuration and real protocol execution', () => {
     const server = createServer({ id: 'shared', name: 'Shared', transportType: 'http', url: 'https://example.invalid', enabled: true, isBuiltIn: false, description: '', disabledTools: ['keep'] , scope: 'global' }, root)
     const listed = (await app.inject(`/mcp/servers?path=${encodeURIComponent(root)}`)).json()
     expect(listed.data).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'shared', scope: 'global', enabled: true })]))
-    expect(fs.existsSync(path.join(root, '.aether', 'mcp.json'))).toBe(false)
+    expect(fs.existsSync(path.join(root, '.ae', 'mcp.json'))).toBe(false)
 
     const disabled = await app.inject({ method: 'POST', url: `/mcp/servers/shared/disable?path=${encodeURIComponent(root)}&scope=global` })
     expect(disabled.json()).toMatchObject({ code: 200, data: { id: 'shared', scope: 'global', enabled: false } })
-    expect(fs.existsSync(path.join(root, '.aether', 'mcp.json'))).toBe(false)
+    expect(fs.existsSync(path.join(root, '.ae', 'mcp.json'))).toBe(false)
 
     const updated = await app.inject({ method: 'PATCH', url: `/mcp/servers/shared?path=${encodeURIComponent(root)}&scope=global`, payload: { description: 'updated' } })
     expect(updated.json()).toMatchObject({ code: 200, data: { scope: 'global', description: 'updated', disabledTools: ['keep'] } })
-    expect(fs.existsSync(path.join(root, '.aether', 'mcp.json'))).toBe(false)
+    expect(fs.existsSync(path.join(root, '.ae', 'mcp.json'))).toBe(false)
 
     const deleted = await app.inject({ method: 'DELETE', url: `/mcp/servers/shared?path=${encodeURIComponent(root)}&scope=global` })
     expect(deleted.json()).toMatchObject({ code: 200, data: true })

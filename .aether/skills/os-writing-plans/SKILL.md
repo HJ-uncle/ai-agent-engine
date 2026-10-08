@@ -15,7 +15,7 @@ Assume they are a skilled developer, but know almost nothing about our toolset o
 
 **Context:** If working in an isolated worktree, it should have been created via the `superpowers:using-git-worktrees` skill at execution time.
 
-**Save plans to:** `.openspec/changes/<feature-name>/tasks.md`
+**Save plans to:** `.ae/openspec/changes/<feature-name>/tasks.md`
 - (This replaces the legacy `docs/superpowers/plans/` location to align with OpenSpec architecture)
 
 ## Scope Check
@@ -62,7 +62,7 @@ This structure informs the task decomposition. Each task should produce self-con
 
 ## Task Structure
 
-**Every task MUST be mapped to a section in `.openspec/changes/<feature-name>/tasks.md`.**
+**Every task MUST be mapped to a section in `.ae/openspec/changes/<feature-name>/tasks.md`.**
 
 ````markdown
 ### Task N: [Component Name]
@@ -113,7 +113,7 @@ If you find issues, fix them inline. No need to re-review — just fix and move 
 
 After saving the plan, offer execution choice:
 
-**"Plan complete and saved to `.openspec/changes/<feature-name>/tasks.md`. Two execution options:**
+**"Plan complete and saved to `.ae/openspec/changes/<feature-name>/tasks.md`. Two execution options:**
 
 **1. Subagent-Driven (recommended)** - I dispatch a fresh subagent per task, review between tasks, and **automatically update the OpenSpec task status** upon completion.
 

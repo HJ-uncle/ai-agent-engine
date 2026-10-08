@@ -8,6 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { logger } from '../../observability/index.js'
+import { projectDataPath, projectDataReadPaths } from '../../core/project-storage.js'
 
 // ─── 标准 MCP Server 数据格式 ─────────────────────────────────────────────────
 export interface McpServerRecord {
@@ -28,7 +29,7 @@ export interface McpServerRecord {
   registryId?: string
   createdAt: number
   updatedAt: number
-  /** 来源层级（listServers 标注）：project（.aether/mcp.json）| global（~/.aether/mcp.json） */
+  /** 来源层级（listServers 标注）：project（.ae/mcp.json）| global（~/.aether/mcp.json） */
   scope?: 'project' | 'global'
 }
 
@@ -40,29 +41,19 @@ interface MCPConfigFile {
   mcpServers: Record<string, Omit<McpServerRecord, 'id'>>
 }
 
-/**
- * MCP 配置文件路径解析。
- *
- * 优先级：
- *   1. MCP_CONFIG_PATH 环境变量（显式指定）
- *   2. <cwd>/.aether/mcp.json（新约定位置，与 aether.json/skills 同目录）
- *   3. <cwd>/mcp.config.json（旧位置，兼容回退）
- *
- * 读写同源：读哪个文件就写哪个文件，避免配置分裂。
- * 首次创建（两处都不存在）时写入 .aether/mcp.json（自动建目录）。
- *
- * 全局层：~/.aether/mcp.json（AETHER_GLOBAL_DIR 可覆盖）在读取时合并，
- * 同名 server 项目级覆盖全局级；写操作默认落项目级文件，显式 global 才修改共享配置。
- */
+/** Explicit deployment paths stay authoritative; generated project config lives in .ae. */
 function resolveConfigPath(projectRoot?: string): string {
-  if (process.env.MCP_CONFIG_PATH) {
-    return path.resolve(process.env.MCP_CONFIG_PATH)
-  }
-  const newPath = path.resolve(projectRoot ?? process.cwd(), '.aether', 'mcp.json')
-  if (fs.existsSync(newPath)) return newPath
-  const legacyPath = path.resolve(projectRoot ?? process.cwd(), 'mcp.config.json')
-  if (fs.existsSync(legacyPath)) return legacyPath
-  return newPath
+  return process.env.MCP_CONFIG_PATH
+    ? path.resolve(process.env.MCP_CONFIG_PATH)
+    : projectDataPath(projectRoot ?? process.cwd(), 'mcp.json')
+}
+
+/** Read legacy files only until the first canonical write, including an empty config after deletion. */
+function resolveConfigReadPath(projectRoot?: string): string {
+  if (process.env.MCP_CONFIG_PATH) return resolveConfigPath(projectRoot)
+  const root = projectRoot ?? process.cwd()
+  const candidates = [...projectDataReadPaths(root, 'mcp.json'), path.resolve(root, 'mcp.config.json')]
+  return candidates.find(candidate => fs.existsSync(candidate)) ?? candidates[0]
 }
 
 /** 用户级（全局）MCP 配置路径 */
@@ -128,7 +119,7 @@ function readOneConfig(configPath: string): MCPConfigFile {
 /** 读取（双层合并）：全局层 ~/.aether/mcp.json + 项目级，同名项目级覆盖 */
 function readConfig(projectRoot?: string): MCPConfigFile {
   const globalCfg = readOneConfig(resolveGlobalConfigPath())
-  const projectCfg = readOneConfig(getConfigPath(projectRoot))
+  const projectCfg = readOneConfig(resolveConfigReadPath(projectRoot))
   if (Object.keys(globalCfg.mcpServers).length === 0) return projectCfg
   // MCP_CONFIG_PATH 显式指定时为单文件模式，不合并全局层
   if (process.env.MCP_CONFIG_PATH) return projectCfg
@@ -138,7 +129,7 @@ function readConfig(projectRoot?: string): MCPConfigFile {
 }
 
 function writeConfigAt(config: MCPConfigFile, configPath = getConfigPath()): void {
-  // 新约定位置在 .aether/ 子目录下，写入前确保目录存在
+  // New project writes never overwrite legacy files; the first edit carries their contents forward.
   fs.mkdirSync(path.dirname(configPath), { recursive: true })
   const tmp = `${configPath}.${process.pid}.${Date.now()}.tmp`
   fs.writeFileSync(tmp, JSON.stringify(config, null, 2), 'utf-8')
@@ -240,7 +231,7 @@ function toRecord(id: string, entry: Omit<McpServerRecord, 'id'>): McpServerReco
 
 /** 写操作基底：仅项目层文件内容 */
 function projectLayerConfig(projectRoot?: string): MCPConfigFile {
-  return readOneConfig(getConfigPath(projectRoot))
+  return readOneConfig(resolveConfigReadPath(projectRoot))
 }
 
 export function listServers(projectRoot?: string, scope?: 'project' | 'global'): McpServerRecord[] {

@@ -98,7 +98,7 @@ interface OSMModeConfig {
   compressRatio?: number
   /** 是否注入方法论 bootstrap */
   methodology: boolean
-  /** 是否在 workspace 自动创建 .openspec/ 变更目录骨架 */
+  /** 是否在 workspace 自动创建 .ae/openspec/ 变更目录骨架 */
   artifactDirs: boolean
 }
 

@@ -23,14 +23,15 @@ import fs from 'node:fs'
 import type { Tool, ToolResult } from '../../core/agent-context/index.js'
 import { extensionPolicy } from '../../security/tool-policy.js'
 import { globalSkillsRoot } from '../../skills/import-pipeline.js'
+import { projectSkillRoots } from '../../skills/project-skills.js'
+import { projectDataPath } from '../../core/project-storage.js'
 
 const DEFAULT_TIMEOUT_MS = 60_000 // 技能脚本可能需要较长时间（如浏览器操作）
 
 /** Resolve the layer containing the skill named in a `$SKILLS_ROOT/...` path. */
 export function resolveSkillRoot(command: string, projectRoot?: string): string {
   const candidates = [
-    projectRoot ? path.join(projectRoot, '.aether', 'skills') : '',
-    projectRoot ? path.join(projectRoot, 'SKILLs') : '',
+    ...projectSkillRoots(projectRoot ?? process.cwd()),
     process.env.SKILLS_ROOT ? path.resolve(process.cwd(), process.env.SKILLS_ROOT) : '',
     globalSkillsRoot(),
   ].filter((candidate, index, all): candidate is string => Boolean(candidate) && all.indexOf(candidate) === index)
@@ -38,7 +39,7 @@ export function resolveSkillRoot(command: string, projectRoot?: string): string 
   const matchingRoot = skillMatch
     ? candidates.find((candidate) => fs.existsSync(path.join(candidate, skillMatch[1])))
     : undefined
-  return matchingRoot ?? candidates.find((candidate) => fs.existsSync(candidate)) ?? path.resolve(process.cwd(), './skills')
+  return matchingRoot ?? candidates.find((candidate) => fs.existsSync(candidate)) ?? projectDataPath(projectRoot ?? process.cwd(), 'skills')
 }
 
 export const runSkillScriptTool: Tool & { source: string } = {

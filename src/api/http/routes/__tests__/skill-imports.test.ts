@@ -242,6 +242,73 @@ describe('Skill Import API', () => {
     expect(projectDeleted.json().code).toBe(200)
   })
 
+  it('legacy project skills remain manageable while all newly created files use .ae', async () => {
+    const projectRoot = path.join(TMP, 'legacy-managed-workspace')
+    const oldRoot = path.join(projectRoot, '.aether', 'skills')
+    const oldestRoot = path.join(projectRoot, 'SKILLs')
+    for (const [root, name] of [[oldRoot, 'legacy-managed'], [oldestRoot, 'oldest-managed']]) {
+      fs.mkdirSync(path.join(root, name), { recursive: true })
+      fs.writeFileSync(path.join(root, name, 'SKILL.md'), SKILL_MD(name))
+    }
+    fs.writeFileSync(path.join(oldRoot, 'unrelated-project-file.txt'), 'keep me')
+    const query = '?path=' + encodeURIComponent(projectRoot) + '&scope=project'
+    const created = await app.inject({ method: 'POST', url: '/api/v1/skills', payload: { projectRoot, name: 'new-created', description: 'new', content: '# new' } })
+    expect(created.json().code).toBe(200)
+    expect(fs.readFileSync(path.join(projectRoot, '.ae/skills/new-created/SKILL.md'), 'utf8')).toContain('# new')
+    const upload = multipart({ projectRoot, filename: 'new-imported.md' }, { data: Buffer.from(SKILL_MD('new-imported')), filename: 'new-imported.md' })
+    const accepted = await app.inject({ method: 'POST', url: '/api/v1/skills/imports', ...upload })
+    expect((await waitTerminal(app, accepted.json().data.importId)).status).toBe('imported')
+    expect(fs.existsSync(path.join(projectRoot, '.ae/skills/new-imported/SKILL.md'))).toBe(true)
+    for (const name of ['legacy-managed', 'oldest-managed']) {
+      const disabled = await app.inject({ method: 'PATCH', url: '/api/v1/skills/' + name + query, payload: { enabled: false } })
+      expect(disabled.json().code).toBe(200)
+      const detail = await app.inject({ method: 'GET', url: '/api/v1/skills/' + name + query })
+      expect(detail.json().data.enabled).toBe(false)
+      const enabled = await app.inject({ method: 'PATCH', url: '/api/v1/skills/' + name + query, payload: { enabled: true } })
+      expect(enabled.json().code).toBe(200)
+      const enabledDetail = await app.inject({ method: 'GET', url: '/api/v1/skills/' + name + query })
+      expect(enabledDetail.json().data.enabled).toBe(true)
+      const removed = await app.inject({ method: 'DELETE', url: '/api/v1/skills/' + name + query })
+      expect(removed.json().code).toBe(200)
+    }
+    expect(fs.existsSync(path.join(oldRoot, 'legacy-managed'))).toBe(false)
+    expect(fs.existsSync(path.join(oldestRoot, 'oldest-managed'))).toBe(false)
+    expect(fs.existsSync(path.join(oldRoot, 'skills.config.json'))).toBe(false)
+    expect(fs.existsSync(path.join(oldestRoot, 'skills.config.json'))).toBe(false)
+    expect(fs.existsSync(path.join(projectRoot, '.ae/skills/skills.config.json'))).toBe(true)
+    expect(fs.readFileSync(path.join(oldRoot, 'unrelated-project-file.txt'), 'utf8')).toBe('keep me')
+  })
+
+  it('deleting a modern skill suppresses older copies without removing them; reimport restores it', async () => {
+    const projectRoot = path.join(TMP, 'shadow-delete-workspace')
+    const name = 'shadow-delete'
+    for (const folder of ['.aether/skills', 'SKILLs']) {
+      const directory = path.join(projectRoot, folder, name)
+      fs.mkdirSync(directory, { recursive: true })
+      fs.writeFileSync(path.join(directory, 'SKILL.md'), SKILL_MD(name))
+    }
+    const query = '?path=' + encodeURIComponent(projectRoot) + '&scope=project'
+    const created = await app.inject({ method: 'POST', url: '/api/v1/skills', payload: { projectRoot, name, description: 'canonical', content: '# new' } })
+    expect(created.json().code).toBe(200)
+    const removed = await app.inject({ method: 'DELETE', url: '/api/v1/skills/' + name + query })
+    expect(removed.json().code).toBe(200)
+    const list = await app.inject({ method: 'GET', url: '/api/v1/skills' + query })
+    expect(list.json().data.list.map((entry: { name: string }) => entry.name)).not.toContain(name)
+    const detail = await app.inject({ method: 'GET', url: '/api/v1/skills/' + name + query })
+    expect(detail.json().code).toBe(40400)
+    expect(fs.existsSync(path.join(projectRoot, '.ae/skills', name))).toBe(false)
+    for (const folder of ['.aether/skills', 'SKILLs']) {
+      expect(fs.readFileSync(path.join(projectRoot, folder, name, 'SKILL.md'))).toEqual(Buffer.from(SKILL_MD(name)))
+    }
+    const upload = multipart({ projectRoot, filename: name + '.md' }, { data: Buffer.from(SKILL_MD(name)), filename: name + '.md' })
+    const accepted = await app.inject({ method: 'POST', url: '/api/v1/skills/imports', ...upload })
+    expect((await waitTerminal(app, accepted.json().data.importId)).status).toBe('imported')
+    const restored = await app.inject({ method: 'GET', url: '/api/v1/skills/' + name + query })
+    expect(restored.json().code).toBe(200)
+    expect(restored.json().data.dir).toBe(path.join(projectRoot, '.ae/skills', name))
+    expect(restored.json().data.enabled).toBe(true)
+  })
+
   it('GET /skills 返回技能列表（含根目录）', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/v1/skills' })
     const json = res.json()

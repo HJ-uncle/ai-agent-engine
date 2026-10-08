@@ -2,9 +2,9 @@
  * SkillsRegistry — 技能全局注册表
  *
  * 功能：
- *  - 双层扫描：全局层（~/.aether/skills）+ 项目层（.aether/skills 或 SKILLs）
+ *  - 双层扫描：全局层（~/.aether/skills）+ 项目层（.ae/skills，兼容 .aether/skills 与 SKILLs）
  *    同名技能项目层覆盖全局层（与 aether.json 配置优先级一致）
- *  - SKILLS_ROOT 显式指定时为单 root 模式（禁用多层，保持确定性）
+ *  - start(root) 显式参数为单 root 模式；SKILLS_ROOT 环境变量保留全局层
  *  - 使用 fs.watch 监听目录变动，自动热重载（两层分别监听）
  *  - 提供单例 `skillsRegistry` 供全局使用
  *  - 变动防抖（500ms），避免批量写入时频繁重载
@@ -15,6 +15,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { loadExternalSkills, type ExternalSkill } from './external-loader.js'
 import { logger } from '../observability/index.js'
+import { loadProjectSkills, projectSkillRoots } from './project-skills.js'
 
 /** 全局层根目录（集群部署时可设 AETHER_GLOBAL_DIR 指向共享卷） */
 function globalLayerRoot(): string {
@@ -26,6 +27,7 @@ export class SkillsRegistry {
   private skills: ExternalSkill[] = []
   private allSkills: ExternalSkill[] = []
   private watchers: fs.FSWatcher[] = []
+  private watchedRoots = new Set<string>()
   private debounceTimer: ReturnType<typeof setTimeout> | null = null
   private skillsRoot: string | null = null   // 项目层（或显式 SKILLS_ROOT 单 root）
   private globalRoot: string | null = null   // 全局层
@@ -41,21 +43,9 @@ export class SkillsRegistry {
     this.skills = []
     this.allSkills = []
     this.explicitRoot = skillsRoot || process.env.SKILLS_ROOT ? path.resolve(skillsRoot || process.env.SKILLS_ROOT!) : null
-    // 优先级：参数 > 环境变量 > cwd/.aether/skills（新约定）> cwd/SKILLs（旧位置回退）
-    let rawRoot = skillsRoot ?? process.env.SKILLS_ROOT ?? ''
-    if (!rawRoot) {
-      const aetherSkills = path.join(process.cwd(), '.aether', 'skills')
-      const legacySkills = path.join(process.cwd(), 'SKILLs')
-      if (fs.existsSync(aetherSkills)) {
-        rawRoot = aetherSkills
-        logger.info({ root: rawRoot }, 'SkillsRegistry: auto-detected cwd/.aether/skills')
-      } else if (fs.existsSync(legacySkills)) {
-        rawRoot = legacySkills
-        logger.info({ root: rawRoot }, 'SkillsRegistry: SKILLS_ROOT not set, auto-detected cwd/SKILLs (legacy path)')
-      } else {
-        logger.warn('SkillsRegistry: SKILLS_ROOT not set and no .aether/skills or SKILLs directory found')
-      }
-    }
+    // Explicit deployments retain their root; auto-discovery reads all legacy
+    // layers so creating .ae never hides unrelated existing project skills.
+    const rawRoot = skillsRoot || process.env.SKILLS_ROOT || projectSkillRoots(process.cwd()).find((root) => fs.existsSync(root)) || ''
 
     // 单 root 模式：显式指定时禁用全局层（保持部署确定性）
     // An explicit argument is a deliberately isolated single-root deployment.
@@ -89,14 +79,15 @@ export class SkillsRegistry {
     this.reload()
 
     // 启动文件监听（所有存在的层）
-    for (const root of [this.globalRoot, this.skillsRoot]) {
-      if (!root) continue
+    for (const root of [this.globalRoot, ...(this.explicitRoot ? [this.skillsRoot] : projectSkillRoots(process.cwd()))]) {
+      if (!root || !fs.existsSync(root)) continue
       this.watchLayer(root)
     }
   }
 
   /** 为单个层挂载递归监听（只响应 SKILL.md 变动） */
   private watchLayer(root: string): void {
+    if (this.watchedRoots.has(root)) return
     try {
       const watcher = fs.watch(
         root,
@@ -111,6 +102,7 @@ export class SkillsRegistry {
         logger.error({ err, root }, 'SkillsRegistry: watcher error')
       })
       this.watchers.push(watcher)
+      this.watchedRoots.add(root)
       logger.info({ root }, 'SkillsRegistry: watching for skill changes')
     } catch (err) {
       logger.warn({ err, root }, 'SkillsRegistry: failed to start watcher for layer')
@@ -122,15 +114,20 @@ export class SkillsRegistry {
    * 动态探测：出现即采纳、补挂监听并重扫，无需重启服务。
    */
   ensureGlobalLayer(): void {
-    if (!this.skillsRoot) {
-      const project = process.env.SKILLS_ROOT || (fs.existsSync(path.join(process.cwd(), '.aether', 'skills'))
-        ? path.join(process.cwd(), '.aether', 'skills') : path.join(process.cwd(), 'SKILLs'))
-      if (fs.existsSync(project)) {
-        this.skillsRoot = path.resolve(project)
-        this.watchLayer(this.skillsRoot)
-        this.reload()
-      }
+    if (!this.explicitRoot && process.env.SKILLS_ROOT) this.explicitRoot = path.resolve(process.env.SKILLS_ROOT)
+    let changed = false
+    const candidates = this.explicitRoot ? [this.explicitRoot] : projectSkillRoots(process.cwd())
+    const available = candidates.filter((root) => fs.existsSync(root))
+    if (this.skillsRoot !== (available[0] ?? null)) {
+      this.skillsRoot = available[0] ?? null
+      changed = true
     }
+    for (const root of available) {
+      if (this.watchedRoots.has(root)) continue
+      this.watchLayer(root)
+      changed = true
+    }
+    if (changed) this.reload()
     if (this.globalRoot || this.singleRootMode) return
     const g = globalLayerRoot()
     if (!fs.existsSync(g)) return
@@ -147,6 +144,7 @@ export class SkillsRegistry {
       this.debounceTimer = null
     }
     for (const w of this.watchers) w.close()
+    this.watchedRoots.clear()
     if (this.watchers.length > 0) {
       this.watchers = []
       logger.info('SkillsRegistry: watchers stopped')
@@ -169,7 +167,7 @@ export class SkillsRegistry {
     // 先加载全局层，后加载项目层 → 项目层覆盖同名
     for (const [root, scope] of [
       [this.globalRoot, 'global'],
-      [this.skillsRoot, 'project'],
+      [this.explicitRoot ? this.skillsRoot : null, 'project'],
     ] as const) {
       if (!root) continue
       try {
@@ -179,6 +177,9 @@ export class SkillsRegistry {
       } catch (err) {
         logger.warn({ err, root }, 'SkillsRegistry: failed to load layer')
       }
+    }
+    if (!this.explicitRoot) {
+      for (const skill of loadProjectSkills(process.cwd())) merged.set(skill.name.toLowerCase(), skill)
     }
     this.allSkills = [...merged.values()]
     this.skills = this.allSkills.filter((skill) => skill.enabled)
@@ -219,8 +220,9 @@ export class SkillsRegistry {
       if (this.globalRoot) roots.push(this.globalRoot)
       if (this.explicitRoot && this.explicitRoot !== this.globalRoot) roots.push(this.explicitRoot)
     } else if (workspaceRoot) {
-      const requested = path.resolve(workspaceRoot)
-      roots.push([path.join(requested, '.aether', 'skills'), path.join(requested, 'SKILLs')].find((root) => fs.existsSync(root)) ?? path.join(requested, '.aether', 'skills'))
+      return loadProjectSkills(workspaceRoot)
+    } else if (!this.explicitRoot) {
+      return loadProjectSkills(process.cwd())
     } else if (this.skillsRoot) {
       roots.push(this.skillsRoot)
     }
@@ -239,16 +241,15 @@ export class SkillsRegistry {
    */
   private loadWorkspaceSkills(workspaceRoot: string, includeDisabled: boolean): ExternalSkill[] {
     const requested = path.resolve(workspaceRoot)
-    const project = [path.join(requested, '.aether', 'skills'), path.join(requested, 'SKILLs')].find((root) => fs.existsSync(root))
+    const projectRoots = projectSkillRoots(requested)
     const roots: Array<[string | null, 'global' | 'project']> = []
     // A request-scoped workspace always gets its own project layer. An
     // explicitly configured SKILLS_ROOT remains available as a built-in layer
     // for compatibility; the workspace project wins on name collisions.
     // Auto-detected cwd skills belong only to cwd. Only explicitly configured
     // built-ins are shared with requests targeting another workspace.
-    if (this.explicitRoot && this.explicitRoot !== path.resolve(project ?? '')) roots.push([this.explicitRoot, 'global'])
+    if (this.explicitRoot && !projectRoots.includes(this.explicitRoot)) roots.push([this.explicitRoot, 'global'])
     if (this.globalRoot && this.globalRoot !== this.explicitRoot) roots.push([this.globalRoot, 'global'])
-    roots.push([project ?? path.join(requested, '.aether', 'skills'), 'project'])
     const merged = new Map<string, ExternalSkill>()
     for (const [root, scope] of roots) {
       if (!root) continue
@@ -257,6 +258,7 @@ export class SkillsRegistry {
       // resolved; otherwise the global copy incorrectly reappears.
       for (const skill of loadExternalSkills(root, { includeDisabled: true })) merged.set(skill.name.toLowerCase(), { ...skill, scope })
     }
+    for (const skill of loadProjectSkills(requested)) merged.set(skill.name.toLowerCase(), skill)
     const values = [...merged.values()]
     return includeDisabled ? values : values.filter((skill) => skill.enabled)
   }

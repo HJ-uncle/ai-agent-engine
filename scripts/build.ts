@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createBuildManifest } from '../src/runtime/build-identity.js'
@@ -14,6 +14,11 @@ const result = spawnSync(process.execPath, [path.join(root, 'node_modules/typesc
 })
 if (result.error) throw result.error
 if (result.status !== 0) process.exit(result.status ?? 1)
+// tsc does not emit .mjs assets. TerminalManager launches this file beside
+// dist/terminal/index.js, so plain engine builds must ship it as well as SDK builds.
+const shellAsset = path.join(root, 'dist/terminal/workspace-shell.mjs')
+mkdirSync(path.dirname(shellAsset), { recursive: true })
+copyFileSync(path.join(root, 'src/terminal/workspace-shell.mjs'), shellAsset)
 const after = createBuildManifest(root)
 if (after.buildId !== before.buildId) throw new Error('Engine sources changed during compilation; rebuild before using this artifact')
 mkdirSync(directory, { recursive: true })

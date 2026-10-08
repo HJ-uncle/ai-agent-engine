@@ -29,7 +29,7 @@ BEFORE claiming any status or expressing satisfaction:
 1. IDENTIFY: What command proves this claim?
 2. RUN: Execute the FULL command (fresh, complete)
 3. READ: Full output, check exit code, count failures
-4. COMPLIANCE: Compare implementation against OpenSpec `.openspec/changes/<feature-name>/spec.md` and `proposal.md`.
+4. COMPLIANCE: Compare implementation against OpenSpec `.ae/openspec/changes/<feature-name>/spec.md` and `proposal.md`.
    - Does every "New Capability" exist?
    - Are all "Impacted" areas verified?
    - Does the code follow all technical requirements in `spec.md`?

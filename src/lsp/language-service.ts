@@ -23,7 +23,7 @@ interface Project {
 }
 
 const projects = new Map<string, Project>()
-const SKIP = new Set(['node_modules', '.git', 'dist', 'out', 'build', 'coverage', '.aether'])
+const SKIP = new Set(['node_modules', '.git', 'dist', 'out', 'build', 'coverage', '.ae', '.aether'])
 const MAX_FILES = 20_000
 
 function key(ctx: LanguageRequestContext): string { return `${ctx.tenantId ?? 'default'}\u0000${ctx.sessionId}` }
