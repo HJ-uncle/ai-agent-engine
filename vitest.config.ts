@@ -3,6 +3,7 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   test: {
     globals: true,
+    setupFiles: ['./vitest.setup.ts'],
     environment: 'node',
     // Scratch probes and the legacy multi-agent-console package have their
     // own dependency/test runners.  Discovering them from the engine root

@@ -96,7 +96,7 @@ describe('account-session terminal WebSocket revocation', () => {
     const refreshed = await accounts.refreshAccountSession(account.refreshToken, randomUUID())
     expect(refreshed.user.sessionId).toBe(account.user.sessionId)
     expect(refreshed.accessToken).not.toBe(account.accessToken)
-    await expect(accounts.authenticateAccountSession(account.accessToken)).rejects.toThrow()
+    expect((await accounts.authenticateAccountSession(account.accessToken)).sessionId).toBe(account.user.sessionId)
     ws.send(JSON.stringify({ type: 'input', data: 'after-refresh' }))
     await expect.poll(() => terminals.calls).toEqual([`input:${id}:after-refresh`])
     expect(ws.readyState).toBe(WebSocket.OPEN)

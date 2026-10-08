@@ -1,8 +1,13 @@
 import { FastifyInstance } from 'fastify'
+import { initDb, closeDb } from '../../../../storage/sqlite/db.js'
 import { createConversationHistory } from '../../../../storage/conversation/factory.js'
 import { conversationRoutes } from '../conversation.js'
 import Fastify from 'fastify'
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
+
+// Vitest setup supplies an isolated per-spec database; these integration tests need its real schema.
+beforeAll(async () => { await initDb() })
+afterAll(() => { closeDb() })
 
 // Mock llm-adapter factory
 vi.mock('../../../../core/llm-adapter/factory.js', () => {

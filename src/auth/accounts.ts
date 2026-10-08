@@ -11,6 +11,7 @@ const RECENT_MS = 10 * 60 * 1000
 const NEW_ROLES = ['tenant-admin']
 export interface AccountIdentity {
   id: string; providerId: string; issuer: string; subject: string
+  name: string | null; email: string | null; avatarUrl: string | null
   userData: Record<string, unknown>; createdAt: string
 }
 export interface AccountUser {
@@ -31,6 +32,7 @@ export class AccountAuthError extends Error {
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const secret = (prefix: string) => prefix + randomBytes(32).toString('base64url')
 const iso = (value: number) => new Date(value).toISOString()
+const randomName = () => `用户 ${randomBytes(3).toString('hex')}`
 
 function readObject(value: unknown): Record<string, unknown> {
   if (typeof value !== 'string') return {}
@@ -98,6 +100,8 @@ export async function getAccountUser(userId: string, sessionId?: string, db: Dat
     createdAt: iso(Number(row.created_at) * 1000), hasRecoveryKey: Boolean(row.recovery_hash || row.api_key_hash),
     identities: identities.rows.map(identity => ({
       id: String(identity.id), providerId: String(identity.provider_id), issuer: String(identity.issuer), subject: String(identity.subject),
+      name: identity.name ? String(identity.name) : null, email: identity.email ? String(identity.email) : null,
+      avatarUrl: identity.avatar_url ? String(identity.avatar_url) : null,
       userData: readObject(identity.user_data), createdAt: iso(Number(identity.created_at)),
     })), ...(sessionId ? { sessionId } : {}),
   }
@@ -105,7 +109,7 @@ export async function getAccountUser(userId: string, sessionId?: string, db: Dat
 async function createUser(db: Database, profile?: ExternalIdentity): Promise<{ id: string; recoveryKey: string }> {
   const id = randomUUID(), tenantId = `account_${randomUUID()}`, now = Date.now()
   const recoveryKey = secret('aether_recovery_')
-  await db.execute({ sql: 'INSERT INTO users(id,tenant_id,name,email,created_at) VALUES(?,?,?,?,?)', args: [id, tenantId, text(profile?.name, 100) ?? `用户 ${randomBytes(3).toString('hex')}`, text(profile?.email, 320), Math.floor(now / 1000)] })
+  await db.execute({ sql: 'INSERT INTO users(id,tenant_id,name,email,created_at) VALUES(?,?,?,?,?)', args: [id, tenantId, text(profile?.name, 100) ?? randomName(), text(profile?.email, 320), Math.floor(now / 1000)] })
   await db.execute({ sql: 'INSERT INTO account_profiles(user_id,recovery_hash,avatar_url,user_data,roles,updated_at) VALUES(?,?,?,?,?,?)', args: [id, hash(recoveryKey), avatar(profile?.avatarUrl), JSON.stringify(sanitizeData(profile?.userData)), JSON.stringify(NEW_ROLES), now] })
   await audit(db, id, 'account.created')
   return { id, recoveryKey }
@@ -143,7 +147,10 @@ export async function loginAccount(recoveryKey: string): Promise<AccountLoginRes
 }
 export async function authenticateAccountSession(token: string): Promise<AuthContext> {
   const now = Date.now()
-  const db = getDb(), result = await db.execute({ sql: 'SELECT s.*, u.tenant_id, p.roles FROM account_sessions s JOIN users u ON u.id=s.user_id JOIN account_profiles p ON p.user_id=u.id WHERE s.access_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND s.access_expires_at>?', args: [hash(token), now, now] })
+  const db = getDb(), result = await db.execute({ sql: `SELECT s.*, u.tenant_id, p.roles FROM account_sessions s JOIN users u ON u.id=s.user_id JOIN account_profiles p ON p.user_id=u.id
+      WHERE s.id IN (SELECT id FROM account_sessions WHERE access_hash=? AND access_expires_at>?
+        UNION ALL SELECT session_id FROM account_access_tokens WHERE token_hash=? AND expires_at>?)
+      AND s.revoked_at IS NULL AND s.expires_at>?`, args: [hash(token), now, hash(token), now, now] })
   const row = result.rows[0]
   if (!row) throw new AccountAuthError(401, '登录已失效，请刷新会话或重新登录')
   if (now - Number(row.last_seen_at) > 60_000) await executeAccountWrite({ sql: 'UPDATE account_sessions SET last_seen_at=? WHERE id=?', args: [now, String(row.id)] })
@@ -188,6 +195,11 @@ export async function refreshAccountSession(refreshToken: string, requestId?: st
     }
     const accessToken = secret('aether_session_'), nextRefreshToken = secret('aether_refresh_')
     const expiry = Math.min(now + ACCESS_MS, Number(row.expires_at))
+    // In-flight HTTP/WS handshakes keep their original access lifetime; revocation still applies to the session.
+    await tx.execute({ sql: 'DELETE FROM account_access_tokens WHERE session_id=? AND expires_at<=?', args: [String(row.id), now] })
+    if (Number(row.access_expires_at) > now) {
+      await tx.execute({ sql: 'INSERT INTO account_access_tokens(token_hash,session_id,expires_at) VALUES(?,?,?)', args: [String(row.access_hash), String(row.id), Number(row.access_expires_at)] })
+    }
     await tx.execute({ sql: 'UPDATE account_sessions SET access_hash=?,access_expires_at=?,last_seen_at=? WHERE id=?', args: [hash(accessToken), expiry, now, String(row.id)] })
     await tx.execute({ sql: 'INSERT INTO account_refresh_tokens(token_hash,session_id,created_at) VALUES(?,?,?)', args: [hash(nextRefreshToken), String(row.id), now] })
     const user = await getAccountUser(String(row.user_id), String(row.id), tx)
@@ -204,7 +216,7 @@ export async function updateAccountProfile(auth: AuthContext, input: Record<stri
   const current = await getAccountUser(auth.userId)
   const tx = await beginAccountTransaction()
   try {
-    await tx.execute({ sql: 'UPDATE users SET name=?,email=? WHERE id=? AND tenant_id=?', args: [input.name === undefined ? current.name : text(input.name, 100) ?? current.name, input.email === undefined ? current.email : text(input.email, 320), auth.userId, auth.tenantId] })
+    await tx.execute({ sql: 'UPDATE users SET name=?,email=? WHERE id=? AND tenant_id=?', args: [input.name === undefined ? current.name : text(input.name, 100) ?? randomName(), input.email === undefined ? current.email : text(input.email, 320), auth.userId, auth.tenantId] })
     await tx.execute({ sql: 'UPDATE account_profiles SET avatar_url=?,bio=?,user_data=?,updated_at=? WHERE user_id=?', args: [input.avatarUrl === undefined ? current.avatarUrl : avatar(input.avatarUrl), input.bio === undefined ? current.bio : text(input.bio, 1000), JSON.stringify(input.userData === undefined ? current.userData : sanitizeData(input.userData)), Date.now(), auth.userId] })
     const result = await getAccountUser(auth.userId, auth.sessionId, tx)
     await tx.commit()
@@ -239,6 +251,7 @@ export async function completeExternalIdentity(identity: ExternalIdentity, linkA
   if (!identity.providerId || !identity.subject || identity.subject.length > 2048) throw new AccountAuthError(400, '第三方身份信息不完整')
   if (linkAuth) { requireRecentAccountAuth(linkAuth); await revalidateAccountAuth(linkAuth) }
   const issuer = identity.issuer ?? identity.providerId
+  const name = text(identity.name, 100), email = text(identity.email, 320), avatarUrl = avatar(identity.avatarUrl)
   const userData = JSON.stringify(sanitizeData(identity.userData)), now = Date.now(), tx = await beginAccountTransaction()
   try {
     const existing = await tx.execute({ sql: 'SELECT user_id FROM account_identities WHERE provider_id=? AND issuer=? AND subject=?', args: [identity.providerId, issuer, identity.subject] })
@@ -251,8 +264,10 @@ export async function completeExternalIdentity(identity: ExternalIdentity, linkA
         if (process.env.AETHER_ACCOUNT_REGISTRATION === 'false') throw new AccountAuthError(403, '管理员已关闭自动注册')
         const created = await createUser(tx, identity); userId = created.id; recoveryKey = created.recoveryKey
       }
-      await tx.execute({ sql: 'INSERT INTO account_identities(id,user_id,provider_id,issuer,subject,user_data,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)', args: [randomUUID(), userId, identity.providerId, issuer, identity.subject, userData, now, now] })
-    } else await tx.execute({ sql: 'UPDATE account_identities SET user_data=?,updated_at=? WHERE provider_id=? AND issuer=? AND subject=?', args: [userData, now, identity.providerId, issuer, identity.subject] })
+      await tx.execute({ sql: 'INSERT INTO account_identities(id,user_id,provider_id,issuer,subject,name,email,avatar_url,user_data,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)', args: [randomUUID(), userId, identity.providerId, issuer, identity.subject, name, email, avatarUrl, userData, now, now] })
+    } else await tx.execute({ sql: `UPDATE account_identities SET name=CASE WHEN ? THEN name ELSE ? END, email=CASE WHEN ? THEN email ELSE ? END,
+      avatar_url=CASE WHEN ? THEN avatar_url ELSE ? END, user_data=CASE WHEN ? THEN user_data ELSE ? END, updated_at=?
+      WHERE provider_id=? AND issuer=? AND subject=?`, args: [identity.name === undefined ? 1 : 0, name, identity.email === undefined ? 1 : 0, email, identity.avatarUrl === undefined ? 1 : 0, avatarUrl, identity.userData === undefined ? 1 : 0, userData, now, identity.providerId, issuer, identity.subject] })
     await audit(tx, userId, linkAuth ? 'identity.linked' : 'identity.login')
     const result = linkAuth ? await getAccountUser(userId, linkAuth.sessionId, tx) : { ...await issueSession(tx, userId), ...(recoveryKey ? { recoveryKey } : {}) }
     await tx.commit(); return result

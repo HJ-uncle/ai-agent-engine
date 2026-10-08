@@ -5,16 +5,20 @@
  * 无文件/超限同步拒绝、权限守卫（AUTH_ENABLED=true 无凭据 → 41015）。
  */
 
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { createHash } from 'node:crypto'
 import { zipSync, strToU8 } from 'fflate'
 
+// Skill import tests must not leave a scheduler that can reopen storage after teardown.
+vi.mock('../../../../scheduler/cron-scheduler.js', () => ({ cronScheduler: { start: vi.fn(), stop: vi.fn() } }))
+
 // 独立的临时数据目录与技能目录（避免污染开发库/真实技能）
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-import-api-'))
 const ORIGINAL_GLOBAL_DIR = process.env.AETHER_GLOBAL_DIR
+const ORIGINAL_DATA_DIR = process.env.DATA_DIR ?? path.join(TMP, 'data')
 process.env.DATA_DIR = path.join(TMP, 'data')
 process.env.SKILLS_ROOT = path.join(TMP, 'skills')
 process.env.AETHER_GLOBAL_DIR = path.join(TMP, 'global')
@@ -23,6 +27,7 @@ fs.mkdirSync(process.env.AETHER_GLOBAL_DIR, { recursive: true })
 process.env.AUTH_ENABLED = 'false'
 
 const { buildServer } = await import('../../server.js')
+const { initDb, closeDb } = await import('../../../../storage/sqlite/db.js')
 
 const SKILL_MD = (name: string) =>
   strToU8(`---\nname: ${name}\ndescription: test\n---\n\n# ${name}\n`)
@@ -65,19 +70,20 @@ describe('Skill Import API', () => {
 
   beforeAll(async () => {
     // buildServer 不执行迁移，先在临时库上建表
-    const { initDb } = await import('../../../../storage/sqlite/db.js')
     await initDb()
     app = await buildServer()
   })
 
-  afterAll(() => {
+  afterAll(async () => {
+    await app?.close()
+    closeDb()
     // Windows 下 Temp 目录可能被杀软/索引服务长期锁定（EPERM）：
     // 清理只是卫生操作，失败不应让全绿的套件标红；目录在 %TEMP% 下
     // 会随系统磁盘清理回收
     try {
       fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
     } catch { /* ignore */ }
-    delete process.env.DATA_DIR
+    process.env.DATA_DIR = ORIGINAL_DATA_DIR
     delete process.env.SKILLS_ROOT
     if (ORIGINAL_GLOBAL_DIR === undefined) delete process.env.AETHER_GLOBAL_DIR
     else process.env.AETHER_GLOBAL_DIR = ORIGINAL_GLOBAL_DIR

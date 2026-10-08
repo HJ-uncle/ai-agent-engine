@@ -1,4 +1,4 @@
-/** Read-only, session-scoped Git HTTP API for remote Aether Code.
+/** Session-scoped Git HTTP API for remote Aether Code.
  *
  * The engine's authenticated request context supplies the tenant.  Callers
  * provide only a session id and workspace-relative path; WorkspaceManager
@@ -8,9 +8,9 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import fs from 'node:fs/promises'
-import path from 'node:path'
 import { workspaceManager } from '../../../workspace/index.js'
 import { success, fail } from '../response.js'
+import { resolveGitWorkspace, resolveGitPath, resolveGitCloneSource, gitArguments, gitEnvironment, type GitWorkspace } from './git-workspace.js'
 
 const execFileAsync = promisify(execFile)
 const tenant = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
@@ -36,14 +36,14 @@ function relative(value: unknown, label: string): string {
   return out
 }
 
-async function run(cwd: string, args: string[]): Promise<string> {
-  const result = await execFileAsync('git', ['-C', cwd, ...args], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 30_000, windowsHide: true })
+async function run(cwd: GitWorkspace, args: string[]): Promise<string> {
+  const result = await execFileAsync('git', gitArguments(cwd, args), { env: gitEnvironment(cwd), encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 30_000, windowsHide: true })
   return String(result.stdout ?? '')
 }
 
-async function runInput(cwd: string, args: string[], input: string): Promise<string> {
+async function runInput(cwd: GitWorkspace, args: string[], input: string): Promise<string> {
   return await new Promise((resolve, reject) => {
-    const child = spawn('git', ['-C', cwd, ...args], { windowsHide: true })
+    const child = spawn('git', gitArguments(cwd, args), { env: gitEnvironment(cwd), windowsHide: true })
     let stdout = ''; let stderr = ''
     const timer = setTimeout(() => { child.kill(); reject(new Error('git 操作超时')) }, 30_000)
     child.stdout.on('data', (chunk) => { stdout += String(chunk) })
@@ -54,7 +54,7 @@ async function runInput(cwd: string, args: string[], input: string): Promise<str
   })
 }
 
-function resultFromInput(cwd: string, args: string[], input: string): Promise<Record<string, unknown>> {
+function resultFromInput(cwd: GitWorkspace, args: string[], input: string): Promise<Record<string, unknown>> {
   return runInput(cwd, args, input).then(() => ({ success: true })).catch((error: any) => ({ success: false, error: String(error?.message || error) }))
 }
 
@@ -79,7 +79,7 @@ function gitName(value: unknown, label: string, max = 512): string {
   return out
 }
 
-async function runAction(cwd: string, body: ActionBody): Promise<Record<string, unknown>> {
+async function runAction(cwd: GitWorkspace, body: ActionBody): Promise<Record<string, unknown>> {
   const op = argument(body.op, 'op', 64)
   const result = (args: string[]) => run(cwd, args).then(() => ({ success: true })).catch((error: any) => ({ success: false, error: String(error?.stderr || error?.message || error) }))
   const file = () => relative(body.path, 'path')
@@ -97,8 +97,9 @@ async function runAction(cwd: string, body: ActionBody): Promise<Record<string, 
       if (!/^(?:https?|ssh|git|file):\/\//i.test(url) && !/^[^\s/@:]+@[^\s:]+:.+/.test(url)) throw new Error('clone 地址只支持 HTTP(S)、SSH、Git 或 file 协议')
       const rawName = url.split(/[?#]/, 1)[0].replace(/[\\/]+$/, '').split(/[\\/]/).at(-1)?.replace(/\.git$/i, '') || 'repository'
       const folder = /^[A-Za-z0-9._-]{1,120}$/.test(rawName) && rawName !== '.' && rawName !== '..' ? rawName : 'repository'
-      const destination = path.join(cwd, folder)
-      const clone = await result(['clone', url, destination])
+      const destination = await resolveGitPath(cwd, folder)
+      const source = await resolveGitCloneSource(cwd, url)
+      const clone = await result(['clone', source, destination])
       return clone.success ? { ...clone, finalPath: destination } : clone
     }
     case 'stage': return result(['add', '-f', '--', file()])
@@ -160,7 +161,7 @@ async function runAction(cwd: string, body: ActionBody): Promise<Record<string, 
     case 'stash-clear': return result(['stash', 'clear'])
     case 'create-tag': return result(['tag', ...(body.message ? ['-a', name(), '-m', body.message] : [name()])])
     case 'delete-tag': return result(['tag', '-d', name()])
-    case 'append-gitignore': { const entry = relative(body.path, 'path'); const target = path.join(cwd, '.gitignore'); const existing = await fs.readFile(target, 'utf8').catch(() => ''); if (!existing.split(/\r?\n/).some((line) => line.trim() === entry || line.trim() === `/${entry}`)) await fs.writeFile(target, `${existing}${existing && !existing.endsWith('\n') ? '\n' : ''}${entry}\n`, 'utf8'); return { success: true } }
+    case 'append-gitignore': { const entry = relative(body.path, 'path'); const target = await resolveGitPath(cwd, '.gitignore'); const existing = await fs.readFile(target, 'utf8').catch(() => ''); if (!existing.split(/\r?\n/).some((line) => line.trim() === entry || line.trim() === `/${entry}`)) await fs.writeFile(target, `${existing}${existing && !existing.endsWith('\n') ? '\n' : ''}${entry}\n`, 'utf8'); return { success: true } }
     case 'suggest-message': { const stat = await run(cwd, ['diff', '--stat', 'HEAD']).catch(() => ''); return { success: true, message: stat.trim() ? `更新 ${stat.trim().split(/\r?\n/).length} 个文件` : '更新项目文件' } }
     default: throw new Error(`不支持的 Git 操作: ${op}`)
   }
@@ -168,15 +169,18 @@ async function runAction(cwd: string, body: ActionBody): Promise<Record<string, 
 
 function parseStatus(raw: string) {
   const files: any[] = []
-  for (const line of raw.split(/\r?\n/)) {
-    if (!line || line.startsWith('##')) continue
-    const code = line.slice(0, 2)
-    const value = line.slice(3)
-    const parts = value.split(' -> ')
-    const filePath = (parts.at(-1) ?? '').trim()
+  const tokens = raw.split('\0')
+  const change = (code: string) => code === 'A' ? 'added' : code === 'D' ? 'deleted' : code === 'R' ? 'renamed' : code === 'C' ? 'copied' : code === '?' ? 'untracked' : code === ' ' ? null : 'modified'
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index]
+    if (!token || token.startsWith('##')) continue
+    const code = token.slice(0, 2)
+    const filePath = token.slice(3)
     if (!filePath) continue
-    const kind = code.includes('?') ? 'untracked' : code.includes('R') ? 'renamed' : code.includes('C') ? 'copied' : code.includes('A') ? 'added' : code.includes('D') ? 'deleted' : 'modified'
-    files.push({ path: filePath, ...(parts.length > 1 ? { oldPath: parts[0].trim() } : {}), changeType: kind, staged: code[0] !== ' ' && code[0] !== '?', stagedChange: code[0] === ' ' ? null : kind, unstagedChange: code[1] === ' ' ? null : kind, binary: false, additions: 0, deletions: 0 })
+    const oldPath = /[RC]/.test(code) ? tokens[++index] : undefined
+    const stagedChange = code[0] === '?' ? null : change(code[0])
+    const unstagedChange = change(code[1])
+    files.push({ path: filePath, ...(oldPath ? { oldPath } : {}), changeType: unstagedChange ?? stagedChange ?? 'modified', staged: stagedChange !== null, stagedChange, unstagedChange, binary: false, additions: 0, deletions: 0 })
   }
   return files
 }
@@ -200,7 +204,9 @@ export async function gitRoutes(fastify: FastifyInstance) {
       const body = request.body ?? {}
       const sessionId = text(body.sessionId || 'default', 'sessionId', 256) || 'default'
       const cwdRelative = body.cwd === '.' ? '' : relative(body.cwd || '', 'cwd')
-      const cwd = cwdRelative ? workspaceManager.resolveSafePath({ tenantId: tenant(request), sessionId }, cwdRelative) : workspaceManager.getWorkingDirectory({ tenantId: tenant(request), sessionId })
+      const base = workspaceManager.getWorkingDirectory({ tenantId: tenant(request), sessionId })
+      const cwd = await resolveGitWorkspace(base, workspaceManager.resolveSafePath({ tenantId: tenant(request), sessionId }, cwdRelative || '.'))
+      if (!cwd.repository && body.op !== 'init' && body.op !== 'clone') throw new Error('The current workspace is not a Git repository')
       return reply.send(success(await runAction(cwd, body)))
     } catch (error) {
       return reply.code(200).send(fail(50000, error instanceof Error ? error.message : String(error)))
@@ -208,18 +214,20 @@ export async function gitRoutes(fastify: FastifyInstance) {
   })
 
   fastify.get<{ Params: { op: string }; Querystring: Query }>('/git/:op', async (request, reply) => {
-    const sessionId = text(request.query.sessionId || 'default', 'sessionId', 256) || 'default'
-    const base = workspaceManager.getWorkingDirectory({ tenantId: tenant(request), sessionId })
-    const cwdRelative = request.query.cwd === '.' ? '' : relative(request.query.cwd || '', 'cwd')
-    const cwd = cwdRelative ? workspaceManager.resolveSafePath({ tenantId: tenant(request), sessionId }, cwdRelative) : base
-    const op = request.params.op
     try {
+      const sessionId = text(request.query.sessionId || 'default', 'sessionId', 256) || 'default'
+      const base = workspaceManager.getWorkingDirectory({ tenantId: tenant(request), sessionId })
+      const cwdRelative = request.query.cwd === '.' ? '' : relative(request.query.cwd || '', 'cwd')
+      const cwd = await resolveGitWorkspace(base, workspaceManager.resolveSafePath({ tenantId: tenant(request), sessionId }, cwdRelative || '.'))
+      const op = request.params.op
+      if (!cwd.repository && op === 'branch-info') return reply.send(success({ success: true, isRepo: false, info: null }))
+      if (op !== 'status' && !cwd.repository) throw new Error('The current workspace is not a Git repository')
       switch (op) {
         case 'status': {
-          const raw = await run(cwd, ['status', '--porcelain=v1', '--branch', '--untracked-files=all']).catch(() => '')
-          if (!raw && await run(cwd, ['rev-parse', '--is-inside-work-tree']).catch(() => '') === '') return reply.send(success({ success: true, isRepo: false, files: [] }))
-          const header = raw.split(/\r?\n/).find((line) => line.startsWith('##')) ?? ''
-          const branch = header.slice(3).split('...')[0].split(' ')[0] || ''
+          if (!cwd.repository) return reply.send(success({ success: true, isRepo: false, files: [] }))
+          const raw = await run(cwd, ['status', '--porcelain=v1', '-z', '--branch', '--untracked-files=all'])
+          const header = raw.split('\0').find((line) => line.startsWith('##')) ?? ''
+          const branch = header.slice(3).replace(/^No commits yet on /, '').split('...')[0].split(' ')[0] || ''
           return reply.send(success({ success: true, isRepo: true, files: parseStatus(raw), branch, merging: false }))
         }
         case 'branch-info': {
@@ -233,7 +241,7 @@ export async function gitRoutes(fastify: FastifyInstance) {
         case 'diff': {
           const file = relative(request.query.path, 'path'); const staged = request.query.staged === 'true'; const base = request.query.base === 'head'; const raw = await run(cwd, staged ? ['diff', '--cached', '--', file] : base ? ['diff', 'HEAD', '--', file] : ['diff', '--', file]);
           const oldContent = await run(cwd, staged || base ? ['show', `HEAD:${file}`] : ['show', `:${file}`]).catch(() => '');
-          const newContent = await fs.readFile(path.join(cwd, file), 'utf8').catch(() => '')
+          const newContent = await fs.readFile(await resolveGitPath(cwd, file), 'utf8').catch(() => '')
           const lines = raw.split(/\r?\n/).filter(Boolean).map((line) => ({ type: line.startsWith('+') && !line.startsWith('+++') ? 'add' : line.startsWith('-') && !line.startsWith('---') ? 'delete' : 'context', oldLineNumber: null, newLineNumber: null, content: line.slice(1) }))
           return reply.send(success({ success: true, diff: { path: file, changeType: 'modified', binary: false, oldContent, newContent, hunks: lines.length ? [{ id: 'hunk-0', oldStart: 1, oldLines: 0, newStart: 1, newLines: 0, lines }] : [] } }))
         }

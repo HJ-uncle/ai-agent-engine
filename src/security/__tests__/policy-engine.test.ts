@@ -1,7 +1,12 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest'
+import { initDb, closeDb } from '../../storage/sqlite/db.js'
 import { detectInjection, detectPathTraversal, policyEngine, approveCommand, setSecurityMode } from '../policy-engine.js'
 import { isPrivateIP, parseCidr } from '../network-policy.js'
 import { createPool } from '../../core/utils/concurrency-pool.js'
+
+// The runner supplies a per-spec DB before imports; never reset the operator's policy table.
+beforeAll(async () => { await initDb() })
+afterAll(() => { closeDb() })
 
 describe('policy-engine injection detection', () => {
   it('detects shell metacharacters', () => {

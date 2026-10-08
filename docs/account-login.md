@@ -7,7 +7,7 @@
 - `POST /register {}` 一键生成随机名称、内部 userId、独立 tenantId、恢复凭证与账号会话。`AETHER_ACCOUNT_REGISTRATION=false` 关闭公开注册（包括第三方首次自动注册）。可选个人信息通过登录后的 profile 保存；不要求填写密码或邮箱。
 - `POST /login {recoveryKey}` 使用恢复凭证重登；也接受已存在有效 API Key，保留旧用户 ID、租户及所有租户数据。不会把匿名 default 数据自动归给新账号。
 - `GET /me` 读取个人资料、已绑定身份及当前会话 ID。
-- `PATCH /profile {name?,email?,avatarUrl?,bio?,userData?}` 更新资料。userData 限 16 KB JSON 对象，不能修改角色、内部 ID 或租户。邮箱为用户自填资料，不代表邮箱验证。
+- `PATCH /profile {name?,email?,avatarUrl?,bio?,userData?}` 更新资料；省略 name 保持原名称，显式空值或空白名称生成随机名称。userData 限 16 KB JSON 对象，不能修改角色、内部 ID 或租户。邮箱为用户自填资料，不代表邮箱验证。
 - `POST /refresh {refreshToken,requestId?}` 更新短期访问凭证。
 - `GET /sessions`、`DELETE /sessions/:id` 查看或撤销自己的登录会话。
 - `POST /logout {all?:boolean}` 注销当前会话或全部会话。
@@ -18,11 +18,11 @@
 
 成功登录返回 `{user,accessToken,refreshToken,expiresAt,recoveryKey?}`。时间字段为 ISO 8601。访问令牌为 `aether_session_` 加 256 位随机值，15 分钟过期；刷新凭证为独立 256 位随机值。会话固定有效期 30 天，届时需重登。数据库仅存恢复、访问与刷新凭证的 SHA-256 哈希。
 
-每次刷新原子消费旧 refreshToken 并签发新凭证。客户端为每次刷新生成随机 requestId，先保存后发送，并使用单飞请求。同一旧 refreshToken + 同一 requestId 可在 5 分钟内重试并取得原结果，包括服务端重启后；缓存用旧明文 refreshToken 通过独立域派生 AES-GCM 密钥加密，数据库哈希不能用于解密。换用不同 requestId 重放旧凭证、超过重试窗口，或不带 requestId 重放会撤销该会话。正常临时网络错误不应清空本地凭证；客户端保留待完成 requestId 重试即可。
+每次刷新原子消费旧 refreshToken 并签发新凭证。原 accessToken 保留至其原定到期时间，避免轮换时打断已发出的请求；注销、会话到期或重放撤销仍立即使该会话的所有访问凭证失效。已到期的历史 access 哈希在该会话下次刷新时清理。客户端为每次刷新生成随机 requestId，先保存后发送，并使用单飞请求。同一旧 refreshToken + 同一 requestId 可在 5 分钟内重试并取得原结果，包括服务端重启后；缓存用旧明文 refreshToken 通过独立域派生 AES-GCM 密钥加密，数据库哈希不能用于解密。换用不同 requestId 重放旧凭证、超过重试窗口，或不带 requestId 重放会撤销该会话。正常临时网络错误不应清空本地凭证；客户端保留待完成 requestId 重试即可。
 
 AUTH_ENABLED=false 只允许缺少凭证的本地匿名请求继续使用 default 租户；显式提交的账号会话仍会验证，错误凭证不会降级成匿名。旧 API Key 和 JWT 的既有业务认证保留；新账号管理接口只接受可撤销的本系统账号会话，旧 API Key 须经 login 换取账号会话。第三方须经可信适配器验证后调用内部身份映射服务，客户端不能指定自己要绑定的内部 userId。
 
-第三方唯一身份为 `(providerId, issuer, subject)`。登录已有绑定会复用同一内部用户；登录新身份会创建新账号。绑定仅限已登录且最近认证的账号，保留原 userId 与 tenantId，不按邮箱自动合并。已绑定其他用户时返回冲突，避免隐式数据归属转移。
+第三方唯一身份为 `(providerId, issuer, subject)`。登录已有绑定会复用同一内部用户；登录新身份会创建新账号。绑定仅限已登录且最近认证的账号，保留原 userId 与 tenantId，不按邮箱自动合并。第三方身份的 name、email、avatarUrl 单独保存并随已验证登录更新，自定义 userData 保持独立；绑定不覆盖用户的本地个人资料。已绑定其他用户时返回冲突，避免隐式数据归属转移。
 
 新账号只有 `tenant-admin`：可管理属于自己租户的模型及 safe/standard 会话安全模式；full-access 仍需实例管理员。实例级设置、安全策略、全局 Skills 等仍要求管理员。自定义资料和第三方 userData 不参与权限判断。
 

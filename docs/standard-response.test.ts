@@ -1,16 +1,45 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { buildServer } from '../src/api/http/server.js'
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest'
+import type { FastifyInstance } from 'fastify'
+import fs from 'node:fs'
+import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 
-// Setup env to avoid rejecting unauth immediately if we want
-process.env.AUTH_ENABLED = 'false'
+// The response contract does not exercise background scheduling.
+vi.mock('../src/scheduler/cron-scheduler.js', () => ({ cronScheduler: { start: vi.fn(), stop: vi.fn() } }))
 
-// Mock internal stores if needed, or we just test the middleware and standard response logic on simple endpoints.
+// A full server creates command-job tables and starts its scheduler. Give this
+// response-contract fixture its own DB instead of sharing the operator's DB.
 describe('Standard API Responses', () => {
-  let app: any
-
-  beforeEach(async () => {
+  const fixture = path.resolve('.e2e-tmp', 'standard-response-' + randomUUID())
+  let app: FastifyInstance
+  let database: typeof import('../src/storage/sqlite/db.js')
+  let scheduler: typeof import('../src/scheduler/cron-scheduler.js').cronScheduler
+  beforeAll(async () => {
+    fs.mkdirSync(fixture, { recursive: true })
+    vi.stubEnv('AUTH_ENABLED', 'false')
+    vi.stubEnv('AETHER_INSTANCE_TOKEN', undefined)
+    vi.stubEnv('DATA_DIR', path.join(fixture, 'agent.db'))
+    vi.stubEnv('WORKSPACE_ROOT', path.join(fixture, 'workspace'))
+    database = await import('../src/storage/sqlite/db.js')
+    await database.initDb()
+    const { buildServer } = await import('../src/api/http/server.js')
+    scheduler = (await import('../src/scheduler/cron-scheduler.js')).cronScheduler
     app = await buildServer()
-  })
+  }, 30_000)
+  afterAll(async () => {
+    scheduler?.stop()
+    await app?.close()
+    // SQLite may spend its busy timeout draining the final WAL/mmap handles.
+    // Keep that real cleanup inside the hook instead of timing it out early.
+    if (database) {
+      await database.getDb().execute('PRAGMA mmap_size = 0')
+      await database.getDb().execute('PRAGMA wal_checkpoint(TRUNCATE)')
+      database.closeDb()
+    }
+    vi.unstubAllEnvs()
+    if (!fixture.startsWith(path.resolve('.e2e-tmp') + path.sep) || !path.basename(fixture).startsWith('standard-response-')) throw new Error('Unsafe response fixture cleanup')
+    await fs.promises.rm(fixture, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  }, 30_000)
 
   it('1. 成功对象响应 (Success Object)', async () => {
     // Call health endpoint (whitelist) to see if it returns standard success

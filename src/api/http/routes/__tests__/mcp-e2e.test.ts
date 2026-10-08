@@ -1,16 +1,21 @@
 import fs from 'node:fs'
+import { initDb, closeDb } from '../../../../storage/sqlite/db.js'
 import os from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
 import Fastify from 'fastify'
 import type { FastifyInstance } from 'fastify'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { mcpRoutes } from '../mcp.js'
 import { HTTPMCPClient } from '../../../../tools/mcp/client.js'
 import { createServer, listServers } from '../../../../storage/mcp/mcp-config.js'
 import { clearSecurityMode, setSecurityMode } from '../../../../security/policy-engine.js'
 import { ToolRegistry } from '../../../../core/tool-registry/index.js'
 import { registerMCPTools } from '../../../../tools/mcp/loader.js'
+
+// Vitest setup supplies an isolated per-spec database; these integration tests need its real schema.
+beforeAll(async () => { await initDb() })
+afterAll(() => { closeDb() })
 
 let root: string
 let app: FastifyInstance

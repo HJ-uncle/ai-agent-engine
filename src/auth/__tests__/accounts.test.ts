@@ -109,7 +109,7 @@ describe('account lifecycle with enabled authentication and owned-instance gate'
     const b = refresh.json().data as AccountLoginResult
     expect(b.user.id).toBe(a.user.id)
     expect(b.refreshToken).not.toBe(a.refreshToken)
-    expect((await app.inject({ method: 'GET', url: '/protected', headers: headers(a) })).statusCode).toBe(401)
+    expect((await app.inject({ method: 'GET', url: '/protected', headers: headers(a) })).statusCode).toBe(200)
     expect((await app.inject({ method: 'GET', url: '/protected', headers: headers(b) })).statusCode).toBe(200)
     expect((await app.inject({ method: 'POST', url: '/auth/account/refresh', headers: instanceHeaders, payload: { refreshToken: a.refreshToken } })).statusCode).toBe(401)
     expect((await app.inject({ method: 'GET', url: '/protected', headers: headers(b) })).statusCode).toBe(401)
@@ -304,5 +304,103 @@ describe('account and tenant administrator boundaries', () => {
     expect(otherMode.json().data.mode).toBe('safe')
     expect((await app.inject({ method: 'PUT', url: '/api/v1/security/mode', headers: headers(a), payload: { sessionId, mode: 'full-access' } })).statusCode).toBe(403)
     expect((await app.inject({ method: 'PUT', url: '/global-admin', headers: headers(a), payload: {} })).json().code).toBe(41015)
+  })
+})
+
+
+describe('access rotation without invalidating in-flight requests', () => {
+  it('keeps a prior access token only until its original expiry and prunes expired history on refresh', async () => {
+    const first = await register()
+    const originalExpiry = new Date(first.expiresAt).getTime()
+    const second = await accounts.refreshAccountSession(first.refreshToken)
+    const stored = await database.getDb().execute({ sql: 'SELECT token_hash,session_id,expires_at FROM account_access_tokens WHERE token_hash=?', args: [digest(first.accessToken)] })
+    expect(stored.rows[0]).toMatchObject({ token_hash: digest(first.accessToken), session_id: first.user.sessionId, expires_at: originalExpiry })
+    expect((await app.inject({ method: 'GET', url: '/protected', headers: headers(first) })).statusCode).toBe(200)
+    await database.getDb().execute({ sql: 'UPDATE account_access_tokens SET expires_at=? WHERE token_hash=?', args: [Date.now() - 1, digest(first.accessToken)] })
+    expect((await app.inject({ method: 'GET', url: '/protected', headers: headers(first) })).statusCode).toBe(401)
+    expect((await app.inject({ method: 'GET', url: '/protected', headers: headers(second) })).statusCode).toBe(200)
+    await accounts.refreshAccountSession(second.refreshToken)
+    expect((await database.getDb().execute({ sql: 'SELECT token_hash FROM account_access_tokens WHERE token_hash=?', args: [digest(first.accessToken)] })).rows).toHaveLength(0)
+  })
+  it('retains every still-valid generation across rapid rotations and revokes all on logout', async () => {
+    const first = await register(), second = await accounts.refreshAccountSession(first.refreshToken)
+    const third = await accounts.refreshAccountSession(second.refreshToken)
+    for (const session of [first, second, third]) {
+      expect((await app.inject({ method: 'GET', url: '/protected', headers: headers(session) })).statusCode).toBe(200)
+    }
+    expect((await app.inject({ method: 'POST', url: '/auth/account/logout', headers: headers(first), payload: {} })).statusCode).toBe(200)
+    for (const session of [first, second, third]) {
+      expect((await app.inject({ method: 'GET', url: '/protected', headers: headers(session) })).statusCode).toBe(401)
+    }
+  })
+  it('never resurrects expired access credentials when a refresh succeeds', async () => {
+    const first = await register()
+    await database.getDb().execute({ sql: 'UPDATE account_sessions SET access_expires_at=? WHERE id=?', args: [Date.now() - 1, first.user.sessionId!] })
+    const second = await accounts.refreshAccountSession(first.refreshToken)
+    expect((await app.inject({ method: 'GET', url: '/protected', headers: headers(first) })).statusCode).toBe(401)
+    expect((await app.inject({ method: 'GET', url: '/protected', headers: headers(second) })).statusCode).toBe(200)
+    expect((await database.getDb().execute({ sql: 'SELECT token_hash FROM account_access_tokens WHERE session_id=?', args: [first.user.sessionId!] })).rows).toHaveLength(0)
+  })
+  it('rejects every access generation after session expiry or refresh replay', async () => {
+    const first = await register(), second = await accounts.refreshAccountSession(first.refreshToken)
+    await database.getDb().execute({ sql: 'UPDATE account_sessions SET expires_at=? WHERE id=?', args: [Date.now() - 1, first.user.sessionId!] })
+    for (const session of [first, second]) await expect(accounts.authenticateAccountSession(session.accessToken)).rejects.toThrow('登录已失效')
+    const another = await register(), rotated = await accounts.refreshAccountSession(another.refreshToken)
+    await expect(accounts.refreshAccountSession(another.refreshToken)).rejects.toThrow('会话已撤销')
+    for (const session of [another, rotated]) await expect(accounts.authenticateAccountSession(session.accessToken)).rejects.toThrow('登录已失效')
+  })
+})
+
+describe('optional profile names and separate provider metadata', () => {
+  it('keeps an omitted name and generates a random name for explicit blank input', async () => {
+    const account = await register()
+    const update = (payload: Record<string, unknown>) => app.inject({ method: 'PATCH', url: '/auth/account/profile', headers: headers(account), payload })
+    expect((await update({ name: 'Chosen Name' })).json().data.name).toBe('Chosen Name')
+    expect((await update({ bio: 'Only update bio' })).json().data.name).toBe('Chosen Name')
+    for (const name of ['', '   ', null]) {
+      const response = await update({ name })
+      expect(response.statusCode).toBe(200)
+      expect(response.json().data.name).toMatch(/^用户 [a-f0-9]{6}$/)
+    }
+  })
+  it('persists provider profile fields separately without replacing local profile or colliding with userData keys', async () => {
+    const account = await register(), auth = await accounts.authenticateAccountSession(account.accessToken)
+    await accounts.updateAccountProfile(auth, { name: 'Local Name', email: 'local@example.com', userData: { local: true } })
+    const identity = { providerId: 'profile-fields', subject: randomUUID(), name: 'Provider Name', email: 'provider@example.com', avatarUrl: 'https://profiles.example.com/avatar.png', userData: { name: 'Custom Name', email: 'Custom Email', department: 'Engineering' } }
+    const linked = await accounts.completeExternalIdentity(identity, auth) as AccountUser
+    expect(linked).toMatchObject({ id: account.user.id, tenantId: account.user.tenantId, name: 'Local Name', email: 'local@example.com', userData: { local: true } })
+    expect(linked.identities[0]).toMatchObject(identity)
+    const repeated = await accounts.completeExternalIdentity({ providerId: identity.providerId, subject: identity.subject }) as AccountLoginResult
+    expect(repeated.user.identities[0]).toMatchObject(identity)
+    const updated = await accounts.completeExternalIdentity({ ...identity, name: 'Updated Provider', email: 'updated@example.com', avatarUrl: '', userData: { external: true } }) as AccountLoginResult
+    expect(updated.user).toMatchObject({ id: account.user.id, name: 'Local Name', email: 'local@example.com', userData: { local: true } })
+    expect(updated.user.identities[0]).toMatchObject({ name: 'Updated Provider', email: 'updated@example.com', avatarUrl: null, userData: { external: true } })
+    database.closeDb()
+    expect((await accounts.getAccountUser(account.user.id)).identities[0]).toEqual(updated.user.identities[0])
+  })
+  it('validates provider profile fields for an existing binding before updating any saved identity', async () => {
+    const identity = { providerId: 'validate-profile-fields', subject: randomUUID(), name: 'Original' }
+    const account = await accounts.completeExternalIdentity(identity) as AccountLoginResult
+    for (const bad of [{ name: 'x'.repeat(101) }, { email: 'x'.repeat(321) }, { avatarUrl: 'javascript:alert(1)' }]) {
+      await expect(accounts.completeExternalIdentity({ ...identity, ...bad })).rejects.toThrow()
+    }
+    expect((await accounts.getAccountUser(account.user.id)).identities[0].name).toBe('Original')
+  })
+})
+
+describe('existing account database migration', () => {
+  it('adds identity fields and access history idempotently without changing saved user mappings', async () => {
+    const { createClient } = await import('@libsql/client')
+    const db = createClient({ url: ':memory:' })
+    try {
+      await db.execute('CREATE TABLE account_identities (id TEXT PRIMARY KEY, user_id TEXT, provider_id TEXT, issuer TEXT, subject TEXT, user_data TEXT)')
+      await db.execute({ sql: 'INSERT INTO account_identities VALUES(?,?,?,?,?,?)', args: ['identity', 'original-user', 'original-provider', 'original-issuer', 'original-subject', '{"custom":true}'] })
+      const accessMigration = await import('../../storage/sqlite/migrations/023_account_access_tokens.js')
+      const profileMigration = await import('../../storage/sqlite/migrations/024_account_identity_profiles.js')
+      await accessMigration.up(db); await accessMigration.up(db)
+      await profileMigration.up(db); await profileMigration.up(db)
+      expect((await db.execute('SELECT * FROM account_identities')).rows).toEqual([{ id: 'identity', user_id: 'original-user', provider_id: 'original-provider', issuer: 'original-issuer', subject: 'original-subject', user_data: '{"custom":true}', name: null, email: null, avatar_url: null }])
+      expect((await db.execute('SELECT * FROM account_access_tokens')).rows).toHaveLength(0)
+    } finally { db.close() }
   })
 })
