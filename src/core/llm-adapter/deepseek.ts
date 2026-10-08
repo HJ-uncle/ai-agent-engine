@@ -115,18 +115,31 @@ export class DeepSeekAdapter extends OpenAIAdapter {
     // the distinction between an omitted option and `null` prevents the
     // adapter's model-name heuristic from silently turning reasoning back on
     // after the caller requested a visible, low-latency answer.
-    const thinkingConfigExplicit = options != null && Object.prototype.hasOwnProperty.call(options, 'thinkingConfig')
-    const responseThinkingFieldExplicit = options != null && Object.prototype.hasOwnProperty.call(options, 'responseThinkingField')
+    //
+    // 注意：必须用「值 !== undefined」判断显式指定，而不是 hasOwnProperty。
+    // ReAct 循环的 llmOptions 总是携带 `thinkingConfig: undefined` /
+    // `responseThinkingField: undefined` 这两个键（chat.ts 未启用 thinking 时
+    // 字段值为 undefined），hasOwnProperty 会把"键存在值 undefined"误判为
+    // 显式指定，从而击穿本方法里 responseThinkingField 的默认值 —— 导致
+    // messagesToOpenAI 的 ensureReasoning 兜底失效，思考型网关在第二轮工具调用
+    // 时报 400 "The reasoning_content in the thinking mode must be passed back
+    // to the API."
+    const thinkingConfigExplicit = options?.thinkingConfig !== undefined
+    const responseThinkingFieldExplicit = options?.responseThinkingField !== undefined
+    const isReasonerModel = DeepSeekAdapter.isReasoner(model)
     const wrapped: LLMAdapterOptions = {
       ...(options ?? { model }),
       includeStreamUsage: options?.includeStreamUsage ?? this.dsOptions.includeStreamUsage,
       responseFormat: options?.responseFormat ?? (this.dsOptions.defaultJsonMode ? 'json' : undefined),
-      // R1/reasoner 模型默认拿到 reasoning_content
-      responseThinkingField: responseThinkingFieldExplicit ? options?.responseThinkingField : 'reasoning_content',
+      // R1/reasoner 模型默认拿到 reasoning_content；非推理模型不注入，
+      // 避免向官方 deepseek-chat 等非思考端点回传 reasoning_content 字段。
+      responseThinkingField: responseThinkingFieldExplicit
+        ? options?.responseThinkingField
+        : isReasonerModel ? 'reasoning_content' : undefined,
     }
 
     // 自动 thinking-mode（reasoner 模型）
-    if (!isThinkingDisabled(options) && this.dsOptions.autoThinking && DeepSeekAdapter.isReasoner(model) && (!thinkingConfigExplicit || options?.thinkingConfig !== null)) {
+    if (!isThinkingDisabled(options) && this.dsOptions.autoThinking && isReasonerModel && (!thinkingConfigExplicit || options?.thinkingConfig !== null)) {
       const baseThinking = (options?.thinkingConfig as Record<string, unknown> | null) ?? {}
       wrapped.thinkingConfig = {
         ...baseThinking,

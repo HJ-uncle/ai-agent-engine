@@ -140,7 +140,19 @@ const DEFAULT_RULES: CapabilityRule[] = [
   },
   {
     id: 'deepseek:reasoner',
-    match: { model: [/deepseek.*reasoner/i, /deepseek.*r1/i, /v4(?:\.\d+)?[.-]?(pro|flash)/i, /v3.*think/i] },
+    // 注意：网关别名可能不带 v4 前缀（如 "deepseek-flash"），这类模型在网关侧
+    // 默认输出 reasoning_content（thinking mode）。若此处漏判，引擎不会在回传
+    // 带 tool_calls 的 assistant 消息时补 reasoning_content，网关将报
+    // 400 "The reasoning_content in the thinking mode must be passed back to the API."
+    match: {
+      model: [
+        /deepseek.*reasoner/i,
+        /deepseek.*r1/i,
+        /v3.*think/i,
+        /v4(?:\.\d+)?[.-]?(pro|flash)/i,
+        /deepseek[.-]?(?:v\d+(?:\.\d+)?[.-]?)?(?:pro|flash)/i, // 网关别名：deepseek-flash / deepseek-pro 等
+      ],
+    },
     caps: { thinking: true },
   },
 
