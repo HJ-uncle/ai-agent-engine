@@ -12,6 +12,7 @@ import { getProjectContextBlock } from '../../core/project-context.js'
 import { getSecurityMode, setSecurityMode, clearSecurityMode } from '../../security/policy-engine.js'
 import { skillsRegistry } from '../../skills/index.js'
 import { resolveOSMMode, OSM_MODE_CONFIG } from '../../core/osm.js'
+import { CODE_AGENT_HANDOFF_PROMPT } from '../../core/code-agent-prompt.js'
 
 /**
  * Subagent 工具
@@ -134,6 +135,7 @@ export const subagentTool: Tool = {
       '你没有子代理递归、提问或审批通道。需要授权时如实说明，禁止假报完成。',
       '最终结果必须用文本给出结论、证据和文件定位，不要仅写文件或复述过程。',
       '按请求深度收敛：概览只看入口与少量关键文件；优先搜索再按行范围读取，不要批量全文读取。证据足够就回答；同一工具错误不要原样重试。接近预算或步数限制时，只总结已有证据并说明未核实范围。',
+      ctx.toolProfile === 'code' ? CODE_AGENT_HANDOFF_PROMPT : undefined,
       rolePrompt,
       taskText ? suppliedPrompt : undefined,
     ].filter(Boolean).join('\n\n')

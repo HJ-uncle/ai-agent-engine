@@ -1,7 +1,8 @@
 import { FastifyInstance, FastifyRequest } from 'fastify'
 import { success, fail } from '../response.js'
 import { loadSecurityConfig, saveSecurityConfig, WebFetchConfig } from '../../../tools/web-fetch/security-config.js'
-import { systemConfigStore, SECRET_KEYS, BOOT_PATH_KEYS } from '../../../storage/sqlite/system-config.js'
+import { systemConfigStore, SECRET_KEYS, BOOT_PATH_KEYS, TRUSTED_STARTUP_KEYS } from '../../../storage/sqlite/system-config.js'
+import { requireRoles } from '../../../auth/guards.js'
 import { setGlobalToolPoolLimit } from '../../../core/utils/concurrency-pool.js'
 import { resolveOSMMode, isValidMode, OSM_MODES } from '../../../core/osm.js'
 import { logger as engineLogger } from '../../../observability/index.js'
@@ -98,8 +99,13 @@ export async function settingsRoutes(fastify: FastifyInstance) {
     return reply.code(200).send(success(settings))
   })
 
-  fastify.put<{ Body: Record<string, string | number | boolean | WebFetchConfig> }>('/settings', async (request, reply) => {
+  fastify.put<{ Body: Record<string, string | number | boolean | WebFetchConfig> }>('/settings', { preHandler: requireRoles('admin') }, async (request, reply) => {
     const updates = request.body
+
+    const protectedKeys = Object.keys(updates).filter((key) => TRUSTED_STARTUP_KEYS.has(key))
+    if (protectedKeys.length > 0) {
+      return reply.code(400).send(fail(400, `启动信任配置只能由引擎启动环境设置: ${protectedKeys.join(', ')}`))
+    }
 
     // ── OSM 校验 ────────────────────────────────────────────────────
     // 同时传入 OSM_MODE 和 SUPERPOWER_ENABLED 视为冲突，防止语义歧义。

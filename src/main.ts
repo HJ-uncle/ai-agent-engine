@@ -36,7 +36,7 @@ import { logger } from './observability/index.js'
 import { skillsRegistry } from './skills/index.js'
 import { initDb } from './storage/sqlite/db.js'
 import { initMemoryDb, closeMemoryDb, MEMORY_SCHEMA, MemoryConsolidator } from './storage/memory/index.js'
-import { systemConfigStore } from './storage/sqlite/system-config.js'
+import { systemConfigStore, TRUSTED_STARTUP_KEYS } from './storage/sqlite/system-config.js'
 import { loadAetherConfig, applyAetherConfigToEnv, loadManagedConfig } from './core/aether-config.js'
 import { networkInterfaces } from 'node:os'
 import { commandJobs } from './core/command-jobs/index.js'
@@ -78,6 +78,10 @@ async function main() {
 
     // 将数据库中的 system_config 同步到 process.env
     for (const [key, value] of Object.entries(dbConfig)) {
+      // Authentication and instance identity are deployment trust settings.
+      // A mutable UI/database value must not silently replace the process
+      // startup contract (or turn a running server into an anonymous one).
+      if (TRUSTED_STARTUP_KEYS.has(key)) continue
       if (value !== null && value !== '') {
         process.env[key] = value
       }

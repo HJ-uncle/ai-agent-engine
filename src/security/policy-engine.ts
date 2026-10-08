@@ -19,7 +19,9 @@ const sessionSecurityModes = new Map<string, SecurityMode>()
 const approvedCommands = new Set<string>()
 
 function sessionKey(tenantId: string, sessionId: string): string {
-  return `${tenantId}:${sessionId}`
+  // Encode both components unambiguously; delimiter concatenation collides
+  // when either component itself contains the delimiter.
+  return JSON.stringify([tenantId, sessionId])
 }
 
 function commandKey(tenantId: string, sessionId: string, command: string, args: string[]): string {
@@ -87,6 +89,9 @@ export interface PolicyDecisionInput {
   approved?: boolean
   /** Code execution must not inherit a legacy session-wide approval. */
   ignoreSessionApproval?: boolean
+  /** Background interpreter launches require an explicit confirmation even when
+   * their arguments contain shell metacharacters; foreground invocations deny. */
+  background?: boolean
 }
 
 export interface PolicyDecision {
@@ -136,9 +141,12 @@ const DEFAULT_RULES: PolicyRule[] = [
   { name: 'allow-echo',  command: 'echo',  action: 'allow', priority: 200, enabled: true },
   { name: 'allow-grep',  command: 'grep',  action: 'allow', priority: 200, enabled: true },
   { name: 'allow-find',  command: 'find',  action: 'allow', priority: 200, enabled: true },
-  { name: 'allow-node',  command: 'node',  action: 'allow', priority: 200, enabled: true },
-  { name: 'allow-npm',   command: 'npm',   action: 'allow', priority: 200, enabled: true },
-  { name: 'allow-npx',   command: 'npx',   action: 'allow', priority: 200, enabled: true },
+  // Interpreters can access arbitrary files and sockets from a host process;
+  // a working directory is not an operating-system sandbox. Require explicit
+  // approval in safe mode before they execute.
+  { name: 'confirm-node', command: 'node', action: 'ask', priority: 40, enabled: true, description: '解释器需显式确认' },
+  { name: 'confirm-npm',  command: 'npm',  action: 'ask', priority: 40, enabled: true, description: '包管理器需显式确认' },
+  { name: 'confirm-npx',  command: 'npx',  action: 'ask', priority: 40, enabled: true, description: '包执行器需显式确认' },
 
   // ── 兜底：safe 下 ask 确认，standard 下自动升为 allow（陌生命令直接跑） ──
   { name: 'default-ask', command: '*', action: 'ask', priority: 999, enabled: true, description: '兜底：safe=询问用户 / standard=自动放行' },
@@ -313,7 +321,7 @@ export class PolicyEngine {
     //    standard 模式：降级为 ask，让用户自行判断是否继续
     const injections = detectInjection(args)
     if (injections.length > 0) {
-      const action: PolicyAction = mode === 'standard' ? 'ask' : 'deny'
+      const action: PolicyAction = mode === 'standard' || (input.background === true && isHostInterpreter(cmd)) ? 'ask' : 'deny'
       const decision: PolicyDecision = {
         action,
         reason: `检测到 shell 元字符/命令注入: ${injections.join(' | ')}`,
@@ -327,6 +335,28 @@ export class PolicyEngine {
         decision: action,
         reason: decision.reason,
         details: { injections, securityMode: mode },
+      })
+      return decision
+    }
+
+    // Safe mode cannot make an arbitrary interpreter safe through a command
+    // name allow-list. Keep the command available behind the normal approval
+    // flow (handled above) and require confirmation for every new invocation.
+    // This runs after injection detection so `node -e '...;...'` is denied,
+    // rather than downgraded to a mere confirmation request.
+    if (mode === 'safe' && isHostInterpreter(cmd)) {
+      const decision: PolicyDecision = {
+        action: 'ask',
+        reason: '解释器/包执行器可访问工作区外文件和网络，安全模式需要逐次确认',
+      }
+      await auditLogStore.append({
+        tenantId: input.tenantId,
+        sessionId: input.sessionId,
+        category: 'cmd',
+        target: [cmd, ...args].join(' '),
+        decision: 'ask',
+        reason: decision.reason,
+        details: { securityMode: mode, hostInterpreter: true },
       })
       return decision
     }
@@ -420,6 +450,15 @@ export class PolicyEngine {
 
 function baseName(cmd: string): string {
   return cmd.split(/[/\\]/).pop() ?? cmd
+}
+
+function isHostInterpreter(command: string): boolean {
+  return new Set([
+    'node', 'node.exe', 'npm', 'npm.cmd', 'npx', 'npx.cmd', 'python', 'python.exe',
+    'python3', 'python3.exe', 'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe',
+    'cmd', 'cmd.exe', 'bash', 'bash.exe', 'sh', 'zsh', 'wsl', 'wsl.exe',
+    'ruby', 'perl', 'java', 'dotnet', 'deno', 'bun', 'go'
+  ]).has(command.toLowerCase())
 }
 
 function rowToRule(r: any): PolicyRule {

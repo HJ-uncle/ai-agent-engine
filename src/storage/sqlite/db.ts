@@ -23,6 +23,9 @@ import { up as up18 } from './migrations/018_skill_imports_scope.js'
 import { up as up19 } from './migrations/019_subagent_runs.js'
 import { up as up20 } from './migrations/020_skill_import_identity.js'
 
+import { up as up21 } from './migrations/021_accounts.js'
+import { up as up22 } from './migrations/022_account_external_flows.js'
+
 let client: Client | null = null
 let initialized = false
 let pragmasApplied = false
@@ -126,6 +129,8 @@ export async function initDb(): Promise<void> {
   await up18(db)
   await up19(db)
   await up20(db)
+  await up21(db)
+  await up22(db)
   // 兼容旧数据库：补充新列
   // 必须串行执行并单独捕获异常。SQLite 不支持 ALTER TABLE ADD COLUMN IF NOT EXISTS，
   // 若使用 batch 批量执行，当遇到已存在的列时会抛出异常，导致事务回滚并中断后续的列补充，引发严重的数据不一致隐患。

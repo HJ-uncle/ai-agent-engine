@@ -6,20 +6,14 @@
  * - 纯 Node.js 内置命令，无外部依赖，无乱码
  */
 import { createInterface } from 'node:readline'
-import { exec, execSync } from 'node:child_process'
 import path from 'node:path'
 import fs from 'node:fs'
-import os from 'node:os'
 
 // ── Windows 编码处理 ──────────────────────────────────────────────────────────
 const IS_WINDOWS = process.platform === 'win32'
 
 // Windows 启动时立刻把进程代码页切换到 UTF-8（65001）
 // 之后所有子进程继承此代码页，cmd.exe 的错误信息也变成 UTF-8
-if (IS_WINDOWS) {
-  try { execSync('chcp 65001', { stdio: 'ignore' }) } catch {}
-}
-
 /**
  * 将外部命令输出的 Buffer 解码为字符串（统一 UTF-8）
  */
@@ -41,8 +35,31 @@ const C = {
   white:  '\x1b[37m',
 }
 
-function out(s) { process.stdout.write(s) }
-function outln(s = '') { process.stdout.write(s + '\r\n') }
+// This process deliberately never launches a child process. A cwd check is
+// not an OS sandbox; trusted builds use the separate OS-isolated executor.
+const MAX_INPUT_BYTES = 32 * 1024
+const MAX_OUTPUT_BYTES = 2 * 1024 * 1024
+const MAX_ENTRIES = 20_000
+const MAX_FILE_BYTES = 8 * 1024 * 1024
+let outputBytes = 0
+let outputTruncated = false
+function out(s) {
+  if (outputTruncated) return
+  const text = String(s)
+  const bytes = Buffer.byteLength(text)
+  if (outputBytes + bytes > MAX_OUTPUT_BYTES) {
+    const remaining = Math.max(0, MAX_OUTPUT_BYTES - outputBytes)
+    if (remaining) process.stdout.write(text.slice(0, remaining))
+    outputBytes = MAX_OUTPUT_BYTES
+    outputTruncated = true
+    process.stdout.write('\r\n[输出已达到本条命令预算，已截断]\r\n')
+    return
+  }
+  outputBytes += bytes
+  process.stdout.write(text)
+}
+function outln(s = '') { out(String(s) + '\r\n') }
+function resetOutputBudget() { outputBytes = 0; outputTruncated = false }
 
 // ── 多工作空间初始化 ────────────────────────────────────────────────────────
 let WORKSPACE_ROOTS = []
@@ -52,25 +69,63 @@ try {
 if (WORKSPACE_ROOTS.length === 0) {
   WORKSPACE_ROOTS = [path.resolve(process.env.WORKSPACE_ROOT ?? process.cwd())]
 }
-// 规范化（resolve + 去重）
-WORKSPACE_ROOTS = [...new Set(WORKSPACE_ROOTS.map(p => path.resolve(p)))]
+// A missing or non-directory root is a hard startup error; never fall back to
+// a home directory because that would expand the authority unexpectedly.
+try {
+  WORKSPACE_ROOTS = [...new Set(WORKSPACE_ROOTS.map(p => fs.realpathSync(path.resolve(String(p)))))]
+  if (!WORKSPACE_ROOTS.length || WORKSPACE_ROOTS.some(r => !fs.statSync(r).isDirectory())) throw new Error('workspace root is not a directory')
+} catch (error) {
+  process.stderr.write(`Workspace Shell 无法锁定工作空间: ${error.message}\n`)
+  process.exit(1)
+}
 
 // 主工作空间（默认 cwd）
 const PRIMARY_ROOT = WORKSPACE_ROOTS[0]
 let cwd = PRIMARY_ROOT
 
 // ── 路径安全检查 ───────────────────────────────────────────────────────────
-function inAnyRoot(absPath) {
-  const norm = absPath.toLowerCase()
-  return WORKSPACE_ROOTS.some(r =>
-    norm === r.toLowerCase() ||
-    norm.startsWith(r.toLowerCase() + path.sep.toLowerCase())
-  )
+function samePath(a, b) { return IS_WINDOWS ? a.toLowerCase() === b.toLowerCase() : a === b }
+function relativeInside(root, target) {
+  const rel = path.relative(root, target)
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel))
 }
-
+function inAnyRoot(absPath) { return WORKSPACE_ROOTS.some(root => relativeInside(root, absPath)) }
+function canonicalExistingParent(absPath) {
+  let candidate = absPath
+  while (true) {
+    try { return fs.realpathSync(candidate) }
+    catch (error) {
+      if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error
+      const parent = path.dirname(candidate)
+      if (parent === candidate) return null
+      candidate = parent
+    }
+  }
+}
+// Check lexical and canonical paths. For a new file, its nearest existing
+// parent is canonicalized so a junction/symlink cannot redirect the write.
 function safeResolve(target) {
-  const resolved = path.resolve(cwd, target)
-  return inAnyRoot(resolved) ? resolved : null
+  try {
+    if (typeof target !== 'string' || target.length > 4096) return null
+    const lexical = path.resolve(cwd, target)
+    if (!inAnyRoot(lexical)) return null
+    const canonical = canonicalExistingParent(lexical)
+    if (!canonical) return null
+    return WORKSPACE_ROOTS.some(root => relativeInside(root, canonical)) ? lexical : null
+  } catch { return null }
+}
+function isWorkspaceRoot(target) { return WORKSPACE_ROOTS.some(root => samePath(root, target)) }
+function readEntriesBounded(dirPath, limit = MAX_ENTRIES) {
+  const handle = fs.opendirSync(dirPath)
+  const entries = []
+  try {
+    while (entries.length < limit) {
+      const entry = handle.readSync()
+      if (!entry) break
+      entries.push(entry)
+    }
+  } finally { handle.closeSync() }
+  return entries
 }
 
 // ── 提示符 ─────────────────────────────────────────────────────────────────
@@ -78,8 +133,7 @@ function getPrompt() {
   // 找到当前路径属于哪个工作空间，显示为 @alias/subdir
   for (let i = 0; i < WORKSPACE_ROOTS.length; i++) {
     const root = WORKSPACE_ROOTS[i]
-    if (cwd.toLowerCase() === root.toLowerCase() ||
-        cwd.toLowerCase().startsWith(root.toLowerCase() + path.sep.toLowerCase())) {
+    if (relativeInside(root, cwd)) {
       const rel = path.relative(root, cwd)
       const alias = i === 0 ? '~' : `@ws${i + 1}`
       const display = rel ? `${alias}/${rel.replace(/\\/g, '/')}` : alias
@@ -108,7 +162,7 @@ function fmtDate(d) {
 function printTree(dir, prefix = '', depth = 0, maxDepth = 3) {
   if (depth > maxDepth) return
   let entries
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+  try { entries = readEntriesBounded(dir) } catch { return }
   entries.forEach((e, i) => {
     const isLast = i === entries.length - 1
     const branch = isLast ? '└── ' : '├── '
@@ -156,7 +210,7 @@ const BUILTINS = {
     const target = targetArg ? safeResolve(targetArg) : cwd
     if (!target) { outln(`${C.red}⛔ 禁止访问工作空间外路径${C.reset}`); return }
     try {
-      const entries = fs.readdirSync(target, { withFileTypes: true })
+      const entries = readEntriesBounded(target)
         .filter(e => showHidden || !e.name.startsWith('.'))
         .sort((a, b) => {
           if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1
@@ -181,7 +235,7 @@ const BUILTINS = {
     const target = targetArg ? safeResolve(targetArg) : cwd
     if (!target) { outln(`${C.red}⛔ 禁止访问工作空间外路径${C.reset}`); return }
     try {
-      const entries = fs.readdirSync(target, { withFileTypes: true })
+      const entries = readEntriesBounded(target)
         .filter(e => showHidden || !e.name.startsWith('.'))
         .sort((a, b) => {
           if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1
@@ -208,6 +262,7 @@ const BUILTINS = {
     const resolved = safeResolve(file)
     if (!resolved) { outln(`${C.red}⛔ 禁止访问工作空间外路径${C.reset}`); return }
     try {
+      if (fs.statSync(resolved).size > MAX_FILE_BYTES) { outln(`${C.yellow}文件超过 ${MAX_FILE_BYTES} 字节预算${C.reset}`); return }
       const content = fs.readFileSync(resolved, 'utf8')
       out(content.replace(/\n/g, '\r\n'))
       if (!content.endsWith('\n')) outln()
@@ -241,6 +296,7 @@ const BUILTINS = {
     if (!name) { outln('用法: rm [-rf] <路径>'); return }
     const resolved = safeResolve(name)
     if (!resolved) { outln(`${C.red}⛔ 禁止访问工作空间外路径${C.reset}`); return }
+    if (isWorkspaceRoot(resolved)) { outln(`${C.red}⛔ 不能删除工作空间根目录${C.reset}`); return }
     try {
       fs.rmSync(resolved, { recursive, force })
       outln(`已删除: ${name}`)
@@ -275,8 +331,8 @@ const BUILTINS = {
     function walk(dir, depth = 0) {
       if (depth > 8) return
       let entries
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
-      for (const e of entries) {
+      try { entries = readEntriesBounded(dir) } catch { return }
+      for (const e of entries.slice(0, MAX_ENTRIES)) {
         const full = path.join(dir, e.name)
         if (!namePattern || e.name.includes(namePattern.replace(/\*/g, ''))) {
           const rel = path.relative(cwd, full)
@@ -297,10 +353,18 @@ const BUILTINS = {
     const pattern = filtered[0], fileArg = filtered[1]
     if (!pattern) { outln('用法: grep [-irn] <模式> [文件/目录]'); return }
 
-    const regex = new RegExp(pattern, iFlag ? 'gi' : 'g')
+    if (pattern.length > 256) { outln(`${C.red}grep: 模式过长${C.reset}`); return }
+    // Reject the common nested-quantifier shape that can consume unbounded
+    // CPU in backtracking regex engines. Full code search belongs in a worker
+    // with its own deadline; this interactive terminal stays fail-closed.
+    if (/\([^)]*[+*][^)]*\)[+*{]/.test(pattern)) { outln(`${C.red}grep: 可能导致过量回溯的模式已拒绝${C.reset}`); return }
+    let regex
+    try { regex = new RegExp(pattern, iFlag ? 'gi' : 'g') }
+    catch (error) { outln(`${C.red}grep: 无效正则: ${error.message}${C.reset}`); return }
 
     function grepFile(filePath) {
       try {
+        if (fs.statSync(filePath).size > MAX_FILE_BYTES) return
         const lines = fs.readFileSync(filePath, 'utf8').split('\n')
         lines.forEach((line, i) => {
           if (regex.test(line)) {
@@ -323,7 +387,7 @@ const BUILTINS = {
     const stat = fs.statSync(target)
     if (stat.isDirectory()) {
       function walkGrep(dir) {
-        const entries = fs.readdirSync(dir, { withFileTypes: true })
+        const entries = readEntriesBounded(dir)
         for (const e of entries) {
           const full = path.join(dir, e.name)
           if (e.isDirectory()) walkGrep(full)
@@ -353,7 +417,7 @@ const BUILTINS = {
       outln(`${C.bold}绑定的工作空间：${C.reset}`)
       WORKSPACE_ROOTS.forEach((r, i) => {
         const alias = i === 0 ? '~（主）' : `@ws${i + 1}`
-        const isCurrent = cwd.toLowerCase().startsWith(r.toLowerCase())
+        const isCurrent = relativeInside(r, cwd)
         const marker = isCurrent ? ` ${C.green}◀ 当前${C.reset}` : ''
         outln(`  ${C.cyan}${alias}${C.reset}  ${C.dim}${r}${C.reset}${marker}`)
       })
@@ -372,10 +436,19 @@ const BUILTINS = {
   echo(args) { outln(args.join(' ')) },
 
   env(args) {
-    if (args[0]) { outln(process.env[args[0]] ?? ''); return }
-    // 只显示常用变量，不暴露敏感信息
-    const safe = ['PATH','NODE_ENV','PYTHONPATH','VIRTUAL_ENV','npm_config_prefix']
-    safe.forEach(k => { if (process.env[k]) outln(`${C.cyan}${k}${C.reset}=${process.env[k]}`) })
+    // Never expose the engine environment; arbitrary process.env lookup leaked credentials.
+    const safe = {
+      NODE_ENV: process.env.NODE_ENV === 'production' ? 'production' : 'development',
+      TERM: process.env.TERM ? 'present' : '',
+      LANG: process.env.LANG ? 'present' : '',
+    }
+    if (args[0]) {
+      const key = args[0].toUpperCase()
+      if (!Object.prototype.hasOwnProperty.call(safe, key)) { outln(`${C.red}环境变量不可查询${C.reset}`); return }
+      outln(safe[key] ?? '')
+      return
+    }
+    Object.entries(safe).forEach(([k, v]) => { if (v) outln(`${C.cyan}${k}${C.reset}=${v}`) })
     outln(`${C.cyan}WORKSPACE_ROOT${C.reset}=${WORKSPACE_ROOTS[0]}`)
   },
 
@@ -393,9 +466,9 @@ const BUILTINS = {
         cat:   [`${C.bold}cat${C.reset} — 查看文件内容`, `  cat <文件>    输出文件全部内容`, `${C.dim}提示：大文件建议用 head/tail（外部命令）${C.reset}`],
         grep:  [`${C.bold}grep${C.reset} — 内容搜索`, `  grep <模式> <文件>       单文件搜索`, `  grep -i <模式> <文件>   忽略大小写`, `  grep -n <模式> <文件>   显示行号`, `  grep -r <模式> <目录>   递归搜索`, `  grep -rn <模式> .       递归+行号`],
         find:  [`${C.bold}find${C.reset} — 查找文件`, `  find                    列出当前目录所有文件`, `  find -name *.js         按名称查找（支持通配符）`, `  find src -name config    在 src 目录中查找`],
-        git:   [`${C.bold}git${C.reset} — 版本控制（外部命令）`, `  git status`, `  git log --oneline -10`, `  git diff <文件>`, `  git add <文件>`, `  git commit -m "消息"`, `  git pull / git push`, `${C.dim}注：git 命令工作目录锁定在当前位置${C.reset}`],
-        python:[`${C.bold}python / python3${C.reset} — Python（外部命令）`, `  python <脚本.py>         运行脚本`, `  python -c "print('hi')"  执行单行代码`, `  pip install <包>         安装包（需有权限）`, `${C.dim}注：输出自动 UTF-8 解码${C.reset}`],
-        node:  [`${C.bold}node / npm${C.reset} — Node.js（外部命令）`, `  node <脚本.js>    运行脚本`, `  node -e "代码"    执行单行代码`, `  npm install       安装依赖`, `  npm run <脚本>    运行 package.json 脚本`],
+        git:   [`${C.bold}git${C.reset} — 不在受限文件终端中执行`, `  请使用可信终端或操作系统隔离执行器`],
+        python:[`${C.bold}python / python3${C.reset} — 不在受限文件终端中执行`, `  请使用操作系统隔离执行器`],
+        node:  [`${C.bold}node / npm${C.reset} — 不在受限文件终端中执行`, `  请使用操作系统隔离执行器`],
         rm:    [`${C.bold}rm${C.reset} — 删除文件/目录`, `  rm <文件>        删除文件`, `  rm -r <目录>     递归删除目录`, `  rm -rf <路径>    强制递归删除（谨慎！）`, `${C.red}⚠ 删除操作不可恢复，请谨慎使用${C.reset}`],
         ws:    [`${C.bold}ws${C.reset} — 工作空间管理`, `  ws              列出所有绑定的工作空间`, `  ws ls           同上`, `  ws cd 2         切换到第 2 个工作空间根目录`],
         exit:  [`${C.yellow}exit 命令已禁用${C.reset}`, `${C.dim}此终端由系统管理，请通过关闭终端面板来结束会话。${C.reset}`],
@@ -408,7 +481,7 @@ const BUILTINS = {
 
     const lines = [
       `${C.bold}╔═══════════════════════════════════════════════════════╗${C.reset}`,
-      `${C.bold}║          Workspace Shell 帮助  (安全沙箱)             ║${C.reset}`,
+      `${C.bold}║          Workspace Shell 帮助（受限文件终端）             ║${C.reset}`,
       `${C.bold}╚═══════════════════════════════════════════════════════╝${C.reset}`,
       '',
       `${C.yellow}导航命令${C.reset}`,
@@ -442,20 +515,16 @@ const BUILTINS = {
       `  ${C.cyan}env [变量名]${C.reset}      查看环境变量`,
       `  ${C.cyan}clear${C.reset}             清屏`,
       '',
-      `${C.yellow}外部命令${C.reset}（直接运行，工作目录锁定在当前位置）`,
-      `  ${C.cyan}git${C.reset}  status / log / diff / add / commit / pull / push`,
-      `  ${C.cyan}python / python3${C.reset}  运行 Python 脚本 / 单行代码`,
-      `  ${C.cyan}node${C.reset}              运行 JavaScript`,
-      `  ${C.cyan}npm${C.reset}   install / run <脚本> / list`,
-      `  ${C.cyan}pip${C.reset}   install / list / show <包>`,
-      `  ${C.dim}  提示: 输入 help git / help python 查看更多示例${C.reset}`,
+      `${C.yellow}外部命令${C.reset}`,
+      `  ${C.dim}  受限文件终端拒绝启动 node、python、git、npm 等外部进程。${C.reset}`,
+      `  ${C.dim}  需要执行代码时，请使用单独的操作系统隔离执行器。${C.reset}`,
       '',
       `${C.yellow}快捷键${C.reset}`,
       `  ${C.cyan}Ctrl+C${C.reset}   中断当前正在运行的命令`,
       `  ${C.cyan}Ctrl+V${C.reset}   粘贴（由终端前端处理）`,
       `  ${C.cyan}Ctrl+L${C.reset}   清屏（等同于 clear 命令）`,
       '',
-      `${C.dim}  所有操作严格限制在工作空间内，无法访问外部路径${C.reset}`,
+      `${C.dim}  此终端只提供工作区内置文件操作；它不是操作系统安全沙箱。${C.reset}`,
       `${C.dim}  输入 ${C.reset}${C.cyan}help <命令>${C.reset}${C.dim} 查看某个命令的详细说明${C.reset}`,
       `${C.bold}╔═══════════════════════════════════════════════════════╗${C.reset}`,
       `${C.bold}║  工作空间: ${PRIMARY_ROOT.length > 43 ? '...'+PRIMARY_ROOT.slice(-40) : PRIMARY_ROOT.padEnd(43)}║${C.reset}`,
@@ -471,57 +540,15 @@ const BUILTINS = {
   },
 }
 
-// ── 执行外部命令 ────────────────────────────────────────────────────────────
-// 进程启动时已执行 chcp 65001，子进程继承 UTF-8 代码页，无需再单独处理
-const EXTERNAL_ENV = {
-  ...process.env,
-  WORKSPACE_ROOT: WORKSPACE_ROOTS[0],
-  PYTHONIOENCODING: 'utf-8',   // Python 输出 UTF-8
-  PYTHONUTF8: '1',             // Python 3.7+ UTF-8 模式
-}
-
-async function runExternal(cmd, args) {
-  return new Promise((resolve) => {
-    // 把命令和参数拼成完整字符串传给 exec（shell:true 下不能用独立 args，否则 DEP0190）
-    // 参数中若含空格则加引号包裹
-    const argv = args.map(a => /\s/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a)
-    const cmdline = argv.length ? `${cmd} ${argv.join(' ')}` : cmd
-    const child = exec(cmdline, {
-      cwd,
-      env: EXTERNAL_ENV,
-    })
-    // 注册到全局，让 Ctrl+C 拦截器可以找到并 kill
-    currentChild = child
-    const handleOutput = (d) => {
-      const text = decodeBuffer(Buffer.isBuffer(d) ? d : Buffer.from(d))
-      out(text.replace(/\r?\n/g, '\r\n'))
-    }
-    child.stdout?.on('data', handleOutput)
-    child.stderr?.on('data', handleOutput)
-    child.on('close', (code) => {
-      currentChild = null
-      if (code !== 0 && code !== null) {
-        outln(`${C.dim}[退出码: ${code}]${C.reset}`)
-      }
-      resolve()
-    })
-    child.on('error', () => {
-      currentChild = null
-      outln(`${C.red}命令未找到: ${cmd}${C.reset}`)
-      resolve()
-    })
-  })
-}
-
 // ── 启动横幅 ────────────────────────────────────────────────────────────────
 outln(`${C.bold}${C.cyan}╔════════════════════════════════════════╗${C.reset}`)
-outln(`${C.bold}${C.cyan}║     Workspace Shell  (安全沙箱)        ║${C.reset}`)
+outln(`${C.bold}${C.cyan}║       Workspace Shell (受限文件终端)   ║${C.reset}`)
 outln(`${C.bold}${C.cyan}╚════════════════════════════════════════╝${C.reset}`)
 outln(`${C.dim}主工作空间: ${PRIMARY_ROOT}${C.reset}`)
 if (WORKSPACE_ROOTS.length > 1) {
   outln(`${C.dim}附加工作空间: ${WORKSPACE_ROOTS.slice(1).join(', ')}${C.reset}`)
 }
-outln(`${C.dim}输入 ${C.reset}${C.cyan}help${C.reset}${C.dim} 查看帮助${C.reset}`)
+outln(`${C.dim}仅提供工作区内置文件操作；外部命令需使用隔离执行器${C.reset}`)
 outln()
 
 // ── Tab 补全 ──────────────────────────────────────────────────────────────
@@ -535,7 +562,7 @@ function getPathCompletions(partial) {
     const filePart = lastSlash >= 0 ? norm.slice(lastSlash + 1) : norm
     const searchDir = dirPart ? (safeResolve(dirPart) ?? cwd) : cwd
     if (!searchDir || !fs.existsSync(searchDir)) return []
-    return fs.readdirSync(searchDir, { withFileTypes: true })
+    return readEntriesBounded(searchDir)
       .filter(e => e.name.toLowerCase().startsWith(filePart.toLowerCase()))
       .map(e => {
         const full = dirPart + e.name
@@ -569,9 +596,6 @@ function tabCompleter(line) {
 
 // ── 主循环 ──────────────────────────────────────────────────────────────────
 
-// 当前正在运行的外部子进程（Ctrl+C 时 kill 子进程而非退出 Shell）
-let currentChild = null
-
 // 切换到 raw mode：禁用 PTY 自带的 echo/行编辑，由 readline 全权接管
 // 这样 readline 才能处理 Tab 补全、↑↓ 历史、左右光标移动
 if (process.stdin.isTTY) {
@@ -592,23 +616,14 @@ function showPrompt() {
 
 // ── Ctrl+C：raw mode 下 PTY 不发信号，readline 拦截后触发此事件 ──────────
 rl.on('SIGINT', () => {
-  if (currentChild) {
-    try { currentChild.kill('SIGINT') } catch {}
-    try { currentChild.kill() } catch {}   // Windows 兼容
-  } else {
-    process.stdout.write('^C\r\n')
-    showPrompt()
-  }
+  process.stdout.write('^C\r\n')
+  showPrompt()
 })
 
 // ── 兜底：canonical mode 下 PTY 仍会发真实 SIGINT ────────────────────────
 process.on('SIGINT', () => {
-  if (currentChild) {
-    try { currentChild.kill('SIGINT') } catch {}
-  } else {
-    process.stdout.write('^C\r\n')
-    showPrompt()
-  }
+  process.stdout.write('^C\r\n')
+  showPrompt()
 })
 
 // ── 特殊按键：readline 不处理的字节 ─────────────────────────────────────
@@ -627,11 +642,14 @@ process.stdin.on('data', (chunk) => {
   }
 })
 
-// ── 命令处理 ──────────────────────────────────────────────────────────────
-rl.on('line', async (line) => {
+// ── 命令处理：单一 Promise 队列，避免粘贴多行时竞态 ─────────────────────────
+let commandQueue = Promise.resolve()
+async function processLine(line) {
+  resetOutputBudget()
   // 过滤残留控制字符
+  if (Buffer.byteLength(line, 'utf8') > MAX_INPUT_BYTES) { outln(`${C.red}输入超过 ${MAX_INPUT_BYTES} 字节预算${C.reset}`); return }
   const input = line.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '').trim()
-  if (!input) { showPrompt(); return }
+  if (!input) return
 
   // 支持分号分隔多命令（顺序执行）
   const parts = input.split(/\s*;\s*/)
@@ -643,10 +661,15 @@ rl.on('line', async (line) => {
     if (BUILTINS[cmd]) {
       await BUILTINS[cmd](args)
     } else {
-      await runExternal(cmd, args)
+      // No shell, interpreter, package manager, or native process is started.
+      outln(`${C.yellow}已拒绝外部命令 “${cmd}”：请使用操作系统隔离执行器${C.reset}`)
     }
   }
-  showPrompt()
+}
+rl.on('line', (line) => {
+  commandQueue = commandQueue.then(() => processLine(line)).catch(error => {
+    outln(`${C.red}命令处理失败：${error.message}${C.reset}`)
+  }).finally(showPrompt)
 })
 
 // stdin EOF（连接真正断开）→ 退出进程

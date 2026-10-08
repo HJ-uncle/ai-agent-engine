@@ -73,7 +73,7 @@ it('remote content classifies media extensions and NUL samples as binary', async
   fs.writeFileSync(opaque, Buffer.from([0, 1, 2, 3, 4]))
 
   const mediaResponse = await app.inject({ method: 'GET', url: '/workspace/file/content?sessionId=test&path=clip.mp4' })
-  expect(mediaResponse.json().data).toMatchObject({ isBinary: true, tooLarge: undefined })
+  expect(mediaResponse.json().data).toMatchObject({ isBinary: true, tooLarge: false })
   expect(mediaResponse.json().data.content).toBe(Buffer.from('media fixture without a NUL byte').toString('base64'))
 
   const opaqueResponse = await app.inject({ method: 'GET', url: '/workspace/file/content?sessionId=test&path=payload.bin' })

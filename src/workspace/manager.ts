@@ -22,7 +22,7 @@ export class WorkspaceManager {
   /** IDs are path components, never user supplied paths. Keep this strict on
    * every API entry so the private tenant/session root cannot be redirected. */
   private validateId(value: string | undefined, label: string): string {
-    if (typeof value !== 'string' || value.length === 0 || value.length > 128 ||
+    if (typeof value !== 'string' || value.length === 0 || value.length > 128 || value.trim() !== value ||
       value === '.' || value === '..' || value.includes('\0') || /[\\/]/.test(value) ||
       /[:*?"<>|]/.test(value) || /[\u0000-\u001f]/.test(value) ||
       /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(value)) {
@@ -49,17 +49,24 @@ export class WorkspaceManager {
 
   getWorkingDirectory(ctx: CtxLike): string {
     this.assertContext(ctx)
-    return path.resolve(this.bindings.get(this.bindingKey(ctx)) ?? ctx.cwd ?? ctx.projectRoot ?? ctx.workspacePaths?.[0] ?? this.getScratchDirectory(ctx))
+    const bound = this.bindings.get(this.bindingKey(ctx))
+    // Authenticated requests must bind through the operator-checked endpoint;
+    // request context paths are not an authorization mechanism.
+    if (process.env.AUTH_ENABLED === 'true') {
+      if (bound && (!fs.existsSync(bound) || !fs.statSync(bound).isDirectory())) throw new Error('Bound workspace is no longer available')
+      return path.resolve(bound ?? this.getScratchDirectory(ctx))
+    }
+    return path.resolve(bound ?? ctx.cwd ?? ctx.projectRoot ?? ctx.workspacePaths?.[0] ?? this.getScratchDirectory(ctx))
   }
 
   getPaths(ctx: CtxLike): string[] {
     this.assertContext(ctx)
-    return [...new Set([
-      this.getWorkingDirectory(ctx),
-      ...(ctx.projectRoot ? [path.resolve(ctx.projectRoot)] : []),
-      ...(ctx.workspacePaths ?? []).map(p => path.resolve(p)),
-      this.getScratchDirectory(ctx),
-    ])]
+    const paths = [this.getWorkingDirectory(ctx), this.getScratchDirectory(ctx)]
+    if (process.env.AUTH_ENABLED !== 'true') {
+      paths.push(...(ctx.projectRoot ? [path.resolve(ctx.projectRoot)] : []))
+      paths.push(...(ctx.workspacePaths ?? []).map(p => path.resolve(p)))
+    }
+    return [...new Set(paths)]
   }
 
   /** Bind a session only inside operator-declared engine workspace roots. */
@@ -81,6 +88,17 @@ export class WorkspaceManager {
     // project (including a nested directory). Desktop/no-auth mode retains the
     // existing single-user ability to select any operator-allowed project.
     if (process.env.AUTH_ENABLED !== 'false') {
+      // The engine's private root is partitioned as root/tenant/session. A
+      // tenant must never bind another tenant's private scratch directory,
+      // even before that directory has been explicitly bound.
+      const privateRelative = path.relative(path.resolve(this.root), canonical)
+      const privateParts = privateRelative.split(path.sep).filter(Boolean)
+      // Only apply the tenant/session partition rule to paths inside the
+      // engine's private root. Operator-allowed project roots may legitimately
+      // live beside that private root and are protected by bindingOwners below.
+      if (this.isContained(path.resolve(this.root), canonical) && privateParts.length > 0 && privateParts[0] !== ctx.tenantId) {
+        throw new Error('workspaceRoot belongs to another tenant')
+      }
       const owner = [...this.bindingOwners.entries()].find(([owned, ownerTenant]) =>
         ownerTenant !== ctx.tenantId && (this.isContained(owned, canonical) || this.isContained(canonical, owned)))
       if (owner) throw new Error('workspaceRoot is already bound to another tenant')
@@ -104,6 +122,8 @@ export class WorkspaceManager {
   resolveSafePath(ctx: CtxLike, userPath: string): string {
     this.assertContext(ctx)
     if (typeof userPath !== 'string' || userPath.includes('\0')) throw new Error('Path is invalid')
+    const scratch = this.getScratchDirectory(ctx)
+    if (this.hasSymlinkComponent(this.root, scratch)) throw new Error('Workspace session root contains a symbolic link')
     const resolved = path.resolve(this.getWorkingDirectory(ctx), userPath)
     if (getSecurityMode(ctx.tenantId, ctx.sessionId) !== 'safe') return resolved
     // Normalize before testing containment so absolute paths with '..' cannot bypass it.
@@ -134,6 +154,18 @@ export class WorkspaceManager {
       candidate = parent
     }
     try { return fs.realpathSync.native(candidate) } catch { return candidate }
+  }
+
+  private hasSymlinkComponent(base: string, target: string): boolean {
+    const root = path.resolve(base)
+    const absolute = path.resolve(target)
+    if (!this.isContained(root, absolute)) return false
+    let current = root
+    for (const part of path.relative(root, absolute).split(path.sep).filter(Boolean)) {
+      current = path.join(current, part)
+      try { if (fs.lstatSync(current).isSymbolicLink()) return true } catch { break }
+    }
+    return false
   }
 
   // P1 placeholder

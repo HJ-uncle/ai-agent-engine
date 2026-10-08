@@ -21,9 +21,11 @@ export const ERROR_FORBIDDEN = 41015
 export function requireRoles(...roles: string[]) {
   return async function requireRolesHandler(request: FastifyRequest, reply: FastifyReply) {
     // 本地开发模式（零配置哲学）：与全局鉴权降级保持一致
-    if (process.env.AUTH_ENABLED === 'false') return
-
     const authContext = (request as any).authContext as AuthContext | undefined
+    // Local mode may have no context at all.  Never let a previously
+    // authenticated non-admin context become admin merely because a mutable
+    // environment value changed while the server was running.
+    if (process.env.AUTH_ENABLED === 'false' && (!authContext || authContext.method === 'none')) return
     if (!authContext || authContext.method === 'none') {
       return reply.code(200).send(fail(ERROR_FORBIDDEN, '该操作需要登录后执行'))
     }

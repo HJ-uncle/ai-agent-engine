@@ -128,15 +128,16 @@ describe('D0 owned instance handshake and route gate', () => {
     expect(names).not.toContain('agent_list')
     expect(modelRequests[0].systemPrompt).toContain('## Aether Code 模式执行协议')
     expect(modelRequests[0].systemPrompt).toContain('没有新鲜验证证据时，不得声称“已完成”')
+    expect(modelRequests[0].systemPrompt).toContain('结论 → 已完成/已修复 → 支持/使用方式 → 核心文件 → 验证结果 → 未完成与限制')
     expect(body).not.toContain(token)
   })
 
-  it('preserves standalone behavior only when the instance token is unset', async () => {
+  it('keeps the startup instance-token gate when the environment is later unset', async () => {
     vi.stubEnv('AETHER_INSTANCE_TOKEN', undefined)
     try {
       const response = await app.inject({ method: 'GET', url: '/api/v1/chat/status?sessionId=standalone-fixture' })
-      expect(response.statusCode).toBe(200)
-      expect(response.json()).toMatchObject({ code: 200, data: { running: false } })
+      expect(response.statusCode).toBe(401)
+      expect(response.json()).toMatchObject({ code: 40100 })
     } finally { vi.stubEnv('AETHER_INSTANCE_TOKEN', token) }
     expect(hasValidInstanceToken({ 'x-aether-instance-token': [token, token] }, token)).toBe(false)
     expect(hasValidInstanceToken({}, '')).toBe(false)

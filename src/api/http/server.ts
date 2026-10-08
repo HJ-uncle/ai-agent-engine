@@ -26,6 +26,8 @@ import { lspRoutes } from './routes/lsp.js'
 import { codegraphRoutes } from './routes/codegraph.js'
 import { performanceRoutes } from './routes/performance.js'
 import { deepseekRoutes } from './routes/deepseek.js'
+import { accountRoutes } from './routes/accounts.js'
+import { externalAccountRoutes } from './routes/account-external.js'
 import { authRoutes } from './routes/auth.js'
 import { tenantRoutes } from './routes/tenant.js'
 import { flowRoutes } from './routes/flows/index.js'
@@ -35,7 +37,7 @@ import { commandJobRoutes } from './routes/command-jobs.js'
 import { commandJobs } from '../../core/command-jobs/index.js'
 import { closeKnowledgeDb } from '../../storage/knowledge/db.js'
 import { cronScheduler } from '../../scheduler/cron-scheduler.js'
-import { globalRequestMiddleware, loggingMiddleware, authMiddlewareHook, WHITELIST_PATHS } from './middleware.js'
+import { configureRequestAuthentication, globalRequestMiddleware, loggingMiddleware, authMiddlewareHook, WHITELIST_PATHS } from './middleware.js'
 import fastifyWebsocket from '@fastify/websocket'
 import fastifyMultipart from '@fastify/multipart'
 import fastifyStatic from '@fastify/static'
@@ -44,6 +46,10 @@ import { existsSync } from 'node:fs'
 import { fail } from './response.js'
 
 export async function buildServer() {
+  // Freeze authentication and instance-token configuration only after the
+  // startup configuration chain (env, .aether, managed settings) is complete.
+  // Business settings must never mutate this boundary while the server runs.
+  configureRequestAuthentication()
   const fastify = Fastify({
     logger: false, // Use pino directly
     genReqId: () => uuidv4(),
@@ -123,6 +129,8 @@ export async function buildServer() {
   await fastify.register(modelsRoutes)
   // Auth routes at root level (no /api/v1 prefix, whitelisted)
   await fastify.register(authRoutes)
+  await fastify.register(accountRoutes)
+  await fastify.register(externalAccountRoutes)
 
   // 启动定时任务调度器
   cronScheduler.start()

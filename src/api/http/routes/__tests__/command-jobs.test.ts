@@ -218,7 +218,8 @@ describe('D7 command job HTTP and history lifecycle', () => {
     }
     await assertStillWriting(other.marker)
     await commandJobs.cancel({ tenantId, sessionId: other.job.sessionId }, other.job.jobId, 'fixture completed')
-  })
+  // Windows queries each real process tree through PowerShell before stopping it.
+  }, 15_000)
 
   it.each(['clear', 'turn', 'message', 'truncate', 'session'] as const)(
     'history mutation %s settles background processes before deleting history', async operation => {

@@ -20,6 +20,7 @@ import { registerActiveChat, unregisterActiveChat } from './chat.js'
 import { z } from 'zod'
 import { getSessionMemorySettings, setSessionMemoryScope, type MemoryMode } from '../../../storage/memory/settings.js'
 import { buildMemoryRecallBlock, extractAndStoreMemories } from '../../../middleware/memory/index.js'
+import { CODE_AGENT_EXECUTION_PROMPT } from '../../../core/code-agent-prompt.js'
 
 // ── Validation Schemas ──────────────────────────────────────────────────────
 const UpdateMessageSchema = z.object({
@@ -218,7 +219,8 @@ export async function messagesRoutes(fastify: FastifyInstance) {
       }, { sessionId, scope: effectiveMemoryScope === 'session' ? 'session' : 'global' })
     }
 
-    const fullSystemPrompt = finalSystemPrompt + ragPrompt + memoryRecallBlock + `
+    const codeExecutionPrompt = toolProfile === 'code' ? `\n\n${CODE_AGENT_EXECUTION_PROMPT}` : ''
+    const fullSystemPrompt = finalSystemPrompt + ragPrompt + memoryRecallBlock + codeExecutionPrompt + `
 ---
 # 智能交互规则
 1. 当你需要澄清用户的意图、确认关键操作或提供选择时，请调用 \`ask_user\` 工具。调用该工具后，系统将自动暂停执行，并向用户展示交互式选择界面，等待用户回复后再继续。
@@ -227,7 +229,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 `
 
     // systemPromptTokens: pure system prompt (excluding RAG)
-    const pureSystemPromptForMessages = finalSystemPrompt + memoryRecallBlock + `
+    const pureSystemPromptForMessages = finalSystemPrompt + memoryRecallBlock + codeExecutionPrompt + `
 ---
 # 智能交互规则
 1. 当你需要澄清用户的意图、确认关键操作或提供选择时，请调用 \`ask_user\` 工具。调用该工具后，系统将自动暂停执行，并向用户展示交互式选择界面，等待用户回复后再继续。

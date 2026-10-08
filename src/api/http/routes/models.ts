@@ -25,13 +25,24 @@ const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId 
 
 // Simple check for internal IP to prevent SSRF
 function isPrivateIP(ip: string): boolean {
-  return /^(10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.|127\.|localhost)/.test(ip) || ip.startsWith('::1') || ip.startsWith('fd00:') || ip.startsWith('fe80:')
+  const host = ip.replace(/^\[|\]$/g, '').toLowerCase()
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true
+  if (/^(0\.|10\.|127\.|169\.254\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(host)) return true
+  if (/^(22[4-9]|23\d|24\d|25[0-5])\./.test(host)) return true
+  if (host === '::' || host === '::1' || /^(fc|fd|fe[89ab]|ff)/.test(host) && host.includes(':')) return true
+  const mapped = host.match(/^::ffff:([a-f0-9]{1,4}):([a-f0-9]{1,4})$/)
+  if (mapped) {
+    const high = parseInt(mapped[1], 16), low = parseInt(mapped[2], 16)
+    return isPrivateIP([high >>> 8, high & 255, low >>> 8, low & 255].join('.'))
+  }
+  return false
 }
 
 function isValidEndpoint(url: string): boolean {
   try {
     const parsedUrl = new URL(url)
     if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') return false
+    if (parsedUrl.username || parsedUrl.password || parsedUrl.hash) return false
     if (isPrivateIP(parsedUrl.hostname)) return false
     return true
   } catch {
@@ -46,9 +57,9 @@ function isValidChatCompletionsEndpoint(url: string): boolean {
 
 // Helper to check admin role
 function requireAdmin(authContext: any): boolean {
-  if (process.env.AUTH_ENABLED === 'false' || authContext?.method === 'none') return true
+  if (process.env.AUTH_ENABLED === 'false' && (!authContext || authContext?.method === 'none')) return true
   // For demo/simplicity, if roles includes 'admin' or if it's not set but AUTH_ENABLED is false
-  return authContext?.roles?.includes('admin') || false
+  return authContext?.roles?.some((role: string) => role === 'admin' || role === 'tenant-admin') || false
 }
 
 export async function modelsRoutes(fastify: FastifyInstance) {
@@ -182,6 +193,11 @@ export async function modelsRoutes(fastify: FastifyInstance) {
     let baseUrl = request.body?.baseUrl || model?.baseUrl || ''
     let provider = request.body?.provider || model?.provider || 'openai' // default to openai adapter for custom testing
     let modelId = request.body?.modelId || model?.modelId || 'test'
+
+    // Temporary test overrides must satisfy the same trust boundary as persisted endpoints.
+    if (!isValidChatCompletionsEndpoint(baseUrl)) {
+      return reply.code(400).send(fail(40001, 'Invalid base URL. Private IP or invalid format.'))
+    }
 
     // Use a short timeout for test
     try {

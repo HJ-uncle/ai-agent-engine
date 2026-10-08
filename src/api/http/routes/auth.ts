@@ -52,8 +52,17 @@ export async function authRoutes(fastify: FastifyInstance) {
     }
 
     const db = getDb()
-    const tokenHash = createHash('sha256').update(token.trim()).digest('hex')
+    const authContext = (request as any).authContext as { tenantId?: string; method?: string; roles?: string[] } | undefined
     const tenantId = userId.trim()
+    const localBootstrap = process.env.AUTH_ENABLED === 'false' && authContext?.method === 'none' && tenantId === 'default'
+    const authenticatedAdmin = Boolean(authContext && authContext.method !== 'none' && authContext.roles?.includes('admin'))
+    if (!localBootstrap && !authenticatedAdmin) {
+      return reply.code(403).send(fail(40300, '仅当前租户管理员可管理认证用户'))
+    }
+    if (authenticatedAdmin && authContext?.tenantId !== tenantId) {
+      return reply.code(403).send(fail(40300, '禁止跨租户管理认证用户'))
+    }
+    const tokenHash = createHash('sha256').update(token.trim()).digest('hex')
     const now = Math.floor(Date.now() / 1000)
 
     // 查询是否已存在

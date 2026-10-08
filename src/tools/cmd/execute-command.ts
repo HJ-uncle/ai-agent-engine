@@ -24,7 +24,8 @@ export async function preflightCommand(rawArgs: unknown, ctx: AgentContext): Pro
   }
   const decision = await policyEngine.evaluate({ command: args.command, args: args.args ?? [], tenantId: ctx.tenantId,
     sessionId: ctx.sessionId, ignoreSessionApproval: ctx.toolProfile === 'code',
-    approved: Boolean(ctx.currentToolCallId && ctx.currentToolCallId === ctx.approvedToolCallId) })
+    approved: Boolean(ctx.currentToolCallId && ctx.currentToolCallId === ctx.approvedToolCallId),
+    background: args.background === true })
   if (decision.action === 'allow') return undefined
   if (decision.action === 'deny') return { success: false, output: `命令被策略拒绝: ${decision.reason}`, metadata: { blocked: true } }
   return { success: false, needsConfirmation: true,

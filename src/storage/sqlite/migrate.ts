@@ -19,6 +19,9 @@ import { up as up017 } from './migrations/017_add_skill_imports.js'
 import { up as up018 } from './migrations/018_skill_imports_scope.js'
 import { up as up020 } from './migrations/020_skill_import_identity.js'
 
+import { up as up021 } from './migrations/021_accounts.js'
+import { up as up022 } from './migrations/022_account_external_flows.js'
+
 const BUILTIN_TEMPLATES = [
   {
     name: 'assistant',
@@ -191,6 +194,9 @@ async function migrate() {
     } catch (err: any) {
       console.log('✓ Migration 020_skill_import_identity skipped:', err.message)
     }
+
+    await up021(db)
+    await up022(db)
 
     // Seed built-in prompt templates
     for (const tpl of BUILTIN_TEMPLATES) {

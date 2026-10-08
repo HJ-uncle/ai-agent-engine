@@ -5,6 +5,7 @@ import { auditLogStore, type AuditCategory, type AuditDecision } from '../../../
 import {
   loadNetworkPolicy, saveNetworkPolicy, DEFAULT_NETWORK_POLICY, type NetworkPolicy,
 } from '../../../security/network-policy.js'
+import { requireRoles } from '../../../auth/guards.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
@@ -19,14 +20,14 @@ export async function securityRoutes(fastify: FastifyInstance) {
     },
   )
 
-  fastify.post<{ Body: PolicyRule }>('/security/policies', async (request, reply) => {
+  fastify.post<{ Body: PolicyRule }>('/security/policies', { preHandler: requireRoles('admin') }, async (request, reply) => {
     const rule = await policyEngine.upsertRule({ ...request.body, id: undefined })
     return reply.code(200).send(success(rule))
   })
 
   fastify.put<{ Params: { id: string }; Body: Partial<PolicyRule> }>(
     '/security/policies/:id',
-    async (request, reply) => {
+    { preHandler: requireRoles('admin') }, async (request, reply) => {
       const id = parseInt(request.params.id, 10)
       if (isNaN(id)) return reply.code(200).send(fail(40001, `无效的 ID 格式: ${request.params.id}`))
 
@@ -39,7 +40,7 @@ export async function securityRoutes(fastify: FastifyInstance) {
     },
   )
 
-  fastify.delete<{ Params: { id: string } }>('/security/policies/:id', async (request, reply) => {
+  fastify.delete<{ Params: { id: string } }>('/security/policies/:id', { preHandler: requireRoles('admin') }, async (request, reply) => {
     const id = parseInt(request.params.id, 10)
     if (isNaN(id)) return reply.code(200).send(fail(40001, `无效的 ID 格式: ${request.params.id}`))
 
@@ -47,7 +48,7 @@ export async function securityRoutes(fastify: FastifyInstance) {
     return reply.code(200).send(success({ deleted: true }))
   })
 
-  fastify.post('/security/policies/reset', async (_request, reply) => {
+  fastify.post('/security/policies/reset', { preHandler: requireRoles('admin') }, async (_request, reply) => {
     await policyEngine.resetDefaults()
     return reply.code(200).send(success({ reset: true }))
   })
@@ -80,7 +81,7 @@ export async function securityRoutes(fastify: FastifyInstance) {
     })
   })
 
-  fastify.delete<{ Querystring: { days?: number } }>('/security/audit-log', async (request, reply) => {
+  fastify.delete<{ Querystring: { days?: number } }>('/security/audit-log', { preHandler: requireRoles('admin') }, async (request, reply) => {
     const days = Math.max(1, parseInt(String(request.query.days ?? 30), 10))
     const removed = await auditLogStore.purgeOlderThan(days)
     return reply.code(200).send(success({ removed, days }))
@@ -92,7 +93,7 @@ export async function securityRoutes(fastify: FastifyInstance) {
     return reply.code(200).send(success(policy))
   })
 
-  fastify.put<{ Body: NetworkPolicy }>('/security/network-policy', async (request, reply) => {
+  fastify.put<{ Body: NetworkPolicy }>('/security/network-policy', { preHandler: requireRoles('admin') }, async (request, reply) => {
     // 合并用户提交字段和默认值，做简单校验
     const policy: NetworkPolicy = {
       ...DEFAULT_NETWORK_POLICY,
@@ -105,7 +106,7 @@ export async function securityRoutes(fastify: FastifyInstance) {
     return reply.code(200).send(success(policy))
   })
 
-  fastify.post('/security/network-policy/reset', async (_request, reply) => {
+  fastify.post('/security/network-policy/reset', { preHandler: requireRoles('admin') }, async (_request, reply) => {
     await saveNetworkPolicy({ ...DEFAULT_NETWORK_POLICY })
     return reply.code(200).send(success(DEFAULT_NETWORK_POLICY))
   })
@@ -121,12 +122,16 @@ export async function securityRoutes(fastify: FastifyInstance) {
     return reply.code(200).send(success({ sessionId, mode }))
   })
 
-  fastify.put<{ Body: { sessionId: string; mode: SecurityMode } }>('/security/mode', async (request, reply) => {
+  fastify.put<{ Body: { sessionId: string; mode: SecurityMode } }>('/security/mode', { preHandler: requireRoles('admin', 'tenant-admin') }, async (request, reply) => {
     const tenantId = getTenantId(request)
     const { sessionId, mode } = request.body ?? {} as any
     if (!sessionId) return reply.code(200).send(fail(40001, 'sessionId is required'))
     if (!mode || !VALID_MODES.includes(mode)) {
       return reply.code(200).send(fail(40001, `mode must be one of: ${VALID_MODES.join(', ')}`))
+    }
+    const auth = (request as FastifyRequest & { authContext?: { roles?: string[]; method?: string } }).authContext
+    if (mode === 'full-access' && auth?.method !== 'none' && !auth?.roles?.includes('admin')) {
+      return reply.code(403).send(fail(40300, '完全访问模式需要实例管理员授权'))
     }
     setSecurityMode(tenantId, sessionId, mode)
     await auditLogStore.append({

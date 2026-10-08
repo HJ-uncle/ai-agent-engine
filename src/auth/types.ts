@@ -1,7 +1,9 @@
 export interface AuthContext {
   tenantId: string
   userId?: string
-  method: 'api-key' | 'jwt' | 'none'
+  method: 'api-key' | 'jwt' | 'session' | 'none'
+  sessionId?: string
+  authenticatedAt?: number
   roles?: string[]
 }
 

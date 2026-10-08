@@ -199,7 +199,7 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
           return reply.code(200).send(success({ content: '', isBinary, totalSize: stat.size, tooLarge: true, truncated: false }))
         }
         const content = fs.readFileSync(safePath, 'base64')
-        return reply.code(200).send(success({ content, isBinary, totalSize: stat.size }))
+        return reply.code(200).send(success({ content, isBinary, totalSize: stat.size, tooLarge: false, truncated: false }))
       } else {
         // 文本文件：只限制大小（500KB），不限制行数
         let content = fs.readFileSync(safePath, 'utf-8')
@@ -213,7 +213,7 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
           content = content.slice(0, MAX_TEXT_SIZE) + '\n\n... (截断，完整大小: ' + originalSize + ' 字节)'
         }
         
-        return reply.code(200).send(success({ content, isBinary, totalSize: stat.size, originalLength, truncated }))
+        return reply.code(200).send(success({ content, isBinary, totalSize: stat.size, tooLarge: false, originalLength, truncated }))
       }
     } catch (e: any) {
       return reply.code(200).send(fail(50000, `Failed to read file: ${e.message}`))

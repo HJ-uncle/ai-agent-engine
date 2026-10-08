@@ -2,7 +2,6 @@
  * TerminalManager — 管理服务器端 node-pty 伪终端实例
  * 每个终端由 UUID 标识，支持 create / write / resize / kill
  */
-import os from 'node:os'
 import { existsSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { EventEmitter } from 'node:events'
@@ -16,10 +15,18 @@ export interface TerminalSession {
   /** 当前运行中的命令（title 显示用） */
   title: string
   events: EventEmitter
+  tenantId: string
+  userId?: string
+}
+
+export interface TerminalOwner {
+  tenantId: string
+  userId?: string
 }
 
 class TerminalManager {
   private sessions = new Map<string, TerminalSession>()
+  private ownerCounts = new Map<string, number>()
 
   /**
    * 创建新的 PTY 会话
@@ -28,20 +35,18 @@ class TerminalManager {
    * @param cols     初始列数
    * @param rows     初始行数
    */
-  create(id: string, cwd: string, cols = 120, rows = 30, workspaceRoots?: string[]): TerminalSession {
+  create(id: string, cwd: string, cols = 120, rows = 30, workspaceRoots?: string[], owner?: TerminalOwner): TerminalSession {
+    const tenantId = owner?.tenantId ?? 'default'
+    const ownerKey = `${tenantId}\u0000${owner?.userId ?? ''}`
+    if ((this.ownerCounts.get(ownerKey) ?? 0) >= 32) throw new Error('Terminal limit reached for this owner')
     // 正确获取 workspace-shell.mjs 的路径（跨平台兼容）
     const __filename = fileURLToPath(import.meta.url)
     const __dirname = dirname(__filename)
     const shellScript = resolve(__dirname, './workspace-shell.mjs')
 
     // 确保 cwd 必须存在且可访问
-    let safeCwd = cwd
-    if (!existsSync(safeCwd)) {
-      safeCwd = os.homedir()
-      if (!existsSync(safeCwd)) {
-        safeCwd = process.cwd()
-      }
-    }
+    const safeCwd = cwd
+    if (!existsSync(safeCwd)) throw new Error('Terminal working directory does not exist')
 
     // 所有绑定的工作空间（含自定义路径）传给 shell
     const roots = workspaceRoots && workspaceRoots.length > 0 ? workspaceRoots : [safeCwd]
@@ -53,7 +58,7 @@ class TerminalManager {
       rows,
       cwd: safeCwd,
       env: {
-        ...process.env,
+        ...executionEnvironment(),
         TERM: 'xterm-256color',
         COLORTERM: 'truecolor',
         WORKSPACE_ROOT: roots[0],
@@ -69,7 +74,7 @@ class TerminalManager {
     // 都不可用时降级系统 shell。
     const nodeCandidates = [
       process.env.AETHER_ENGINE_NODE,
-      os.platform() === 'win32' ? 'node.exe' : 'node'
+      process.platform === 'win32' ? 'node.exe' : 'node'
     ].filter(Boolean) as string[]
 
     let p: pty.IPty | null = null
@@ -81,12 +86,7 @@ class TerminalManager {
         // 该候选不可用（PATH 无 node 等），尝试下一个
       }
     }
-    if (!p) {
-      console.error('Failed to spawn workspace-shell, falling back to basic shell')
-      // 降级方案：直接使用系统 shell
-      const fallbackShell = os.platform() === 'win32' ? 'powershell.exe' : (os.platform() === 'darwin' ? '/bin/zsh' : '/bin/bash')
-      p = pty.spawn(fallbackShell, [], spawnOptions)
-    }
+    if (!p) throw new Error('Failed to start restricted workspace shell')
 
     const events = new EventEmitter()
 
@@ -94,11 +94,15 @@ class TerminalManager {
     p.onData(data => events.emit('data', data))
     p.onExit(({ exitCode }) => {
       events.emit('exit', exitCode)
-      this.sessions.delete(id)
+      if (this.sessions.delete(id)) this.decrementOwner(ownerKey)
     })
 
-    const session: TerminalSession = { id, pty: p, cwd: safeCwd, title: 'workspace-shell', events }
+    const session: TerminalSession = {
+      id, pty: p, cwd: safeCwd, title: 'workspace-shell', events,
+      tenantId, userId: owner?.userId,
+    }
     this.sessions.set(id, session)
+    this.ownerCounts.set(ownerKey, (this.ownerCounts.get(ownerKey) ?? 0) + 1)
     return session
   }
 
@@ -106,19 +110,27 @@ class TerminalManager {
     return this.sessions.get(id)
   }
 
-  write(id: string, data: string): void {
-    this.sessions.get(id)?.pty.write(data)
+  write(id: string, data: string): boolean {
+    if (typeof data !== 'string' || data.length > 64 * 1024) return false
+    const session = this.sessions.get(id)
+    if (!session) return false
+    session.pty.write(data)
+    return true
   }
 
-  resize(id: string, cols: number, rows: number): void {
-    this.sessions.get(id)?.pty.resize(cols, rows)
+  resize(id: string, cols: number, rows: number): boolean {
+    if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 1 || cols > 500 || rows < 1 || rows > 500) return false
+    const session = this.sessions.get(id)
+    if (!session) return false
+    session.pty.resize(cols, rows)
+    return true
   }
 
   kill(id: string): void {
     const session = this.sessions.get(id)
     if (!session) return
     try { session.pty.kill() } catch { /* ignore */ }
-    this.sessions.delete(id)
+    if (this.sessions.delete(id)) this.decrementOwner(`${session.tenantId}\u0000${session.userId ?? ''}`)
   }
 
   killAll(): void {
@@ -128,7 +140,26 @@ class TerminalManager {
   list(): Array<{ id: string; cwd: string; title: string }> {
     return [...this.sessions.values()].map(s => ({ id: s.id, cwd: s.cwd, title: s.title }))
   }
+
+  private decrementOwner(ownerKey: string): void {
+    const remaining = (this.ownerCounts.get(ownerKey) ?? 1) - 1
+    if (remaining > 0) this.ownerCounts.set(ownerKey, remaining); else this.ownerCounts.delete(ownerKey)
+  }
 }
 
 // 单例
 export const terminalManager = new TerminalManager()
+
+/** Keep engine credentials and signing material out of arbitrary build commands. */
+function executionEnvironment(): NodeJS.ProcessEnv {
+  const blocked = /(TOKEN|SECRET|PASSWORD|API[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIAL|JWT|ENCRYPTION|DATABASE_URL)/i
+  const allowed = new Set(['PATH', 'Path', 'PATHEXT', 'ComSpec', 'COMSPEC', 'SystemRoot', 'SYSTEMROOT',
+    'WINDIR', 'TEMP', 'TMP', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'HOME', 'LANG', 'TERM', 'COLORTERM',
+    'AETHER_ENGINE_NODE'])
+  const result: NodeJS.ProcessEnv = {}
+  for (const [key, value] of Object.entries(process.env)) {
+    if (blocked.test(key) || (!allowed.has(key) && !key.startsWith('LC_'))) continue
+    result[key] = value
+  }
+  return result
+}

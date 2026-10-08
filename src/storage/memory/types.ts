@@ -101,8 +101,9 @@ export interface UpdateMemoryNodeInput {
   emotionalTrigger?: string | null
   decayRate?: number
   lastAccessed?: number
+  tags?: string[]
   embeddingJson?: string | null
-  embedding?: number[]
+  embedding?: number[] | null
 }
 
 export interface CreateMemoryEdgeInput {
@@ -145,6 +146,7 @@ export interface MemoryManager {
 
   // Node queries
   listNodes(filter: MemoryNodeFilter, ctx: MemoryContext): Promise<MemoryNode[]>
+  countNodes(filter: MemoryNodeFilter, ctx: MemoryContext): Promise<number>
   recallByTags(tags: string[], ctx: MemoryContext): Promise<MemoryNode[]>
   recallRecent(limit: number, ctx: MemoryContext): Promise<MemoryNode[]>
   recallImportant(minImportance: number, ctx: MemoryContext): Promise<MemoryNode[]>

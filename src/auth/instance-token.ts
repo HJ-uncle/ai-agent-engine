@@ -2,10 +2,17 @@ import { createHash, timingSafeEqual } from 'node:crypto'
 
 export const INSTANCE_TOKEN_HEADER = 'x-aether-instance-token'
 
+let startupInstanceToken: string | undefined
+
+/** Capture the instance token once, after startup configuration is final. */
+export function configureInstanceToken(expected = process.env.AETHER_INSTANCE_TOKEN): void {
+  startupInstanceToken = expected
+}
+
 /** This process-local gate is independent of optional tenant authentication and never returns the secret. */
 export function hasValidInstanceToken(
   headers: Record<string, string | string[] | undefined>,
-  expected = process.env.AETHER_INSTANCE_TOKEN,
+  expected = startupInstanceToken ?? process.env.AETHER_INSTANCE_TOKEN,
 ): boolean {
   if (expected === undefined) return true // Standalone deployments retain their existing authentication contract.
   const supplied = headers[INSTANCE_TOKEN_HEADER]

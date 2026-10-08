@@ -12,6 +12,9 @@ export const SECRET_KEYS = new Set(['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'DEEP
  */
 export const BOOT_PATH_KEYS = new Set(['SKILLS_ROOT', 'MCP_CONFIG_PATH', 'WORKSPACE_ROOT', 'BASH_PATH', 'DATA_DIR'])
 
+/** Trust-boundary settings are process-start configuration, never business DB state. */
+export const TRUSTED_STARTUP_KEYS = new Set(['AUTH_ENABLED', 'AETHER_INSTANCE_TOKEN', 'JWT_SECRET', 'AETHER_ACCOUNT_REGISTRATION', 'AETHER_ACCOUNT_PROVIDERS_JSON', 'AETHER_ACCOUNT_PUBLIC_URL', 'ENCRYPTION_KEY'])
+
 export class SystemConfigStore {
   /**
    * 读取单个配置项。

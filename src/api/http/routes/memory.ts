@@ -45,6 +45,22 @@ function edgeResponse(edge: any) {
   return { ...edge, source: edge.sourceNodeId, target: edge.targetNodeId, scope: edge.scope ?? 'global' }
 }
 
+const NODE_TYPES: MemoryNodeType[] = ['preference', 'decision', 'fact', 'lesson', 'narrative', 'milestone']
+function parsePage(value: unknown, fallback: number, max: number) {
+  const n = value === undefined || value === '' ? fallback : Number(value)
+  return Number.isInteger(n) && n > 0 ? Math.min(n, max) : null
+}
+function parseImportance(value: unknown) {
+  if (value === undefined) return undefined
+  const n = Number(value)
+  return Number.isFinite(n) && n >= 0 && n <= 1 ? n : null
+}
+function cleanTags(value: unknown): string[] | null {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.some(tag => typeof tag !== 'string')) return null
+  return Array.from(new Set(value.map(tag => tag.trim()).filter(Boolean))).slice(0, 100)
+}
+
 async function scopedNode(id: string, ctx: MemoryContext) {
   return manager.getNode(id, ctx)
 }
@@ -110,8 +126,57 @@ export async function memoryRoutes(fastify: FastifyInstance) {
   fastify.get<{ Querystring: { sessionId?: string; scope?: string; current?: number; pageSize?: number } }>('/memory/list', async (request, reply) => {
     const resolved = resolveContext(request, request.query)
     if ('error' in resolved) return badScope(reply, resolved.error)
-    const nodes = await manager.listNodes({ orderBy: 'timestamp', orderDir: 'DESC', limit: 1000 }, resolved.context)
-    return reply.code(200).send(paginateArray(nodes.map(nodeResponse), request.query.current, request.query.pageSize))
+    const current = parsePage(request.query.current, 1, 1_000_000)
+    const pageSize = parsePage(request.query.pageSize, 50, 500)
+    if (current === null || pageSize === null) return badScope(reply, 'current and pageSize must be positive integers (pageSize <= 500)')
+    const keyword = (request.query as any).keyword
+    const type = (request.query as any).type
+    if (type !== undefined && type !== 'all' && (!NODE_TYPES.includes(type) || typeof type !== 'string')) return badScope(reply, 'type is invalid')
+    const filter: any = { orderBy: 'timestamp', orderDir: 'DESC', limit: pageSize, offset: (current - 1) * pageSize, keyword }
+    // pagination is applied directly in SQL; no in-memory truncation
+    if (type && type !== 'all') filter.types = [type]
+    // Keep the two statements sequential for local libsql builds that do not
+    // support overlapping cursor reads when an OFFSET is bound.
+    const nodes = await manager.listNodes(filter, resolved.context)
+    const total = await manager.countNodes(filter, resolved.context)
+    // Nodes are already sliced by SQL; avoid applying the page offset a second
+    // time in paginateArray (which would empty pages after the first one).
+    return reply.code(200).send({ ...paginateArray(nodes.map(nodeResponse)), pagination: { current, pageSize, total, totalPages: Math.ceil(total / pageSize) } })
+  })
+
+  // Settings-facing CRUD endpoint.  The existing /memory/remember endpoint is
+  // intentionally kept as a compatibility shorthand for tool callers.
+  fastify.post<{ Querystring: ScopeInput; Body: { summary?: string; detail?: string | null; type?: MemoryNodeType; importance?: number; tags?: string[]; scope?: string; sessionId?: string } }>('/memory/nodes', async (request, reply) => {
+    const body = request.body ?? ({} as any)
+    const resolved = resolveContext(request, { scope: body.scope ?? request.query.scope, sessionId: body.sessionId ?? request.query.sessionId })
+    if ('error' in resolved) return badScope(reply, resolved.error)
+    const summary = typeof body.summary === 'string' ? body.summary.trim() : ''
+    if (!summary) return badScope(reply, 'summary is required')
+    const type = body.type ?? 'fact'
+    if (!NODE_TYPES.includes(type)) return badScope(reply, 'type is invalid')
+    const importance = parseImportance(body.importance)
+    if (importance === null) return badScope(reply, 'importance must be between 0 and 1')
+    if (body.detail !== undefined && body.detail !== null && typeof body.detail !== 'string') return badScope(reply, 'detail must be a string or null')
+    const tags = cleanTags(body.tags)
+    if (tags === null) return badScope(reply, 'tags must be an array of strings')
+    const node = await manager.createNode({ type, summary, detail: body.detail ?? null, importance: importance ?? 0.5, tags }, resolved.context)
+    return reply.code(201).send(success(nodeResponse(node), '创建成功'))
+  })
+
+  fastify.get<{ Params: { id: string }; Querystring: ScopeInput }>('/memory/nodes/:id', async (request, reply) => {
+    const resolved = resolveContext(request, request.query)
+    if ('error' in resolved) return badScope(reply, resolved.error)
+    const node = await scopedNode(request.params.id, resolved.context)
+    if (!node) return reply.code(404).send(fail(40400, 'Memory not found'))
+    return reply.code(200).send(success(nodeResponse(node)))
+  })
+
+  fastify.get<{ Params: { id: string }; Querystring: ScopeInput }>('/memory/:id', async (request, reply) => {
+    const resolved = resolveContext(request, request.query)
+    if ('error' in resolved) return badScope(reply, resolved.error)
+    const node = await scopedNode(request.params.id, resolved.context)
+    if (!node) return reply.code(404).send(fail(40400, 'Memory not found'))
+    return reply.code(200).send(success(nodeResponse(node)))
   })
 
   fastify.get<{ Querystring: { sessionId?: string; scope?: string } }>('/memory/graph', async (request, reply) => {
@@ -142,14 +207,22 @@ export async function memoryRoutes(fastify: FastifyInstance) {
   fastify.put<{
     Params: { id: string }
     Querystring: { sessionId?: string; scope?: string }
-    Body: { summary?: string; type?: MemoryNodeType; importance?: number; detail?: string | null; scope?: unknown }
+    Body: { summary?: string; type?: MemoryNodeType; importance?: number; detail?: string | null; tags?: string[]; scope?: unknown }
   }>('/memory/:id', async (request, reply) => {
     const resolved = resolveContext(request, request.query)
     if ('error' in resolved) return badScope(reply, resolved.error)
-    if (Object.prototype.hasOwnProperty.call(request.body ?? {}, 'scope')) return badScope(reply, 'scope cannot be changed in an update; use the request scope')
+    if (Object.prototype.hasOwnProperty.call(request.body ?? {}, 'scope') || Object.prototype.hasOwnProperty.call(request.body ?? {}, 'sessionId')) return badScope(reply, 'scope and sessionId cannot be changed in an update; use the request scope')
     if (!await scopedNode(request.params.id, resolved.context)) return reply.code(404).send(fail(40400, 'Memory not found'))
-    const { summary, type, importance, detail } = request.body ?? {}
-    const updated = await manager.updateNode(request.params.id, { summary, type, importance, detail }, resolved.context)
+    const body = request.body ?? ({} as any)
+    if (body.summary !== undefined && (typeof body.summary !== 'string' || !body.summary.trim())) return badScope(reply, 'summary must be a non-empty string')
+    if (body.type !== undefined && !NODE_TYPES.includes(body.type)) return badScope(reply, 'type is invalid')
+    const importance = parseImportance(body.importance)
+    if (importance === null) return badScope(reply, 'importance must be between 0 and 1')
+    if (body.detail !== undefined && body.detail !== null && typeof body.detail !== 'string') return badScope(reply, 'detail must be a string or null')
+    const tags = cleanTags(body.tags)
+    if (tags === null) return badScope(reply, 'tags must be an array of strings')
+    const { summary, type, detail } = body
+    const updated = await manager.updateNode(request.params.id, { summary: typeof summary === 'string' ? summary.trim() : summary, type, importance: importance ?? undefined, detail, tags: body.tags === undefined ? undefined : tags }, resolved.context)
     if (!updated) return reply.code(404).send(fail(40400, 'Memory not found'))
     return reply.code(200).send(success(nodeResponse(updated)))
   })

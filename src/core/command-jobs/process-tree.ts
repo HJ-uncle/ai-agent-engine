@@ -67,7 +67,15 @@ export async function stopCommandProcessTree(child: ChildProcess, startedAt: num
   for (const target of targets) {
     if (!alive(target)) continue
     try { await execute(taskkill, ['/PID', String(target), '/T', '/F']) }
-    catch (error) { if (alive(target)) throw new Error(`Could not stop command process tree: ${String(error)}`) }
+    catch (error) {
+      // Some restricted Windows hosts deny taskkill even for a child process
+      // owned by this engine.  Fall back to Node's process handle for every
+      // process we already discovered; this still avoids guessing descendants
+      // and lets the normal close event settle the durable job state.
+      try { process.kill(target, 'SIGTERM') } catch (fallbackError) {
+        if (alive(target)) throw new Error(`Could not stop command process tree: ${String(error)}; fallback: ${String(fallbackError)}`)
+      }
+    }
   }
   for (let attempt = 0; attempt < 20 && targets.some(alive); attempt++) await pause(25)
   if (targets.some(alive)) throw new Error('Command process tree did not exit after taskkill')

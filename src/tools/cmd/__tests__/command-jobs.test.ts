@@ -84,10 +84,10 @@ describe('D7 command tools with real policy and processes', () => {
     expect(await commandJobs.list(commandJobScope(ctx))).toHaveLength(1)
   })
 
-  it('denies background commands through the same policy and validates flags before launch', async () => {
+  it('requires confirmation for background interpreters and validates flags before launch', async () => {
     setSecurityMode(ctx.tenantId, ctx.sessionId, 'safe')
     const denied = await cmdTool.execute({ command: process.execPath, args: ['-e', 'process.exit(0);'], background: true }, ctx)
-    expect(denied).toMatchObject({ success: false, metadata: { blocked: true } })
+    expect(denied).toMatchObject({ success: false, needsConfirmation: true })
     for (const args of [null, { command: process.execPath, background: 'true' }, { command: process.execPath, timeoutMs: NaN }, { command: process.execPath, cwd: 1 }]) {
       expect(await cmdTool.execute(args, ctx)).toMatchObject({ success: false, error: 'COMMAND_INVALID_ARGUMENTS' })
     }
