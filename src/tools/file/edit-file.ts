@@ -25,12 +25,12 @@ function validArgs(value: unknown): value is EditFileArgs {
 
 export const editFileTool: Tool = {
   name: 'edit_file', displayName: '精确编辑文件',
-  description: '对已有 UTF-8 文本文件做精确替换。先 read_file mode="exact" 获取完整字节 expectedHash 和无行号 content；正文必须逐字匹配，保留 CRLF、Unicode 和 BOM，不自动格式化。所有 edits 都匹配同一原文件：每个 oldText 必须非空且唯一，多项不可重叠。版本不一致、匹配不存在或不唯一时整次修改失败，不猜位置。大文件的改动快照保存到磁盘并可安全撤回。',
+  description: '对已有 UTF-8 文本文件做精确替换。使用同一文件最近一次 read_file / write_file / edit_file 成功返回的 expectedHash；已经掌握原文时无需重复读取，不要计算或猜测 hash。原文不确定时先 read_file mode="exact" 获取无行号 content；正文必须逐字匹配，保留 CRLF、Unicode 和 BOM，不自动格式化。所有 edits 都匹配同一原文件：每个 oldText 必须非空且唯一，多项不可重叠。版本不一致、匹配不存在或不唯一时整次修改失败，不猜位置。大文件的改动快照保存到磁盘并可安全撤回。',
   parameters: {
     type: 'object', additionalProperties: false,
     properties: {
-      path: { type: 'string', minLength: 1, description: '目标文件路径，使用 read_file 返回的 path。' },
-      expectedHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$', description: 'read_file 返回的完整文件字节 SHA-256 版本，不是片段 hash。' },
+      path: { type: 'string', minLength: 1, description: '目标文件路径，使用同一文件最近一次 read_file / write_file / edit_file 返回的 path。' },
+      expectedHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$', description: '同一文件最近一次 read_file / write_file / edit_file 成功返回的完整文件字节 SHA-256 版本；不是片段 hash，不要自行猜测。' },
       edits: { type: 'array', minItems: 1, description: '在同一原文件上同时定位；不使用前一个替换产生的内容定位后一个。', items: {
         type: 'object', additionalProperties: false,
         properties: {
@@ -83,7 +83,7 @@ export const editFileTool: Tool = {
         for (const match of [...matches].reverse()) updated = updated.slice(0, match.start) + match.newText + updated.slice(match.end)
         const afterBytes = Buffer.from(updated, 'utf8')
         if (afterBytes.toString('utf8') !== updated || afterBytes.includes(0)) return failure('EDIT_NOT_TEXT', 'Replacement must remain valid UTF-8 text without binary content.')
-        if (before.content.equals(afterBytes)) return { success: true, output: `No change: ${canonicalPath}\nexpectedHash: ${before.hash}`, metadata: { noChange: true, oldHash: before.hash, newHash: before.hash } }
+        if (before.content.equals(afterBytes)) return { success: true, output: `No change: ${canonicalPath}\nexpectedHash: ${before.hash}`, metadata: { path: canonicalPath, expectedHash: before.hash, noChange: true, oldHash: before.hash, newHash: before.hash } }
 
         // No await from the full-byte version read above through this write. In-process
         // editor writes, agent writes and reverts also hold this canonical path lock.
@@ -109,7 +109,7 @@ export const editFileTool: Tool = {
         }
         const change = await commitWriteChange(ctx, args.path, canonicalPath, snapshot)
         return { success: true, output: `Edited ${canonicalPath}: ${matches.length} replacement(s)\nexpectedHash: ${hashFileContent(afterBytes)}`,
-          change, metadata: { oldHash: before.hash, newHash: change.newHash, replacements: matches.length, fileMutationApplied: true, rollbackAvailable: !change.truncated } }
+          change, metadata: { path: canonicalPath, expectedHash: change.newHash, oldHash: before.hash, newHash: change.newHash, replacements: matches.length, fileMutationApplied: true, rollbackAvailable: !change.truncated } }
       })
     } catch (error) {
       if (error instanceof ChangeRecordingError) return failure('EDIT_RECORD_FAILED', error.message, { fileMutationApplied: true, rollbackAvailable: false })

@@ -63,6 +63,38 @@ const usage = (frames: string[]) => frames.filter(frame => frame.startsWith('\x0
   .map(frame => JSON.parse(frame.slice('\x00__usage__'.length)))
 
 describe('D5 provider streaming and partial evidence', () => {
+  it.each(['', 'private reasoning only'])('keeps empty-output failures diagnosable without claiming success: %s', async reasoning => {
+    const f = fixture()
+    f.llm.stream = vi.fn(async function* () {
+      if (reasoning) yield { done: false, reasoningContent: reasoning }
+      yield { done: true, model: 'actual-empty-model', finishReason: 'stop' as const, promptTokens: 17, completionTokens: reasoning ? 5 : 0 }
+    })
+    const frames = await f.run({}, 'private user request')
+    expect(f.llm.stream).toHaveBeenCalledTimes(1)
+    expect(f.ctx.tools.execute).not.toHaveBeenCalled()
+    expect(body(frames)).toBe('')
+    expect(f.outcomes).toEqual([expect.objectContaining({
+      status: 'failed', stopReason: 'empty_output',
+      error: { code: 'EMPTY_OUTPUT', message: expect.stringContaining(reasoning ? '仅返回了思考内容' : '未收到模型的最终回答或工具调用'), retryable: false },
+    })])
+    const assistant = f.history.filter(message => message.role === 'assistant')
+    expect(assistant).toHaveLength(1)
+    const responseDiagnostics = {
+      provider: 'test', modelId: 'actual-empty-model', finishReason: 'stop', chunkCount: reasoning ? 2 : 1,
+      terminalChunkReceived: true, contentCharacters: 0, reasoningCharacters: reasoning.length,
+      promptTokens: 17, completionTokens: reasoning ? 5 : 0,
+    }
+    expect(assistant[0]).toMatchObject({
+      id: 'assistant-1', content: '', reasoningContent: reasoning,
+      usage: { promptTokens: 17, completionTokens: reasoning ? 5 : 0 },
+      metadata: { rootRunId: 'root-1', status: 'failed', stopReason: 'empty_output', responseDiagnostics },
+    })
+    expect(f.ctx.logger.warn).toHaveBeenCalledWith({ rootRunId: 'root-1', sessionId: 'session', ...responseDiagnostics }, 'Model response had no final answer')
+    expect(JSON.stringify(vi.mocked(f.ctx.logger.warn).mock.calls)).not.toContain('private')
+    expect(usage(frames).at(-1)).toMatchObject({ modelId: 'actual-empty-model', promptTokens: 17, completionTokens: reasoning ? 5 : 0 })
+    expect(f.outcomes.some(outcome => outcome.output)).toBe(false)
+  })
+
   it('delivers each body delta before the provider can complete its deferred response', async () => {
     const f = fixture()
     const releaseProvider = deferred()

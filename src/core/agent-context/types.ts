@@ -8,7 +8,7 @@ import type { RunObserver, SubagentEvent } from '../subagent/types.js'
 // ─── JSON Schema ───────────────────────────────────────────────────────────────
 
 export interface JSONSchema {
-  type: string
+  type?: string | string[]
   properties?: Record<string, JSONSchema>
   required?: string[]
   description?: string

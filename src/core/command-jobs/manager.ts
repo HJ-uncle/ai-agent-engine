@@ -5,11 +5,10 @@ import type { Client } from '@libsql/client'
 import { getDb } from '../../storage/sqlite/db.js'
 import { throwIfAborted } from '../utils/abort.js'
 import { stopCommandProcessTree } from './process-tree.js'
+import { createCommandLaunchPlan } from './launch-plan.js'
 import { COMMAND_OUTPUT_BYTES, COMMAND_PAGE_BYTES, commandJobIsTerminal,
   type CommandJobLaunch, type CommandJobOutput, type CommandJobScope, type CommandJobSnapshot, type CommandOutputEntry } from './types.js'
 
-const WIN_BUILTINS = new Set(['dir', 'type', 'copy', 'move', 'del', 'rd', 'md', 'mkdir', 'rmdir', 'ren', 'rename',
-  'cls', 'echo', 'set', 'cd', 'pushd', 'popd', 'title', 'ver', 'vol', 'path', 'assoc', 'ftype', 'mklink'])
 const schemas = new WeakMap<Client, Promise<void>>()
 
 interface StoredJob { tenantId: string; job: CommandJobSnapshot; entries: CommandOutputEntry[] }
@@ -296,9 +295,10 @@ export class CommandJobManager {
       if (this.stopping || admission.cancelled) throw new Error('Command service or owner is stopping')
       this.active.set(job.jobId, live)
       const windows = process.platform === 'win32'
-      const useCmd = windows && (WIN_BUILTINS.has(input.command.toLowerCase()) || /\.(cmd|bat)$/i.test(input.command))
-      const child = spawn(useCmd ? 'cmd.exe' : input.command, useCmd ? ['/c', input.command, ...input.args] : input.args,
-        { cwd: input.cwd, shell: false, windowsHide: true, detached: !windows, env: input.env, stdio: ['ignore', 'pipe', 'pipe'] })
+      const plan = createCommandLaunchPlan(input.command, input.args, input.cwd, input.env)
+      const child = spawn(plan.command, plan.args,
+        { cwd: input.cwd, shell: false, windowsHide: true, windowsVerbatimArguments: plan.windowsVerbatimArguments,
+          detached: !windows, env: input.env, stdio: ['ignore', 'pipe', 'pipe'] })
       live.child = child
       const stdout = new StringDecoder('utf8')
       const stderr = new StringDecoder('utf8')

@@ -86,7 +86,7 @@ function messageToAnthropic(
         if (parsed.dataUrl) {
           // 如果是 smart_read 的图片 JSON 结果，转换成多模态格式
           toolContent = [
-            { type: 'text', text: `图片文件 ${parsed.filename} 已读取：` },
+            { type: 'text', text: `图片文件 ${parsed.filename} 已读取：${typeof parsed.description === 'string' ? '\n' + parsed.description.slice(0, 1024) : ''}` },
             { 
               type: 'image', 
               source: { 
@@ -407,93 +407,142 @@ export class AnthropicAdapter implements LLMAdapter {
       streamParams['tools'] = options.tools.map(toolToAnthropic)
     }
 
-    // 流式 tool_use 组装：content_block_start 带 id/name，
-    // 后续 input_json_delta 追加参数，content_block_stop 时上报
-    const pendingTools = new Map<
-      number,
-      { id: string; name: string; args: string }
-    >()
-
-    // Use the messages.stream() helper available in v0.20
-    let stream: ReturnType<(typeof createStream)>
-    const createStream = () => (this.client.messages as unknown as {
-      stream: (params: Record<string, unknown>, requestOptions: { signal?: AbortSignal }) => {
-        abort(): void
-        [Symbol.asyncIterator](): AsyncIterator<{
-          type: string
-          delta?: { type: string; text?: string }
-        }>
-        finalMessage(): Promise<{
-          usage: { 
-            input_tokens: number; 
-            output_tokens: number;
-            cache_creation_input_tokens?: number;
-            cache_read_input_tokens?: number;
-          }
-          model: string
-          stop_reason: string | null
-        }>
+    type ContentBlock = {
+      type: string; text?: string; thinking?: string; reasoning?: string; reasoning_content?: string
+      id?: string; name?: string; input?: unknown; [key: string]: unknown
+    }
+    type Usage = { input_tokens: number; output_tokens: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number }
+    type StreamEvent = {
+      type: string; index?: number; content_block?: ContentBlock
+      delta?: ContentBlock & { partial_json?: string; stop_reason?: string | null }
+      message?: { content?: ContentBlock[]; usage?: Usage }; usage?: Usage
+    }
+    type Stream = AsyncIterable<StreamEvent> & {
+      abort(): void
+      on?(name: 'streamEvent', listener: (event: StreamEvent) => void): unknown
+      off?(name: 'streamEvent', listener: (event: StreamEvent) => void): unknown
+      finalMessage(): Promise<{ content?: ContentBlock[]; usage: Usage; model: string; stop_reason: string | null }>
+    }
+    type BlockState = {
+      type: string; content: string; reasoning: string
+      tool?: { id: string; name: string; input?: unknown; args: string; emitted: boolean }
+    }
+    const blocks = new Map<number, BlockState>()
+    const startSnapshots = new WeakMap<StreamEvent, StreamEvent>()
+    // SDK 0.20 mutates block-start objects while accumulating later deltas.
+    // Capture them synchronously before its async iterator can see the final text.
+    const snapshotStart = (event: StreamEvent) => {
+      if (event.type === 'content_block_start' || event.type === 'message_start') {
+        startSnapshots.set(event, structuredClone(event))
       }
-    }).stream(streamParams, { signal: options?.signal })
+    }
+    const hiddenText = (block: ContentBlock): string => {
+      const kind = block.type.replace(/_delta$/, '')
+      if (kind === 'redacted_thinking') return ''
+      const custom = options?.responseThinkingField
+      const customKind = custom?.replace(/_delta$/, '')
+      if (!['thinking', 'reasoning', 'reasoning_content'].includes(kind) && kind !== customKind) return ''
+      // Legacy configurations may name either the block field or its delta event.
+      const value = (custom && kind === customKind ? block[custom] ?? block[customKind!] : undefined)
+        ?? block.thinking ?? block.reasoning_content ?? block.reasoning
+      return typeof value === 'string' ? value : ''
+    }
+    const suffix = (current: string, snapshot: string): string => {
+      if (snapshot.startsWith(current)) return snapshot.slice(current.length)
+      // Older SDKs do not accumulate every newer block type in finalMessage().
+      if (current.startsWith(snapshot)) return ''
+      throw Object.assign(new Error('Anthropic content snapshot conflicts with streamed content'), { code: 'INVALID_STREAM', retryable: false })
+    }
+    function* acceptBlock(index: number, block: ContentBlock): Generator<LLMStreamChunk> {
+      let state = blocks.get(index)
+      if (!state) {
+        state = { type: block.type, content: '', reasoning: '' }
+        blocks.set(index, state)
+      }
+      if (state.type !== block.type) throw Object.assign(new Error('Anthropic content block changed type'), { code: 'INVALID_STREAM', retryable: false })
+      if (block.type === 'text' && typeof block.text === 'string') {
+        const missing = suffix(state.content, block.text)
+        if (missing) { state.content += missing; yield { content: missing, done: false } }
+      } else if (block.type === 'tool_use') {
+        state.tool ??= { id: block.id ?? '', name: block.name ?? '', input: block.input, args: '', emitted: false }
+        state.tool.id ||= block.id ?? ''
+        state.tool.name ||= block.name ?? ''
+        if (state.tool.input === undefined) state.tool.input = block.input
+      } else {
+        const missing = suffix(state.reasoning, hiddenText(block))
+        if (missing) { state.reasoning += missing; yield { reasoningContent: missing, done: false } }
+      }
+    }
+    function* finishTool(index: number): Generator<LLMStreamChunk> {
+      const tool = blocks.get(index)?.tool
+      if (!tool || tool.emitted) return
+      if (!tool.id || !tool.name) throw Object.assign(new Error('Anthropic tool block is missing its id or name'), { code: 'INVALID_STREAM', retryable: false })
+      tool.emitted = true
+      yield { content: '', done: false, toolCalls: [{ id: tool.id, name: tool.name,
+        args: tool.args || JSON.stringify(tool.input ?? {}), index }] }
+    }
 
+    let stream: Stream | undefined
     const observed = await observeStreamRequest(async () => {
-      stream = createStream()
+      stream = (this.client.messages as unknown as {
+        stream(params: Record<string, unknown>, requestOptions: { signal?: AbortSignal }): Stream
+      }).stream(streamParams, { signal: options?.signal })
+      stream.on?.('streamEvent', snapshotStart)
       return stream
-    }, { ...options, model: String(streamParams.model), requestInputTokenEstimate: Math.max(options?.requestInputTokenEstimate ?? 0, estimateTokens(JSON.stringify({ messages: streamParams.messages, tools: streamParams.tools, system: streamParams.system }))) }, this.provider, String(streamParams.model), (event, previous) => {
-      const frame = event as {type: string; message?: {usage?: unknown}; usage?: unknown}
-      return anthropicUsage(frame.type === 'message_start' ? frame.message?.usage : frame.usage, previous)
-    })
+    }, { ...options, model: String(streamParams.model), requestInputTokenEstimate: Math.max(options?.requestInputTokenEstimate ?? 0, estimateTokens(JSON.stringify({ messages: streamParams.messages, tools: streamParams.tools, system: streamParams.system }))) }, this.provider, String(streamParams.model),
+    (event, previous) => anthropicUsage(event.type === 'message_start' ? event.message?.usage : event.usage, previous),
+    event => event.type === 'message_stop')
     try {
-    for await (const event of observed as any) {
-      if (event.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
-        pendingTools.set(event.index, {
-          id: event.content_block.id ?? '',
-          name: event.content_block.name ?? '',
-          args: ''
-        })
-      } else if (event.type === 'content_block_delta') {
-        if (event.delta?.type === 'text_delta' && event.delta.text) {
-          yield { content: event.delta.text, done: false }
-        } else if ((event.delta?.type === 'thinking_delta' || event.delta?.type === options?.responseThinkingField) && (event.delta.thinking || event.delta[options?.responseThinkingField || 'thinking'])) {
-          yield { reasoningContent: event.delta.thinking || event.delta[options?.responseThinkingField || 'thinking'], done: false }
-        } else if (event.delta?.type === 'input_json_delta') {
-          const tool = pendingTools.get(event.index)
-          if (tool && event.delta.partial_json) tool.args += event.delta.partial_json
-        }
-      } else if (event.type === 'content_block_stop' && pendingTools.has(event.index)) {
-        const tool = pendingTools.get(event.index)!
-        pendingTools.delete(event.index)
-        if (tool.id && tool.name) {
-          yield {
-            content: '',
-            done: false,
-            toolCalls: [
-              {
-                id: tool.id,
-                name: tool.name,
-                args: tool.args || '{}',
-                index: event.index
-              }
-            ]
+      for await (const originalEvent of observed) {
+        const event = startSnapshots.get(originalEvent) ?? originalEvent
+        if (event.type === 'message_start') {
+          for (const [index, block] of (event.message?.content ?? []).entries()) yield* acceptBlock(index, block)
+        } else if (event.type === 'content_block_start' && event.content_block) {
+          yield* acceptBlock(event.index ?? 0, event.content_block)
+        } else if (event.type === 'content_block_delta' && event.delta) {
+          const index = event.index ?? 0
+          const delta = event.delta
+          const state = blocks.get(index)
+          if (!state) throw Object.assign(new Error('Anthropic content delta arrived before its block'), { code: 'INVALID_STREAM', retryable: false })
+          if (delta.type === 'text_delta' && delta.text) {
+            state.content += delta.text
+            yield { content: delta.text, done: false }
+          } else if (delta.type === 'input_json_delta') {
+            if (state.tool && delta.partial_json) state.tool.args += delta.partial_json
+          } else {
+            const reasoning = hiddenText(delta)
+            if (reasoning) { state.reasoning += reasoning; yield { reasoningContent: reasoning, done: false } }
           }
+        } else if (event.type === 'content_block_stop') {
+          yield* finishTool(event.index ?? 0)
         }
       }
-    }
 
-    const finalMessage = await stream!.finalMessage()
-    const cacheHitTokens = finalMessage.usage.cache_read_input_tokens
-    const cacheMissTokens = finalMessage.usage.cache_creation_input_tokens
-
-    yield {
-      done: true,
-      finishReason: finalMessage.stop_reason === 'max_tokens' ? 'length' : finalMessage.stop_reason === 'tool_use' ? 'tool_calls' : 'stop',
-      promptTokens: anthropicUsage(finalMessage.usage)!.promptTokens,
-      completionTokens: finalMessage.usage.output_tokens,
-      model: finalMessage.model,
-      ...(cacheHitTokens != null ? { cacheHitTokens } : {}),
-      ...(cacheMissTokens != null ? { cacheMissTokens } : {}),
+      const finalMessage = await stream!.finalMessage()
+      const reason = finalMessage.stop_reason
+      // A missing/unknown terminal reason must not turn a truncated stream into success.
+      if (!reason || !['end_turn', 'stop_sequence', 'tool_use', 'max_tokens', 'refusal'].includes(reason)) {
+        throw Object.assign(new Error(`Anthropic response has no supported completion reason (${reason ?? 'missing'})`), {
+          code: reason ? 'UNSUPPORTED_STOP_REASON' : 'INCOMPLETE_STREAM', retryable: !reason,
+        })
+      }
+      for (const [index, block] of (finalMessage.content ?? []).entries()) yield* acceptBlock(index, block)
+      for (const index of blocks.keys()) yield* finishTool(index)
+      const cacheHitTokens = finalMessage.usage.cache_read_input_tokens
+      const cacheMissTokens = finalMessage.usage.cache_creation_input_tokens
+      yield {
+        done: true,
+        finishReason: reason === 'max_tokens' ? 'length' : reason === 'tool_use' ? 'tool_calls' : 'stop',
+        promptTokens: anthropicUsage(finalMessage.usage)!.promptTokens,
+        completionTokens: finalMessage.usage.output_tokens,
+        model: finalMessage.model,
+        ...(cacheHitTokens != null ? { cacheHitTokens } : {}),
+        ...(cacheMissTokens != null ? { cacheMissTokens } : {}),
+      }
+    } finally {
+      stream?.off?.('streamEvent', snapshotStart)
+      stream?.abort()
     }
-    } finally { stream!.abort() }
   }
 
   countTokens(content: string | any[]): number {

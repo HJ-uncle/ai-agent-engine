@@ -130,7 +130,7 @@ export const readFileTool: Tool = {
 export const writeFileTool: Tool = {
   name: 'write_file',
   displayName: '写入文件',
-  description: '将数据写入指定格式的文件。支持文本、JSON、Excel (xlsx) 和 Word (docx)。\n\n### 🎨 万能美化指南 (AI 必读)\n- **完全样式开放**: 你可以通过 `headerBg`, `primaryColor`, `font`, `rowAlternateBg` 等参数完全控制文档配色。如果用户说“我要亮紫色风格”，请大胆设置这些颜色。\n- **图片支持**: 支持在 Excel (`images`) 或 Word (`children` 中传 `type: "image"`) 插入图片。只需提供图片路径。\n- **默认专业度**: 如果用户没给指定颜色，默认使用 `theme: "business"` 即可获得深蓝商务风。',
+  description: '将数据写入指定格式的文件。支持文本、JSON、Excel (xlsx) 和 Word (docx)。成功返回实际落盘文件的 expectedHash；后续 edit_file 可直接使用这个版本及已知原文，不要自行计算或猜测 hash。格式化后的 UTF-8 文本原文不确定时先 read_file mode="exact"。\n\n### 🎨 万能美化指南 (AI 必读)\n- **完全样式开放**: 你可以通过 `headerBg`, `primaryColor`, `font`, `rowAlternateBg` 等参数完全控制文档配色。如果用户说“我要亮紫色风格”，请大胆设置这些颜色。\n- **图片支持**: 支持在 Excel (`images`) 或 Word (`children` 中传 `type: "image"`) 插入图片。只需提供图片路径。\n- **默认专业度**: 如果用户没给指定颜色，默认使用 `theme: "business"` 即可获得深蓝商务风。',
   parameters: {
     type: 'object',
     properties: {
@@ -212,8 +212,11 @@ export const writeFileTool: Tool = {
           }
         }
         const change = await commitWriteChange(ctx, filePath, canonicalPath, snapshot)
-        return { success: true, output: `Successfully written to ${filePath}`, change,
-          ...(usedContentAlias ? { metadata: { compatibilityAlias: 'content' } } : {}) }
+        // Return the recorded on-disk version: format handlers may change the input bytes.
+        // Metadata alone is not sent to the model in the next tool-result message.
+        return { success: true, output: `Successfully written to ${filePath}\npath: ${canonicalPath}\nexpectedHash: ${change.newHash}`, change,
+          metadata: { path: canonicalPath, expectedHash: change.newHash, fileMutationApplied: true, rollbackAvailable: !change.truncated,
+            ...(usedContentAlias ? { compatibilityAlias: 'content' } : {}) } }
       })
     } catch (err) {
       return {

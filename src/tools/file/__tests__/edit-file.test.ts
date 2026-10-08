@@ -9,7 +9,7 @@ import type { AgentContext } from '../../../core/agent-context/index.js'
 import { clearSecurityMode, setSecurityMode } from '../../../security/policy-engine.js'
 import { hashFileContent, withFileLocks } from '../../../shared/file-version.js'
 import { editFileTool } from '../edit-file.js'
-import { readFileTool } from '../super-file-tool.js'
+import { readFileTool, writeFileTool } from '../super-file-tool.js'
 import { MAX_FILE_SIZE } from '../constants.js'
 
 let root: string
@@ -51,6 +51,73 @@ function deferred() {
 }
 
 describe('D6 exact text edits with full byte versions', () => {
+  it('chains write and edits using the model-visible versions without a redundant read', async () => {
+    const file = path.join(root, '.ae', 'tmp', 'test-gomoku.mjs')
+    const content = '\uFEFFconst 标题 = "旧😀";\r\nconst value = 1;\r\n'
+    const written = await writeFileTool.execute({ path: file, data: content }, ctx)
+    expect(written.success).toBe(true)
+    const version = written.output.match(/^expectedHash: (sha256:[a-f0-9]{64})$/m)?.[1]
+    expect(version).toBe(hashFileContent(fs.readFileSync(file)))
+    expect(written.metadata).toMatchObject({ path: file, expectedHash: version, fileMutationApplied: true })
+
+    const edited = await editFileTool.execute({ path: file, expectedHash: version,
+      edits: [{ oldText: '"旧😀"', newText: '"新✨"' }] }, ctx)
+    expect(edited.success).toBe(true)
+    const nextVersion = edited.output.match(/^expectedHash: (sha256:[a-f0-9]{64})$/m)?.[1]
+    expect(nextVersion).toBe(hashFileContent(fs.readFileSync(file)))
+    expect(edited.metadata).toMatchObject({ path: file, expectedHash: nextVersion })
+    expect(nextVersion).not.toBe(version)
+
+    const second = await editFileTool.execute({ path: file, expectedHash: nextVersion,
+      edits: [{ oldText: 'value = 1', newText: 'value = 2' }] }, ctx)
+    expect(second.success).toBe(true)
+    expect(fs.readFileSync(file)).toEqual(Buffer.from('\uFEFFconst 标题 = "新✨";\r\nconst value = 2;\r\n'))
+    expect(await store.list(ctx.tenantId, ctx.sessionId)).toHaveLength(3)
+  })
+
+  it('returns the actual formatted file version rather than hashing write input', async () => {
+    const file = path.join(root, 'settings.json')
+    const data = { title: '标题', value: 1 }
+    const written = await writeFileTool.execute({ path: file, data }, ctx)
+    expect(written.success).toBe(true)
+    const actual = fs.readFileSync(file)
+    expect(actual.toString('utf8')).toBe(JSON.stringify(data, null, 2))
+    const version = written.output.match(/^expectedHash: (sha256:[a-f0-9]{64})$/m)?.[1]
+    expect(version).toBe(hashFileContent(actual))
+    expect(version).not.toBe(hashFileContent(JSON.stringify(data)))
+    expect(written.change).toMatchObject({ newHash: version })
+    const edited = await editFileTool.execute({ path: file, expectedHash: version,
+      edits: [{ oldText: '"value": 1', newText: '"value": 2' }] }, ctx)
+    expect(edited.success).toBe(true)
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ title: '标题', value: 2 })
+  })
+
+  it('rejects external changes after write even if the expected replacement still matches', async () => {
+    const file = path.join(root, 'versioned.mjs')
+    const written = await writeFileTool.execute({ path: file, data: 'const value = 1;\n// original\n' }, ctx)
+    expect(written.success).toBe(true)
+    const expectedHash = written.output.match(/^expectedHash: (sha256:[a-f0-9]{64})$/m)?.[1]
+    fs.writeFileSync(file, 'const value = 1;\n// user changes\n')
+    const edited = await editFileTool.execute({ path: file, expectedHash,
+      edits: [{ oldText: 'value = 1', newText: 'value = 2' }] }, ctx)
+    expect(edited).toMatchObject({ success: false, error: 'EDIT_VERSION_CONFLICT',
+      metadata: { expectedHash, fileMutationApplied: false } })
+    expect(fs.readFileSync(file, 'utf8')).toBe('const value = 1;\n// user changes\n')
+    expect(await store.list(ctx.tenantId, ctx.sessionId)).toHaveLength(1)
+  })
+
+  it('still rejects incorrect original text with a current write version', async () => {
+    const file = path.join(root, 'exact.mjs')
+    const written = await writeFileTool.execute({ path: file, data: 'const value = 1;\n' }, ctx)
+    expect(written.success).toBe(true)
+    const expectedHash = written.output.match(/^expectedHash: (sha256:[a-f0-9]{64})$/m)?.[1]
+    const edited = await editFileTool.execute({ path: file, expectedHash,
+      edits: [{ oldText: 'const value = 999;', newText: 'const value = 2;' }] }, ctx)
+    expect(edited).toMatchObject({ success: false, error: 'EDIT_NO_MATCH', metadata: { fileMutationApplied: false } })
+    expect(fs.readFileSync(file, 'utf8')).toBe('const value = 1;\n')
+    expect(await store.list(ctx.tenantId, ctx.sessionId)).toHaveLength(1)
+  })
+
   it('edits JSON without formatting and records the root identity and exact bytes for successful rollback', async () => {
     const original = '{ "保留":  "值", "target": 1 }\r\n'
     const { file, expectedHash } = seed(original, 'settings.json')

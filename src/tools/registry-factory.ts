@@ -36,6 +36,7 @@ import { createAgentTools } from './agent/index.js'
 import type { InlineAgent } from './agent/index.js'
 import { lspDiagnoseTool } from './lsp/index.js'
 import { codegraphTool } from './codegraph/index.js'
+import { browserTools, BROWSER_READONLY_TOOLS } from './browser/browser-tools.js'
 import type { ExternalSkill } from '../skills/external-loader.js'
 import {
   resolveDefaultAllowedTools,
@@ -140,7 +141,8 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   const registerBuiltin = (tool: Tool) => {
     const readOnly = [readFileTool, listFilesTool, globTool, grepTool, getCurrentContextTool,
       ...commandJobTools.filter(candidate => candidate.name === 'command_output')].includes(tool)
-    const mode = subagentTools.includes(tool) ? 'subagent' : readOnly ? 'readonly' : 'serial'
+    const browserReadOnly = browserTools.includes(tool) && BROWSER_READONLY_TOOLS.has(tool.name)
+    const mode = subagentTools.includes(tool) ? 'subagent' : readOnly || browserReadOnly ? 'readonly' : 'serial'
     registry.register(trustBuiltinTool(tool, mode))
     if (registry.has(tool.name)) builtinTools.push(tool.name)
   }
@@ -333,6 +335,8 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
 
   // 19. 代码图查询工具（codegraph：只读查询符号/调用关系/影响面；索引缺失仅提示）
   if (shouldRegister('codegraph')) registerBuiltin(codegraphTool)
+
+  if (profile === 'code') browserTools.forEach(tool => { if (shouldRegister(tool.name)) registerBuiltin(tool) })
 
   // ── Superpower 自检 ────────────────────────────────────────────────────
   // 验证 CORE 工具名与 registry 实际注册保持一致，避免 OFF 模式下 Agent

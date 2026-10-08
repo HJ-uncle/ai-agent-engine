@@ -30,7 +30,7 @@ function renderContentPreview(content: unknown): string {
 export const getCurrentContextTool: Tool = {
   name: 'get_current_context',
   displayName: '获取当前上下文',
-  description: '获取当前会话上下文（会话ID、工作区、记忆、系统状态）。可选返回工具列表和历史摘要。',
+  description: '获取当前会话上下文（会话ID、工作区、运行平台、工具能力、记忆、系统状态）。可选返回工具列表和历史摘要。',
   parameters: {
     type: 'object',
     properties: {
@@ -74,9 +74,30 @@ export const getCurrentContextTool: Tool = {
           : []),
       ]
 
+      // 平台来自当前引擎，能力来自本次注册表，不能把引擎 Node 误报为 PATH 中的程序。
+      const tools = ctx.tools.list()
+      const toolNames = new Set(tools.map(tool => tool.name))
+      contextInfo.push('', '### 运行环境与工具约定',
+        `- **引擎平台**: ${process.platform} / ${process.arch}`,
+        `- **引擎 Node.js**: ${process.version}（仅表示引擎运行时；PATH 中的程序需通过命令结果确认）`,
+      )
+      if (toolNames.has('execute_cmd')) {
+        contextInfo.push(
+          '- **命令参数**: command 只填程序名或可执行文件完整路径；args 是逐项参数，不添加 shell 外层引号。',
+          '- **示例**: {"command":"node","args":["--version"]}；执行脚本用 {"command":"node","args":[".ae/tmp/check.cjs"]}。不要把 "node --version" 整行放进 command。',
+          '- **失败判断**: 启动失败检查程序和参数；非零退出先读 stdout/stderr 与退出码，区分测试断言、脚本错误和工具故障。',
+        )
+      }
+      if (toolNames.has('browser_tabs')) {
+        contextInfo.push('- **浏览器**: 已注册 browser_tabs；先调用它确认当前会话的客户端连接和可用标签，注册不代表浏览器已连接。')
+      } else {
+        contextInfo.push('- **浏览器**: 本次未注册 browser_tabs；当前上下文未确认浏览器操作能力，不能声称已做页面交互验证。')
+      }
+      const diagnoseTool = tools.find(tool => tool.name === 'code_diagnose')
+      if (diagnoseTool?.description) contextInfo.push(`- **代码诊断范围**: ${diagnoseTool.description}`)
+
       // 获取工具列表
       if (includeTools) {
-        const tools = ctx.tools.list()
         contextInfo.push(``)
         contextInfo.push(`### 已注册工具 (${tools.length} 个)`)
         contextInfo.push(`| 工具名 | 描述 |`)

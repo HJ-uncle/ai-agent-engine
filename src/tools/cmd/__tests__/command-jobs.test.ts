@@ -48,7 +48,48 @@ describe('D7 command tools with real policy and processes', () => {
     expect(result.success).toBe(false)
     expect(result.output).toContain(JSON.stringify({ cwd: fs.realpathSync(fixture), args }))
     expect(result.output).toContain('stderr evidence')
+    expect(result.output).toContain('[COMMAND_EXIT_FAILED] status=failed; exitCode=3; signal=none')
     expect(result.metadata).toMatchObject({ exitCode: 3, commandJob: { status: 'failed', background: false, exitCode: 3 } })
+  })
+
+  it.each(['node -v', 'where python', 'cmd /c "node -v & python --version"'])('rejects an entire shell line with repair instructions before spawning: %s', async command => {
+    const start = vi.spyOn(commandJobs, 'start')
+    const result = await cmdTool.execute({ command }, ctx)
+    expect(result).toMatchObject({ success: false, error: 'COMMAND_INVALID_ARGUMENTS' })
+    expect(result.output).toContain('{"command":"node","args":["-v"]}')
+    expect(result.output).toContain('无需嵌套 cmd')
+    expect(start).not.toHaveBeenCalled()
+  })
+
+  it('allows a real executable path containing spaces through the policy preflight', async () => {
+    const executable = script('runtime with spaces.exe', 'fixture')
+    expect(await cmdTool.preflight!({ command: executable, args: ['-v'] }, ctx)).toBeUndefined()
+  })
+
+  it.skipIf(process.platform !== 'win32')('rejects multiline batch arguments before policy approval or process launch', async () => {
+    const batch = script('multiline.cmd', '@echo off\r\necho should-not-run > unexpected.txt')
+    const start = vi.spyOn(commandJobs, 'start')
+    const policy = vi.spyOn(policyEngine, 'evaluate')
+    const result = await cmdTool.execute({ command: batch, args: ['first\nsecond'] }, ctx)
+    expect(result).toMatchObject({ success: false, error: 'COMMAND_INVALID_ARGUMENTS' })
+    expect(result.output).toContain('直接调用 node/python')
+    expect(start).not.toHaveBeenCalled()
+    expect(policy).not.toHaveBeenCalled()
+    expect(fs.existsSync(path.join(fixture, 'unexpected.txt'))).toBe(false)
+  })
+
+  it.each(['standard', 'safe'] as const)('preserves PATH/PATHEXT without leaking unrelated environment in %s mode', async mode => {
+    vi.stubEnv('PATHEXT', '.EXE;.CMD')
+    vi.stubEnv('AETHER_COMMAND_PRIVATE_FIXTURE', 'must-not-enter-command')
+    setSecurityMode(ctx.tenantId, ctx.sessionId, mode)
+    const start = vi.spyOn(commandJobs, 'start')
+    const file = script('environment.cjs', 'process.stdout.write(JSON.stringify({pathext:process.env.PATHEXT,privateValue:process.env.AETHER_COMMAND_PRIVATE_FIXTURE??null}))')
+    const approved = { ...ctx, approvedToolCallId: ctx.currentToolCallId }
+    const result = await cmdTool.execute({ command: process.execPath, args: [file] }, approved)
+    expect(result.success).toBe(true)
+    expect(JSON.parse(result.output)).toEqual({ pathext: '.EXE;.CMD', privateValue: null })
+    expect(start.mock.calls.at(-1)?.[0].env).toMatchObject({ PATH: process.env.PATH, PATHEXT: '.EXE;.CMD' })
+    expect(start.mock.calls.at(-1)?.[0].env).not.toHaveProperty('AETHER_COMMAND_PRIVATE_FIXTURE')
   })
 
   it('returns a background launch before completion, then reads its persisted success and output', async () => {

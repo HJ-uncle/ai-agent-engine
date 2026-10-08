@@ -34,6 +34,7 @@ import { flowRoutes } from './routes/flows/index.js'
 import { skillImportRoutes } from './routes/skill-imports.js'
 import { utilityRoutes } from './routes/utility.js'
 import { commandJobRoutes } from './routes/command-jobs.js'
+import { browserRoutes } from './routes/browser.js'
 import { commandJobs } from '../../core/command-jobs/index.js'
 import { closeKnowledgeDb } from '../../storage/knowledge/db.js'
 import { cronScheduler } from '../../scheduler/cron-scheduler.js'
@@ -122,6 +123,7 @@ export async function buildServer() {
     await api.register(skillImportRoutes)
     await api.register(utilityRoutes)
     await api.register(commandJobRoutes)
+    await api.register(browserRoutes)
   }, { prefix: '/api/v1' })
 
   // Health and metrics at root level

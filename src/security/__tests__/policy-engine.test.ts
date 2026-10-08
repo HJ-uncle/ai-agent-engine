@@ -30,27 +30,72 @@ describe('policy-engine evaluation and approval', () => {
     await policyEngine.resetDefaults()
   })
 
-  it('allows approved commands even if they are high risk', async () => {
+  it('hard-blocks delete commands in every mode and redirects to delete_file', async () => {
     const tenantId = 'test-tenant'
     const sessionId = 'test-session'
     setSecurityMode(tenantId, sessionId, 'safe')
 
-    // Normally rm triggers ask in safe mode
+    // 纯命令名拦截：不触发注入检测，safe 下也必须直接 deny（而非 ask）
+    for (const [command, args] of [
+      ['rm', ['foo']],
+      ['del', ['foo.txt']],
+      ['erase', ['foo.txt']],
+      ['rmdir', ['foo']],
+      ['unlink', ['foo.txt']],
+      ['C:\\tools\\bin\\rm.exe', ['foo']],
+    ] as const) {
+      const decision = await policyEngine.evaluate({ command, args: [...args], tenantId, sessionId })
+      expect(decision.action).toBe('deny')
+      expect(decision.reason).toContain('delete_file')
+    }
+
+    // 注入敏感的删除形式（; 等元字符会在 safe 下先被注入检测拦截，ask/deny 均不执行）：
+    // 在 full-access 下注入检测跳过，删除硬拦截必须兜住
+    setSecurityMode(tenantId, sessionId, 'full-access')
+    for (const [command, args] of [
+      ['git', ['clean', '-fd']],
+      ['node', ['-e', "require('fs').rmSync('a', { recursive: true })"]],
+      ['python', ['-c', 'import shutil; shutil.rmtree("a")']],
+      ['Remove-Item', ['-Recurse', 'foo']],
+    ] as const) {
+      const decision = await policyEngine.evaluate({ command, args: [...args], tenantId, sessionId })
+      expect(decision.action).toBe('deny')
+      expect(decision.reason).toContain('delete_file')
+    }
+    setSecurityMode(tenantId, sessionId, 'safe')
+  })
+
+  it('delete commands stay blocked even after user approval and in full-access mode', async () => {
+    const tenantId = 'test-tenant'
+    const sessionId = 'test-session'
+    approveCommand(tenantId, sessionId, 'rm', ['-rf', 'foo'])
+    let decision = await policyEngine.evaluate({ command: 'rm', args: ['-rf', 'foo'], tenantId, sessionId, approved: true })
+    expect(decision.action).toBe('deny')
+
+    setSecurityMode(tenantId, sessionId, 'full-access')
+    decision = await policyEngine.evaluate({ command: 'rm', args: ['-rf', 'foo'], tenantId, sessionId })
+    expect(decision.action).toBe('deny')
+    setSecurityMode(tenantId, sessionId, 'safe')
+  })
+
+  it('allows approved non-delete commands even if they are high risk', async () => {
+    const tenantId = 'test-tenant'
+    const sessionId = 'test-session'
+    setSecurityMode(tenantId, sessionId, 'safe')
+
     let decision = await policyEngine.evaluate({
-      command: 'rm',
-      args: ['-rf', 'foo'],
+      command: 'taskkill',
+      args: ['/PID', '1234', '/F'],
       tenantId,
       sessionId
     })
     expect(decision.action).toBe('ask')
 
-    // Approve the command
-    approveCommand(tenantId, sessionId, 'rm', ['-rf', 'foo'])
+    approveCommand(tenantId, sessionId, 'taskkill', ['/PID', '1234', '/F'])
 
-    // Now it should be allowed
     decision = await policyEngine.evaluate({
-      command: 'rm',
-      args: ['-rf', 'foo'],
+      command: 'taskkill',
+      args: ['/PID', '1234', '/F'],
       tenantId,
       sessionId
     })

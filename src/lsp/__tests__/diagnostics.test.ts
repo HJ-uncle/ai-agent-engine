@@ -71,7 +71,34 @@ describe('diagnostic execution outcomes and concurrency', () => {
     expect(cache.size).toBe(0)
   })
 
+  it('gives HTML callers supported types and honest alternative validation boundaries', async () => {
+    const result = await lspDiagnoseTool.execute({
+      filePath: 'index.html', content: '<script>const broken = ;</script>',
+    }, {} as AgentContext)
+    expect(result).toMatchObject({ success: false, error: 'DIAGNOSTIC_UNSUPPORTED',
+      metadata: { code: 'DIAGNOSTIC_UNSUPPORTED', diagnosticStatus: 'unsupported', validationPerformed: false } })
+    expect(result.output).toContain('TypeScript (.ts/.tsx/.mts/.cts)')
+    expect(result.output).toContain('未执行静态诊断')
+    expect(result.output).toContain('classic/module')
+    expect(result.output).toContain('DOM、Canvas、布局或交互')
+    expect(result.output).not.toContain('诊断通过')
+    expect(typescriptAdapter.diagnose).not.toHaveBeenCalled()
+    expect(cache.size).toBe(0)
+  })
+
+  it('explains missing JavaScript configuration without promising a successful diagnostic', async () => {
+    const result = await lspDiagnoseTool.execute({ filePath: 'game.mjs', content: 'const x = 1' }, {} as AgentContext)
+    expect(result).toMatchObject({ success: false, error: 'DIAGNOSTIC_UNSUPPORTED',
+      metadata: { validationPerformed: false } })
+    expect(result.output).toContain('ESLint')
+    expect(result.output).toContain('先确认项目安装和配置')
+    expect(result.output).not.toContain('诊断通过')
+    expect(typescriptAdapter.diagnose).not.toHaveBeenCalled()
+    expect(cache.size).toBe(0)
+  })
+
   it('does not cache adapter failures or reuse an old success after the adapter disappears', async () => {
+
     vi.mocked(typescriptAdapter.diagnose).mockRejectedValueOnce(new Error('CLI crashed'))
     expect(await diagnoseFile('file.ts', options)).toMatchObject({ status: 'error', error: 'typescript: CLI crashed' })
     expect(cache.size).toBe(0)

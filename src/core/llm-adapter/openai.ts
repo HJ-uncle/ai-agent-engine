@@ -402,7 +402,7 @@ function messagesToOpenAI(
               const injectedMsg = {
                 role: 'user' as const,
                 content: [
-                  { type: 'text', text: `Here is the image file "${parsed.filename ?? 'image'}" you just read:` },
+                  { type: 'text', text: `Here is the image file "${parsed.filename ?? 'image'}" you just read:${typeof parsed.description === 'string' ? '\n' + parsed.description.slice(0, 1024) : ''}` },
                   { type: 'image_url', image_url: { url: parsed.dataUrl } },
                 ] as OpenAI.Chat.ChatCompletionContentPart[],
               }

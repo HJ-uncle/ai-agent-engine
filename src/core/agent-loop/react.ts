@@ -6,40 +6,13 @@ import type { Message, ToolResult } from '../agent-context/index.js'
 import { estimateTokens } from '../utils/tokens.js'
 import { v4 as uuidv4 } from 'uuid'
 import { applyOSMMultiplier, getOSMCompressRatio } from '../osm.js'
+import { getCodeToolOutputMaxChars, getToolOutputMaxChars } from './tool-output-limit.js'
 import { repairJson } from '../utils/json.js'
 import { TodoStore } from '../../storage/todo/index.js'
 import type { RunOutcome } from '../subagent/types.js'
 import { FINALIZATION_PROMPT, estimateRequestInput, finalizationMessages, partialEvidence } from './finalization.js'
 import { executeRegisteredTool, executeToolBatch, normalizeToolResult, type RegisteredToolCall, type ParsedToolCall } from './tool-batch.js'
 import { resolveCapabilities } from '../model-capabilities/index.js'
-
-/**
- * 截断过大的工具输出，避免历史消息膨胀。
- * 保留开头和结尾各 maxChars/2 的内容，中间用省略标记替代。
- * 对于 24/7 长期运行的 Agent 至关重要。
- *
- * ⚠️ 注意：以前这里用模块顶层 const 缓存 env，导致 process.env 或 superpower
- * 开关运行时变更无法生效。现改为每次调用时动态读取，保证 PUT /settings 热更新
- * 能立即生效（与 maxIterations / compressRatio 的动态读取策略对齐）。
- */
-function getToolOutputMaxChars(): number {
-  const base = parseInt(process.env.TOOL_OUTPUT_MAX_CHARS ?? '4000', 10)
-  return applyOSMMultiplier('toolOutputMaxChars', base)
-}
-
-/**
- * Code mode needs a larger window for source and compiler diagnostics, but its
- * transcript still has to be bounded.  A command can legally emit megabytes
- * of minified assets or base64 data; forwarding that entire result to the next
- * model request can exceed the provider's real tokenizer limit even when the
- * character based estimate says it fits.  Keep the cap configurable while
- * giving Code mode a useful default for ordinary source files.
- */
-function getCodeToolOutputMaxChars(): number {
-  const configured = parseInt(process.env.CODE_TOOL_OUTPUT_MAX_CHARS ?? '', 10)
-  if (Number.isFinite(configured) && configured > 0) return configured
-  return 64 * 1024
-}
 
 /**
  * 连续失败 / 重复调用的止损阈值。
@@ -123,6 +96,7 @@ export function truncateToolOutput(output: string, maxChars: number = getToolOut
           return JSON.stringify({
             filename: typeof record.filename === 'string' ? record.filename.slice(0, 512) : undefined,
             mimeType: imageData[1],
+            description: typeof record.description === 'string' ? record.description.slice(0, 1024) : undefined,
             size: typeof record.size === 'number' ? record.size : undefined,
             dataUrl: record.dataUrl,
             hasDataUrl: true,
@@ -698,9 +672,12 @@ export class ReActStrategy implements LoopStrategy {
       let partialOutput = ''
       let partialSaved = false
       let streamCompleted = false
+      let streamChunkCount = 0
+      let receivedTerminalChunk = false
       let failureReason = 'incomplete'
-      const persistPartial = async (status: 'failed' | 'cancelled', stopReason: string) => {
-        if (partialSaved || (!response.content && !response.reasoningContent)) return
+      const persistPartial = async (status: 'failed' | 'cancelled', stopReason: string,
+        responseDiagnostics?: Record<string, string | number | boolean>) => {
+        if (partialSaved || (!response.content && !response.reasoningContent && !responseDiagnostics)) return
         const messageId = ctx.assistantMessageId ?? uuidv4()
         const promptTokens = response.promptTokens || requestInputTokenEstimate
         const completionTokens = response.completionTokens || estimateTokens(response.content + response.reasoningContent)
@@ -713,6 +690,7 @@ export class ReActStrategy implements LoopStrategy {
             ...(response.cacheMissTokens != null ? { cacheMissTokens: response.cacheMissTokens } : {}),
             ...(response.reasoningTokens != null ? { reasoningTokens: response.reasoningTokens } : {}) },
           metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId, partial: true, status, stopReason,
+            ...(responseDiagnostics ? { responseDiagnostics } : {}),
             usageEstimated: response.promptTokens === 0 || response.completionTokens === 0 },
         } as Message, ctx)
         partialSaved = true
@@ -726,6 +704,8 @@ export class ReActStrategy implements LoopStrategy {
 
         for await (const chunk of stream) {
           if (ctx.signal?.aborted) throw Object.assign(new Error('Model request cancelled'), { name: 'AbortError' })
+          streamChunkCount++
+          receivedTerminalChunk ||= chunk.done === true
           // Providers may report usage/model before their final chunk (or fail afterwards).
           for (const key of ['promptTokens', 'completionTokens', 'cacheHitTokens', 'cacheMissTokens', 'reasoningTokens'] as const) {
             if (chunk[key] != null) response[key] = chunk[key]
@@ -1124,8 +1104,23 @@ export class ReActStrategy implements LoopStrategy {
         continue
       }
       if (!String(response.content ?? '').trim()) {
-        await persistPartial('failed', 'empty_output')
-        await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'empty_output', error: { code: 'EMPTY_OUTPUT', message: 'Model returned no final answer', retryable: false } })
+        // Keep shape/usage evidence even for an entirely empty response. Raw provider
+        // payloads can contain credentials or user content and must not enter diagnostics.
+        const responseDiagnostics = {
+          provider: this.llm.provider, modelId: String(response.model), finishReason: String(response.finishReason),
+          chunkCount: streamChunkCount, terminalChunkReceived: receivedTerminalChunk,
+          contentCharacters: String(response.content ?? '').length,
+          reasoningCharacters: String(response.reasoningContent ?? '').length,
+          promptTokens: Number(response.promptTokens), completionTokens: Number(response.completionTokens),
+        }
+        ctx.logger.warn({ rootRunId: ctx.rootRunId, sessionId: ctx.sessionId, ...responseDiagnostics }, 'Model response had no final answer')
+        await persistPartial('failed', 'empty_output', responseDiagnostics)
+        yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, currentPromptTokens: currentUsage.promptTokens,
+          contextWindow: ctx.modelCaps?.contextWindow, modelId: response.model })}`
+        const message = response.reasoningContent?.trim()
+          ? '模型仅返回了思考内容，未收到最终回答（EMPTY_OUTPUT）。请检查模型服务后重试。'
+          : '未收到模型的最终回答或工具调用（EMPTY_OUTPUT）。模型服务可能返回了空内容，或响应未被正确解析；请检查模型服务后重试。'
+        await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'empty_output', error: { code: 'EMPTY_OUTPUT', message, retryable: false } })
         return
       }
       // ── 最终回答 ──

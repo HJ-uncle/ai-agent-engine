@@ -127,8 +127,10 @@ const DEFAULT_RULES: PolicyRule[] = [
   { name: 'ask-mkfs',     command: 'mkfs',     action: 'deny', priority: 5,  enabled: true, description: '格式化磁盘（safe:拒绝 / standard:需确认）' },
 
   // ── 危险但可逆：safe 下 ask，standard 下自动放行 ──
-  { name: 'ask-rm',       command: 'rm',       action: 'ask',  priority: 10, enabled: true, description: '删除文件（safe:需确认 / standard:自动放行）' },
-  { name: 'ask-del',      command: 'del',      action: 'ask',  priority: 10, enabled: true, description: '删除文件 Windows（safe:需确认 / standard:自动放行）' },
+  // 注意：rm/del/erase/rmdir/Remove-Item/git clean 在 evaluate() 顶部被硬拒绝
+  // （删除必须走 delete_file 工具），不会走到这里的规则匹配；保留规则仅作文档。
+  { name: 'ask-rm',       command: 'rm',       action: 'ask',  priority: 10, enabled: true, description: '删除文件（已被硬拦截取代：删除必须走 delete_file 工具）' },
+  { name: 'ask-del',      command: 'del',      action: 'ask',  priority: 10, enabled: true, description: '删除文件 Windows（已被硬拦截取代：删除必须走 delete_file 工具）' },
   { name: 'ask-kill',     command: 'kill',     action: 'ask',  priority: 20, enabled: true, description: '终止进程（safe:需确认 / standard:自动放行）' },
   { name: 'ask-taskkill', command: 'taskkill', action: 'ask',  priority: 20, enabled: true, description: '终止进程 Windows（safe:需确认 / standard:自动放行）' },
   { name: 'ask-chmod',    command: 'chmod',    action: 'ask',  priority: 30, enabled: true, description: '修改权限（safe:需确认 / standard:自动放行）' },
@@ -180,6 +182,41 @@ export function detectInjection(args: string[]): string[] {
   }
   return hits
 }
+
+// ─── 文件删除硬拦截 ─────────────────────────────────────────────────────────
+/**
+ * 删除文件/目录必须走记录式删除工具（delete_file）：它写入文件改动记录并
+ * 进入用户确认队列，可撤回。通过 shell/脚本删除（rm/del/Remove-Item/
+ * fs.rmSync/os.remove 等）完全绕过该管线——删除不可撤回，改动面板里还会
+ * 留下断链的 ⚠ 记录。因此删除类命令在所有安全模式下（含 full-access 与
+ * 已审批命令）一律硬拒绝，并引导到 delete_file。
+ */
+const DELETE_COMMANDS = new Set([
+  'rm', 'unlink', 'rmdir', 'shred',                                    // POSIX
+  'del', 'erase', 'rd',                                                // cmd
+  'remove-item', 'remove-itemproperty', 'ri',                          // PowerShell
+])
+
+/** node/python 等解释器参数里内联执行的删除调用（fs.rmSync / os.remove 等） */
+const INLINE_DELETE_PATTERNS = [
+  /\bfs\s*\.\s*(?:rm|rmSync|rmdir|rmdirSync|unlink|unlinkSync)\s*\(/,
+  /\b(?:rmSync|rmdirSync|unlinkSync)\s*\(/,
+  /\bos\s*\.\s*(?:remove|unlink|rmdir|removedirs)\s*\(/,
+  /\bshutil\s*\.\s*rmtree\s*\(/,
+  /\bRemove-Item(?:Property)?\b/i,
+]
+
+function inlineDeleteHits(args: string[]): string[] {
+  const hits: string[] = []
+  for (const a of args) {
+    if (typeof a !== 'string' || a.length < 8) continue
+    if (INLINE_DELETE_PATTERNS.some(re => re.test(a))) hits.push(a.slice(0, 120))
+  }
+  return hits
+}
+
+export const DELETE_COMMAND_REDIRECT =
+  '删除文件必须通过 delete_file 工具完成（它会记录改动并交给用户确认，可撤回）；不允许通过命令行或脚本删除文件。请改用 delete_file。'
 
 /** 路径穿越：.. 或 绝对路径到敏感目录 */
 export function detectPathTraversal(args: string[]): string[] {
@@ -279,6 +316,28 @@ export class PolicyEngine {
     const cmd  = baseName(input.command).toLowerCase()
     const args = input.args ?? []
     const mode = getSecurityMode(input.tenantId ?? 'default', input.sessionId ?? '')
+
+    // -1) 删除类操作硬拦截：所有模式（含 full-access / 已审批命令）一律拒绝。
+    //     删除必须走 delete_file 工具进入改动记录与用户确认管线，可撤回。
+    //     a) 命令本身即删除命令（剥掉 .exe/.cmd/.bat/.ps1 扩展名后匹配）；
+    //     b) git clean 子命令；c) 解释器参数内联删除。
+    const cmdBare = cmd.replace(/\.(?:exe|cmd|bat|ps1|com)$/i, '')
+    const inlineHits = inlineDeleteHits(args)
+    const isGitClean = cmdBare === 'git' && args.some(a => /^clean$/i.test(a))
+    if (DELETE_COMMANDS.has(cmdBare) || isGitClean || inlineHits.length > 0) {
+      const target = isGitClean ? 'git clean' : inlineHits.length > 0 ? `内联删除调用: ${inlineHits.join(' | ')}` : cmd
+      const decision: PolicyDecision = { action: 'deny', reason: DELETE_COMMAND_REDIRECT }
+      await auditLogStore.append({
+        tenantId: input.tenantId,
+        sessionId: input.sessionId,
+        category: 'cmd',
+        target,
+        decision: 'deny',
+        reason: decision.reason,
+        details: { securityMode: mode, deleteBlocked: true },
+      })
+      return decision
+    }
 
     // 0) 如果用户已经审批过该命令，直接放行
     if (input.approved || (!input.ignoreSessionApproval && isCommandApproved(input.tenantId ?? 'default', input.sessionId ?? '', input.command, input.args))) {

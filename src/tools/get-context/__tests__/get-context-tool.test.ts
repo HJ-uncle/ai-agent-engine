@@ -17,6 +17,35 @@ vi.mock('../../../storage/memory/memory-manager.js', () => {
 
 beforeEach(() => { vi.clearAllMocks() })
 
+describe('get_current_context runtime capabilities', () => {
+  it('reports the engine runtime without promising external commands or browser support', async () => {
+    const result = await getCurrentContextTool.execute({ includeTools: false }, context('code'))
+    expect(result.success).toBe(true)
+    expect(result.output).toContain(`${process.platform} / ${process.arch}`)
+    expect(result.output).toContain(process.version)
+    expect(result.output).toContain('PATH 中的程序需通过命令结果确认')
+    expect(result.output).toContain('本次未注册 browser_tabs')
+    expect(result.output).not.toContain('已注册工具 (')
+    expect(result.output).not.toContain('"command":"node"')
+  })
+
+  it('derives tool guidance from the current registry even with the table hidden', async () => {
+    const ctx = context('code')
+    ctx.tools.list = () => [
+      { name: 'execute_cmd', description: 'Run command', parameters: { type: 'object' } },
+      { name: 'browser_tabs', description: 'Read client tabs', parameters: { type: 'object' } },
+      { name: 'code_diagnose', description: 'PROJECT_DIAGNOSTIC_CAPABILITIES', parameters: { type: 'object' } },
+    ] as ReturnType<AgentContext['tools']['list']>
+    const result = await getCurrentContextTool.execute({ includeTools: false }, ctx)
+    expect(result.output).toContain('"command":"node","args":["--version"]')
+    expect(result.output).toContain('注册不代表浏览器已连接')
+    expect(result.output).toContain('PROJECT_DIAGNOSTIC_CAPABILITIES')
+    expect(result.output).not.toContain('本次未注册 browser_tabs')
+    expect(result.output).not.toContain('已注册工具 (')
+    expect(memory.list).not.toHaveBeenCalled()
+  })
+})
+
 function context(toolProfile?: 'code' | 'general'): AgentContext {
   return {
     toolProfile, tenantId: 'context-tenant', sessionId: 'context-session',
