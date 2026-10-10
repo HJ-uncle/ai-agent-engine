@@ -102,16 +102,22 @@ export class FallbackAdapter implements LLMAdapter {
   get model(): string { return this.adapters[0].model }
 
   private selectedOptions(adapter: LLMAdapter, messages: Message[], options?: LLMAdapterOptions): LLMAdapterOptions {
-    const contextWindow = this.modelContextWindows[adapter.model]
-    if (Number.isFinite(contextWindow) && contextWindow > 0) {
+    const knownWindow = this.modelContextWindows[adapter.model]
+    const requestedWindow = options?.contextWindow
+    const contextWindow = Math.min(Number.isFinite(knownWindow) && knownWindow > 0 ? knownWindow : Infinity,
+      typeof requestedWindow === 'number' && Number.isFinite(requestedWindow) && requestedWindow > 0 ? requestedWindow : Infinity)
+    let maxTokens = options?.maxTokens
+    if (Number.isFinite(contextWindow)) {
       const input = Math.max(options?.requestInputTokenEstimate ?? 0,
         estimateRequestInput(messages, options?.systemPrompt, options?.tools ?? []))
-      const requested = input + (options?.maxTokens ?? (options?.unboundedOutput ? 0 : 4096))
+      if (options?.unboundedOutput) maxTokens = Math.min(maxTokens ?? Infinity, Math.max(1, Math.floor(contextWindow - input)))
+      const requested = input + (maxTokens ?? 4096)
       if (requested > contextWindow) throw Object.assign(new Error(
         `Model ${adapter.model} context window ${contextWindow} cannot fit estimated input and output reserve ${requested}`,
       ), { code: 'CONTEXT_WINDOW_EXCEEDED', retryable: false, model: adapter.model, contextWindow, requested })
     }
-    return { ...options, model: adapter.model }
+    return { ...options, model: adapter.model, ...(Number.isFinite(contextWindow) ? { contextWindow } : {}),
+      ...(maxTokens !== undefined ? { maxTokens } : {}) }
   }
 
   async complete(messages: Message[], options?: LLMAdapterOptions): Promise<LLMResponse> {
@@ -120,8 +126,10 @@ export class FallbackAdapter implements LLMAdapter {
     for (const adapter of this.adapters) {
       throwIfAborted(options?.signal)
       try {
-        const response = await adapter.complete(messages, this.selectedOptions(adapter, messages, options))
-        return { ...response, model: response.model ?? adapter.model }
+        const selected = this.selectedOptions(adapter, messages, options)
+        const response = await adapter.complete(messages, selected)
+        const contextWindow = response.contextWindow ?? selected.contextWindow
+        return { ...response, model: response.model ?? adapter.model, ...(contextWindow ? { contextWindow } : {}) }
       } catch (err) {
         if (isAbortError(err, options?.signal) || !isRetryable(err)) throw err
         lastError = err
@@ -137,11 +145,13 @@ export class FallbackAdapter implements LLMAdapter {
       throwIfAborted(options?.signal)
       let delivered = false
       try {
-        for await (const chunk of adapter.stream(messages, this.selectedOptions(adapter, messages, options))) {
+        const selected = this.selectedOptions(adapter, messages, options)
+        for await (const chunk of adapter.stream(messages, selected)) {
           // A yielded chunk is already visible to the consumer, including thinking,
           // tool arguments, usage and terminal state. Never replay after that boundary.
           delivered = true
-          yield { ...chunk, model: chunk.model ?? adapter.model }
+          const contextWindow = chunk.contextWindow ?? selected.contextWindow
+          yield { ...chunk, model: chunk.model ?? adapter.model, ...(contextWindow ? { contextWindow } : {}) }
         }
         return
       } catch (error) {

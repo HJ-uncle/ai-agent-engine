@@ -45,6 +45,18 @@ function successResponse(model = 'fallback-server-model') {
 }
 
 describe('D5 stream fallback delivery boundary', () => {
+  it.each(['stream', 'complete'] as const)('uses the actual fallback capacity and adjusts code output reservation (%s)', async mode => {
+    const primary = fixtureAdapter('primary', unavailable())
+    const fallback = fixtureAdapter('fallback')
+    const adapter = new FallbackAdapter({ primary, fallbacks: [fallback], modelContextWindows: { primary: 100_000, fallback: 64_000 } })
+    const request = { ...options, unboundedOutput: true, contextWindow: 100_000, maxTokens: 90_000, requestInputTokenEstimate: 100 }
+    if (mode === 'stream') expect((await collect(adapter, request)).every(chunk => chunk.contextWindow === 64_000)).toBe(true)
+    else expect(await adapter.complete(messages, request)).toMatchObject({ contextWindow: 64_000 })
+    const selected = vi.mocked(mode === 'stream' ? fallback.stream : fallback.complete).mock.calls[0][1]
+    expect(selected).toMatchObject({ model: 'fallback', contextWindow: 64_000, maxTokens: 63_900 })
+    expect(request).toMatchObject({ contextWindow: 100_000, maxTokens: 90_000 })
+  })
+
   it('switches on retryable failure before delivery and sends the selected model with unchanged request constraints', async () => {
     const primary = fixtureAdapter('primary', unavailable())
     const fallback = fixtureAdapter('fallback')

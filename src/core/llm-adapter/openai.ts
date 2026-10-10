@@ -1,10 +1,11 @@
 import { applyThinkingPreference, isThinkingDisabled, isProtectedThinkingParameter } from './thinking.js'
-import { observeRequest, observeStreamRequest, openAIUsage, prepareRequestContext } from './request-attempt.js'
+import { observeRequest, observeStreamRequest, openAIUsage, openAIUsageSnapshot, openAIUsageFromSnapshot, prepareRequestContext,
+  type OpenAIUsageSnapshot } from './request-attempt.js'
 import { throwIfAborted } from '../utils/abort.js'
 import OpenAI from 'openai'
 import http from 'node:http'
 import https from 'node:https'
-import type { LLMAdapter, LLMResponse, LLMAdapterOptions, EmbedOptions, LLMStreamChunk } from './types.js'
+import type { LLMAdapter, LLMResponse, LLMAdapterOptions, EmbedOptions, LLMStreamChunk, RequestAttemptUsage } from './types.js'
 
 const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 100 })
 const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 100 })
@@ -248,14 +249,17 @@ async function createWithParamFallback<T>(
   return await observeRequest(() => client.chat.completions.create(current as any, requestOptions) as unknown as Promise<T>, options, provider, String(current.model), value => openAIUsage((value as {usage?: unknown}).usage))
 }
 
-/**
- * @description createWithParamFallback 的流式版本：建立 SSE 连接阶段遇到
- *   「不支持的参数」类 400 时，自动剔除该参数重试。错误在 await create 阶段抛出，
- *   不影响后续 chunk 迭代。
- * @param client OpenAI SDK 实例
- * @param params 请求参数（含 stream:true，会按需克隆删字段）
- * @param requestOptions create 的第二参（signal 等）
- */
+function streamUsageObserver(): (chunk: OpenAI.Chat.ChatCompletionChunk) => RequestAttemptUsage | undefined {
+  let snapshot: OpenAIUsageSnapshot | undefined
+  return chunk => {
+    // Keep sparse wire counters separately from ledger defaults so later
+    // fragments can complete an initially unknown total without fake zeros.
+    snapshot = openAIUsageSnapshot(chunk.usage, snapshot)
+    return openAIUsageFromSnapshot(snapshot)
+  }
+}
+
+/** Retry unsupported request parameters only before the SSE connection opens. */
 async function streamWithParamFallback(
   client: OpenAI,
   params: Record<string, unknown>,
@@ -269,7 +273,7 @@ async function streamWithParamFallback(
     try {
       return await observeStreamRequest(() => client.chat.completions.create(
         current as unknown as OpenAI.Chat.ChatCompletionCreateParamsStreaming, requestOptions,
-      ), options, provider, String(current.model), chunk => openAIUsage(chunk.usage),
+      ), options, provider, String(current.model), streamUsageObserver(),
       chunk => chunk.choices?.some(choice => Boolean(choice.finish_reason)) ?? false)
     } catch (error: any) {
       throwIfAborted(requestOptions.signal)
@@ -287,7 +291,7 @@ async function streamWithParamFallback(
   }
   return await observeStreamRequest(() => client.chat.completions.create(
     current as unknown as OpenAI.Chat.ChatCompletionCreateParamsStreaming, requestOptions,
-  ), options, provider, String(current.model), chunk => openAIUsage(chunk.usage),
+  ), options, provider, String(current.model), streamUsageObserver(),
   chunk => chunk.choices?.some(choice => Boolean(choice.finish_reason)) ?? false)
 }
 
@@ -785,37 +789,16 @@ export class OpenAIAdapter implements LLMAdapter {
 
     // 处理缓存token：在 OpenAI / DeepSeek 协议中，usage.prompt_tokens 已经是总输入 token 数
     //（包含了命中缓存的部分）。之前的代码错误地又加了一次 cached_tokens 导致重复计算。
-    const usage = response.usage
-    const promptTokens = usage?.prompt_tokens ?? 0
-
-    // ── DeepSeek / Moonshot / SiliconFlow 私有 usage 字段透传 ───────────────────
-    const cacheHitTokens =
-      (usage as any)?.prompt_cache_hit_tokens ??
-      (usage as any)?.cache_hit_tokens ??
-      (usage as any)?.prompt_tokens_details?.cached_tokens ??
-      undefined
-    const cacheMissTokens =
-      (usage as any)?.prompt_cache_miss_tokens ??
-      (cacheHitTokens != null
-        ? Math.max(0, (usage?.prompt_tokens ?? 0) - (cacheHitTokens as number))
-        : undefined)
-    const reasoningTokens =
-      (usage as any)?.completion_tokens_details?.reasoning_tokens ?? 
-      (usage as any)?.reasoning_tokens ?? 
-      undefined
+    const usage = openAIUsage(response.usage)
 
     return {
       content: cleanContent,
       reasoningContent,
       toolCalls,
-      promptTokens,
-      completionTokens: usage?.completion_tokens ?? 0,
+      ...(usage ?? { promptTokens: 0, completionTokens: 0 }),
       finishReason: (choice.finish_reason === 'tool_calls' || (toolCalls && toolCalls.length > 0)
         ? 'tool_calls'
         : choice.finish_reason === 'length' ? 'length' : 'stop'),
-      ...(cacheHitTokens != null ? { cacheHitTokens } : {}),
-      ...(cacheMissTokens != null ? { cacheMissTokens } : {}),
-      ...(reasoningTokens != null ? { reasoningTokens } : {}),
       model: response.model,
     }
   }
@@ -892,7 +875,7 @@ export class OpenAIAdapter implements LLMAdapter {
     // 原生 API 只做基础 JSON parse，由我们自己处理 delta，兼容性最佳。
     // 注意：将 params 断言为 ChatCompletionCreateParamsStreaming 以触发流式重载，
     // 返回值为 Stream<ChatCompletionChunk>，实现了 AsyncIterable<ChatCompletionChunk>。
-    let manualUsage: any = null
+    let manualUsage: OpenAIUsageSnapshot | undefined
     let manualModel: string | undefined = undefined
     let streamFinishReason: LLMStreamChunk['finishReason']
 
@@ -907,11 +890,16 @@ export class OpenAIAdapter implements LLMAdapter {
         // 1. 提取 usage（部分供应商在最后一个 chunk 的顶层或 usage 字段中返回）
         const reason = chunk.choices?.[0]?.finish_reason
         if (reason) streamFinishReason = reason === 'length' ? 'length' : reason === 'tool_calls' || reason === 'function_call' ? 'tool_calls' : reason === 'stop' ? 'stop' : 'error'
-        const usage = (chunk as any).usage
-        if (usage) manualUsage = usage
+        manualUsage = openAIUsageSnapshot(chunk.usage, manualUsage)
 
         // 2. 提取 model（用于展示真实调用的模型 ID）
         if ((chunk as any).model) manualModel = (chunk as any).model
+
+        // Usage can arrive before termination. Forward it immediately so a
+        // later disconnect retains provider counts instead of local estimates.
+        if (chunk.usage && manualUsage) yield {
+          ...manualUsage, done: false, model: manualModel ?? String(params.model),
+        }
 
         // 3. 提取 delta 内容
         const delta = chunk.choices?.[0]?.delta
@@ -941,35 +929,10 @@ export class OpenAIAdapter implements LLMAdapter {
       }
 
     // 原生 stream 没有 finalMessage()，usage 从 chunk 中累积
-    const finalUsage = manualUsage
-    // 兼容 Qwen dashscope：streaming usage 字段为 input_tokens 而非 prompt_tokens
-    const finalPromptTokens =
-      finalUsage?.prompt_tokens ??
-      (finalUsage as any)?.input_tokens ??
-      0
-
-    // ── DeepSeek / Moonshot / SiliconFlow 私有 usage 字段透传 ───────────────────
-    const cacheHitTokens =
-      (finalUsage as any)?.prompt_cache_hit_tokens ??
-      (finalUsage as any)?.cache_hit_tokens ??
-      (finalUsage as any)?.prompt_tokens_details?.cached_tokens ??
-      undefined
-    const cacheMissTokens =
-      (finalUsage as any)?.prompt_cache_miss_tokens ?? 
-      (cacheHitTokens != null ? Math.max(0, (finalUsage?.prompt_tokens ?? 0) - (cacheHitTokens as number)) : undefined)
-    const reasoningTokens =
-      (finalUsage as any)?.completion_tokens_details?.reasoning_tokens ?? 
-      (finalUsage as any)?.reasoning_tokens ?? 
-      undefined
-
     yield {
       done: true,
       finishReason: streamFinishReason,
-      promptTokens: finalPromptTokens,
-      completionTokens: finalUsage?.completion_tokens ?? finalUsage?.output_tokens ?? 0,
-      ...(cacheHitTokens != null ? { cacheHitTokens } : {}),
-      ...(cacheMissTokens != null ? { cacheMissTokens } : {}),
-      ...(reasoningTokens != null ? { reasoningTokens } : {}),
+      ...manualUsage,
       model: manualModel ?? String(params.model),
     }
   }

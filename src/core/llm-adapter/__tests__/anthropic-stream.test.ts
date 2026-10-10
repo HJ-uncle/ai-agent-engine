@@ -135,6 +135,7 @@ describe('Anthropic streaming block fidelity', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(wire, { headers: { 'content-type': 'text/event-stream' } })))
     const adapter = new AnthropicAdapter('deepseek-v4.1-flash', 'fixture-key', 'http://fixture.invalid/anthropic', { 'X-Access-Token': 'fixture-token' })
     const iterator = adapter.stream([{ role: 'user', content: '创建五子棋' }], { model: adapter.model, signal: controller.signal })[Symbol.asyncIterator]()
+    expect(await iterator.next()).toMatchObject({ done: false, value: { done: false, promptTokens: 12, completionTokens: 0 } })
     expect(await iterator.next()).toMatchObject({ done: false, value: { content: '部分结果', done: false } })
     controller.abort()
     await expect(iterator.next()).rejects.toMatchObject({ name: 'AbortError' })

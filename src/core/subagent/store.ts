@@ -103,6 +103,23 @@ export class SubagentStore {
     return result.rows.map((row) => JSON.parse(String(row.snapshot)) as SubagentRun)
   }
 
+  /** Recover exactly what the parent published, even after transcript eviction. */
+  async getSnapshotsAtSequences(tenantId: string, watermarks: readonly { runId: string; seq: number }[]): Promise<SubagentRun[]> {
+    await this.ready()
+    const snapshots: SubagentRun[] = []
+    // Stay below SQLite's conservative parameter limit without an N+1 read.
+    for (let offset = 0; offset < watermarks.length; offset += 400) {
+      const page = watermarks.slice(offset, offset + 400)
+      const result = await this.db.execute({
+        sql: `WITH requested(run_id,seq) AS (VALUES ${page.map(() => '(?,?)').join(',')})
+          SELECT e.event FROM subagent_events e JOIN requested r ON e.run_id=r.run_id AND e.seq=r.seq
+          WHERE e.tenant_id=?`, args: [...page.flatMap(item => [item.runId, item.seq]), tenantId],
+      })
+      snapshots.push(...result.rows.map(row => (JSON.parse(String(row.event)) as SubagentEvent).snapshot))
+    }
+    return snapshots
+  }
+
   async listChildSessionIds(tenantId: string): Promise<string[]> {
     await this.ready()
     const result = await this.db.execute({ sql: 'SELECT DISTINCT child_session_id FROM subagent_runs WHERE tenant_id=?', args: [tenantId] })

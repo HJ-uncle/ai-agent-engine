@@ -20,6 +20,8 @@ export interface LLMResponse {
   reasoningTokens?: number
   /** 实际使用的模型 ID */
   model?: string
+  /** Effective input + output capacity of the model used for this invocation. */
+  contextWindow?: number
 }
 
 export interface LLMStreamChunk {
@@ -39,9 +41,12 @@ export interface LLMStreamChunk {
   cacheMissTokens?: number
   reasoningTokens?: number
   model?: string
+  contextWindow?: number
 }
 
 export interface RequestAttemptUsage {
+  /** Observed counters are a lower bound when any provider counter is missing. */
+  unknown?: boolean
   cacheWriteTokens?: number
   promptTokens: number
   completionTokens: number

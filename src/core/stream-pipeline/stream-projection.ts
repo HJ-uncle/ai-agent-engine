@@ -1,5 +1,6 @@
 /** The same envelopes are used by live SSE and the current-turn snapshot. */
 export type StreamEnvelope = Record<string, unknown>
+export interface SubagentWatermark { runId: string; seq: number }
 
 // A stream snapshot is a live-turn view, not a second transcript database.
 // Keep the in-memory projection bounded; persisted history remains the source
@@ -57,11 +58,27 @@ type ProjectionSlot = ToolProjection | PayloadProjection
 /** Retains semantic state rather than a second unbounded event log. */
 export class CurrentTurnProjection {
   private readonly slots = new Map<string, ProjectionSlot>()
+  // A transcript slot can be evicted; its published child sequence cannot.
+  // Keep only identities here and recover immutable details from the store.
+  private readonly childSequences = new Map<string, number>()
   private sequence = 0
   private textTail?: { key: string; field: 'content' | 'thinking' }
   private _truncated = false
 
-  constructor(initial: StreamEnvelope[] = []) { for (const payload of initial) this.apply(payload) }
+  constructor(initial: StreamEnvelope[] = [], watermarks: SubagentWatermark[] = [], truncated = false) {
+    this._truncated = truncated
+    for (const watermark of watermarks) this.recordChildSequence(watermark.runId, watermark.seq)
+    for (const payload of initial) this.apply(payload)
+  }
+
+  private recordChildSequence(runId: unknown, seq: unknown): void {
+    if (typeof runId !== 'string' || !runId || typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 1) return
+    this.childSequences.set(runId, Math.max(this.childSequences.get(runId) ?? 0, seq))
+  }
+
+  subagentWatermarks(): SubagentWatermark[] {
+    return [...this.childSequences].map(([runId, seq]) => ({ runId, seq }))
+  }
 
   currentRun(): Record<string, unknown> | undefined {
     const slot = this.slots.get('run:')
@@ -88,6 +105,9 @@ export class CurrentTurnProjection {
     }
     this.textTail = undefined
     const data = record(value)
+    const child = field === 'subagentEvent' ? record(data?.snapshot)
+      : field === 'toolEnd' || field === 'toolResult' ? record(data?.subagent ?? record(data?.metadata)?.subagent) : undefined
+    if (child) this.recordChildSequence(child.runId, child.lastSeq)
     if (['toolStart', 'toolCall', 'toolArgs', 'toolEnd', 'toolResult', 'ask_user', 'permissionRequest'].includes(field)) {
       const id = identity(data, 'toolCallId', 'requestId')
       if (!id || !data) return
@@ -112,6 +132,7 @@ export class CurrentTurnProjection {
         // The modern permission envelope supersedes its legacy ask_user alias.
         if (field === 'permissionRequest' || !slot.pending?.permissionRequest) slot.pending = { [field]: this.boundRecord(data) }
       }
+      this.trimSlots()
       return
     }
     if (field === 'run' && data) {
@@ -128,7 +149,28 @@ export class CurrentTurnProjection {
     const previous = this.slots.get(key)
     const mergedValue = field === 'usage' && previous?.kind === 'payload' && data
       ? { ...record(previous.payload.usage), ...data } : value
-    this.slots.set(key, { kind: 'payload', payload: { [field]: this.boundValue(mergedValue) } })
+    if (field === 'usage' && data && record(mergedValue)
+      && (typeof data.currentPromptTokens === 'number' || typeof data.promptTokens === 'number')) {
+      const usage = mergedValue as Record<string, unknown>
+      const contextModelId = identity(data, 'contextModelId', 'modelId') ?? identity(record(mergedValue), 'modelId')
+      delete usage.contextModelId
+      if (contextModelId) usage.contextModelId = contextModelId
+      if (typeof data.currentPromptTokens !== 'number') delete usage.currentPromptTokens
+      if (typeof data.contextUsageEstimated !== 'boolean') delete usage.contextUsageEstimated
+      if (typeof data.contextUsageProvisional !== 'boolean') delete usage.contextUsageProvisional
+      if (typeof data.requestInputTokenEstimate !== 'number') delete usage.requestInputTokenEstimate
+      // A new invocation with an unknown model window must not inherit the
+      // previous invocation's limit. Model-only patches keep its snapshot.
+      if (data.contextWindow === undefined) delete usage.contextWindow
+      const used = data.currentPromptTokens ?? data.promptTokens
+      if (data.contextUsageEstimated === false && data.contextUsageProvisional !== true
+        && typeof used === 'number' && Number.isFinite(used) && used >= 0) {
+        usage.confirmedContext = { used,
+          ...(typeof data.contextWindow === 'number' && Number.isFinite(data.contextWindow) && data.contextWindow > 0
+            ? { contextWindow: data.contextWindow } : {}), ...(contextModelId ? { modelId: contextModelId } : {}) }
+      }
+    }
+    this.slots.set(key, { kind: 'payload', payload: { [field]: field === 'run' && data ? this.boundRun(data) : this.boundValue(mergedValue) } })
     this.trimSlots()
   }
 
@@ -158,19 +200,28 @@ export class CurrentTurnProjection {
     return this.boundValue(value) as Record<string, unknown>
   }
 
+  private boundRun(run: Record<string, unknown>): Record<string, unknown> {
+    if (!Array.isArray(run.pending)) return this.boundRecord(run)
+    const { pending, ...state } = run
+    const active = pending.filter(item => record(item)?.status === 'pending')
+    const answered = pending.filter(item => record(item)?.status !== 'pending')
+    const retained = [...(active.length >= MAX_PROJECTION_SLOTS ? [] : answered.slice(-(MAX_PROJECTION_SLOTS - active.length))), ...active]
+    if (retained.length < pending.length) this._truncated = true
+    // Old answered controls remain in durable audit data. The newest active
+    // control must survive even when thousands of earlier ones were answered.
+    return { ...this.boundRecord(state), pending: retained.map(item => this.boundValue(item)) }
+  }
+
   private trimSlots(): void {
     while (this.slots.size > MAX_PROJECTION_SLOTS) {
-      const first = this.slots.keys().next().value as string | undefined
-      if (!first) break
-      // Preserve the run watermark even when a very long turn has many tool
-      // calls; older transcript details remain available from persisted history.
-      if (first === 'run:') {
-        const iterator = this.slots.keys()
-        iterator.next()
-        const candidate = iterator.next().value as string | undefined
-        if (!candidate) break
-        this.slots.delete(candidate)
-      } else this.slots.delete(first)
+      let candidate: string | undefined
+      for (const key of this.slots.keys()) {
+        if (key !== 'run:' && key !== 'usage:') { candidate = key; break }
+      }
+      if (!candidate) break
+      // Latest billing/context and run state are semantic snapshots, not old
+      // transcript details. Eviction must never reset the visible counters.
+      this.slots.delete(candidate)
       this._truncated = true
     }
   }

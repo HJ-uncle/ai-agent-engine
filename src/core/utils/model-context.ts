@@ -12,7 +12,12 @@ export function modelMessageInput(message: Message): Pick<Message, 'role' | 'con
   return {
     role: message.role,
     content: modelMessageContent(message),
-    ...(message.role === 'assistant' && message.toolCall ? { toolCall: message.toolCall } : {}),
+    // Parsed calls also carry replay/diagnostic fields such as _rawArgs. Only
+    // adapters' public call fields enter the prompt; counting the retained raw
+    // JSON again can double a large write_file argument.
+    ...(message.role === 'assistant' && message.toolCall ? { toolCall: {
+      id: message.toolCall.id, name: message.toolCall.name, args: message.toolCall.args,
+    } } : {}),
     ...(message.role === 'tool' && message.toolCallId ? { toolCallId: message.toolCallId } : {}),
     // OpenAI-compatible reasoning models require this field on replay. Counting
     // it is conservative for adapters that do not replay reasoning.

@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events'
 import { randomUUID } from 'node:crypto'
-import { CurrentTurnProjection, decodeStreamChunk, type StreamEnvelope } from './stream-projection.js'
+import { CurrentTurnProjection, decodeStreamChunk, type StreamEnvelope, type SubagentWatermark } from './stream-projection.js'
 
 export interface SseEventPayload { id: string; chunk: string }
 export interface StreamBusOptions {
@@ -10,6 +10,8 @@ export interface StreamBusOptions {
   /** Maximum bytes queued for one subscriber before it must reload a snapshot. */
   maxSubscriberBytes?: number
   initialProjection?: StreamEnvelope[]
+  initialSubagentWatermarks?: SubagentWatermark[]
+  initialProjectionTruncated?: boolean
   /** Keep the producer alive when an SSE viewer disconnects (the client can replay later). */
   retainOnDisconnect?: boolean
 }
@@ -22,6 +24,7 @@ export interface StreamSnapshot {
   /** Older frames remain available from the persisted history snapshot. */
   projectionTruncated?: boolean
   projection: StreamEnvelope[]
+  subagentWatermarks?: SubagentWatermark[]
 }
 
 export class SnapshotRequiredError extends Error {
@@ -53,15 +56,15 @@ export class StreamBus {
     this.maxSubscriberEvents = Math.max(1, options.maxSubscriberEvents ?? 2048)
     this.maxSubscriberBytes = Math.max(1, options.maxSubscriberBytes ?? 8 * 1024 * 1024)
     this.retainOnDisconnect = options.retainOnDisconnect === true
-    this.projection = new CurrentTurnProjection(structuredClone(options.initialProjection ?? []))
+    this.projection = new CurrentTurnProjection(structuredClone(options.initialProjection ?? []), options.initialSubagentWatermarks, options.initialProjectionTruncated)
   }
 
   get lastEventId(): string { return `${this.streamId}:${this.sequence}` }
 
   /** Resume attempts can inherit their turn projection before publishing new events. */
-  seedProjection(payloads: StreamEnvelope[]): void {
+  seedProjection(payloads: StreamEnvelope[], subagentWatermarks?: SubagentWatermark[], projectionTruncated = false): void {
     if (this.sequence || this.finished) throw new Error('Projection must be seeded before the first event')
-    this.projection = new CurrentTurnProjection(structuredClone(payloads))
+    this.projection = new CurrentTurnProjection(structuredClone(payloads), subagentWatermarks, projectionTruncated)
   }
 
   push(chunk: string): SseEventPayload | undefined {
@@ -92,10 +95,11 @@ export class StreamBus {
   }
 
   snapshot(): StreamSnapshot {
+    const subagentWatermarks = this.projection.subagentWatermarks()
     return { schemaVersion: 1, streamId: this.streamId, eventId: this.lastEventId,
       finished: this.finished, ...(this.errorObj ? { error: this.errorObj instanceof Error ? this.errorObj.message : String(this.errorObj) } : {}),
       ...(this.projection.truncated ? { projectionTruncated: true } : {}),
-      projection: this.projection.snapshot() }
+      projection: this.projection.snapshot(), ...(subagentWatermarks.length ? { subagentWatermarks } : {}) }
   }
 
   assertReplayCursor(cursor?: string): number {

@@ -21,6 +21,8 @@ import { success, fail } from '../response.js'
 import { withHistoryLock, isSessionHistoryMutating } from '../../../storage/conversation/serialization.js'
 import { rootRunStore, type RootRun, type RootPending } from '../../../storage/root-runs/index.js'
 import { persistedTurnProjection } from '../chat-snapshot.js'
+import { continuedTurnUsage, sessionUsageAtWatermark, sessionSubagentUsage, sessionSubagentRunsAtWatermark } from '../chat-usage.js'
+import { SubagentStore } from '../../../core/subagent/store.js'
 import { TodoStore } from '../../../storage/todo/index.js'
 import { ChangeStore } from '../../../storage/changes/index.js'
 import { commandJobs } from '../../../core/command-jobs/index.js'
@@ -348,6 +350,9 @@ const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId 
 
 export async function chatRoutes(fastify: FastifyInstance) {
   await rootRunStore.initialize()
+  // Reuse bounded revision caches across frequent snapshot refreshes.
+  const snapshotHistory = createConversationHistory()
+  const snapshotSubagents = new SubagentStore()
   // Initialize agent store
   const agentStore = new SQLiteAgentStore()
 
@@ -1119,9 +1124,11 @@ ${workspaceInfo}${codegraphBlock}${attachments && attachments.length > 0 ? `\n\n
 7. **禁止绕过工具链自造轮子。** 当现有工具做不到某件事时（例如看不到图片），**不要**自己写脚本去实现底层能力（手写 PNG/JPEG 解码器、二进制解析、像素取证、OCR 引擎等）。这类自造轮子几乎必然失败，且会烧掉几十轮工具调用。正确做法：① 换用受支持的路径（如 \`read_file mode:"ocr"\`）；② 确认该路径确实不可用后，直接向用户说明限制并给出替代方案。**同一件事尝试失败一次就换路径，绝不允许用「再换个脚本试试」的方式反复试探。**
 ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
 `
-    const systemPromptTokens = estimateTokens(pureSystemPrompt)
-    const ragTokens = estimateTokens(ragPrompt)
     const skillTokens = estimateTokens(skillsPrompt)
+    // Skills are already embedded in baseSystemPrompt, but have their own
+    // usage category. Each input section must be counted exactly once.
+    const systemPromptTokens = Math.max(0, estimateTokens(pureSystemPrompt) - skillTokens)
+    const ragTokens = estimateTokens(ragPrompt)
 
     // Tool definitions: estimate separately for builtin vs MCP
     const allToolsList = registry.list()
@@ -1140,6 +1147,7 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
     let rootRun!: RootRun
     let attemptId = ''
     let conversationId = ''
+    let precedingTurnUsage: Record<string, number> = {}
     let resumedPending: RootPending | undefined
     const publishRun = (run: RootRun | null) => {
       if (!run) return
@@ -1187,8 +1195,13 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
           const prior = activeStreams.get(makeAbortKey(tenantId, sessionId))
           const priorSnapshot = prior?.snapshot()
           const priorRun = priorSnapshot?.projection.find(payload => payload.run)?.run as RootRun | undefined
-          if (priorRun?.runId === rootRun.runId) streamBus.seedProjection(priorSnapshot!.projection)
-          else streamBus.seedProjection(persistedTurnProjection(await ctx.history.getFullHistory(ctx), rootRun))
+          if (priorRun?.runId === rootRun.runId) streamBus.seedProjection(priorSnapshot!.projection, priorSnapshot!.subagentWatermarks, priorSnapshot!.projectionTruncated)
+          else {
+            const precedingChildren = await snapshotSubagents.listRunsForParent(tenantId, sessionId)
+            streamBus.seedProjection(persistedTurnProjection(await ctx.history.getFullHistory(ctx), rootRun),
+              precedingChildren.filter(child => child.parentConversationId === rootRun.turnId)
+                .map(child => ({ runId: child.runId, seq: child.lastSeq })))
+          }
         } else {
           streamBus.push('\x00__user_message__' + JSON.stringify({ id: rootRun.userMessageId, role: 'user', content: message,
             conversationId: rootRun.turnId, createdAt: rootRun.createdAt,
@@ -1203,6 +1216,19 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
             if (current) publishRun(cancelledBeforeStart ? await rootRunStore.update(tenantId, rootRun.runId, { status: 'cancelled', stopReason: 'Cancelled before execution started' }, attemptId) : rootRunStore.public(current))
             streamBus.end()
             return false
+          }
+          if (toolResponse) {
+            precedingTurnUsage = await ctx.history.getSessionUsage(ctx, rootRun.turnId)
+            const precedingSnapshot = streamBus.snapshot()
+            const projection = precedingSnapshot.projection
+            const priorUsage = projection.find(frame => frame.usage)?.usage as Record<string, unknown> | undefined
+            // Earlier calls may have been compacted out of the persisted UI
+            // projection. Seed their billing once, keeping occupancy paired
+            // with the last actual input snapshot when one remains available.
+            streamBus.seedProjection([...projection.filter(frame => !frame.usage), { usage: {
+              ...priorUsage, ...precedingTurnUsage, sessionId, runId: rootRun.runId,
+              turnId: rootRun.turnId, attemptId, usageScope: 'turn',
+            } }], precedingSnapshot.subagentWatermarks, precedingSnapshot.projectionTruncated)
           }
           activeStreams.set(makeAbortKey(tenantId, sessionId), streamBus)
           registerActiveChat(tenantId, sessionId, abortController)
@@ -1286,7 +1312,7 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
         const pipeline = createPipeline([])
 
         const generator = pipeline.pipe(strategy.run(prompt, ctx))
-        for await (const chunk of generator) {
+        for await (let chunk of generator) {
           if (chunk.startsWith('\x00__assistant_msg_id__')) {
             const assistantMessageId = chunk.slice('\x00__assistant_msg_id__'.length)
             if (assistantMessageId !== rootRun.assistantMessageId) publishRun(await rootRunStore.update(tenantId, rootRun.runId, { assistantMessageId }, attemptId))
@@ -1296,7 +1322,15 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
           } else if (chunk.includes('\x00__usage__')) {
             try {
               const usageStr = chunk.split('\x00__usage__')[1]
-              const usage = JSON.parse(usageStr)
+              const usage: Record<string, unknown> = { ...continuedTurnUsage(precedingTurnUsage, JSON.parse(usageStr)),
+                sessionId, runId: rootRun.runId, turnId: rootRun.turnId, attemptId, usageScope: 'turn' }
+              if (typeof usage.currentPromptTokens === 'number' || typeof usage.promptTokens === 'number') {
+                usage.contextModelId = typeof usage.modelId === 'string' && usage.modelId
+                  ? usage.modelId : rootRun.actualModelId ?? rootRun.modelId
+              }
+              // The stream remains cumulative for one durable turn, even
+              // though the resumed ReAct strategy starts its counters at zero.
+              chunk = '\x00__usage__' + JSON.stringify(usage)
               finalUsage = { ...finalUsage, ...usage }
               if (typeof usage.modelId === 'string' && usage.modelId && usage.modelId !== rootRun.actualModelId) {
                 publishRun(await rootRunStore.update(tenantId, rootRun.runId, { actualModelId: usage.modelId }, attemptId))
@@ -1472,11 +1506,16 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
       const result = await withHistoryLock(tenantId, async () => {
         // An admission can begin while this reader was queued for the history lock.
         if (pendingAdmissions.get(key)?.size) return null
-        const [storedHistory, runs, todos, changes, jobs] = await Promise.all([
-          createConversationHistory().getFullHistory({ tenantId, sessionId }), rootRunStore.list(tenantId, sessionId),
+        const [storedHistory, runs, todos, changes, jobs, childRuns] = await Promise.all([
+          snapshotHistory.getFullHistory({ tenantId, sessionId }), rootRunStore.list(tenantId, sessionId),
           new TodoStore().list(tenantId, sessionId), new ChangeStore().list(tenantId, sessionId),
-          commandJobs.list({ tenantId, sessionId }),
+          commandJobs.list({ tenantId, sessionId }), snapshotSubagents.listRunsForParent(tenantId, sessionId),
         ])
+        const latestTurnId = runs.at(-1)?.turnId
+        const totals = latestTurnId && snapshotHistory.getUsageTotals
+          ? await snapshotHistory.getUsageTotals({ tenantId, sessionId }, latestTurnId)
+          : { sessionUsage: await snapshotHistory.getSessionUsage({ tenantId, sessionId }),
+            turnUsage: latestTurnId ? await snapshotHistory.getSessionUsage({ tenantId, sessionId }, latestTurnId) : {} }
         const history = publicHistoryMessages(storedHistory)
         // JSONL keeps the pre-compaction transcript on disk but exposes only
         // the summary + recent tail to the model/UI snapshot.  Tell the UI
@@ -1491,11 +1530,19 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
           const run = snapshot.projection.find(payload => payload.run)?.run as RootRun | undefined
           if (run && runs.at(-1)?.runId === run.runId) {
             const projectedRuns = [...runs.filter(item => item.runId !== run.runId), run].sort((a, b) => a.seq - b.seq)
-            return { ...snapshot, source: 'live', sessionId, run, runs: projectedRuns, history, historyCompacted, todos, changes, commandJobs: jobs }
+            const publishedUsage = snapshot.projection.find(frame => frame.usage)?.usage as Record<string, unknown> | undefined
+            const publishedChildren = await snapshotSubagents.getSnapshotsAtSequences(tenantId, snapshot.subagentWatermarks ?? [])
+            const subagentRuns = sessionSubagentRunsAtWatermark(childRuns, { tenantId, sessionId }, run.turnId,
+              [...snapshot.projection, ...publishedChildren.map(child => ({ subagentEvent: { snapshot: child } }))])
+            return { ...snapshot, source: 'live', sessionId, run, runs: projectedRuns, history, historyCompacted, todos, changes, commandJobs: jobs,
+              sessionUsage: sessionUsageAtWatermark(totals.sessionUsage, totals.turnUsage, publishedUsage),
+              sessionSubagentUsage: sessionSubagentUsage(subagentRuns, { tenantId, sessionId }), subagentRuns }
           }
         }
         return { schemaVersion: 1, source: 'persisted', sessionId, eventId: null, finished: true,
-          projection: [], run: runs.at(-1), runs, history, historyCompacted, todos, changes, commandJobs: jobs }
+          projection: [], run: runs.at(-1), runs, history, historyCompacted, todos, changes, commandJobs: jobs,
+          sessionUsage: totals.sessionUsage, sessionSubagentUsage: sessionSubagentUsage(childRuns, { tenantId, sessionId }),
+          subagentRuns: sessionSubagentRunsAtWatermark(childRuns, { tenantId, sessionId }) }
       })
       if (result) return reply.send(success(result))
     }

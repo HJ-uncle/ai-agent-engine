@@ -1,5 +1,6 @@
 import { applyThinkingPreference } from './thinking.js'
-import { observeRequest, observeStreamRequest, anthropicUsage, prepareRequestContext } from './request-attempt.js'
+import { observeRequest, observeStreamRequest, anthropicUsage, anthropicUsageSnapshot, anthropicUsageFromSnapshot, prepareRequestContext,
+  type AnthropicUsageSnapshot } from './request-attempt.js'
 import Anthropic from '@anthropic-ai/sdk'
 import type { LLMAdapter, LLMResponse, LLMAdapterOptions, LLMStreamChunk } from './types.js'
 import type { Message, Tool } from '../agent-context/index.js'
@@ -549,6 +550,7 @@ export class AnthropicAdapter implements LLMAdapter {
     }
 
     let stream: Stream | undefined
+    let usageSnapshot: AnthropicUsageSnapshot | undefined
     const requestContext = prepareRequestContext(options, streamParams, Number(streamParams.max_tokens))
     if (options?.contextWindow && Number.isFinite(options.contextWindow)) streamParams.max_tokens = requestContext.maxTokens
     const observed = await observeStreamRequest(async () => {
@@ -558,11 +560,30 @@ export class AnthropicAdapter implements LLMAdapter {
       stream.on?.('streamEvent', snapshotStart)
       return stream
     }, requestContext, this.provider, String(streamParams.model),
-    (event, previous) => anthropicUsage(event.type === 'message_start' ? event.message?.usage : event.usage, previous),
+    originalEvent => {
+      // SDK 0.20 only updates output_tokens in finalMessage().usage. Read the
+      // actual events, including gateway input/cache corrections, and preserve
+      // absent fields independently instead of reusing its stale final snapshot.
+      const event = startSnapshots.get(originalEvent) ?? originalEvent
+      usageSnapshot = anthropicUsageSnapshot(event.type === 'message_start' ? event.message?.usage : event.usage, usageSnapshot)
+      return anthropicUsageFromSnapshot(usageSnapshot)
+    },
     event => event.type === 'message_stop')
     try {
       for await (const originalEvent of observed) {
         const event = startSnapshots.get(originalEvent) ?? originalEvent
+        const rawUsage = event.type === 'message_start' ? event.message?.usage : event.usage
+        if (rawUsage && usageSnapshot) {
+          const usage = anthropicUsageFromSnapshot(usageSnapshot)!
+          // Only reported fields reach ReAct. In particular, an absent input
+          // must not replace its estimate with a fabricated zero on interruption.
+          yield { done: false,
+            ...(usageSnapshot.input_tokens !== undefined ? { promptTokens: usage.promptTokens } : {}),
+            ...(usageSnapshot.output_tokens !== undefined ? { completionTokens: usage.completionTokens } : {}),
+            ...(usage.cacheHitTokens !== undefined ? { cacheHitTokens: usage.cacheHitTokens } : {}),
+            ...(usage.cacheMissTokens !== undefined ? { cacheMissTokens: usage.cacheMissTokens } : {}),
+          }
+        }
         if (event.type === 'message_start') {
           for (const [index, block] of (event.message?.content ?? []).entries()) yield* acceptBlock(index, block)
         } else if (event.type === 'content_block_start' && event.content_block) {
@@ -596,16 +617,15 @@ export class AnthropicAdapter implements LLMAdapter {
       }
       for (const [index, block] of (finalMessage.content ?? []).entries()) yield* acceptBlock(index, block)
       for (const index of blocks.keys()) yield* finishTool(index)
-      const cacheHitTokens = finalMessage.usage.cache_read_input_tokens
-      const cacheMissTokens = finalMessage.usage.cache_creation_input_tokens
+      const usage = anthropicUsageFromSnapshot(usageSnapshot)
       yield {
         done: true,
         finishReason: reason === 'max_tokens' ? 'length' : reason === 'tool_use' ? 'tool_calls' : 'stop',
-        promptTokens: anthropicUsage(finalMessage.usage)!.promptTokens,
-        completionTokens: finalMessage.usage.output_tokens,
+        ...(usageSnapshot?.input_tokens !== undefined ? { promptTokens: usage!.promptTokens } : {}),
+        ...(usageSnapshot?.output_tokens !== undefined ? { completionTokens: usage!.completionTokens } : {}),
         model: finalMessage.model,
-        ...(cacheHitTokens != null ? { cacheHitTokens } : {}),
-        ...(cacheMissTokens != null ? { cacheMissTokens } : {}),
+        ...(usage?.cacheHitTokens !== undefined ? { cacheHitTokens: usage.cacheHitTokens } : {}),
+        ...(usage?.cacheMissTokens !== undefined ? { cacheMissTokens: usage.cacheMissTokens } : {}),
       }
     } finally {
       stream?.off?.('streamEvent', snapshotStart)

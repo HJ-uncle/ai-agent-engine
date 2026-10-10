@@ -68,12 +68,14 @@ function createBaseAdapter(provider: string, model: string, options?: CreateAdap
 
   // DeepSeek 自动路由（最高优先级，避免 qwen 误判）
   if (shouldUseDeepSeek(provider, model, options?.baseUrl)) {
-    return new DeepSeekAdapter(model, options?.apiKey, options?.baseUrl, options?.deepseek, eh)
+    return new DeepSeekAdapter(model, options?.apiKey, options?.baseUrl,
+      { ...options?.deepseek, ...(options?.capabilities?.vision !== undefined ? { vision: options.capabilities.vision } : {}) }, eh)
   }
 
   // Qwen 自动路由
   if (shouldUseQwen(provider, model, options?.baseUrl)) {
-    return new QwenAdapter(model, options?.apiKey, options?.baseUrl, options?.qwen, eh)
+    return new QwenAdapter(model, options?.apiKey, options?.baseUrl,
+      { ...options?.qwen, ...(options?.capabilities?.vision !== undefined ? { vision: options.capabilities.vision } : {}) }, eh)
   }
 
   switch (provider) {

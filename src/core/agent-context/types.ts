@@ -165,7 +165,11 @@ export interface ConversationHistory {
   /** 会话列表（供历史面板展示） */
   listSessions(tenantId: string): Promise<Array<{ sessionId: string; lastMessage?: string; lastAt?: number; messageCount: number; title?: string; lastReply?: string }>>
   /** 会话 token 使用统计 */
-  getSessionUsage(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<Record<string, number>>
+  getSessionUsage(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>, conversationId?: string): Promise<Record<string, number>>
+  /** Session and selected-turn billing totals from one durable read revision. */
+  getUsageTotals?(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>, conversationId: string): Promise<{
+    sessionUsage: Record<string, number>; turnUsage: Record<string, number>
+  }>
   /** Returns the windowed token count (tokens in the messages returned by getHistory). */
   getTokenCount(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<number>
   /** Returns the raw total token count across ALL stored messages (before windowing). */

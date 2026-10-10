@@ -23,6 +23,7 @@ import { up as up021 } from './migrations/021_accounts.js'
 import { up as up022 } from './migrations/022_account_external_flows.js'
 import { up as up023 } from './migrations/023_account_access_tokens.js'
 import { up as up024 } from './migrations/024_account_identity_profiles.js'
+import { up as up025 } from './migrations/025_conversation_usage_archive.js'
 
 const BUILTIN_TEMPLATES = [
   {
@@ -201,6 +202,7 @@ async function migrate() {
     await up022(db)
     await up023(db)
     await up024(db)
+    await up025(db)
 
     // Seed built-in prompt templates
     for (const tpl of BUILTIN_TEMPLATES) {

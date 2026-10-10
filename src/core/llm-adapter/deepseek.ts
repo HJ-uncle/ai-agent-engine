@@ -56,6 +56,8 @@ const REASONER_MODEL_PATTERNS = [
 ]
 
 export interface DeepSeekAdapterOptions {
+  /** Explicit capability overrides also apply to compatible DeepSeek gateways. */
+  vision?: boolean
   /** 自动给推理模型注入 reasoning_effort（默认 true） */
   autoThinking?: boolean
   /** 思考力度：medium / high / max（默认 medium） */
@@ -70,7 +72,6 @@ export interface DeepSeekAdapterOptions {
 
 export class DeepSeekAdapter extends OpenAIAdapter {
   override readonly provider = 'deepseek'
-  override readonly supportsVision = false
   private readonly dsOptions: Required<DeepSeekAdapterOptions>
 
   constructor(
@@ -84,10 +85,11 @@ export class DeepSeekAdapter extends OpenAIAdapter {
       model,
       apiKey || process.env.DEEPSEEK_API_KEY,
       baseURL || process.env.DEEPSEEK_BASE_URL || DEFAULT_DEEPSEEK_BASE_URL,
-      undefined,
+      options.vision ?? false,
       defaultHeaders,
     )
     this.dsOptions = {
+      vision: options.vision ?? false,
       autoThinking: options.autoThinking ?? true,
       thinkingEffort: options.thinkingEffort ?? 'medium',
       defaultJsonMode: options.defaultJsonMode ?? false,

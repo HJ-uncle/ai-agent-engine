@@ -13,7 +13,7 @@ export type RequestAttempt = {
   provider: string
   model: string
   outcome: 'succeeded' | 'failed' | 'cancelled'
-  usage?: { promptTokens: number; completionTokens: number; cacheHitTokens?: number; cacheMissTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number }
+  usage?: { promptTokens: number; completionTokens: number; cacheHitTokens?: number; cacheMissTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number; unknown?: boolean }
 }
 
 /** Cumulative spend is unlimited unless the operator explicitly configures a finite positive cap. */
@@ -106,7 +106,7 @@ export class RequestBudget {
     if (usage && Number.isFinite(usage.promptTokens) && Number.isFinite(usage.completionTokens)) {
       // Report actual spend even when an estimate was too small; never clamp it to the reservation or cap.
       attempt.charged = Math.max(0, usage.promptTokens) + Math.max(0, usage.completionTokens)
-      attempt.unknown = false
+      attempt.unknown = usage.unknown === true
     } else {
       attempt.charged = attempt.reserved
       attempt.unknown = true

@@ -56,6 +56,8 @@ const TEXT_ONLY_MODEL_PATTERNS = [
 ]
 
 export interface QwenAdapterOptions {
+  /** Explicit capability override takes precedence over model-name detection. */
+  vision?: boolean
   /** 思考模型自动注入 enable_thinking（默认 true） */
   autoThinking?: boolean
   /** 默认开启网络搜索（默认 false） */
@@ -83,15 +85,11 @@ export class QwenAdapter extends OpenAIAdapter {
         || process.env.DASHSCOPE_API_KEY
         || process.env.QWEN_API_KEY,
       baseURL || process.env.QWEN_BASE_URL || DEFAULT_QWEN_BASE_URL,
-      undefined,
+      options.vision ?? !TEXT_ONLY_MODEL_PATTERNS.some((re) => re.test(model)),
       defaultHeaders,
     )
-    // 大多数 Qwen 模型支持视觉；只有明确的纯文本专用型号才关闭
-    // openai.ts 的 detectVisionSupport 遇到 qwen URL 会返回 false，此处强制覆盖
-    const isTextOnly = TEXT_ONLY_MODEL_PATTERNS.some((re) => re.test(model))
-    ;(this as any).supportsVision = !isTextOnly
-
     this.qwenOptions = {
+      vision: this.supportsVision,
       autoThinking:       options.autoThinking      ?? true,
       enableSearch:       options.enableSearch       ?? false,
       includeStreamUsage: options.includeStreamUsage ?? true,

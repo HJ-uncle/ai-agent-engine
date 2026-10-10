@@ -44,9 +44,24 @@ export interface TokenUsage {
   systemToolsTokens: number
   messagesTokens: number
   skillTokens: number
+  /** Provider input includes cached tokens; live turn frames accumulate across calls. */
   promptTokens: number
   completionTokens: number
   totalTokens: number
+  /** Input occupied by the latest model request. This is not cumulative billing. */
+  currentPromptTokens?: number
+  /** Input is a local request estimate until the provider reports its count; never adds billing by itself. */
+  contextUsageEstimated?: boolean
+  /** Capacity of the model used by that latest request; absent means unknown. */
+  contextWindow?: number
+  contextModelId?: string
+  modelId?: string
+  usageScope?: 'turn'
+  sessionId?: string
+  runId?: string
+  turnId?: string
+  attemptId?: string
+  userInputTokens?: number
   conversationId: string | null
   ragTokens?: number
   builtinToolsTokens?: number

@@ -14,7 +14,7 @@ import { FINALIZATION_PROMPT, estimateRequestInput, finalizationMessages, partia
 import { executeRegisteredTool, executeToolBatch, normalizeToolResult, type RegisteredToolCall, type ParsedToolCall } from './tool-batch.js'
 import { resolveCapabilities } from '../model-capabilities/index.js'
 import { ToolProgressTracker, toolFailureLimit } from './tool-progress.js'
-import { modelMessageContent } from '../utils/model-context.js'
+import { estimateModelHistoryTokens, estimateModelMessageTokens, modelMessageContent } from '../utils/model-context.js'
 import { createHash } from 'node:crypto'
 
 const OUTPUT_CONTINUATION_PROMPT = 'The previous model response reached its single-response output limit. Continue the same user task from the retained partial response and history, starting exactly where the response stopped. Do not repeat text already emitted, restart completed work, or repeat executed tools. Use tools only for remaining work; finish normally when the original task is complete.'
@@ -398,10 +398,6 @@ export class ReActStrategy implements LoopStrategy {
 
     /** Names of tools actually called in the last iteration */
     let lastUsedToolNames: Set<string> = new Set()
-    /** 记录迭代 0 的工具定义 token 数，后续迭代的 usage 展示统一使用此值 */
-    let iter0ToolDefsTokens: number | null = null
-    /** Cumulative token count of tool-call result messages across all iterations */
-    let cumulativeToolResultsTokens = 0
     // ── Token 跨轮次累加（用于匹配 DeepSeek 官网统计） ────────────────────────
     let cumulativePromptTokens = 0
     let cumulativeCompletionTokens = 0
@@ -653,6 +649,7 @@ export class ReActStrategy implements LoopStrategy {
         completionTokens: 0,
         finishReason: 'stop',
         model: this.llm.model,
+        contextWindow: llmOptions.contextWindow,
       }
 
       let partialOutput = emittedOutput
@@ -661,28 +658,53 @@ export class ReActStrategy implements LoopStrategy {
       let streamChunkCount = 0
       let receivedTerminalChunk = false
       let failureReason = 'incomplete'
+      let promptUsageReported = false
+      let completionUsageReported = false
+      const toolCallsMap = new Map<number, { id?: string; name?: string; args: string; started: boolean }>()
+      const invocationPromptTokens = () => promptUsageReported ? response.promptTokens : requestInputTokenEstimate
+      const invocationCompletionTokens = () => completionUsageReported ? response.completionTokens
+        : estimateTokens(response.content + response.reasoningContent
+          + (toolCallsMap.size ? JSON.stringify([...toolCallsMap.values()].map(({ id, name, args }) => ({ id, name, args }))) : ''))
+      const contextSnapshot = () => ({ currentPromptTokens: invocationPromptTokens(), contextWindow: response.contextWindow,
+        modelId: response.model, contextUsageEstimated: !promptUsageReported,
+        // Compatible gateways can correct message-start input/cache counters
+        // at the terminal chunk. Retain the sample without claiming finality.
+        contextUsageProvisional: promptUsageReported && !receivedTerminalChunk, requestInputTokenEstimate })
+      let publishedContext: string | undefined
+      const changedContextFrame = () => {
+        const snapshot = JSON.stringify(contextSnapshot())
+        if (snapshot === publishedContext) return undefined
+        publishedContext = snapshot
+        return '\x00__usage__' + snapshot
+      }
       const persistPartial = async (status: 'failed' | 'cancelled', stopReason: string,
         responseDiagnostics?: Record<string, string | number | boolean>) => {
-        if (partialSaved || (!response.content && !response.reasoningContent && !responseDiagnostics)) return
+        if (partialSaved || (!response.content && !response.reasoningContent && !responseDiagnostics
+          && !promptUsageReported && !completionUsageReported && !toolCallsMap.size)) return
         const messageId = ctx.assistantMessageId ?? uuidv4()
-        const promptTokens = response.promptTokens || requestInputTokenEstimate
-        const completionTokens = response.completionTokens || estimateTokens(response.content + response.reasoningContent)
+        const promptTokens = invocationPromptTokens()
+        const completionTokens = invocationCompletionTokens()
         await ctx.history.append({ id: messageId, role: 'assistant', content: response.content,
           reasoningContent: response.reasoningContent, modelId: response.model, createdAt: Date.now(),
           tokens: completionTokens, conversationId,
           usage: { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens,
-            currentPromptTokens: promptTokens, ...(ctx.modelCaps?.contextWindow ? { contextWindow: ctx.modelCaps.contextWindow } : {}),
+            currentPromptTokens: promptTokens, ...(response.contextWindow ? { contextWindow: response.contextWindow } : {}),
             ...(response.cacheHitTokens != null ? { cacheHitTokens: response.cacheHitTokens } : {}),
             ...(response.cacheMissTokens != null ? { cacheMissTokens: response.cacheMissTokens } : {}),
             ...(response.reasoningTokens != null ? { reasoningTokens: response.reasoningTokens } : {}) },
           metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId, partial: true, status, stopReason,
             ...(responseDiagnostics ? { responseDiagnostics } : {}),
-            usageEstimated: response.promptTokens === 0 || response.completionTokens === 0 },
+            contextUsageEstimated: !promptUsageReported,
+            contextUsageProvisional: promptUsageReported && !receivedTerminalChunk, requestInputTokenEstimate,
+            usageEstimated: !promptUsageReported || !completionUsageReported },
         } as Message, ctx)
         partialSaved = true
       }
-      const toolCallsMap = new Map<number, { id?: string; name?: string; args: string; started: boolean }>()
       try {
+        // Context occupancy is useful while the provider is still thinking.
+        // Publish this admitted request's estimate without charging unfinished
+        // input/output; provider input corrects it as soon as it is available.
+        yield changedContextFrame()!
         const stream = this.llm.stream(messages, {
           ...llmOptions,
           ...(ctx.signal ? { signal: ctx.signal } : {}),
@@ -694,13 +716,20 @@ export class ReActStrategy implements LoopStrategy {
           receivedTerminalChunk ||= chunk.done === true
           // Providers may report usage/model before their final chunk (or fail afterwards).
           for (const key of ['promptTokens', 'completionTokens', 'cacheHitTokens', 'cacheMissTokens', 'reasoningTokens'] as const) {
-            if (chunk[key] != null) response[key] = chunk[key]
+            const value = chunk[key]
+            if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+              response[key] = value
+              if (key === 'promptTokens') promptUsageReported = true
+              if (key === 'completionTokens') completionUsageReported = true
+            }
           }
           if (chunk.model && chunk.model !== response.reportedModel) {
             response.model = response.reportedModel = chunk.model
-            yield `\x00__usage__${JSON.stringify({ modelId: chunk.model })}`
           }
           if (chunk.finishReason) response.finishReason = chunk.finishReason
+          if (typeof chunk.contextWindow === 'number' && Number.isFinite(chunk.contextWindow) && chunk.contextWindow > 0) response.contextWindow = chunk.contextWindow
+          const contextFrame = changedContextFrame()
+          if (contextFrame) yield contextFrame
           if (chunk.content) {
             response.content += chunk.content
             emittedOutput += chunk.content
@@ -764,12 +793,20 @@ export class ReActStrategy implements LoopStrategy {
         failureReason = err.name === 'AbortError' || ctx.signal?.aborted ? 'cancelled'
           : err?.code === 'TOKEN_BUDGET_EXCEEDED' ? 'budget' : 'provider_error'
         await persistPartial(failureReason === 'cancelled' ? 'cancelled' : 'failed', failureReason)
-        if (partialSaved) yield `\x00__usage__${JSON.stringify({ modelId: response.model,
-          promptTokens: cumulativePromptTokens + (response.promptTokens || requestInputTokenEstimate),
-          completionTokens: cumulativeCompletionTokens + (response.completionTokens || estimateTokens(response.content + response.reasoningContent)),
-          totalTokens: cumulativePromptTokens + cumulativeCompletionTokens + (response.promptTokens || requestInputTokenEstimate)
-            + (response.completionTokens || estimateTokens(response.content + response.reasoningContent)),
-          currentPromptTokens: response.promptTokens || requestInputTokenEstimate, contextWindow: ctx.modelCaps?.contextWindow })}`
+        if (partialSaved) yield `\x00__usage__${JSON.stringify({
+          promptTokens: cumulativePromptTokens + invocationPromptTokens(),
+          completionTokens: cumulativeCompletionTokens + invocationCompletionTokens(),
+          totalTokens: cumulativePromptTokens + cumulativeCompletionTokens + invocationPromptTokens() + invocationCompletionTokens(),
+          // The interrupted call is already durable. Keep every reported
+          // billing detail at that same watermark, rather than retaining the
+          // preceding call's cache/reasoning counters in the live projection.
+          ...(cumulativeCacheHitTokens !== undefined || response.cacheHitTokens !== undefined
+            ? { cacheHitTokens: (cumulativeCacheHitTokens ?? 0) + (response.cacheHitTokens ?? 0) } : {}),
+          ...(cumulativeCacheMissTokens !== undefined || response.cacheMissTokens !== undefined
+            ? { cacheMissTokens: (cumulativeCacheMissTokens ?? 0) + (response.cacheMissTokens ?? 0) } : {}),
+          ...(cumulativeReasoningTokens !== undefined || response.reasoningTokens !== undefined
+            ? { reasoningTokens: (cumulativeReasoningTokens ?? 0) + (response.reasoningTokens ?? 0) } : {}),
+          ...contextSnapshot() })}`
         const announced = [...toolCallsMap.values()].filter(call => call.started && call.id && call.name)
           .map(call => ({ id: call.id!, name: call.name!, args: {}, _rawArgs: call.args }))
         yield* this.settleUnstarted(announced, ctx, 'Model request ended before this tool could execute')
@@ -807,12 +844,13 @@ export class ReActStrategy implements LoopStrategy {
     }
 
     // Context capacity is stable; physical request spend is enforced by onRequestAttempt.
-    await ctx.runObserver?.onUsage?.({ invocationId: uuidv4(), promptTokens: response.promptTokens,
-      completionTokens: response.completionTokens, cacheHitTokens: response.cacheHitTokens,
-      cacheMissTokens: response.cacheMissTokens })
+    await ctx.runObserver?.onUsage?.({ invocationId: uuidv4(), promptTokens: invocationPromptTokens(),
+      completionTokens: invocationCompletionTokens(), cacheHitTokens: response.cacheHitTokens,
+      cacheMissTokens: response.cacheMissTokens, estimated: !promptUsageReported || !completionUsageReported })
 
     const bd = this.options.promptBreakdown ?? { systemPromptTokens: 0, systemToolsTokens: 0, skillTokens: 0, ragTokens: 0, builtinToolsTokens: 0, mcpToolsTokens: 0 }
-    const completionTokens = response.completionTokens || estimateTokens((response.content || '') + (response.reasoningContent || ''))
+    const completionTokens = invocationCompletionTokens()
+    const usageEstimated = !promptUsageReported || !completionUsageReported
 
     // ── 真实 Token 统计 ──────────────────────────────────────────────
     // 优先使用 LLM API 返回的 promptTokens（真实计费值）。
@@ -821,38 +859,25 @@ export class ReActStrategy implements LoopStrategy {
     const effectiveToolDefsTokens = estimateTokens(
       effectiveTools.map(t => `${t.name}: ${t.description} ${JSON.stringify(t.parameters ?? {})}`).join('\n')
     )
-    // 记录迭代 0 的工具定义 token 数，后续迭代展示时统一使用此值
-    // 避免工具裁剪导致最终回答的 systemToolsTokens 异常偏低（Bug fix）
-    if (iter0ToolDefsTokens === null) {
-      iter0ToolDefsTokens = effectiveToolDefsTokens
-    }
-    // 展示用的工具 token 数：始终使用迭代 0 的值，保证前端显示一致
-    const displayToolDefsTokens = iter0ToolDefsTokens
-
-    const apiPromptTokens = response.promptTokens  // LLM 返回的真实值（0 则降级用本地估算）
-    // localEstimate 需要包含 toolResults / rag，保证降级路径与 API 路径分项一致
     const builtinToolsTokensRaw = (bd as any).builtinToolsTokens ?? 0
     const mcpToolsTokensRaw = (bd as any).mcpToolsTokens ?? 0
-    
-    // 如果上游没传细分或者细分和不等于总数，我们做个兼容兜底
-    let effectiveBuiltin = builtinToolsTokensRaw
-    let effectiveMcp = mcpToolsTokensRaw
-    if (effectiveBuiltin + effectiveMcp === 0) {
-      effectiveBuiltin = displayToolDefsTokens
-      effectiveMcp = 0
-    }
-
+    const configuredToolDefsTokens = builtinToolsTokensRaw + mcpToolsTokensRaw
+    // Only definitions still sent in this invocation occupy its context.
+    const effectiveBuiltin = configuredToolDefsTokens > 0
+      ? Math.round(effectiveToolDefsTokens * builtinToolsTokensRaw / configuredToolDefsTokens) : effectiveToolDefsTokens
+    const effectiveMcp = effectiveToolDefsTokens - effectiveBuiltin
+    const currentToolResultsTokens = messages.filter(message => message.role === 'tool')
+      .reduce((total, message) => total + estimateModelMessageTokens(message), 0)
+    const requestMessagesTokens = estimateModelHistoryTokens(messages)
+    // History already includes tool results. Never add earlier, archived results
+    // a second time, especially after compaction has removed them from input.
     const localEstimate = bd.systemPromptTokens + effectiveBuiltin + effectiveMcp + bd.skillTokens
-      + ((bd as any).ragTokens ?? 0) + (cumulativeToolResultsTokens ?? 0) + historyTokens
-    const promptTokens = apiPromptTokens || localEstimate
+      + ((bd as any).ragTokens ?? 0) + requestMessagesTokens
+    const promptTokens = invocationPromptTokens()
 
-    // ── 计算当前提问 (User Message) 的 Token 数 ────────────────────────
-    // 从 messages 数组中取出最后一条（即本次 User 消息）
-    const lastUserMsg = messages[messages.length - 1]
-    const userInputTokens = lastUserMsg?.role === 'user' ? estimateTokens(lastUserMsg.content) : 0
-    // 注意：historyTokens 包含了 userInputTokens，但不包含工具调用的结果。
-    // 因此，rawMessagesTokens = 历史总和 - 当前提问
-    const rawMessagesTokens = Math.max(0, historyTokens - userInputTokens)
+    const lastUserMsg = [...messages].reverse().find(message => message.role === 'user')
+    const userInputTokens = lastUserMsg ? estimateModelMessageTokens(lastUserMsg) : 0
+    const rawMessagesTokens = Math.max(0, requestMessagesTokens - userInputTokens - currentToolResultsTokens)
 
     // ── 基于真实 Token 消耗推算倍率 ──────────────────────────────
     let finalSystemPromptTokens = bd.systemPromptTokens
@@ -861,21 +886,19 @@ export class ReActStrategy implements LoopStrategy {
     let finalRagTokens = (bd as any).ragTokens ?? 0
     let finalBuiltinToolsTokens = effectiveBuiltin
     let finalMcpToolsTokens = effectiveMcp
-    let finalToolResultsTokens = cumulativeToolResultsTokens ?? 0
+    let finalToolResultsTokens = currentToolResultsTokens
     let finalUserInputTokens = userInputTokens
     let finalMessagesTokens = rawMessagesTokens
 
-    if (apiPromptTokens && localEstimate > 0) {
-      // 真实总数中如果包含 cacheHitTokens，我们需要把它减去，
-      // 因为 cacheHitTokens 通常代表已经缓存的系统提示词或历史消息。
-      // 我们基于“未命中的部分 (cacheMiss) + 命中的部分 (cacheHit)”来做整体等比放大
-      // 对于计费来说，cache hit 是便宜的，但这里我们要在前端展示“它到底占了多大比例”
-      const ratio = apiPromptTokens / localEstimate
-      finalSystemPromptTokens = Math.round(bd.systemPromptTokens * ratio)
+    if (localEstimate > 0) {
+      // Cached input still occupies context. Scale disjoint request components
+      // against the full provider count (or the dispatch estimate if absent).
+      const ratio = promptTokens / localEstimate
+      finalSystemPromptTokens = Math.floor(bd.systemPromptTokens * ratio)
       
       // 如果工具消耗为 0，避免出现 0 / 0 = NaN 的情况
       if (effectiveBuiltin + effectiveMcp > 0) {
-        finalSystemToolsTokens = Math.round((effectiveBuiltin + effectiveMcp) * ratio)
+        finalSystemToolsTokens = Math.floor((effectiveBuiltin + effectiveMcp) * ratio)
         const builtinRatio = effectiveBuiltin / (effectiveBuiltin + effectiveMcp)
         finalBuiltinToolsTokens = Math.round(finalSystemToolsTokens * builtinRatio)
         finalMcpToolsTokens = finalSystemToolsTokens - finalBuiltinToolsTokens
@@ -885,23 +908,23 @@ export class ReActStrategy implements LoopStrategy {
         finalMcpToolsTokens = 0
       }
 
-      finalSkillTokens = Math.round(bd.skillTokens * ratio)
-      finalRagTokens = Math.round(((bd as any).ragTokens ?? 0) * ratio)
+      finalSkillTokens = Math.floor(bd.skillTokens * ratio)
+      finalRagTokens = Math.floor(((bd as any).ragTokens ?? 0) * ratio)
       
-      const cumulativeToolResultsTokensLocal = cumulativeToolResultsTokens ?? 0
-      finalToolResultsTokens = Math.round(cumulativeToolResultsTokensLocal * ratio)
-      finalUserInputTokens = Math.round(userInputTokens * ratio)
+      finalToolResultsTokens = Math.floor(currentToolResultsTokens * ratio)
+      finalUserInputTokens = Math.floor(userInputTokens * ratio)
       
-      // 最后一个分项用减法，保证总和绝对等于 apiPromptTokens，避免 Math.round 产生的舍入误差
-      finalMessagesTokens = Math.max(0, apiPromptTokens - finalSystemPromptTokens - finalSystemToolsTokens - finalSkillTokens - finalRagTokens - finalToolResultsTokens - finalUserInputTokens)
-    } else if (apiPromptTokens) {
+      // Floor each component, then put the rounding remainder in history so
+      // even very small counts add up exactly to the request's prompt tokens.
+      finalMessagesTokens = Math.max(0, promptTokens - finalSystemPromptTokens - finalSystemToolsTokens - finalSkillTokens - finalRagTokens - finalToolResultsTokens - finalUserInputTokens)
+    } else if (promptTokens) {
       // 极端情况：localEstimate 为 0 但有 apiPromptTokens，全算作历史消息
-      finalMessagesTokens = apiPromptTokens
+      finalMessagesTokens = promptTokens
     }
 
     const currentUsage: TokenUsage = {
       currentPromptTokens: promptTokens,
-      contextWindow: ctx.modelCaps?.contextWindow,
+      contextWindow: response.contextWindow,
       systemPromptTokens: finalSystemPromptTokens,
       systemToolsTokens: finalSystemToolsTokens,
       skillTokens: finalSkillTokens,
@@ -985,11 +1008,12 @@ export class ReActStrategy implements LoopStrategy {
             reasoningContent: response.reasoningContent, createdAt: Date.now(), tokens: completionTokens,
             usage: currentUsage as unknown as Record<string, number>, modelId: response.model, conversationId,
             metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId, outputContinuation: true,
+              usageEstimated, contextUsageEstimated: !promptUsageReported,
+              contextUsageProvisional: promptUsageReported && !receivedTerminalChunk, requestInputTokenEstimate,
               continuationIndex: continuedResponseFingerprints.size, stopReason: 'output_limit' },
           } as Message, ctx)
           outputContinuation = { messageId, suffix: String(response.content).slice(-2048) }
-          yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, currentPromptTokens: currentUsage.promptTokens,
-            contextWindow: ctx.modelCaps?.contextWindow, modelId: response.model })}`
+          yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, ...contextSnapshot() })}`
           ctx.logger.info({ iteration, messageId, continuationIndex: continuedResponseFingerprints.size }, 'Continuing model response after output limit')
           // Every continuation goes through normal admission, compaction,
           // physical request accounting and cancellation on the next iteration.
@@ -999,8 +1023,7 @@ export class ReActStrategy implements LoopStrategy {
       }
       if (response.finishReason === 'length' || response.finishReason === 'error') {
         await persistPartial('failed', response.finishReason === 'length' ? 'output_limit' : 'provider_error')
-        yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, currentPromptTokens: currentUsage.promptTokens,
-          contextWindow: ctx.modelCaps?.contextWindow, modelId: response.model })}`
+        yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, ...contextSnapshot() })}`
         yield* this.settleUnstarted(response.toolCalls ?? [], ctx, 'Model response ended before this tool could execute')
         await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: response.finishReason === 'length' ? 'output_limit' : 'provider_error',
           partialOutput: emittedOutput, error: { code: response.finishReason === 'length' ? 'OUTPUT_LIMIT' : 'INCOMPLETE_RESPONSE', message: 'Model response ended before completion', retryable: false } })
@@ -1022,14 +1045,15 @@ export class ReActStrategy implements LoopStrategy {
             id: messageId, role: 'assistant', content: index === 0 ? response.content || '' : '',
             reasoningContent: index === 0 ? response.reasoningContent : undefined,
             toolCall: call, toolCallId: call.id, createdAt: Date.now(),
-            tokens: index === 0 ? response.completionTokens : 0,
+            tokens: index === 0 ? completionTokens : 0,
             usage: index === 0 ? currentUsage as unknown as Record<string, number> : undefined,
             modelId: response.model, conversationId,
-            metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId },
+            metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId,
+              ...(index === 0 ? { usageEstimated, contextUsageEstimated: !promptUsageReported,
+                contextUsageProvisional: promptUsageReported && !receivedTerminalChunk, requestInputTokenEstimate } : {}) },
           } as Message, ctx)
           if (index === 0) yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage,
-            currentPromptTokens: currentUsage.promptTokens, contextWindow: ctx.modelCaps?.contextWindow,
-            conversationId: messageId, modelId: response.model })}`
+            ...contextSnapshot(), conversationId: messageId })}`
           const frame = { name: call.name, toolName: call.name, args: call.args,
             toolCallId: call.id, messageId, rootRunId: ctx.rootRunId, turnId: ctx.turnId }
           yield `\x00__tool_start__${JSON.stringify(frame)}`
@@ -1068,7 +1092,6 @@ export class ReActStrategy implements LoopStrategy {
             step = await settlement.next()
           }
           const settled = step.value
-          cumulativeToolResultsTokens += settled.tokens
           failedToPersist ||= settled.failedToPersist
           blocked ||= Boolean(result.metadata?.blocked)
         }
@@ -1116,8 +1139,7 @@ export class ReActStrategy implements LoopStrategy {
         }
         ctx.logger.warn({ rootRunId: ctx.rootRunId, sessionId: ctx.sessionId, ...responseDiagnostics }, 'Model response had no final answer')
         await persistPartial('failed', 'empty_output', responseDiagnostics)
-        yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, currentPromptTokens: currentUsage.promptTokens,
-          contextWindow: ctx.modelCaps?.contextWindow, modelId: response.model })}`
+        yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, ...contextSnapshot() })}`
         const message = response.reasoningContent?.trim()
           ? '模型仅返回了思考内容，未收到最终回答（EMPTY_OUTPUT）。请检查模型服务后重试。'
           : '未收到模型的最终回答或工具调用（EMPTY_OUTPUT）。模型服务可能返回了空内容，或响应未被正确解析；请检查模型服务后重试。'
@@ -1135,7 +1157,9 @@ export class ReActStrategy implements LoopStrategy {
         id: messageId,
         role: 'assistant',
         content: finalizationReason ? finalizationNotice + '\n\n' + response.content : response.content || '',
-        metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId, ...(finalizationReason ? { partial: true, stopReason: finalizationReason } : {}) },
+        metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId, usageEstimated, contextUsageEstimated: !promptUsageReported,
+          contextUsageProvisional: promptUsageReported && !receivedTerminalChunk, requestInputTokenEstimate,
+          ...(finalizationReason ? { partial: true, stopReason: finalizationReason } : {}) },
         reasoningContent: response.reasoningContent,
         createdAt: Date.now(),
         tokens: completionTokens, // 使用本轮增量生成数
@@ -1152,12 +1176,8 @@ export class ReActStrategy implements LoopStrategy {
 
       yield `\x00__usage__${JSON.stringify({
         ...cumulativeUsage,
-        // 单次调用口径：本轮真实输入 token（上下文占用快照，压缩后下一轮自然回落）
-        currentPromptTokens: currentUsage.promptTokens,
-        // 当前模型的上下文窗口上限（能力表解析结果），前端用量环分母
-        contextWindow: ctx.modelCaps?.contextWindow,
+        ...contextSnapshot(),
         conversationId: messageId,
-        modelId: response.model // 透传模型 ID 供前端计算价格
       })}`
       return
     }

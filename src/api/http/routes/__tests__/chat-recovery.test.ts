@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import Fastify, { type FastifyInstance } from 'fastify'
-import { createClient, type Client } from '@libsql/client'
+import { LocalSqliteProcessClient } from '../../../../storage/sqlite/local-process-client.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as database from '../../../../storage/sqlite/db.js'
 import { up as createTodoTables } from '../../../../storage/sqlite/migrations/006_add_todos_cron.js'
@@ -13,13 +13,14 @@ import { ChangeStore } from '../../../../storage/changes/index.js'
 import { hashFileContent } from '../../../../shared/file-version.js'
 import { StreamBus, activeStreams } from '../../../../core/stream-pipeline/stream-bus.js'
 import { ReActStrategy } from '../../../../core/agent-loop/index.js'
+import { SubagentStore } from '../../../../core/subagent/store.js'
 import { chatRoutes, registerActiveChat, unregisterActiveChat, waitForPriorToolBatch } from '../chat.js'
 
 const tenantId = 'd4-recovery-tenant'
 const sessionId = 'd4-recovery-session'
 const ctx = { tenantId, sessionId }
 let fixture: string
-let db: Client
+let db: LocalSqliteProcessClient
 let app: FastifyInstance
 let baseUrl: string
 let history: ReturnType<typeof createConversationHistory>
@@ -31,7 +32,7 @@ beforeEach(async () => {
   fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-d4-recovery-'))
   vi.stubEnv('DATA_DIR', path.join(fixture, 'agent.db'))
   vi.stubEnv('HISTORY_BACKEND', 'jsonl')
-  db = createClient({ url: 'file::memory:' })
+  db = new LocalSqliteProcessClient({ url: `file:${path.join(fixture, 'agent.db').replace(/\\/g, '/')}` })
   vi.spyOn(database, 'getDb').mockReturnValue(db)
   await createTodoTables(db)
   history = createConversationHistory()
@@ -57,6 +58,7 @@ afterEach(async () => {
   activeStreams.delete(`${tenantId}:${sessionId}`)
   await app?.close()
   db?.close()
+  if (db) await db.whenClosed()
   vi.restoreAllMocks()
   vi.unstubAllEnvs()
   if (path.dirname(fixture) !== path.resolve(os.tmpdir()) || !path.basename(fixture).startsWith('aether-d4-recovery-')) {
@@ -100,6 +102,75 @@ async function replay(lastEventId: string, targetTenant = tenantId) {
 }
 
 describe('D4 chat snapshot and replay HTTP contract', () => {
+  it('preserves session billing and unknown child lower bounds across compaction and archive pages', async () => {
+    let latest = await seedTurn()
+    for (let index = 0; index < 7; index++) {
+      if (index) latest = await seedTurn()
+      await history.append({ id: `metered-${index}`, role: 'assistant', content: `metered call ${index}`,
+        usage: { promptTokens: 20, completionTokens: 5, totalTokens: 25 },
+        conversationId: latest.turnId } as never, ctx)
+    }
+    const children = new SubagentStore(db)
+    const known = await children.createRun({ tenantId, rootSessionId: sessionId, parentSessionId: sessionId,
+      parentConversationId: latest.turnId, parentMessageId: latest.assistantMessageId, parentToolCallId: 'known-child',
+      task: 'review', description: 'known child', modelId: 'fixture-model' })
+    await children.recordUsage(tenantId, known.runId, { invocationId: 'known-call', promptTokens: 8, completionTokens: 2 })
+    const unknown = await children.createRun({ tenantId, rootSessionId: sessionId, parentSessionId: sessionId,
+      parentConversationId: latest.turnId, parentMessageId: latest.assistantMessageId, parentToolCallId: 'unknown-child',
+      task: 'review', description: 'unknown child', modelId: 'fixture-model' })
+    await children.appendSnapshot(tenantId, unknown.runId, 'usage.updated', { usage: { totalTokens: 7, unknown: true } })
+    const before = await snapshot()
+    expect(before.sessionUsage).toMatchObject({ promptTokens: 140, completionTokens: 35, totalTokens: 175 })
+    expect(before.sessionSubagentUsage).toEqual({ totalTokens: 17, count: 2, unknown: 1 })
+    await history.compress!(ctx, async () => 'prior turns retained', 4)
+    const compact = await snapshot()
+    expect(compact.historyCompacted).toBe(true)
+    expect(compact.history.length).toBeLessThan(before.history.length)
+    expect(compact.sessionUsage).toEqual(before.sessionUsage)
+    expect(compact.sessionSubagentUsage).toEqual(before.sessionSubagentUsage)
+    const first = await history.getArchive!(ctx, { offset: 0, limit: 2 })
+    const later = await history.getArchive!(ctx, { offset: 10, limit: 2 })
+    expect(first.messages).toHaveLength(2)
+    expect(later.messages).toHaveLength(2)
+    expect((await snapshot()).sessionUsage).toEqual(before.sessionUsage)
+  })
+
+  it('keeps session parent and child billing at the delivered watermark when DB usage is ahead', async () => {
+    const old = await seedTurn()
+    await history.append({ id: 'prior-metered', role: 'assistant', content: 'prior call', conversationId: old.turnId,
+      usage: { promptTokens: 20, completionTokens: 10, totalTokens: 30 } } as never, ctx)
+    const run = await seedTurn('running')
+    const children = new SubagentStore(db)
+    const child = await children.createRun({ tenantId, rootSessionId: sessionId, parentSessionId: sessionId,
+      parentConversationId: run.turnId, parentMessageId: run.assistantMessageId, parentToolCallId: 'active-child',
+      task: 'review', description: 'active child', modelId: 'fixture-model' })
+    const deliveredChild = await children.recordUsage(tenantId, child.runId, { invocationId: 'child-before', promptTokens: 4, completionTokens: 1 })
+    const bus = attachBus()
+    bus.push('\x00__run__' + JSON.stringify(run))
+    bus.push('\x00__usage__' + JSON.stringify({ promptTokens: 4, completionTokens: 2, totalTokens: 6 }))
+    bus.push('\x00__subagent_event__' + JSON.stringify(deliveredChild))
+    const cursor = bus.lastEventId
+    // These durable calls have not yet been delivered on SSE.
+    await history.append({ id: 'future-metered', role: 'assistant', content: 'future call', conversationId: run.turnId,
+      usage: { promptTokens: 999, completionTokens: 99, totalTokens: 1098 } } as never, ctx)
+    await children.recordUsage(tenantId, child.runId, { invocationId: 'child-future', promptTokens: 5000, completionTokens: 500 })
+    const state = await snapshot()
+    expect(state.eventId).toBe(cursor)
+    expect(state.sessionUsage).toMatchObject({ promptTokens: 24, completionTokens: 12, totalTokens: 36 })
+    expect(state.sessionSubagentUsage).toEqual({ totalTokens: 5, count: 1, unknown: 0 })
+    // The complete transcript can grow beyond the in-memory view. Billing
+    // and delivered child identities must survive that view's eviction.
+    for (let index = 0; index < 4_200; index++) {
+      bus.push('\x00__file_change__' + JSON.stringify({ id: `long-turn-change-${index}` }))
+    }
+    const truncated = await snapshot()
+    expect(truncated.eventId).toBe(bus.lastEventId)
+    expect(truncated.projectionTruncated).toBe(true)
+    expect(truncated.sessionUsage).toEqual(state.sessionUsage)
+    expect(truncated.sessionSubagentUsage).toEqual(state.sessionSubagentUsage)
+    expect(truncated.subagentRuns).toEqual(state.subagentRuns)
+  })
+
   it('does not impose a 30 second answer wait on durable Code tool batches', async () => {
     vi.useFakeTimers()
     try {

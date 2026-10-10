@@ -149,7 +149,7 @@ export class SubagentRunner {
           cacheHitTokens: event.usage?.cacheHitTokens,
           cacheMissTokens: event.usage?.cacheMissTokens,
           cacheWriteTokens: event.usage?.cacheWriteTokens,
-          unknown: !event.usage,
+          unknown: !event.usage || event.usage.unknown === true,
         }))
       }
     }

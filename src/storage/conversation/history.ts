@@ -7,8 +7,25 @@ import { estimateModelHistoryTokens } from '../../core/utils/model-context.js'
 import { compressionSplitIndex, type CompressionOptions } from './compression.js'
 import { applyOSMMultiplier } from '../../core/osm.js'
 import { serializeMessageMetadata, restoreModelInputContent } from './model-input-content.js'
+import { BILLING_USAGE_KEYS } from './usage.js'
+import { up as createUsageArchive } from '../sqlite/migrations/025_conversation_usage_archive.js'
+import type { Client } from '@libsql/client'
 
 type Ctx = { tenantId: string; sessionId: string }
+const usageArchiveReady = new WeakMap<Client, Promise<void>>()
+function ensureUsageArchive(db: Client): Promise<void> {
+  let pending = usageArchiveReady.get(db)
+  if (!pending) {
+    pending = createUsageArchive(db).catch(error => { usageArchiveReady.delete(db); throw error })
+    usageArchiveReady.set(db, pending)
+  }
+  return pending
+}
+function billingCounterSql(key: string): string {
+  return key === 'totalTokens'
+    ? "COALESCE(json_extract(token_usage, '$.totalTokens'), COALESCE(json_extract(token_usage, '$.promptTokens'), 0) + COALESCE(json_extract(token_usage, '$.completionTokens'), 0))"
+    : `json_extract(token_usage, '$.${key}')`
+}
 
 // Micro-compaction changes the model projection to a short marker, but the
 // original tool output remains part of the user-visible transcript.  Keep the
@@ -178,12 +195,14 @@ export class SQLiteConversationHistory implements ConversationHistory {
       return message.id ?? uuidv4()
     }
     const db = getDb()
+    await ensureUsageArchive(db)
     const messageId = message.id ?? uuidv4()
     await db.execute({
       sql: `INSERT INTO conversations
               (tenant_id, session_id, conversation_id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, model_id, metadata)
             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-            WHERE NOT EXISTS (SELECT 1 FROM conversations WHERE tenant_id=? AND session_id=? AND message_id=?)`,
+            WHERE NOT EXISTS (SELECT 1 FROM conversations WHERE tenant_id=? AND session_id=? AND message_id=?)
+              AND NOT EXISTS (SELECT 1 FROM conversation_usage_archive WHERE tenant_id=? AND session_id=? AND message_id=?)`,
       args: [
         ctx.tenantId,
         ctx.sessionId,
@@ -200,6 +219,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
         message.usage ? JSON.stringify(message.usage) : null,
         message.modelId ?? null,
         serializeMessageMetadata(message),
+        ctx.tenantId, ctx.sessionId, messageId,
         ctx.tenantId, ctx.sessionId, messageId,
       ],
     })
@@ -256,6 +276,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
 
   private async getRawMessages(ctx: Ctx): Promise<Message[]> {
     const db = getDb()
+    await ensureUsageArchive(db)
     const result = await db.execute({
       sql: `SELECT id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id, model_id, metadata
             FROM conversations
@@ -266,7 +287,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
     const allRows = result.rows
     const allMessages = allRows.map(rowToMessage)
 
-    // ── 清理孤立数据：找第一条 user 消息，其之前的所有 non-user 行直接删除 ────
+    // 清理孤立的模型消息，但读取历史不能丢失已产生的调用用量。
     // ⚠️ 注意：绝不能在“找不到 user 消息”时删除整个会话！
     //    压缩（compress）后会话可能只剩 system 摘要 + assistant 反馈，此时没有 user 行；
     //    若在此执行 DELETE 会把整个会话历史永久清空（历史数据丢失事故的根因）。
@@ -282,14 +303,21 @@ export class SQLiteConversationHistory implements ConversationHistory {
         .filter((r) => r['role'] !== 'system')
         .map((r) => r['id'] as number)
       if (orphanIds.length > 0) {
-        Promise.all(
-          orphanIds.map((id) =>
-            db.execute({
-              sql: `DELETE FROM conversations WHERE id = ? AND tenant_id = ?`,
-              args: [id, ctx.tenantId],
-            }).catch(() => {})
-          )
-        ).catch(() => {})
+        const firstUser = allRows[firstUserIdx]
+        const prefix = `tenant_id=? AND session_id=? AND role<>'system'
+          AND (created_at<? OR (created_at=? AND id<?))`
+        const args = [ctx.tenantId, ctx.sessionId, firstUser.created_at, firstUser.created_at, firstUser.id]
+        // Preserve billing and remove its model row in one transaction; lazy
+        // JSONL migration can subsequently carry the hidden usage receipt.
+        await db.batch([{
+          sql: `INSERT INTO conversation_usage_archive
+            (tenant_id, session_id, message_id, conversation_id, row_id, token_usage)
+            SELECT tenant_id, session_id, message_id, conversation_id, id, token_usage FROM conversations
+            WHERE ${prefix} AND token_usage IS NOT NULL
+            ON CONFLICT(tenant_id, session_id, message_id) DO UPDATE SET
+              conversation_id=excluded.conversation_id, row_id=excluded.row_id, token_usage=excluded.token_usage`,
+          args,
+        }, { sql: `DELETE FROM conversations WHERE ${prefix}`, args }], 'write')
       }
     }
     // 过滤掉 firstUserIdx 之前的 assistant/tool 孤立行，保留 system 前缀
@@ -330,10 +358,11 @@ export class SQLiteConversationHistory implements ConversationHistory {
   /** 硬删除指定消息 */
   async deleteMessage(messageId: string, tenantId: string): Promise<void> {
     const db = getDb()
-    await db.execute({
+    await ensureUsageArchive(db)
+    await db.batch([{
       sql: `DELETE FROM conversations WHERE message_id = ? AND tenant_id = ?`,
       args: [messageId, tenantId],
-    })
+    }, { sql: 'DELETE FROM conversation_usage_archive WHERE message_id=? AND tenant_id=?', args: [messageId, tenantId] }], 'write')
   }
 
   /** 更新消息内容（用于编辑功能） */
@@ -354,24 +383,30 @@ export class SQLiteConversationHistory implements ConversationHistory {
   /** 硬删除指定ID之后的消息 */
   async deleteMessagesAfterId(id: number, sessionId: string, tenantId: string): Promise<void> {
     const db = getDb()
-    await db.execute({
+    await ensureUsageArchive(db)
+    await db.batch([{
+      sql: `DELETE FROM conversation_usage_archive WHERE tenant_id=? AND session_id=? AND
+        (row_id>? OR message_id IN (SELECT message_id FROM conversations WHERE tenant_id=? AND session_id=? AND id>?))`,
+      args: [tenantId, sessionId, id, tenantId, sessionId, id],
+    }, {
       sql: `DELETE FROM conversations WHERE tenant_id = ? AND session_id = ? AND id > ?`,
       args: [tenantId, sessionId, id],
-    })
+    }], 'write')
   }
 
   /** 硬删除一整轮对话（同一 conversation_id 的所有行） */
   async deleteByConversationId(conversationId: string, tenantId: string): Promise<number> {
     const db = getDb()
+    await ensureUsageArchive(db)
     const before = await db.execute({
       sql: `SELECT COUNT(*) as cnt FROM conversations WHERE conversation_id = ? AND tenant_id = ?`,
       args: [conversationId, tenantId],
     })
     const count = Number(before.rows[0]?.['cnt'] ?? 0)
-    await db.execute({
+    await db.batch([{
       sql: `DELETE FROM conversations WHERE conversation_id = ? AND tenant_id = ?`,
       args: [conversationId, tenantId],
-    })
+    }, { sql: 'DELETE FROM conversation_usage_archive WHERE conversation_id=? AND tenant_id=?', args: [conversationId, tenantId] }], 'write')
     return count
   }
 
@@ -410,60 +445,64 @@ export class SQLiteConversationHistory implements ConversationHistory {
    * This is used by the frontend to show the "lifetime" consumption of the session,
    * even when some messages have been windowed out of the active context.
    */
-  async getSessionUsage(ctx: Ctx): Promise<Record<string, number>> {
+  async getSessionUsage(ctx: Ctx, conversationId?: string): Promise<Record<string, number>> {
+    const totals = await this.getUsageTotals(ctx, conversationId)
+    return conversationId === undefined ? totals.sessionUsage : totals.turnUsage
+  }
+
+  /** Read session and turn counters from one SQL snapshot. */
+  async getUsageTotals(ctx: Ctx, conversationId?: string): Promise<{ sessionUsage: Record<string, number>; turnUsage: Record<string, number> }> {
     const db = getDb()
+    await ensureUsageArchive(db)
+    const fields = BILLING_USAGE_KEYS.flatMap(key => [
+      `COALESCE(SUM(CAST(${billingCounterSql(key)} AS INTEGER)), 0) AS ${key}`,
+      `COALESCE(SUM(CASE WHEN same_turn=1 THEN CAST(${billingCounterSql(key)} AS INTEGER) ELSE 0 END), 0) AS turn_${key}`,
+    ]).join(', ')
     const rs = await db.execute({
-      sql: `SELECT SUM(CAST(json_extract(token_usage, '$.systemPromptTokens') AS INTEGER)) as system_prompt_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.systemToolsTokens') AS INTEGER)) as system_tools_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.messagesTokens') AS INTEGER)) as messages_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.skillTokens') AS INTEGER)) as skill_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.promptTokens') AS INTEGER)) as prompt_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.completionTokens') AS INTEGER)) as completion_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.totalTokens') AS INTEGER)) as total_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.ragTokens') AS INTEGER)) as rag_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.builtinToolsTokens') AS INTEGER)) as builtin_tools_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.mcpToolsTokens') AS INTEGER)) as mcp_tools_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.toolResultsTokens') AS INTEGER)) as tool_results_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.userInputTokens') AS INTEGER)) as user_input_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.cacheHitTokens') AS INTEGER)) as cache_hit_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.cacheMissTokens') AS INTEGER)) as cache_miss_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.reasoningTokens') AS INTEGER)) as reasoning_tokens
-            FROM conversations
-            WHERE tenant_id = ? AND session_id = ?`,
-      args: [ctx.tenantId, ctx.sessionId],
+      sql: `SELECT ${fields} FROM (
+        SELECT token_usage, CASE WHEN conversation_id=? THEN 1 ELSE 0 END AS same_turn FROM (
+          SELECT token_usage, conversation_id FROM conversations WHERE tenant_id=? AND session_id=?
+          UNION ALL
+          SELECT a.token_usage, a.conversation_id FROM conversation_usage_archive a
+          WHERE a.tenant_id=? AND a.session_id=? AND NOT EXISTS (
+            SELECT 1 FROM conversations c WHERE c.tenant_id=a.tenant_id AND c.session_id=a.session_id AND c.message_id=a.message_id
+          )
+        )
+      )`,
+      args: [conversationId ?? null, ctx.tenantId, ctx.sessionId, ctx.tenantId, ctx.sessionId],
     })
     const row = rs.rows[0]
     return {
-      systemPromptTokens: Number(row['system_prompt_tokens'] ?? 0),
-      systemToolsTokens: Number(row['system_tools_tokens'] ?? 0),
-      messagesTokens: Number(row['messages_tokens'] ?? 0),
-      skillTokens: Number(row['skill_tokens'] ?? 0),
-      promptTokens: Number(row['prompt_tokens'] ?? 0),
-      completionTokens: Number(row['completion_tokens'] ?? 0),
-      totalTokens: Number(row['total_tokens'] ?? 0),
-      ragTokens: Number(row['rag_tokens'] ?? 0),
-      builtinToolsTokens: Number(row['builtin_tools_tokens'] ?? 0),
-      mcpToolsTokens: Number(row['mcp_tools_tokens'] ?? 0),
-      toolResultsTokens: Number(row['tool_results_tokens'] ?? 0),
-      userInputTokens: Number(row['user_input_tokens'] ?? 0),
-      cacheHitTokens: Number(row['cache_hit_tokens'] ?? 0),
-      cacheMissTokens: Number(row['cache_miss_tokens'] ?? 0),
-      reasoningTokens: Number(row['reasoning_tokens'] ?? 0),
+      sessionUsage: Object.fromEntries(BILLING_USAGE_KEYS.map(key => [key, Number(row?.[key] ?? 0)])),
+      turnUsage: Object.fromEntries(BILLING_USAGE_KEYS.map(key => [key, Number(row?.[`turn_${key}`] ?? 0)])),
     }
+  }
+
+  /** Compact SQLite calls migrate as billing-only receipts, never model input. */
+  async getArchivedUsage(ctx: Ctx): Promise<Array<{ messageId: string; conversationId?: string; usage: Record<string, number>; dbId: number }>> {
+    const db = getDb()
+    await ensureUsageArchive(db)
+    const rows = await db.execute({ sql: `SELECT a.* FROM conversation_usage_archive a
+      WHERE a.tenant_id=? AND a.session_id=? AND NOT EXISTS (
+        SELECT 1 FROM conversations c WHERE c.tenant_id=a.tenant_id AND c.session_id=a.session_id AND c.message_id=a.message_id)
+      ORDER BY a.row_id ASC`, args: [ctx.tenantId, ctx.sessionId] })
+    return rows.rows.map(row => ({ messageId: String(row.message_id), dbId: Number(row.row_id),
+      ...(row.conversation_id ? { conversationId: String(row.conversation_id) } : {}), usage: JSON.parse(String(row.token_usage)) }))
   }
 
   async clear(ctx: Ctx, options?: { tombstone?: boolean }): Promise<void> {
     const db = getDb()
+    await ensureUsageArchive(db)
     // 默认设置墓碑：阻止后续 N 秒内的 append（防止正在跑的 SSE 流回写"复活"会话）。
     // 调用方若要在删除后立即重建历史（如 compress），应传 { tombstone: false }，
     // 否则紧随其后的 append 会被墓碑静默丢弃，导致重建内容丢失。
     if (options?.tombstone !== false) {
       setTombstone(ctx.tenantId, ctx.sessionId)
     }
-    await db.execute({
+    await db.batch([{
       sql: 'DELETE FROM conversations WHERE tenant_id = ? AND session_id = ?',
       args: [ctx.tenantId, ctx.sessionId],
-    })
+    }, { sql: 'DELETE FROM conversation_usage_archive WHERE tenant_id=? AND session_id=?', args: [ctx.tenantId, ctx.sessionId] }], 'write')
   }
 
   /** 列出该租户下所有有历史消息的 session，按最新消息时间倒序 */
@@ -483,6 +522,15 @@ export class SQLiteConversationHistory implements ConversationHistory {
     const { getSubagentStore } = await import('../../core/subagent/store.js')
     const childSessions = new Set(await getSubagentStore().listChildSessionIds(tenantId))
     const db = getDb()
+    await ensureUsageArchive(db)
+    const billed = await db.execute({ sql: `SELECT session_id, ${BILLING_USAGE_KEYS.map(key =>
+      `COALESCE(SUM(CAST(${billingCounterSql(key)} AS INTEGER)), 0) AS ${key}`).join(', ')}
+      FROM (SELECT session_id, token_usage FROM conversations WHERE tenant_id=?
+        UNION ALL SELECT a.session_id, a.token_usage FROM conversation_usage_archive a WHERE a.tenant_id=?
+        AND NOT EXISTS (SELECT 1 FROM conversations c WHERE c.tenant_id=a.tenant_id AND c.session_id=a.session_id AND c.message_id=a.message_id))
+      GROUP BY session_id`, args: [tenantId, tenantId] })
+    const billingBySession = new Map(billed.rows.map(row => [String(row.session_id),
+      Object.fromEntries(BILLING_USAGE_KEYS.map(key => [key, Number(row[key] ?? 0)]))]))
     const rs = await db.execute({
       sql: `SELECT c.session_id,
                    s.agent_id,
@@ -500,22 +548,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
                    (SELECT content FROM conversations c4
                     WHERE c4.tenant_id = c.tenant_id AND c4.session_id = c.session_id
                       AND c4.role = 'assistant'
-                    ORDER BY c4.created_at DESC LIMIT 1) as last_assistant_msg,
-                   SUM(CAST(json_extract(token_usage, '$.systemPromptTokens') AS INTEGER)) as system_prompt_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.systemToolsTokens') AS INTEGER)) as system_tools_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.messagesTokens') AS INTEGER)) as messages_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.skillTokens') AS INTEGER)) as skill_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.promptTokens') AS INTEGER)) as prompt_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.completionTokens') AS INTEGER)) as completion_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.totalTokens') AS INTEGER)) as total_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.ragTokens') AS INTEGER)) as rag_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.builtinToolsTokens') AS INTEGER)) as builtin_tools_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.mcpToolsTokens') AS INTEGER)) as mcp_tools_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.toolResultsTokens') AS INTEGER)) as tool_results_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.userInputTokens') AS INTEGER)) as user_input_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.cacheHitTokens') AS INTEGER)) as cache_hit_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.cacheMissTokens') AS INTEGER)) as cache_miss_tokens,
-                   SUM(CAST(json_extract(token_usage, '$.reasoningTokens') AS INTEGER)) as reasoning_tokens
+                    ORDER BY c4.created_at DESC LIMIT 1) as last_assistant_msg
             FROM conversations c
             LEFT JOIN sessions s ON s.session_id = c.session_id AND s.tenant_id = c.tenant_id
             WHERE c.tenant_id = ? AND c.role IN ('user','assistant') AND c.session_id NOT LIKE 'subagent-%'
@@ -540,23 +573,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
         lastReply:    row['last_assistant_msg'] ? String(row['last_assistant_msg']) : undefined,
         lastAt:       Number(row['last_at']) * 1000,
         messageCount: Number(row['cnt']),
-        totalUsage: {
-          systemPromptTokens: Number(row['system_prompt_tokens'] ?? 0),
-          systemToolsTokens: Number(row['system_tools_tokens'] ?? 0),
-          messagesTokens: Number(row['messages_tokens'] ?? 0),
-          skillTokens: Number(row['skill_tokens'] ?? 0),
-          promptTokens: Number(row['prompt_tokens'] ?? 0),
-          completionTokens: Number(row['completion_tokens'] ?? 0),
-          totalTokens: Number(row['total_tokens'] ?? 0),
-          ragTokens: Number(row['rag_tokens'] ?? 0),
-          builtinToolsTokens: Number(row['builtin_tools_tokens'] ?? 0),
-          mcpToolsTokens: Number(row['mcp_tools_tokens'] ?? 0),
-          toolResultsTokens: Number(row['tool_results_tokens'] ?? 0),
-          userInputTokens: Number(row['user_input_tokens'] ?? 0),
-          cacheHitTokens: Number(row['cache_hit_tokens'] ?? 0),
-          cacheMissTokens: Number(row['cache_miss_tokens'] ?? 0),
-          reasoningTokens: Number(row['reasoning_tokens'] ?? 0),
-        }
+        totalUsage: billingBySession.get(String(row.session_id))
       }
     })
   }
@@ -602,6 +619,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
     keepRecent: number | CompressionOptions = 6,
   ): Promise<{ preTokens: number; postTokens: number }> {
     const db = getDb()
+    await ensureUsageArchive(db)
     const result = await db.execute({
       sql: `SELECT message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id, model_id, metadata
             FROM conversations
@@ -630,6 +648,13 @@ export class SQLiteConversationHistory implements ConversationHistory {
     const rebuilt: Message[] = [summaryMsg, ...recentMessages]
     const tx = await db.transaction('write')
     try {
+      await tx.execute({ sql: `INSERT INTO conversation_usage_archive
+        (tenant_id, session_id, message_id, conversation_id, row_id, token_usage)
+        SELECT tenant_id, session_id, message_id, conversation_id, id, token_usage FROM conversations
+        WHERE tenant_id=? AND session_id=? AND message_id IS NOT NULL AND token_usage IS NOT NULL
+        ON CONFLICT(tenant_id, session_id, message_id) DO UPDATE SET
+          conversation_id=excluded.conversation_id, row_id=excluded.row_id, token_usage=excluded.token_usage`,
+        args: [ctx.tenantId, ctx.sessionId] })
       await tx.execute({
         sql: `DELETE FROM conversations WHERE tenant_id = ? AND session_id = ?`,
         args: [ctx.tenantId, ctx.sessionId],
@@ -749,23 +774,11 @@ export class SQLiteConversationHistory implements ConversationHistory {
     if (allMessages.length <= 4) return // Nothing to summarize
 
     const toSummarize = allMessages.slice(0, -4)
-    const toKeep = allMessages.slice(-4)
 
     // Build a simple extractive summary without requiring an LLM instance.
     // Callers that want a proper LLM-based summary should override this method.
     const summaryContent = `[Previous conversation summary: ${toSummarize.length} messages exchanged covering: ${toSummarize.map((m) => m.content.slice(0, 50)).join('; ')}]`
 
-    // 同 compress：主动重建历史，不使用墓碑（否则紧随的 append 会被静默丢弃）
-    await this.clear(ctx, { tombstone: false })
-
-    await this.append({
-      role: 'system',
-      content: summaryContent,
-      tokens: estimateTokens(summaryContent),
-    }, ctx)
-
-    for (const msg of toKeep) {
-      await this.append(msg, ctx)
-    }
+    await this.compress(ctx, async () => summaryContent, 4)
   }
 }

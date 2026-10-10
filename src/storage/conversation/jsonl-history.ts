@@ -23,6 +23,7 @@ import type { AgentContext, CompactionArchiveEvidence, ConversationArchive, Conv
 import { estimateTokens } from '../../core/utils/tokens.js'
 import { estimateModelHistoryTokens } from '../../core/utils/model-context.js'
 import { compressionSplitIndex, type CompressionOptions } from './compression.js'
+import { addMessageUsage, emptyBillingUsage } from './usage.js'
 
 type Ctx = Pick<AgentContext, 'tenantId' | 'sessionId'>
 
@@ -35,7 +36,7 @@ const sessionWriteQueues = new Map<string, Promise<void>>()
 interface JsonlRow {
   uuid: string
   parentUuid: string | null
-  type: string // user|assistant|tool|system|summary|update|tombstone
+  type: string // user|assistant|tool|system|summary|update|tombstone|usage (migration billing receipt)
   timestamp: string
   sessionId: string
   tenantId: string
@@ -150,6 +151,9 @@ export class JSONLConversationHistory implements ConversationHistory {
   private readonly rootDir: string
   private readonly maxTokens?: number
   private readonly states = new Map<string, SessionState>()
+  private readonly usageCache = new Map<string, {
+    sessionKey: string; conversationId?: string; revision: string; usage: Record<string, number>
+  }>()
   private cachedBytes = 0
   private readonly maxCachedSessions = 64
   private readonly maxCachedBytes = 64 * 1024 * 1024
@@ -227,6 +231,15 @@ export class JSONLConversationHistory implements ConversationHistory {
 
   private matchesFile(state: SessionState, stat: fs.Stats): boolean {
     return state.mtimeMs === stat.mtimeMs && state.ctimeMs === stat.ctimeMs && state.size === stat.size && state.ino === stat.ino && state.dev === stat.dev
+  }
+
+  private fileRevision(stat: Pick<fs.Stats, 'mtimeMs' | 'ctimeMs' | 'size' | 'ino' | 'dev'>): string {
+    return `${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}:${stat.ino}:${stat.dev}`
+  }
+
+  private async usageRevision(ctx: Ctx): Promise<string | undefined> {
+    try { return this.fileRevision(await fs.promises.stat(this.filePath(ctx))) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; return undefined }
   }
 
   /** Cache only the active projection; evicting a cache never deletes durable history. */
@@ -319,7 +332,7 @@ export class JSONLConversationHistory implements ConversationHistory {
       if (row.type === 'tombstone') tombstoneRows.push(row)
       else if (row.type === 'update' && row.targetUuid) collectUpdate(updates, row)
       else if (row.type === 'summary') summaries.push(row)
-      else rows.push(row)
+      else if (row.type !== 'usage') rows.push(row)
     }
 
     state.nextSeq = maxSeq + 1
@@ -465,8 +478,10 @@ export class JSONLConversationHistory implements ConversationHistory {
     const { SQLiteConversationHistory } = await import('./history.js')
     const sqlite = new SQLiteConversationHistory()
     let rows: Message[] = []
+    let receipts: Awaited<ReturnType<typeof sqlite.getArchivedUsage>> = []
     try {
       rows = await sqlite.getFullHistory(ctx)
+      receipts = await sqlite.getArchivedUsage(ctx)
     } catch {
       rows = []
     }
@@ -476,13 +491,26 @@ export class JSONLConversationHistory implements ConversationHistory {
     // test/upgrade step; a permanent marker here would make subsequent reads
     // skip those rows forever. Only a non-empty migration writes a durable
     // marker, while an explicit clear writes the separate `cleared` marker.
-    if (rows.length === 0) return
+    if (rows.length === 0 && receipts.length === 0) return
     const file = this.filePath(ctx)
     const tmp = `${file}.tmp`
     this.assertNotSymbolicLink(tmp, 'Conversation migration temporary file')
     let seq = 1
     let parentUuid: string | null = null
     const lines: string[] = []
+    // SQLite may already have discarded summarized content. Preserve its
+    // billing receipts without inventing recoverable messages or expanding
+    // the model context. They still carry exact message/turn deletion keys.
+    for (const receipt of receipts) {
+      const usage = emptyBillingUsage()
+      addMessageUsage(usage, { role: 'assistant', content: '', usage: receipt.usage })
+      lines.push(JSON.stringify({ uuid: receipt.messageId, parentUuid: null, type: 'usage',
+        timestamp: new Date().toISOString(), ...ctx, isSidechain: ctx.sessionId.startsWith('subagent-'),
+        dbSeq: seq++, ...(receipt.conversationId ? { conversationId: receipt.conversationId } : {}),
+        payload: { id: receipt.messageId, role: 'assistant', content: '', usage,
+          ...(receipt.conversationId ? { conversationId: receipt.conversationId } : {}) },
+      } satisfies JsonlRow))
+    }
     for (const msg of rows) {
       const uuid = msg.id || crypto.randomUUID()
       const convId = (msg as unknown as Record<string, unknown>).conversationId
@@ -514,6 +542,7 @@ export class JSONLConversationHistory implements ConversationHistory {
     const key = this.sessionKey(ctx)
     return this.enqueue(key, async () => {
       const state = await this.loadSession(ctx)
+      const precedingRevision = this.fileRevision(state)
       const uuid = message.id || crypto.randomUUID()
       if (state.messages.some(existing => existing.id === uuid)) return uuid
       const convId = (message as unknown as Record<string, unknown>).conversationId
@@ -546,9 +575,11 @@ export class JSONLConversationHistory implements ConversationHistory {
       }
       const persisted = JSON.parse(encoded) as JsonlRow
       let addedBytes = 0
+      let visibleMessage: Message | undefined
       if (row.dbSeq > state.visibleAfterSeq
         && !state.deletedUuids.has(uuid) && !(row.conversationId && state.deletedConvIds.has(row.conversationId))) {
         const stored = this.rowToMessage(persisted)
+        visibleMessage = stored
         // Replace the array so callers holding a previous read get a stable
         // snapshot, as they did when append forced a complete rebuild.
         state.messages = [...state.messages, stored]
@@ -561,6 +592,15 @@ export class JSONLConversationHistory implements ConversationHistory {
       state.mtimeMs = stat.mtimeMs; state.ctimeMs = stat.ctimeMs
       state.size = stat.size; state.ino = stat.ino; state.dev = stat.dev
       this.cacheState(key, state, state.cacheBytes + addedBytes)
+      // Normal append can advance cached billing incrementally. Maintenance
+      // and external writes instead force a revision-checked archive rescan.
+      for (const entry of this.usageCache.values()) {
+        if (entry.sessionKey !== key || entry.revision !== precedingRevision) continue
+        if (visibleMessage && (entry.conversationId === undefined || entry.conversationId === row.conversationId)) {
+          addMessageUsage(entry.usage, visibleMessage)
+        }
+        entry.revision = this.fileRevision(stat)
+      }
       return uuid
     })
   }
@@ -648,7 +688,7 @@ export class JSONLConversationHistory implements ConversationHistory {
 
     const messages: Message[] = []
     for (const { row, ordinal: rowOrdinal } of entries) {
-      if (row.type === 'summary' || row.type === 'update' || row.type === 'tombstone') continue
+      if (row.type === 'summary' || row.type === 'update' || row.type === 'tombstone' || row.type === 'usage') continue
       if (rowOrdinal <= clearAfterOrdinal) continue
       if (isTruncated(row.dbSeq, rowOrdinal)) continue
       if (deletedUuids.has(row.uuid)) continue
@@ -771,6 +811,11 @@ export class JSONLConversationHistory implements ConversationHistory {
 
   /** Two bounded-memory passes; apply edits/deletions before returning archive evidence. */
   async searchArchive(ctx: Ctx, options: HistorySearchOptions): Promise<HistorySearchResult> {
+    return this.scanArchive(ctx, options)
+  }
+
+  private async scanArchive(ctx: Ctx, options: HistorySearchOptions,
+    visit?: (message: Message) => void, includeUsageReceipts = false): Promise<HistorySearchResult> {
     const file = this.filePath(ctx)
     // A cold search must not materialize the active projection or the entire
     // transcript. Only consult the legacy source when no JSONL file exists.
@@ -817,7 +862,7 @@ export class JSONLConversationHistory implements ConversationHistory {
       const messages: Message[] = []
       let totalMatches = 0
       for await (const { row, ordinal } of rows()) {
-        if (!row.payload || !['user', 'assistant', 'tool', 'system'].includes(row.type)) continue
+        if (!row.payload || !['user', 'assistant', 'tool', 'system', ...(includeUsageReceipts ? ['usage'] : [])].includes(row.type)) continue
         if (ordinal <= clearAfter || isTruncated(row.dbSeq, ordinal) || deleted.has(row.uuid) || row.conversationId && deletedTurns.has(row.conversationId)) continue
         if (options.messageId && row.uuid !== options.messageId || options.role && row.type !== options.role) continue
         const message = this.rowToMessage(row), update = updates.get(row.uuid)
@@ -825,6 +870,7 @@ export class JSONLConversationHistory implements ConversationHistory {
         const text = typeof message.content === 'string' ? message.content : JSON.stringify(message.content)
         const inputText = typeof message.modelInputContent === 'string' ? message.modelInputContent : JSON.stringify(message.modelInputContent ?? '')
         if (query && !text.toLocaleLowerCase().includes(query) && !inputText.toLocaleLowerCase().includes(query)) continue
+        visit?.(message)
         if (totalMatches >= offset && messages.length < limit) messages.push(message)
         totalMatches++
       }
@@ -915,12 +961,12 @@ export class JSONLConversationHistory implements ConversationHistory {
     for (const name of fs.readdirSync(dir)) {
       if (!name.endsWith('.jsonl')) continue
       const ctx: Ctx = { tenantId, sessionId: name.slice(0, -'.jsonl'.length) }
-      const state = await this.loadSession(ctx)
-      const hit = state.messages.filter(
-        (m) => (m as unknown as Record<string, unknown>).conversationId === conversationId,
-      )
-      if (hit.length > 0) {
-        count += hit.length
+      let matchingMessages = 0
+      await this.scanArchive(ctx, { limit: 0 }, message => {
+        if ((message as Message & { conversationId?: string }).conversationId === conversationId) matchingMessages++
+      }, true)
+      if (matchingMessages > 0) {
+        count += matchingMessages
         await this.appendRow(ctx, {
           uuid: crypto.randomUUID(),
           parentUuid: null,
@@ -1052,20 +1098,51 @@ export class JSONLConversationHistory implements ConversationHistory {
     return result
   }
 
-  async getSessionUsage(ctx: Ctx): Promise<Record<string, number>> {
-    const state = await this.loadSession(ctx)
-    let totalTokens = 0
-    let messageCount = 0
-    let userTokens = 0
-    let assistantTokens = 0
-    for (const m of state.messages) {
-      messageCount++
-      const t = m.tokens ?? 0
-      totalTokens += t
-      if (m.role === 'user') userTokens += t
-      else if (m.role === 'assistant') assistantTokens += t
+  async getSessionUsage(ctx: Ctx, conversationId?: string): Promise<Record<string, number>> {
+    const result = await this.readUsageTotals(ctx, conversationId)
+    return conversationId === undefined ? result.sessionUsage : result.turnUsage
+  }
+
+  async getUsageTotals(ctx: Ctx, conversationId: string): Promise<{
+    sessionUsage: Record<string, number>; turnUsage: Record<string, number>
+  }> {
+    return this.readUsageTotals(ctx, conversationId)
+  }
+
+  private async readUsageTotals(ctx: Ctx, conversationId?: string): Promise<{
+    sessionUsage: Record<string, number>; turnUsage: Record<string, number>
+  }> {
+    const sessionKey = this.sessionKey(ctx), sessionCacheKey = `${sessionKey}\0session`
+    const turnCacheKey = `${sessionKey}\0turn:${conversationId}`
+    const revision = await this.usageRevision(ctx)
+    const cachedSession = this.usageCache.get(sessionCacheKey), cachedTurn = this.usageCache.get(turnCacheKey)
+    if (revision !== undefined && cachedSession?.revision === revision
+      && (conversationId === undefined || cachedTurn?.revision === revision)) {
+      this.usageCache.delete(sessionCacheKey); this.usageCache.set(sessionCacheKey, cachedSession)
+      if (conversationId !== undefined && cachedTurn) {
+        this.usageCache.delete(turnCacheKey); this.usageCache.set(turnCacheKey, cachedTurn)
+      }
+      return { sessionUsage: { ...cachedSession.usage }, turnUsage: cachedTurn ? { ...cachedTurn.usage } : emptyBillingUsage() }
     }
-    return { totalTokens, messageCount, userTokens, assistantTokens }
+    const usage = emptyBillingUsage(), turnUsage = emptyBillingUsage()
+    // Billing comes from every retained provider call, including rows covered
+    // by summaries. Do not load the full transcript or count content estimates
+    // as provider usage. Tombstones and edits use the same archive fold rules.
+    await this.scanArchive(ctx, { limit: 0 }, message => {
+      addMessageUsage(usage, message)
+      if (conversationId !== undefined && (message as Message & { conversationId?: string }).conversationId === conversationId) addMessageUsage(turnUsage, message)
+    }, true)
+    const latestRevision = await this.usageRevision(ctx)
+    if (revision !== undefined && revision === latestRevision) {
+      this.usageCache.delete(sessionCacheKey)
+      this.usageCache.set(sessionCacheKey, { sessionKey, revision, usage: { ...usage } })
+      if (conversationId !== undefined) {
+        this.usageCache.delete(turnCacheKey)
+        this.usageCache.set(turnCacheKey, { sessionKey, conversationId, revision, usage: { ...turnUsage } })
+      }
+      while (this.usageCache.size > this.maxCachedSessions) this.usageCache.delete(this.usageCache.keys().next().value!)
+    }
+    return { sessionUsage: usage, turnUsage }
   }
 
   async compress(
@@ -1134,6 +1211,7 @@ export class JSONLConversationHistory implements ConversationHistory {
       messageCount: number
       title?: string
       lastReply?: string
+      totalUsage?: Record<string, number>
     }>
   > {
     const { getSubagentStore } = await import('../../core/subagent/store.js')
@@ -1146,6 +1224,7 @@ export class JSONLConversationHistory implements ConversationHistory {
       messageCount: number
       title?: string
       lastReply?: string
+      totalUsage?: Record<string, number>
     }> = []
     if (!fs.existsSync(dir)) return result
     for (const name of fs.readdirSync(dir)) {
@@ -1168,6 +1247,7 @@ export class JSONLConversationHistory implements ConversationHistory {
         lastReply: asText(lastAssistant),
         messageCount: msgs.length,
         lastAt: state.mtimeMs,
+        totalUsage: await this.getSessionUsage({ tenantId, sessionId }),
       })
     }
     result.sort((a, b) => (b.lastAt ?? 0) - (a.lastAt ?? 0))
@@ -1201,7 +1281,7 @@ export class JSONLConversationHistory implements ConversationHistory {
       if (state.byId.has(messageId)) return { tenantId, sessionId }
       // Compaction hides covered rows only from model replay. Editing,
       // deleting and exact-ID lookup must still locate retained originals.
-      if ((await this.searchArchive({ tenantId, sessionId }, { messageId, limit: 1 })).messages.length) return { tenantId, sessionId }
+      if ((await this.scanArchive({ tenantId, sessionId }, { messageId, limit: 1 }, undefined, true)).messages.length) return { tenantId, sessionId }
     }
     return null
   }

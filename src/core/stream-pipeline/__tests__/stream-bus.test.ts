@@ -21,17 +21,148 @@ function frame(name: string, payload: unknown): string {
 }
 
 describe('StreamBus resumable subscriptions', () => {
+  it('retains the latest context and billing snapshot when long-turn details exceed the projection cap', () => {
+    const bus = new StreamBus(new AbortController())
+    const usage = { currentPromptTokens: 10_000, promptTokens: 44_000, contextWindow: 100_000 }
+    bus.push(frame('run', { runId: 'long-turn' }))
+    bus.push(frame('usage', usage))
+    for (let index = 0; index < 4_200; index++) bus.push(frame('file_change', { id: `change-${index}` }))
+    expect(bus.snapshot().projectionTruncated).toBe(true)
+    expect(bus.snapshot().projection.find(frame => frame.usage)?.usage).toEqual(usage)
+    expect(bus.snapshot().projection.find(frame => frame.run)?.run).toEqual({ runId: 'long-turn' })
+  })
+
+  it('retains detached child sequence watermarks through detail eviction and approval seeding', () => {
+    const bus = new StreamBus(new AbortController())
+    const child = { runId: 'child-1', lastSeq: 2 }
+    bus.push(frame('subagent_event', { snapshot: child }))
+    for (let index = 0; index < 4_200; index++) bus.push(frame('file_change', { id: `change-${index}` }))
+    const snapshot = bus.snapshot()
+    expect(snapshot.projection.find(frame => frame.subagentEvent)).toBeUndefined()
+    expect(snapshot.subagentWatermarks).toEqual([{ runId: child.runId, seq: 2 }])
+    const resumed = new StreamBus(new AbortController())
+    resumed.seedProjection(snapshot.projection, snapshot.subagentWatermarks, snapshot.projectionTruncated)
+    snapshot.subagentWatermarks![0].seq = 1000
+    expect(resumed.snapshot().subagentWatermarks).toEqual([{ runId: child.runId, seq: 2 }])
+    expect(resumed.snapshot().projectionTruncated).toBe(true)
+    resumed.push(frame('tool_result', { metadata: { subagent: { ...child, lastSeq: 3 } } }))
+    resumed.push(frame('subagent_event', { snapshot: child }))
+    expect(resumed.snapshot().subagentWatermarks).toEqual([{ runId: child.runId, seq: 3 }])
+  })
+
+  it('retains active approval controls beyond thousands of answered predecessors', () => {
+    const bus = new StreamBus(new AbortController())
+    const answered = Array.from({ length: 4_200 }, (_, index) => ({ requestId: `answered-${index}`, status: 'answered' }))
+    const pending = { requestId: 'active', toolCallId: 'active-tool', status: 'pending' }
+    bus.push(frame('run', { runId: 'long-run', status: 'waiting', pending: [...answered, pending] }))
+    const snapshot = bus.snapshot()
+    const run = snapshot.projection.find(frame => frame.run)?.run as { pending: Array<typeof pending> }
+    expect(run.pending.filter(item => item.status === 'pending')).toEqual([pending])
+    expect(run.pending).toHaveLength(4_096)
+    expect(snapshot.projectionTruncated).toBe(true)
+  })
+
+  it('bounds tool-only projection streams while retaining their usage snapshot', () => {
+    const bus = new StreamBus(new AbortController())
+    bus.push(frame('usage', { promptTokens: 44_000, currentPromptTokens: 10_000 }))
+    for (let index = 0; index < 4_200; index++) bus.push(frame('tool_start', { toolCallId: `tool-${index}`, name: 'read_file' }))
+    const snapshot = bus.snapshot()
+    expect(snapshot.projectionTruncated).toBe(true)
+    expect(snapshot.projection.length).toBeLessThanOrEqual(4_096)
+    expect(snapshot.projection.find(frame => frame.usage)?.usage).toMatchObject({ promptTokens: 44_000, currentPromptTokens: 10_000 })
+    expect(snapshot.projection.find(frame => (frame.toolStart as { toolCallId?: string })?.toolCallId === 'tool-0')).toBeUndefined()
+  })
+
+  it('replays a shrinking context snapshot with increasing cumulative input and preserves it after model-only updates', async () => {
+    const bus = new StreamBus(new AbortController())
+    const first = bus.push(frame('usage', { currentPromptTokens: 12_000, promptTokens: 12_000, contextWindow: 100_000 }))!
+    bus.push(frame('usage', { currentPromptTokens: 22_000, promptTokens: 34_000, contextWindow: 100_000 }))
+    bus.push(frame('usage', { currentPromptTokens: 10_000, promptTokens: 44_000, contextWindow: 100_000 }))
+    bus.push(frame('usage', { modelId: 'fallback' }))
+    bus.end()
+    expect(bus.snapshot().projection).toEqual([{ usage: {
+      currentPromptTokens: 10_000, promptTokens: 44_000, contextWindow: 100_000, modelId: 'fallback',
+    } }])
+    const replay = await collect(busToIterable(bus, first.id))
+    expect(replay.map(event => JSON.parse(event.chunk.slice('\x00__usage__'.length)))).toEqual([
+      { currentPromptTokens: 22_000, promptTokens: 34_000, contextWindow: 100_000 },
+      { currentPromptTokens: 10_000, promptTokens: 44_000, contextWindow: 100_000 }, { modelId: 'fallback' },
+    ])
+  })
+
   it('merges model-only usage updates without summing or losing cumulative counters', () => {
     const bus = new StreamBus(new AbortController())
     bus.push(frame('usage', { promptTokens: 20, completionTokens: 10, totalTokens: 30, modelId: 'primary' }))
     bus.push(frame('usage', { modelId: 'fallback' }))
     expect(bus.snapshot().projection).toEqual([
-      { usage: { promptTokens: 20, completionTokens: 10, totalTokens: 30, modelId: 'fallback' } },
+      { usage: { promptTokens: 20, completionTokens: 10, totalTokens: 30, modelId: 'fallback', contextModelId: 'primary' } },
     ])
     bus.push(frame('usage', { promptTokens: 40, completionTokens: 15, totalTokens: 55, modelId: 'fallback' }))
     expect(bus.snapshot().projection).toEqual([
-      { usage: { promptTokens: 40, completionTokens: 15, totalTokens: 55, modelId: 'fallback' } },
+      { usage: { promptTokens: 40, completionTokens: 15, totalTokens: 55, modelId: 'fallback', contextModelId: 'fallback' } },
     ])
+  })
+
+  it('recovers a pending invocation input without charging its estimate as completed usage', () => {
+    const bus = new StreamBus(new AbortController())
+    bus.push(frame('usage', { currentPromptTokens: 14_577, promptTokens: 130_000, completionTokens: 9_352,
+      totalTokens: 139_352, contextWindow: 1_000_000, modelId: 'primary', contextUsageEstimated: false }))
+    bus.push(frame('usage', { currentPromptTokens: 17_123, contextWindow: 64_000,
+      modelId: 'fallback', contextUsageEstimated: true }))
+    expect(bus.snapshot().projection.find(item => item.usage)?.usage).toEqual({ currentPromptTokens: 17_123,
+      promptTokens: 130_000, completionTokens: 9_352, totalTokens: 139_352, contextWindow: 64_000,
+      modelId: 'fallback', contextModelId: 'fallback', contextUsageEstimated: true,
+      confirmedContext: { used: 14_577, contextWindow: 1_000_000, modelId: 'primary' } })
+    bus.push(frame('usage', { currentPromptTokens: 16_885, contextWindow: 64_000,
+      modelId: 'fallback', contextUsageEstimated: false }))
+    expect(bus.snapshot().projection.find(item => item.usage)?.usage).toMatchObject({ currentPromptTokens: 16_885,
+      totalTokens: 139_352, contextUsageEstimated: false })
+    bus.push(frame('usage', { currentPromptTokens: 18_000, contextWindow: 64_000 }))
+    expect(bus.snapshot().projection.find(item => item.usage)?.usage).not.toHaveProperty('contextUsageEstimated')
+  })
+
+  it('retains confirmed context through estimates, provisional gateway counts, eviction and recovery', () => {
+    const bus = new StreamBus(new AbortController())
+    bus.push(frame('usage', { currentPromptTokens: 55_327, contextWindow: 128_000, modelId: 'model',
+      contextUsageEstimated: false, contextUsageProvisional: false, promptTokens: 164_025, totalTokens: 164_025 }))
+    bus.push(frame('usage', { currentPromptTokens: 64_673, contextWindow: 128_000, modelId: 'model',
+      contextUsageEstimated: true, contextUsageProvisional: false, requestInputTokenEstimate: 64_673 }))
+    bus.push(frame('usage', { currentPromptTokens: 19_848, contextWindow: 128_000, modelId: 'model',
+      contextUsageEstimated: false, contextUsageProvisional: true, requestInputTokenEstimate: 64_673 }))
+    for (let index = 0; index < 4_200; index++) bus.push(frame('file_change', { id: `context-change-${index}` }))
+    const snapshot = bus.snapshot()
+    expect(snapshot.projection.find(item => item.usage)?.usage).toMatchObject({ currentPromptTokens: 19_848,
+      totalTokens: 164_025, contextUsageProvisional: true, requestInputTokenEstimate: 64_673,
+      confirmedContext: { used: 55_327, contextWindow: 128_000, modelId: 'model' } })
+    const recovered = new StreamBus(new AbortController())
+    recovered.seedProjection(snapshot.projection)
+    expect(recovered.snapshot().projection.find(item => item.usage)?.usage).toEqual(snapshot.projection.find(item => item.usage)?.usage)
+    recovered.push(frame('usage', { currentPromptTokens: 56_306, contextWindow: 128_000, modelId: 'model',
+      contextUsageEstimated: false, contextUsageProvisional: false, requestInputTokenEstimate: 64_673,
+      promptTokens: 220_331, completionTokens: 1_295, totalTokens: 221_626 }))
+    expect(recovered.snapshot().projection.find(item => item.usage)?.usage).toMatchObject({ currentPromptTokens: 56_306,
+      totalTokens: 221_626, confirmedContext: { used: 56_306, contextWindow: 128_000, modelId: 'model' } })
+    recovered.push(frame('usage', { currentPromptTokens: 20_000, contextUsageEstimated: false }))
+    expect(recovered.snapshot().projection.find(item => item.usage)?.usage).toMatchObject({ confirmedContext: { used: 20_000, modelId: 'model' } })
+    expect(recovered.snapshot().projection.find(item => item.usage)?.usage).not.toHaveProperty('contextUsageProvisional')
+    expect(recovered.snapshot().projection.find(item => item.usage)?.usage).not.toHaveProperty('requestInputTokenEstimate')
+  })
+
+  it('does not retain an older context window when a fresh invocation has an unknown window', () => {
+    const bus = new StreamBus(new AbortController())
+    bus.push(frame('usage', { promptTokens: 12_000, currentPromptTokens: 12_000, contextWindow: 100_000 }))
+    bus.push(frame('usage', { modelId: 'new-provider' }))
+    expect(bus.snapshot().projection[0].usage).toMatchObject({ contextWindow: 100_000, currentPromptTokens: 12_000 })
+    bus.push(frame('usage', { promptTokens: 22_000, currentPromptTokens: 10_000, modelId: 'new-provider' }))
+    expect(bus.snapshot().projection).toEqual([{ usage: { promptTokens: 22_000, currentPromptTokens: 10_000, modelId: 'new-provider', contextModelId: 'new-provider' } }])
+  })
+
+  it('preserves input model ownership across model-only frames and snapshots without a window', () => {
+    const bus = new StreamBus(new AbortController())
+    bus.push(frame('usage', { promptTokens: 12_000, currentPromptTokens: 12_000, modelId: 'input-model' }))
+    bus.push(frame('usage', { modelId: 'new-model' }))
+    expect(bus.snapshot().projection).toEqual([{ usage: { promptTokens: 12_000, currentPromptTokens: 12_000,
+      modelId: 'new-model', contextModelId: 'input-model' } }])
   })
 
   it('publishes a newer cancellation after a waiting stream ends and replays it after the old watermark', async () => {
