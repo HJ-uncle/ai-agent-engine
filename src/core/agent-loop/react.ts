@@ -16,6 +16,7 @@ import { resolveCapabilities } from '../model-capabilities/index.js'
 import { ToolProgressTracker, toolFailureLimit } from './tool-progress.js'
 import { estimateModelHistoryTokens, estimateModelMessageTokens, modelMessageContent } from '../utils/model-context.js'
 import { createHash } from 'node:crypto'
+import { browserOutputPresentation } from '../utils/browser-output.js'
 
 const OUTPUT_CONTINUATION_PROMPT = 'The previous model response reached its single-response output limit. Continue the same user task from the retained partial response and history, starting exactly where the response stopped. Do not repeat text already emitted, restart completed work, or repeat executed tools. Use tools only for remaining work; finish normally when the original task is complete.'
 
@@ -225,16 +226,18 @@ export class ReActStrategy implements LoopStrategy {
     // character estimate; persisting it verbatim makes the next request fail
     // before the loop has a chance to compact the history.
     const outputLimit = ctx.toolProfile === 'code' ? getCodeToolOutputMaxChars() : getToolOutputMaxChars()
-    const truncated = truncateToolOutput(stripSubagentMeta(output), outputLimit)
+    const presentation = browserOutputPresentation(stripSubagentMeta(output), outputLimit)
+    const truncated = presentation?.displayOutput ?? truncateToolOutput(stripSubagentMeta(output), outputLimit)
+    const modelInputContent = presentation?.modelInputContent
     const outputWasTruncated = truncated.length < output.length
     if (outputWasTruncated) (metadata as Record<string, unknown>).outputTruncated = true
-    const tokens = estimateTokens(truncated)
+    const tokens = estimateTokens(modelInputContent ?? truncated)
     if (result.status !== 'waiting') {
       const subagent = result.metadata?.subagent as { runId?: string } | undefined
       try {
         await ctx.history.append({
           id: subagent?.runId ? 'subagent-result:' + subagent.runId : `tool-result:${ctx.rootRunId ?? ctx.runId ?? ctx.conversationId ?? ctx.sessionId}:${call.id}`,
-          role: 'tool', content: truncated, toolCallId: call.id, toolName: call.name,
+          role: 'tool', content: truncated, ...(modelInputContent !== undefined ? { modelInputContent } : {}), toolCallId: call.id, toolName: call.name,
           createdAt: Date.now(), tokens, metadata, conversationId: ctx.conversationId,
         } as Message, ctx)
       } catch (error) {

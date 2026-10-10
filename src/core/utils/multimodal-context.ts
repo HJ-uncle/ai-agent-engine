@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { browserOutputPresentation } from './browser-output.js'
 import { estimateTokens } from './tokens.js'
 
 type ImageIdentity = { url: string; mimeType?: string; lowDetail?: boolean }
@@ -78,6 +79,8 @@ function imageDescription(image: ImageIdentity): string {
 
 /** Text summaries keep image identity/retrieval evidence, never base64 pixel text. */
 export function multimodalSummaryText(content: unknown, toolPayload = false): string {
+  const browserPreview = toolPayload ? browserOutputPresentation(content) : undefined
+  if (browserPreview) return browserPreview.modelInputContent
   const imageTool = toolPayload ? imageToolPayload(content) : undefined
   if (imageTool) return JSON.stringify({ ...imageTool, dataUrl: imageDescription({ url: imageTool.dataUrl }) })
   if (!Array.isArray(content)) return typeof content === 'string' ? content : JSON.stringify(content)

@@ -801,3 +801,34 @@ describe('thinking Off during finalization', () => {
     expect(requests[1].systemPrompt).toContain('探索已停止')
   })
 })
+
+describe('browser screenshot settlement', () => {
+  it('persists and streams screenshot pixels but sends only semantic metadata to the next model request', async () => {
+    const f = fixture()
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDdwAAAAASUVORK5CYII='
+    const dataUrl = 'data:image/png;base64,' + Buffer.concat([Buffer.from(png, 'base64'), Buffer.alloc(100_000)]).toString('base64')
+    const output = JSON.stringify({
+      tab: { title: 'Login', url: 'https://example.test/login', navigationId: 3 }, text: 'Log in',
+      elements: [{ role: 'button', name: 'Log in', ref: '3:1' }], viewport: { width: 1000, height: 700 },
+      screenshot: { dataUrl, width: 1, height: 1 }, truncated: false,
+    })
+    vi.mocked(f.ctx.tools.execute).mockResolvedValue({ success: true, output })
+    let requests = 0
+    f.llm.stream = vi.fn(async function* () {
+      if (requests++ === 0) yield { done: true, toolCalls: [{ id: 'browser-read', name: 'browser_snapshot', args: '{}', index: 0 }] }
+      else yield { done: true, content: 'Snapshot inspected.' }
+    })
+    const frames = await f.run()
+    const stored = f.history.find(message => message.role === 'tool')!
+    expect(JSON.parse(stored.content as string).screenshot.dataUrl).toBe(dataUrl)
+    expect(stored.modelInputContent).not.toContain('data:image')
+    expect(stored.tokens).toBeLessThan(4000)
+    const nextInput = vi.mocked(f.llm.stream).mock.calls[1][0]
+    expect(JSON.stringify(nextInput)).not.toContain('data:image')
+    expect(JSON.stringify(nextInput)).toContain('retainedForDisplay')
+    const frame = frames.find(value => value.startsWith('\x00__tool_result__'))!
+    expect(JSON.parse(JSON.parse(frame.slice('\x00__tool_result__'.length)).output).screenshot.dataUrl).toBe(dataUrl)
+    const observed = vi.mocked(f.ctx.runObserver!.onToolEnd!).mock.calls[0][0]
+    expect(JSON.parse(observed.output!).screenshot.dataUrl).toBe(dataUrl)
+  })
+})

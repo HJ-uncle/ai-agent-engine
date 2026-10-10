@@ -1,3 +1,5 @@
+import { browserOutputPresentation } from '../utils/browser-output.js'
+
 /** The same envelopes are used by live SSE and the current-turn snapshot. */
 export type StreamEnvelope = Record<string, unknown>
 export interface SubagentWatermark { runId: string; seq: number }
@@ -7,6 +9,7 @@ export interface SubagentWatermark { runId: string; seq: number }
 // for older content when these limits are reached.
 const MAX_PROJECTION_SLOTS = 4096
 const MAX_TEXT_CHARS = 512 * 1024
+const MAX_BROWSER_IMAGE_CHARS = 16 * 1024 * 1024
 const PROJECTION_TRUNCATION_MARKER = '\n[…部分内容已归档，可从历史记录读取…]\n'
 
 const jsonFrames: Record<string, string> = {
@@ -51,6 +54,7 @@ interface ToolProjection {
   result?: Record<string, unknown>
   end?: Record<string, unknown>
   pending?: StreamEnvelope
+  browserPreviews?: Record<string, { imageChars: number; model: string }>
 }
 interface PayloadProjection { kind: 'payload'; payload: StreamEnvelope }
 type ProjectionSlot = ToolProjection | PayloadProjection
@@ -125,14 +129,19 @@ export class CurrentTurnProjection {
           ? (typeof slot.args?.args === 'string' ? slot.args.args : '') + data.args : data.args }
         if (typeof slot.args.args === 'string') slot.args.args = this.appendText('', slot.args.args)
       } else if (field === 'toolEnd' || field === 'toolResult') {
-        if (field === 'toolEnd') slot.end = { ...slot.end, ...this.boundRecord(data) }
-        else slot.result = { ...slot.end, ...slot.result, ...this.boundRecord(data) }
+        const bounded = this.boundToolResult(data, slot)
+        if (field === 'toolEnd') slot.end = { ...slot.end, ...bounded }
+        else {
+          slot.result = { ...slot.end, ...slot.result, ...bounded }
+          slot.end = undefined
+        }
         if (data.status !== 'waiting') slot.pending = undefined
       } else {
         // The modern permission envelope supersedes its legacy ask_user alias.
         if (field === 'permissionRequest' || !slot.pending?.permissionRequest) slot.pending = { [field]: this.boundRecord(data) }
       }
       this.trimSlots()
+      if (field === 'toolEnd' || field === 'toolResult') this.trimBrowserImages()
       return
     }
     if (field === 'run' && data) {
@@ -196,6 +205,21 @@ export class CurrentTurnProjection {
     return value
   }
 
+  private boundToolResult(value: Record<string, unknown>, slot: ToolProjection): Record<string, unknown> {
+    const { output, outputPreview, ...rest } = value
+    const bounded = this.boundRecord(rest)
+    for (const [key, item] of Object.entries({ output, outputPreview })) {
+      if (item === undefined) continue
+      const preview = browserOutputPresentation(item, MAX_TEXT_CHARS)
+      bounded[key] = preview?.displayOutput ?? this.boundValue(item)
+      if (preview?.imageChars) {
+        slot.browserPreviews ??= {}
+        slot.browserPreviews[key] = { imageChars: preview.imageChars, model: preview.modelInputContent }
+      } else if (slot.browserPreviews) delete slot.browserPreviews[key]
+    }
+    return bounded
+  }
+
   private boundRecord(value: Record<string, unknown>): Record<string, unknown> {
     return this.boundValue(value) as Record<string, unknown>
   }
@@ -223,6 +247,27 @@ export class CurrentTurnProjection {
       // transcript details. Eviction must never reset the visible counters.
       this.slots.delete(candidate)
       this._truncated = true
+    }
+  }
+
+  private trimBrowserImages(): void {
+    // Pixel evidence has its own aggregate bound. Scan only when tool results
+    // change; scanning all tool slots for each text token slows long turns.
+    // Older screenshots remain in durable history after projection eviction.
+    let imageChars = 0
+    for (const slot of this.slots.values()) if (slot.kind === 'tool') {
+      imageChars += Object.values(slot.browserPreviews ?? {}).reduce((total, image) => total + image.imageChars, 0)
+    }
+    if (imageChars > MAX_BROWSER_IMAGE_CHARS) for (const slot of this.slots.values()) {
+      if (slot.kind !== 'tool' || !slot.browserPreviews) continue
+      for (const [key, image] of Object.entries(slot.browserPreviews)) {
+        if (slot.end?.[key] !== undefined) slot.end[key] = image.model
+        if (slot.result?.[key] !== undefined) slot.result[key] = image.model
+        imageChars -= image.imageChars
+      }
+      slot.browserPreviews = undefined
+      this._truncated = true
+      if (imageChars <= MAX_BROWSER_IMAGE_CHARS) break
     }
   }
 

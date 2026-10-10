@@ -1,10 +1,13 @@
 import type { Message } from '../agent-context/types.js'
+import { browserOutputPresentation } from './browser-output.js'
 import { estimateTokens } from './tokens.js'
 import { estimateMultimodalContent, imageToolPayload } from './multimodal-context.js'
 
 /** The provider snapshot is independent from editable UI attachment/display content. */
 export function modelMessageContent(message: Message): Message['content'] {
-  return message.modelInputContent ?? message.content
+  if (message.modelInputContent != null) return message.modelInputContent
+  // Historical browser previews predate the separate model input column.
+  return (message.role === 'tool' ? browserOutputPresentation(message.content)?.modelInputContent : undefined) ?? message.content
 }
 
 /** Only fields consumed by the provider adapters; replay/UI data stays in storage. */

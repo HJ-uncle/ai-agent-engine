@@ -1,4 +1,5 @@
 import type { AgentContext } from '../agent-context/types.js'
+import { browserOutputPresentation } from '../utils/browser-output.js'
 import { BudgetExceededError, RequestBudget, parseRequestTokenLimit, type RequestAttempt } from './budget.js'
 import { SubagentPool } from './pool.js'
 import { getSubagentStore, SubagentStore } from './store.js'
@@ -123,7 +124,7 @@ export class SubagentRunner {
         await emit(await this.store.appendSnapshot(tenantId, runId, 'tool.completed', (current) => ({
           toolCalls: current.toolCalls.map((item) => item.id === tool.toolCallId ? {
             ...item, status: controller.signal.aborted ? 'cancelled' : tool.success ? 'succeeded' : 'failed',
-            output: boundedText(tool.output, 32_000), ...(tool.error ? { error: tool.error } : {}), finishedAt: Date.now(),
+            output: browserOutputPresentation(tool.output, 32_000)?.modelInputContent ?? boundedText(tool.output, 32_000), ...(tool.error ? { error: tool.error } : {}), finishedAt: Date.now(),
             ...(tool.durationMs !== undefined ? { durationMs: tool.durationMs } : {}),
           } : item),
         })))

@@ -40,7 +40,9 @@ export async function preflightCommand(rawArgs: unknown, ctx: AgentContext): Pro
     throw error
   }
   const decision = await policyEngine.evaluate({ command: args.command, args: args.args ?? [], tenantId: ctx.tenantId,
-    sessionId: ctx.sessionId, ignoreSessionApproval: ctx.toolProfile === 'code',
+    // Security mode belongs to the visible root conversation; child agents keep
+    // separate sessions for history and job ownership.
+    sessionId: ctx.rootSessionId ?? ctx.sessionId, ignoreSessionApproval: ctx.toolProfile === 'code',
     approved: Boolean(ctx.currentToolCallId && ctx.currentToolCallId === ctx.approvedToolCallId),
     background: args.background === true })
   if (decision.action === 'allow') return undefined
@@ -71,7 +73,7 @@ export const cmdTool: Tool = {
     const blocked = await preflightCommand(rawArgs, ctx)
     if (blocked) return blocked
     const { command, args = [], cwd: cwdArg, timeoutMs, background = false } = rawArgs as CommandArgs
-    const mode = getSecurityMode(ctx.tenantId, ctx.sessionId)
+    const mode = getSecurityMode(ctx.tenantId, ctx.rootSessionId ?? ctx.sessionId)
     workspaceManager.init(ctx)
     const cwd = fs.realpathSync(workspaceManager.resolveSafePath(ctx, cwdArg ?? workspaceManager.getWorkingDirectory(ctx)))
     workspaceManager.resolveSafePath(ctx, cwd)

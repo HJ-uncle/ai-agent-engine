@@ -280,3 +280,23 @@ it('honors an explicitly configured child cap under an unlimited HTTP parent wit
   expect(budget.snapshot).toEqual({ charged: 0, reserved: 0, remaining: Infinity, unknown: false })
   expect(budget.canAfford(600_000)).toBe(true)
 })
+
+it('keeps browser tool overview JSON complete without copying archived screenshot pixels into parent snapshots', async () => {
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDdwAAAAASUVORK5CYII=', 'base64')
+  const dataUrl = 'data:image/png;base64,' + Buffer.concat([png, Buffer.alloc(100_000)]).toString('base64')
+  const output = JSON.stringify({ tab: { title: 'Login', url: 'https://example.test/' }, text: 'Log in',
+    elements: [{ role: 'button', name: 'Log in', bounds: { x: 20, y: 30, width: 80, height: 32 } }],
+    viewport: { width: 1000, height: 700 }, screenshot: { dataUrl, width: 1, height: 1 }, truncated: false })
+  const run = await runner.run(input(), parent, async ({ observer }) => {
+    await observer.onToolStart({ toolCallId: 'browser-1', name: 'browser_snapshot', args: {} })
+    await observer.onToolEnd({ toolCallId: 'browser-1', name: 'browser_snapshot', success: true, output, durationMs: 3 })
+    await observer.onOutcome({ status: 'succeeded', output: 'Inspected the page.' })
+  })
+  const preview = run.toolCalls[0].output!
+  expect(preview.length).toBeLessThanOrEqual(32_000)
+  expect(preview).not.toContain('data:image')
+  expect(JSON.parse(preview)).toMatchObject({ screenshot: { retainedForDisplay: true, width: 1, height: 1 },
+    elements: [{ name: 'Log in', bounds: { x: 20, y: 30, width: 80, height: 32 } }] })
+  expect((await store.getRun('tenant-a', run.runId))?.toolCalls[0].output).toBe(preview)
+  expect(events.at(-1)?.snapshot.toolCalls[0].output).toBe(preview)
+})

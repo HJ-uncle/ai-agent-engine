@@ -66,6 +66,24 @@ describe('D7 command tools with real policy and processes', () => {
     expect(await cmdTool.preflight!({ command: executable, args: ['-v'] }, ctx)).toBeUndefined()
   })
 
+  it('uses live root mode for commands despite a stale child snapshot, including permission revocation', async () => {
+    const child = { ...ctx, rootSessionId: ctx.sessionId, sessionId: ctx.sessionId + '-child' }
+    const input = { command: 'cmd.exe', args: ['/d', '/s', '/c', 'netstat -ano | findstr :8765'] }
+    setSecurityMode(child.tenantId, child.sessionId, 'standard')
+    try {
+      expect(await cmdTool.preflight!(input, child)).toBeUndefined()
+      setSecurityMode(child.tenantId, child.sessionId, 'full-access')
+      setSecurityMode(ctx.tenantId, ctx.sessionId, 'standard')
+      expect(await cmdTool.preflight!(input, child)).toMatchObject({ needsConfirmation: true })
+      setSecurityMode(ctx.tenantId, ctx.sessionId, 'safe')
+      expect(await cmdTool.preflight!(input, child)).toMatchObject({ success: false, metadata: { blocked: true } })
+      const foreign = { ...child, tenantId: child.tenantId + '-other' }
+      setSecurityMode(ctx.tenantId, ctx.sessionId, 'full-access')
+      vi.stubEnv('DEFAULT_SECURITY_MODE', 'standard')
+      expect(await cmdTool.preflight!(input, foreign)).toMatchObject({ needsConfirmation: true })
+    } finally { clearSecurityMode(child.tenantId, child.sessionId) }
+  })
+
   it.skipIf(process.platform !== 'win32')('rejects multiline batch arguments before policy approval or process launch', async () => {
     const batch = script('multiline.cmd', '@echo off\r\necho should-not-run > unexpected.txt')
     const start = vi.spyOn(commandJobs, 'start')
