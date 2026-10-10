@@ -5,13 +5,13 @@
  * - F32_BLOB 在 Turso 和较新 libsql 本地客户端中可用
  * - 老旧 libsql 本地客户端不支持 F32_BLOB 时自动回退到 BLOB
  */
-import { createClient } from '@libsql/client'
+import { LocalSqliteProcessClient } from '../sqlite/local-process-client.js'
 import type { Client } from '@libsql/client'
 import path from 'node:path'
 import fs from 'node:fs'
 
-let client: Client | null = null
-let initialized = false
+let client: LocalSqliteProcessClient | null = null
+let initialization: Promise<void> | null = null
 
 export function resolveMemoryDbPath(): string {
   // DATA_DIR 语义与主 DB 对齐：始终视为 SQLite 数据库**文件**路径
@@ -26,8 +26,9 @@ export function resolveMemoryDbPath(): string {
 }
 
 export function getMemoryDb(): Client {
-  if (client) return client
-  client = createClient({ url: `file:${resolveMemoryDbPath()}` })
+  if (client && !client.closed) return client
+  if (client?.closed) { client = null; initialization = null }
+  client = new LocalSqliteProcessClient({ url: `file:${resolveMemoryDbPath()}` }, { cacheKb: 2000, mmapBytes: 0 })
   return client
 }
 
@@ -61,12 +62,18 @@ async function tryExecuteWithF32BlobFallback(db: Client, sql: string): Promise<v
   }
 }
 
-export async function initMemoryDb(schemaStatements: string[]): Promise<void> {
-  if (initialized) return
-  initialized = true
-
+export function initMemoryDb(schemaStatements: string[]): Promise<void> {
   const db = getMemoryDb()
+  if (initialization) return initialization
+  const pending = initializeMemorySchema(db, schemaStatements).catch(error => {
+    if (initialization === pending) initialization = null
+    throw error
+  })
+  initialization = pending
+  return pending
+}
 
+async function initializeMemorySchema(db: Client, schemaStatements: string[]): Promise<void> {
   // PRAGMA 非关键，失败忽略
   await Promise.all([
     db.execute('PRAGMA journal_mode = WAL').catch(() => {}),
@@ -103,6 +110,9 @@ async function migrateMemoryScopes(db: Client): Promise<void> {
   }
 
   const nodeColumns = await columns('memory_nodes')
+  if (!nodeColumns.has('embedding_space')) {
+    await db.execute('ALTER TABLE memory_nodes ADD COLUMN embedding_space TEXT')
+  }
   if (!nodeColumns.has('scope')) {
     await db.execute("ALTER TABLE memory_nodes ADD COLUMN scope TEXT NOT NULL DEFAULT 'global'")
   }
@@ -121,12 +131,15 @@ async function migrateMemoryScopes(db: Client): Promise<void> {
 
   await db.execute('CREATE INDEX IF NOT EXISTS idx_memory_nodes_scope ON memory_nodes(tenant_id, scope, session_id)')
   await db.execute('CREATE INDEX IF NOT EXISTS idx_memory_edges_scope ON memory_edges(tenant_id, scope, session_id)')
+  await db.execute('CREATE INDEX IF NOT EXISTS idx_memory_edges_source_scope ON memory_edges(tenant_id, scope, source_node_id, session_id)')
+  await db.execute('CREATE INDEX IF NOT EXISTS idx_memory_edges_target_scope ON memory_edges(tenant_id, scope, target_node_id, session_id)')
 }
 
-export function closeMemoryDb(): void {
-  if (client) {
-    client.close()
-    client = null
-    initialized = false
-  }
+/** Clear ownership immediately; callers cleaning up files can await native handle release. */
+export function closeMemoryDb(): Promise<void> {
+  const previous = client
+  client = null
+  initialization = null
+  previous?.close()
+  return previous?.whenClosed() ?? Promise.resolve()
 }

@@ -575,23 +575,40 @@ const BUILTINS = {
           date: fmtDate(stat?.mtime),
         }
       })
-      const sizeWidth = Math.max(4, ...rows.map(row => textWidth(row.size)))
-      const metadataWidth = 4 + sizeWidth + 16 + 6
-      const nameWidth = Math.min(Math.max(12, ...rows.map(row => textWidth(row.name))), width - metadataWidth)
-      if (nameWidth >= 12) {
-        outln(`${C.bold}${padCells('名称', nameWidth)}  类型  ${padCells('大小', sizeWidth, true)}  修改时间${C.reset}`)
+      // Keep the table as wide as its content requires. The old fixed 12-cell
+      // name column made a one-file listing look like a stretched report and
+      // could push the last column into an automatic terminal wrap. Name is
+      // still the first column (the conventional file-listing scan order),
+      // while long names are capped to the available width and wrapped.
+      const gap = 2
+      const typeWidth = Math.max(textWidth('类型'), ...rows.map(row => textWidth(row.type)))
+      const sizeWidth = Math.max(textWidth('大小'), ...rows.map(row => textWidth(row.size)))
+      const dateWidth = Math.max(textWidth('修改时间'), ...rows.map(row => textWidth(row.date)))
+      const fixedWidth = typeWidth + sizeWidth + dateWidth + gap * 3
+      const availableNameWidth = Math.max(1, width - fixedWidth)
+      const naturalNameWidth = Math.max(textWidth('名称'), ...rows.map(row => textWidth(row.name)))
+      const nameWidth = Math.min(naturalNameWidth, availableNameWidth)
+      const tableWidth = nameWidth + fixedWidth
+
+      // With enough room, render one compact table and a separator that ends
+      // at the final column. It must never be a full-terminal rule when the
+      // rows are shorter than the viewport.
+      if (nameWidth >= Math.min(naturalNameWidth, 12) && tableWidth <= width) {
+        outln(`${C.bold}${padCells('名称', nameWidth)}${' '.repeat(gap)}${padCells('类型', typeWidth)}${' '.repeat(gap)}${padCells('大小', sizeWidth, true)}${' '.repeat(gap)}${padCells('修改时间', dateWidth)}${C.reset}`)
+        outln(`${C.dim}${'─'.repeat(tableWidth)}${C.reset}`)
         for (const row of rows) {
           const lines = wrapCells(row.name, nameWidth)
-          outln(`${styledName(padCells(lines[0], nameWidth), row.entry)}  ${row.type}  ${padCells(row.size, sizeWidth, true)}  ${row.date}`)
+          outln(`${styledName(padCells(lines[0], nameWidth), row.entry)}${' '.repeat(gap)}${padCells(row.type, typeWidth)}${' '.repeat(gap)}${padCells(row.size, sizeWidth, true)}${' '.repeat(gap)}${row.date}`)
           for (const line of lines.slice(1)) outln(styledName(line, row.entry))
         }
       } else {
+        // A narrow terminal gets readable stacked records rather than a
+        // squeezed header whose columns no longer communicate their values.
         for (const row of rows) {
           for (const line of wrapCells(row.name, width)) outln(styledName(line, row.entry))
           const indent = width > 4 ? '  ' : ''
-          for (const detail of [`${row.type} · ${row.size}`, `修改时间 ${row.date}`]) {
-            for (const line of wrapCells(detail, width - indent.length)) outln(indent + line)
-          }
+          const detail = `类型 ${row.type} · 大小 ${row.size} · 修改时间 ${row.date}`
+          for (const line of wrapCells(detail, Math.max(1, width - indent.length))) outln(indent + line)
           outln()
         }
       }
@@ -900,6 +917,10 @@ for (const hint of [
     outln(line.replace(/help(?: <命令>)?/g, command => `${C.bold}${C.cyan}${command}${C.reset}`))
   }
 }
+// Keep a compact identity marker at the end of the startup block.  Small
+// xterm viewports scroll the first banner lines out of view while the shell
+// starts; the marker keeps the product identity visible beside the prompt.
+outln(`${C.bold}${C.cyan}Workspace Shell${C.reset}`)
 outln()
 
 // ── Tab 补全 ──────────────────────────────────────────────────────────────

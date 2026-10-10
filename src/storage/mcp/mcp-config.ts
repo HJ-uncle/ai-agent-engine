@@ -9,6 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { logger } from '../../observability/index.js'
 import { projectDataPath, projectDataReadPaths } from '../../core/project-storage.js'
+import { validateOperationTimeout } from '../../core/utils/operation-timeout.js'
 
 // ─── 标准 MCP Server 数据格式 ─────────────────────────────────────────────────
 export interface McpServerRecord {
@@ -22,6 +23,8 @@ export interface McpServerRecord {
   env?: Record<string, string>
   url?: string
   headers?: Record<string, string>
+  /** Omitted = transport defaults; 0 = no deadline for this server. */
+  timeoutMs?: number
   /** Optional per-server tool allow list. Names here are MCP definition names. */
   disabledTools?: string[]
   isBuiltIn: boolean
@@ -177,6 +180,7 @@ export function importConfigDocument(
     if (!/^[a-z0-9][a-z0-9_-]*$/.test(id)) throw new Error(`服务器 id 无效：${id}`)
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error(`服务器 ${id} 必须是对象`)
     const source = raw as Record<string, unknown>
+    validateOperationTimeout(source.timeoutMs === null ? undefined : source.timeoutMs)
     const transportType = (source.transportType ?? source.type ?? source.transport) as unknown
     if (!['stdio', 'sse', 'http', 'streamableHttp'].includes(String(transportType))) {
       throw new Error(`服务器 ${id} 的 transport/type 不受支持`)
@@ -196,6 +200,7 @@ export function importConfigDocument(
     const { transport: _transport, type: _type, ...rest } = source
     normalized[id] = {
       ...rest as Omit<McpServerRecord, 'id'>,
+      ...(source.timeoutMs === null ? { timeoutMs: undefined } : {}),
       name,
       description,
       enabled: source.enabled !== false,
@@ -262,6 +267,8 @@ export function getServer(id: string, projectRoot?: string, scope?: 'project' | 
 /** A transport switch must not retain credentials from the previous transport. */
 function transportFields(entry: Omit<McpServerRecord, 'id'>): Omit<McpServerRecord, 'id'> {
   const result = { ...entry }
+  validateOperationTimeout(result.timeoutMs)
+  if (result.timeoutMs === undefined) delete result.timeoutMs
   delete result.scope
   if (result.transportType === 'stdio') {
     delete result.url

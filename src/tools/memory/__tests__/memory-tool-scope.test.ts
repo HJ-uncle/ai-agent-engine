@@ -12,15 +12,15 @@ describe('memory tools scope policy', () => {
   const previousDataDir = process.env.DATA_DIR
 
   beforeEach(async () => {
-    closeMemoryDb()
+    await closeMemoryDb()
     fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-memory-tools-'))
     process.env.DATA_DIR = path.join(fixture, 'agent.db')
     await initMemoryDb(MEMORY_SCHEMA)
     tools = createMemoryTools()
   })
 
-  afterEach(() => {
-    closeMemoryDb()
+  afterEach(async () => {
+    await closeMemoryDb()
     if (previousDataDir === undefined) delete process.env.DATA_DIR
     else process.env.DATA_DIR = previousDataDir
     try { fs.rmSync(fixture, { recursive: true, force: true }) } catch { /* SQLite may release the file shortly after close. */ }

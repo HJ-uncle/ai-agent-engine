@@ -13,66 +13,11 @@ import type { RunOutcome } from '../subagent/types.js'
 import { FINALIZATION_PROMPT, estimateRequestInput, finalizationMessages, partialEvidence } from './finalization.js'
 import { executeRegisteredTool, executeToolBatch, normalizeToolResult, type RegisteredToolCall, type ParsedToolCall } from './tool-batch.js'
 import { resolveCapabilities } from '../model-capabilities/index.js'
+import { ToolProgressTracker, toolFailureLimit } from './tool-progress.js'
+import { modelMessageContent } from '../utils/model-context.js'
+import { createHash } from 'node:crypto'
 
-/**
- * 连续失败 / 重复调用的止损阈值。
- *
- * 旧值写死 20：意味着「同一个工具连续失败或重复调 20 轮」才刹车，
- * 中间 19 轮全在白白烧 token（转录里同一假设反复推演 4-5 遍就是这种浪费）。
- * 现改为可配（默认 8），并可用 MAX_CONSECUTIVE_FAILURES 热更新。
- */
-function getMaxConsecutiveFailures(): number {
-  const raw = parseInt(process.env.MAX_CONSECUTIVE_FAILURES ?? '', 10)
-  if (Number.isFinite(raw) && raw > 0) return raw
-  return 8
-}
-
-/**
- * 语义级重复检测：判断两次工具调用是否「实质相同」。
- *
- * 旧实现用 `name + JSON.stringify(args)` 全等比较，过于严格 —— 模型只要把
- * 参数换个写法（键顺序、空格）就绕过了检测。
- * 这里做归一化后再比：
- *   - 键排序后序列化，消除键顺序差异；
- *   - 字符串值仅保留前 200 字符，避免长文本（如整段代码）的微小差异
- *     把「实质相同的重复调用」判成不同。
- * 只比较工具名 + 归一化参数，不涉及语义模型，零额外成本。
- */
-function fingerprintToolCall(tc: { name?: string; args?: unknown }): string {
-  const args = tc?.args ?? {}
-  let normalized: string
-  try {
-    const sortKeys = (val: unknown): unknown => {
-      if (Array.isArray(val)) return val.map(sortKeys)
-      if (val && typeof val === 'object') {
-        const out: Record<string, unknown> = {}
-        for (const k of Object.keys(val as Record<string, unknown>).sort()) {
-          out[k] = sortKeys((val as Record<string, unknown>)[k])
-        }
-        return out
-      }
-      return val
-    }
-    normalized = JSON.stringify(sortKeys(args), (_k, v) =>
-      typeof v === 'string' && v.length > 200 ? v.slice(0, 200) : v,
-    )
-  } catch {
-    normalized = String(args)
-  }
-  return `${tc?.name ?? ''}:${normalized}`
-}
-
-/** A transient tool outage should be retried by the model instead of tripping
- * the no-progress circuit. Permanent failures and repeated successful calls
- * remain subject to the existing safety stop. */
-function isTransientToolFailure(result: ToolResult): boolean {
-  if (result.status !== 'failed') return false
-  if (result.metadata?.retryable === true) return true
-  const metadataCode = result.metadata?.code ?? result.metadata?.errorCode ?? result.metadata?.errorType
-  const text = `${metadataCode ?? ''} ${result.error ?? ''} ${result.output ?? ''}`.toLowerCase()
-  return /(?:timeout|timed out|time\s*out|econnreset|econnrefused|ehostunreach|enetunreach|enetreset|socket hang up|network|temporar|rate.?limit|too many requests|service unavailable|gateway (?:timeout|unavailable)|(?:^|[^a-z])5\d\d(?:[^a-z]|$))/.test(text)
-}
-
+const OUTPUT_CONTINUATION_PROMPT = 'The previous model response reached its single-response output limit. Continue the same user task from the retained partial response and history, starting exactly where the response stopped. Do not repeat text already emitted, restart completed work, or repeat executed tools. Use tools only for remaining work; finish normally when the original task is complete.'
 
 /**
  * Truncate tool output that is too long.
@@ -184,7 +129,7 @@ export interface TokenUsage {
 export interface ReActOptions {
   /** Reserve the final child iteration for returning evidence instead of starting more tools. */
   finalizeOnLimit?: boolean
-  /** Code mode leaves completion length and local cumulative budgets to the provider/context window. */
+  /** Code mode uses remaining context capacity without a fixed completion or cumulative budget. */
   unboundedCode?: boolean
   maxOutputTokens?: number
   maxIterations?: number
@@ -248,7 +193,15 @@ async function requestHistory(ctx: AgentContext): Promise<Message[]> {
     const lastUser = all.map(message => message.role).lastIndexOf('user')
     if (lastUser >= 0) selected = all.slice(lastUser)
   }
-  return pairToolHistory(selected.map(message => ({ ...message })))
+  return pairToolHistory(selected.map(projectModelMessage))
+}
+
+/** User replay evidence must not be counted or sent as live model context. */
+export function projectModelMessage(message: Message): Message {
+  const projected = { ...message, content: modelMessageContent(message) }
+  if (!message.metadata || typeof message.metadata !== 'object') return projected
+  const { outputPreview: _preview, __aetherMicroCompactArchive: _archive, ...metadata } = message.metadata
+  return { ...projected, metadata }
 }
 
 export class ReActStrategy implements LoopStrategy {
@@ -391,8 +344,9 @@ export class ReActStrategy implements LoopStrategy {
         id: ctx.userMessageId ?? uuidv4(),
         role: 'user',
         content: historyContent,
+        ...(input !== historyContent ? { modelInputContent: input } : {}),
         createdAt: Date.now(),
-        tokens: estimateTokens(historyContent),
+        tokens: estimateTokens(input),
         ...(conversationId ? { conversationId } : {}),
         metadata: { ...this.options.metadata, rootRunId: ctx.rootRunId, turnId: ctx.turnId },
       }
@@ -401,6 +355,23 @@ export class ReActStrategy implements LoopStrategy {
       yield `\x00__user_msg_id__${savedUserMsgId}`
       // ★ 别名帧（新版协议，第三方项目 等下游消费 camelCase 命名；不影响旧消费者）
       yield `\x00__userMsgId__${savedUserMsgId}`
+    }
+
+    // Persisted snapshots make every replay/compaction use the same actual
+    // attachment content, including after a restart or approval continuation.
+    let outputContinuation: { messageId: string; suffix: string } | undefined
+    const continuedResponseFingerprints = new Set<string>()
+    let emittedOutput = ''
+    const readModelHistory = async (): Promise<Message[]> => {
+      const messages = await requestHistory(ctx)
+      if (!outputContinuation) return messages
+      // The full segment is durable and searchable. If compaction covered it,
+      // its short suffix also anchors the precise point where generation stopped.
+      if (!messages.some(message => message.id === outputContinuation!.messageId)) {
+        messages.push({ role: 'assistant', content: outputContinuation.suffix })
+      }
+      messages.push({ role: 'user', content: OUTPUT_CONTINUATION_PROMPT })
+      return messages
     }
 
     // ★ 会话待办初始帧：每轮开始时推送现有清单，客户端据此恢复任务托盘
@@ -463,16 +434,14 @@ export class ReActStrategy implements LoopStrategy {
       ctx.logger.warn({ err }, 'Failed to count ask_user occurrences')
     }
 
-    /** 记录连续失败次数，防止进入死循环。包含全局失败计数和重复调用检测。 */
-    let globalConsecutiveFailures = 0
-    /** 记录工具调用的指纹（name + args），用于检测重复调用 */
-    let lastToolFingerprints: string[] = []
+    const toolProgress = new ToolProgressTracker()
 
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       // ── 每轮迭代开始时检查 abort signal，确保用户中止能及时生效 ──────────────
       // 之前只在 LLM 调用时检查，导致工具执行/历史压缩等阶段无法被中断。
       if (ctx.signal?.aborted) {
         ctx.logger.info({ iteration }, 'Agent loop aborted at iteration boundary')
+        await ctx.runObserver?.onOutcome?.({ status: 'cancelled', stopReason: 'cancelled', partialOutput: emittedOutput || undefined })
         return
       }
 
@@ -480,10 +449,14 @@ export class ReActStrategy implements LoopStrategy {
       // 阈值对齐 Claude Code auto-compact：有效窗口的 ~92% 触发（COMPRESS_THRESHOLD_RATIO=0.92）。
       // 有效窗口取 min(tokenBudget, 模型真实 contextWindow)：tokenBudget 经 OSM 倍率放大后
       // 可能远超模型实际上限，若直接用它做阈值，模型都拒答了压缩还没触发。
-      let messages = await requestHistory(ctx)
+      let messages = await readModelHistory()
       let effectiveTools = toolList.filter(tool => tool.name !== 'ask_user' || askUserCount < maxAskUserCount)
-      const compressRatio = getOSMCompressRatio(
+      const configuredCompressRatio = getOSMCompressRatio(
         parseFloat(process.env.COMPRESS_THRESHOLD_RATIO ?? '0.92'))
+      // A malformed or >100% runtime setting must not disable pre-request
+      // compaction and allow the hard model window to be reached first.
+      const compressRatio = Number.isFinite(configuredCompressRatio) && configuredCompressRatio > 0
+        ? Math.min(configuredCompressRatio, 0.95) : 0.92
       // 有效上限 = 已知预算与模型窗口中的较小者；两者都未知才不设上限。
       // 窗口这一侧必须保留：装不下的请求要在本地拒发（而不是静默丢掉存储的强制
       // 约束，或明知会被服务端拒还硬发一次）。真正要消除的是**被人为推导出来的
@@ -496,17 +469,21 @@ export class ReActStrategy implements LoopStrategy {
         : Math.min(
           typeof ctx.tokenBudget === 'number' ? ctx.tokenBudget : Number.POSITIVE_INFINITY,
           ctx.modelCaps?.contextWindow ?? Number.POSITIVE_INFINITY)
-      // Code mode deliberately omits maxTokens. OpenAI-compatible adapters then
-      // let the upstream model choose its available completion capacity instead
-      // of stopping at the old engine-side 8192-token reservation.
+      // Code mode derives its dispatch cap from the remaining context later,
+      // instead of stopping at the old fixed 8192-token output cap.
       let maxOutputTokens = unboundedCode
         ? undefined
         : this.options.maxOutputTokens ?? Math.min(8192, Math.max(256, Math.floor(effectiveBudget / 4)))
-      const outputReservation = maxOutputTokens ?? 0
-      const fixedInputTokens = estimateRequestInput(messages.filter(message => message.role === 'system'), this.options.systemPrompt, effectiveTools)
+      // Admission headroom triggers compaction early; the actual Code output
+      // allowance is all context capacity left after the admitted input.
+      const outputReservation = maxOutputTokens ?? (Number.isFinite(effectiveBudget)
+        ? Math.min(8192, Math.max(256, Math.floor(effectiveBudget * 0.05))) : 0)
+      const fixedInputTokens = estimateRequestInput(messages.filter(message => message.role === 'system'
+        && !(ctx.history.retainsArchive && message.metadata?.isCompactSummary)), this.options.systemPrompt, effectiveTools)
       if ((!unboundedCode && (!Number.isFinite(maxOutputTokens) || maxOutputTokens! <= 0))
         || (Number.isFinite(effectiveBudget) && fixedInputTokens + outputReservation > effectiveBudget)) {
         await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'context_limit',
+          partialOutput: emittedOutput || undefined,
           error: { code: 'CONTEXT_LIMIT', message: 'System instructions, tools and output reservation exceed the context window', retryable: false } })
         yield '\n\n[Response truncated: token budget exceeded]'
         return
@@ -522,7 +499,7 @@ export class ReActStrategy implements LoopStrategy {
           const microOutputLimit = ctx.toolProfile === 'code' ? getCodeToolOutputMaxChars() : getToolOutputMaxChars()
           const micro = await ctx.history.microCompactToolResults(ctx, { keepRecent: 10, maxChars: microOutputLimit })
           if (micro.cleared > 0) {
-            messages = await requestHistory(ctx)
+            messages = await readModelHistory()
             rawTokens = estimateRequestInput(messages, this.options.systemPrompt, effectiveTools) + outputReservation
             ctx.logger.info({ ...micro, rawTokens }, 'Micro-compact done')
           }
@@ -530,8 +507,9 @@ export class ReActStrategy implements LoopStrategy {
           ctx.logger.warn({ err: err?.message }, 'Micro-compact failed, continuing')
         }
       }
-      if (rawTokens > compressThreshold && typeof ctx.history.compress === 'function'
-        && (!ctx.requestBudget || ctx.requestBudget.canAfford(rawTokens * 3 + 16_384))) {
+      for (let compressionPass = 0; compressionPass < 4 && rawTokens > compressThreshold
+        && typeof ctx.history.compress === 'function'
+        && (!ctx.requestBudget || ctx.requestBudget.canAfford(rawTokens * 3 + 16_384)); compressionPass++) {
         ctx.logger.info({ rawTokens, threshold: compressThreshold }, 'Compressing conversation history')
         const { buildCompactSummarizeFn } = await import('./compact-prompt.js')
         // 专职模型路由：配置了 LLM_SUMMARIZE_MODEL 时用轻量模型做总结，
@@ -548,34 +526,33 @@ export class ReActStrategy implements LoopStrategy {
         try {
           const summarizeWindow = resolveCapabilities({ model: summarizeLlm.model, provider: summarizeLlm.provider }).contextWindow
           const summarize = buildCompactSummarizeFn(summarizeLlm, { signal: ctx.signal, onRequestAttempt: ctx.onRequestAttempt,
-            contextWindow: Math.min(effectiveBudget, summarizeWindow ?? Infinity), maxOutputTokens: unboundedCode ? undefined : Math.min(4096, maxOutputTokens!) })
+            contextWindow: Math.min(effectiveBudget, summarizeWindow ?? Infinity), maxOutputTokens: unboundedCode ? undefined : Math.min(4096, maxOutputTokens!),
+            archiveAvailable: ctx.history.retainsArchive === true })
+          const beforeCompression = rawTokens
+          // Retained exchanges must fit alongside system/tool overhead and the
+          // summary itself. Reduce retention on a second pass if the first
+          // reduction still leaves an inadmissible request.
+          const keepRecentTokens = Math.floor(Math.min(effectiveBudget * 0.2,
+            Math.max(0, compressThreshold - fixedInputTokens - outputReservation - 8192)) / 2 ** compressionPass)
           const stats = await ctx.history.compress(
             ctx,
             summarize,
-            { keepRecentTokens: Math.floor(effectiveBudget * 0.2) },
+            { keepRecentTokens, force: true },
           )
-          ctx.logger.info({ preTokens: stats.preTokens, postTokens: stats.postTokens }, 'Compression done')
+          const compressedMessages = await readModelHistory()
+          const compressedRequestTokens = estimateRequestInput(compressedMessages, this.options.systemPrompt, effectiveTools) + outputReservation
+          ctx.logger.info({ preTokens: stats.preTokens, postTokens: stats.postTokens,
+            preRequestTokens: rawTokens, postRequestTokens: compressedRequestTokens, compressionPass }, 'Compression done')
+          rawTokens = compressedRequestTokens
+          if (rawTokens >= beforeCompression) break
         } catch (err: any) {
           ctx.logger.error({ err: err?.message, rawTokens }, 'Compression failed; checking the complete request before dispatch')
+          break
         }
       }
 
       // Read again after compaction without silently windowing away constraints.
-      messages = await requestHistory(ctx)
-
-      // ★ 修复：当设置了 displayContent（前端原始格式）时，历史存的是 displayContent，
-      //   但 LLM 需要看到处理后的 input（含 OCR/图片/文件内容）。
-      //   此处在每一轮迭代中都将本轮 user 消息的 content 替换为真正的 LLM prompt，
-      //   确保多轮工具调用后 LLM 依然能看到处理后的多模态/长文本内容。
-      if (this.options.displayContent !== undefined && this.options.displayContent !== null && input) {
-        const processedInput = input as string | any[]
-        for (let i = messages.length - 1; i >= 0; i--) {
-          if (messages[i].role === 'user') {
-            messages[i] = { ...messages[i], content: processedInput ?? messages[i].content }
-            break
-          }
-        }
-      }
+      messages = await readModelHistory()
 
       // 3. 计算 windowed token count，检查是否超 budget。
       // 使用 1.1 的系数作为安全余量，防止本地估算与 API 实际计量的偏差。
@@ -584,7 +561,8 @@ export class ReActStrategy implements LoopStrategy {
 
       if (!unboundedCode && typeof ctx.tokenBudget === 'number' && conservativeHistoryTokens >= ctx.tokenBudget) {
         ctx.logger.warn({ historyTokens, conservativeHistoryTokens, tokenBudget: ctx.tokenBudget }, 'Token budget exhausted')
-        await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'context_limit', error: { retryable: false, code: 'CONTEXT_LIMIT', message: 'Context window exceeded' } })
+        await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'context_limit', partialOutput: emittedOutput || undefined,
+          error: { retryable: false, code: 'CONTEXT_LIMIT', message: 'Context window exceeded' } })
         yield '\n\n[Response truncated: token budget exceeded]'
         return
       }
@@ -614,30 +592,38 @@ export class ReActStrategy implements LoopStrategy {
           requestInputTokenEstimate = estimateRequestInput(messages, systemPrompt, [])
         }
         if (!unboundedCode && ctx.requestBudget && !ctx.requestBudget.canAfford(requestInputTokenEstimate + maxOutputTokens!)) {
-          const evidence = recordedEvidence
+          const evidence = emittedOutput || recordedEvidence
           await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'budget', partialOutput: evidence,
             error: { code: 'TOKEN_BUDGET_EXCEEDED', message: finalizationNotice, retryable: false } })
-          yield '\n\n' + finalizationNotice + '\n\n' + evidence
+          yield '\n\n' + finalizationNotice + '\n\n' + (emittedOutput ? '' : evidence)
           return
         }
         yield '\n\n' + finalizationNotice + '\n\n'
       }
 
-      const exceedsContext = Number.isFinite(effectiveBudget) && (unboundedCode
-        ? requestInputTokenEstimate >= effectiveBudget
-        : requestInputTokenEstimate + (maxOutputTokens ?? 0) > effectiveBudget)
+      const finalOutputReservation = unboundedCode ? outputReservation : (maxOutputTokens ?? 0)
+      const exceedsContext = Number.isFinite(effectiveBudget)
+        && requestInputTokenEstimate + finalOutputReservation > effectiveBudget
       if (exceedsContext) {
         await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'context_limit',
-          error: { code: 'CONTEXT_LIMIT', message: `Request input (${requestInputTokenEstimate}) plus output reservation (${maxOutputTokens}) exceeds context window (${effectiveBudget})`, retryable: false } })
+          partialOutput: emittedOutput || undefined,
+          error: { code: 'CONTEXT_LIMIT', message: `Request input (${requestInputTokenEstimate}) plus output reservation (${finalOutputReservation}) exceeds context window (${effectiveBudget})`, retryable: false } })
         yield '\n\n[Response truncated: token budget exceeded]'
         return
       }
+
+      // A configured context window bounds input plus completion (including
+      // reasoning). Code mode gets all remaining capacity instead of a fixed
+      // output cap; omitting this field would let compatible gateways use
+      // their 262K/393K protocol maxima despite a configured 100K window.
+      const dispatchMaxOutputTokens = unboundedCode && Number.isFinite(effectiveBudget)
+        ? Math.max(1, Math.floor(effectiveBudget - requestInputTokenEstimate)) : maxOutputTokens
 
       ctx.logger.debug({ iteration, toolCount: effectiveTools.length, finalizationReason }, 'Preparing model request')
 
       const llmOptions: LLMAdapterOptions = {
         model: this.llm.model,
-        maxTokens: maxOutputTokens,
+        maxTokens: dispatchMaxOutputTokens,
         unboundedOutput: unboundedCode,
         contextWindow: Number.isFinite(effectiveBudget) ? effectiveBudget : undefined,
         requestInputTokenEstimate,
@@ -669,7 +655,7 @@ export class ReActStrategy implements LoopStrategy {
         model: this.llm.model,
       }
 
-      let partialOutput = ''
+      let partialOutput = emittedOutput
       let partialSaved = false
       let streamCompleted = false
       let streamChunkCount = 0
@@ -717,9 +703,10 @@ export class ReActStrategy implements LoopStrategy {
           if (chunk.finishReason) response.finishReason = chunk.finishReason
           if (chunk.content) {
             response.content += chunk.content
-            partialOutput = response.content
+            emittedOutput += chunk.content
+            partialOutput = emittedOutput
             yield chunk.content
-            await ctx.runObserver?.onOutput?.(response.content)
+            await ctx.runObserver?.onOutput?.(emittedOutput)
           }
           if (chunk.reasoningContent) {
             response.reasoningContent += chunk.reasoningContent
@@ -811,11 +798,11 @@ export class ReActStrategy implements LoopStrategy {
 
     // A provider may ignore the empty tool list. Never execute new work during the reserved summary.
     if (finalizationReason && response.toolCalls.length > 0) {
-      const evidence = response.content || recordedEvidence || partialEvidence(messages)
+      const evidence = emittedOutput || recordedEvidence || partialEvidence(messages)
       await persistPartial('failed', finalizationReason)
       await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: finalizationReason, partialOutput: evidence,
         error: { code: finalizationReason === 'budget' ? 'TOKEN_BUDGET_EXCEEDED' : 'MAX_STEPS', message: finalizationNotice, retryable: false } })
-      if (!response.content) yield evidence
+      if (!response.content && !emittedOutput) yield evidence
       return
     }
 
@@ -988,22 +975,43 @@ export class ReActStrategy implements LoopStrategy {
       ...(cumulativeReasoningTokens != null ? { reasoningTokens: cumulativeReasoningTokens } : {}),
     }
 
+      if (response.finishReason === 'length' && response.toolCalls.length === 0
+        && !finalizationReason && iteration + 1 < maxIterations && String(response.content).trim()) {
+        const fingerprint = createHash('sha256').update(String(response.content).trim().replace(/\s+/g, ' ')).digest('hex')
+        if (!continuedResponseFingerprints.has(fingerprint)) {
+          continuedResponseFingerprints.add(fingerprint)
+          const messageId = uuidv4()
+          await ctx.history.append({ id: messageId, role: 'assistant', content: response.content,
+            reasoningContent: response.reasoningContent, createdAt: Date.now(), tokens: completionTokens,
+            usage: currentUsage as unknown as Record<string, number>, modelId: response.model, conversationId,
+            metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId, outputContinuation: true,
+              continuationIndex: continuedResponseFingerprints.size, stopReason: 'output_limit' },
+          } as Message, ctx)
+          outputContinuation = { messageId, suffix: String(response.content).slice(-2048) }
+          yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, currentPromptTokens: currentUsage.promptTokens,
+            contextWindow: ctx.modelCaps?.contextWindow, modelId: response.model })}`
+          ctx.logger.info({ iteration, messageId, continuationIndex: continuedResponseFingerprints.size }, 'Continuing model response after output limit')
+          // Every continuation goes through normal admission, compaction,
+          // physical request accounting and cancellation on the next iteration.
+          continue
+        }
+        ctx.logger.warn({ iteration }, 'Output continuation repeated an unchanged segment')
+      }
       if (response.finishReason === 'length' || response.finishReason === 'error') {
         await persistPartial('failed', response.finishReason === 'length' ? 'output_limit' : 'provider_error')
         yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, currentPromptTokens: currentUsage.promptTokens,
           contextWindow: ctx.modelCaps?.contextWindow, modelId: response.model })}`
         yield* this.settleUnstarted(response.toolCalls ?? [], ctx, 'Model response ended before this tool could execute')
         await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: response.finishReason === 'length' ? 'output_limit' : 'provider_error',
-          partialOutput: response.content, error: { code: response.finishReason === 'length' ? 'OUTPUT_LIMIT' : 'INCOMPLETE_RESPONSE', message: 'Model response ended before completion', retryable: false } })
+          partialOutput: emittedOutput, error: { code: response.finishReason === 'length' ? 'OUTPUT_LIMIT' : 'INCOMPLETE_RESPONSE', message: 'Model response ended before completion', retryable: false } })
         return
       }
+      outputContinuation = undefined
+      continuedResponseFingerprints.clear()
       // Register the complete batch before any invocation can start.
       if (response.toolCalls && response.toolCalls.length > 0) {
         const calls = response.toolCalls as ParsedToolCall[]
         lastUsedToolNames = new Set(calls.map(call => call.name))
-        const fingerprints = calls.map(fingerprintToolCall)
-        const isRepeating = fingerprints.length > 0 && fingerprints.every(value => lastToolFingerprints.includes(value))
-        lastToolFingerprints = fingerprints
         const registered: RegisteredToolCall[] = []
         try {
         for (let index = 0; index < calls.length; index++) {
@@ -1051,7 +1059,6 @@ export class ReActStrategy implements LoopStrategy {
         }
         let blocked = false
         const settledFrames: string[] = []
-        let transientFailures = 0
         for (let index = 0; index < registered.length; index++) {
           const result = batch.results[index]
           const settlement = this.settleTool(registered[index], result, ctx)
@@ -1064,20 +1071,14 @@ export class ReActStrategy implements LoopStrategy {
           cumulativeToolResultsTokens += settled.tokens
           failedToPersist ||= settled.failedToPersist
           blocked ||= Boolean(result.metadata?.blocked)
-          if (isTransientToolFailure(result)) transientFailures++
-          else if (result.status === 'failed') globalConsecutiveFailures++
-          else if (result.status === 'succeeded' && !isRepeating) globalConsecutiveFailures = 0
         }
-        // Repeating calls are a no-progress signal only when they produced a
-        // durable/permanent failure. A transient outage must get a chance to
-        // recover without burning the global circuit-breaker budget.
-        if (isRepeating && transientFailures === 0) globalConsecutiveFailures++
+        const globalConsecutiveFailures = toolProgress.observe(calls, batch.results)
         // The consumer may disconnect/return after any frame. All started tool
         // results must already be durable before yielding the first terminal card.
         for (const frame of settledFrames) yield frame
         if (failedToPersist) throw new Error('One or more tool results could not be persisted; all started tools have settled')
         if (ctx.signal?.aborted) {
-          await ctx.runObserver?.onOutcome?.({ status: 'cancelled', stopReason: 'cancelled' })
+          await ctx.runObserver?.onOutcome?.({ status: 'cancelled', stopReason: 'cancelled', partialOutput: emittedOutput || undefined })
           return
         }
         if (batch.pending) {
@@ -1095,7 +1096,7 @@ export class ReActStrategy implements LoopStrategy {
             error: { code: 'TOOL_NOT_ALLOWED', message: 'Tool execution was blocked', retryable: false } })
           return
         }
-        if (globalConsecutiveFailures >= getMaxConsecutiveFailures()) {
+        if (globalConsecutiveFailures >= toolFailureLimit()) {
           await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'repeated_failure',
             error: { retryable: false, code: 'REPEATED_FAILURE', message: 'Tool failure or repetition limit exceeded' } })
           yield '\n\n[Loop detected or tools failed repeatedly. Stopping to prevent token waste.]'
@@ -1120,7 +1121,8 @@ export class ReActStrategy implements LoopStrategy {
         const message = response.reasoningContent?.trim()
           ? '模型仅返回了思考内容，未收到最终回答（EMPTY_OUTPUT）。请检查模型服务后重试。'
           : '未收到模型的最终回答或工具调用（EMPTY_OUTPUT）。模型服务可能返回了空内容，或响应未被正确解析；请检查模型服务后重试。'
-        await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'empty_output', error: { code: 'EMPTY_OUTPUT', message, retryable: false } })
+        await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'empty_output', partialOutput: emittedOutput || undefined,
+          error: { code: 'EMPTY_OUTPUT', message, retryable: false } })
         return
       }
       // ── 最终回答 ──
@@ -1144,9 +1146,9 @@ export class ReActStrategy implements LoopStrategy {
       await ctx.history.append(finalMsg, ctx)
       yield `\x00__assistant_msg_id__${messageId}`
       await ctx.runObserver?.onOutcome?.(ctx.signal?.aborted ? { status: 'cancelled', stopReason: 'cancelled' }
-        : finalizationReason ? { status: 'failed', stopReason: finalizationReason, partialOutput: response.content,
+        : finalizationReason ? { status: 'failed', stopReason: finalizationReason, partialOutput: emittedOutput,
           error: { code: finalizationReason === 'budget' ? 'TOKEN_BUDGET_EXCEEDED' : 'MAX_STEPS', message: finalizationNotice, retryable: false } }
-        : { status: 'succeeded', output: response.content || '', stopReason: 'completed' })
+        : { status: 'succeeded', output: emittedOutput, stopReason: 'completed' })
 
       yield `\x00__usage__${JSON.stringify({
         ...cumulativeUsage,
@@ -1162,7 +1164,8 @@ export class ReActStrategy implements LoopStrategy {
 
     // Max iterations exceeded
     ctx.logger.warn({ maxIterations }, 'Max iterations exceeded')
-    await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'max_steps', error: { retryable: false, code: 'MAX_STEPS', message: 'Maximum iterations exceeded' } })
+    await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'max_steps', partialOutput: emittedOutput || undefined,
+      error: { retryable: false, code: 'MAX_STEPS', message: 'Maximum iterations exceeded' } })
     yield `\n\n[Max iterations (${maxIterations}) exceeded. The task may be too complex.]`
   }
 }

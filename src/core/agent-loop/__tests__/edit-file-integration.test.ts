@@ -134,6 +134,7 @@ describe('D6 exact-edit real runtime integration', () => {
     fs.writeFileSync(path.join(fixtureDir, 'mcp.json'), JSON.stringify({ mcpServers: {} }))
     vi.stubEnv('DATA_DIR', path.join(fixtureDir, 'storage', 'agent.db'))
     vi.stubEnv('WORKSPACE_ROOT', path.join(fixtureDir, 'scratch'))
+    vi.stubEnv('AUTH_ENABLED', 'false')
     vi.stubEnv('HISTORY_BACKEND', 'jsonl')
     vi.stubEnv('OSM_MODE', 'off')
     vi.stubEnv('DEFAULT_SECURITY_MODE', 'safe')

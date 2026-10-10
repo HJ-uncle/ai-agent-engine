@@ -198,6 +198,8 @@ export interface McpServer {
   env?: Record<string, string>
   url?: string
   headers?: Record<string, string>
+  /** Zero means no deadline; absent keeps each transport default. */
+  timeoutMs?: number
   isBuiltIn: boolean
   githubUrl?: string
   registryId?: string
@@ -212,6 +214,7 @@ export interface McpServer {
 }
 
 export type CreateMcpServerInput = Omit<McpServer, 'createdAt' | 'updatedAt' | 'status' | 'toolCount'>
+export type UpdateMcpServerInput = Omit<Partial<CreateMcpServerInput>, 'timeoutMs'> & { timeoutMs?: number | null }
 
 // ── Memory 类型 ───────────────────────────────────────────────────────────────
 export interface MemoryEntry {

@@ -1,6 +1,22 @@
 import { randomUUID } from 'node:crypto'
 import type { LLMAdapterOptions, RequestAttemptUsage } from './types.js'
 import { isAbortError, throwIfAborted } from '../utils/abort.js'
+import { estimateProviderRequestInput } from '../utils/multimodal-context.js'
+
+/** Use the same final wire estimate for admission, output capacity and observation. */
+export function prepareRequestContext(options: LLMAdapterOptions | undefined,
+  request: { model?: unknown; messages?: unknown; tools?: unknown; system?: unknown }, wireMaxTokens?: number): LLMAdapterOptions {
+  const requestInputTokenEstimate = Math.max(options?.requestInputTokenEstimate ?? 0, estimateProviderRequestInput(request))
+  const contextWindow = options?.contextWindow
+  const result = { ...options, model: String(request.model ?? options?.model ?? ''), requestInputTokenEstimate }
+  if (typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0) {
+    const remaining = Math.floor(contextWindow - requestInputTokenEstimate)
+    if (remaining < 1) throw Object.assign(new Error('Provider request input exceeds its configured context window'),
+      { code: 'CONTEXT_WINDOW_EXCEEDED', retryable: false, contextWindow, requestInputTokenEstimate })
+    result.maxTokens = Math.min(Number.isFinite(wireMaxTokens) && wireMaxTokens! > 0 ? Math.floor(wireMaxTokens!) : remaining, remaining)
+  }
+  return result
+}
 
 type Outcome = 'succeeded' | 'failed' | 'cancelled'
 async function begin(options: LLMAdapterOptions | undefined, provider: string, model: string) {

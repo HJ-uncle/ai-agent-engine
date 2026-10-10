@@ -75,7 +75,7 @@ describe('D0 owned instance handshake and route gate', () => {
     expect(identity.version).not.toBe('unknown')
     expect(identity.instanceId).toMatch(/^[a-f0-9-]{36}$/)
     expect(first.body).not.toContain(token)
-    expect(Object.keys(identity).sort()).toEqual(['buildId', 'instanceId', 'protocolVersion', 'subagentSchemaVersion', 'toolProfiles', 'version'])
+    expect(Object.keys(identity).sort()).toEqual(['buildId', 'dependencyPatchDigest', 'dependencyPatchSchemaVersion', 'instanceId', 'protocolVersion', 'subagentSchemaVersion', 'toolProfiles', 'version'])
     const originalCwd = process.cwd()
     fs.writeFileSync(path.join(fixture, 'package.json'), '{"version":"incorrect-cwd-package"}')
     try {

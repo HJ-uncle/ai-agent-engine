@@ -11,6 +11,7 @@
 
 const fs = require('fs')
 const path = require('path')
+const { spawnSync } = require('child_process')
 
 // ==================== 路径定义 ====================
 
@@ -44,6 +45,7 @@ if (!fs.existsSync(srcNodeModules)) {
 }
 
 // ==================== 清理旧 bin/ 目录（全量重建，避免残留） ====================
+checkPatch(path.join(agentEngineRoot, 'node_modules/node-pty'))
 
 if (fs.existsSync(binDir)) {
   console.log(`[copy-bin] 清理旧 bin/ 目录...`)
@@ -67,7 +69,8 @@ if (fs.existsSync(distDir)) {
   copyDirRecursive(distDir, binDistDir, [])
   // 把 bin/main.js 覆盖为 bin/dist/main.js（保持根目录 main.js 入口不变）
   if (fs.existsSync(path.join(binDistDir, 'main.js'))) {
-    fs.copyFileSync(path.join(binDistDir, 'main.js'), binMainJs)
+    // Keep the historical entry usable without moving its relative ESM imports.
+    fs.writeFileSync(binMainJs, "import './dist/main.js'\n", 'utf8')
   }
 
   // workspace-shell.mjs 是终端 shell 的运行时 asset。tsc 只编译 .ts，
@@ -123,12 +126,17 @@ for (const pkg of packages) {
   } else {
     // typescript 包的 lib/*.d.ts 是运行时必需资源（tsc CLI 的默认 lib 加载
     // 依赖它们），不能被声明文件过滤规则裁掉
-    copyDirRecursive(srcPkg, dstPkg, [], pkg === 'typescript')
+    if (pkg === 'node-pty') fs.cpSync(srcPkg, dstPkg, { recursive: true, dereference: false })
+    else copyDirRecursive(srcPkg, dstPkg, [], pkg === 'typescript')
     copied++
   }
 }
 
 console.log(`[copy-bin] node_modules 完成：${copied} 个包已复制，${skipped} 个 dev 包已跳过`)
+checkPatch(path.join(binNodeModules, 'node-pty'))
+fs.mkdirSync(path.join(binDir, 'scripts'), { recursive: true })
+fs.copyFileSync(path.join(agentEngineRoot, 'scripts/apply-node-pty-patch.mjs'), path.join(binDir, 'scripts/apply-node-pty-patch.mjs'))
+fs.cpSync(path.join(agentEngineRoot, 'scripts/patches'), path.join(binDir, 'scripts/patches'), { recursive: true })
 
 // ==================== 复制技能目录 ====================
 // 源目录：.aether/skills（新约定）优先，旧 SKILLs/ 回退
@@ -220,4 +228,10 @@ function copyDirRecursive(src, dst, excludePatterns, keepDeclarations = false) {
     const dstEntry = path.join(dst, entry)
     copyDirRecursive(srcEntry, dstEntry, excludePatterns, keepDeclarations)
   }
+}
+
+function checkPatch(packageDir) {
+  const result = spawnSync(process.execPath, [path.join(agentEngineRoot, 'scripts/apply-node-pty-patch.mjs'), '--package-dir', packageDir, '--check'], { encoding: 'utf8', windowsHide: true })
+  if (result.error) throw result.error
+  if (result.status !== 0) throw new Error(`SDK node-pty patch verification failed: ${result.stderr || result.stdout}`)
 }

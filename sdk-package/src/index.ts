@@ -18,6 +18,7 @@
  * ```
  */
 import * as path from 'path'
+import * as fs from 'fs'
 import { AgentEngineSdkConfig, EngineHealthResult, SdkMode, SdkStartResult } from './types'
 import { findAvailablePort } from './embedded/portFinder'
 import { startProcess, ProcessHandle } from './embedded/processManager'
@@ -184,13 +185,19 @@ export class AgentEngineSdk {
     // 1. 端口探测
     const port = await findAvailablePort(preferredPort)
 
-    // 2. 解析 bin/main.js 路径
-    const binPath = embeddedOpts.binaryPath ?? path.join(__dirname, '..', 'bin', 'main.js')
+    // Relative ESM imports belong beside the emitted dist modules.
+    const binPath = embeddedOpts.binaryPath ?? path.join(__dirname, '..', 'bin', 'dist', 'main.js')
 
     // 3. 解析 dataDir
     // 注意：默认值始终基于 SDK 包内 bin/ 同级的 data/，不跟随自定义 binaryPath 变化，
     // 避免用户传入外部 binPath 时将数据写入意外位置。
-    const dataDir = embeddedOpts.dataDir ?? path.join(__dirname, '..', 'data')
+    const configuredData = embeddedOpts.dataDir
+    // Accept the SDK's historical directory option as well as the engine file
+    // contract. Existing Electron integrations must not open a directory as SQLite.
+    const dataDir = configuredData
+      ? ((fs.existsSync(configuredData) && fs.statSync(configuredData).isDirectory()) || !path.extname(configuredData)
+          ? path.join(configuredData, 'agent.db') : configuredData)
+      : path.join(__dirname, '..', 'data', 'agent.db')
 
     // 4. 启动子进程
     console.log(`[AgentEngineSdk] 启动内嵌 agent-engine，端口: ${port}，bin: ${binPath}`)

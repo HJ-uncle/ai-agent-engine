@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { formatMessages, parseMemories, buildExtractionPrompt } from '../extractor.js'
+import { formatMessages, parseMemories, buildExtractionPrompt, buildMemoryExtractionChunks } from '../extractor.js'
+import { estimateRequestInput } from '../../../core/agent-loop/finalization.js'
 import type { ExtractedMemory } from '../types.js'
 
 describe('formatMessages', () => {
@@ -184,5 +185,29 @@ describe('buildExtractionPrompt', () => {
     const prompt = buildExtractionPrompt('test history')
     expect(prompt).toContain('对话历史开始')
     expect(prompt).toContain('对话历史结束')
+  })
+})
+
+describe('large-turn extraction budget', () => {
+  it('preserves an entire multilingual input including late constraints across independently admitted chunks', () => {
+    const original = '检查架构与错误修复，保留全部测试证据。😀\n'.repeat(3000) + 'TAIL-CONSTRAINT:账目必须支持幂等写入'
+    const contextWindow = 8_000
+    const { prompts, maxOutputTokens } = buildMemoryExtractionChunks([{ role: 'user', content: original }], contextWindow)
+    expect(prompts.length).toBeGreaterThan(1)
+    const rejoined = prompts.map(prompt => prompt.split('--- 对话历史开始 ---\n')[1].split('\n--- 对话历史结束 ---')[0].replace(/^\[USER\]: /, '')).join('')
+    expect(rejoined).toBe(original)
+    expect(prompts.at(-1)).toContain('TAIL-CONSTRAINT:账目必须支持幂等写入')
+    for (const prompt of prompts) {
+      expect(estimateRequestInput([{ role: 'user', content: prompt }], undefined, []) + maxOutputTokens).toBeLessThan(contextWindow)
+      expect(prompt).not.toMatch(/\uD83D(?!\uDE00)/)
+    }
+  })
+
+  it('keeps small turns together and never silently submits instructions to an undersized model', () => {
+    const result = buildMemoryExtractionChunks([{ role: 'user', content: 'Prefer stable APIs.' }, { role: 'assistant', content: 'Will retain backward compatibility.' }], 100_000)
+    expect(result.prompts).toHaveLength(1)
+    expect(result.prompts[0]).toContain('[USER]: Prefer stable APIs.')
+    expect(result.prompts[0]).toContain('[ASSISTANT]: Will retain backward compatibility.')
+    expect(() => buildMemoryExtractionChunks([{ role: 'user', content: 'remember' }], 100)).toThrow(/cannot fit/)
   })
 })

@@ -31,6 +31,7 @@ import { subagentTools } from './subagent/index.js'
 import { webFetchTool } from './web-fetch/index.js'
 import { httpRequestTool } from './http-request/index.js'
 import { getCurrentContextTool } from './get-context/index.js'
+import { searchHistoryTool } from './get-context/search-history-tool.js'
 import { installPackageTool, listPackagesTool } from './install-package/install-package-tool.js'
 import { createAgentTools } from './agent/index.js'
 import type { InlineAgent } from './agent/index.js'
@@ -47,8 +48,11 @@ import {
   isOsmSkillVisible,
 } from '../core/osm.js'
 import { logger } from '../observability/index.js'
+import { throwIfAborted } from '../core/utils/abort.js'
 
 export interface RegistryFactoryOptions {
+  /** Cancels request-owned discovery before an Agent has been admitted. */
+  signal?: AbortSignal
   securityContext?: Pick<AgentContext, 'tenantId' | 'sessionId' | 'toolProfile'>
   /** Project root used to resolve project-scoped MCP configuration. */
   workspaceRoot?: string
@@ -96,6 +100,7 @@ export interface RegistryFactoryOptions {
     url?: string
     headers?: Record<string, string>
     disabledTools?: string[]
+    timeoutMs?: number
   }>
   /**
    * 客户端透传的内联 Agent 列表（请求级；用户端把用户 agent 列表随请求下发）。
@@ -123,6 +128,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   externalSkills: ExternalSkill[]
   toolCategories: ToolCategories
 }> {
+  throwIfAborted(opts.signal)
   const profile = opts.toolProfile ?? 'general'
   const explicitAllowedTools = normalizeAllowedTools(opts.allowedTools)
   const memoryTools = createMemoryTools()
@@ -139,7 +145,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
 
   /** Helper: register a tool into the registry and track it as builtin */
   const registerBuiltin = (tool: Tool) => {
-    const readOnly = [readFileTool, listFilesTool, globTool, grepTool, getCurrentContextTool,
+    const readOnly = [readFileTool, listFilesTool, globTool, grepTool, getCurrentContextTool, searchHistoryTool,
       ...commandJobTools.filter(candidate => candidate.name === 'command_output')].includes(tool)
     const browserReadOnly = browserTools.includes(tool) && BROWSER_READONLY_TOOLS.has(tool.name)
     const mode = subagentTools.includes(tool) ? 'subagent' : readOnly || browserReadOnly ? 'readonly' : 'serial'
@@ -310,6 +316,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
 
   // 14. 获取当前上下文工具
   if (shouldRegister('get_current_context')) registerBuiltin(getCurrentContextTool)
+  if (shouldRegister('search_history')) registerBuiltin(searchHistoryTool)
 
   // 15. 安装包工具
   if (shouldRegister('install_package')) registerBuiltin(installPackageTool)
@@ -322,8 +329,10 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
       (explicitAllowedTools === undefined || explicitAllowedTools.includes(name)),
     opts.inlineMcpServers,
     opts.securityContext,
-    opts.workspaceRoot
+    opts.workspaceRoot,
+    opts.signal
   )
+  throwIfAborted(opts.signal)
 
   // 17. Agent 系统工具 - 按 allowedTools 过滤；注入 inlineAgents 供查询
   createAgentTools(opts.inlineAgents ?? []).forEach(t => {

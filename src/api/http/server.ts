@@ -15,6 +15,7 @@ import { agentRoutes } from './routes/agents.js'
 import { workspaceRoutes } from './routes/workspace.js'
 import { gitRoutes } from './routes/git.js'
 import { terminalRoutes } from './routes/terminal.js'
+import { terminalManager } from '../../terminal/index.js'
 import { settingsRoutes } from './routes/settings.js'
 import { modelsRoutes } from './routes/models.js'
 import { todoRoutes } from './routes/todos.js'
@@ -70,8 +71,11 @@ export async function buildServer() {
   fastify.addHook('onRequest', authMiddlewareHook)
   await commandJobs.initialize()
   fastify.addHook('onClose', async () => {
-    await commandJobs.shutdown('Engine shutdown')
+    cronScheduler.stop()
+    const results = await Promise.allSettled([terminalManager.killAll(), commandJobs.shutdown('Engine shutdown')])
     closeKnowledgeDb()
+    const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+    if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Engine owned resources failed to shut down')
   })
 
   // Global error handler

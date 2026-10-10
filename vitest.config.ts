@@ -10,7 +10,7 @@ export default defineConfig({
     // makes `npm test` execute Playwright helpers and UI tests with the wrong
     // dependency graph, producing false failures and hiding the engine
     // regression result.
-    exclude: ['**/node_modules/**', '**/dist/**', '**/e2e/**', '**/.e2e-tmp/**', 'multi-agent-console/**'],
+    exclude: ['**/node_modules/**', '**/dist/**', '**/e2e/**', '**/.e2e-tmp/**', '.tmp/**', 'test-projects/**', 'scripts/longrun/**/*.test.mjs', 'multi-agent-console/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov'],

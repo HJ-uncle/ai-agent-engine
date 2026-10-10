@@ -6,8 +6,8 @@ export type PolicyAction = 'allow' | 'ask' | 'deny'
 // ─── 安全模式 ──────────────────────────────────────────────────────────────
 /**
  * 三种安全模式（会话级别）：
- * - safe:        安全模式（默认）。白名单 + 策略引擎完整检查，高危命令 deny/ask。
- * - standard:    标准模式。只对 deny 级别命令拦截，其余命令直接放行（跳过 ask 确认）。
+ * - safe:        安全模式。白名单 + 策略引擎完整检查，高危命令 deny/ask。
+ * - standard:    标准模式（默认）。普通命令直接执行，策略拒绝项仍需确认；硬性边界继续生效。
  * - full-access: 完全访问模式。跳过策略引擎和白名单检查，所有命令/网络直接放行。仍写审计日志。
  */
 export type SecurityMode = 'safe' | 'standard' | 'full-access'
@@ -42,10 +42,12 @@ const VALID_SECURITY_MODES: readonly SecurityMode[] = ['safe', 'standard', 'full
 /**
  * 解析默认安全模式。
  * 来源：DEFAULT_SECURITY_MODE 环境变量（可由 .aether/aether.json 的
- * defaultSecurityMode 字段在启动时注入）；未设置或非法值回退 'safe'。
+ * defaultSecurityMode 字段在启动时注入）；未设置采用 'standard'。
+ * 显式配置但拼写错误时仍回退 'safe'，避免错误配置悄悄放宽策略。
  */
 function resolveDefaultSecurityMode(): SecurityMode {
   const raw = process.env.DEFAULT_SECURITY_MODE
+  if (raw === undefined) return 'standard'
   if (raw && (VALID_SECURITY_MODES as readonly string[]).includes(raw)) {
     return raw as SecurityMode
   }

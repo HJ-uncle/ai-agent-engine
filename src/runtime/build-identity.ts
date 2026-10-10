@@ -8,9 +8,11 @@ export interface BuildManifest {
   protocolVersion: 1
   toolProfiles: ['general', 'code']
   subagentSchemaVersion: 1
+  dependencyPatchSchemaVersion?: 1
+  dependencyPatchDigest?: string
 }
 
-const BUILD_INPUTS = ['package.json', 'package-lock.json', 'tsconfig.json', 'scripts/build.ts']
+const BUILD_INPUTS = ['package.json', 'package-lock.json', 'tsconfig.json', 'scripts/build.ts', 'scripts/apply-node-pty-patch.mjs']
 
 /** Hash actual build inputs, including uncommitted edits, rather than identifying every dirty build by HEAD. */
 export function createBuildManifest(root: string): BuildManifest {
@@ -23,6 +25,7 @@ export function createBuildManifest(root: string): BuildManifest {
     }
   }
   walk('src')
+  if (existsSync(path.join(root, 'scripts/patches'))) walk('scripts/patches')
   for (const name of BUILD_INPUTS) if (existsSync(path.join(root, name))) files.push(name)
   const hash = createHash('sha256')
   for (const name of files.sort()) {
@@ -38,6 +41,10 @@ export function createBuildManifest(root: string): BuildManifest {
     protocolVersion: 1,
     toolProfiles: ['general', 'code'],
     subagentSchemaVersion: 1,
+    ...(existsSync(path.join(root, 'scripts/patches/node-pty-1.1.0/manifest.json')) ? {
+      dependencyPatchSchemaVersion: 1 as const,
+      dependencyPatchDigest: createHash('sha256').update(readFileSync(path.join(root, 'scripts/patches/node-pty-1.1.0/manifest.json'))).digest('hex'),
+    } : {}),
   }
 }
 
@@ -62,7 +69,10 @@ export function readBuildManifest(runtimeDirectory: string): BuildManifest {
       manifest.toolProfiles[0] !== 'general' || manifest.toolProfiles[1] !== 'code') {
     throw new Error('Invalid engine build manifest')
   }
+  if (manifest.dependencyPatchSchemaVersion !== undefined && (manifest.dependencyPatchSchemaVersion !== 1 ||
+      !/^[a-f0-9]{64}$/.test(manifest.dependencyPatchDigest ?? ''))) throw new Error('Invalid engine dependency patch manifest')
   // Publish only the documented fields, never accidental build metadata or local paths.
   return { version: manifest.version, buildId: manifest.buildId, protocolVersion: 1,
-    toolProfiles: ['general', 'code'], subagentSchemaVersion: 1 }
+    toolProfiles: ['general', 'code'], subagentSchemaVersion: 1,
+    ...(manifest.dependencyPatchSchemaVersion === 1 ? { dependencyPatchSchemaVersion: 1 as const, dependencyPatchDigest: manifest.dependencyPatchDigest } : {}) }
 }

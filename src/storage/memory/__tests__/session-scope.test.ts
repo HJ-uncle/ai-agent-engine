@@ -15,7 +15,7 @@ describe('memory session scope isolation', () => {
   const sessionBCtx: MemoryContext = { tenantId: 'tenant-a', sessionId: 'session-b', scope: 'session' }
 
   beforeEach(async () => {
-    closeMemoryDb()
+    await closeMemoryDb()
     fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-memory-scope-'))
     process.env.DATA_DIR = path.join(fixture, 'agent.db')
     await initMemoryDb(MEMORY_SCHEMA)
@@ -23,7 +23,7 @@ describe('memory session scope isolation', () => {
   })
 
   afterEach(async () => {
-    closeMemoryDb()
+    await closeMemoryDb()
     await new Promise(resolve => setTimeout(resolve, 50))
     try { fs.rmSync(fixture, { recursive: true, force: true }) } catch { /* Windows may release SQLite handles later. */ }
   })

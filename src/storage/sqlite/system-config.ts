@@ -2,7 +2,7 @@ import { getDb } from './db.js'
 import { encrypt, decrypt } from '../../utils/encryption.js'
 
 /** 需要加密存储的敏感配置 key（供 settings route 等外部模块共享，避免重复定义） */
-export const SECRET_KEYS = new Set(['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY'])
+export const SECRET_KEYS = new Set(['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY', 'EMBEDDING_API_KEY'])
 
 /**
  * 启动期路径类配置 key：决定 skills/MCP/workspace 的根目录解析。

@@ -1,6 +1,7 @@
 import path from 'node:path'
 import { isCommandAllowed, resetWhitelist } from '../cmd-whitelist.js'
 import { WorkspaceManager } from '../../workspace/manager.js'
+import { clearSecurityMode, setSecurityMode } from '../policy-engine.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -28,14 +29,18 @@ describe('isCommandAllowed (cmd-whitelist)', () => {
   })
 })
 
-describe('WorkspaceManager.resolveSafePath', () => {
+describe('WorkspaceManager.resolveSafePath in safe mode', () => {
   let manager: WorkspaceManager
   const ctx = makeCtx()
 
   beforeEach(() => {
+    // These assertions describe safe mode, independently of the product default.
+    setSecurityMode(ctx.tenantId, ctx.sessionId, 'safe')
     // Use a fixed temp-like root so paths are deterministic
     manager = new WorkspaceManager(path.join(process.cwd(), '.test-workspace'))
   })
+
+  afterEach(() => { clearSecurityMode(ctx.tenantId, ctx.sessionId) })
 
   it('resolves a normal relative path inside the workspace', () => {
     const result = manager.resolveSafePath(ctx, 'file.txt')

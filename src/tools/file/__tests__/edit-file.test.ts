@@ -18,6 +18,7 @@ let ctx: AgentContext
 let store: ChangeStore
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-d6-edit-'))
+  vi.stubEnv('AUTH_ENABLED', 'false')
   vi.stubEnv('DATA_DIR', path.join(root, 'agent.db'))
   db = createClient({ url: 'file::memory:' })
   vi.spyOn(database, 'getDb').mockReturnValue(db)

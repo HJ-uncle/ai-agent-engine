@@ -22,7 +22,7 @@ function mapNodeRow(row: Record<string, unknown>): MemoryNode {
   const embeddingJson = (row.embedding_json as string) || null
   let jsonEmbedding: number[] | undefined
   if (embeddingJson) { try { jsonEmbedding = JSON.parse(embeddingJson) } catch { jsonEmbedding = undefined } }
-  return { id: row.id as string, tenantId: row.tenant_id as string, scope: (row.scope as MemoryScope) || 'global', sessionId: (row.session_id as string) || '', type: row.type as MemoryNodeType, timestamp: row.timestamp as number, lastAccessed: row.last_accessed as number, strength: row.strength as number, importance: row.importance as number, summary: row.summary as string, detail: (row.detail as string) || null, triggerContext: (row.trigger_context as string) || null, emotionalValence: (row.emotional_valence as number) ?? 0, emotionalTrigger: (row.emotional_trigger as string) || null, sourceSessionId: (row.source_session_id as string) || null, sourceInteractionIndex: (row.source_interaction_index as number) ?? null, sourceToolsUsed: row.source_tools_used ? JSON.parse(row.source_tools_used as string) : null, sourceContextSnapshot: (row.source_context_snapshot as string) || null, decayRate: (row.decay_rate as number) ?? 0.01, lastStrengthUpdate: row.last_strength_update as number, embeddingJson, embedding: row.embedding ? Array.from(new Float32Array(row.embedding as ArrayBuffer)) : jsonEmbedding, createdAt: row.created_at as number, updatedAt: row.updated_at as number }
+  return { id: row.id as string, tenantId: row.tenant_id as string, scope: (row.scope as MemoryScope) || 'global', sessionId: (row.session_id as string) || '', type: row.type as MemoryNodeType, timestamp: row.timestamp as number, lastAccessed: row.last_accessed as number, strength: row.strength as number, importance: row.importance as number, summary: row.summary as string, detail: (row.detail as string) || null, triggerContext: (row.trigger_context as string) || null, emotionalValence: (row.emotional_valence as number) ?? 0, emotionalTrigger: (row.emotional_trigger as string) || null, sourceSessionId: (row.source_session_id as string) || null, sourceInteractionIndex: (row.source_interaction_index as number) ?? null, sourceToolsUsed: row.source_tools_used ? JSON.parse(row.source_tools_used as string) : null, sourceContextSnapshot: (row.source_context_snapshot as string) || null, decayRate: (row.decay_rate as number) ?? 0.01, lastStrengthUpdate: row.last_strength_update as number, embeddingJson, embeddingSpace: (row.embedding_space as string) || null, embedding: row.embedding ? Array.from(new Float32Array(row.embedding as ArrayBuffer)) : jsonEmbedding, createdAt: row.created_at as number, updatedAt: row.updated_at as number }
 }
 function mapEdgeRow(row: Record<string, unknown>): MemoryEdge {
   return { id: row.id as string, tenantId: row.tenant_id as string, scope: (row.scope as MemoryScope) || 'global', sessionId: (row.session_id as string) || '', sourceNodeId: row.source_node_id as string, targetNodeId: row.target_node_id as string, type: row.type as MemoryEdgeType, strength: row.strength as number, description: (row.description as string) || null, createdAt: row.created_at as number }
@@ -49,12 +49,14 @@ export class SQLiteMemoryManager implements MemoryManager {
       input.sourceToolsUsed ? JSON.stringify(input.sourceToolsUsed) : null,
       input.sourceContextSnapshot ?? null, input.decayRate ?? 0.01, now,
       input.embedding ? JSON.stringify(input.embedding) : null,
+      input.embeddingSpace ?? null,
     ]
-    const columns = 'id,tenant_id,scope,session_id,type,timestamp,strength,importance,summary,detail,trigger_context,emotional_valence,emotional_trigger,source_session_id,source_interaction_index,source_tools_used,source_context_snapshot,decay_rate,last_strength_update,embedding_json,embedding,created_at,updated_at'
-    const values = '?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,vector32(?),?,?'
-    const plainValues = '?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,NULL,?,?'
+    const columns = 'id,tenant_id,scope,session_id,type,timestamp,strength,importance,summary,detail,trigger_context,emotional_valence,emotional_trigger,source_session_id,source_interaction_index,source_tools_used,source_context_snapshot,decay_rate,last_strength_update,embedding_json,embedding_space,embedding,created_at,updated_at'
+    const values = `${Array(21).fill('?').join(',')},vector32(?),?,?`
+    const plainValues = `${Array(21).fill('?').join(',')},NULL,?,?`
+    const useNativeVector = input.embedding?.length === 1536
     try {
-      await db.execute({ sql: `INSERT INTO memory_nodes (${columns}) VALUES (${input.embedding ? values : plainValues})`, args: input.embedding ? [...commonArgs, JSON.stringify(input.embedding), now, now] : [...commonArgs, now, now] })
+      await db.execute({ sql: `INSERT INTO memory_nodes (${columns}) VALUES (${useNativeVector ? values : plainValues})`, args: useNativeVector ? [...commonArgs, JSON.stringify(input.embedding), now, now] : [...commonArgs, now, now] })
     } catch (error) {
       // Local SQLite builds without the vector extension still support the
       // JSON embedding fallback.  Retry the insert with a NULL vector column.
@@ -73,9 +75,11 @@ export class SQLiteMemoryManager implements MemoryManager {
     // embedding explicitly, preventing stale semantic recall.
     const textChanged = updates.summary !== undefined || updates.detail !== undefined
     if (textChanged && updates.embedding === undefined && updates.embeddingJson === undefined) {
-      sets.push('embedding_json=NULL', 'embedding=NULL')
+      sets.push('embedding_json=NULL', 'embedding=NULL', 'embedding_space=NULL')
     }
-    if (updates.embedding !== undefined) { if (updates.embedding === null) { sets.push('embedding=NULL', 'embedding_json=NULL') } else { sets.push('embedding=vector32(?)', 'embedding_json=?'); args.push(JSON.stringify(updates.embedding), JSON.stringify(updates.embedding)) } }
+    if (updates.embeddingSpace !== undefined) add('embedding_space', updates.embeddingSpace)
+    else if (updates.embedding !== undefined || updates.embeddingJson !== undefined) add('embedding_space', null)
+    if (updates.embedding !== undefined) { if (updates.embedding === null) { sets.push('embedding=NULL', 'embedding_json=NULL', 'embedding_space=NULL') } else if (updates.embedding.length === 1536) { sets.push('embedding=vector32(?)', 'embedding_json=?'); args.push(JSON.stringify(updates.embedding), JSON.stringify(updates.embedding)) } else { sets.push('embedding=NULL', 'embedding_json=?'); args.push(JSON.stringify(updates.embedding)) } }
     const hasTags = updates.tags !== undefined
     if (!sets.length && !hasTags) return this.getNode(id, c)
     sets.push('updated_at=unixepoch()')
@@ -123,8 +127,12 @@ export class SQLiteMemoryManager implements MemoryManager {
   async recallRecent(limit: number, ctx: MemoryContext): Promise<MemoryNode[]> { return this.listNodes({ orderBy: 'timestamp', limit }, ctx) }
   async recallImportant(minImportance: number, ctx: MemoryContext): Promise<MemoryNode[]> { return this.listNodes({ minImportance, orderBy: 'importance', limit: 50 }, ctx) }
   async recallBySession(sessionId: string, ctx: MemoryContext): Promise<MemoryNode[]> { return this.listNodes({ sessionId, orderBy: 'timestamp', limit: 100 }, ctx) }
-  async recallSimilar(embedding: number[], limit: number, ctx: MemoryContext, maxDistance = 0.4): Promise<MemoryNode[]> {
+  async recallSimilar(embedding: number[], limit: number, ctx: MemoryContext, maxDistance = 0.4, embeddingSpace?: string): Promise<MemoryNode[]> {
     const c = normalizeContext(ctx); const db = getMemoryDb(); const s = scoped('', c)
+    if (embeddingSpace !== undefined) {
+      if (embeddingSpace) { s.sql += ' AND embedding_space=?'; s.args.push(embeddingSpace) }
+      else s.sql += ' AND embedding_space IS NULL'
+    }
     const fallback = async (): Promise<MemoryNode[]> => {
       // The embedding_json column is intentionally scoped by the same
       // predicate. This path also handles databases where vector columns are
@@ -146,15 +154,114 @@ export class SQLiteMemoryManager implements MemoryManager {
     }
   }
 
+  async findNodeBySummary(summary: string, ctx: MemoryContext, executor?: Executor): Promise<MemoryNode | null> {
+    const c = normalizeContext(ctx); const db = executor ?? getMemoryDb(); const s = scoped('', c)
+    const result = await db.execute({ sql: `SELECT * FROM memory_nodes WHERE ${s.sql} AND summary=? ORDER BY created_at ASC,id ASC LIMIT 1`, args: [...s.args, summary] })
+    if (!result.rows.length) return null
+    return this.getNode(String(result.rows[0].id), c, db)
+  }
+
+  async createExtractedNodeIfAbsent(input: CreateMemoryNodeInput, ctx: MemoryContext): Promise<{ node: MemoryNode; created: boolean }> {
+    const tx = await getMemoryDb().transaction('write')
+    try {
+      const existing = await this.findNodeBySummary(input.summary, ctx, tx)
+      const node = existing ?? await this.createNode(input, ctx, tx)
+      await tx.commit()
+      return { node, created: !existing }
+    } catch (error) { await tx.rollback(); throw error }
+  }
+
+  async createExtractedEdgeIfAbsent(input: CreateMemoryEdgeInput, ctx: MemoryContext): Promise<MemoryEdge> {
+    const c = normalizeContext(ctx); const s = scoped('', c)
+    const tx = await getMemoryDb().transaction('write')
+    try {
+      const existing = await tx.execute({ sql: `SELECT * FROM memory_edges WHERE ${s.sql} AND source_node_id=? AND target_node_id=? AND type=? ORDER BY created_at ASC,id ASC LIMIT 1`,
+        args: [...s.args, input.sourceNodeId, input.targetNodeId, input.type] })
+      const edge = existing.rows.length ? mapEdgeRow(existing.rows[0] as Record<string, unknown>) : await this.createEdge(input, c, tx)
+      await tx.commit()
+      return edge
+    } catch (error) { await tx.rollback(); throw error }
+  }
+
+  async getEmbeddingBackfillCandidates(spaceId: string, limit: number, ctx: MemoryContext): Promise<MemoryNode[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('Embedding backfill batch limit must be a positive integer')
+    const c = normalizeContext(ctx); const db = getMemoryDb(); const s = scoped('', c)
+    const rows = await db.execute({ sql: `SELECT * FROM memory_nodes WHERE ${s.sql}
+      AND length(trim(summary))>0 AND (embedding_json IS NULL OR embedding_space IS NULL OR embedding_space != ?)
+      ORDER BY timestamp ASC,id ASC LIMIT ?`, args: [...s.args, spaceId, limit] })
+    return this._mapWithTags(rows.rows, c)
+  }
+
+  async updateEmbeddingIfUnchanged(id: string, summary: string, detail: string | null,
+    embedding: number[], spaceId: string, ctx: MemoryContext): Promise<boolean> {
+    if (!embedding.length || embedding.some(value => !Number.isFinite(value))) throw new Error('Invalid memory embedding')
+    const c = normalizeContext(ctx); const db = getMemoryDb(); const s = scoped('', c)
+    const value = JSON.stringify(embedding)
+    const predicate = `id=? AND ${s.sql} AND summary=? AND detail IS ?`
+    const args: InValue[] = [value, spaceId, id, ...s.args, summary, detail]
+    // The native schema/index uses 1536 dimensions. Other service dimensions
+    // use the JSON cosine backend without corrupting the native index.
+    if (embedding.length === 1536) {
+      try {
+        const result = await db.execute({ sql: `UPDATE memory_nodes SET embedding=vector32(?),embedding_json=?,embedding_space=?,updated_at=unixepoch() WHERE ${predicate}`,
+          args: [value, ...args] })
+        return result.rowsAffected > 0
+      } catch (error) { if (!/vector32|vector/i.test(String((error as Error)?.message))) throw error }
+    }
+    const result = await db.execute({ sql: `UPDATE memory_nodes SET embedding=NULL,embedding_json=?,embedding_space=?,updated_at=unixepoch() WHERE ${predicate}`, args })
+    return result.rowsAffected > 0
+  }
+
   async createEdge(input: CreateMemoryEdgeInput, ctx: MemoryContext, executor?: Executor): Promise<MemoryEdge> {
     const c = normalizeContext(ctx); const db = executor ?? getMemoryDb(); const s = scoped('n', c); const nodes = await db.execute({ sql: `SELECT id FROM memory_nodes n WHERE n.id IN (?,?) AND ${s.sql}`, args: [input.sourceNodeId, input.targetNodeId, ...s.args] }); if (nodes.rows.length !== 2) throw new Error('both edge endpoints must be in the same tenant and memory scope')
     const id = uuidv4(); const now = Math.floor(Date.now() / 1000); await db.execute({ sql: 'INSERT INTO memory_edges (id,tenant_id,scope,session_id,source_node_id,target_node_id,type,strength,description,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)', args: [id, c.tenantId, c.scope, c.scope === 'session' ? c.sessionId : '', input.sourceNodeId, input.targetNodeId, input.type, input.strength ?? 0.5, input.description ?? null, now] }); const es = scoped('', c); const r = await db.execute({ sql: `SELECT * FROM memory_edges WHERE id=? AND ${es.sql}`, args: [id, ...es.args] }); return mapEdgeRow(r.rows[0] as Record<string, unknown>)
   }
   async deleteEdge(id: string, ctx: MemoryContext): Promise<void> { const c = normalizeContext(ctx); const db = getMemoryDb(); const s = scoped('', c); await db.execute({ sql: `DELETE FROM memory_edges WHERE id=? AND ${s.sql}`, args: [id, ...s.args] }) }
   async getEdges(nodeId: string, ctx: MemoryContext): Promise<MemoryEdge[]> { const c = normalizeContext(ctx); const db = getMemoryDb(); const n = scoped('n', c); const e = scoped('e', c); const r = await db.execute({ sql: `SELECT e.* FROM memory_edges e JOIN memory_nodes n ON n.id=? AND ${n.sql} WHERE (e.source_node_id=? OR e.target_node_id=?) AND ${e.sql}`, args: [nodeId, ...n.args, nodeId, nodeId, ...e.args] }); return r.rows.map((row: any) => mapEdgeRow(row)) }
-  async getNeighbors(nodeId: string, edgeTypes?: MemoryEdgeType[], ctx?: MemoryContext): Promise<MemoryNode[]> { const c = normalizeContext(ctx); const db = getMemoryDb(); const n = scoped('n', c); const e = scoped('e', c); let type = ''; const ta: InValue[] = []; if (edgeTypes?.length) { type = ` AND e.type IN (${edgeTypes.map(() => '?').join(',')})`; ta.push(...edgeTypes) }; const r = await db.execute({ sql: `SELECT DISTINCT n.* FROM memory_nodes n JOIN memory_edges e ON ${e.sql} AND (e.source_node_id=n.id OR e.target_node_id=n.id) AND (e.source_node_id=? OR e.target_node_id=?) WHERE ${n.sql} AND n.id!=?${type} ORDER BY n.strength DESC`, args: [...e.args, nodeId, nodeId, ...n.args, nodeId, ...ta] }); return this._mapWithTags(r.rows, c) }
-  async traversePath(startNodeId: string, maxHops: number, edgeTypes?: MemoryEdgeType[], ctx?: MemoryContext): Promise<MemoryNode[]> { if (maxHops < 1) return []; const c = normalizeContext(ctx); const db = getMemoryDb(); const start = scoped('start', c); const e = scoped('e', c); const next = scoped('next', c); let type = ''; const ta: InValue[] = []; if (edgeTypes?.length) { type = ` AND e.type IN (${edgeTypes.map(() => '?').join(',')})`; ta.push(...edgeTypes) }; const end = scoped('n', c); const sql = `WITH RECURSIVE traverse(node_id,hop) AS (SELECT start.id,0 FROM memory_nodes start WHERE start.id=? AND ${start.sql} UNION SELECT next.id,t.hop+1 FROM traverse t JOIN memory_edges e ON ${e.sql} AND (e.source_node_id=t.node_id OR e.target_node_id=t.node_id) JOIN memory_nodes next ON next.id=CASE WHEN e.source_node_id=t.node_id THEN e.target_node_id ELSE e.source_node_id END AND ${next.sql} WHERE t.hop<?${type}) SELECT DISTINCT n.* FROM traverse t JOIN memory_nodes n ON n.id=t.node_id WHERE t.node_id!=? AND ${end.sql}`; const r = await db.execute({ sql, args: [startNodeId, ...start.args, ...e.args, ...next.args, maxHops, ...ta, startNodeId, ...end.args] }); return this._mapWithTags(r.rows, c) }
-  async getRelatedNodes(nodeIds: string[], edgeTypes?: MemoryEdgeType[], ctx?: MemoryContext): Promise<MemoryNode[]> { if (!nodeIds.length) return []; const c = normalizeContext(ctx); const db = getMemoryDb(); const n = scoped('n', c); const e = scoped('e', c); const p = nodeIds.map(() => '?').join(','); let type = ''; const ta: InValue[] = []; if (edgeTypes?.length) { type = ` AND e.type IN (${edgeTypes.map(() => '?').join(',')})`; ta.push(...edgeTypes) }; const r = await db.execute({ sql: `SELECT DISTINCT n.* FROM memory_nodes n JOIN memory_edges e ON ${e.sql} AND (e.source_node_id=n.id OR e.target_node_id=n.id) WHERE ${n.sql} AND (e.source_node_id IN (${p}) OR e.target_node_id IN (${p})) AND n.id NOT IN (${p})${type} ORDER BY n.strength DESC`, args: [...e.args, ...n.args, ...nodeIds, ...nodeIds, ...nodeIds, ...ta] }); return this._mapWithTags(r.rows, c) }
+  async getNeighbors(nodeId: string, edgeTypes?: MemoryEdgeType[], ctx?: MemoryContext): Promise<MemoryNode[]> {
+    return (await this.getRelatedNodes([nodeId], edgeTypes, ctx)).filter(node => node.id !== nodeId)
+  }
+  async traversePath(startNodeId: string, maxHops: number, edgeTypes?: MemoryEdgeType[], ctx?: MemoryContext): Promise<MemoryNode[]> {
+    if (maxHops < 1) return []
+    const c = normalizeContext(ctx); const db = getMemoryDb()
+    const start = scoped('start', c), e = scoped('e', c), next = scoped('next', c), end = scoped('n', c)
+    const type = edgeTypes?.length ? ` AND e.type IN (${edgeTypes.map(() => '?').join(',')})` : ''
+    const typeArgs: InValue[] = edgeTypes ?? []
+    // Separate indexed endpoint branches. The former OR join could build a
+    // node/edge cross product and stall a large memory graph for minutes.
+    const sql = `WITH RECURSIVE traverse(node_id,hop) AS (
+      SELECT start.id,0 FROM memory_nodes start WHERE start.id=? AND ${start.sql}
+      UNION
+      SELECT next.id,t.hop+1 FROM traverse t
+        JOIN memory_edges e ON ${e.sql} AND e.source_node_id=t.node_id
+        JOIN memory_nodes next ON next.id=e.target_node_id AND ${next.sql}
+        WHERE t.hop<?${type}
+      UNION
+      SELECT next.id,t.hop+1 FROM traverse t
+        JOIN memory_edges e ON ${e.sql} AND e.target_node_id=t.node_id
+        JOIN memory_nodes next ON next.id=e.source_node_id AND ${next.sql}
+        WHERE t.hop<?${type}
+      ) SELECT DISTINCT n.* FROM traverse t JOIN memory_nodes n ON n.id=t.node_id
+        WHERE t.node_id!=? AND ${end.sql}`
+    const args: InValue[] = [startNodeId, ...start.args,
+      ...e.args, ...next.args, maxHops, ...typeArgs,
+      ...e.args, ...next.args, maxHops, ...typeArgs, startNodeId, ...end.args]
+    return this._mapWithTags((await db.execute({ sql, args })).rows, c)
+  }
+  async getRelatedNodes(nodeIds: string[], edgeTypes?: MemoryEdgeType[], ctx?: MemoryContext): Promise<MemoryNode[]> {
+    if (!nodeIds.length) return []
+    const c = normalizeContext(ctx); const db = getMemoryDb(); const n = scoped('n', c), e = scoped('e', c)
+    const ids = nodeIds.map(() => '?').join(',')
+    const type = edgeTypes?.length ? ` AND e.type IN (${edgeTypes.map(() => '?').join(',')})` : ''
+    const typeArgs: InValue[] = edgeTypes ?? []
+    const sql = `SELECT n.* FROM memory_nodes n WHERE n.id IN (
+      SELECT e.target_node_id FROM memory_edges e WHERE ${e.sql} AND e.source_node_id IN (${ids})${type}
+      UNION
+      SELECT e.source_node_id FROM memory_edges e WHERE ${e.sql} AND e.target_node_id IN (${ids})${type}
+      ) AND ${n.sql} ORDER BY n.strength DESC`
+    const rows = await db.execute({ sql, args: [...e.args, ...nodeIds, ...typeArgs, ...e.args, ...nodeIds, ...typeArgs, ...n.args] })
+    return this._mapWithTags(rows.rows, c)
+  }
 
   async addTag(nodeId: string, tag: string, ctx: MemoryContext): Promise<void> { const c = normalizeContext(ctx); await this._attachTags(nodeId, [tag], c) }
   async removeTag(nodeId: string, tag: string, ctx: MemoryContext): Promise<void> { const c = normalizeContext(ctx); const db = getMemoryDb(); const s = scoped('n', c); await db.execute({ sql: `DELETE FROM memory_node_tags WHERE node_id=? AND EXISTS (SELECT 1 FROM memory_nodes n WHERE n.id=? AND ${s.sql}) AND tag_id IN (SELECT id FROM memory_tags WHERE tenant_id=? AND name=?)`, args: [nodeId, nodeId, ...s.args, c.tenantId, tag] }) }

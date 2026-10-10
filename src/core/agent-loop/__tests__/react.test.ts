@@ -542,14 +542,19 @@ describe('structured run lifecycle', () => {
 })
 
 describe('run resource and permission boundaries', () => {
-  it('a length-limited model reply is partial, never succeeded', async () => {
+  it('an unchanged length continuation stops as partial without claiming success', async () => {
     const llm = makeLLMAdapter([])
-    llm.stream = async function* () { yield { done: true, content: 'unfinished evidence', finishReason: 'length' } }
+    llm.stream = vi.fn(async function* () { yield { done: true, content: 'unfinished evidence', finishReason: 'length' as const } })
     const onOutcome = vi.fn()
     const ctx = makeCtx({ runId: 'bounded', runObserver: { onOutcome } })
-    await collectYields(new ReActStrategy(llm).run('task', ctx))
-    expect(onOutcome).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'failed', stopReason: 'output_limit', partialOutput: 'unfinished evidence' }))
-    expect((await ctx.history.getHistory(ctx)).find(message => message.id === 'subagent-outcome:bounded')?.content).toBe('unfinished evidence')
+    const output = (await collectYields(new ReActStrategy(llm).run('task', ctx))).join('')
+    expect(llm.stream).toHaveBeenCalledTimes(2)
+    expect(output).toBe('unfinished evidenceunfinished evidence')
+    expect(onOutcome).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'failed', stopReason: 'output_limit', partialOutput: output }))
+    expect(onOutcome.mock.calls.some(([value]) => value.status === 'succeeded')).toBe(false)
+    const history = await ctx.history.getHistory(ctx)
+    expect(history.find(message => message.metadata?.outputContinuation)?.content).toBe('unfinished evidence')
+    expect(history.find(message => message.id === 'subagent-outcome:bounded')?.content).toBe(output)
   })
 
   it('budget rejection keeps its own error code and does not shrink the context capacity', async () => {

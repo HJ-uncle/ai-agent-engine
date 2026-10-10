@@ -3,6 +3,7 @@ import type { IToolRegistry } from '../../core/agent-context/index.js'
 import { logger } from '../../observability/index.js'
 import { listServers } from '../../storage/mcp/mcp-config.js'
 import type { NetworkContext } from '../../security/guarded-http.js'
+import { throwIfAborted } from '../../core/utils/abort.js'
 
 /**
  * 内联 MCP server 配置（来自客户端请求级透传，如 桌面客户端）
@@ -17,6 +18,7 @@ interface InlineMcpServer {
   env?: Record<string, string>
   url?: string
   headers?: Record<string, string>
+  timeoutMs?: number
   disabledTools?: string[]
 }
 
@@ -35,8 +37,10 @@ export async function registerMCPTools(
   toolFilter?: (name: string) => boolean,
   inlineServers?: InlineMcpServer[],
   securityContext?: NetworkContext,
-  workspaceRoot?: string
+  workspaceRoot?: string,
+  signal?: AbortSignal
 ): Promise<string[]> {
+  throwIfAborted(signal)
   const registeredNames: string[] = []
   const localServers = listServers(workspaceRoot)
 
@@ -86,10 +90,11 @@ export async function registerMCPTools(
         env: server.env,
         transportType: server.transportType,
         headers: server.headers,
+        timeoutMs: server.timeoutMs,
       }, securityContext)
 
       try {
-        const tools = await client.toTools()
+        const tools = await client.toTools(signal)
         tools.forEach((t) => {
           const definitionName = t.name.startsWith(`mcp_${server.id}_`) ? t.name.slice(`mcp_${server.id}_`.length) : t.name
           if (server.disabledTools?.includes(definitionName) || (toolFilter && !toolFilter(t.name))) return
@@ -100,10 +105,14 @@ export async function registerMCPTools(
         })
         logger.info({ id: server.id, toolCount: tools.length }, 'MCP server registered')
       } catch (err) {
+        throwIfAborted(signal)
         logger.warn({ id: server.id, url: server.url, err }, 'MCP server unavailable, skipping')
+      } finally {
+        if (signal?.aborted) await client.disconnect()
       }
     }),
   )
+  throwIfAborted(signal)
 
   // 客户端 inline server（请求级临时挂载）
   await Promise.allSettled(
@@ -117,9 +126,10 @@ export async function registerMCPTools(
         env: server.env,
         transportType: server.transportType,
         headers: server.headers,
+        timeoutMs: server.timeoutMs,
       }, securityContext)
       try {
-        const tools = await client.toTools()
+        const tools = await client.toTools(signal)
         tools.forEach((t) => {
           const definitionName = t.name.startsWith(`mcp_${server.id}_`) ? t.name.slice(`mcp_${server.id}_`.length) : t.name
           if (server.disabledTools?.includes(definitionName) || (toolFilter && !toolFilter(t.name))) return
@@ -133,13 +143,17 @@ export async function registerMCPTools(
           'Inline MCP server registered (request-level)'
         )
       } catch (err) {
+        throwIfAborted(signal)
         logger.warn(
           { id: server.id, name: server.name, url: server.url, err },
           'Inline MCP server unavailable, skipping'
         )
+      } finally {
+        if (signal?.aborted) await client.disconnect()
       }
     }),
   )
+  throwIfAborted(signal)
 
   return registeredNames
 }

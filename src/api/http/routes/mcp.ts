@@ -28,6 +28,7 @@ import { HTTPMCPClient } from '../../../tools/mcp/client.js'
 import { logger } from '../../../observability/index.js'
 import { success, fail, paginateArray } from '../response.js'
 import { z } from 'zod'
+import { MAX_OPERATION_TIMEOUT_MS } from '../../../core/utils/operation-timeout.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
@@ -43,6 +44,7 @@ const McpBaseSchema = z.object({
   args: z.array(z.string()).optional(),
   env: z.record(z.string()).optional(),
   headers: z.record(z.string()).optional(),
+  timeoutMs: z.number().int().min(0).max(MAX_OPERATION_TIMEOUT_MS).nullable().optional().transform(value => value ?? undefined),
   disabledTools: z.array(z.string().min(1)).optional().default([]),
   enabled: z.boolean().optional().default(true),
   isBuiltIn: z.boolean().optional().default(false),
@@ -193,13 +195,17 @@ export async function mcpRoutes(fastify: FastifyInstance) {
       return reply.code(200).send(fail(40400, `MCP server "${req.params.id}" not found`))
     }
 
+    const controller = new AbortController()
+    const disconnected = () => { if (!reply.raw.writableEnded) controller.abort(new DOMException('MCP connection test cancelled', 'AbortError')) }
+    req.raw.once('aborted', disconnected)
+    reply.raw.once('close', disconnected)
+    let client: HTTPMCPClient | undefined
     try {
       if (server.transportType !== 'stdio' && !server.url) {
         return reply.code(200).send(fail(40001, 'Server has no URL configured'))
       }
-      const client = new HTTPMCPClient({ id: server.id, name: server.name || server.id, url: server.url, command: server.command, args: server.args, env: server.env, transportType: server.transportType, headers: server.headers })
-      const tools = await client.toTools()
-      await client.disconnect()
+      client = new HTTPMCPClient({ id: server.id, name: server.name || server.id, url: server.url, command: server.command, args: server.args, env: server.env, transportType: server.transportType, headers: server.headers, timeoutMs: server.timeoutMs }, { tenantId: getTenantId(req), sessionId: '' })
+      const tools = await client.toTools(controller.signal)
       return reply.code(200).send(success({
         success: true,
         toolCount: tools.length,
@@ -208,6 +214,10 @@ export async function mcpRoutes(fastify: FastifyInstance) {
     } catch (err) {
       logger.warn({ id: server.id, err }, 'MCP server test failed')
       return reply.code(200).send(fail(50000, err instanceof Error ? err.message : 'Connection failed'))
+    } finally {
+      req.raw.removeListener('aborted', disconnected)
+      reply.raw.removeListener('close', disconnected)
+      await client?.disconnect()
     }
   })
 }

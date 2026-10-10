@@ -27,4 +27,6 @@ export interface LLMCredentials {
   apiKey?: string
   baseUrl?: string
   provider?: string
+  /** Effective request/model capability override, shared with the chat request. */
+  contextWindow?: number
 }

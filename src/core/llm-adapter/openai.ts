@@ -1,5 +1,5 @@
 import { applyThinkingPreference, isThinkingDisabled, isProtectedThinkingParameter } from './thinking.js'
-import { observeRequest, observeStreamRequest, openAIUsage } from './request-attempt.js'
+import { observeRequest, observeStreamRequest, openAIUsage, prepareRequestContext } from './request-attempt.js'
 import { throwIfAborted } from '../utils/abort.js'
 import OpenAI from 'openai'
 import http from 'node:http'
@@ -18,6 +18,7 @@ const keepAliveFetch = async (url: RequestInfo | URL, init?: RequestInit) => {
 import type { Message, Tool } from '../agent-context/index.js'
 import { estimateTokens } from '../utils/tokens.js'
 import { repairJson } from '../utils/json.js'
+import { modelMessageContent } from '../utils/model-context.js'
 import { normalizeWriteFileArgs } from '../../shared/write-file-args.js'
 
 /**
@@ -295,6 +296,7 @@ function messagesToOpenAI(
   supportsVision: boolean = true,
   ensureReasoning: boolean = false,
 ): OpenAI.Chat.ChatCompletionMessageParam[] {
+  messages = messages.map(message => ({ ...message, content: modelMessageContent(message) }))
   // First pass: collect all valid tool_call IDs (with non-empty id & name)
   // AND collect all tool result IDs from tool messages
   const validToolCallIds = new Set<string>()
@@ -741,10 +743,17 @@ export class OpenAIAdapter implements LLMAdapter {
       params.tools = options.tools.map(toolToOpenAI)
       params.tool_choice = 'auto'
     }
+    const requestContext = prepareRequestContext(options, params, params.max_completion_tokens ?? params.max_tokens)
+    if (options?.contextWindow && Number.isFinite(options.contextWindow)) {
+      const field = 'max_completion_tokens' in params || modelUsesMaxCompletionTokens(String(params.model))
+        ? 'max_completion_tokens' : 'max_tokens'
+      params[field] = requestContext.maxTokens
+      if (field === 'max_completion_tokens' && 'max_tokens' in params) params.max_tokens = requestContext.maxTokens
+    }
     const response = await createWithParamFallback<OpenAI.Chat.ChatCompletion>(
       this.client,
       params,
-      { signal: options?.signal }, { ...options, model: String(params.model), requestInputTokenEstimate: Math.max(options?.requestInputTokenEstimate ?? 0, estimateTokens(JSON.stringify({ messages: params.messages, tools: params.tools, system: params.system }))) }, this.provider,
+      { signal: options?.signal }, requestContext, this.provider,
     )
     const choice = response.choices[0]
     const message = choice.message
@@ -868,6 +877,13 @@ export class OpenAIAdapter implements LLMAdapter {
       params.tools = options.tools.map(toolToOpenAI)
       params.tool_choice = 'auto'
     }
+    const requestContext = prepareRequestContext(options, params, params.max_completion_tokens ?? params.max_tokens)
+    if (options?.contextWindow && Number.isFinite(options.contextWindow)) {
+      const field = 'max_completion_tokens' in params || modelUsesMaxCompletionTokens(String(params.model))
+        ? 'max_completion_tokens' : 'max_tokens'
+      params[field] = requestContext.maxTokens
+      if (field === 'max_completion_tokens' && 'max_tokens' in params) params.max_tokens = requestContext.maxTokens
+    }
 
     // 使用原生 chat.completions.create({ stream: true }) 代替 beta.chat.completions.stream。
     // beta stream helper 内部会把 SSE chunk 解析为类型化 event 对象，第三方 GPT 兼容 API
@@ -884,7 +900,7 @@ export class OpenAIAdapter implements LLMAdapter {
     const stream = await streamWithParamFallback(
       this.client,
       params,
-      { signal: options?.signal }, { ...options, model: String(params.model), requestInputTokenEstimate: Math.max(options?.requestInputTokenEstimate ?? 0, estimateTokens(JSON.stringify({ messages: params.messages, tools: params.tools, system: params.system }))) }, this.provider,
+      { signal: options?.signal }, requestContext, this.provider,
     )
 
     for await (const chunk of stream) {

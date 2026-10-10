@@ -8,14 +8,14 @@ import { MEMORY_SCHEMA } from '../schema.js'
 describe('memory database schema initialization', () => {
   let fixture: string
 
-  beforeEach(() => {
-    closeMemoryDb()
+  beforeEach(async () => {
+    await closeMemoryDb()
     fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-memory-schema-'))
     process.env.DATA_DIR = path.join(fixture, 'agent.db')
   })
 
   afterEach(async () => {
-    closeMemoryDb()
+    await closeMemoryDb()
     await new Promise((resolve) => setTimeout(resolve, 100))
     try { fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }) } catch { /* Windows may release SQLite handles slightly later. */ }
   })

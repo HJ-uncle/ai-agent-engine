@@ -1,5 +1,5 @@
-import { createClient } from '@libsql/client'
 import type { Client } from '@libsql/client'
+import { LocalSqliteProcessClient } from './local-process-client.js'
 import path from 'node:path'
 import fs from 'node:fs'
 import { up } from './migrations/001_initial.js'
@@ -29,40 +29,11 @@ import { up as up23 } from './migrations/023_account_access_tokens.js'
 import { up as up24 } from './migrations/024_account_identity_profiles.js'
 
 let client: Client | null = null
-let initialized = false
-let pragmasApplied = false
-
-/**
- * 应用 SQLite 性能相关 pragmas（幂等，只执行一次）。
- * 收益：WAL 允许并发读写，NORMAL 同步降低 fsync 次数，缓存/映射显著加速查询。
- * 期望响应速度提升 30-50%。
- */
-async function applyPerformancePragmas(db: Client): Promise<void> {
-  if (pragmasApplied) return
-  pragmasApplied = true
-
-  // 运行期可调的阈值（默认值经过多数工作负载验证）
-  const cacheKb      = parseInt(process.env.SQLITE_CACHE_KB       ?? '20000', 10) // 20MB
-  const mmapBytes    = parseInt(process.env.SQLITE_MMAP_BYTES     ?? '268435456', 10) // 256MB
-  const busyTimeout  = parseInt(process.env.SQLITE_BUSY_TIMEOUT_MS ?? '5000', 10)
-
-  const pragmas = [
-    `PRAGMA journal_mode = WAL`,
-    `PRAGMA synchronous = NORMAL`,
-    `PRAGMA cache_size = -${cacheKb}`,     // 负数表示 KB
-    `PRAGMA temp_store = MEMORY`,
-    `PRAGMA mmap_size = ${mmapBytes}`,
-    `PRAGMA busy_timeout = ${busyTimeout}`,
-    `PRAGMA foreign_keys = ON`,
-  ]
-  for (const p of pragmas) {
-    // 某些 pragma 在只读或内存库中可能失败，容忍错误
-    await db.execute(p).catch(() => {})
-  }
-}
+let initialization: Promise<void> | null = null
 
 export function getDb(): Client {
-  if (client) return client
+  if (client && !client.closed) return client
+  if (client?.closed) { client = null; initialization = null }
 
   const dbPath = process.env.DATA_DIR ?? './data/agent.db'
   const dbDir = path.dirname(path.resolve(dbPath))
@@ -73,7 +44,11 @@ export function getDb(): Client {
 
   // @libsql/client uses file: prefix for local SQLite
   const url = `file:${path.resolve(dbPath)}`
-  client = createClient({ url })
+  client = new LocalSqliteProcessClient({ url }, {
+    cacheKb: Number(process.env.SQLITE_CACHE_KB ?? 20000),
+    mmapBytes: Number(process.env.SQLITE_MMAP_BYTES ?? 268435456),
+    busyTimeoutMs: Number(process.env.SQLITE_BUSY_TIMEOUT_MS ?? 5000),
+  })
 
   return client
 }
@@ -101,15 +76,18 @@ export async function getDbStats(): Promise<Record<string, string | number>> {
  * 在应用启动时调用一次，确保所有表和列都存在。
  * 使用 CREATE TABLE IF NOT EXISTS，完全幂等，安全重复执行。
  */
-export async function initDb(): Promise<void> {
-  if (initialized) return
-  initialized = true
-
+export function initDb(): Promise<void> {
   const db = getDb()
+  if (initialization) return initialization
+  const pending = initializeSchema(db).catch(error => {
+    if (initialization === pending) initialization = null
+    throw error
+  })
+  initialization = pending
+  return pending
+}
 
-  // 先应用性能 pragma，再跑迁移（让迁移本身也享受 WAL 加速）
-  await applyPerformancePragmas(db)
-
+async function initializeSchema(db: Client): Promise<void> {
   // 运行完整迁移（所有 CREATE TABLE IF NOT EXISTS，幂等）
   await up(db)
   await up2(db)
@@ -153,6 +131,7 @@ export async function initDb(): Promise<void> {
 }
 
 export function closeDb(): void {
+  initialization = null
   if (client) {
     client.close()
     client = null

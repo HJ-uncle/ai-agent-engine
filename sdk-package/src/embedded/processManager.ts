@@ -17,6 +17,8 @@ import * as path from 'path'
 export interface StartProcessOptions {
   /** node 可执行文件路径（默认使用 process.execPath） */
   nodePath?: string
+  /** Packaged runtimes may execute from writable state. */
+  cwd?: string
   /** agent-engine bin/main.js 的绝对路径 */
   binPath: string
   /** 监听端口，注入为 PORT 环境变量 */
@@ -57,8 +59,9 @@ export function startProcess(opts: StartProcessOptions): ProcessHandle {
   function resolveSkillsRoot(startDir: string): string {
     let dir = startDir
     for (let i = 0; i < 3; i++) {
-      const candidate = path.join(dir, 'SKILLs')
-      if (fs.existsSync(candidate)) return candidate
+      // NTFS also matches dist/skills when probing SKILLs with existsSync.
+      const found = fs.readdirSync(dir, { withFileTypes: true }).find(entry => entry.isDirectory() && entry.name === 'SKILLs')
+      if (found) return path.join(dir, found.name)
       const parent = path.dirname(dir)
       if (parent === dir) break  // 到达根目录
       dir = parent
@@ -69,7 +72,7 @@ export function startProcess(opts: StartProcessOptions): ProcessHandle {
   const defaultSkillsRoot = resolveSkillsRoot(binDir)
   const callerEnv = opts.env ?? {}
   const skillsRootEnv: Record<string, string> =
-    callerEnv['SKILLS_ROOT'] ? {} : { SKILLS_ROOT: defaultSkillsRoot }
+    callerEnv['SKILLS_ROOT'] || process.env.SKILLS_ROOT ? {} : { SKILLS_ROOT: defaultSkillsRoot }
 
   const env: Record<string, string> = {
     ...process.env as Record<string, string>,
@@ -84,8 +87,9 @@ export function startProcess(opts: StartProcessOptions): ProcessHandle {
     ...callerEnv
   }
 
-  const child = spawn(nodePath, ['main.js'], {
-    cwd: binDir,
+  const child = spawn(nodePath, [opts.binPath], {
+    cwd: opts.cwd ?? binDir,
+    windowsHide: true,
     env,
     detached: false,
     stdio: ['pipe', 'pipe', 'pipe']

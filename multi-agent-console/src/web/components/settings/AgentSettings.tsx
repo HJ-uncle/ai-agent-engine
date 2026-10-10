@@ -51,12 +51,13 @@ export default function AgentSettings() {
         <div className={styles.card}>
           <SettingRow
             title="最大迭代次数"
-            desc="每次对话 Agent 最多执行多少轮工具调用后停止（MAX_ITERATIONS）"
+            desc="其他运行模式的迭代上限；清空表示不限。Code 模式不使用此全局限制。"
             envKey="MAX_ITERATIONS"
           >
             <InputNumber
-              min={1} max={500}
-              value={settings.MAX_ITERATIONS}
+              min={1}
+              placeholder="不限"
+              value={settings.MAX_ITERATIONS ?? null}
               onChange={(v) => handleChange('MAX_ITERATIONS', v)}
               style={{ width: 120, ...INPUT_STYLE }}
             />
@@ -64,15 +65,16 @@ export default function AgentSettings() {
 
           <SettingRow
             title="Token 预算"
-            desc="每次对话允许消耗的最大 token 数，超出后触发历史压缩（TOKEN_BUDGET）"
+            desc="其他运行模式的本地 Token 预算；清空表示不设。Code 模式按模型上下文窗口自动压缩。"
             envKey="TOKEN_BUDGET"
           >
             <InputNumber
-              min={10000} max={500000} step={10000}
-              value={settings.TOKEN_BUDGET}
+              min={1} step={10000}
+              placeholder="不限"
+              value={settings.TOKEN_BUDGET ?? null}
               onChange={(v) => handleChange('TOKEN_BUDGET', v)}
               style={{ width: 120, ...INPUT_STYLE }}
-              formatter={(v) => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+              formatter={(v) => v === null || v === undefined ? '' : `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
             />
           </SettingRow>
         </div>
@@ -98,13 +100,13 @@ export default function AgentSettings() {
 
           <SettingRow
             title="压缩触发比例"
-            desc="历史 token 占 TOKEN_BUDGET 的比例达到此阈值时自动压缩（COMPRESS_THRESHOLD_RATIO，0.1–1.0）"
+            desc="按可用模型上下文触发自动压缩；默认 92%。增强模式可能提前压缩，实际比例由引擎决定。"
             envKey="COMPRESS_THRESHOLD_RATIO"
           >
             <Row gutter={8} align="middle" style={{ width: 220 }}>
               <Col flex="1">
                 <Slider
-                  min={0.1} max={1.0} step={0.05}
+                  min={0.1} max={1.0} step={0.01}
                   value={settings.COMPRESS_THRESHOLD_RATIO}
                   onChange={(v) => handleChange('COMPRESS_THRESHOLD_RATIO', v)}
                   tooltip={{ formatter: (v) => `${Math.round((v ?? 0) * 100)}%` }}
@@ -114,7 +116,7 @@ export default function AgentSettings() {
                 <span style={{ color: '#ccc', fontSize: 13, minWidth: 36, textAlign: 'right', display: 'inline-block' }}>
                   {settings.COMPRESS_THRESHOLD_RATIO
                     ? `${Math.round(settings.COMPRESS_THRESHOLD_RATIO * 100)}%`
-                    : '50%'}
+                    : '读取中…'}
                 </span>
               </Col>
             </Row>

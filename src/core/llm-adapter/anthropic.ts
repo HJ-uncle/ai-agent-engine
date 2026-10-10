@@ -1,9 +1,10 @@
 import { applyThinkingPreference } from './thinking.js'
-import { observeRequest, observeStreamRequest, anthropicUsage } from './request-attempt.js'
+import { observeRequest, observeStreamRequest, anthropicUsage, prepareRequestContext } from './request-attempt.js'
 import Anthropic from '@anthropic-ai/sdk'
 import type { LLMAdapter, LLMResponse, LLMAdapterOptions, LLMStreamChunk } from './types.js'
 import type { Message, Tool } from '../agent-context/index.js'
 import { estimateTokens } from '../utils/tokens.js'
+import { modelMessageContent } from '../utils/model-context.js'
 
 // Anthropic SDK v0.20 does not expose Tool types directly; we use a minimal inline type.
 interface AnthropicTool {
@@ -50,9 +51,46 @@ interface AnthropicMessageParam {
  */
 const MAX_ANTHROPIC_OUTPUT_TOKENS = 393_216
 
-function normalizeOutputTokenLimit(value: number | undefined, fallback: number): number {
+function maxOutputTokensForModel(model: string): number {
+  // Kimi K2.6's Anthropic-compatible endpoint advertises a 262144 output
+  // ceiling even though the shared gateway accepts the larger DeepSeek
+  // ceiling. Keep the limit model-specific so unbounded 100K-context turns
+  // remain valid for every configured model.
+  const normalized = model.trim()
+  if (/^kimi[-_]k2\.6$/i.test(normalized)) return 262_144
+  if (/^minimax(?:[-_]|$)/i.test(normalized)) return 32_768
+  if (/^glm(?:[-_\.]|$)/i.test(normalized)) return 131_072
+  return MAX_ANTHROPIC_OUTPUT_TOKENS
+}
+
+function isFixedThinkingGatewayModel(model: string): boolean {
+  return /^(?:minimax|glm)(?:[-_]|$)/i.test(model.trim())
+}
+
+/**
+ * MiniMax/GLM Anthropic-compatible gateways require their own thinking switch
+ * even when the caller did not provide a thinking preference. They reject the
+ * native Anthropic disabled object and stale reasoning_effort overrides, so
+ * normalize those fields at the final wire adapter boundary.
+ */
+function normalizeGatewayThinking(options: LLMAdapterOptions | undefined, model: string): LLMAdapterOptions | undefined {
+  if (!isFixedThinkingGatewayModel(model)) return options
+  const thinkingConfig = { ...(options?.thinkingConfig ?? {}) }
+  delete thinkingConfig.thinking
+  delete thinkingConfig.reasoning_effort
+  delete thinkingConfig.think
+  thinkingConfig.enable_thinking = true
+  return {
+    ...(options ?? {}),
+    model,
+    thinkingConfig,
+    reasoningEffort: undefined,
+  }
+}
+
+function normalizeOutputTokenLimit(value: number | undefined, fallback: number, model?: string): number {
   const candidate = Number.isFinite(value) ? Math.floor(value!) : fallback
-  return Math.max(1, Math.min(MAX_ANTHROPIC_OUTPUT_TOKENS, candidate))
+  return Math.max(1, Math.min(model ? maxOutputTokensForModel(model) : MAX_ANTHROPIC_OUTPUT_TOKENS, candidate))
 }
 
 /**
@@ -67,6 +105,7 @@ function messageToAnthropic(
   validToolUseIds?: Set<string>,
   validToolResultIds?: Set<string>
 ): AnthropicMessageParam | null {
+  msg = { ...msg, content: modelMessageContent(msg) }
   // ── tool result → Anthropic user/tool_result ─────────────────────────────
   if (msg.role === 'tool') {
     // Drop orphaned tool_result blocks (no matching tool_use was emitted)
@@ -176,7 +215,12 @@ function messageToAnthropic(
 
   return {
     role: msg.role as 'user' | 'assistant',
-    content: msg.content,
+    content: Array.isArray(msg.content) ? msg.content.map(part => {
+      if (part?.type !== 'image_url' || typeof part.image_url?.url !== 'string') return part
+      const match = /^data:([^;,]+);base64,([\s\S]+)$/.exec(part.image_url.url)
+      return match ? { type: 'image', source: { type: 'base64', media_type: match[1], data: match[2] } }
+        : { type: 'image', source: { type: 'url', url: part.image_url.url } }
+    }) : msg.content,
   }
 }
 
@@ -243,7 +287,11 @@ export class AnthropicAdapter implements LLMAdapter {
   }
 
   async complete(messages: Message[], options?: LLMAdapterOptions): Promise<LLMResponse> {
-    options = applyThinkingPreference(options, this.provider, options?.model ?? this.model)
+    const requestedModel = options?.model ?? this.model
+    options = normalizeGatewayThinking(
+      applyThinkingPreference(options, this.provider, requestedModel),
+      requestedModel,
+    )
     // Two-pass orphan filtering:
     // Pass 1 — collect all valid tool_use ids from assistant messages
     // and collect all valid tool_result ids from tool messages
@@ -278,9 +326,10 @@ export class AnthropicAdapter implements LLMAdapter {
         // the agent loop; this is only the provider protocol ceiling.
         ? MAX_ANTHROPIC_OUTPUT_TOKENS
         : 4096)
-    const maxTokens = normalizeOutputTokenLimit(requestedMaxTokens, MAX_ANTHROPIC_OUTPUT_TOKENS)
+    const model = options?.model ?? this.model
+    const maxTokens = normalizeOutputTokenLimit(requestedMaxTokens, MAX_ANTHROPIC_OUTPUT_TOKENS, model)
     const params: Record<string, unknown> = {
-      model: options?.model ?? this.model,
+      model,
       max_tokens: maxTokens,
       messages: anthropicMessages,
       system: options?.systemPrompt,
@@ -288,6 +337,12 @@ export class AnthropicAdapter implements LLMAdapter {
 
     if (options?.thinkingConfig) {
       Object.assign(params, options.thinkingConfig)
+    }
+    if (options?.temperature !== undefined) {
+      // Native extended thinking requires temperature=1; compatible gateways
+      // using enable_thinking retain their own requested sampling preference.
+      const thinking = params['thinking'] as { type?: string } | undefined
+      params['temperature'] = thinking?.type === 'enabled' ? 1 : options.temperature
     }
 
     if (options?.tools && options.tools.length > 0) {
@@ -314,7 +369,9 @@ export class AnthropicAdapter implements LLMAdapter {
       }
       stop_reason: string | null
     }>
-    const response = await observeRequest(() => (this.client.messages.create as unknown as CreateFn)(params, { signal: options?.signal }), { ...options, model: String(params.model), requestInputTokenEstimate: Math.max(options?.requestInputTokenEstimate ?? 0, estimateTokens(JSON.stringify({ messages: params.messages, tools: params.tools, system: params.system }))) }, this.provider, String(params.model), value => anthropicUsage(value.usage))
+    const requestContext = prepareRequestContext(options, params, Number(params.max_tokens))
+    if (options?.contextWindow && Number.isFinite(options.contextWindow)) params.max_tokens = requestContext.maxTokens
+    const response = await observeRequest(() => (this.client.messages.create as unknown as CreateFn)(params, { signal: options?.signal }), requestContext, this.provider, String(params.model), value => anthropicUsage(value.usage))
 
     let content = ''
     let reasoningContent = ''
@@ -369,7 +426,11 @@ export class AnthropicAdapter implements LLMAdapter {
   }
 
   async *stream(messages: Message[], options?: LLMAdapterOptions): AsyncIterable<LLMStreamChunk> {
-    options = applyThinkingPreference(options, this.provider, options?.model ?? this.model)
+    const requestedModel = options?.model ?? this.model
+    options = normalizeGatewayThinking(
+      applyThinkingPreference(options, this.provider, requestedModel),
+      requestedModel,
+    )
     // Two-pass orphan filtering (same as complete())
     const validToolUseIds = new Set<string>()
     const validToolResultIds = new Set<string>()
@@ -391,9 +452,10 @@ export class AnthropicAdapter implements LLMAdapter {
       ?? (options?.unboundedOutput
         ? MAX_ANTHROPIC_OUTPUT_TOKENS
         : 4096)
-    const streamMaxTokens = normalizeOutputTokenLimit(requestedStreamMaxTokens, MAX_ANTHROPIC_OUTPUT_TOKENS)
+    const model = options?.model ?? this.model
+    const streamMaxTokens = normalizeOutputTokenLimit(requestedStreamMaxTokens, MAX_ANTHROPIC_OUTPUT_TOKENS, model)
     const streamParams: Record<string, unknown> = {
-      model: options?.model ?? this.model,
+      model,
       max_tokens: streamMaxTokens,
       messages: anthropicMessages,
       system: options?.systemPrompt,
@@ -401,6 +463,10 @@ export class AnthropicAdapter implements LLMAdapter {
 
     if (options?.thinkingConfig) {
       Object.assign(streamParams, options.thinkingConfig)
+    }
+    if (options?.temperature !== undefined) {
+      const thinking = streamParams['thinking'] as { type?: string } | undefined
+      streamParams['temperature'] = thinking?.type === 'enabled' ? 1 : options.temperature
     }
 
     if (options?.tools && options.tools.length > 0) {
@@ -483,13 +549,15 @@ export class AnthropicAdapter implements LLMAdapter {
     }
 
     let stream: Stream | undefined
+    const requestContext = prepareRequestContext(options, streamParams, Number(streamParams.max_tokens))
+    if (options?.contextWindow && Number.isFinite(options.contextWindow)) streamParams.max_tokens = requestContext.maxTokens
     const observed = await observeStreamRequest(async () => {
       stream = (this.client.messages as unknown as {
         stream(params: Record<string, unknown>, requestOptions: { signal?: AbortSignal }): Stream
       }).stream(streamParams, { signal: options?.signal })
       stream.on?.('streamEvent', snapshotStart)
       return stream
-    }, { ...options, model: String(streamParams.model), requestInputTokenEstimate: Math.max(options?.requestInputTokenEstimate ?? 0, estimateTokens(JSON.stringify({ messages: streamParams.messages, tools: streamParams.tools, system: streamParams.system }))) }, this.provider, String(streamParams.model),
+    }, requestContext, this.provider, String(streamParams.model),
     (event, previous) => anthropicUsage(event.type === 'message_start' ? event.message?.usage : event.usage, previous),
     event => event.type === 'message_stop')
     try {

@@ -12,8 +12,12 @@ const pty = await import('node-pty')
 
 describe('terminal resource boundary', () => {
   beforeEach(async () => {
-    await terminalManager.killAll()
     vi.clearAllMocks()
+    mock.fake.kill.mockImplementation(() => {
+      const onExit = mock.fake.onExit.mock.calls.at(-1)?.[0] as ((event: { exitCode: number }) => void) | undefined
+      onExit?.({ exitCode: 0 })
+    })
+    await terminalManager.killAll()
     mock.mode.mockReturnValue('restricted-files')
   })
   afterEach(async () => { await terminalManager.killAll() })
@@ -76,5 +80,24 @@ describe('terminal resource boundary', () => {
     await expect(terminalManager.create('unique', process.cwd())).rejects.toThrow(/already exists/)
     await expect(terminalManager.create('invalid', process.cwd(), -1, 30)).rejects.toThrow(/dimensions/)
     expect(pty.spawn).toHaveBeenCalledOnce()
+  })
+
+  it('merges concurrent close requests and waits for the PTY exit event', async () => {
+    let kills = 0
+    let exit!: (event: { exitCode: number }) => void
+    mock.fake.kill.mockImplementation(() => { kills++ })
+    mock.fake.onExit.mockImplementation(listener => { exit = listener })
+    await terminalManager.create('close-once', process.cwd())
+    const first = terminalManager.kill('close-once')
+    const second = terminalManager.kill('close-once')
+    await Promise.resolve()
+    expect(kills).toBe(1)
+    let settled = false
+    void first.then(() => { settled = true })
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(settled).toBe(false)
+    exit({ exitCode: 0 })
+    await Promise.all([first, second])
+    expect(terminalManager.get('close-once')).toBeUndefined()
   })
 })

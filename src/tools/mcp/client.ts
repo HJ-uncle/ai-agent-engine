@@ -4,6 +4,8 @@ import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/in
 import { guardedHttp, type NetworkContext } from '../../security/guarded-http.js'
 import { extensionPolicy } from '../../security/tool-policy.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { validateOperationTimeout } from '../../core/utils/operation-timeout.js'
+import { stopCommandProcessTree } from '../../core/command-jobs/process-tree.js'
 
 let _rpcId = 1
 
@@ -49,10 +51,22 @@ export class HTTPMCPClient implements MCPClient {
   private sessionId?: string
   private legacySse?: LegacySseSession
   private process?: ChildProcessWithoutNullStreams
+  private processStartedAt = 0
   private stdioBuffer = Buffer.alloc(0)
   private stdioPending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>()
 
-  constructor(private readonly config: MCPServerConfig, private readonly securityContext: NetworkContext = { tenantId: 'default', sessionId: '' }) {}
+  constructor(private readonly config: MCPServerConfig, private readonly securityContext: NetworkContext = { tenantId: 'default', sessionId: '' }) {
+    validateOperationTimeout(config.timeoutMs)
+  }
+
+  private requestSignal(defaultMs: number, signal?: AbortSignal): AbortSignal | undefined {
+    const timeoutMs = this.config.timeoutMs ?? defaultMs
+    return timeoutMs === 0 ? signal : signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs)
+  }
+
+  private httpTimeoutOptions() {
+    return { timeoutMs: this.config.timeoutMs, overridePolicyTimeout: this.config.timeoutMs !== undefined }
+  }
 
   // ── JSON-RPC 2.0 请求 ─────────────────────────────────────────────────────
   private async rpc<T>(method: string, params: unknown = {}, signal?: AbortSignal, ctx = this.securityContext): Promise<T> {
@@ -77,7 +91,8 @@ export class HTTPMCPClient implements MCPClient {
       },
       body,
       stream: true,
-      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000),
+      signal: this.requestSignal(15_000, signal),
+      ...this.httpTimeoutOptions(),
     })
 
     if (!res.ok) {
@@ -129,10 +144,11 @@ export class HTTPMCPClient implements MCPClient {
     let abortHandler: (() => void) | undefined
     const promise = new Promise<T>((resolve, reject) => {
       this.stdioPending.set(id, { resolve: resolve as (value: unknown) => void, reject })
-      timeout = setTimeout(() => {
+      const timeoutMs = this.config.timeoutMs ?? 15_000
+      if (timeoutMs > 0) timeout = setTimeout(() => {
         const pending = this.stdioPending.get(id)
         if (pending) { this.stdioPending.delete(id); pending.reject(new Error('MCP stdio request timed out')) }
-      }, 15_000)
+      }, timeoutMs)
     })
     this.process.stdin.write(`${body}\n`)
     if (signal) {
@@ -145,6 +161,7 @@ export class HTTPMCPClient implements MCPClient {
       else signal.addEventListener('abort', abort, { once: true })
     }
     return promise.finally(() => {
+      this.stdioPending.delete(id)
       if (timeout) clearTimeout(timeout)
       if (signal && abortHandler) signal.removeEventListener('abort', abortHandler)
     })
@@ -207,7 +224,8 @@ export class HTTPMCPClient implements MCPClient {
     if (!endpoint) return
     const response = await guardedHttp(endpoint, this.securityContext, 'mcp', {
       method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...(this.sessionId ? { 'Mcp-Session-Id': this.sessionId } : {}), ...this.config.headers },
-      body: JSON.stringify({ jsonrpc: '2.0', method, params }), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(5000)]) : AbortSignal.timeout(5000),
+      body: JSON.stringify({ jsonrpc: '2.0', method, params }), signal: this.requestSignal(5_000, signal),
+      ...this.httpTimeoutOptions(),
     })
     if (!response.ok) throw new Error(`MCP notification ${response.status}`)
   }
@@ -217,7 +235,8 @@ export class HTTPMCPClient implements MCPClient {
     if (!session?.endpoint || session.closed) throw new Error('MCP SSE session is not connected')
     throwIfAborted(signal)
     const deadline = new AbortController()
-    const timer = setTimeout(() => deadline.abort(new Error('MCP SSE request timed out')), 15_000)
+    const timeoutMs = this.config.timeoutMs ?? 15_000
+    const timer = timeoutMs > 0 ? setTimeout(() => deadline.abort(new Error('MCP SSE request timed out')), timeoutMs) : undefined
     const requestSignal = AbortSignal.any([session.controller.signal, deadline.signal, ...(signal ? [signal] : [])])
     const pending = new Promise<T>((resolve, reject) => {
       session.pending.set(id, { resolve: resolve as (value: unknown) => void, reject })
@@ -236,6 +255,7 @@ export class HTTPMCPClient implements MCPClient {
         body,
         signal: requestSignal,
         stream: true,
+        ...this.httpTimeoutOptions(),
       }).then(async response => {
         try {
           if (!response.ok) throw new Error(`MCP SSE POST ${response.status}`)
@@ -342,12 +362,14 @@ export class HTTPMCPClient implements MCPClient {
     const abortHandler = () => this.closeLegacySse(session, signal?.reason ?? new DOMException('Operation cancelled', 'AbortError'))
     if (signal) signal.addEventListener('abort', abortHandler, { once: true })
     if (signal?.aborted) abortHandler()
-    const endpointTimer = setTimeout(() => this.closeLegacySse(session, new Error('MCP SSE endpoint timed out')), 15_000)
+    const timeoutMs = this.config.timeoutMs ?? 15_000
+    const endpointTimer = timeoutMs > 0 ? setTimeout(() => this.closeLegacySse(session, new Error('MCP SSE endpoint timed out')), timeoutMs) : undefined
     try {
       const response = await guardedHttp(this.config.url, this.securityContext, 'mcp-discovery', {
         headers: { Accept: 'text/event-stream', ...this.config.headers },
         stream: true,
         signal: session.controller.signal,
+        ...this.httpTimeoutOptions(),
       })
       if (!response.ok || !response.body || !response.headers.get('content-type')?.includes('text/event-stream')) {
         await response.body?.cancel()
@@ -372,7 +394,8 @@ export class HTTPMCPClient implements MCPClient {
   private async restListTools(signal?: AbortSignal): Promise<MCPToolDefinition[]> {
     const res = await guardedHttp(`${this.config.url}/tools`, this.securityContext, 'mcp-discovery', {
       headers: this.config.headers,
-      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10000)]) : AbortSignal.timeout(10000),
+      signal: this.requestSignal(10_000, signal),
+      ...this.httpTimeoutOptions(),
     })
     if (!res.ok) throw new Error(`REST /tools ${res.status}`)
     const data = (await res.json()) as { tools: MCPToolDefinition[] }
@@ -385,7 +408,8 @@ export class HTTPMCPClient implements MCPClient {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...this.config.headers },
       body: JSON.stringify(args),
-      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),
+      signal: this.requestSignal(30_000, signal),
+      ...this.httpTimeoutOptions(),
     })
     if (!res.ok) throw new Error(`REST /tools/${name} ${res.status}`)
     const data = (await res.json()) as { result?: string; content?: Array<{type:string;text?:string}> }
@@ -402,10 +426,12 @@ export class HTTPMCPClient implements MCPClient {
     throwIfAborted(signal)
     if (this.config.transportType === 'stdio') {
       if (!this.config.command) throw new Error('MCP stdio command is not configured')
+      this.processStartedAt = Date.now()
       const child = spawn(this.config.command, this.config.args ?? [], {
         env: { ...process.env, ...(this.config.env ?? {}) },
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
+        detached: process.platform !== 'win32',
       })
       this.process = child
       child.stdout.on('data', chunk => { if (this.process === child) this.acceptStdioData(chunk) })
@@ -495,7 +521,7 @@ export class HTTPMCPClient implements MCPClient {
     this.cachedTools = []
     for (const pending of this.stdioPending.values()) pending.reject(new Error('MCP client disconnected'))
     this.stdioPending.clear()
-    if (this.process && !this.process.killed) this.process.kill()
+    const child = this.process
     this.process = undefined
     this.stdioBuffer = Buffer.alloc(0)
     this.sessionId = undefined
@@ -504,10 +530,12 @@ export class HTTPMCPClient implements MCPClient {
       this.closeLegacySse(sse, new Error('MCP client disconnected'))
       await sse.reader?.cancel().catch(() => undefined)
     }
+    if (child) await stopCommandProcessTree(child, this.processStartedAt)
   }
 
-  async listTools(): Promise<MCPToolDefinition[]> {
-    if (!this.connected) await this.connect()
+  async listTools(signal?: AbortSignal): Promise<MCPToolDefinition[]> {
+    throwIfAborted(signal)
+    if (!this.connected) await this.connect(signal)
     return this.cachedTools
   }
 
@@ -533,11 +561,12 @@ export class HTTPMCPClient implements MCPClient {
     return this.restCallTool(name, args, signal, ctx)
   }
 
-  async toTools(): Promise<Tool[]> {
-    const definitions = await this.listTools()
+  async toTools(signal?: AbortSignal): Promise<Tool[]> {
+    const definitions = await this.listTools(signal)
     // Discovery must not leave one child process or long-lived SSE stream per
     // chat registry alive. Those transports reconnect lazily on tool call.
     if (this.config.transportType === 'stdio' || this.config.transportType === 'sse') await this.disconnect()
+    throwIfAborted(signal)
     const client = this
 
     return definitions.map((def): Tool & { source: string } => ({

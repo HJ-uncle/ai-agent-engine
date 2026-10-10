@@ -4,6 +4,7 @@
  * 每分钟检查一次所有启用的定时任务，到期则向 /api/v1/chat 发起内部请求
  */
 import { CronStore } from '../storage/cron/index.js'
+import { INSTANCE_TOKEN_HEADER } from '../auth/instance-token.js'
 
 // 简单 cron 解析：支持标准 5 字段 cron（分 时 日 月 周）
 function matchCron(expr: string, now: Date): boolean {
@@ -40,6 +41,7 @@ function matchCron(expr: string, now: Date): boolean {
 
 export class CronScheduler {
   private timer: ReturnType<typeof setInterval> | null = null
+  private initialTimer: ReturnType<typeof setTimeout> | null = null
   private store = new CronStore()
   private baseUrl: string
   private running = false
@@ -53,11 +55,14 @@ export class CronScheduler {
     this.running = true
     // 每分钟整点触发一次
     const tick = () => {
+      if (!this.running) return
       this.checkAndRun().catch(err => console.error('[CronScheduler] tick error:', err))
     }
     // 对齐到下一分钟整点
     const msToNextMin = 60000 - (Date.now() % 60000)
-    setTimeout(() => {
+    this.initialTimer = setTimeout(() => {
+      this.initialTimer = null
+      if (!this.running) return
       tick()
       this.timer = setInterval(tick, 60000)
     }, msToNextMin)
@@ -66,6 +71,10 @@ export class CronScheduler {
 
   stop() {
     this.running = false
+    if (this.initialTimer) {
+      clearTimeout(this.initialTimer)
+      this.initialTimer = null
+    }
     if (this.timer) {
       clearInterval(this.timer)
       this.timer = null
@@ -94,10 +103,19 @@ export class CronScheduler {
     }
     if (job.agentId) body.agentId = job.agentId
 
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', 'X-Request-ID': `cron-${job.id}` }
+    const instanceToken = process.env.AETHER_INSTANCE_TOKEN
+    if (instanceToken) {
+      const target = new URL(this.baseUrl)
+      if (!['127.0.0.1', '[::1]', 'localhost'].includes(target.hostname)) throw new Error('Internal cron credentials require a loopback target')
+      headers[INSTANCE_TOKEN_HEADER] = instanceToken
+    }
+
     // 内部 HTTP 调用 chat 接口（SSE），消费完流即可
     const res = await fetch(`${this.baseUrl}/api/v1/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Request-ID': `cron-${job.id}` },
+      headers,
+      redirect: 'error',
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(120000),
     })

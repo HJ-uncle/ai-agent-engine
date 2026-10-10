@@ -11,6 +11,7 @@ import { up as modelIds } from '../../sqlite/migrations/012_add_message_model_id
 import { up as metadataSchema } from '../../sqlite/migrations/015_add_metadata.js'
 import { SQLiteConversationHistory } from '../history.js'
 import type { Message } from '../../../core/agent-context/types.js'
+import { estimateModelHistoryTokens } from '../../../core/utils/model-context.js'
 
 let db: Client
 let fixture: string
@@ -39,7 +40,7 @@ afterEach(() => {
 })
 
 describe('SQLite compaction preserves retained message identity', () => {
-  it.each([4, { keepRecentTokens: 40 }])('preserves current turn metadata, model, tool state and chronological order (retention: %j)', async retention => {
+  it.each(['count', 'model-tokens'] as const)('preserves current turn metadata, model, tool state and chronological order (retention: %s)', async retention => {
     const recent: Array<Message & { conversationId: string }> = [
       { id: 'current-user', role: 'user', content: 'Continue this precise turn', tokens: 10,
         conversationId: 'current-turn', metadata: { rootRunId: 'current-run', turnId: 'current-turn', attachments: [{ name: '设计.md', type: 'text/markdown' }] } },
@@ -70,7 +71,7 @@ describe('SQLite compaction preserves retained message identity', () => {
     const before = await history.getFullHistory(ctx)
     const summarize = vi.fn(async () => 'Summary retaining the previous request constraints.')
 
-    const stats = await history.compress(ctx, summarize, retention)
+    const stats = await history.compress(ctx, summarize, retention === 'count' ? 4 : { keepRecentTokens: estimateModelHistoryTokens(before.slice(4)) })
     const after = await history.getFullHistory(ctx)
 
     expect(summarize).toHaveBeenCalledWith(before.slice(0, 4))
@@ -83,7 +84,7 @@ describe('SQLite compaction preserves retained message identity', () => {
     expect(after[2]).toMatchObject({ modelId: 'actual-fallback-model', reasoningContent: 'Keep the specified target.', toolCall: recent[1].toolCall, usage: recent[1].usage })
     expect(after[3].metadata.change.id).toBe('change-1')
     expect(after[1].metadata.attachments).toEqual([{ name: '设计.md', type: 'text/markdown' }])
-    expect(stats.preTokens).toBe(440)
+    expect(stats.preTokens).toBe(estimateModelHistoryTokens(before))
     expect(stats.postTokens).toBeLessThan(stats.preTokens)
     expect((await history.getFullHistory({ ...ctx, sessionId: 'other-session' })).map(message => message.id)).toEqual(['other-session'])
   })

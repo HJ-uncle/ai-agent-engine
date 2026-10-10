@@ -2,13 +2,15 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { SQLiteTaskQueue } from '../../../storage/task-queue/index.js'
 import { success, fail } from '../response.js'
 
-const taskQueue = new SQLiteTaskQueue()
-taskQueue.start()
-
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
 
 export async function taskRoutes(fastify: FastifyInstance) {
+  // The HTTP instance owns its poller. Module-level timers survive server.close()
+  // and keep embedded/imported runtimes alive after their transport has stopped.
+  const taskQueue = new SQLiteTaskQueue()
+  fastify.addHook('onReady', async () => { taskQueue.start() })
+  fastify.addHook('onClose', async () => { taskQueue.stop() })
   fastify.post<{ Body: { type: string; payload: Record<string, unknown> } }>('/tasks', async (request, reply) => {
     const { type, payload } = request.body
     const tenantId = getTenantId(request)

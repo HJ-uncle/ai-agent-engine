@@ -22,7 +22,24 @@ export function applyThinkingPreference(
   if (options?.thinkingEnabled !== false) return options
   let thinkingConfig: Record<string, unknown> | null = null
   if (provider === 'anthropic') {
-    thinkingConfig = { thinking: { type: 'disabled' } }
+    // Several Anthropic-compatible gateway models reject Anthropic's native
+    // `thinking: {type: "disabled"}` switch and require the field to be
+    // omitted when thinking is off. Keep the native switch for Claude and
+    // other Anthropic models, while leaving these families to their gateway
+    // default wire contract.
+    if (/^(?:minimax|glm)(?:[-_]|$)/i.test(model)) {
+      // This gateway family requires the switch to be explicitly enabled;
+      // sending false is rejected at the provider boundary. Treat Off as a
+      // compatibility request and let the provider's fixed thinking mode
+      // run without leaking native Anthropic fields.
+      thinkingConfig = { enable_thinking: true }
+    } else if (/^kimi(?:[-_]|$)/i.test(model)) {
+      // Kimi accepts the Anthropic-compatible payload without a thinking
+      // switch; omit unsupported native fields.
+      thinkingConfig = null
+    } else {
+      thinkingConfig = { thinking: { type: 'disabled' } }
+    }
   } else if (provider === 'ollama') {
     thinkingConfig = { think: false }
   } else if (provider === 'deepseek' || /deepseek/i.test(model)) {

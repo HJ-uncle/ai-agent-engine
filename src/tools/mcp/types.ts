@@ -15,12 +15,14 @@ export interface MCPServerConfig {
   args?: string[]
   env?: Record<string, string>
   headers?: Record<string, string>
+  /** Per-operation deadline in ms. Omitted preserves transport defaults; 0 disables the deadline. */
+  timeoutMs?: number
 }
 
 export interface MCPClient {
-  connect(): Promise<void>
+  connect(signal?: AbortSignal): Promise<void>
   disconnect(): Promise<void>
-  listTools(): Promise<MCPToolDefinition[]>
+  listTools(signal?: AbortSignal): Promise<MCPToolDefinition[]>
   callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string>
-  toTools(): Promise<Tool[]>
+  toTools(signal?: AbortSignal): Promise<Tool[]>
 }

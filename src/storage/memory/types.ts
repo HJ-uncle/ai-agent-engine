@@ -42,6 +42,7 @@ export interface MemoryNode {
   lastStrengthUpdate: number
   embeddingJson: string | null
   embedding?: number[]
+  embeddingSpace?: string | null
   createdAt: number
   updatedAt: number
   tags?: string[]
@@ -88,6 +89,7 @@ export interface CreateMemoryNodeInput {
   decayRate?: number
   tags?: string[]
   embedding?: number[]
+  embeddingSpace?: string | null
 }
 
 export interface UpdateMemoryNodeInput {
@@ -104,6 +106,7 @@ export interface UpdateMemoryNodeInput {
   tags?: string[]
   embeddingJson?: string | null
   embedding?: number[] | null
+  embeddingSpace?: string | null
 }
 
 export interface CreateMemoryEdgeInput {
@@ -151,7 +154,7 @@ export interface MemoryManager {
   recallRecent(limit: number, ctx: MemoryContext): Promise<MemoryNode[]>
   recallImportant(minImportance: number, ctx: MemoryContext): Promise<MemoryNode[]>
   recallBySession(sessionId: string, ctx: MemoryContext): Promise<MemoryNode[]>
-  recallSimilar(embedding: number[], limit: number, ctx: MemoryContext, maxDistance?: number): Promise<MemoryNode[]>
+  recallSimilar(embedding: number[], limit: number, ctx: MemoryContext, maxDistance?: number, embeddingSpace?: string): Promise<MemoryNode[]>
 
   // Edge CRUD
   createEdge(input: CreateMemoryEdgeInput, ctx: MemoryContext): Promise<MemoryEdge>

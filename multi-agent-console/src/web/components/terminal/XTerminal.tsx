@@ -7,6 +7,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { copyToClipboard } from '@core/utils/clipboard'
+import { createTerminalPasteController, isTerminalPasteShortcut } from './terminal-paste'
 import '@xterm/xterm/css/xterm.css'
 
 export interface XTerminalProps {
@@ -75,6 +76,16 @@ const XTerminal: React.FC<XTerminalProps> = ({
     term.loadAddon(webLinksAddon)
     term.open(containerRef.current)
 
+    // Intercept paste in the capture phase before xterm's own textarea handler.
+    // This gives us one normalized `term.paste()` path and keeps a native event
+    // available when navigator.clipboard.readText() is unavailable.
+    const pasteController = createTerminalPasteController(term)
+    const textarea = term.textarea
+    const onPaste = (event: Event): void => {
+      pasteController.handlePasteEvent(event as ClipboardEvent)
+    }
+    textarea?.addEventListener('paste', onPaste, true)
+
     // 延迟 fit：等容器真正完成布局后再计算尺寸
     requestAnimationFrame(() => {
       try { fitAddon.fit() } catch { /* ignore */ }
@@ -135,9 +146,10 @@ const XTerminal: React.FC<XTerminalProps> = ({
         return true      // 无选中 → 照常发 ^C（中断命令）
       }
 
-      // Ctrl+V：return false 阻止 xterm 把 \x16 发给 PTY
-      // 浏览器的 paste 事件仍然会触发 → xterm.js 内部 textarea 收到后通过 onData 发出
-      if (e.ctrlKey && e.key === 'v') {
+      // Handle Ctrl/Cmd+V, Ctrl/Cmd+Shift+V and Shift+Insert ourselves so
+      // xterm cannot map the shortcut to a literal \x16 PTY input.
+      if (isTerminalPasteShortcut(e)) {
+        pasteController.requestClipboardPaste()
         return false
       }
 
@@ -177,6 +189,7 @@ const XTerminal: React.FC<XTerminalProps> = ({
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
         ws.close()
       }
+      textarea?.removeEventListener('paste', onPaste, true)
       term.dispose()
       termRef.current = null
       fitRef.current = null

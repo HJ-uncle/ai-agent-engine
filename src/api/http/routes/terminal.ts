@@ -64,7 +64,7 @@ export async function terminalRoutes(fastify: FastifyInstance) {
       } catch (error) { return reply.code(400).send(fail(40001, error instanceof Error ? error.message : 'Invalid cwd')) }
     }
 
-    // 最终保险：确保 cwd 存在，否则回退到用户主目录
+    // A terminal never silently falls back to a different directory.
     const { existsSync } = await import('node:fs')
     if (!existsSync(cwd)) {
       return reply.code(400).send(fail(40001, 'Terminal working directory does not exist'))
@@ -76,7 +76,7 @@ export async function terminalRoutes(fastify: FastifyInstance) {
     const id = randomUUID()
     try {
       console.log(`[Terminal] Creating terminal ${id} in ${cwd}`)
-      const session = terminalManager.create(id, cwd, cols, rows, allWorkspacePaths, { tenantId, userId })
+      await terminalManager.create(id, cwd, cols, rows, allWorkspacePaths, { tenantId, userId, sessionId })
 
       return reply.code(200).send(success({ terminalId: id, cwd }))
     } catch (e: any) {
@@ -172,7 +172,10 @@ export async function terminalRoutes(fastify: FastifyInstance) {
               if (!terminalManager.write(id, msg.data)) close(1009)
             } else if (msg.type === 'resize') {
               if (!terminalManager.resize(id, msg.cols, msg.rows)) close(1008)
-            } else { terminalManager.kill(id); close(1000) }
+            } else {
+              await terminalManager.kill(id)
+              close(1000)
+            }
           }
         } catch { close(1011) }
         finally {
@@ -217,9 +220,14 @@ export async function terminalRoutes(fastify: FastifyInstance) {
   // ── DELETE /terminal/:id — 手动关闭终端 ──────────────────────────────────
   fastify.delete<{ Params: { id: string } }>('/terminal/:id', async (request, reply) => {
     const { id } = request.params
-    const session = terminalManager.get(id)
+    const session = terminalManager.getCloseOwner(id)
     if (!session || !owns(session, request)) return reply.code(404).send(fail(40400, 'Terminal not found'))
-    terminalManager.kill(id)
+    try {
+      await terminalManager.kill(id)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return reply.code(200).send(fail(50000, `Failed to close terminal: ${message}`))
+    }
     return reply.code(200).send(success({ success: true }))
   })
 }

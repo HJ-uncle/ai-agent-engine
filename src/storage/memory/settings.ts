@@ -9,7 +9,7 @@ export function isMemoryMode(value: unknown): value is MemoryMode {
 }
 
 export function defaultMemoryMode(profile?: ToolProfile): MemoryMode {
-  return profile === 'code' ? 'off' : 'global'
+  return profile === 'code' ? 'session' : 'global'
 }
 
 function requireSession(sessionId: string): void {

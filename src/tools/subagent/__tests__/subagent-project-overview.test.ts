@@ -22,6 +22,7 @@ describe.skipIf(!rgAvailable)('subagent project overview with real search and hi
     fs.writeFileSync(path.join(projectRoot, 'README.md'), '# Sample project\nPROJECT_PURPOSE: Electron IDE for project research\nENTRY: src/main/index.ts\n')
     vi.stubEnv('DATA_DIR', path.join(fixtureDir, 'storage', 'agent.db'))
     vi.stubEnv('WORKSPACE_ROOT', path.join(fixtureDir, 'scratch'))
+    vi.stubEnv('AUTH_ENABLED', 'false')
     vi.stubEnv('HISTORY_BACKEND', 'jsonl')
     vi.stubEnv('OSM_MODE', 'off')
     vi.stubEnv('SUBAGENT_TOKEN_LIMIT', '')
@@ -112,10 +113,12 @@ describe.skipIf(!rgAvailable)('subagent project overview with real search and hi
     expect(run.usage.totalTokens).toBe(600_000)
     expect(requestBudget.limit).toBe(Infinity)
     expect(requestBudget.snapshot).toMatchObject({ charged: 600_000, reserved: 0, remaining: Infinity })
-    expect((await getSubagentStore().getRun(parent.tenantId, run.runId))?.resultSummary).toBe(result.output)
+    expect((await getSubagentStore().getRun(parent.tenantId, run.runId))?.resultSummary).toBe(run.resultSummary)
+    expect(result.output).toContain(`[子任务状态] {"runId":"${run.runId}"`)
+    expect(result.output).toContain(run.resultSummary)
     const childHistory = await createConversationHistory().getFullHistory({ tenantId: parent.tenantId, sessionId: run.childSessionId })
     expect(childHistory.filter((message) => message.role === 'tool').map((message) => message.toolName)).toEqual(['grep_search', 'read_file'])
-    expect(childHistory.at(-1)?.content).toBe(result.output)
+    expect(childHistory.at(-1)?.content).toBe(run.resultSummary)
     const parentHistory = await history.getFullHistory(parent)
     expect(parentHistory.find((message) => message.id === `subagent-result:${run.runId}`)).toMatchObject({
       role: 'tool', toolCallId: 'overview-spawn', content: result.output, metadata: { success: true, subagent: { runId: run.runId, status: 'succeeded' } },

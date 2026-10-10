@@ -2,7 +2,7 @@
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentContext } from '../../../core/agent-context/types.js'
 import { grepTool } from '../grep-tool.js'
 
@@ -15,6 +15,7 @@ describe.skipIf(!rgAvailable)('grep_search with real ripgrep', () => {
   beforeEach(() => {
     fs.mkdirSync(fixtureRoot, { recursive: true })
     fixtureDir = fs.mkdtempSync(path.join(fixtureRoot, 'grep-search-'))
+    vi.stubEnv('AUTH_ENABLED', 'false')
     for (const file of ['first.txt', 'second.txt']) {
       fs.writeFileSync(path.join(fixtureDir, file), Array.from({ length: 40 }, (_, i) => `needle ${file} ${i}`).join('\n'))
     }
@@ -23,6 +24,7 @@ describe.skipIf(!rgAvailable)('grep_search with real ripgrep', () => {
   afterEach(() => {
     if (path.dirname(fixtureDir) !== fixtureRoot || !path.basename(fixtureDir).startsWith('grep-search-')) throw new Error('Unsafe fixture cleanup path')
     fs.rmSync(fixtureDir, { recursive: true, force: true })
+    vi.unstubAllEnvs()
   })
 
   async function assertCount(maxResults: number | undefined, expected: number): Promise<void> {

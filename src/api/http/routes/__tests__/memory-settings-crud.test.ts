@@ -11,7 +11,7 @@ describe('memory settings CRUD API', () => {
   let fixture: string
   let app: ReturnType<typeof Fastify>
   beforeEach(async () => {
-    closeMemoryDb()
+    await closeMemoryDb()
     fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-memory-crud-'))
     process.env.DATA_DIR = path.join(fixture, 'agent.db')
     await initMemoryDb(MEMORY_SCHEMA)
@@ -21,7 +21,7 @@ describe('memory settings CRUD API', () => {
     await app.ready()
   })
   afterEach(async () => {
-    await app.close(); closeMemoryDb()
+    await app.close(); await closeMemoryDb()
     try { fs.rmSync(fixture, { recursive: true, force: true }) } catch { /* Windows handle release is eventual. */ }
   })
 

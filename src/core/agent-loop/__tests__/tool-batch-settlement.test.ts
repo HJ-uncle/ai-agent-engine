@@ -28,9 +28,9 @@ function fixture(calls: ToolCall[]) {
       if (requestCount++ === 0 && calls.length) yield { done: true, toolCalls: calls.map((call, index) => ({ ...call, args: JSON.stringify(call.args), index })) }
       else yield { done: true, content: 'done' }
     }) } as LLMAdapter
-  async function run(input: string | null = 'task') {
+  async function run(input: string | null = 'task', maxIterations = 3) {
     const frames: string[] = []
-    for await (const frame of new ReActStrategy(llm, { maxIterations: 3 }).run(input, ctx)) frames.push(frame)
+    for await (const frame of new ReActStrategy(llm, { maxIterations }).run(input, ctx)) frames.push(frame)
     return frames
   }
   return { ctx, llm, history, outcomes, run }
@@ -116,6 +116,45 @@ describe('D3 batch side effects and terminal evidence', () => {
     await f.run()
     expect(f.outcomes.at(-1)).not.toMatchObject({ stopReason: 'repeated_failure' })
     expect(f.outcomes.at(-1)).toMatchObject({ stopReason: 'max_steps' })
+  })
+
+  it('continues identical reads when another developer changes the returned file each round', async () => {
+    const f = fixture([])
+    let request = 0, version = 0
+    f.llm.stream = vi.fn(async function* () {
+      if (request++ < 12) yield { done: true, toolCalls: [{ id: 'read-' + request, name: 'read_file', args: '{"path":"shared.ts"}' }] }
+      else yield { done: true, content: 'All shared versions verified.' }
+    })
+    f.ctx.tools.execute = vi.fn(async () => ({ success: true, output: 'Shared file version ' + ++version }))
+    await f.run('Verify shared development.', 20)
+    expect(f.ctx.tools.execute).toHaveBeenCalledTimes(12)
+    expect(f.outcomes.at(-1)).toMatchObject({ status: 'succeeded' })
+  })
+
+  it('allows a configured zero to continue permanent failures until the model changes approach', async () => {
+    vi.stubEnv('MAX_CONSECUTIVE_FAILURES', '0')
+    const f = fixture([])
+    let request = 0
+    f.llm.stream = vi.fn(async function* () {
+      if (request++ < 12) yield { done: true, toolCalls: [{ id: 'read-' + request, name: 'read_file', args: '{"path":"missing.ts"}' }] }
+      else yield { done: true, content: 'The file is missing; report the unresolved evidence.' }
+    })
+    f.ctx.tools.execute = vi.fn(async () => ({ success: false, output: 'File does not exist.', error: 'ENOENT' }))
+    await f.run('Inspect missing file.', 20)
+    expect(f.ctx.tools.execute).toHaveBeenCalledTimes(12)
+    expect(f.outcomes.at(-1)).toMatchObject({ status: 'succeeded' })
+  })
+
+  it('still stops genuinely unchanged successful calls when the optional limit is enabled', async () => {
+    vi.stubEnv('MAX_CONSECUTIVE_FAILURES', '2')
+    const f = fixture([])
+    let request = 0
+    f.llm.stream = vi.fn(async function* () {
+      yield { done: true, toolCalls: [{ id: 'read-' + ++request, name: 'read_file', args: '{"path":"unchanged.ts"}' }] }
+    })
+    await f.run('Inspect unchanged file.', 20)
+    expect(f.ctx.tools.execute).toHaveBeenCalledTimes(3)
+    expect(f.outcomes.at(-1)).toMatchObject({ stopReason: 'repeated_failure' })
   })
 
   it('continues settling siblings if one history append fails', async () => {

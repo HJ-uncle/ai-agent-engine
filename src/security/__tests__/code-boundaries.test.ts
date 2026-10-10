@@ -31,6 +31,7 @@ let mcpMethods: string[]
 
 beforeEach(async () => {
   fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-d3-policy-'))
+  vi.stubEnv('AUTH_ENABLED', 'false')
   db = createClient({ url: 'file::memory:' })
   vi.spyOn(database, 'getDb').mockReturnValue(db)
   await securitySchema(db)
@@ -75,6 +76,7 @@ afterEach(async () => {
   await new Promise<void>(done => server.close(() => done()))
   db.close()
   vi.restoreAllMocks()
+  vi.unstubAllEnvs()
   if (path.dirname(fixture) !== os.tmpdir() || !path.basename(fixture).startsWith('aether-d3-policy-')) throw new Error('Unsafe fixture')
   fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
 })

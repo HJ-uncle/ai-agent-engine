@@ -93,13 +93,14 @@ export default function SystemSettings() {
         <div className={styles.card}>
           <SettingRow
             title="命令执行超时 (CMD_TIMEOUT_MS)"
-            desc="execute_cmd 工具的最大执行时间（毫秒），超时后强制终止进程"
+            desc="其他运行模式的命令超时；清空使用模式默认。Code 模式默认不限时，工具可另设单次超时。"
             envKey="CMD_TIMEOUT_MS"
           >
             <Space.Compact>
               <InputNumber
-                min={1000} max={300000} step={1000}
-                value={settings.CMD_TIMEOUT_MS}
+                min={1} step={1000}
+                placeholder="模式默认"
+                value={settings.CMD_TIMEOUT_MS ?? null}
                 onChange={(v) => handleChange('CMD_TIMEOUT_MS', v)}
                 style={{ width: 110, ...INPUT_STYLE }}
               />

@@ -59,7 +59,40 @@ export async function extractKnowledgeContent(filename: string, data: Uint8Array
     const parser = new PDFParse({ data: Buffer.from(data) })
     try {
       const result = await parser.getText()
-      return { content: result.text, contentType: contentType || 'application/pdf', warning: result.text.trim() ? undefined : '该 PDF 未提取到文本，扫描件需要先进行 OCR' }
+      // pdf-parse may include page separators even when every page's text
+      // layer is empty. Inspect page text rather than treating those markers
+      // as extracted content, otherwise image-only scans skip OCR.
+      const text = result.pages.map(page => page.text.trim()).filter(Boolean).join('\n\n')
+      if (text) return { content: result.text, contentType: contentType || 'application/pdf' }
+
+      // A scanned PDF has no text layer. Render a bounded number of pages with
+      // the production PDF renderer and run the same OCR pipeline used for
+      // image knowledge documents. The page limit keeps uploads predictable;
+      // callers can raise it deliberately for longer scans.
+      const configuredPages = Number.parseInt(process.env.KNOWLEDGE_PDF_OCR_PAGES?.trim() || '3', 10)
+      const pageLimit = Number.isFinite(configuredPages) ? Math.min(Math.max(configuredPages, 1), 10) : 3
+      const language = process.env.KNOWLEDGE_OCR_LANGUAGE?.trim() || 'eng+chi_sim'
+      const screenshots = await parser.getScreenshot({ first: pageLimit, desiredWidth: 1600, imageBuffer: true, imageDataUrl: false })
+      const pages: string[] = []
+      const errors: string[] = []
+      for (const page of screenshots.pages) {
+        if (!page.data?.length) continue
+        try {
+          const ocr = await Tesseract.recognize(Buffer.from(page.data), language, { logger: () => undefined })
+          const pageText = ocr.data.text?.trim() ?? ''
+          if (pageText) pages.push(`## Page ${page.pageNumber}\n${pageText}`)
+        } catch (error) {
+          errors.push(`page ${page.pageNumber}: ${(error as Error).message}`)
+        }
+      }
+      const ocrText = pages.join('\n\n')
+      if (ocrText) return {
+        content: ocrText,
+        contentType: contentType || 'application/pdf',
+        warning: errors.length ? `扫描 PDF OCR 部分页面失败（${errors.join('; ')}）` : undefined
+      }
+      const detail = errors.length ? `；${errors.join('; ')}` : ''
+      return { content: '', contentType: contentType || 'application/pdf', warning: `该 PDF 未提取到文本，扫描件 OCR 未识别到可检索文字${detail}` }
     } finally { await parser.destroy() }
   }
   if ((KNOWLEDGE_OCR_EXTENSIONS as readonly string[]).includes(ext)) {

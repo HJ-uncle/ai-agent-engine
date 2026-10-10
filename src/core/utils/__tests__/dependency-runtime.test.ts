@@ -27,6 +27,9 @@ let scratch: string
 let ctx: AgentContext
 let commandDb: Client
 beforeEach(() => {
+  // This suite exercises the trusted single-user host runtime. Production
+  // defaults require authentication and intentionally reject request paths.
+  vi.stubEnv('AUTH_ENABLED', 'false')
   tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-deps-'))
   project = path.join(tempRoot, 'project')
   scratch = path.join(tempRoot, 'private', 't', 's')
@@ -41,6 +44,7 @@ afterEach(async () => {
   await commandJobs.cancelScope({ tenantId: 't', sessionId: 's' }, 'test_cleanup')
   commandDb.close()
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
   vi.restoreAllMocks()
   const resolved = path.resolve(tempRoot)
   if (!resolved.startsWith(path.resolve(os.tmpdir()) + path.sep) || !path.basename(resolved).startsWith('aether-deps-')) throw new Error('Unexpected test cleanup target')

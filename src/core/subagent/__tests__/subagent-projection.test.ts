@@ -96,7 +96,7 @@ describe.each(['jsonl', 'sqlite'] as const)('subagent projection through %s hist
     expect(results).toHaveLength(1)
     expect(results[0]).toMatchObject({
       id: `subagent-result:${run.runId}`, toolCallId: input.parentToolCallId,
-      content: 'README describes the application.', metadata: { success: true, subagent: {
+      content: expect.stringContaining('README describes the application.'), metadata: { success: true, subagent: {
         runId: run.runId, status: 'succeeded', usage: { totalTokens: 10 },
         toolCalls: [{ id: 'read-1', args: { path: 'README.md' }, output: 'Full README contents' }],
       } },

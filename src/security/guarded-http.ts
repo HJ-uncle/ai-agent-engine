@@ -4,6 +4,7 @@ import net from 'node:net'
 import type { AgentContext } from '../core/agent-context/index.js'
 import { checkNetworkAccess } from './network-policy.js'
 import { throwIfAborted } from '../core/utils/abort.js'
+import { validateOperationTimeout } from '../core/utils/operation-timeout.js'
 
 export type NetworkContext = Pick<AgentContext, 'tenantId' | 'sessionId'>
 export interface GuardedHttpOptions {
@@ -12,6 +13,8 @@ export interface GuardedHttpOptions {
   body?: string
   signal?: AbortSignal
   timeoutMs?: number
+  /** Only explicit per-server configuration may replace the policy's time cap for this request. Other policy checks still apply. */
+  overridePolicyTimeout?: boolean
   followRedirects?: boolean
   /** Resolve on headers and expose a bounded, cancellable body for MCP SSE. */
   stream?: boolean
@@ -19,6 +22,7 @@ export interface GuardedHttpOptions {
 
 /** One transport for every code-reachable HTTP tool: validate each hop and pin checked DNS. */
 export async function guardedHttp(url: string, ctx: NetworkContext, source: string, options: GuardedHttpOptions = {}): Promise<Response> {
+  validateOperationTimeout(options.timeoutMs)
   let target = new URL(url)
   let method = options.method ?? 'GET'
   let body = options.body
@@ -28,7 +32,16 @@ export async function guardedHttp(url: string, ctx: NetworkContext, source: stri
     if (!['http:', 'https:'].includes(target.protocol) || target.username || target.password) throw new Error('Only HTTP(S) URLs without embedded credentials are supported')
     const policy = await checkNetworkAccess({ url: target.href, ...ctx, source })
     if (!policy.allowed) throw new Error(`网络策略拒绝: ${policy.reason}`)
-    const signal = AbortSignal.any([...(options.signal ? [options.signal] : []), AbortSignal.timeout(Math.min(options.timeoutMs ?? policy.timeoutMs, policy.timeoutMs))])
+    const requested = options.timeoutMs ?? policy.timeoutMs
+    // Zero is an explicit disabled deadline, never AbortSignal.timeout(0).
+    // Existing HTTP callers remain capped by the network policy. MCP may
+    // replace only that time cap after a user selected a server deadline.
+    const timeoutMs = options.overridePolicyTimeout ? requested
+      : requested === 0 ? policy.timeoutMs
+        : policy.timeoutMs === 0 ? requested : Math.min(requested, policy.timeoutMs)
+    validateOperationTimeout(timeoutMs, 'network timeoutMs')
+    const signals = [...(options.signal ? [options.signal] : []), ...(timeoutMs > 0 ? [AbortSignal.timeout(timeoutMs)] : [])]
+    const signal = signals.length ? AbortSignal.any(signals) : undefined
     const response = await new Promise<Response>((resolve, reject) => {
       const transport = target.protocol === 'https:' ? https : http
       const requestHeaders: Record<string, string> = {}

@@ -58,7 +58,7 @@ describe('durable root run identity and pending claims', () => {
 
   it('survives reopening: waiting can be answered but prior running work is interrupted without reexecution', async () => {
     const running = await store.create('tenant', 'running', 'model-A', [], {})
-    const waiting = await store.create('tenant', 'waiting', 'model-A', ['workspace-A'], { model: 'model-A' })
+    const waiting = await store.create('tenant', 'waiting', 'model-A', ['workspace-A'], { model: 'model-A', memoryScope: 'session', thinkingMode: 'medium', skills: [], mcpServers: ['mcp-A'], utilityModel: '' })
     await store.update('tenant', waiting.runId, { actualModelId: 'fallback-B' })
     await store.pending('tenant', waiting.runId, pending)
     db.close()
@@ -67,10 +67,39 @@ describe('durable root run identity and pending claims', () => {
     await store.initialize()
     expect(await store.get('tenant', running.runId)).toMatchObject({ status: 'interrupted', error: { code: 'ENGINE_RESTARTED' } })
     expect(await store.get('tenant', waiting.runId)).toMatchObject({ status: 'waiting', modelId: 'model-A', actualModelId: 'fallback-B',
-      request: { model: 'model-A' }, workspacePaths: ['workspace-A'], pending: [{ status: 'pending' }] })
+      request: { model: 'model-A', memoryScope: 'session', thinkingMode: 'medium', skills: [], mcpServers: ['mcp-A'], utilityModel: '' }, workspacePaths: ['workspace-A'], pending: [{ status: 'pending' }] })
     const accepted = await store.answer('tenant', 'waiting', waiting.runId, pending.requestId, pending.toolCallId, pending.toolName, 'approved')
     expect(accepted).toMatchObject({ duplicate: false, run: { status: 'running', modelId: 'model-A', actualModelId: 'fallback-B',
-      turnId: waiting.turnId, userMessageId: waiting.userMessageId } })
+      turnId: waiting.turnId, userMessageId: waiting.userMessageId,
+      requestConfig: { memoryScope: 'session', thinkingMode: 'medium', skills: [], mcpServers: ['mcp-A'], utilityModel: '' } } })
+  })
+
+  it('publishes only safe requested composer values and preserves omitted versus explicitly empty resources', async () => {
+    const run = await store.create('tenant', 'session', 'model-A', [], {
+      agentId: 'agent-A', thinkingMode: false, subagentModel: 'sub-A', utilityModel: '',
+      skills: [], mcpServers: ['mcp-A'], memoryScope: 'off',
+      modelBaseUrl: 'https://SECRET-endpoint', systemPrompt: 'SECRET-system',
+      inlineSkills: [{ name: 'SECRET-inline', content: 'SECRET-body' }],
+      inlineAgents: [{ apiKey: 'SECRET-key', prompt: 'SECRET-prompt' }], metadata: { harmless: 'SECRET-metadata' },
+    })
+    expect(run.requestConfig).toEqual({ agentId: 'agent-A', thinkingMode: false, subagentModel: 'sub-A', utilityModel: '', skills: [], mcpServers: ['mcp-A'], memoryScope: 'off' })
+    expect(run.requestConfig).not.toHaveProperty('knowledgeBases')
+    expect(JSON.stringify(run)).not.toContain('SECRET')
+    // A persisted unsolicited public config must not bypass the private-request whitelist.
+    await store.update('tenant', run.runId, { requestConfig: { knowledgeBases: ['injected'] }, status: 'succeeded' })
+    expect((await store.list('tenant', 'session'))[0].requestConfig).toEqual(run.requestConfig)
+    const next = await store.create('tenant', 'session', 'model-A', [], { knowledgeBases: [], thinkingMode: true })
+    expect(next.requestConfig).toEqual({ knowledgeBases: [], thinkingMode: true })
+    expect(next.requestConfig).not.toHaveProperty('skills')
+    expect(next.requestConfig).not.toHaveProperty('memoryScope')
+  })
+
+  it.each([true, false, 'low', 'medium', 'high'] as const)('retains exact thinking value %s through pending approval', async thinkingMode => {
+    const run = await store.create('tenant', 'session', 'model-A', [], { thinkingMode, memoryScope: 'session' })
+    await store.pending('tenant', run.runId, pending)
+    const answered = await store.answer('tenant', 'session', run.runId, pending.requestId, pending.toolCallId, pending.toolName, 'approved')
+    expect(answered.run.requestConfig).toEqual({ thinkingMode, memoryScope: 'session' })
+    expect((await store.get('tenant', run.runId))?.request).toEqual({ thinkingMode, memoryScope: 'session' })
   })
 
   it('prevents an old waiting attempt from overwriting an immediate answer or cancellation', async () => {

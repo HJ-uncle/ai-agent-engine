@@ -12,6 +12,7 @@ import {
 import { mcpApi } from '@core/api'
 import type { McpServer, CreateMcpServerInput } from '@core/types'
 import styles from './McpPanel.module.css'
+import { parseMcpTimeout } from './mcp-timeout'
 
 // ── Status badge ───────────────────────────────────────────────────────────────
 function StatusBadge({ status }: { status?: McpServer['status'] }) {
@@ -46,6 +47,7 @@ function McpFormModal({
       if (editing) {
         form.setFieldsValue({
           name: editing.name,
+          timeoutMs: editing.timeoutMs,
           command: editing.command,
           args: editing.args?.join(' ') ?? '',
           enabled: editing.enabled ?? true,
@@ -62,6 +64,7 @@ function McpFormModal({
     try {
       const values = await form.validateFields()
       setLoading(true)
+      const timeoutMs = parseMcpTimeout(values.timeoutMs)
       const input: CreateMcpServerInput = {
         id: values.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
         name: values.name,
@@ -72,11 +75,12 @@ function McpFormModal({
         enabled: values.enabled ?? true,
         env: values.envJson ? JSON.parse(values.envJson) : undefined,
         isBuiltIn: false,
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
         scope: editing ? undefined : (values.scope ?? 'project'),
       }
       let server: McpServer
       if (editing) {
-        server = await mcpApi.update(editing.id, input)
+        server = await mcpApi.update(editing.id, { ...input, timeoutMs: timeoutMs ?? null }, { scope: editing.scope })
       } else {
         server = await mcpApi.create(input)
       }
@@ -124,6 +128,9 @@ function McpFormModal({
             placeholder='{"API_KEY": "xxx"}'
             autoSize={{ minRows: 2, maxRows: 5 }}
           />
+        </Form.Item>
+        <Form.Item name="timeoutMs" label="请求超时（毫秒）" extra="留空使用默认，0 表示不限；用户仍可取消。">
+          <Input inputMode="numeric" placeholder="默认" />
         </Form.Item>
         <Form.Item name="enabled" label="启用" valuePropName="checked">
           <Switch />

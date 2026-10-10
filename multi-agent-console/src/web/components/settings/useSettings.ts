@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { App } from 'antd'
 import { settingsApi } from '@core/api'
+import { buildSettingsPatch } from './settings-patch'
 
 export type SettingsData = Record<string, any>
 
@@ -12,9 +13,10 @@ export function useSettings() {
   const { message } = App.useApp()
   const [settings, setSettings] = useState<SettingsData>({})
   const [saving, setSaving] = useState(false)
+  const baseline = useRef<SettingsData>({})
 
   const load = () => {
-    settingsApi.get().then((data) => setSettings(data))
+    settingsApi.get().then((data) => { baseline.current = data; setSettings(data) })
   }
 
   useEffect(() => { load() }, [])
@@ -32,12 +34,11 @@ export function useSettings() {
   const saveKeys = async (keys: string[], successMsg = '已保存', overrides?: Record<string, any>) => {
     setSaving(true)
     try {
-      const payload = Object.fromEntries(
-        keys
-          .filter((k) => (overrides?.hasOwnProperty(k) ? true : settings[k] !== undefined))
-          .map((k) => [k, overrides?.hasOwnProperty(k) ? overrides[k] : settings[k]])
-      )
+      const payload = buildSettingsPatch(keys, settings, baseline.current, overrides)
+      if (Object.keys(payload).length === 0) { message.info('没有需要保存的修改'); return }
       await settingsApi.update(payload)
+      // A newer edit during the request remains dirty against the value actually saved.
+      baseline.current = { ...baseline.current, ...payload }
       message.success(successMsg)
     } catch {
       message.error('保存失败，请重试')

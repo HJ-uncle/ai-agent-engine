@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "patchId": "aether-system-conpty-close-v1",
+  "package": "node-pty",
+  "version": "1.1.0",
+  "packageSha256": "f8b6a14f7022c14f1cd5d109486f5dacd32bffb63a9a63e38eced37dacb47439",
+  "files": [
+    {
+      "path": "lib/windowsPtyAgent.js",
+      "asset": "windowsPtyAgent.js",
+      "beforeSha256": "8636d16b38266112204061a22b135734177c242837982fd3a4055be726efa64a",
+      "afterSha256": "2dffa0fff76a516b1aa4b1265a6f9d173c7ccdc42713026b06d4e51abb6834a0"
+    },
+    {
+      "path": "lib/conpty_console_list_agent.js",
+      "asset": "conpty_console_list_agent.js",
+      "beforeSha256": "0d010879bb6680a0253d44363183d53e631f42972594eb6dcb1fb842c8c85e52",
+      "afterSha256": "748e3eb92c4a41b39e7b1c5c5eed59ee35c962ead0aef275896834744400f705"
+    },
+    {
+      "path": "lib/windowsConoutConnection.js",
+      "asset": "windowsConoutConnection.js",
+      "beforeSha256": "1440f70908fb1f55911ac8e936a1230f68a9c00c03096fcef6788eac6aad9d62",
+      "afterSha256": "ef4d6afb311463bd705e8592e0aadb845ce79bd347386c9ea28654ac475154d7"
+    },
+    {
+      "path": "lib/windowsTerminal.js",
+      "asset": "windowsTerminal.js",
+      "beforeSha256": "c3a65716f53fed0135a8a633373d5f9c2ab092544d651f27ef0a67096dd3bcd9",
+      "afterSha256": "294ff9b8468fd3cf19dc01491f6810e95d3466793ceb2e82e69a0ae40ab5d497"
+    },
+    {
+      "path": "typings/node-pty.d.ts",
+      "asset": "node-pty.d.ts",
+      "beforeSha256": "4bb071c41f8f9aaa3e1691c8c84873fa38a3067161ac0d22f085577a9e483be0",
+      "afterSha256": "519be3f1336179cb969f95abd2c40357353478676840cd01c034f2596f1656c8"
+    }
+  ]
+}

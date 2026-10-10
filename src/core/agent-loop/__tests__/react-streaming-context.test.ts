@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentContext, Message, ToolResult } from '../../agent-context/index.js'
 import type { LLMAdapter, LLMAdapterOptions, LLMStreamChunk } from '../../llm-adapter/types.js'
 import type { RunOutcome } from '../../subagent/types.js'
-import { ReActStrategy, type ReActOptions } from '../react.js'
+import { ReActStrategy, projectModelMessage, type ReActOptions } from '../react.js'
+import { estimateRequestInput } from '../finalization.js'
 import { buildCompactSummarizeFn } from '../compact-prompt.js'
 
 vi.mock('../../../storage/todo/index.js', () => ({ TodoStore: class { async list() { return [] } } }))
@@ -63,6 +64,30 @@ const usage = (frames: string[]) => frames.filter(frame => frame.startsWith('\x0
   .map(frame => JSON.parse(frame.slice('\x00__usage__'.length)))
 
 describe('D5 provider streaming and partial evidence', () => {
+  it('keeps archived tool output out of model requests and token estimates', async () => {
+    const originalOutput = 'diagnostic output '.repeat(10_000)
+    const message: Message = { id: 'old-tool', role: 'tool', toolName: 'execute_cmd', toolCallId: 'test-command',
+      content: '[tool result cleared]', metadata: { status: 'succeeded', success: true, outputPreview: originalOutput,
+        __aetherMicroCompactArchive: { content: originalOutput, tokens: 40_000 } } }
+    const projected = projectModelMessage(message)
+    expect(projected).toMatchObject({ content: '[tool result cleared]', metadata: { status: 'succeeded', success: true } })
+    expect(projected.metadata).not.toHaveProperty('outputPreview')
+    expect(projected.metadata).not.toHaveProperty('__aetherMicroCompactArchive')
+    expect(message.metadata.outputPreview).toBe(originalOutput)
+    expect(estimateRequestInput([projected], undefined, [])).toBeLessThan(200)
+    expect(estimateRequestInput([projected], undefined, [])).toBeLessThan(estimateRequestInput([{ ...message, content: originalOutput }], undefined, []) / 100)
+
+    const f = fixture([{ id: 'prior-user', role: 'user', content: 'Run the checks' },
+      { id: 'prior-call', role: 'assistant', content: '', toolCall: { id: 'test-command', name: 'execute_cmd', args: { command: 'node' } } }, message])
+    f.ctx.modelCaps = { contextWindow: 2_000 }
+    await f.run({}, 'Continue using the existing checks.')
+    expect(f.ctx.history.compress).not.toHaveBeenCalled()
+    expect(f.llm.stream).toHaveBeenCalledTimes(1)
+    const request = vi.mocked(f.llm.stream).mock.calls[0][0]
+    expect(request.find(item => item.id === 'old-tool')).toEqual(projected)
+    expect(f.history.find(item => item.id === 'old-tool')?.metadata.outputPreview).toBe(originalOutput)
+  })
+
   it.each(['', 'private reasoning only'])('keeps empty-output failures diagnosable without claiming success: %s', async reasoning => {
     const f = fixture()
     f.llm.stream = vi.fn(async function* () {
@@ -201,7 +226,42 @@ describe('D5 provider streaming and partial evidence', () => {
 })
 
 describe('D5 complete request context admission', () => {
-  it('Code mode omits the fixed output cap and ignores the local token budget', async () => {
+  it('admits a Qwen code request with large replay/diff metadata while preserving the complete stored evidence', async () => {
+    const metadata = { change: { oldContent: 'old source '.repeat(30_000), newContent: 'new source '.repeat(30_000) },
+      subagent: { events: [{ output: 'child replay '.repeat(20_000) }] }, outputPreview: 'tool preview '.repeat(10_000) }
+    const previous: Message[] = [
+      { id: 'prior-request', role: 'user', content: 'Implement the approved project.' },
+      { id: 'prior-call', role: 'assistant', content: '', tokens: 0,
+        toolCall: { id: 'write-1', name: 'write_file', args: { path: 'src/main.ts', content: 'source text '.repeat(2_500) } } },
+      { id: 'prior-result', role: 'tool', content: 'File written.', toolCallId: 'write-1', metadata },
+    ]
+    const f = fixture(previous)
+    f.ctx.toolProfile = 'code'
+    f.ctx.modelCaps = { contextWindow: 128_000 }
+    await f.run({}, 'Continue and verify the project.')
+    expect(f.llm.stream).toHaveBeenCalledTimes(1)
+    expect(f.ctx.history.compress).not.toHaveBeenCalled()
+    const [request, options] = vi.mocked(f.llm.stream).mock.calls[0]
+    expect(options!.requestInputTokenEstimate).toBeLessThan(12_000)
+    expect(options!.maxTokens! + options!.requestInputTokenEstimate!).toBe(128_000)
+    expect(request.find(message => message.id === 'prior-result')?.metadata.change).toEqual(metadata.change)
+    expect(f.history.find(message => message.id === 'prior-result')?.metadata).toEqual(metadata)
+  })
+
+  it('reserves code completion headroom even though its wire output cap is omitted', async () => {
+    const f = fixture()
+    f.ctx.toolProfile = 'code'
+    f.ctx.modelCaps = { contextWindow: 2_000 }
+    const input = 'x '.repeat(2_950)
+    expect(estimateRequestInput([{ role: 'user', content: input }], undefined, [])).toBeLessThan(2_000)
+    await f.run({}, input)
+    expect(f.llm.stream).not.toHaveBeenCalled()
+    expect(f.outcomes.at(-1)).toMatchObject({ status: 'failed', stopReason: 'context_limit',
+      error: { message: expect.stringContaining('output reservation (256)') } })
+    expect(f.outcomes.at(-1)?.error?.message).not.toContain('undefined')
+  })
+
+  it('Code mode uses the remaining context capacity and ignores the local token budget', async () => {
     const f = fixture()
     f.ctx.toolProfile = 'code'
     f.ctx.tokenBudget = 1
@@ -209,11 +269,25 @@ describe('D5 complete request context admission', () => {
     await f.run({ maxOutputTokens: 100 }, 'Give a short answer.')
     expect(f.llm.stream).toHaveBeenCalledTimes(1)
     const options = vi.mocked(f.llm.stream).mock.calls[0][1]!
-    expect(options.maxTokens).toBeUndefined()
+    expect(options.maxTokens! + options.requestInputTokenEstimate!).toBe(20_000)
+    expect(options.maxTokens).toBeGreaterThan(8_192)
     expect(options.unboundedOutput).toBe(true)
     expect(options.contextWindow).toBe(20_000)
     expect(f.outcomes.at(-1)).toMatchObject({ status: 'succeeded' })
   })
+
+  it.each(['qwen3.8-flash', 'MiniMax-M2.5', 'glm-5.3', 'kimi-k2.6', 'deepseek-v4.1-flash'])
+    ('keeps %s reasoning plus answer allowance inside the configured 100K context', async model => {
+      const f = fixture()
+      Object.defineProperty(f.llm, 'model', { value: model })
+      f.ctx.toolProfile = 'code'
+      f.ctx.modelCaps = { contextWindow: 100_000 }
+      await f.run({}, 'Complete the retained project without changing historical decisions.')
+      const options = vi.mocked(f.llm.stream).mock.calls[0][1]!
+      expect(options.contextWindow).toBe(100_000)
+      expect(options.maxTokens! + options.requestInputTokenEstimate!).toBe(100_000)
+      expect(options.maxTokens).toBeGreaterThan(8_192)
+    })
 
   it('uses a positive default output reservation that permits a simple request in a 4096-token window', async () => {
     const f = fixture()
@@ -312,6 +386,79 @@ describe('D5 complete request context admission', () => {
     expect(f.ctx.history.compress).toHaveBeenCalled()
     expect(f.llm.stream).not.toHaveBeenCalled()
     expect(f.outcomes.at(-1)).toMatchObject({ status: 'failed', stopReason: 'context_limit' })
+  })
+
+  it('repeats compaction with a smaller retained suffix until the complete request fits', async () => {
+    const f = fixture([{ id: 'old', role: 'assistant', content: 'old context '.repeat(5_000) }])
+    f.ctx.modelCaps = { contextWindow: 6_000 }
+    let pass = 0
+    f.ctx.history.compress = vi.fn(async (_ctx, _summarize, retention) => {
+      const before = estimateRequestInput(f.history, undefined, [])
+      f.history.splice(0, f.history.length - 1, { id: 'summary', role: 'system', content: ++pass === 1
+        ? 'old context '.repeat(2_500) : 'Earlier work verified; DECISION=43; pending checkpoint remains.' })
+      return { preTokens: before, postTokens: estimateRequestInput(f.history, undefined, []) }
+    })
+    await f.run()
+    expect(f.ctx.history.compress).toHaveBeenCalledTimes(2)
+    const retentions = vi.mocked(f.ctx.history.compress).mock.calls.map(call => call[2] as { keepRecentTokens: number })
+    expect(retentions[1].keepRecentTokens).toBeLessThanOrEqual(retentions[0].keepRecentTokens)
+    const [request, options] = vi.mocked(f.llm.stream).mock.calls[0]
+    expect(estimateRequestInput(request, options?.systemPrompt, options?.tools ?? []) + options!.maxTokens!).toBeLessThanOrEqual(6_000)
+    expect(request.some(message => String(message.content).includes('DECISION=43'))).toBe(true)
+    expect(f.outcomes.at(-1)).toMatchObject({ status: 'succeeded' })
+  })
+
+  it.each(['invalid', '2'])('still compacts before the hard window with threshold configuration %s', async value => {
+    vi.stubEnv('COMPRESS_THRESHOLD_RATIO', value)
+    const f = fixture([{ id: 'old', role: 'assistant', content: 'old context '.repeat(5_000) }])
+    f.ctx.modelCaps = { contextWindow: 6_000 }
+    f.ctx.history.compress = vi.fn(async () => {
+      f.history.splice(0, f.history.length - 1, { id: 'summary', role: 'system', content: 'Earlier work verified; pending checkpoint.' })
+      return { preTokens: 20_000, postTokens: 100 }
+    })
+    await f.run()
+    expect(f.ctx.history.compress).toHaveBeenCalledTimes(1)
+    expect(f.llm.stream).toHaveBeenCalledTimes(1)
+    expect(f.outcomes.at(-1)).toMatchObject({ status: 'succeeded' })
+  })
+
+  it('budgets processed attachment content before compaction and never substitutes it into an older user row', async () => {
+    const older: Message = { id: 'old-user', role: 'user', content: 'Earlier original instruction.' }
+    const f = fixture([older])
+    f.ctx.toolProfile = 'code'
+    f.ctx.modelCaps = { contextWindow: 6_000 }
+    const processed = 'Extracted attachment detail '.repeat(4_000) + 'CURRENT_LIMIT=43'
+    let summarizedMessages: Message[] = []
+    f.llm.complete = vi.fn(async (messages) => {
+      summarizedMessages = messages
+      return { content: '<summary>CURRENT_LIMIT=43; continue the current attachment task.</summary>' } as any
+    })
+    Object.defineProperty(f.ctx.history, 'retainsArchive', { value: true })
+    f.ctx.history.compress = vi.fn(async (_ctx, summarize) => {
+      const result = await summarize([...f.history])
+      f.history.splice(1, f.history.length - 1, { id: 'summary', role: 'system', content: result, metadata: { isCompactSummary: true } })
+      return { preTokens: 30_000, postTokens: 100 }
+    })
+    await f.run({ displayContent: 'See attachment.' }, processed)
+    expect(f.ctx.history.compress).toHaveBeenCalledTimes(1)
+    expect(summarizedMessages.some(message => String(message.content).includes('CURRENT_LIMIT=43'))).toBe(true)
+    expect(f.llm.stream).toHaveBeenCalledTimes(1)
+    const [request, options] = vi.mocked(f.llm.stream).mock.calls[0]
+    expect(request.find(message => message.id === 'old-user')?.content).toBe(older.content)
+    expect(options!.requestInputTokenEstimate! + 300).toBeLessThanOrEqual(6_000)
+    expect(f.outcomes.at(-1)).toMatchObject({ status: 'succeeded' })
+  })
+
+  it('replays saved model input on a later request while retaining the user-visible attachment message', async () => {
+    const display = [{ type: 'workspace_file', path: 'retained-contract.txt', name: 'retained-contract.txt' }]
+    const modelInput = 'Approved retained attachment: DECISION=43; do not change the idempotency key.'
+    const f = fixture([{ id: 'attachment-turn', role: 'user', content: display, modelInputContent: modelInput }])
+    await f.run({}, 'Verify the earlier attachment decision.')
+    const [request, options] = vi.mocked(f.llm.stream).mock.calls[0]
+    expect(request.find(message => message.id === 'attachment-turn')?.content).toBe(modelInput)
+    expect(f.history.find(message => message.id === 'attachment-turn')?.content).toEqual(display)
+    expect(options!.requestInputTokenEstimate).toBe(estimateRequestInput(request, options?.systemPrompt, options?.tools ?? []))
+    expect(f.outcomes.at(-1)).toMatchObject({ status: 'succeeded' })
   })
 
   it('preserves old system constraints verbatim when the summarizer omits them', async () => {

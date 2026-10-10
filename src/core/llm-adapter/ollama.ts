@@ -1,9 +1,10 @@
 import { applyThinkingPreference } from './thinking.js'
-import { observeRequest, observeStreamRequest } from './request-attempt.js'
+import { observeRequest, observeStreamRequest, prepareRequestContext } from './request-attempt.js'
 import type { RequestAttemptUsage } from './types.js'
 import type { LLMAdapter, LLMResponse, LLMAdapterOptions, LLMStreamChunk } from './types.js'
 import type { Message } from '../agent-context/index.js'
 import { estimateTokens } from '../utils/tokens.js'
+import { modelMessageContent } from '../utils/model-context.js'
 
 interface OllamaMessage {
   role: string
@@ -23,7 +24,8 @@ export class OllamaAdapter implements LLMAdapter {
     if (systemPrompt) {
       result.push({ role: 'system', content: systemPrompt })
     }
-    for (const msg of messages) {
+    for (const message of messages) {
+      const msg = { ...message, content: modelMessageContent(message) }
       if (msg.role === 'tool') {
         result.push({ role: 'user', content: `Tool result: ${msg.content}` })
       } else {
@@ -55,6 +57,8 @@ export class OllamaAdapter implements LLMAdapter {
     if (options?.thinkingConfig) {
       Object.assign(requestBody, options.thinkingConfig)
     }
+    const requestContext = prepareRequestContext(options, requestBody, requestBody.options.num_predict)
+    if (options?.contextWindow && Number.isFinite(options.contextWindow)) requestBody.options.num_predict = requestContext.maxTokens
 
     const data = await observeRequest(async () => {
       const response = await fetch(`${this.baseUrl}/api/chat`, {
@@ -63,7 +67,7 @@ export class OllamaAdapter implements LLMAdapter {
       })
       if (!response.ok) throw Object.assign(new Error(`Ollama API error: ${response.status} ${response.statusText}`), { status: response.status })
       return await response.json() as { model: string; message: { content: string }; prompt_eval_count?: number; eval_count?: number; done_reason?: string }
-    }, { ...options, model: requestBody.model, requestInputTokenEstimate: Math.max(options?.requestInputTokenEstimate ?? 0, estimateTokens(JSON.stringify({ messages: requestBody.messages, tools: requestBody.tools, system: requestBody.system }))) }, this.provider, requestBody.model,
+    }, requestContext, this.provider, requestBody.model,
       data => data.prompt_eval_count === undefined && data.eval_count === undefined ? undefined : { promptTokens: data.prompt_eval_count ?? 0, completionTokens: data.eval_count ?? 0 })
 
     return {
@@ -92,6 +96,8 @@ export class OllamaAdapter implements LLMAdapter {
     if (options?.thinkingConfig) {
       Object.assign(requestBody, options.thinkingConfig)
     }
+    const requestContext = prepareRequestContext(options, requestBody, requestBody.options.num_predict)
+    if (options?.contextWindow && Number.isFinite(options.contextWindow)) requestBody.options.num_predict = requestContext.maxTokens
 
     interface Frame { model: string; message?: { content?: string }; done?: boolean; done_reason?: string; prompt_eval_count?: number; eval_count?: number }
     const observed = await observeStreamRequest<Frame>(async () => {
@@ -116,7 +122,7 @@ export class OllamaAdapter implements LLMAdapter {
           }
         } finally { await reader.cancel().catch(() => {}); reader.releaseLock() }
       })()
-    }, { ...options, model: requestBody.model, requestInputTokenEstimate: Math.max(options?.requestInputTokenEstimate ?? 0, estimateTokens(JSON.stringify({ messages: requestBody.messages, tools: requestBody.tools, system: requestBody.system }))) }, this.provider, requestBody.model,
+    }, requestContext, this.provider, requestBody.model,
       (data): RequestAttemptUsage | undefined => data.prompt_eval_count === undefined && data.eval_count === undefined ? undefined : { promptTokens: data.prompt_eval_count ?? 0, completionTokens: data.eval_count ?? 0 },
       data => data.done === true)
     let terminal: Frame | undefined

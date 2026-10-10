@@ -1,5 +1,6 @@
 import path from 'node:path'
 import fs from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import type { AgentContext } from '../core/agent-context/index.js'
 import { getSecurityMode } from '../security/policy-engine.js'
 
@@ -7,8 +8,6 @@ type CtxLike = Pick<AgentContext, 'tenantId' | 'sessionId' | 'workspacePaths' | 
 
 export class WorkspaceManager {
   private readonly root: string
-  private readonly bindings = new Map<string, string>()
-  private readonly bindingOwners = new Map<string, string>()
   private readonly allowedRoots: string[]
 
   constructor(root?: string) {
@@ -17,6 +16,112 @@ export class WorkspaceManager {
       this.root,
       ...(process.env.AETHER_ALLOWED_WORKSPACE_ROOTS ?? '').split(path.delimiter).filter(Boolean).map(value => path.resolve(value))
     ])]
+  }
+
+  /**
+   * Workspace selection is user state, not process state. Keep it beside the
+   * configured engine database so a remote engine restart cannot silently
+   * send an existing session back to its scratch directory. The optional
+   * override is useful for managed deployments and isolated tests.
+   */
+  private bindingsFile(): string {
+    const configured = process.env.AETHER_WORKSPACE_BINDINGS_FILE
+    if (configured?.trim()) return path.resolve(configured)
+    const dbFile = path.resolve(process.env.DATA_DIR ?? path.join(this.root, '..', 'agent.db'))
+    // Keep test/custom roots self-contained. Production deployments may set
+    // DATA_DIR to place this small state file beside the main database.
+    return process.env.DATA_DIR ? path.join(path.dirname(dbFile), 'workspace-bindings.json') :
+      path.join(this.root, '.aether-workspace-bindings.json')
+  }
+
+  private readBindings(): Map<string, string> {
+    const file = this.bindingsFile()
+    const bindings = new Map<string, string>()
+    let parsed: unknown
+    try {
+      if (fs.lstatSync(file).isSymbolicLink()) throw new Error('binding state must not be a symbolic link')
+      parsed = JSON.parse(fs.readFileSync(file, 'utf8'))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return bindings
+      throw new Error(`Workspace binding state is unreadable: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    if (!parsed || typeof parsed !== 'object' || (parsed as any).version !== 1 || !Array.isArray((parsed as any).bindings)) {
+      throw new Error('Workspace binding state is invalid')
+    }
+    for (const item of (parsed as any).bindings) {
+      if (!item || typeof item !== 'object' || typeof item.tenantId !== 'string' ||
+        typeof item.sessionId !== 'string' || typeof item.workspaceRoot !== 'string') {
+        throw new Error('Workspace binding state contains an invalid entry')
+      }
+      this.validateId(item.tenantId, 'tenantId')
+      this.validateId(item.sessionId, 'sessionId')
+      if (!path.isAbsolute(item.workspaceRoot)) throw new Error('Workspace binding state contains a relative path')
+      const key = `${item.tenantId}\u0000${item.sessionId}`
+      if (bindings.has(key)) throw new Error('Workspace binding state contains duplicate session bindings')
+      // Retain unavailable/disallowed selections. Reading that session must
+      // report the problem, never quietly change its development directory.
+      bindings.set(key, path.resolve(item.workspaceRoot))
+    }
+    return bindings
+  }
+
+  private persistBindings(state: Map<string, string>): void {
+    const file = this.bindingsFile()
+    try {
+      if (fs.lstatSync(file).isSymbolicLink()) throw new Error('Workspace binding state must not be a symbolic link')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    const bindings = [...state.entries()].map(([key, workspaceRoot]) => {
+      const separator = key.indexOf('\u0000')
+      return { tenantId: key.slice(0, separator), sessionId: key.slice(separator + 1), workspaceRoot }
+    })
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
+    try {
+      const descriptor = fs.openSync(temporary, 'wx', 0o600)
+      try {
+        fs.writeFileSync(descriptor, JSON.stringify({ version: 1, bindings }, null, 2) + '\n', 'utf8')
+        fs.fsyncSync(descriptor)
+      } finally { fs.closeSync(descriptor) }
+      fs.renameSync(temporary, file)
+    } catch (error) {
+      try { fs.rmSync(temporary, { force: true }) } catch { /* preserve original error */ }
+      throw error
+    }
+  }
+
+  private validateBoundDirectory(ctx: CtxLike, bound: string, bindings: Map<string, string>): string {
+    if (!fs.existsSync(bound) || !fs.statSync(bound).isDirectory()) throw new Error('Bound workspace is no longer available')
+    const canonical = fs.realpathSync(bound)
+    if (!this.allowedRoots.some(base => this.isContained(this.realpathIfExists(base), canonical))) {
+      throw new Error('Bound workspace is outside the engine allowed workspace roots')
+    }
+    if (this.isAuthenticated()) {
+      const privateRoot = this.canonicalPrivateRoot()
+      const tenant = this.isContained(privateRoot, canonical)
+        ? path.relative(privateRoot, canonical).split(path.sep).filter(Boolean)[0]
+        : undefined
+      if (tenant && tenant !== ctx.tenantId) throw new Error('Bound workspace belongs to another tenant')
+      if (this.isContained(privateRoot, canonical) && !tenant) throw new Error('The private workspace root cannot be bound')
+    }
+    if (this.isAuthenticated()) {
+      for (const [key, owned] of bindings) {
+        if (key.split('\u0000')[0] === ctx.tenantId) continue
+        if (!fs.existsSync(owned) || !fs.statSync(owned).isDirectory()) continue
+        const other = fs.realpathSync(owned)
+        if (this.isContained(other, canonical) || this.isContained(canonical, other)) {
+          throw new Error('Bound workspace overlaps a binding belonging to another tenant')
+        }
+      }
+    }
+    return canonical
+  }
+
+  private isAuthenticated(): boolean { return process.env.AUTH_ENABLED !== 'false' }
+
+  private canonicalPrivateRoot(): string {
+    return fs.existsSync(this.root) ? this.realpathIfExists(this.root) : path.resolve(this.root)
   }
 
   /** IDs are path components, never user supplied paths. Keep this strict on
@@ -49,20 +154,21 @@ export class WorkspaceManager {
 
   getWorkingDirectory(ctx: CtxLike): string {
     this.assertContext(ctx)
-    const bound = this.bindings.get(this.bindingKey(ctx))
+    const bindings = this.readBindings()
+    const bound = bindings.get(this.bindingKey(ctx))
+    if (bound) return this.validateBoundDirectory(ctx, bound, bindings)
     // Authenticated requests must bind through the operator-checked endpoint;
     // request context paths are not an authorization mechanism.
-    if (process.env.AUTH_ENABLED === 'true') {
-      if (bound && (!fs.existsSync(bound) || !fs.statSync(bound).isDirectory())) throw new Error('Bound workspace is no longer available')
-      return path.resolve(bound ?? this.getScratchDirectory(ctx))
+    if (this.isAuthenticated()) {
+      return this.getScratchDirectory(ctx)
     }
-    return path.resolve(bound ?? ctx.cwd ?? ctx.projectRoot ?? ctx.workspacePaths?.[0] ?? this.getScratchDirectory(ctx))
+    return path.resolve(ctx.cwd ?? ctx.projectRoot ?? ctx.workspacePaths?.[0] ?? this.getScratchDirectory(ctx))
   }
 
   getPaths(ctx: CtxLike): string[] {
     this.assertContext(ctx)
     const paths = [this.getWorkingDirectory(ctx), this.getScratchDirectory(ctx)]
-    if (process.env.AUTH_ENABLED !== 'true') {
+    if (!this.isAuthenticated()) {
       paths.push(...(ctx.projectRoot ? [path.resolve(ctx.projectRoot)] : []))
       paths.push(...(ctx.workspacePaths ?? []).map(p => path.resolve(p)))
     }
@@ -72,6 +178,7 @@ export class WorkspaceManager {
   /** Bind a session only inside operator-declared engine workspace roots. */
   bind(ctx: CtxLike, workspaceRoot: string): string {
     this.assertContext(ctx)
+    const bindings = this.readBindings()
     if (!workspaceRoot.trim() || !path.isAbsolute(workspaceRoot)) throw new Error('workspaceRoot must be an absolute server path')
     const resolved = path.resolve(workspaceRoot)
     const allowed = this.allowedRoots.some(base => {
@@ -87,24 +194,27 @@ export class WorkspaceManager {
     // In authenticated deployments do not let one tenant bind another tenant's
     // project (including a nested directory). Desktop/no-auth mode retains the
     // existing single-user ability to select any operator-allowed project.
-    if (process.env.AUTH_ENABLED !== 'false') {
+    if (this.isAuthenticated()) {
       // The engine's private root is partitioned as root/tenant/session. A
       // tenant must never bind another tenant's private scratch directory,
       // even before that directory has been explicitly bound.
-      const privateRelative = path.relative(path.resolve(this.root), canonical)
-      const privateParts = privateRelative.split(path.sep).filter(Boolean)
+      const privateRoot = this.canonicalPrivateRoot()
+      const isPrivate = this.isContained(privateRoot, canonical)
+      const privateParts = isPrivate ? path.relative(privateRoot, canonical).split(path.sep).filter(Boolean) : []
       // Only apply the tenant/session partition rule to paths inside the
       // engine's private root. Operator-allowed project roots may legitimately
-      // live beside that private root and are protected by bindingOwners below.
-      if (this.isContained(path.resolve(this.root), canonical) && privateParts.length > 0 && privateParts[0] !== ctx.tenantId) {
+      // live beside that private root and are protected by persisted ownership below.
+      if (isPrivate && privateParts.length === 0) throw new Error('The private workspace root cannot be bound')
+      if (isPrivate && privateParts.length > 0 && privateParts[0] !== ctx.tenantId) {
         throw new Error('workspaceRoot belongs to another tenant')
       }
-      const owner = [...this.bindingOwners.entries()].find(([owned, ownerTenant]) =>
-        ownerTenant !== ctx.tenantId && (this.isContained(owned, canonical) || this.isContained(canonical, owned)))
+      const owner = [...bindings.entries()].find(([key, owned]) =>
+        key.split('\u0000')[0] !== ctx.tenantId && fs.existsSync(owned) && fs.statSync(owned).isDirectory() &&
+        (this.isContained(fs.realpathSync(owned), canonical) || this.isContained(canonical, fs.realpathSync(owned))))
       if (owner) throw new Error('workspaceRoot is already bound to another tenant')
     }
-    this.bindings.set(this.bindingKey(ctx), canonical)
-    this.bindingOwners.set(canonical, ctx.tenantId)
+    bindings.set(this.bindingKey(ctx), canonical)
+    this.persistBindings(bindings)
     return canonical
   }
 

@@ -298,10 +298,10 @@ describe('account and tenant administrator boundaries', () => {
   })
   it('keeps security modes tenant scoped and denies full-access and instance admin mutations', async () => {
     const a = await register(), b = await register(), sessionId = randomUUID()
-    const setMode = await app.inject({ method: 'PUT', url: '/api/v1/security/mode', headers: headers(a), payload: { sessionId, mode: 'standard' } })
-    expect(setMode.json().data).toMatchObject({ sessionId, mode: 'standard' })
+    const setMode = await app.inject({ method: 'PUT', url: '/api/v1/security/mode', headers: headers(a), payload: { sessionId, mode: 'safe' } })
+    expect(setMode.json().data).toMatchObject({ sessionId, mode: 'safe' })
     const otherMode = await app.inject({ method: 'GET', url: `/api/v1/security/mode?sessionId=${sessionId}`, headers: headers(b) })
-    expect(otherMode.json().data.mode).toBe('safe')
+    expect(otherMode.json().data.mode).toBe('standard')
     expect((await app.inject({ method: 'PUT', url: '/api/v1/security/mode', headers: headers(a), payload: { sessionId, mode: 'full-access' } })).statusCode).toBe(403)
     expect((await app.inject({ method: 'PUT', url: '/global-admin', headers: headers(a), payload: {} })).json().code).toBe(41015)
   })

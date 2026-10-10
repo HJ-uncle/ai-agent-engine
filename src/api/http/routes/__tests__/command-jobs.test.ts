@@ -221,6 +221,34 @@ describe('D7 command job HTTP and history lifecycle', () => {
   // Windows queries each real process tree through PowerShell before stopping it.
   }, 15_000)
 
+  it('stops owned processes even when persisting chat cancellation fails, then reconciles on retry', async () => {
+    const sessionId = 'chat-stop-write-failure'
+    const run = await rootRunStore.create(tenantId, sessionId, 'fixture-model', [fixture], {})
+    const child = await writingJob(sessionId, { ownerSessionId: 'failed-stop-child', ownerRunId: 'failed-stop-child-run' })
+    const { registerActiveChat, unregisterActiveChat } = await import('../chat.js')
+    const controller = new AbortController()
+    registerActiveChat(tenantId, sessionId, controller)
+    const update = vi.spyOn(rootRunStore, 'update').mockRejectedValueOnce(
+      Object.assign(new Error('SQLITE_BUSY: database is locked'), { code: 'SQLITE_BUSY' }),
+    )
+    try {
+      const failed = await request({ method: 'POST', url: '/chat/cancel', payload: { sessionId } })
+      expect(failed.json()).toMatchObject({ code: 50000, message: 'SQLITE_BUSY: database is locked' })
+      expect(controller.signal.aborted).toBe(true)
+      expect((await getJob(child.job)).json().data.status).toBe('cancelled')
+      await assertStopped(child.marker)
+      expect((await rootRunStore.get(tenantId, run.runId))?.status).toBe('running')
+
+      const retried = await request({ method: 'POST', url: '/chat/cancel', payload: { sessionId } })
+      expect(retried.json()).toMatchObject({ code: 200, data: { cancelled: true } })
+      expect((await rootRunStore.get(tenantId, run.runId))?.status).toBe('cancelled')
+      await assertStopped(child.marker)
+    } finally {
+      update.mockRestore()
+      unregisterActiveChat(tenantId, sessionId, controller)
+    }
+  }, 15_000)
+
   it.each(['clear', 'turn', 'message', 'truncate', 'session'] as const)(
     'history mutation %s settles background processes before deleting history', async operation => {
       const sessionId = `delete-${operation}`
@@ -310,6 +338,56 @@ describe('D7 command job HTTP and history lifecycle', () => {
       expect(fs.existsSync(marker)).toBe(false)
     } finally { release(); dbSpy.mockRestore(); cancelSpy.mockRestore() }
   }, 10_000)
+
+  it('cancels five sessions while subagent transactions and ordinary writes compete for SQLite', async () => {
+    const { SubagentStore } = await import('../../../../core/subagent/store.js')
+    const store = new SubagentStore(db)
+    const roots = await Promise.all(Array.from({ length: 5 }, (_, index) =>
+      rootRunStore.create(tenantId, `sqlite-overlap-${index}`, 'fixture-model', [fixture], {})))
+    const children = await Promise.all(roots.flatMap(root => Array.from({ length: 3 }, (_, index) =>
+      store.createRun({ tenantId, rootSessionId: root.sessionId, parentSessionId: root.sessionId,
+        parentConversationId: root.turnId, parentMessageId: root.assistantMessageId,
+        parentToolCallId: `${root.runId}-review-${index}`, task: 'Concurrent persistence regression',
+        description: `Reviewer ${index}`, modelId: 'fixture-model' }))))
+
+    // Hold a real write transaction while HTTP cancellation and child snapshots
+    // arrive. Ordinary writes must wait rather than racing a detached connection.
+    const tx = await db.transaction('write')
+    let responses: Awaited<ReturnType<typeof request>>[]
+    let updated: Awaited<ReturnType<typeof store.appendSnapshot>>[]
+    try {
+      await tx.execute({ sql: 'UPDATE root_runs SET state=state WHERE tenant_id=?', args: [tenantId] })
+      const cancellation = Promise.all(roots.map(root =>
+        request({ method: 'POST', url: '/chat/cancel', payload: { sessionId: root.sessionId } })))
+      const snapshots = Promise.all(children.map(async ({ runId }) => {
+        await store.appendSnapshot(tenantId, runId, 'started', { status: 'running', startedAt: Date.now() })
+        return store.appendSnapshot(tenantId, runId, 'finished', {
+          status: 'succeeded', resultSummary: 'Persisted concurrent review', finishedAt: Date.now(),
+        })
+      }))
+      // Attach rejection handlers before releasing the transaction.
+      const combined = Promise.all([cancellation, snapshots])
+      void combined.catch(() => {})
+      const health = await app.inject({ method: 'GET', url: '/health', headers })
+      expect(health.json()).toMatchObject({ code: 200, data: { status: 'ok' } })
+      await new Promise(resolve => setTimeout(resolve, 30))
+      await tx.commit()
+      ;[responses, updated] = await combined
+    } finally { tx.close() }
+
+    for (const response of responses) {
+      expect(response.statusCode, response.body).toBe(200)
+      expect(response.json(), response.body).toMatchObject({ code: 200, data: { cancelled: true } })
+    }
+    expect(updated).toHaveLength(15)
+    for (const root of roots) expect((await rootRunStore.get(tenantId, root.runId))?.status).toBe('cancelled')
+    const outbox = await store.listPendingParentProjections(tenantId)
+    for (const { runId } of children) {
+      expect((await store.getRun(tenantId, runId))?.status).toBe('succeeded')
+      expect((await store.listEvents(tenantId, runId)).map(event => event.seq)).toEqual([1, 2, 3])
+      expect(outbox.filter(item => item.event.runId === runId).map(item => item.event.seq)).toEqual([1, 2, 3])
+    }
+  }, 15_000)
 
   it('closing the real HTTP server waits for owned background processes to stop', async () => {
     const { job, marker } = await writingJob('server-shutdown')

@@ -81,11 +81,11 @@ export class RetryingAdapter implements LLMAdapter {
     return this.inner.countTokens(text)
   }
 
-  async embed(text: string | string[], options?: any): Promise<number[][]> {
-    if (this.inner.embed) {
-      return withRetry(() => this.inner.embed!(text, options), this.retryOptions)
-    }
-    throw new Error('Embed not supported by underlying adapter')
+  get embed(): LLMAdapter['embed'] {
+    // Optional capabilities must remain optional through wrappers. Anthropic
+    // chat adapters have no embedding endpoint.
+    if (!this.inner.embed) return undefined
+    return (text, options) => withRetry(() => this.inner.embed!(text, options), this.retryOptions)
   }
 }
 
@@ -156,7 +156,12 @@ export class FallbackAdapter implements LLMAdapter {
     return this.adapters[0].countTokens(text)
   }
 
-  async embed(text: string | string[], options?: any): Promise<number[][]> {
+  get embed(): LLMAdapter['embed'] {
+    if (!this.adapters.some(adapter => adapter.embed)) return undefined
+    return (text, options) => this.embedWithFallback(text, options)
+  }
+
+  private async embedWithFallback(text: string | string[], options?: any): Promise<number[][]> {
     let lastError: unknown
     for (const adapter of this.adapters) {
       if (adapter.embed) {

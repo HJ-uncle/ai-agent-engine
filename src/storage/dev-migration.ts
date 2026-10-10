@@ -115,13 +115,16 @@ function validateJsonObject(value: unknown): void {
 async function readSource(source: Client, key: Buffer): Promise<{ models: Row[]; settings: Row[] }> {
   // No source schema migration, journal-mode change, update, or delete is permitted.
   await source.execute('PRAGMA query_only = ON')
-  const transaction = await source.transaction('read')
+  // This client belongs only to this migration. Keep its physical connection
+  // attached so the caller's close() releases it after the snapshot is read.
+  await source.execute('BEGIN TRANSACTION READONLY')
+  let committed = false
   try {
-    const tables = await transaction.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('models','system_config')")
+    const tables = await source.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('models','system_config')")
     const names = new Set(tables.rows.map(row => row.name))
     let models: Row[] = []
     if (names.has('models')) {
-      const info = await transaction.execute('PRAGMA table_info(models)')
+      const info = await source.execute('PRAGMA table_info(models)')
       const columns = new Set(info.rows.map(row => row.name))
       if (REQUIRED_SOURCE_COLUMNS.some(column => !columns.has(column))) {
         throw new DevModelMigrationError('unsupported-source-schema', 'Source model schema is incomplete; source was preserved.')
@@ -129,7 +132,7 @@ async function readSource(source: Client, key: Buffer): Promise<{ models: Row[];
       const defaults: Record<string, string> = { is_enabled: '0', created_at: 'unixepoch()', updated_at: 'unixepoch()' }
       const selected = MODEL_COLUMNS.map(column => columns.has(column) ? column : `${defaults[column] ?? 'NULL'} AS ${column}`)
       const active = columns.has('deleted_at') ? ' WHERE deleted_at IS NULL' : ''
-      models = (await transaction.execute(`SELECT ${selected.join(', ')} FROM models${active}`)).rows
+      models = (await source.execute(`SELECT ${selected.join(', ')} FROM models${active}`)).rows
       for (const row of models) {
         if (REQUIRED_SOURCE_COLUMNS.some(column => typeof row[column] !== 'string')) {
           throw new DevModelMigrationError('invalid-source-model', 'A source model record is incomplete; source was preserved.')
@@ -144,7 +147,7 @@ async function readSource(source: Client, key: Buffer): Promise<{ models: Row[];
     let settings: Row[] = []
     if (names.has('system_config')) {
       // Read only the explicit allowlist and capability namespace, never general secrets/settings.
-      const candidates = await transaction.execute({
+      const candidates = await source.execute({
         sql: "SELECT key,value,is_secret,updated_at FROM system_config WHERE key IN (?,?,?) OR substr(key,1,19)='MODEL_CAPABILITIES_'",
         args: [...SETTINGS_KEYS],
       })
@@ -158,10 +161,11 @@ async function readSource(source: Client, key: Buffer): Promise<{ models: Row[];
         return SETTINGS_KEYS.has(String(row.key)) && modelIds.has(row.value)
       })
     }
-    await transaction.commit()
+    await source.execute('COMMIT')
+    committed = true
     return { models, settings }
   } finally {
-    transaction.close()
+    if (!committed) await source.execute('ROLLBACK').catch(() => undefined)
   }
 }
 
@@ -172,16 +176,20 @@ async function importModels(destination: Client, data: { models: Row[]; settings
   await initSettings(destination)
   await initCapabilities(destination)
   await destination.execute('CREATE TABLE IF NOT EXISTS _aether_dev_migrations (id TEXT PRIMARY KEY, completed_at INTEGER NOT NULL)')
-  const transaction = await destination.transaction('write')
+  // No other operation shares this client. Explicit transaction SQL preserves
+  // atomic imports without detaching an unclosed native transaction connection.
+  await destination.execute('BEGIN IMMEDIATE')
+  let committed = false
   try {
-    const marker = await transaction.execute({ sql: 'SELECT 1 FROM _aether_dev_migrations WHERE id=?', args: [MIGRATION_ID] })
+    const marker = await destination.execute({ sql: 'SELECT 1 FROM _aether_dev_migrations WHERE id=?', args: [MIGRATION_ID] })
     if (marker.rows.length) {
-      await transaction.commit()
+      await destination.execute('COMMIT')
+      committed = true
       return result('already-migrated')
     }
     const summary = result('migrated')
     for (const row of data.models) {
-      const inserted = await transaction.execute({
+      const inserted = await destination.execute({
         sql: `INSERT INTO models (${MODEL_COLUMNS.join(',')}) VALUES (${MODEL_COLUMNS.map(() => '?').join(',')}) ON CONFLICT DO NOTHING`,
         args: MODEL_COLUMNS.map(column => row[column] as InValue),
       })
@@ -189,20 +197,18 @@ async function importModels(destination: Client, data: { models: Row[]; settings
       else summary.skippedModels++
     }
     for (const row of data.settings) {
-      const inserted = await transaction.execute({
+      const inserted = await destination.execute({
         sql: 'INSERT INTO system_config (key,value,is_secret,updated_at) VALUES (?,?,0,?) ON CONFLICT(key) DO NOTHING',
         args: [row.key, row.value, row.updated_at] as InValue[],
       })
       summary.importedSettings += inserted.rowsAffected
     }
-    await transaction.execute({ sql: 'INSERT INTO _aether_dev_migrations (id,completed_at) VALUES (?,unixepoch())', args: [MIGRATION_ID] })
-    await transaction.commit()
+    await destination.execute({ sql: 'INSERT INTO _aether_dev_migrations (id,completed_at) VALUES (?,unixepoch())', args: [MIGRATION_ID] })
+    await destination.execute('COMMIT')
+    committed = true
     return summary
-  } catch (error) {
-    await transaction.rollback().catch(() => undefined)
-    throw error
   } finally {
-    transaction.close()
+    if (!committed) await destination.execute('ROLLBACK').catch(() => undefined)
   }
 }
 
@@ -261,8 +267,8 @@ export async function migrateDevModels(options: DevModelMigrationOptions): Promi
     if (temporary) {
       // Only exact files owned by this invocation; no directory cleanup or source deletion.
       for (const suffix of ['', '-journal', '-wal', '-shm']) {
-        // Windows libsql can retain a detached native transaction handle until process exit;
-        // an isolated staging link may remain, but the published DB is complete and marked.
+        // Cleanup is limited to this invocation's staging files; it must never
+        // delete or replace the exclusively published destination.
         try { fs.unlinkSync(temporary + suffix) } catch { /* never delete or replace the destination */ }
       }
     }

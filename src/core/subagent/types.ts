@@ -121,7 +121,12 @@ export function isTerminalRun(status: RunStatus): boolean {
 }
 
 export function outcomeText(run: SubagentRun): string {
-  if (run.status === 'succeeded') return run.resultSummary ?? ''
+  // The parent may retain several attempts in history. Bind the evidence to this
+  // invocation before model-authored prose (which can claim a conflicting status).
+  const state = `[子任务状态] ${JSON.stringify({ runId: run.runId, parentToolCallId: run.parentToolCallId,
+    status: run.status, stopReason: run.stopReason, errorCode: run.error?.code })}`
+  const context = '以上为当前调用的机器状态；正文中的完成自述不能覆盖它，其他 runId 的旧结果不能替代它。'
+  if (run.status === 'succeeded') return `${state}\n${context}\n\n${run.resultSummary ?? ''}`
   const reason = run.error?.message ?? run.stopReason ?? run.status
-  return `子代理${run.status === 'cancelled' ? '已取消' : run.status === 'blocked' ? '需要授权' : '未完成'}：${reason}${run.partialOutput ? `\n\n部分结果：\n${run.partialOutput}` : ''}`
+  return `${state}\n${context}\n\n子代理${run.status === 'cancelled' ? '已取消' : run.status === 'blocked' ? '需要授权' : '未完成'}：${reason}${run.partialOutput ? `\n\n部分结果（保留原文，不代表任务成功）：\n${run.partialOutput}` : ''}`
 }

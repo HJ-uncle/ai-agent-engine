@@ -4,11 +4,10 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { closeDb } from '../../sqlite/db.js'
 import type { Message } from '../../../core/agent-context/types.js'
 
 type Ctx = { tenantId: string; sessionId: string }
-type Result = { compacted: { cleared: number; freedTokens: number }; messages: Message[] }
+type Result = { compacted: { cleared: number; freedTokens: number }; messages: Message[]; archive: Message[]; repeated: { cleared: number; freedTokens: number } }
 const ctx: Ctx = { tenantId: 'micro-compact-tenant', sessionId: 'micro-compact-session' }
 let fixture: string
 let savedDataDir: string | undefined
@@ -24,8 +23,8 @@ beforeEach(() => {
   process.env.DATA_DIR = path.join(fixture, 'agent.db')
 })
 afterEach(() => {
-  // JSONL lazy migration can open the shared SQLite client even without a SQLite setup helper.
-  closeDb()
+  // History and SQLite are used only inside runScenario's subprocess, which
+  // joins its owned database worker before exiting. This parent owns no client.
   if (savedDataDir === undefined) delete process.env.DATA_DIR
   else process.env.DATA_DIR = savedDataDir
   if (path.dirname(fixture) !== path.resolve(os.tmpdir()) || !path.basename(fixture).startsWith('aether-microcompact-')) throw new Error('Unsafe fixture cleanup')
@@ -34,22 +33,25 @@ afterEach(() => {
 })
 
 async function runScenario(backend: 'sqlite' | 'jsonl', messages: Message[]): Promise<Result> {
-  // libsql's local transaction object retains its native SQLite connection until GC,
-  // even after commit/close. A real subprocess exit deterministically releases Windows
-  // file handles before cleanup while exercising the unmocked history and transaction code.
+  // Exercise the unmocked history and transaction code in a real subprocess.
+  // Its SQLite worker is a grandchild: the scenario's exit alone does not join
+  // that worker, so wait for native handle release before parent fixture cleanup.
   const source = `
-    import { initDb, closeDb } from ${JSON.stringify(new URL('../../sqlite/db.ts', import.meta.url).href)};
+    import { initDb, closeDb, getDb } from ${JSON.stringify(new URL('../../sqlite/db.ts', import.meta.url).href)};
     import { SQLiteConversationHistory } from ${JSON.stringify(new URL('../history.ts', import.meta.url).href)};
     import { JSONLConversationHistory } from ${JSON.stringify(new URL('../jsonl-history.ts', import.meta.url).href)};
     const { ctx, messages } = JSON.parse(process.argv[2]);
-    await initDb();
+    const db = getDb();
     try {
+      await initDb();
       const history = ${backend === 'sqlite' ? 'new SQLiteConversationHistory(1_000_000)' : 'new JSONLConversationHistory(1_000_000)'};
       for (const message of messages) await history.append(message, ctx);
       const compacted = await history.microCompactToolResults(ctx, { keepRecent: 10, maxChars: 64 });
-      const output = 'MICROCOMPACT_RESULT:' + JSON.stringify({ compacted, messages: await history.getFullHistory(ctx) });
+      const restarted = ${backend === 'sqlite' ? 'new SQLiteConversationHistory(1_000_000)' : 'new JSONLConversationHistory(1_000_000)'};
+      const repeated = await restarted.microCompactToolResults(ctx, { keepRecent: 10, maxChars: 64 });
+      const output = 'MICROCOMPACT_RESULT:' + JSON.stringify({ compacted, repeated, messages: await restarted.getFullHistory(ctx), archive: (await restarted.getArchive(ctx)).messages });
       await new Promise(resolve => process.stdout.write(output, resolve));
-    } finally { closeDb(); }
+    } finally { closeDb(); await db.whenClosed(); }
     process.exit(0);
   `
   const root = fileURLToPath(new URL('../../../../', import.meta.url))
@@ -80,5 +82,11 @@ describe.each(['sqlite', 'jsonl'] as const)('%s micro-compaction', backend => {
     expect(result.compacted.cleared).toBe(2)
     expect(result.messages.find(message => message.id === 'old-tool')?.content).toBe('[tool result cleared]')
     expect(result.messages.find(message => message.id === 'recent-huge')?.content).toBe('[tool result cleared]')
+    expect(result.messages.find(message => message.id === 'old-tool')?.metadata?.outputPreview).toBe('old output')
+    expect(result.messages.find(message => message.id === 'recent-huge')?.metadata?.outputPreview).toBe('x'.repeat(200))
+    expect(result.archive.find(message => message.id === 'old-tool')?.content).toBe('old output')
+    expect(result.archive.find(message => message.id === 'recent-huge')?.content).toBe('x'.repeat(200))
+    expect(result.archive.find(message => message.id === 'recent-huge')?.tokens).toBe(50)
+    expect(result.repeated).toEqual({ cleared: 0, freedTokens: 0 })
   }, 15_000)
 })

@@ -5,6 +5,11 @@ import { fileURLToPath } from 'node:url'
 import { createBuildManifest } from '../src/runtime/build-identity.js'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
+const patched = spawnSync(process.execPath, [path.join(root, 'scripts/apply-node-pty-patch.mjs'), '--root', root], {
+  cwd: root, stdio: 'inherit', windowsHide: true,
+})
+if (patched.error) throw patched.error
+if (patched.status !== 0) process.exit(patched.status ?? 1)
 const before = createBuildManifest(root)
 const directory = path.join(root, 'dist/runtime')
 // A failed or interrupted build must not leave an old manifest certifying partially replaced output.
@@ -22,6 +27,7 @@ copyFileSync(path.join(root, 'src/terminal/workspace-shell.mjs'), shellAsset)
 const after = createBuildManifest(root)
 if (after.buildId !== before.buildId) throw new Error('Engine sources changed during compilation; rebuild before using this artifact')
 mkdirSync(directory, { recursive: true })
+copyFileSync(path.join(root, 'node_modules/node-pty/.aether-node-pty-patch.json'), path.join(directory, 'dependency-patches.json'))
 const temporary = path.join(directory, `build-manifest.${process.pid}.tmp`)
 writeFileSync(temporary, JSON.stringify(after, null, 2) + '\n', 'utf8')
 renameSync(temporary, path.join(directory, 'build-manifest.json'))

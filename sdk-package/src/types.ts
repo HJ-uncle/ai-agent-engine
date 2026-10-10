@@ -13,8 +13,8 @@ export type SdkMode = 'embedded' | 'remote'
 
 export interface EmbeddedOptions {
   /**
-   * agent-engine 二进制入口脚本路径（即 bin/main.js 的绝对路径）。
-   * 默认使用 SDK 包内的 bin/main.js。
+   * agent-engine 入口脚本的绝对路径。
+   * 默认使用 SDK 包内的 bin/dist/main.js。
    */
   binaryPath?: string
 
@@ -25,9 +25,9 @@ export interface EmbeddedOptions {
   preferredPort?: number
 
   /**
-   * agent-engine 数据目录（存放 SQLite DB 等持久化文件）。
-   * 默认为 bin/ 同级的 data/ 目录。
-   * 建议在 Electron 应用中设置为 app.getPath('userData')/agent-engine/
+   * SQLite 数据库文件路径，对应引擎 DATA_DIR；兼容旧的目录路径，自动追加 agent.db。
+   * 默认为 bin/ 同级的 data/agent.db。
+   * 建议在 Electron 应用中设置为 app.getPath('userData')/agent-engine/agent.db。
    */
   dataDir?: string
 

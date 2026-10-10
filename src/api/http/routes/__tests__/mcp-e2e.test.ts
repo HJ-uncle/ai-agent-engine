@@ -138,7 +138,9 @@ describe('MCP configuration and real protocol execution', () => {
     expect(await client.callTool('echo', { text: 'hello' }, undefined, { tenantId: 'test', sessionId: 'test' })).toBe('hello')
     clearSecurityMode('test', 'test')
     await client.disconnect()
-  })
+  // Includes two real Windows owned-tree snapshots/cleanup operations. The
+  // MCP product RPC deadline remains 15s; the old 5s test also covered OS cleanup.
+  }, 20_000)
 
   it('parses UTF-8 Content-Length framed stdio responses', async () => {
     const server = createServer({ id: 'framed', name: 'Framed', transportType: 'stdio', command: process.execPath,
@@ -160,7 +162,9 @@ describe('MCP configuration and real protocol execution', () => {
     const results = await Promise.all([tools[0].execute({ text: 'one' }, context), tools[0].execute({ text: 'two' }, context)])
     expect(results.map(result => result.output).sort()).toEqual(['one', 'two'])
     clearSecurityMode('parallel', 'parallel')
-  })
+  // Discovery plus two independent process-tree cleanups contend for CIM in
+  // the full suite. Keep this integration allowance local to this fixture.
+  }, 20_000)
 
   it('supports request-scoped inline stdio servers without persisting credentials', async () => {
     const registry = new ToolRegistry()

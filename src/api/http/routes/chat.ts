@@ -25,6 +25,7 @@ import { TodoStore } from '../../../storage/todo/index.js'
 import { ChangeStore } from '../../../storage/changes/index.js'
 import { commandJobs } from '../../../core/command-jobs/index.js'
 import { CODE_AGENT_EXECUTION_PROMPT } from '../../../core/code-agent-prompt.js'
+import { publicHistoryMessages } from '../history-projection.js'
 
 /**
  * 主 Agent 的子代理委派纪律（对齐 wuzu-client codeAgent.ts 的「探索预算」章节）。
@@ -182,6 +183,7 @@ interface ChatBody {
     env?: Record<string, string>
     url?: string
     headers?: Record<string, string>
+    timeoutMs?: number
   }>
   /**
    * 客户端透传的用户 Agent 列表（请求级）。
@@ -253,6 +255,8 @@ import { StreamBus, activeStreams, busToIterable } from '../../../core/stream-pi
 // key = `${tenantId}:${sessionId}`，value = 当前正在运行的 AbortController。
 // 同一会话同时只允许有一个流（新流开始前会先 abort 旧流）。
 const activeChatAborters = new Map<string, AbortController>()
+/** Discovery owns a controller before durable root admission; concurrent preparations stay separate. */
+const preparingChatAborters = new Map<string, Set<AbortController>>()
 
 function makeAbortKey(tenantId: string, sessionId: string): string {
   return `${tenantId}:${sessionId}`
@@ -328,8 +332,12 @@ export function unregisterActiveChat(tenantId: string, sessionId: string, contro
 
 export function abortActiveChat(tenantId: string, sessionId: string, reason = 'User cancelled'): boolean {
   const key = makeAbortKey(tenantId, sessionId)
+  let cancelled = false
+  for (const controller of preparingChatAborters.get(key) ?? []) {
+    if (!controller.signal.aborted) { controller.abort(new Error(reason)); cancelled = true }
+  }
   const controller = activeChatAborters.get(key)
-  if (!controller || controller.signal.aborted) return false
+  if (!controller || controller.signal.aborted) return cancelled
   try { controller.abort(new Error(reason)) } catch { /* noop */ }
   activeChatAborters.delete(key)
   return true
@@ -359,21 +367,27 @@ export async function chatRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     const { sessionId } = request.body
     const tenantId = getTenantId(request)
-    let cancelled = await withHistoryLock(tenantId, async () => {
-      const key = makeAbortKey(tenantId, sessionId)
-      cancellationEpochs.set(key, (cancellationEpochs.get(key) ?? 0) + 1)
-      let cancelled = abortActiveChat(tenantId, sessionId, 'Cancelled by user via /chat/cancel')
-      const active = (await rootRunStore.list(tenantId, sessionId)).filter(run => run.status === 'running' || run.status === 'waiting')
-      for (const run of active) {
-        const updated = await rootRunStore.update(tenantId, run.runId, { status: 'cancelled', stopReason: 'Cancelled by user' })
-        if (updated) activeStreams.get(key)?.publishRunState(updated)
-        cancelled = true
-      }
-      abortActiveChat(tenantId, sessionId, 'Cancelled by user via /chat/cancel')
-      return cancelled
-    })
-    const jobs = await commandJobs.cancelScope({ tenantId, sessionId }, 'Cancelled by user via /chat/cancel')
-    cancelled ||= jobs.length > 0
+    let cancelled = false
+    try {
+      cancelled = await withHistoryLock(tenantId, async () => {
+        const key = makeAbortKey(tenantId, sessionId)
+        cancellationEpochs.set(key, (cancellationEpochs.get(key) ?? 0) + 1)
+        let cancelled = abortActiveChat(tenantId, sessionId, 'Cancelled by user via /chat/cancel')
+        const active = (await rootRunStore.list(tenantId, sessionId)).filter(run => run.status === 'running' || run.status === 'waiting')
+        for (const run of active) {
+          const updated = await rootRunStore.update(tenantId, run.runId, { status: 'cancelled', stopReason: 'Cancelled by user' })
+          if (updated) activeStreams.get(key)?.publishRunState(updated)
+          cancelled = true
+        }
+        abortActiveChat(tenantId, sessionId, 'Cancelled by user via /chat/cancel')
+        return cancelled
+      })
+    } finally {
+      // A failed state write must not leave root or child-owned commands running.
+      // Still surface the persistence error so a retry can reconcile the run state.
+      const jobs = await commandJobs.cancelScope({ tenantId, sessionId }, 'Cancelled by user via /chat/cancel')
+      cancelled ||= jobs.length > 0
+    }
     return reply.code(200).send({
       code: 200,
       message: cancelled ? 'OK' : 'No active chat for this session',
@@ -689,19 +703,42 @@ export async function chatRoutes(fastify: FastifyInstance) {
     // Build tool registry（统一工厂，含所有内置工具 + MCP + Skills）
     // 把客户端透传的 inline 资源（桌面端本地 skill / mcp）一并注入，
     // 让 list_skills / get_skill / MCP 工具都能即时看到 + 调用。
-    const { registry, externalSkills, toolCategories } = await createToolRegistry({
-      toolProfile,
-      securityContext: { tenantId, sessionId, toolProfile },
-      memoryScope: effectiveMemoryScope,
-      allowedSkills,
-      allowedTools,
-      inlineSkills: requestedInlineSkills,
-      inlineMcpServers: requestedInlineMcpServers,
-      inlineAgents: requestedInlineAgents,
-      workspaceRoot: workspacePaths?.[0]
-    })
-
     const abortController = new AbortController()
+    const preparing = preparingChatAborters.get(admissionKey) ?? new Set<AbortController>()
+    preparing.add(abortController); preparingChatAborters.set(admissionKey, preparing)
+    // Before root admission there is no durable producer to reconnect to.
+    // Stop only this preparation on disconnect, retaining the existing Code
+    // disconnect/replay behavior once a root has actually started below.
+    const onPreparationClose = () => {
+      if (!reply.raw.writableEnded) abortController.abort(new Error('Client disconnected during tool discovery'))
+    }
+    reply.raw.once('close', onPreparationClose)
+    request.raw.once('aborted', onPreparationClose)
+    let prepared: Awaited<ReturnType<typeof createToolRegistry>>
+    try {
+      if (reply.raw.destroyed || request.raw.aborted || (cancellationEpochs.get(admissionKey) ?? 0) !== admissionEpoch) onPreparationClose()
+      prepared = await createToolRegistry({
+        signal: abortController.signal,
+        toolProfile,
+        securityContext: { tenantId, sessionId, toolProfile },
+        memoryScope: effectiveMemoryScope,
+        allowedSkills,
+        allowedTools,
+        inlineSkills: requestedInlineSkills,
+        inlineMcpServers: requestedInlineMcpServers,
+        inlineAgents: requestedInlineAgents,
+        workspaceRoot: workspacePaths?.[0]
+      })
+    } catch (error) {
+      if (abortController.signal.aborted) return reply.code(499).send(fail(49900, 'Chat preparation cancelled'))
+      throw error
+    } finally {
+      reply.raw.removeListener('close', onPreparationClose)
+      request.raw.removeListener('aborted', onPreparationClose)
+      preparing.delete(abortController)
+      if (!preparing.size && preparingChatAborters.get(admissionKey) === preparing) preparingChatAborters.delete(admissionKey)
+    }
+    const { registry, externalSkills, toolCategories } = prepared
 
     // Code runs are durable root jobs: an SSE viewer may disconnect while the
     // model/tools continue working and reconnect through /chat/stream later.
@@ -1015,6 +1052,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
       })(),
       enableMemory ? buildMemoryRecallBlock(tenantId, plainTextQuery, {
         model: resolvedModel,
+        contextWindow: modelCaps.contextWindow,
         apiKey: modelApiKey,
         baseUrl: modelBaseUrl,
         provider: modelProvider,
@@ -1124,7 +1162,7 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
           if (accepted.duplicate) return 'duplicate' as const
           resumedPending = accepted.pending
         } else {
-          rootRun = await rootRunStore.create(tenantId, sessionId, resolvedModel ?? ctx.modelName ?? '', workspacePaths ?? [], { ...request.body, toolProfile } as unknown as Record<string, unknown>)
+          rootRun = await rootRunStore.create(tenantId, sessionId, resolvedModel ?? ctx.modelName ?? '', workspacePaths ?? [], { ...request.body, memoryScope: selectedMemoryScope, toolProfile } as unknown as Record<string, unknown>)
         }
         attemptId = (await rootRunStore.get(tenantId, rootRun.runId))!.attemptId
         conversationId = rootRun.turnId
@@ -1329,6 +1367,7 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
           // memory policy also applies to code-profile runs.
           if (enableMemory) {
             extractAndStoreMemories({
+              sourceTurnId: conversationId,
               messages: fullHistory.map((m: any) => ({
                 role: m.role as string,
                 content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
@@ -1338,6 +1377,7 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
               memoryScope: effectiveMemoryScope === 'session' ? 'session' : 'global',
               llm: {
                 model: resolvedModel,
+                contextWindow: modelCaps.contextWindow,
                 apiKey: modelApiKey,
                 baseUrl: modelBaseUrl,
                 provider: modelProvider,
@@ -1432,11 +1472,12 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
       const result = await withHistoryLock(tenantId, async () => {
         // An admission can begin while this reader was queued for the history lock.
         if (pendingAdmissions.get(key)?.size) return null
-        const [history, runs, todos, changes, jobs] = await Promise.all([
+        const [storedHistory, runs, todos, changes, jobs] = await Promise.all([
           createConversationHistory().getFullHistory({ tenantId, sessionId }), rootRunStore.list(tenantId, sessionId),
           new TodoStore().list(tenantId, sessionId), new ChangeStore().list(tenantId, sessionId),
           commandJobs.list({ tenantId, sessionId }),
         ])
+        const history = publicHistoryMessages(storedHistory)
         // JSONL keeps the pre-compaction transcript on disk but exposes only
         // the summary + recent tail to the model/UI snapshot.  Tell the UI
         // that an explicit archive read is available without embedding the

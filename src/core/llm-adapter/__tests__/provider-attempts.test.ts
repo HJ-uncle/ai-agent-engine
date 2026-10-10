@@ -32,7 +32,7 @@ describe('actual request attempts', () => {
     expect(body).not.toHaveProperty('max_completion_tokens')
   })
 
-  it('uses the gateway maximum for an unbounded DeepSeek V4 Code request', async () => {
+  it('bounds a DeepSeek V4 Code response by the remaining configured context', async () => {
     const wire = 'data: ' + JSON.stringify({ id: 'm', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 3, completion_tokens: 1 } }) + '\n\ndata: [DONE]\n\n'
     const fetchMock = vi.fn(async () => new Response(wire, { headers: { 'content-type': 'text/event-stream' } }))
     vi.stubGlobal('fetch', fetchMock)
@@ -41,14 +41,13 @@ describe('actual request attempts', () => {
       model: adapter.model,
       signal: new AbortController().signal,
       unboundedOutput: true,
-      // A near-full context used to turn the protocol field into 400. The
-      // provider fallback must remain its wire maximum instead of inheriting
-      // that estimate as an accidental completion cap.
+      // A finite caller-supplied window constrains input plus completion even
+      // though Code mode has no fixed engine-side output cap.
       contextWindow: 1_000_000,
       requestInputTokenEstimate: 999_600,
     })) { /* consume the complete request */ }
     const body = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body)) as Record<string, unknown>
-    expect(body.max_completion_tokens).toBe(393216)
+    expect(body.max_completion_tokens).toBe(400)
     expect(Number.isInteger(body.max_completion_tokens)).toBe(true)
   })
 
@@ -67,7 +66,7 @@ describe('actual request attempts', () => {
     expect(body.max_completion_tokens).toBe(400)
   })
 
-  it('caps an oversized unbounded Anthropic-compatible request at the gateway limit', async () => {
+  it('caps an Anthropic-compatible response at the remaining configured context', async () => {
     const streamMock = vi.fn(() => ({
       async *[Symbol.asyncIterator]() { yield { type: 'message_stop' } },
       finalMessage: async () => ({ model: 'deepseek-v4.1-flash', stop_reason: 'end_turn', usage: { input_tokens: 3, output_tokens: 1 } }),
@@ -83,7 +82,7 @@ describe('actual request attempts', () => {
       requestInputTokenEstimate: 999_600,
     })) { /* consume the complete request */ }
     const request = (streamMock.mock.calls[0] as unknown as [Record<string, unknown>])[0]
-    expect(request.max_tokens).toBe(393216)
+    expect(request.max_tokens).toBe(400)
   })
 
   it('does not retry a 400 body error even when its message contains a 5', async () => {

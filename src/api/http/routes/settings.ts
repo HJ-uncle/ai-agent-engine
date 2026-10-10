@@ -4,7 +4,7 @@ import { loadSecurityConfig, saveSecurityConfig, WebFetchConfig } from '../../..
 import { systemConfigStore, SECRET_KEYS, BOOT_PATH_KEYS, TRUSTED_STARTUP_KEYS } from '../../../storage/sqlite/system-config.js'
 import { requireRoles } from '../../../auth/guards.js'
 import { setGlobalToolPoolLimit } from '../../../core/utils/concurrency-pool.js'
-import { resolveOSMMode, isValidMode, OSM_MODES } from '../../../core/osm.js'
+import { resolveOSMMode, isValidMode, OSM_MODES, applyOSMMultiplier, getOSMCompressRatio } from '../../../core/osm.js'
 import { logger as engineLogger } from '../../../observability/index.js'
 import { MANAGED_KEYS } from '../../../core/aether-config.js'
 import { MAX_FILE_SIZE } from '../../../tools/file/constants.js'
@@ -26,8 +26,24 @@ export async function settingsRoutes(fastify: FastifyInstance) {
     const getStr = (key: string, def: string) =>
       dbConfig[key] ?? process.env[key] ?? def
 
+    const getOptionalNumber = (key: string): number | null => {
+      const raw = getStr(key, '').trim()
+      if (!raw) return null
+      const value = parseInt(raw, 10)
+      return Number.isFinite(value) ? value : null
+    }
+    const configuredIterations = getOptionalNumber('MAX_ITERATIONS')
+    const configuredTokenBudget = getOptionalNumber('TOKEN_BUDGET')
+    const configuredCommandTimeout = getOptionalNumber('CMD_TIMEOUT_MS')
+    const configuredCompressRatio = parseFloat(getStr('COMPRESS_THRESHOLD_RATIO', '0.92'))
+    const baseCompressRatio = Number.isFinite(configuredCompressRatio) && configuredCompressRatio > 0 ? configuredCompressRatio : 0.92
+    const osmCompressRatio = getOSMCompressRatio(configuredCompressRatio)
+    const effectiveCompressRatio = Number.isFinite(osmCompressRatio) && osmCompressRatio > 0
+      ? Math.min(osmCompressRatio, 0.95) : 0.92
+
     const mask = (val: string) => {
-      if (!val || val.length < 8) return val
+      if (!val) return ''
+      if (val.length < 8) return '...'
       return `${val.slice(0, 3)}...${val.slice(-4)}`
     }
 
@@ -52,17 +68,17 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       DEEPSEEK_INCLUDE_STREAM_USAGE:  getStr('DEEPSEEK_INCLUDE_STREAM_USAGE', 'true') !== 'false',
       DEEPSEEK_LOG_CACHE_HITS:        getStr('DEEPSEEK_LOG_CACHE_HITS', 'true') !== 'false',
       // ── Agent ────────────────────────────────────────────────────────────
-      MAX_ITERATIONS:          parseInt(getStr('MAX_ITERATIONS',          '50'),      10),
-      TOKEN_BUDGET:            parseInt(getStr('TOKEN_BUDGET',            '80000'),   10),
+      MAX_ITERATIONS:          configuredIterations,
+      TOKEN_BUDGET:            configuredTokenBudget,
       HISTORY_MAX_TOKENS:      parseInt(getStr('HISTORY_MAX_TOKENS',      '20000'),   10),
       TOOL_OUTPUT_MAX_CHARS:   parseInt(getStr('TOOL_OUTPUT_MAX_CHARS',   '4000'),    10),
-      COMPRESS_THRESHOLD_RATIO: parseFloat(getStr('COMPRESS_THRESHOLD_RATIO', '0.5')),
+      COMPRESS_THRESHOLD_RATIO: baseCompressRatio,
       // ── Skills ───────────────────────────────────────────────────────────
       // 路径类配置默认空 = 自动探测 .aether/ 约定目录（不要回填旧默认 './skills'）
       SKILLS_ROOT:   getStr('SKILLS_ROOT',   ''),
       BASH_PATH:     getStr('BASH_PATH',     ''),
       // ── Tools ────────────────────────────────────────────────────────────
-      CMD_TIMEOUT_MS:      parseInt(getStr('CMD_TIMEOUT_MS',      '5000'),    10),
+      CMD_TIMEOUT_MS:      configuredCommandTimeout,
       MAX_FILE_SIZE_BYTES: parseInt(getStr('MAX_FILE_SIZE_BYTES', String(MAX_FILE_SIZE)), 10),
       WEB_SEARCH_SERVER:   getStr('WEB_SEARCH_SERVER', 'http://127.0.0.1:8923'),
       // ── Workspace ────────────────────────────────────────────────────────
@@ -76,6 +92,11 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       ENABLE_LONG_TERM_MEMORY: getStr('ENABLE_LONG_TERM_MEMORY', 'true') === 'true',
       MEMORY_CONSOLIDATION_INTERVAL_HOURS: parseInt(getStr('MEMORY_CONSOLIDATION_INTERVAL_HOURS', '24'), 10),
       MEMORY_DECAY_THRESHOLD: parseFloat(getStr('MEMORY_DECAY_THRESHOLD', '0.05')),
+      EMBEDDING_BASE_URL: getStr('EMBEDDING_BASE_URL', ''),
+      EMBEDDING_MODEL: getStr('EMBEDDING_MODEL', ''),
+      EMBEDDING_API_KEY: mask(getStr('EMBEDDING_API_KEY', '')),
+      EMBEDDING_DIMENSIONS: parseInt(getStr('EMBEDDING_DIMENSIONS', '1536') || '1536', 10),
+      EMBEDDING_SEND_DIMENSIONS: getStr('EMBEDDING_SEND_DIMENSIONS', 'false') === 'true',
       // ── Performance ──────────────────────────────────────────────────────
       TOOL_CONCURRENCY_LIMIT: parseInt(getStr('TOOL_CONCURRENCY_LIMIT', '8'),      10),
       SQLITE_CACHE_KB:        parseInt(getStr('SQLITE_CACHE_KB',        '20000'),  10),
@@ -94,13 +115,39 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       webFetch: securityConfig.webFetch,
       // ── Managed Settings ────────────────────────────────────────────────
       managedKeys: Array.from(MANAGED_KEYS),
+      // Read-only applicability: null means no configured cap, or the
+      // profile-specific command default. Keep explicit settings above intact.
+      runtimeLimits: {
+        code: { maxIterations: null, tokenBudget: null, commandTimeoutMs: null },
+        otherProfiles: {
+          maxIterations: configuredIterations !== null && configuredIterations > 0
+            ? applyOSMMultiplier('maxIterations', configuredIterations) : null,
+          tokenBudget: configuredTokenBudget !== null && configuredTokenBudget > 0
+            ? applyOSMMultiplier('tokenBudget', configuredTokenBudget) : null,
+          commandTimeoutMs: configuredCommandTimeout !== null && configuredCommandTimeout > 0
+            ? configuredCommandTimeout : null,
+          commandDefaults: { foregroundStandard: 30_000, foregroundFullAccess: 120_000, background: 600_000 },
+        },
+        compression: { configuredRatio: baseCompressRatio, effectiveRatio: effectiveCompressRatio },
+      },
     }
 
     return reply.code(200).send(success(settings))
   })
 
-  fastify.put<{ Body: Record<string, string | number | boolean | WebFetchConfig> }>('/settings', { preHandler: requireRoles('admin') }, async (request, reply) => {
+  fastify.put<{ Body: Record<string, string | number | boolean | WebFetchConfig | null> }>('/settings', { preHandler: requireRoles('admin') }, async (request, reply) => {
     const updates = request.body
+
+    if (updates.EMBEDDING_DIMENSIONS !== undefined) {
+      const dimensions = Number(updates.EMBEDDING_DIMENSIONS)
+      if (!Number.isSafeInteger(dimensions) || dimensions < 1) return reply.code(400).send(fail(400, 'EMBEDDING_DIMENSIONS must be a positive integer'))
+    }
+    if (typeof updates.EMBEDDING_BASE_URL === 'string' && updates.EMBEDDING_BASE_URL.trim()) {
+      try {
+        const url = new URL(updates.EMBEDDING_BASE_URL)
+        if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('Invalid URL')
+      } catch { return reply.code(400).send(fail(400, 'EMBEDDING_BASE_URL must be an HTTP(S) service URL without credentials, query or fragment')) }
+    }
 
     const protectedKeys = Object.keys(updates).filter((key) => TRUSTED_STARTUP_KEYS.has(key))
     if (protectedKeys.length > 0) {
@@ -142,8 +189,14 @@ export async function settingsRoutes(fastify: FastifyInstance) {
 
     // 其余所有字段写入数据库
     for (const [k, v] of Object.entries(updates)) {
+      if (k === 'runtimeLimits' || k === 'managedKeys') continue
       if (MANAGED_KEYS.has(k)) {
         engineLogger.warn({ key: k }, 'Attempted to modify a managed setting, ignoring.')
+        continue
+      }
+      if (v === null && ['MAX_ITERATIONS', 'TOKEN_BUDGET', 'CMD_TIMEOUT_MS'].includes(k)) {
+        await systemConfigStore.delete(k)
+        delete process.env[k]
         continue
       }
       const strVal = String(v)

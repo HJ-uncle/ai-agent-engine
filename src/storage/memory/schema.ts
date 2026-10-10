@@ -39,6 +39,7 @@ export const MEMORY_SCHEMA: string[] = [
     decay_rate        REAL NOT NULL DEFAULT 0.01 CHECK(decay_rate >= 0.0),
     last_strength_update INTEGER NOT NULL DEFAULT (unixepoch()),
     embedding_json    TEXT,
+    embedding_space   TEXT,
     embedding         F32_BLOB(1536),
     created_at        INTEGER NOT NULL DEFAULT (unixepoch()),
     updated_at        INTEGER NOT NULL DEFAULT (unixepoch())
@@ -95,6 +96,10 @@ export const MEMORY_SCHEMA: string[] = [
 
   `CREATE INDEX IF NOT EXISTS idx_memory_edges_scope
     ON memory_edges(tenant_id, scope, session_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_memory_edges_source_scope
+    ON memory_edges(tenant_id, scope, source_node_id, session_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_memory_edges_target_scope
+    ON memory_edges(tenant_id, scope, target_node_id, session_id)`,
 
   `CREATE INDEX IF NOT EXISTS idx_memory_edges_source
     ON memory_edges(source_node_id)`,

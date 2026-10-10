@@ -1,5 +1,6 @@
 import type { Message } from '../../core/agent-context/types.js'
 import type { RootRun } from '../../storage/root-runs/index.js'
+import { publicHistoryMessage } from './history-projection.js'
 
 type HistoryMessage = Message & { conversationId?: string }
 
@@ -9,7 +10,7 @@ export function persistedTurnProjection(history: HistoryMessage[], run: RootRun)
   const usage: Record<string, number> = {}
   let modelId = run.actualModelId
   for (const message of history.filter(item => item.conversationId === run.turnId || item.id === run.userMessageId)) {
-    if (message.role === 'user') { frames.push({ userMessage: message }); continue }
+    if (message.role === 'user') { frames.push({ userMessage: publicHistoryMessage(message) }); continue }
     if (message.role === 'assistant') {
       if (message.modelId) modelId = message.modelId
       if (message.reasoningContent) frames.push({ thinking: message.reasoningContent })

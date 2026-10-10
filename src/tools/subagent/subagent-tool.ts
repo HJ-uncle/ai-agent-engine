@@ -61,7 +61,7 @@ function loadRoleTemplate(role: SubagentRole): string | null {
 /** Only known read operations belong to research roles; arbitrary MCP/script tools may mutate external state. */
 const RESEARCH_TOOLS = new Set([
   'read_file', 'smart_read', 'list_files', 'glob', 'glob_search', 'grep', 'grep_search',
-  'list_skills', 'get_skill', 'codegraph', 'get_current_context',
+  'list_skills', 'get_skill', 'codegraph', 'get_current_context', 'search_history',
   'browser_tabs', 'browser_snapshot', 'browser_screenshot', 'browser_console', 'browser_network', 'browser_network_request',
   'todo_list', 'todo_create', 'todo_update', 'todo_delete',
   'recall', 'search_memory', 'list_memories',

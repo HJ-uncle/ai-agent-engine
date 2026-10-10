@@ -135,7 +135,10 @@ describe('Workspace Shell listing output', () => {
       if (name === 'docs/') expect(metadata![1]).toBe('—')
     }
     expect(lines.at(-1)).toContain(`共 ${files.length + 1} 项`)
-    expect(lines.some(line => /^[-─]{20,}$/.test(line))).toBe(false)
+    // The separator belongs to the compact content table, not the viewport.
+    expect(lines[1]).toMatch(/^─+$/)
+    expect(cellWidth(lines[1])).toBe(timeColumn + 16)
+    expect(cellWidth(lines[1])).toBeLessThan(columns - 1)
     expect(lines.every(line => cellWidth(line) < columns)).toBe(true)
   })
 
@@ -166,7 +169,7 @@ describe('Workspace Shell listing output', () => {
       expect(lines.some(line => line.includes('修改时间'))).toBe(true)
     } else {
       const typeColumn = cellColumn(lines[0], '类型')
-      fragments = lines.slice(1).filter(line => !line.startsWith('共 ')).map(line => firstCells(line, typeColumn - 2))
+      fragments = lines.slice(2).filter(line => !line.startsWith('共 ')).map(line => firstCells(line, typeColumn - 2))
     }
     expect(fragments.map(line => line.trimEnd()).join('')).toBe(name)
     expect(lines.join('\n')).not.toContain('…')

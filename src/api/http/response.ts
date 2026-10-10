@@ -42,15 +42,26 @@ export function fail(code: number, msg: string, data: any = null): StandardRespo
   }
 }
 
-export function paginateArray<T>(items: T[], current?: number, pageSize?: number): StandardResponse<T[]> {
+export function paginateArray<T>(items: T[], current?: number | string, pageSize?: number | string): StandardResponse<T[]> {
   if (current != null && pageSize != null) {
+    // Query strings arrive as strings on routes without a coercing schema.
+    // Normalize before arithmetic: start + "200" otherwise concatenates.
+    const page = Number(current)
+    const size = Number(pageSize)
+    if (!['number', 'string'].includes(typeof current) || !['number', 'string'].includes(typeof pageSize)
+      || !Number.isSafeInteger(page) || page < 1 || !Number.isSafeInteger(size) || size < 1) {
+      return fail(40001, '参数验证失败：current 和 pageSize 必须是正整数')
+    }
     const total = items.length
-    const totalPages = Math.ceil(total / pageSize)
-    const start = (current - 1) * pageSize
-    const paginatedItems = items.slice(start, start + pageSize)
+    const totalPages = Math.ceil(total / size)
+    const start = (page - 1) * size
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(start + size)) {
+      return fail(40001, '参数验证失败：分页范围超出安全整数范围')
+    }
+    const paginatedItems = items.slice(start, start + size)
     return successWithPagination(paginatedItems, {
-      current: Number(current),
-      pageSize: Number(pageSize),
+      current: page,
+      pageSize: size,
       total,
       totalPages,
     })

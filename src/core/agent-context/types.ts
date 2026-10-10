@@ -31,6 +31,8 @@ export interface Message {
   id?: string          // unique message ID
   role: MessageRole
   content: string | any[]
+  /** Actual provider input after attachment extraction; UI content remains separate. */
+  modelInputContent?: string | any[]
   reasoningContent?: string // for Deepseek R1 thinking mode
   toolCall?: ToolCall
   toolCallId?: string  // for tool result messages
@@ -131,6 +133,9 @@ export interface Tool {
 // ─── Storage Interfaces (forward declarations) ────────────────────────────────
 
 export interface ConversationHistory {
+  /** Compaction retains the complete, explicitly searchable transcript. */
+  readonly retainsArchive?: boolean
+  searchArchive?(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>, options: HistorySearchOptions): Promise<HistorySearchResult>
   append(message: Message, ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<string>
   /** Returns windowed messages for LLM context (applying token window). */
   getHistory(ctx: Pick<AgentContext, 'tenantId' | 'sessionId' | 'inheritContext'>): Promise<Message[]>
@@ -142,7 +147,7 @@ export interface ConversationHistory {
    * getFullHistory(): archive data must never be fed back into the model
    * context automatically.
    */
-  getArchive?(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<ConversationArchive>
+  getArchive?(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>, page?: { offset: number; limit: number }): Promise<ConversationArchive>
   clear(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>, options?: { tombstone?: boolean }): Promise<void>
   summarize(ctx: AgentContext): Promise<void>
   /** 物理删除某条消息（及其对应的数据库行） */
@@ -170,15 +175,15 @@ export interface ConversationHistory {
    *
    * 第三参支持两种形态：
    * - `keepRecent?: number`（旧）：按条数保留最近 N 条原文
-   * - `{ keepRecentTokens?: number }`（新，推荐）：从尾部按 token 预算回溯保留，
-   *   保底 floor(n/2) 条 —— 对齐 Claude Code 的保留策略
+   * - `{ keepRecentTokens?: number, force?: boolean }`：按模型输入预算保留完整工具交换；
+   *   force 在请求已超压缩阈值时保证摘要至少覆盖一部分历史。
    *
    * 返回值：压缩前后 token 统计（供手动压缩端点回显 / 审计日志用）
    */
   compress(
     ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>,
-    summarizeFn: (messages: Message[]) => Promise<string>,
-    keepRecent?: number | { keepRecentTokens?: number },
+    summarizeFn: (messages: Message[], evidence?: CompactionArchiveEvidence) => Promise<string>,
+    keepRecent?: number | { keepRecentTokens?: number; force?: boolean },
   ): Promise<{ preTokens: number; postTokens: number }>
   /**
    * Micro-compact：把最近 keepRecent 条消息之前的 tool 结果内容替换为占位符，
@@ -191,8 +196,33 @@ export interface ConversationHistory {
   ): Promise<{ cleared: number; freedTokens: number }>
 }
 
+/** Storage-authenticated original messages covered by the next archive summary. */
+export interface CompactionArchiveEvidence {
+  /** Actual system rows after edits/deletions; excludes generated summaries. */
+  systemMessages: readonly Message[]
+}
+
+export interface HistorySearchOptions {
+  query?: string
+  messageId?: string
+  role?: MessageRole
+  offset?: number
+  limit?: number
+}
+
+export interface HistorySearchResult {
+  messages: Message[]
+  totalMatches: number
+  nextOffset: number | null
+  backend: 'jsonl' | 'sqlite'
+}
+
 export interface ConversationArchive {
   messages: Message[]
+  /** Complete transcript count even when only one page is materialized. */
+  totalMessageCount?: number
+  /** Opaque snapshot identity used to refresh pages after same-count edits. */
+  archiveRevision?: string
   /** True when the current context is a compacted projection of the archive. */
   compressed: boolean
   /** The latest summary marker, when the backend retained one. */

@@ -1,7 +1,7 @@
 import type {
   Agent, CreateAgentInput, UpdateAgentInput, SseEvent,
   KnowledgeBase, KnowledgeDocument, KnowledgeDocumentDetail, KnowledgeSearchResult,
-  McpServer, CreateMcpServerInput,
+  McpServer, CreateMcpServerInput, UpdateMcpServerInput,
   MemoryEntry, Task, CreateTaskInput, Tool,
 } from '@core/types'
 
@@ -626,7 +626,7 @@ export const mcpApi = {
   },
 
   // PUT /mcp/servers/:id
-  update: async (id: string, input: Partial<CreateMcpServerInput>, params?: { path?: string; scope?: 'project' | 'global' }) => {
+  update: async (id: string, input: UpdateMcpServerInput, params?: { path?: string; scope?: 'project' | 'global' }) => {
     const res = await request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}${mcpApi._query(params)}`, {
       method: 'PUT',
       body: JSON.stringify(input),
@@ -635,7 +635,7 @@ export const mcpApi = {
   },
 
   // PATCH /mcp/servers/:id
-  patch: async (id: string, input: Partial<CreateMcpServerInput>, params?: { path?: string; scope?: 'project' | 'global' }) => {
+  patch: async (id: string, input: UpdateMcpServerInput, params?: { path?: string; scope?: 'project' | 'global' }) => {
     const res = await request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}${mcpApi._query(params)}`, {
       method: 'PATCH',
       body: JSON.stringify(input),

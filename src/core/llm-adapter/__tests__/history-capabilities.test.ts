@@ -10,8 +10,10 @@ import type { Message } from '../../agent-context/index.js'
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks() })
 
 const summary = '【历史上下文摘要】保留 CRLF；不要改动用户手写文件。'
+const extractedAttachment = 'Retained attachment: DECISION=43; reuse the same idempotency key.'
 const messages: Message[] = [
   { role: 'system', content: summary, metadata: { isCompactSummary: true } },
+  { role: 'user', content: 'uploaded-contract-display-only', modelInputContent: extractedAttachment },
   { role: 'user', content: '继续修复' },
 ]
 const systemPrompt = 'You are a coding assistant.'
@@ -54,11 +56,14 @@ describe('compacted constraints reach the real provider request', () => {
       expect(text.split(summary)).toHaveLength(2)
       expect(text).toContain(systemPrompt)
       expect(text).toContain('继续修复')
+      expect(text.split(extractedAttachment)).toHaveLength(2)
+      expect(text).not.toContain('uploaded-contract-display-only')
       if (provider === 'anthropic') {
         expect(payload.system).toBe(systemPrompt)
         expect(payload.messages[0].role).toBe('user')
       }
     }
+    expect(messages[1].content).toBe('uploaded-contract-display-only')
   })
 })
 

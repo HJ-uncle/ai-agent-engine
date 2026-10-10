@@ -3,9 +3,32 @@ import { getDb } from '../sqlite/db.js'
 import type { Row } from '@libsql/client'
 import { v4 as uuidv4 } from 'uuid'
 import { estimateTokens } from '../../core/utils/tokens.js'
+import { estimateModelHistoryTokens } from '../../core/utils/model-context.js'
+import { compressionSplitIndex, type CompressionOptions } from './compression.js'
 import { applyOSMMultiplier } from '../../core/osm.js'
+import { serializeMessageMetadata, restoreModelInputContent } from './model-input-content.js'
 
 type Ctx = { tenantId: string; sessionId: string }
+
+// Micro-compaction changes the model projection to a short marker, but the
+// original tool output remains part of the user-visible transcript.  Keep the
+// payload in message metadata so old SQLite databases need no schema change.
+const MICRO_COMPACT_ARCHIVE_KEY = '__aetherMicroCompactArchive'
+
+function restoreMicroCompactedTool(message: Message): Message {
+  if (message.role !== 'tool' || message.content !== '[tool result cleared]' || !message.metadata || typeof message.metadata !== 'object') return message
+  const metadata = message.metadata as Record<string, unknown>
+  const archived = metadata[MICRO_COMPACT_ARCHIVE_KEY]
+  if (!archived || typeof archived !== 'object' || typeof (archived as { content?: unknown }).content !== 'string') return message
+  const { [MICRO_COMPACT_ARCHIVE_KEY]: _internal, ...visibleMetadata } = metadata
+  const original = archived as { content: string; tokens?: number }
+  return {
+    ...message,
+    content: original.content,
+    ...(typeof original.tokens === 'number' ? { tokens: original.tokens } : {}),
+    metadata: visibleMetadata,
+  }
+}
 
 function rowToMessage(row: Row): Message & { conversationId?: string } {
   const role = row['role'] as string
@@ -61,6 +84,7 @@ function rowToMessage(row: Row): Message & { conversationId?: string } {
       /* ignore malformed JSON */
     }
   }
+  restoreModelInputContent(msg)
   if (tool_call_id) {
     msg.toolCallId = tool_call_id
     msg.toolName = tool_name ?? undefined
@@ -168,14 +192,14 @@ export class SQLiteConversationHistory implements ConversationHistory {
         message.role,
         typeof message.content === 'string' ? message.content : JSON.stringify(message.content),
         message.reasoningContent ?? null,
-        message.toolCallId ?? null,
+        message.toolCallId ?? message.toolCall?.id ?? null,
         message.toolCall?.name ?? null,
         message.toolName ?? null,
         message.toolCall ? JSON.stringify(message.toolCall.args) : null,
         message.tokens ?? 0,
         message.usage ? JSON.stringify(message.usage) : null,
         message.modelId ?? null,
-        message.metadata ? JSON.stringify(message.metadata) : null,
+        serializeMessageMetadata(message),
         ctx.tenantId, ctx.sessionId, messageId,
       ],
     })
@@ -212,7 +236,9 @@ export class SQLiteConversationHistory implements ConversationHistory {
    * append-only transcript.
    */
   async getArchive(ctx: Ctx): Promise<ConversationArchive> {
-    const messages = await this.getFullHistory(ctx)
+    // getFullHistory is the compact model projection.  Restore any tool
+    // output retained by micro-compaction only for this explicit user archive.
+    const messages = (await this.getFullHistory(ctx)).map(restoreMicroCompactedTool)
     const summaryMessage = messages.find((message) => {
       const metadata = message.metadata as Record<string, unknown> | undefined
       return message.role === 'system' && metadata?.isCompactSummary === true
@@ -318,7 +344,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
       args: [
         typeof content === 'string' ? content : JSON.stringify(content), 
         tokens, 
-        metadata ? JSON.stringify(metadata) : null,
+        serializeMessageMetadata({ metadata }),
         messageId, 
         tenantId
       ],
@@ -566,14 +592,14 @@ export class SQLiteConversationHistory implements ConversationHistory {
    *
    * 保留策略（对齐 Claude Code）：
    * - 数值参数 `keepRecent`（旧）：按条数保留最近 N 条原文
-   * - `{ keepRecentTokens }`（新）：从尾部按 token 预算回溯保留，保底 floor(n/2) 条
+   * - `{ keepRecentTokens }`：按模型输入预算保留完整工具交换
    *
    * 重建包在事务里：clear + append 任一失败整体回滚，不留「历史已删摘要未写」的半重建状态。
    */
   async compress(
     ctx: Ctx,
     summarizeFn: (messages: Message[]) => Promise<string>,
-    keepRecent: number | { keepRecentTokens?: number } = 6,
+    keepRecent: number | CompressionOptions = 6,
   ): Promise<{ preTokens: number; postTokens: number }> {
     const db = getDb()
     const result = await db.execute({
@@ -585,27 +611,8 @@ export class SQLiteConversationHistory implements ConversationHistory {
     })
     const allMessages = result.rows.map(rowToMessage)
 
-    const tokensBefore = allMessages.reduce((s, m) => s + (m.tokens ?? estimateTokens(m.content)), 0)
-
-    // 切分点：数值按条数；对象按 token 预算回溯 + 保底一半
-    let splitIdx: number
-    if (typeof keepRecent === 'number') {
-      splitIdx = Math.max(0, allMessages.length - keepRecent)
-    } else {
-      const budget = keepRecent.keepRecentTokens ?? 20000
-      const floor = Math.max(1, Math.floor(allMessages.length / 2))
-      let acc = 0
-      splitIdx = 0
-      for (let i = allMessages.length - 1; i >= 0; i--) {
-        acc += allMessages[i].tokens ?? estimateTokens(allMessages[i].content)
-        const kept = allMessages.length - i
-        if (acc >= budget && kept >= floor) {
-          splitIdx = i
-          break
-        }
-      }
-      if (allMessages.length - splitIdx < floor) splitIdx = Math.max(0, allMessages.length - floor)
-    }
+    const tokensBefore = estimateModelHistoryTokens(allMessages)
+    const splitIdx = compressionSplitIndex(allMessages, keepRecent)
 
     const olderMessages = allMessages.slice(0, splitIdx)
     const recentMessages = allMessages.slice(splitIdx)
@@ -640,14 +647,14 @@ export class SQLiteConversationHistory implements ConversationHistory {
             msg.role,
             typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
             msg.reasoningContent ?? null,
-            msg.toolCallId ?? null,
+            msg.toolCallId ?? msg.toolCall?.id ?? null,
             msg.toolCall?.name ?? null,
             msg.toolName ?? null,
             msg.toolCall ? JSON.stringify(msg.toolCall.args) : null,
             msg.tokens ?? 0,
             msg.usage ? JSON.stringify(msg.usage) : null,
             msg.modelId ?? null,
-            msg.metadata ? JSON.stringify(msg.metadata) : null,
+            serializeMessageMetadata(msg),
             (msg.createdAt ?? Date.now()) / 1000,
           ],
         })
@@ -658,8 +665,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
       throw e
     }
 
-    const tokensAfter =
-      summaryTokens + recentMessages.reduce((s, m) => s + (m.tokens ?? estimateTokens(m.content)), 0)
+    const tokensAfter = estimateModelHistoryTokens(rebuilt)
     console.log(`[history] compress: ${tokensBefore} → ${tokensAfter} tokens (freed ${tokensBefore - tokensAfter})`)
     return { preTokens: tokensBefore, postTokens: tokensAfter }
   }
@@ -683,7 +689,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
 
     // 取该会话全部消息（按写入顺序），排除最近 keepRecent 条消息范围内的
     const all = await db.execute({
-      sql: `SELECT id, role, content, tokens FROM conversations
+      sql: `SELECT id, role, content, tokens, metadata FROM conversations
             WHERE tenant_id = ? AND session_id = ?
             ORDER BY created_at ASC, id ASC`,
       args: [ctx.tenantId, ctx.sessionId],
@@ -708,9 +714,20 @@ export class SQLiteConversationHistory implements ConversationHistory {
         if (!content || content === placeholder) continue
         if (id >= cutoffId && (maxChars === undefined || content.length <= maxChars)) continue
         const oldTokens = Number(row['tokens'] ?? 0) || estimateTokens(content)
+        let metadata: Record<string, unknown>
+        try {
+          const parsed = row['metadata'] ? JSON.parse(String(row['metadata'])) : {}
+          metadata = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}
+        } catch {
+          metadata = {}
+        }
+        // Cleared rows were skipped above. If the message was explicitly edited
+        // since a prior pass, its current output supersedes the old archive.
+        metadata[MICRO_COMPACT_ARCHIVE_KEY] = { content, tokens: oldTokens }
+        metadata.outputPreview = content
         await tx.execute({
-          sql: `UPDATE conversations SET content = ?, tokens = ? WHERE id = ?`,
-          args: [placeholder, placeholderTokens, id],
+          sql: `UPDATE conversations SET content = ?, tokens = ?, metadata = ? WHERE id = ?`,
+          args: [placeholder, placeholderTokens, JSON.stringify(metadata), id],
         })
         cleared++
         freedTokens += Math.max(0, oldTokens - placeholderTokens)

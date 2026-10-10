@@ -50,7 +50,7 @@ Thumbs.db
 .vscode/
 .idea/
 .trae/
-workspace
+/workspace/
 .codemap/
 .codemaker/codemap/
 .codemaker/codeindex/
@@ -65,3 +65,4 @@ workspace
 .e2e-remote-final/
 .e2e-remote-core-final/
 .tmp
+test-projects

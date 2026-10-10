@@ -9,7 +9,7 @@
  *
  * 与 SQLite 实现的语义差异：
  * - deleteMessagesAfterId 的入参从自增 rowid 改为 dbSeq（每行单调递增序号）；
- *   truncate 取 min(afterSeq)，多次截断以最早的为截止，不会「复活」中间消息
+ *   truncate 只删除该墓碑之前 dbSeq > afterSeq 的消息，后续追加不受旧截断影响
  * - 删除是逻辑删（tombstone 行），物理清理只发生在 clear（rename .bak）时
  *
  * 落盘路径：`<DATA_DIR目录>/sessions/<tenantId>/<sessionId>.jsonl`
@@ -18,10 +18,18 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import type { AgentContext, ConversationArchive, ConversationHistory, Message } from '../../core/agent-context/types.js'
+import { createInterface } from 'node:readline'
+import type { AgentContext, CompactionArchiveEvidence, ConversationArchive, ConversationHistory, HistorySearchOptions, HistorySearchResult, Message } from '../../core/agent-context/types.js'
 import { estimateTokens } from '../../core/utils/tokens.js'
+import { estimateModelHistoryTokens } from '../../core/utils/model-context.js'
+import { compressionSplitIndex, type CompressionOptions } from './compression.js'
 
 type Ctx = Pick<AgentContext, 'tenantId' | 'sessionId'>
+
+const CLEARED_TOOL_RESULT = '[tool result cleared]'
+// Instances share write ordering for the same physical archive; root paths
+// isolate tenants with the same ids in different engine data directories.
+const sessionWriteQueues = new Map<string, Promise<void>>()
 
 /** 一行 JSONL 的信封（对齐 Claude Code 公共字段 + 引擎扩展） */
 interface JsonlRow {
@@ -50,8 +58,12 @@ interface JsonlRow {
   // update 行
   targetUuid?: string
   content?: string | any[]
+  modelInputContent?: string | any[] | null
   tokens?: number
   metadata?: unknown
+  /** Original tool output retained separately from the compact model content. */
+  archiveContent?: Message['content']
+  archiveTokens?: number
   // tombstone 行
   scope?: 'message' | 'conversation' | 'truncate' | 'clear'
   afterSeq?: number
@@ -70,14 +82,78 @@ interface SessionState {
   rawTokens: number
   /** 缓存失效依据 */
   mtimeMs: number
+  ctimeMs: number
   size: number
+  ino: number
+  dev: number
+  /** Fold rules must also apply to newly appended rows, including legacy tombstones. */
+  visibleAfterSeq: number
+  deletedUuids: Set<string>
+  deletedConvIds: Set<string>
+  cacheBytes: number
+}
+
+function collectUpdate(updates: Map<string, JsonlRow>, row: JsonlRow): void {
+  const prior = updates.get(row.targetUuid!)
+  // Legacy micro-compaction wrote an ordinary update without an archive
+  // payload. Recover the latest edited value (or the original message below)
+  // instead of treating the cleared marker as a user edit.
+  if (row.content === CLEARED_TOOL_RESULT) {
+    updates.set(row.targetUuid!, { ...prior, ...row,
+      archiveContent: row.archiveContent ?? prior?.archiveContent
+        ?? (prior?.content !== CLEARED_TOOL_RESULT ? prior?.content : undefined),
+      archiveTokens: row.archiveTokens ?? prior?.archiveTokens
+        ?? (prior?.content !== CLEARED_TOOL_RESULT ? prior?.tokens : undefined),
+      metadata: row.metadata ?? prior?.metadata,
+    })
+  } else {
+    updates.set(row.targetUuid!, row)
+  }
+}
+
+function applyUpdate(message: Message, update: JsonlRow, archive = false): void {
+  const compacted = message.role === 'tool' && update.content === CLEARED_TOOL_RESULT
+  const originalContent = update.archiveContent ?? message.content
+  const originalTokens = update.archiveTokens ?? message.tokens
+  if (update.content !== undefined) message.content = compacted && archive ? originalContent : update.content
+  if (typeof update.tokens === 'number') message.tokens = compacted && archive ? originalTokens : update.tokens
+  if (update.metadata !== undefined) message.metadata = update.metadata
+  // User edits invalidate the attachment/provider snapshot. Legacy content
+  // updates also reset it; micro-compacting tool output does not change input.
+  if (typeof update.modelInputContent === 'string' || Array.isArray(update.modelInputContent)) message.modelInputContent = update.modelInputContent
+  else if (update.modelInputContent === null || update.content !== undefined && !compacted) delete message.modelInputContent
+  if (compacted) {
+    const metadata = message.metadata && typeof message.metadata === 'object' && !Array.isArray(message.metadata)
+      ? message.metadata as Record<string, unknown> : {}
+    message.metadata = { ...metadata, outputPreview: typeof originalContent === 'string' ? originalContent : JSON.stringify(originalContent) }
+  }
+}
+
+/** A truncate deletes older rows only. Suffix minima make repeated cuts O(log N) per row. */
+function truncateFilter(cuts: Array<{ ordinal: number; afterSeq: number }>): (seq: number, ordinal: number) => boolean {
+  const sorted = cuts.sort((left, right) => left.ordinal - right.ordinal)
+  let floor = Infinity
+  for (let index = sorted.length - 1; index >= 0; index--) { floor = Math.min(floor, sorted[index].afterSeq); sorted[index].afterSeq = floor }
+  return (seq, ordinal) => {
+    let left = 0, right = sorted.length
+    while (left < right) {
+      const middle = (left + right) >>> 1
+      if (sorted[middle].ordinal <= ordinal) left = middle + 1
+      else right = middle
+    }
+    return left < sorted.length && seq > sorted[left].afterSeq
+  }
 }
 
 export class JSONLConversationHistory implements ConversationHistory {
+  readonly retainsArchive = true
   private readonly rootDir: string
   private readonly maxTokens?: number
   private readonly states = new Map<string, SessionState>()
-  private readonly writeQueues = new Map<string, Promise<void>>()
+  private cachedBytes = 0
+  private readonly maxCachedSessions = 64
+  private readonly maxCachedBytes = 64 * 1024 * 1024
+  private readonly writeQueues = sessionWriteQueues
   /** 进程内墓碑（对齐 SQLite 实现：clear 后短时间内拒绝写入，防流式回写复活） */
   private readonly tombstones = new Map<string, number>()
 
@@ -92,24 +168,53 @@ export class JSONLConversationHistory implements ConversationHistory {
   }
 
   private filePath(ctx: Ctx): string {
-    return path.join(this.rootDir, ctx.tenantId, `${ctx.sessionId}.jsonl`)
+    const directory = this.tenantPath(ctx.tenantId)
+    this.validateSegment(ctx.sessionId)
+    const file = path.resolve(directory, `${ctx.sessionId}.jsonl`)
+    if (path.dirname(file) !== directory) throw new Error('Conversation path escapes its tenant directory')
+    this.assertNotSymbolicLink(file, 'Conversation archive')
+    return file
   }
 
   private migratedPath(ctx: Ctx): string {
-    return path.join(this.rootDir, ctx.tenantId, `${ctx.sessionId}.migrated`)
+    const marker = this.filePath(ctx).replace(/\.jsonl$/, '.migrated')
+    this.assertNotSymbolicLink(marker, 'Conversation migration marker')
+    return marker
+  }
+
+  private assertNotSymbolicLink(file: string, label: string): void {
+    try {
+      // existsSync follows the target and misses dangling links. lstat checks
+      // the entry itself before a read/write could escape the tenant path.
+      if (fs.lstatSync(file).isSymbolicLink()) throw new Error(`${label} cannot be a symbolic link`)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+  }
+
+  private validateSegment(value: string): void {
+    if (typeof value !== 'string' || !value || value === '.' || value === '..' || /[\\/:*?"<>|\u0000-\u001f]/.test(value)
+      || /[. ]$/.test(value) || /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(value)) {
+      throw new Error('Conversation tenant/session identifier must be a safe single path segment')
+    }
+  }
+
+  private tenantPath(tenantId: string): string {
+    this.validateSegment(tenantId)
+    const root = path.resolve(this.rootDir), directory = path.resolve(root, tenantId)
+    if (path.dirname(directory) !== root) throw new Error('Conversation tenant path escapes the archive root')
+    this.assertNotSymbolicLink(directory, 'Conversation tenant directory')
+    return directory
   }
 
   /** 串行化同一会话的写操作，避免并发 append 交错写坏行 */
   private enqueue<T>(key: string, fn: () => Promise<T>): Promise<T> {
-    const prev = this.writeQueues.get(key) ?? Promise.resolve()
+    const queueKey = `${path.resolve(this.rootDir)}\0${key}`
+    const prev = this.writeQueues.get(queueKey) ?? Promise.resolve()
     const next = prev.then(fn, fn)
-    this.writeQueues.set(
-      key,
-      next.then(
-        () => undefined,
-        () => undefined,
-      ),
-    )
+    const settled = next.then(() => undefined, () => undefined)
+    this.writeQueues.set(queueKey, settled)
+    void settled.then(() => { if (this.writeQueues.get(queueKey) === settled) this.writeQueues.delete(queueKey) })
     return next
   }
 
@@ -119,6 +224,24 @@ export class JSONLConversationHistory implements ConversationHistory {
   }
 
   // ─── 读取与折叠 ──────────────────────────────────────────────
+
+  private matchesFile(state: SessionState, stat: fs.Stats): boolean {
+    return state.mtimeMs === stat.mtimeMs && state.ctimeMs === stat.ctimeMs && state.size === stat.size && state.ino === stat.ino && state.dev === stat.dev
+  }
+
+  /** Cache only the active projection; evicting a cache never deletes durable history. */
+  private cacheState(key: string, state: SessionState, bytes?: number): void {
+    const previous = this.states.get(key)
+    if (previous) { this.cachedBytes -= previous.cacheBytes; this.states.delete(key) }
+    state.cacheBytes = bytes ?? state.messages.reduce((sum, message) => sum + Buffer.byteLength(JSON.stringify(message)) + 128, 1024)
+      + [...state.deletedUuids, ...state.deletedConvIds].reduce((sum, id) => sum + Buffer.byteLength(id) + 64, 0)
+    this.states.set(key, state); this.cachedBytes += state.cacheBytes
+    while (this.states.size > this.maxCachedSessions || this.cachedBytes > this.maxCachedBytes) {
+      const oldest = this.states.keys().next().value as string | undefined
+      if (oldest === undefined) break
+      this.cachedBytes -= this.states.get(oldest)!.cacheBytes; this.states.delete(oldest)
+    }
+  }
 
   private async loadSession(ctx: Ctx): Promise<SessionState> {
     const key = this.sessionKey(ctx)
@@ -131,7 +254,8 @@ export class JSONLConversationHistory implements ConversationHistory {
     }
 
     const cached = this.states.get(key)
-    if (cached && stat && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    if (cached && stat && this.matchesFile(cached, stat)) {
+      this.states.delete(key); this.states.set(key, cached)
       return cached
     }
 
@@ -152,11 +276,18 @@ export class JSONLConversationHistory implements ConversationHistory {
       nextSeq: 1,
       rawTokens: 0,
       mtimeMs: stat?.mtimeMs ?? 0,
+      ctimeMs: stat?.ctimeMs ?? 0,
       size: stat?.size ?? 0,
+      ino: stat?.ino ?? 0,
+      dev: stat?.dev ?? 0,
+      visibleAfterSeq: -1,
+      deletedUuids: new Set(),
+      deletedConvIds: new Set(),
+      cacheBytes: 0,
     }
 
     if (!stat) {
-      this.states.set(key, state)
+      this.cacheState(key, state)
       return state
     }
 
@@ -165,6 +296,7 @@ export class JSONLConversationHistory implements ConversationHistory {
     const rowOrdinals = new Map<JsonlRow, number>()
     const tombstoneRows: JsonlRow[] = []
     const updates = new Map<string, JsonlRow>()
+    const summaries: JsonlRow[] = []
     let lastSummary: JsonlRow | null = null
     let lastSummaryOrdinal = -1
     let rawOrdinal = 0
@@ -185,15 +317,15 @@ export class JSONLConversationHistory implements ConversationHistory {
       rowOrdinals.set(row, currentOrdinal)
       if (typeof row.dbSeq === 'number' && row.dbSeq > maxSeq) maxSeq = row.dbSeq
       if (row.type === 'tombstone') tombstoneRows.push(row)
-      else if (row.type === 'update' && row.targetUuid) updates.set(row.targetUuid, row)
-      else if (row.type === 'summary') { lastSummary = row; lastSummaryOrdinal = currentOrdinal }
+      else if (row.type === 'update' && row.targetUuid) collectUpdate(updates, row)
+      else if (row.type === 'summary') summaries.push(row)
       else rows.push(row)
     }
 
     state.nextSeq = maxSeq + 1
 
     // 折叠 tombstone
-    let cutoffSeq = Infinity
+    const truncations: Array<{ ordinal: number; afterSeq: number }> = []
     let clearSeq = -1
     let clearOrdinal = -1
     const deletedUuids = new Set<string>()
@@ -204,32 +336,48 @@ export class JSONLConversationHistory implements ConversationHistory {
         clearSeq = Math.max(clearSeq, t.dbSeq ?? 0)
         clearOrdinal = Math.max(clearOrdinal, rowOrdinals.get(t) ?? -1)
       } else if (t.scope === 'truncate' && typeof t.afterSeq === 'number') {
-        cutoffSeq = Math.min(cutoffSeq, t.afterSeq)
+        truncations.push({ ordinal: rowOrdinals.get(t) ?? -1, afterSeq: t.afterSeq })
       } else if (t.scope === 'message' && t.targetUuid) {
         deletedUuids.add(t.targetUuid)
       } else if (t.scope === 'conversation' && t.conversationId) {
         deletedConvIds.add(t.conversationId)
       }
     }
+    const isTruncated = truncateFilter(truncations)
+    for (const summary of summaries) {
+      const ordinal = rowOrdinals.get(summary) ?? -1
+      if (ordinal > clearOrdinal && !isTruncated(summary.dbSeq, ordinal)) { lastSummary = summary; lastSummaryOrdinal = ordinal }
+    }
 
-    // summary 跳跃：leafSeq 及之前的消息被摘要覆盖
-    const summaryFloor = lastSummary && typeof lastSummary.leafSeq === 'number' ? lastSummary.leafSeq : -1
+    // summary 跳跃：leafSeq 及之前的消息被摘要覆盖. Legacy JSONL rows
+    // carried only leafUuid, so derive the durable sequence from the original
+    // row instead of letting every pre-summary message reappear after restart.
+    const summaryLeaf = lastSummary?.leafUuid ? rows.find(row => row.uuid === lastSummary!.leafUuid) : undefined
+    const legacySummaryTail = lastSummary
+      ? [...rows, ...tombstoneRows]
+        .filter(row => (rowOrdinals.get(row) ?? -1) < lastSummaryOrdinal)
+        .reduce<JsonlRow | undefined>((tail, row) => !tail || row.dbSeq > tail.dbSeq ? row : tail, undefined)
+      : undefined
+    const summaryFloor = lastSummary
+      ? (typeof lastSummary.leafSeq === 'number'
+        ? lastSummary.leafSeq
+        : summaryLeaf?.dbSeq ?? legacySummaryTail?.dbSeq ?? -1)
+      : -1
+    state.visibleAfterSeq = Math.max(clearSeq, summaryFloor)
+    state.deletedUuids = deletedUuids
+    state.deletedConvIds = deletedConvIds
 
     let lastUuid: string | null = null
     for (const row of rows) {
       if (row.dbSeq <= clearSeq) continue
       if ((rowOrdinals.get(row) ?? -1) <= clearOrdinal) continue
-      if (row.dbSeq > cutoffSeq) continue
+      if (isTruncated(row.dbSeq, rowOrdinals.get(row) ?? -1)) continue
       if (row.dbSeq <= summaryFloor) continue
       if (deletedUuids.has(row.uuid)) continue
       if (row.conversationId && deletedConvIds.has(row.conversationId)) continue
       const msg = this.rowToMessage(row)
       const upd = updates.get(row.uuid)
-      if (upd) {
-        if (upd.content !== undefined) msg.content = upd.content
-        if (typeof upd.tokens === 'number') msg.tokens = upd.tokens
-        if (upd.metadata !== undefined) msg.metadata = upd.metadata
-      }
+      if (upd) applyUpdate(msg, upd)
       state.messages.push(msg)
       if (msg.id) state.byId.set(msg.id, msg)
       state.rawTokens += msg.tokens ?? 0
@@ -243,14 +391,14 @@ export class JSONLConversationHistory implements ConversationHistory {
         role: 'system',
         content: `【历史上下文摘要】${lastSummary.summary}`,
         tokens: estimateTokens(lastSummary.summary),
-        metadata: { isCompactSummary: true, transcriptPath: lastSummary.transcriptPath },
+        metadata: { isCompactSummary: true, transcriptPath: lastSummary.transcriptPath, compactionLeafSeq: summaryFloor },
       }
       state.messages.unshift(summaryMsg)
       state.rawTokens += summaryMsg.tokens ?? 0
     }
 
     state.lastUuid = lastUuid
-    this.states.set(key, state)
+    this.cacheState(key, state)
     return state
   }
 
@@ -261,6 +409,7 @@ export class JSONLConversationHistory implements ConversationHistory {
       role: (p.role as Message['role']) ?? (row.type as Message['role']),
       content: (p.content as Message['content']) ?? '',
     }
+    if (typeof p.modelInputContent === 'string' || Array.isArray(p.modelInputContent)) msg.modelInputContent = p.modelInputContent
     if (typeof p.tokens === 'number') msg.tokens = p.tokens
     if (typeof p.reasoningContent === 'string') msg.reasoningContent = p.reasoningContent
     if (p.toolCall !== undefined) msg.toolCall = p.toolCall as Message['toolCall']
@@ -284,6 +433,7 @@ export class JSONLConversationHistory implements ConversationHistory {
       content: msg.content,
       tokens: msg.tokens ?? 0,
     }
+    if (msg.modelInputContent !== undefined) p.modelInputContent = msg.modelInputContent
     if (msg.reasoningContent !== undefined) p.reasoningContent = msg.reasoningContent
     if (msg.toolCall !== undefined) p.toolCall = msg.toolCall
     if (msg.toolCallId !== undefined) p.toolCallId = msg.toolCallId
@@ -308,7 +458,8 @@ export class JSONLConversationHistory implements ConversationHistory {
     try {
       const marker = (await fs.promises.readFile(migrated, 'utf8')).trim()
       if (marker === 'cleared' || marker.length > 0) return
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       // No marker yet; continue with the lazy legacy import below.
     }
     const { SQLiteConversationHistory } = await import('./history.js')
@@ -328,6 +479,7 @@ export class JSONLConversationHistory implements ConversationHistory {
     if (rows.length === 0) return
     const file = this.filePath(ctx)
     const tmp = `${file}.tmp`
+    this.assertNotSymbolicLink(tmp, 'Conversation migration temporary file')
     let seq = 1
     let parentUuid: string | null = null
     const lines: string[] = []
@@ -373,16 +525,42 @@ export class JSONLConversationHistory implements ConversationHistory {
         sessionId: ctx.sessionId,
         tenantId: ctx.tenantId,
         isSidechain: ctx.sessionId.startsWith('subagent-') || Boolean((ctx as Partial<AgentContext>).parentSessionId),
-        dbSeq: state.nextSeq++,
+        dbSeq: state.nextSeq,
         payload: this.messageToPayload({ ...message, id: uuid }),
         ...(typeof convId === 'string' ? { conversationId: convId } : {}),
       }
       const file = this.filePath(ctx)
+      const encoded = JSON.stringify(row) + '\n'
       await fs.promises.mkdir(path.dirname(file), { recursive: true })
-      await fs.promises.appendFile(file, JSON.stringify(row) + '\n')
-      state.lastUuid = uuid
-      state.rawTokens += message.tokens ?? 0
-      state.mtimeMs = 0 // 失效缓存，下次 load 重读
+      // Append is durable before advancing sequence/cache. A failed write must
+      // never make an unpersisted message visible or consume its dbSeq.
+      try { await fs.promises.appendFile(file, encoded) }
+      catch (error) { state.mtimeMs = 0; throw error }
+      const stat = await fs.promises.stat(file)
+      // Other instances/processes may append or replace the file. Rebuild on
+      // an unexpected tail/identity rather than hiding their records in cache.
+      if (stat.size !== state.size + Buffer.byteLength(encoded)
+        || state.size > 0 && (state.ino !== stat.ino || state.dev !== stat.dev)) {
+        state.mtimeMs = 0
+        return uuid
+      }
+      const persisted = JSON.parse(encoded) as JsonlRow
+      let addedBytes = 0
+      if (row.dbSeq > state.visibleAfterSeq
+        && !state.deletedUuids.has(uuid) && !(row.conversationId && state.deletedConvIds.has(row.conversationId))) {
+        const stored = this.rowToMessage(persisted)
+        // Replace the array so callers holding a previous read get a stable
+        // snapshot, as they did when append forced a complete rebuild.
+        state.messages = [...state.messages, stored]
+        state.byId.set(stored.id!, stored)
+        state.lastUuid = uuid
+        state.rawTokens += stored.tokens ?? 0
+        addedBytes = Buffer.byteLength(JSON.stringify(stored)) + 128
+      }
+      state.nextSeq = row.dbSeq + 1
+      state.mtimeMs = stat.mtimeMs; state.ctimeMs = stat.ctimeMs
+      state.size = stat.size; state.ino = stat.ino; state.dev = stat.dev
+      this.cacheState(key, state, state.cacheBytes + addedBytes)
       return uuid
     })
   }
@@ -410,7 +588,8 @@ export class JSONLConversationHistory implements ConversationHistory {
    * rows so they never consume the model context; this method is for an
    * explicit user archive view only.
    */
-  async getArchive(ctx: Ctx): Promise<ConversationArchive> {
+  async getArchive(ctx: Ctx, page?: { offset: number; limit: number }): Promise<ConversationArchive> {
+    if (page) return this.getArchivePage(ctx, page)
     // Trigger lazy migration and use the same cache/clear semantics as the
     // normal read path before opening the transcript directly.
     const current = await this.loadSession(ctx)
@@ -443,26 +622,26 @@ export class JSONLConversationHistory implements ConversationHistory {
     const updates = new Map<string, JsonlRow>()
     const deletedUuids = new Set<string>()
     const deletedConvIds = new Set<string>()
-    let truncateAfter = Infinity
+    const isTruncated = truncateFilter(entries.filter(({ row }) => row.type === 'tombstone' && row.scope === 'truncate' && typeof row.afterSeq === 'number')
+      .map(({ row, ordinal }) => ({ ordinal, afterSeq: row.afterSeq! })))
     let clearAfterOrdinal = -1
     let latestSummary: JsonlRow | undefined
 
     for (const { row, ordinal: rowOrdinal } of entries) {
       if (row.type === 'update' && row.targetUuid) {
-        updates.set(row.targetUuid, row)
+        collectUpdate(updates, row)
       } else if (row.type === 'tombstone') {
         if (row.scope === 'clear') {
           // clear() normally renames the file.  The fallback tombstone uses
           // dbSeq=0, so line order is the only reliable boundary here.
           clearAfterOrdinal = Math.max(clearAfterOrdinal, rowOrdinal)
-        } else if (row.scope === 'truncate' && typeof row.afterSeq === 'number') {
-          truncateAfter = Math.min(truncateAfter, row.afterSeq)
+          latestSummary = undefined
         } else if (row.scope === 'message' && row.targetUuid) {
           deletedUuids.add(row.targetUuid)
         } else if (row.scope === 'conversation' && row.conversationId) {
           deletedConvIds.add(row.conversationId)
         }
-      } else if (row.type === 'summary' && rowOrdinal > clearAfterOrdinal) {
+      } else if (row.type === 'summary' && rowOrdinal > clearAfterOrdinal && !isTruncated(row.dbSeq, rowOrdinal)) {
         latestSummary = row
       }
     }
@@ -471,21 +650,18 @@ export class JSONLConversationHistory implements ConversationHistory {
     for (const { row, ordinal: rowOrdinal } of entries) {
       if (row.type === 'summary' || row.type === 'update' || row.type === 'tombstone') continue
       if (rowOrdinal <= clearAfterOrdinal) continue
-      if (typeof row.dbSeq === 'number' && row.dbSeq > truncateAfter) continue
+      if (isTruncated(row.dbSeq, rowOrdinal)) continue
       if (deletedUuids.has(row.uuid)) continue
       if (row.conversationId && deletedConvIds.has(row.conversationId)) continue
       const message = this.rowToMessage(row)
       const update = updates.get(row.uuid)
-      if (update) {
-        if (update.content !== undefined) message.content = update.content
-        if (typeof update.tokens === 'number') message.tokens = update.tokens
-        if (update.metadata !== undefined) message.metadata = update.metadata
-      }
+      if (update) applyUpdate(message, update, true)
       messages.push(message)
     }
 
     return {
       messages,
+      totalMessageCount: messages.length,
       compressed: Boolean(latestSummary),
       ...(latestSummary?.summary ? {
         summary: {
@@ -501,9 +677,159 @@ export class JSONLConversationHistory implements ConversationHistory {
     }
   }
 
+  /** Materialize only the requested page, including on a cold/restarted reader. */
+  private async getArchivePage(ctx: Ctx, page: { offset: number; limit: number }): Promise<ConversationArchive> {
+    if (!Number.isSafeInteger(page.offset) || page.offset < 0 || !Number.isSafeInteger(page.limit) || page.limit < 1) throw new Error('Invalid archive page')
+    const file = this.filePath(ctx)
+    let archiveHandle: Awaited<ReturnType<typeof fs.promises.open>> | undefined
+    try { archiveHandle = await fs.promises.open(file, 'r') }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    if (!archiveHandle) {
+      await this.migrateFromSqlite(ctx)
+      try { archiveHandle = await fs.promises.open(file, 'r') }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    }
+    if (!archiveHandle) return { messages: [], totalMessageCount: 0, archiveRevision: 'empty', compressed: false, currentMessageCount: 0, backend: 'jsonl' }
+
+    // Pin both passes to the same file and append-only byte window, even when
+    // clear() renames the transcript while a page is being read.
+    const handle = archiveHandle
+    try {
+      const stat = await handle.stat()
+      const size = stat.size
+      const archiveRevision = crypto.createHash('sha256').update(`${size}:${stat.mtimeMs}`).digest('hex').slice(0, 32)
+      const rows = async function* () {
+        if (!size) return
+        const input = fs.createReadStream(file, { fd: handle.fd, autoClose: false, start: 0, encoding: 'utf8', end: size - 1 })
+        const lines = createInterface({ input, crlfDelay: Infinity })
+        let ordinal = 0
+        try {
+          for await (const line of lines) {
+            if (!line.trim()) continue
+            let row: JsonlRow
+            try { row = JSON.parse(line) as JsonlRow } catch { continue }
+            yield { row, ordinal: ordinal++ }
+          }
+        } finally { lines.close() }
+      }
+      const updates = new Map<string, JsonlRow>(), deleted = new Set<string>(), deletedTurns = new Set<string>()
+      const originalSequences = new Map<string, number>()
+      const truncations: Array<{ ordinal: number; afterSeq: number }> = []
+      const summaries: Array<{ ordinal: number; dbSeq: number; floor: number; hasSummary: boolean }> = []
+      let clearAfter = -1, latestSummary: JsonlRow | undefined, previousMessageSeq = -1
+      for await (const { row, ordinal } of rows()) {
+        if (row.payload && ['user', 'assistant', 'tool', 'system'].includes(row.type)) {
+          originalSequences.set(row.uuid, row.dbSeq)
+          previousMessageSeq = Math.max(previousMessageSeq, row.dbSeq)
+        }
+        if (row.type === 'update' && row.targetUuid) collectUpdate(updates, row)
+        else if (row.type === 'tombstone') {
+          previousMessageSeq = Math.max(previousMessageSeq, row.dbSeq ?? -1)
+          if (row.scope === 'clear') { clearAfter = Math.max(clearAfter, ordinal); summaries.length = 0 }
+          if (row.scope === 'truncate' && typeof row.afterSeq === 'number') truncations.push({ ordinal, afterSeq: row.afterSeq })
+          if (row.scope === 'message' && row.targetUuid) deleted.add(row.targetUuid)
+          if (row.scope === 'conversation' && row.conversationId) deletedTurns.add(row.conversationId)
+        } else if (row.type === 'summary' && ordinal > clearAfter) {
+          summaries.push({ ordinal, dbSeq: row.dbSeq, hasSummary: Boolean(row.summary), floor: typeof row.leafSeq === 'number' ? row.leafSeq
+            : row.leafUuid && originalSequences.has(row.leafUuid) ? originalSequences.get(row.leafUuid)! : previousMessageSeq })
+        }
+      }
+      const isTruncated = truncateFilter(truncations)
+      let selectedSummary: typeof summaries[number] | undefined
+      for (let index = summaries.length - 1; index >= 0; index--) {
+        if (!isTruncated(summaries[index].dbSeq, summaries[index].ordinal)) { selectedSummary = summaries[index]; break }
+      }
+      const summaryFloor = selectedSummary?.floor ?? -1
+      const messages: Message[] = []
+      let totalMessageCount = 0, currentMessageCount = selectedSummary?.hasSummary ? 1 : 0
+      for await (const { row, ordinal } of rows()) {
+        if (ordinal === selectedSummary?.ordinal && row.type === 'summary') latestSummary = row
+        if (!row.payload || !['user', 'assistant', 'tool', 'system'].includes(row.type)) continue
+        if (ordinal <= clearAfter || isTruncated(row.dbSeq, ordinal) || deleted.has(row.uuid) || row.conversationId && deletedTurns.has(row.conversationId)) continue
+        if (row.dbSeq > summaryFloor) currentMessageCount++
+        if (totalMessageCount >= page.offset && messages.length < page.limit) {
+          const message = this.rowToMessage(row), update = updates.get(row.uuid)
+          if (update) applyUpdate(message, update, true)
+          messages.push(message)
+        }
+        totalMessageCount++
+      }
+      return { messages, totalMessageCount, archiveRevision, compressed: Boolean(latestSummary), currentMessageCount, backend: 'jsonl',
+        ...(latestSummary?.summary ? { summary: { content: latestSummary.summary,
+          ...(typeof latestSummary.leafSeq === 'number' ? { leafSeq: latestSummary.leafSeq } : {}),
+          ...(typeof latestSummary.preTokens === 'number' ? { preTokens: latestSummary.preTokens } : {}),
+          ...(typeof latestSummary.postTokens === 'number' ? { postTokens: latestSummary.postTokens } : {}),
+          ...(latestSummary.transcriptPath ? { transcriptPath: latestSummary.transcriptPath } : {}),
+        } } : {}) }
+    } finally { await handle.close() }
+  }
+
   async getTokenCount(ctx: Ctx): Promise<number> {
     const windowed = await this.getHistory(ctx)
     return windowed.reduce((sum, m) => sum + (m.tokens ?? 0), 0)
+  }
+
+  /** Two bounded-memory passes; apply edits/deletions before returning archive evidence. */
+  async searchArchive(ctx: Ctx, options: HistorySearchOptions): Promise<HistorySearchResult> {
+    const file = this.filePath(ctx)
+    // A cold search must not materialize the active projection or the entire
+    // transcript. Only consult the legacy source when no JSONL file exists.
+    let archiveHandle: Awaited<ReturnType<typeof fs.promises.open>> | undefined
+    try { archiveHandle = await fs.promises.open(file, 'r') }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    if (!archiveHandle) {
+      await this.migrateFromSqlite(ctx)
+      try { archiveHandle = await fs.promises.open(file, 'r') }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    }
+    if (!archiveHandle) return { messages: [], totalMatches: 0, nextOffset: null, backend: 'jsonl' }
+    const handle = archiveHandle
+    try {
+      const size = (await handle.stat()).size
+      const rows = async function* () {
+        if (!size) return
+        const input = fs.createReadStream(file, { fd: handle.fd, autoClose: false, start: 0, encoding: 'utf8', end: size - 1 })
+        const lines = createInterface({ input, crlfDelay: Infinity })
+        let ordinal = 0
+        try {
+          for await (const line of lines) {
+            if (!line.trim()) continue
+            let row: JsonlRow
+            try { row = JSON.parse(line) as JsonlRow } catch { continue }
+            yield { row, ordinal: ordinal++ }
+          }
+        } finally { lines.close() }
+      }
+      const updates = new Map<string, JsonlRow>(), deleted = new Set<string>(), deletedTurns = new Set<string>()
+      const truncations: Array<{ ordinal: number; afterSeq: number }> = []
+      let clearAfter = -1
+      for await (const { row, ordinal } of rows()) {
+        if (row.type === 'update' && row.targetUuid) collectUpdate(updates, row)
+        if (row.type !== 'tombstone') continue
+        if (row.scope === 'clear') clearAfter = Math.max(clearAfter, ordinal)
+        if (row.scope === 'truncate' && typeof row.afterSeq === 'number') truncations.push({ ordinal, afterSeq: row.afterSeq })
+        if (row.scope === 'message' && row.targetUuid) deleted.add(row.targetUuid)
+        if (row.scope === 'conversation' && row.conversationId) deletedTurns.add(row.conversationId)
+      }
+      const isTruncated = truncateFilter(truncations)
+      const query = options.query?.toLocaleLowerCase() ?? ''
+      const offset = options.offset ?? 0, limit = options.limit ?? 10
+      const messages: Message[] = []
+      let totalMatches = 0
+      for await (const { row, ordinal } of rows()) {
+        if (!row.payload || !['user', 'assistant', 'tool', 'system'].includes(row.type)) continue
+        if (ordinal <= clearAfter || isTruncated(row.dbSeq, ordinal) || deleted.has(row.uuid) || row.conversationId && deletedTurns.has(row.conversationId)) continue
+        if (options.messageId && row.uuid !== options.messageId || options.role && row.type !== options.role) continue
+        const message = this.rowToMessage(row), update = updates.get(row.uuid)
+        if (update) applyUpdate(message, update, true)
+        const text = typeof message.content === 'string' ? message.content : JSON.stringify(message.content)
+        const inputText = typeof message.modelInputContent === 'string' ? message.modelInputContent : JSON.stringify(message.modelInputContent ?? '')
+        if (query && !text.toLocaleLowerCase().includes(query) && !inputText.toLocaleLowerCase().includes(query)) continue
+        if (totalMatches >= offset && messages.length < limit) messages.push(message)
+        totalMatches++
+      }
+      return { messages, totalMatches, nextOffset: offset + messages.length < totalMatches ? offset + messages.length : null, backend: 'jsonl' }
+    } finally { await handle.close() }
   }
 
   async getRawTokenCount(ctx: Ctx): Promise<number> {
@@ -513,8 +839,10 @@ export class JSONLConversationHistory implements ConversationHistory {
 
   async clear(ctx: Ctx, options?: { tombstone?: boolean }): Promise<void> {
     const key = this.sessionKey(ctx)
-    this.tombstones.set(key, Date.now())
     const file = this.filePath(ctx)
+    // Validate the marker before renaming history or setting a tombstone.
+    this.migratedPath(ctx)
+    this.tombstones.set(key, Date.now())
     await this.enqueue(key, async () => {
       try {
         if (fs.existsSync(file)) {
@@ -540,6 +868,8 @@ export class JSONLConversationHistory implements ConversationHistory {
       await fs.promises.mkdir(path.dirname(this.migratedPath(ctx)), { recursive: true })
       await fs.promises.writeFile(this.migratedPath(ctx), 'cleared')
     })
+    const cached = this.states.get(key)
+    if (cached) this.cachedBytes -= cached.cacheBytes
     this.states.delete(key)
   }
 
@@ -579,7 +909,7 @@ export class JSONLConversationHistory implements ConversationHistory {
   }
 
   async deleteByConversationId(conversationId: string, tenantId: string): Promise<number> {
-    const dir = path.join(this.rootDir, tenantId)
+    const dir = this.tenantPath(tenantId)
     let count = 0
     if (!fs.existsSync(dir)) return 0
     for (const name of fs.readdirSync(dir)) {
@@ -629,6 +959,7 @@ export class JSONLConversationHistory implements ConversationHistory {
       dbSeq: 0,
       targetUuid: messageId,
       content,
+      modelInputContent: null,
       tokens,
       metadata,
     })
@@ -672,6 +1003,11 @@ export class JSONLConversationHistory implements ConversationHistory {
         targetUuid: msg.id,
         content: placeholder,
         tokens: placeholderTokens,
+        metadata: msg.metadata,
+        // Keep the compact content in the update row for model replay.  The
+        // archive reader deliberately selects this separate field instead.
+        archiveContent: content,
+        archiveTokens: oldTokens,
       })
       cleared++
       freedTokens += Math.max(0, oldTokens - placeholderTokens)
@@ -691,14 +1027,16 @@ export class JSONLConversationHistory implements ConversationHistory {
     if (!ctx) return null
     const state = await this.loadSession(ctx)
     const msg = state.byId.get(messageId)
-    return (msg as Message & { conversationId?: string; dbId: number }) ?? null
+    if (msg) return msg as Message & { conversationId?: string; dbId: number }
+    const archived = await this.searchArchive(ctx, { messageId, limit: 1 })
+    return (archived.messages[0] as Message & { conversationId?: string; dbId: number }) ?? null
   }
 
   async getByConversationId(
     conversationId: string,
     tenantId: string,
   ): Promise<(Message & { conversationId?: string })[]> {
-    const dir = path.join(this.rootDir, tenantId)
+    const dir = this.tenantPath(tenantId)
     if (!fs.existsSync(dir)) return []
     const result: (Message & { conversationId?: string })[] = []
     for (const name of fs.readdirSync(dir)) {
@@ -732,44 +1070,28 @@ export class JSONLConversationHistory implements ConversationHistory {
 
   async compress(
     ctx: Ctx,
-    summarizeFn: (messages: Message[]) => Promise<string>,
-    keepRecentOrOpts?: number | { keepRecentTokens?: number },
+    summarizeFn: (messages: Message[], evidence?: CompactionArchiveEvidence) => Promise<string>,
+    keepRecentOrOpts?: number | CompressionOptions,
   ): Promise<{ preTokens: number; postTokens: number }> {
     const state = await this.loadSession(ctx)
     const all = state.messages
-    const preTokens = state.rawTokens
-    if (all.length < 4) return { preTokens, postTokens: preTokens }
-
-    // 保留策略（照抄 Claude Code）：从尾部按 token 预算回溯，保底一半条数。
-    // 兼容旧的 keepRecent 数值参数：按条数截。
-    let splitIdx: number
-    if (typeof keepRecentOrOpts === 'number') {
-      splitIdx = Math.max(0, all.length - keepRecentOrOpts)
-    } else {
-      const budget = keepRecentOrOpts?.keepRecentTokens ?? 20000
-      const floor = Math.max(1, Math.floor(all.length / 2))
-      let acc = 0
-      splitIdx = 0
-      for (let i = all.length - 1; i >= 0; i--) {
-        acc += all[i].tokens ?? 0
-        const kept = all.length - i
-        if (acc >= budget && kept >= floor) {
-          splitIdx = i
-          break
-        }
-      }
-      // 预算内未满足保底条数：至少保留 floor 条
-      if (all.length - splitIdx < floor) splitIdx = Math.max(0, all.length - floor)
-    }
+    const preTokens = estimateModelHistoryTokens(all)
+    const splitIdx = compressionSplitIndex(all, keepRecentOrOpts ?? {})
 
     const older = all.slice(0, splitIdx)
     const recent = all.slice(splitIdx)
     if (older.length === 0) return { preTokens, postTokens: preTokens }
 
-    const summary = await summarizeFn(older)
     const leaf = older[older.length - 1]
-    const leafSeq = ((leaf as unknown as Record<string, unknown>).dbId as number) ?? 0
-    const postTokens = estimateTokens(summary) + recent.reduce((s, m) => s + (m.tokens ?? 0), 0)
+    const leafSeq = ((leaf as unknown as Record<string, unknown>).dbId as number)
+      ?? (leaf.metadata?.isCompactSummary ? leaf.metadata.compactionLeafSeq : undefined) ?? 0
+    // Read actual system rows, not the legacy summary's textual role markers.
+    // Only rows covered by this summary belong here; recent rows stay verbatim.
+    const archivedSystems = await this.searchArchive(ctx, { role: 'system', limit: Number.MAX_SAFE_INTEGER })
+    const systemMessages = archivedSystems.messages.filter(message => message.role === 'system'
+      && !message.metadata?.isCompactSummary && (message as Message & { dbId: number }).dbId <= leafSeq)
+    const summary = await summarizeFn(older, { systemMessages })
+    const postTokens = estimateModelHistoryTokens([{ role: 'system', content: `【历史上下文摘要】${summary}` }, ...recent])
 
     await this.appendRow(ctx, {
       uuid: crypto.randomUUID(),
@@ -816,7 +1138,7 @@ export class JSONLConversationHistory implements ConversationHistory {
   > {
     const { getSubagentStore } = await import('../../core/subagent/store.js')
     const childSessions = new Set(await getSubagentStore().listChildSessionIds(tenantId))
-    const dir = path.join(this.rootDir, tenantId)
+    const dir = this.tenantPath(tenantId)
     const result: Array<{
       sessionId: string
       lastMessage?: string
@@ -870,13 +1192,16 @@ export class JSONLConversationHistory implements ConversationHistory {
 
   /** 全局定位消息所在会话：内存索引未命中时扫 tenant 目录 */
   private async locateMessage(messageId: string, tenantId: string): Promise<Ctx | null> {
-    const dir = path.join(this.rootDir, tenantId)
+    const dir = this.tenantPath(tenantId)
     if (!fs.existsSync(dir)) return null
     for (const name of fs.readdirSync(dir)) {
       if (!name.endsWith('.jsonl')) continue
       const sessionId = name.slice(0, -'.jsonl'.length)
       const state = await this.loadSession({ tenantId, sessionId })
       if (state.byId.has(messageId)) return { tenantId, sessionId }
+      // Compaction hides covered rows only from model replay. Editing,
+      // deleting and exact-ID lookup must still locate retained originals.
+      if ((await this.searchArchive({ tenantId, sessionId }, { messageId, limit: 1 })).messages.length) return { tenantId, sessionId }
     }
     return null
   }

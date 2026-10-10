@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { createConversationHistory } from '../../../storage/conversation/factory.js'
 import { SessionStore } from '../../../storage/session/index.js'
-import { success, fail, paginateArray } from '../response.js'
+import { success, fail, paginateArray, successWithPagination } from '../response.js'
 import { workspaceManager } from '../../../workspace/index.js'
 import { abortActiveChat } from './chat.js'
 import fs from 'node:fs'
@@ -13,6 +13,7 @@ import { rootRunStore } from '../../../storage/root-runs/index.js'
 import { withHistoryLock, invalidateSessionHistory, withSessionHistoryMutation, bindHistoryGeneration } from '../../../storage/conversation/serialization.js'
 import type { Message } from '../../../core/agent-context/types.js'
 import { commandJobs } from '../../../core/command-jobs/index.js'
+import { publicHistoryMessages } from '../history-projection.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
@@ -32,16 +33,14 @@ export async function autoCompactSession(tenantId: string, sessionId: string, lo
 
   // 与手动端点同一条路：history.compress 统一落地与保留策略；后台压缩同样按条数保留
   const stats = await withHistoryLock(tenantId, async () => {
-    const result = await history.compress({ tenantId, sessionId }, buildCompactSummarizeFn(llm), 6)
-    await history.append({
-      role: 'assistant' as const,
-      content: '（上下文已触发智能压缩以释放空间）',
-      tokens: 15,
-      metadata: { compressedFrom: result.preTokens, compressedTo: result.postTokens },
-    }, { tenantId, sessionId })
+    // A new turn may already be running when this detached post-turn job gets
+    // its lock. Leave that turn's context alone; its loop owns compaction.
+    if ((await rootRunStore.list(tenantId, sessionId)).some(run => run.status === 'running' || run.status === 'waiting')) return null
+    const result = await history.compress({ tenantId, sessionId }, buildCompactSummarizeFn(llm, { archiveAvailable: history.retainsArchive === true }), 6)
     return result
   })
 
+  if (!stats) return
   logger.info({ originalTokens: stats.preTokens, compressedTokens: stats.postTokens }, 'Auto-compaction finished')
 }
 
@@ -124,7 +123,7 @@ export async function conversationRoutes(fastify: FastifyInstance) {
     }
     const sessionUsage = await history.getSessionUsage({ tenantId, sessionId })
     
-    const response = paginateArray(messages, current, pageSize)
+    const response = paginateArray(publicHistoryMessages(messages), current, pageSize)
     response.metadata = { sessionUsage, subagentRuns, runs: await rootRunStore.list(tenantId, sessionId), commandJobs: jobs }
     
     return reply.code(200).send(response)
@@ -146,10 +145,18 @@ export async function conversationRoutes(fastify: FastifyInstance) {
     if (typeof getArchive !== 'function') {
       return reply.code(501).send(fail(50101, '当前历史后端不支持归档读取'))
     }
+    let page: { offset: number; limit: number } | undefined
+    let normalizedCurrent = 1
+    if (current != null && pageSize != null) {
+      const validation = paginateArray([], current, pageSize)
+      if (validation.code !== 200) return reply.code(200).send(validation)
+      normalizedCurrent = validation.pagination!.current
+      page = { offset: (normalizedCurrent - 1) * validation.pagination!.pageSize, limit: validation.pagination!.pageSize }
+    }
     // Keep archive replay as rich as the compact history endpoint: tool rows
     // need their persisted child-run/job metadata for the UI cards to render.
     await projectPendingSubagents(history, tenantId)
-    const archive = await getArchive.call(history, { tenantId, sessionId })
+    const archive = await getArchive.call(history, { tenantId, sessionId }, page)
     const subagentRuns = await getSubagentStore().listRunsForParent(tenantId, sessionId)
     const jobs = await commandJobs.list({ tenantId, sessionId })
     for (const message of archive.messages) {
@@ -158,11 +165,15 @@ export async function conversationRoutes(fastify: FastifyInstance) {
       const job = jobs.find(item => item.toolCallId && item.toolCallId === message.toolCallId && item.ownerSessionId === sessionId)
       if (job) message.metadata = { ...message.metadata, commandJob: job }
     }
-    const response = paginateArray(archive.messages, current, pageSize)
+    const total = archive.totalMessageCount ?? archive.messages.length
+    const response = page && archive.totalMessageCount !== undefined
+      ? successWithPagination(publicHistoryMessages(archive.messages), { current: normalizedCurrent, pageSize: page.limit, total, totalPages: Math.ceil(total / page.limit) })
+      : paginateArray(publicHistoryMessages(archive.messages), current, pageSize)
     response.metadata = {
       compressed: archive.compressed,
       currentMessageCount: archive.currentMessageCount,
-      archiveMessageCount: archive.messages.length,
+      archiveMessageCount: total,
+      ...(archive.archiveRevision ? { archiveRevision: archive.archiveRevision } : {}),
       backend: archive.backend,
       ...(archive.summary ? {
         summary: {
@@ -336,16 +347,14 @@ export async function conversationRoutes(fastify: FastifyInstance) {
       // 手动压缩按条数保留（保底一半），保证「点了就一定压缩」——token 预算回溯只用于
       // 自动压缩（react.ts），那里上下文大、预算回溯才有意义。
       const stats = await withHistoryLock(tenantId, async () => {
-        const result = await compactHistory.compress({ tenantId, sessionId }, buildCompactSummarizeFn(llm), 6)
-        await compactHistory.append({
-          role: 'assistant' as const,
-          content: '我已经为您完成了上下文压缩，并保留了核心摘要信息。您可以继续与我对话。',
-          tokens: 20,
-          metadata: { compressedFrom: result.preTokens, compressedTo: result.postTokens },
-        }, { tenantId, sessionId })
+        // Manual maintenance must not mutate the context under an executing
+        // or approval-waiting root. It never cancels the task on the user's behalf.
+        if ((await rootRunStore.list(tenantId, sessionId)).some(run => run.status === 'running' || run.status === 'waiting')) return null
+        const result = await compactHistory.compress({ tenantId, sessionId }, buildCompactSummarizeFn(llm, { archiveAvailable: compactHistory.retainsArchive === true }), 6)
         return result
       })
 
+      if (!stats) return reply.code(409).send(fail(40900, '当前任务仍在运行或等待应答，请在任务结束后压缩上下文'))
       return reply.code(200).send(success({
         success: true,
         message: '压缩成功',

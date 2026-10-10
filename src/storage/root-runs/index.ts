@@ -18,6 +18,17 @@ export interface RootPending {
   status: 'pending' | 'answered'
   output?: string
 }
+/** Public composer settings only; inline definitions and connection secrets stay private. */
+export interface RootRunRequestConfig {
+  agentId?: string
+  thinkingMode?: boolean | 'low' | 'medium' | 'high'
+  subagentModel?: string
+  utilityModel?: string
+  skills?: string[]
+  mcpServers?: string[]
+  knowledgeBases?: string[]
+  memoryScope?: 'off' | 'global' | 'session'
+}
 export interface RootRun {
   schemaVersion: 1
   runId: string
@@ -31,6 +42,8 @@ export interface RootRun {
   modelId: string
   /** Last model that actually delivered output; modelId remains the requested resume configuration. */
   actualModelId?: string
+  /** Presence matters: omitted resources inherit from the agent, [] explicitly disables them. */
+  requestConfig?: RootRunRequestConfig
   workspacePaths: string[]
   createdAt: number
   updatedAt: number
@@ -46,7 +59,7 @@ const schemas = new WeakMap<Client, Promise<void>>()
 export function resumableRequest(request: Record<string, unknown>): Record<string, unknown> {
   const allowed = ['agentId', 'systemPrompt', 'maxAskUserCount', 'thinkingMode', 'inheritContext', 'workspacePaths',
     'model', 'subagentModel', 'utilityModel', 'modelBaseUrl', 'modelProvider', 'capabilities', 'skills', 'mcpServers',
-    'knowledgeBases', 'allowedTools', 'inlineSkills', 'inlineAgents', 'inlineAgent', 'inlineKnowledgeBases', 'ragTopK', 'metadata', 'toolProfile']
+    'knowledgeBases', 'memoryScope', 'allowedTools', 'inlineSkills', 'inlineAgents', 'inlineAgent', 'inlineKnowledgeBases', 'ragTopK', 'metadata', 'toolProfile']
   const clean = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map(clean)
     if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([key]) =>
@@ -54,6 +67,22 @@ export function resumableRequest(request: Record<string, unknown>): Record<strin
     return value
   }
   return Object.fromEntries(allowed.filter(key => request[key] !== undefined).map(key => [key, clean(request[key])]))
+}
+
+export function publicRequestConfig(request: Record<string, unknown>): RootRunRequestConfig {
+  const config: RootRunRequestConfig = {}
+  for (const key of ['agentId', 'subagentModel', 'utilityModel'] as const) {
+    if (typeof request[key] === 'string') config[key] = request[key]
+  }
+  for (const key of ['skills', 'mcpServers', 'knowledgeBases'] as const) {
+    const value = request[key]
+    if (Array.isArray(value) && value.every(id => typeof id === 'string')) config[key] = [...value]
+  }
+  const thinking = request.thinkingMode
+  if (typeof thinking === 'boolean' || thinking === 'low' || thinking === 'medium' || thinking === 'high') config.thinkingMode = thinking
+  const scope = request.memoryScope
+  if (scope === 'off' || scope === 'global' || scope === 'session') config.memoryScope = scope
+  return config
 }
 
 export class RootRunStore {
@@ -84,7 +113,11 @@ export class RootRunStore {
     return db
   }
 
-  public(run: StoredRun): RootRun { const { request: _request, attemptId: _attemptId, ...result } = run; return result }
+  public(run: StoredRun): RootRun {
+    const { request, attemptId: _attemptId, requestConfig: _storedConfig, ...result } = run
+    // Reproject the private request on every read, including old database rows.
+    return { ...result, requestConfig: publicRequestConfig(request) }
+  }
 
   async list(tenantId: string, sessionId: string): Promise<RootRun[]> {
     const db = await this.ready()

@@ -23,6 +23,36 @@ describe('browser tool contracts', () => {
     expect(execute).toHaveBeenCalledTimes(1)
   })
 
+  it.each([
+    { ref: 'e12' },
+    { selector: '#board' },
+    { x: 0, y: 50 },
+    { x: 100000, y: 100000 },
+  ])('forwards one valid click target unchanged: %j', async target => {
+    const execute = vi.spyOn(browserBridge, 'execute').mockResolvedValue({ success: true, output: '{"clicked":true}' })
+    const args = { tabId: 'tab-1', navigationId: 7, ...target }
+    expect(await tool('browser_click').execute(args, ctx)).toMatchObject({ success: true })
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(execute).toHaveBeenCalledWith('click', args, ctx)
+  })
+
+  it('explains incomplete coordinates without dispatching a browser action', async () => {
+    const execute = vi.spyOn(browserBridge, 'execute')
+    const result = await tool('browser_click').execute({ tabId: 'tab-1', navigationId: 7, x: 12 }, ctx)
+    expect(result).toMatchObject({ success: false, metadata: { code: 'BROWSER_INVALID_ARGUMENTS' } })
+    expect(result.output).toContain('同时提供 x 和 y')
+    expect(result.output).toContain('最新 snapshot')
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('identifies missing navigationId without dispatching a browser action', async () => {
+    const execute = vi.spyOn(browserBridge, 'execute')
+    const result = await tool('browser_click').execute({ tabId: 'tab-1', ref: 'e12' }, ctx)
+    expect(result).toMatchObject({ success: false, metadata: { code: 'BROWSER_INVALID_ARGUMENTS' } })
+    expect(result.output).toContain('navigationId: Required')
+    expect(execute).not.toHaveBeenCalled()
+  })
+
   it('forwards network filters and defaults before preserving native pagination metadata', async () => {
     const output = JSON.stringify({ entries: [{ id: 'network:one', method: 'GET', status: 404 }], total: 13, captured: 100, dropped: 4, offset: 5, limit: 1, hasMore: true, nextOffset: 6 })
     const execute = vi.spyOn(browserBridge, 'execute').mockResolvedValue({ success: true, output })
@@ -87,6 +117,18 @@ describe('browser tool contracts', () => {
     ['browser_click', { tabId: 't', ref: 'e' }],
     ['browser_click', { tabId: 't', navigationId: 0, x: 1 }],
     ['browser_click', { tabId: 't', navigationId: 0, x: 1, y: 2, selector: 'button' }],
+    ['browser_click', { tabId: 't', navigationId: 0, y: 2 }],
+    ['browser_click', { tabId: 't', navigationId: 0 }],
+    ['browser_click', { tabId: 't', navigationId: 0, ref: '' }],
+    ['browser_click', { tabId: 't', navigationId: 0, selector: '' }],
+    ['browser_click', { tabId: 't', navigationId: 0, ref: 'e1', selector: '#board' }],
+    ['browser_click', { tabId: 't', navigationId: 0, ref: 'e1', x: 1 }],
+    ['browser_click', { tabId: 't', navigationId: 0, ref: 'e1', x: 1, y: 2 }],
+    ['browser_click', { tabId: 't', navigationId: 0, ref: 'e'.repeat(129) }],
+    ['browser_click', { tabId: 't', navigationId: 0, selector: 'x'.repeat(2001) }],
+    ['browser_click', { tabId: 't', navigationId: 0, x: -1, y: 0 }],
+    ['browser_click', { tabId: 't', navigationId: 0, x: 0, y: 100001 }],
+    ['browser_click', { tabId: 't', navigationId: -1, ref: 'e1' }],
     ['browser_fill', { tabId: 't', navigationId: 0, text: 'value' }],
     ['browser_fill', { tabId: 't', navigationId: 0, text: 'value', ref: 'a', selector: 'input' }],
     ['browser_scroll', { tabId: 't', deltaY: 100 }],

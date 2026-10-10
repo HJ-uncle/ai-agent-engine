@@ -10,6 +10,7 @@ import {
 import { mcpApi } from '@core/api'
 import type { McpServer, CreateMcpServerInput } from '@core/types'
 import styles from './SettingsLayout.module.css'
+import { parseMcpTimeout } from '../mcp-timeout'
 
 const TRANSPORT_OPTIONS = [
   { value: 'http',          label: 'HTTP (REST)' },
@@ -78,6 +79,10 @@ export default function McpSettings() {
 
       // 转换 env / headers / args
       const payload: any = { ...values }
+      const timeoutMs = parseMcpTimeout(values.timeoutMs)
+      if (timeoutMs !== undefined) payload.timeoutMs = timeoutMs
+      else if (editing) payload.timeoutMs = null
+      else delete payload.timeoutMs
       try { payload.env = values.env ? JSON.parse(values.env) : undefined } catch { payload.env = undefined }
       try { payload.headers = values.headers ? JSON.parse(values.headers) : undefined } catch { payload.headers = undefined }
       payload.args = values.args ? values.args.split(/\s+/).filter(Boolean) : undefined
@@ -340,6 +345,9 @@ export default function McpSettings() {
             />
           </Form.Item>
 
+          <Form.Item name="timeoutMs" label="请求超时（毫秒）" extra="留空使用默认，0 表示不限；用户仍可取消。">
+            <Input inputMode="numeric" placeholder="默认" />
+          </Form.Item>
           <Form.Item name="enabled" label="启用" valuePropName="checked">
             <Switch />
           </Form.Item>
