@@ -182,7 +182,7 @@ export interface ConversationHistory {
    * - `{ keepRecentTokens?: number, force?: boolean }`：按模型输入预算保留完整工具交换；
    *   force 在请求已超压缩阈值时保证摘要至少覆盖一部分历史。
    *
-   * 返回值：压缩前后 token 统计（供手动压缩端点回显 / 审计日志用）
+   * 返回值：压缩前后历史 token 估算（供自动压缩状态与审计日志使用）
    */
   compress(
     ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>,

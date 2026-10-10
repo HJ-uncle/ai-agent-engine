@@ -110,11 +110,6 @@ export interface Session {
   agentId?: string
   inheritContext?: boolean
   workspacePaths?: string[] // 自定义工作区路径列表
-  compressStats?: {
-    originalTokens: number
-    compressedTokens: number
-    ratio: string
-  } | null
 }
 
 // ── SSE 事件类型（对齐后端 sse-sink.ts 映射后的格式）──────────────────────────

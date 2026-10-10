@@ -94,6 +94,66 @@ describe('durable root run identity and pending claims', () => {
     expect(next.requestConfig).not.toHaveProperty('memoryScope')
   })
 
+  it('persists compaction progress for replay and clears stale running progress on restart without changing a finished task outcome', async () => {
+    const active = await store.create('tenant', 'active-compaction', 'model-A', [], {})
+    const finished = await store.create('tenant', 'finished-compaction', 'model-A', [], {})
+    const priorFinishedAt = Date.now() - 1000
+    const progress = { phase: 'running' as const, startedAt: Date.now() - 500, beforeTokens: 110_000 }
+    await store.update('tenant', active.runId, { compaction: progress })
+    await store.update('tenant', finished.runId, { status: 'succeeded', compaction: progress })
+    // Persist an older completion time to verify recovery changes only progress.
+    await db.execute({ sql: 'UPDATE root_runs SET state=json_set(state,\'$.finishedAt\',?) WHERE run_id=?', args: [priorFinishedAt, finished.runId] })
+    const before = (await store.list('tenant', 'finished-compaction'))[0]
+    expect(before.compaction).toEqual(progress)
+    db.close()
+    db = createClient({ url: `file:${path.join(fixture, 'agent.db')}` })
+    store = new RootRunStore()
+    await store.initialize()
+    const recovered = (await store.list('tenant', 'finished-compaction'))[0]
+    expect(recovered).toMatchObject({ status: 'succeeded', finishedAt: priorFinishedAt, version: before.version + 1,
+      compaction: { ...progress, phase: 'failed', finishedAt: expect.any(Number), error: expect.stringContaining('Engine restarted') } })
+    expect(recovered.error).toBeUndefined()
+    expect(await store.get('tenant', active.runId)).toMatchObject({ status: 'interrupted', error: { code: 'ENGINE_RESTARTED' },
+      compaction: { ...progress, phase: 'failed', error: expect.stringContaining('original history was preserved') } })
+    const version = recovered.version
+    await store.initialize()
+    expect((await store.list('tenant', 'finished-compaction'))[0].version).toBe(version)
+  })
+
+  it('keeps the execution completion time through running, successful and failed compaction maintenance updates', async () => {
+    let clock = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => clock)
+    const run = await store.create('tenant', 'maintenance-time', 'model-A', [], {})
+    clock += 100
+    const completed = (await store.update('tenant', run.runId, { status: 'succeeded' }))!
+    const completedAt = clock
+    expect(completed.finishedAt).toBe(completedAt)
+    let previousVersion = completed.version
+    const startedAt = completedAt + 50
+    for (const phase of ['running', 'succeeded', 'failed'] as const) {
+      clock += 100
+      const updated = (await store.update('tenant', run.runId, { compaction: {
+        phase, startedAt, beforeTokens: 95_000,
+        ...(phase === 'running' ? {} : { finishedAt: clock }),
+        ...(phase === 'succeeded' ? { afterTokens: 15_000 } : {}),
+        ...(phase === 'failed' ? { error: 'Synthetic compaction failure' } : {}),
+      } }))!
+      expect(updated).toMatchObject({ status: 'succeeded', finishedAt: completedAt, updatedAt: clock,
+        version: previousVersion + 1, compaction: { phase, startedAt } })
+      expect(updated.error).toBeUndefined()
+      expect((await store.list('tenant', 'maintenance-time'))[0]).toEqual(updated)
+      previousVersion = updated.version
+    }
+    // Old terminal rows without a completion timestamp are healed only once.
+    await db.execute({ sql: 'UPDATE root_runs SET state=json_remove(state,\'$.finishedAt\') WHERE run_id=?', args: [run.runId] })
+    clock += 100
+    const repaired = (await store.update('tenant', run.runId, { compaction: { phase: 'running', startedAt: clock } }))!
+    expect(repaired.finishedAt).toBe(clock)
+    const repairedAt = clock
+    clock += 100
+    expect((await store.update('tenant', run.runId, { compaction: { phase: 'succeeded', startedAt: repairedAt, finishedAt: clock } }))!.finishedAt).toBe(repairedAt)
+  })
+
   it.each([true, false, 'low', 'medium', 'high'] as const)('retains exact thinking value %s through pending approval', async thinkingMode => {
     const run = await store.create('tenant', 'session', 'model-A', [], { thinkingMode, memoryScope: 'session' })
     await store.pending('tenant', run.runId, pending)

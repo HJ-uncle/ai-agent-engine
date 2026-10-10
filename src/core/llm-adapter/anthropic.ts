@@ -6,6 +6,7 @@ import type { LLMAdapter, LLMResponse, LLMAdapterOptions, LLMStreamChunk } from 
 import type { Message, Tool } from '../agent-context/index.js'
 import { estimateTokens } from '../utils/tokens.js'
 import { modelMessageContent } from '../utils/model-context.js'
+import { isFailedBrowserMessage } from '../utils/browser-failure.js'
 
 // Anthropic SDK v0.20 does not expose Tool types directly; we use a minimal inline type.
 interface AnthropicTool {
@@ -21,6 +22,7 @@ interface AnthropicTool {
 
 // Content block types not exported by v0.20 but present at runtime
 interface ToolResultBlock {
+  is_error?: boolean
   type: 'tool_result'
   tool_use_id: string
   content: string
@@ -156,12 +158,14 @@ function messageToAnthropic(
       finalContent = [{
         type: 'tool_result',
         tool_use_id: msg.toolCallId ?? '',
+        ...(isFailedBrowserMessage(msg) ? { is_error: true } : {}),
         content: toolContent as any,
       }]
     } else {
       finalContent = [{
         type: 'tool_result',
         tool_use_id: msg.toolCallId ?? '',
+        ...(isFailedBrowserMessage(msg) ? { is_error: true } : {}),
         content: toolContent,
       }]
     }

@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { initDb, closeDb } from '../../../../storage/sqlite/db.js'
 import { SQLiteConversationHistory } from '../../../../storage/conversation/index.js'
-import { conversationRoutes } from '../conversation.js'
+import { autoCompactSession, conversationRoutes } from '../conversation.js'
 import Fastify from 'fastify'
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
 
@@ -10,9 +10,10 @@ beforeAll(async () => { await initDb() })
 afterAll(() => { closeDb() })
 
 // Mock llm-adapter factory with simulated delay
-vi.mock('../../../../core/llm-adapter/factory.js', () => {
+vi.mock('../../../../core/llm-adapter/resolve-model.js', () => {
   return {
-    createLLMAdapter: () => ({
+    resolveModelConfig: async () => ({ model: 'test-model', provider: 'test', capabilities: { contextWindow: 100_000 } }),
+    createAdapterFromResolved: () => ({
       model: 'test-model',
       complete: async () => {
         // Simulate LLM delay
@@ -54,15 +55,10 @@ describe('Conversation Compression API Performance', () => {
     }
 
     const startTime = Date.now()
-    const response = await fastify.inject({
-      method: 'POST',
-      url: '/conversation/compress?sessionId=perf-session'
-    })
+    const stats = await autoCompactSession('perf-tenant', 'perf-session', { info: vi.fn() })
     const endTime = Date.now()
 
-    expect(response.statusCode).toBe(200)
-    const json = response.json()
-    expect(json.data.success).toBe(true)
+    expect(stats?.postTokens).toBeGreaterThan(0)
 
     const duration = endTime - startTime
     console.log(`Compression took ${duration}ms`)

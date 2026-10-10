@@ -106,8 +106,19 @@ export interface RunInvocationUsage {
   unknown?: boolean
 }
 
+/** Automatic history reduction is independent from the parent run's outcome. */
+export interface CompactionState {
+  phase: 'running' | 'succeeded' | 'failed'
+  startedAt: number
+  finishedAt?: number
+  beforeTokens?: number
+  afterTokens?: number
+  error?: string
+}
+
 export interface RunObserver {
   onOutput?(text: string): void | Promise<void>
+  onCompaction?(state: CompactionState): void | Promise<void>
   onOutcome(outcome: RunOutcome): void | Promise<void>
   onToolStart(tool: RunToolStart): void | Promise<void>
   onToolEnd(tool: RunToolEnd): void | Promise<void>

@@ -6,16 +6,16 @@ import { autoCompactSession, conversationRoutes } from '../conversation.js'
 import Fastify from 'fastify'
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
+import { createAdapterFromResolved } from '../../../../core/llm-adapter/resolve-model.js'
 
 // Vitest setup supplies an isolated per-spec database; these integration tests need its real schema.
 beforeAll(async () => { await initDb() })
 afterAll(() => { closeDb() })
 
-// Mock llm-adapter factory
-vi.mock('../../../../core/llm-adapter/factory.js', () => {
+vi.mock('../../../../core/llm-adapter/resolve-model.js', () => {
   return {
-    createLLMAdapterWithDbConfig: vi.fn(),
-    createLLMAdapter: () => ({
+    resolveModelConfig: vi.fn(async () => ({ model: 'test-model', provider: 'test', capabilities: { contextWindow: 100_000 } })),
+    createAdapterFromResolved: vi.fn(() => ({
       model: 'test-model',
       complete: async () => ({
         content: 'Mocked Summary',
@@ -23,7 +23,7 @@ vi.mock('../../../../core/llm-adapter/factory.js', () => {
         completionTokens: 20,
         totalTokens: 120
       })
-    })
+    }))
   }
 })
 
@@ -54,9 +54,10 @@ describe('Conversation Compression API', () => {
     const run = await rootRunStore.create(ctx.tenantId, ctx.sessionId, 'test-model', [], {})
     if (status === 'waiting') await rootRunStore.update(ctx.tenantId, run.runId, { status })
     const before = await history.getFullHistory(ctx)
-    const response = await fastify.inject({ method: 'POST', url: `/conversation/compress?sessionId=${ctx.sessionId}` })
-    expect(response.statusCode).toBe(409)
-    expect(response.json().message).toContain('当前任务仍在运行或等待应答')
+    const states = vi.fn()
+    const result = await autoCompactSession(ctx.tenantId, ctx.sessionId, { info: vi.fn() }, undefined, { onCompaction: states })
+    expect(result).toBeUndefined()
+    expect(states).not.toHaveBeenCalled()
     expect(await history.getFullHistory(ctx)).toEqual(before)
     expect((await rootRunStore.get(ctx.tenantId, run.runId))?.status).toBe(status)
     await rootRunStore.update(ctx.tenantId, run.runId, { status: 'cancelled' })
@@ -66,9 +67,8 @@ describe('Conversation Compression API', () => {
   it('background compaction preserves only real assistant messages and skips a newly active root', async () => {
     const ctx = { tenantId: 'test-tenant', sessionId: 'background-compaction' }
     for (let i = 0; i < 8; i++) await history.append({ id: `background-${i}`, role: i % 2 ? 'assistant' : 'user', content: `original-${i}` }, ctx)
-    const adapters = await import('../../../../core/llm-adapter/index.js')
     const complete = vi.fn(async () => ({ content: 'Background summary', finishReason: 'stop' as const, promptTokens: 10, completionTokens: 3, totalTokens: 13 }))
-    vi.spyOn(adapters, 'createLLMAdapterWithDbConfig').mockResolvedValue({ model: 'test-model', provider: 'test', complete,
+    vi.mocked(createAdapterFromResolved).mockReturnValueOnce({ model: 'test-model', provider: 'test', complete,
       stream: async function* () { throw new Error('Background compaction must use complete') }, countTokens: () => 0 })
     const logger = { info: vi.fn() }
     const run = await rootRunStore.create(ctx.tenantId, ctx.sessionId, 'test-model', [], {})
@@ -87,23 +87,28 @@ describe('Conversation Compression API', () => {
     await history.clear(ctx)
   })
 
+  it('does not display progress or contact a model when recent exchanges cannot be reduced', async () => {
+    const ctx = { tenantId: 'test-tenant', sessionId: 'test-session' }
+    for (let index = 0; index < 6; index++) await history.append({ id: `recent-${index}`, role: index % 2 ? 'assistant' : 'user', content: `Keep recent message ${index}` }, ctx)
+    const before = await history.getFullHistory(ctx)
+    const calls = vi.mocked(createAdapterFromResolved).mock.calls.length
+    const states = vi.fn()
+    expect(await autoCompactSession(ctx.tenantId, ctx.sessionId, { info: vi.fn() }, undefined, { onCompaction: states })).toBeUndefined()
+    expect(states).not.toHaveBeenCalled()
+    expect(vi.mocked(createAdapterFromResolved).mock.calls).toHaveLength(calls)
+    expect(await history.getFullHistory(ctx)).toEqual(before)
+  })
+
   it('should compress history and preserve data integrity', async () => {
-    // 1. Prepare data（8 条，超过手动压缩下限且超出保留 6 条的窗口）
+    // Eight rows exceed the six-message retention window.
     for (let i = 1; i <= 8; i++) {
       await history.append({ role: i % 2 ? 'user' : 'assistant', content: `Message ${i}` }, { tenantId: 'test-tenant', sessionId: 'test-session' })
     }
 
-    // 2. Call compress endpoint
-    const response = await fastify.inject({
-      method: 'POST',
-      url: '/conversation/compress?sessionId=test-session'
-    })
-
-    expect(response.statusCode).toBe(200)
-    const json = response.json()
-    expect(json.data.success).toBe(true)
-    expect(json.data.stats).toBeDefined()
-    expect(json.data.stats.compressedTokens).toBeGreaterThan(0)
+    const states = vi.fn()
+    const stats = await autoCompactSession('test-tenant', 'test-session', { info: vi.fn() }, undefined, { onCompaction: states })
+    expect(stats?.postTokens).toBeGreaterThan(0)
+    expect(states.mock.calls.map(([state]) => state.phase)).toEqual(['running', 'succeeded'])
 
     // 3. Verify history after compression（8 条 → 摘要 1 条 + 最近 6 条；
     // 压缩结果通过 API 返回，不伪造一条 assistant 消息污染用户对话。）
@@ -154,32 +159,26 @@ describe('Conversation Compression API', () => {
   })
 
   it('should rollback history if LLM completion fails', async () => {
-    // 1. Prepare data（超过手动压缩的 4 条下限）
+    // The summarizer has reducible history outside the retained tail.
     for (let i = 1; i <= 8; i++) {
       await history.append({ role: i % 2 ? 'user' : 'assistant', content: `Message ${i}` }, { tenantId: 'test-tenant', sessionId: 'test-session-err' })
     }
 
     // Override mock for error
-    const factory = await import('../../../../core/llm-adapter/factory.js')
-    const adapter = factory.createLLMAdapter()
+    const adapter = createAdapterFromResolved({ model: 'test-model', provider: 'test', capabilities: {} })
     vi.spyOn(adapter, 'complete').mockRejectedValueOnce(new Error('LLM Timeout'))
-    vi.spyOn(factory, 'createLLMAdapter').mockReturnValueOnce(adapter)
+    vi.mocked(createAdapterFromResolved).mockReturnValueOnce(adapter)
 
     const beforeMessages = await history.getHistory({ tenantId: 'test-tenant', sessionId: 'test-session-err' })
 
-    // 2. Call compress endpoint
-    const response = await fastify.inject({
-      method: 'POST',
-      url: '/conversation/compress?sessionId=test-session-err'
-    })
-
-    expect(response.statusCode).toBe(200)
-    const json = response.json()
-    expect(json.code).toBe(50000)
-    expect(json.message).toContain('LLM Timeout')
+    const states = vi.fn()
+    await expect(autoCompactSession('test-tenant', 'test-session-err', { info: vi.fn() }, undefined, { onCompaction: states })).rejects.toThrow('LLM Timeout')
+    expect(states.mock.calls.map(([state]) => state.phase)).toEqual(['running', 'failed'])
+    expect(states.mock.calls[1][0].error).toBe('LLM Timeout')
 
     // 3. Verify history is untouched
     const messages = await history.getHistory({ tenantId: 'test-tenant', sessionId: 'test-session-err' })
+    expect(messages).toEqual(beforeMessages)
     expect(messages.length).toBe(8)
     expect(messages[0].role).toBe('user')
     expect(messages[1].role).toBe('assistant')

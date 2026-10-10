@@ -18,6 +18,7 @@ export interface BrowserClientIdentity { tenantId: string; userId?: string }
 interface Pending {
   command: BrowserCommand
   delivered: boolean
+  watched?: () => void
   settle(result: ToolResult): void
 }
 interface Client {
@@ -37,7 +38,7 @@ export class BrowserBridgeError extends Error {
 const unavailable = (): ToolResult => ({
   success: false,
   output: '当前会话没有连接 Aether 内置浏览器。请在 Aether 打开浏览器并在“设置 → 浏览器”启用 AI 操作，然后重试。远端引擎也需要 Aether 客户端保持在线。',
-  metadata: { code: 'BROWSER_CLIENT_UNAVAILABLE' },
+  metadata: { code: 'BROWSER_CLIENT_UNAVAILABLE', operationPerformed: false },
 })
 const scopeKey = (tenantId: string, sessionId: string) => JSON.stringify([tenantId, sessionId])
 
@@ -62,7 +63,7 @@ export class BrowserBridge {
     this.clients.delete(client.id)
     this.scopes.delete(scopeKey(client.identity.tenantId, client.sessionId))
     for (const pending of [...client.pending.values()]) pending.settle({
-      success: false, output: reason, metadata: { code: 'BROWSER_CLIENT_DISCONNECTED' },
+      success: false, output: reason, metadata: { code: 'BROWSER_CLIENT_DISCONNECTED', operationPerformed: pending.delivered ? 'unknown' : false },
     })
     client.wake?.()
   }
@@ -106,7 +107,7 @@ export class BrowserBridge {
   }
 
   private registration(client: Client) {
-    return { clientId: client.id, clientToken: client.token, sessionId: client.sessionId, pollTimeoutMs: this.pollTimeoutMs, leaseMs: this.leaseMs }
+    return { clientId: client.id, clientToken: client.token, sessionId: client.sessionId, pollTimeoutMs: this.pollTimeoutMs, leaseMs: this.leaseMs, capabilities: { requestWatch: true } }
   }
 
   unregister(identity: BrowserClientIdentity, id: string, token: string): void {
@@ -139,6 +140,29 @@ export class BrowserBridge {
     })
   }
 
+  /** Independent from the command consumer, which can be blocked waiting for page visibility. */
+  async watchRequest(identity: BrowserClientIdentity, id: string, token: string, requestId: string,
+    wait = true, signal?: AbortSignal): Promise<{ active: boolean }> {
+    const client = this.authorize(identity, id, token)
+    const pending = client.pending.get(requestId)
+    const state = () => ({ active: !!pending?.delivered && this.clients.get(id) === client && client.pending.get(requestId) === pending })
+    if (!pending?.delivered || !wait || signal?.aborted) return state()
+    if (pending.watched) throw new BrowserBridgeError(409, 'Only one browser request watch may be active')
+    return new Promise(resolve => {
+      let timer: ReturnType<typeof setTimeout>
+      const wake = () => {
+        clearTimeout(timer)
+        signal?.removeEventListener('abort', wake)
+        if (pending.watched === wake) pending.watched = undefined
+        resolve(state())
+      }
+      timer = setTimeout(wake, Math.min(20_000, this.pollTimeoutMs))
+      pending.watched = wake
+      signal?.addEventListener('abort', wake, { once: true })
+      if (signal?.aborted) wake()
+    })
+  }
+
   result(identity: BrowserClientIdentity, id: string, token: string, requestId: string, result: ToolResult): boolean {
     const client = this.authorize(identity, id, token)
     const pending = client.pending.get(requestId)
@@ -149,25 +173,32 @@ export class BrowserBridge {
 
   async execute(action: BrowserAction, args: Record<string, unknown>, ctx: Pick<AgentContext, 'tenantId' | 'sessionId' | 'rootSessionId' | 'signal'>): Promise<ToolResult> {
     this.prune()
-    if (ctx.signal?.aborted) return { success: false, status: 'cancelled', output: '浏览器操作已取消。' }
-    if (!BROWSER_ACTIONS.includes(action)) return { success: false, output: '未知浏览器操作，未发送到客户端。', metadata: { code: 'BROWSER_UNKNOWN_ACTION' } }
+    if (ctx.signal?.aborted) return { success: false, status: 'cancelled', output: '浏览器操作已取消。', metadata: { code: 'BROWSER_COMMAND_CANCELLED', operationPerformed: false } }
+    if (!BROWSER_ACTIONS.includes(action)) return { success: false, output: '未知浏览器操作，未发送到客户端。', metadata: { code: 'BROWSER_UNKNOWN_ACTION', operationPerformed: false } }
     const sessionId = ctx.rootSessionId ?? ctx.sessionId
     const id = this.scopes.get(scopeKey(ctx.tenantId, sessionId))
     const client = id ? this.clients.get(id) : undefined
     if (!client) return unavailable()
     // Bounds memory use when independent agents outpace a disconnected/slow client.
-    if (client.pending.size >= 32) return { success: false, output: '浏览器操作队列已满，请等待已有操作结束。' }
+    if (client.pending.size >= 32) return { success: false, output: '浏览器操作队列已满，请等待已有操作结束。', metadata: { code: 'BROWSER_QUEUE_FULL', operationPerformed: false } }
     const requestId = randomUUID()
     const command: BrowserCommand = { requestId, sessionId, action, args, expiresAt: Date.now() + this.commandTimeoutMs }
     return new Promise(resolve => {
       const settle = (result: ToolResult) => {
-        if (!client.pending.delete(requestId)) return
+        const pending = client.pending.get(requestId)
+        if (!pending || !client.pending.delete(requestId)) return
         clearTimeout(timer)
         ctx.signal?.removeEventListener('abort', cancel)
+        pending.watched?.()
         resolve(result)
       }
-      const cancel = () => settle({ success: false, status: 'cancelled', output: '浏览器操作已取消；如已发送到页面，请重新读取页面状态。' })
-      const timer = setTimeout(() => settle({ success: false, output: '等待浏览器结果超时。操作状态未知，请重新读取页面，不要盲目重复提交。', metadata: { code: 'BROWSER_COMMAND_TIMEOUT' } }), this.commandTimeoutMs)
+      // A command handed to the client may have taken effect before its reply
+      // was lost. Only a command still in this broker's queue is known not to run.
+      const performed = (): false | 'unknown' => client.pending.get(requestId)?.delivered ? 'unknown' : false
+      const cancel = () => settle({ success: false, status: 'cancelled', output: '浏览器操作已取消；如已发送到页面，请重新读取页面状态。',
+        metadata: { code: 'BROWSER_COMMAND_CANCELLED', operationPerformed: performed() } })
+      const timer = setTimeout(() => settle({ success: false, output: '等待浏览器结果超时。请重新读取页面，不要盲目重复提交。',
+        metadata: { code: 'BROWSER_COMMAND_TIMEOUT', operationPerformed: performed() } }), this.commandTimeoutMs)
       client.pending.set(requestId, { command, delivered: false, settle })
       ctx.signal?.addEventListener('abort', cancel, { once: true })
       client.wake?.()

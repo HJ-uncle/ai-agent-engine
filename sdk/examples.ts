@@ -106,26 +106,16 @@ async function main() {
   // for await (const chunk of client.messages.edit(msgId, '修改后的问题')) { ... }
   // for await (const chunk of client.messages.regenerate(msgId)) { ... }
 
-  // ─── 9. 对话压缩 ────────────────────────────────────────────────────
-  console.log('\n[9] 对话压缩')
-  try {
-    const compressResult = await client.conversation.compress(SESSION)
-    console.log(`  压缩比例: ${compressResult.stats.ratio}`)
-    console.log(`  原始 Token: ${compressResult.stats.originalTokens} → 压缩后: ${compressResult.stats.compressedTokens}`)
-  } catch (e: any) {
-    console.log('  跳过:', e.message)
-  }
-
-  // ─── 10. 会话管理 ────────────────────────────────────────────────────
-  console.log('\n[10] 会话管理')
+  // ─── 9. 会话管理 ────────────────────────────────────────────────────
+  console.log('\n[9] 会话管理')
   const sessions = await client.conversation.getSessions()
   console.log(`  活跃会话: ${sessions.length} 个`)
   const binding = await client.sessions.getBinding(SESSION)
   console.log('  绑定状态:', binding.started ? `已锁定 → ${binding.agent?.name || binding.agentId}` : '未锁定')
   // await client.sessions.delete('obsolete-session', true)  // 保留工作区
 
-  // ─── 11. 记忆读写 ────────────────────────────────────────────────────
-  console.log('\n[11] 记忆管理')
+  // ─── 10. 记忆读写 ────────────────────────────────────────────────────
+  console.log('\n[10] 记忆管理')
   await client.memory.remember('favorite_language', 'TypeScript', SESSION)
   const { value } = await client.memory.recall('favorite_language', SESSION)
   console.log('  读取 favorite_language =', value)
@@ -133,21 +123,21 @@ async function main() {
   console.log(`  本会话记忆: ${memories.length} 条`)
   memories.forEach((m) => console.log(`  · ${m.key} = ${m.value}`))
 
-  // ─── 12. 待办管理 ────────────────────────────────────────────────────
-  console.log('\n[12] 待办管理')
+  // ─── 11. 待办管理 ────────────────────────────────────────────────────
+  console.log('\n[11] 待办管理')
   // await client.todos.create({ title: 'Review code', priority: 'high', sessionId: SESSION })
   const todos = await client.todos.list({ sessionId: SESSION })
   console.log(`  待办数量: ${todos.length}`)
   todos.forEach((t) => console.log(`  · [${t.priority}] ${t.title} — ${t.status}`))
 
-  // ─── 13. 定时任务 ────────────────────────────────────────────────────
-  console.log('\n[13] 定时任务')
+  // ─── 12. 定时任务 ────────────────────────────────────────────────────
+  console.log('\n[12] 定时任务')
   const cronJobs = await client.cron.list()
   console.log(`  定时任务: ${cronJobs.length} 个`)
   cronJobs.forEach((j) => console.log(`  · ${j.name} (${j.cronExpr}) — ${j.enabled ? '启用' : '禁用'}`))
 
-  // ─── 14. 安全策略 ────────────────────────────────────────────────────
-  console.log('\n[14] 安全策略')
+  // ─── 13. 安全策略 ────────────────────────────────────────────────────
+  console.log('\n[13] 安全策略')
   const policies = await client.security.policies.list()
   console.log(`  命令策略: ${policies.length} 条`)
   const netPolicy = await client.security.networkPolicy.get()
@@ -155,19 +145,19 @@ async function main() {
   // const auditLogs = await client.security.auditLog.query({ current: 1, pageSize: 10 })
   // console.log(`  审计日志: ${auditLogs.length} 条`)
 
-  // ─── 15. LSP 诊断 ────────────────────────────────────────────────────
-  console.log('\n[15] LSP 诊断')
+  // ─── 14. LSP 诊断 ────────────────────────────────────────────────────
+  console.log('\n[14] LSP 诊断')
   const adapters = await client.lsp.adapters()
   console.log(`  可用适配器: ${adapters.map((a) => `${a.name}(${a.languages.join(',')})`).join(' | ')}`)
 
-  // ─── 16. 性能统计 ────────────────────────────────────────────────────
-  console.log('\n[16] 性能统计')
+  // ─── 15. 性能统计 ────────────────────────────────────────────────────
+  console.log('\n[15] 性能统计')
   const stats = await client.performance.stats()
   console.log(`  SQLite journal: ${stats.sqlite.journal_mode}`)
   console.log(`  工具线程池: size=${stats.toolPool.size} active=${stats.toolPool.active} pending=${stats.toolPool.pending}`)
 
-  // ─── 17. DeepSeek 通道 ────────────────────────────────────────────────
-  console.log('\n[17] DeepSeek 通道')
+  // ─── 16. DeepSeek 通道 ────────────────────────────────────────────────
+  console.log('\n[16] DeepSeek 通道')
   try {
     const dsStatus = await client.deepseek.status()
     console.log(`  状态: ${dsStatus.enabled ? '✅ 已启用' : '❌ 未启用'}`)
@@ -184,8 +174,8 @@ async function main() {
     console.log('  跳过:', e.message)
   }
 
-  // ─── 18. 知识库 ──────────────────────────────────────────────────────
-  console.log('\n[18] 知识库')
+  // ─── 17. 知识库 ──────────────────────────────────────────────────────
+  console.log('\n[17] 知识库')
   const docs = await client.knowledge.list()
   console.log(`  文档数量: ${docs.length}`)
   docs.forEach((d) => console.log(`  · ${d.filename} (${d.chunkCount} chunks)`))
@@ -194,32 +184,32 @@ async function main() {
     console.log(`  搜索结果: ${results.length} 条`)
   }
 
-  // ─── 19. MCP 服务器 ──────────────────────────────────────────────────
-  console.log('\n[19] MCP 服务器')
+  // ─── 18. MCP 服务器 ──────────────────────────────────────────────────
+  console.log('\n[18] MCP 服务器')
   const mcpServers = await client.mcp.list()
   console.log(`  MCP 服务器: ${mcpServers.length} 个`)
   mcpServers.forEach((s) => {
     console.log(`  · ${s.name} (${s.transportType}) — ${s.enabled ? '✅' : '❌'}`)
   })
 
-  // ─── 20. 工作区 ──────────────────────────────────────────────────────
-  console.log('\n[20] 工作区')
+  // ─── 19. 工作区 ──────────────────────────────────────────────────────
+  console.log('\n[19] 工作区')
   const workspaceTree = await client.workspace.files(SESSION)
   console.log(`  目录树根节点: ${workspaceTree.name} (${workspaceTree.children?.length ?? 0} 个子项)`)
   const recent = await client.workspace.recent()
   console.log(`  最近工作区: ${recent.length} 个`)
   recent.forEach((r) => console.log(`  · ${r.name} ${r.hasSession ? '(活跃)' : ''}`))
 
-  // ─── 21. 终端 ────────────────────────────────────────────────────────
-  console.log('\n[21] 终端')
+  // ─── 20. 终端 ────────────────────────────────────────────────────────
+  console.log('\n[20] 终端')
   // const term = await client.terminal.create(SESSION, { cols: 120, rows: 30 })
   // console.log(`  终端已创建: ${term.terminalId} (cwd: ${term.cwd})`)
   // const wsUrl = client.terminal.wsUrl(term.terminalId)
   // console.log(`  WebSocket: ${wsUrl}`)
   console.log('  (终端功能需要 WebSocket，跳过 HTTP 示例)')
 
-  // ─── 22. 任务管理 ────────────────────────────────────────────────────
-  console.log('\n[22] 异步任务')
+  // ─── 21. 任务管理 ────────────────────────────────────────────────────
+  console.log('\n[21] 异步任务')
   const taskList = await client.tasks.list()
   console.log(`  任务数量: ${taskList.length}`)
   const { jobId } = await client.tasks.submit('test', { example: true })
@@ -227,8 +217,8 @@ async function main() {
   const job = await client.tasks.get(jobId)
   console.log(`  状态: ${job.status ?? 'pending'}`)
 
-  // ─── 23. 指标统计 ────────────────────────────────────────────────────
-  console.log('\n[23] Prometheus 指标')
+  // ─── 22. 指标统计 ────────────────────────────────────────────────────
+  console.log('\n[22] Prometheus 指标')
   const metrics = await client.getMetrics()
   const metricsLines = metrics.split('\n').filter((l) => l && !l.startsWith('#'))
   console.log(`  指标行数: ${metricsLines.length}`)

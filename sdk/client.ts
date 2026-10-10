@@ -659,21 +659,6 @@ export interface MCPTestResult {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Conversation Compress 类型
-// ═══════════════════════════════════════════════════════════════════════════════
-
-export interface CompressResult {
-  success: boolean
-  message: string
-  stats: {
-    originalTokens: number
-    compressedTokens: number
-    ratio: string
-  }
-  usage: TokenUsage
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // AgentClient 主类
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -974,9 +959,6 @@ export class AgentClient {
           ...(opts?.pageSize != null ? { pageSize: String(opts.pageSize) } : {}),
         }),
 
-      /** 压缩会话历史（生成摘要替换旧消息） */
-      compress: (sessionId: string): Promise<CompressResult> =>
-        self.fetch('POST', '/api/v1/conversation/compress', undefined, { sessionId }),
     }
   }
 

@@ -2,7 +2,7 @@
  * 子进程生命周期管理模块
  *
  * 使用 child_process.spawn 启动 agent-engine（node bin/main.js），
- * 注入 PORT、DATA_DIR 等环境变量，并提供优雅关闭（SIGTERM → SIGKILL）能力。
+ * 注入 AETHER_ENGINE_PORT、DATA_DIR 等环境变量，并提供优雅关闭（SIGTERM → SIGKILL）能力。
  *
  * 关键约束：
  * - detached: false — 确保父进程退出时子进程自动终止
@@ -21,7 +21,7 @@ export interface StartProcessOptions {
   cwd?: string
   /** agent-engine bin/main.js 的绝对路径 */
   binPath: string
-  /** 监听端口，注入为 PORT 环境变量 */
+  /** 监听端口，注入为 AETHER_ENGINE_PORT 环境变量 */
   port: number
   /** 数据目录，注入为 DATA_DIR 环境变量 */
   dataDir?: string
@@ -76,8 +76,9 @@ export function startProcess(opts: StartProcessOptions): ProcessHandle {
 
   const env: Record<string, string> = {
     ...process.env as Record<string, string>,
-    PORT: String(opts.port),
-    HOST: '127.0.0.1',
+    // Dedicated keys separate the listener from project server settings.
+    AETHER_ENGINE_PORT: String(opts.port),
+    AETHER_ENGINE_HOST: '127.0.0.1',
     // 禁用 pino-pretty 颜色（避免 Electron 控制台乱码）
     FORCE_COLOR: '0',
     NO_COLOR: '1',
@@ -86,6 +87,16 @@ export function startProcess(opts: StartProcessOptions): ProcessHandle {
     ...skillsRootEnv,
     ...callerEnv
   }
+
+  // Older imported runtimes still consume PORT/HOST. New runtimes consume this
+  // one-shot snapshot before loading project .env files or business modules.
+  env.AETHER_ENGINE_PROJECT_ENV = JSON.stringify({
+    version: 1,
+    PORT: env.PORT ?? null,
+    HOST: env.HOST ?? null
+  })
+  env.PORT = env.AETHER_ENGINE_PORT
+  env.HOST = env.AETHER_ENGINE_HOST
 
   const child = spawn(nodePath, [opts.binPath], {
     cwd: opts.cwd ?? binDir,

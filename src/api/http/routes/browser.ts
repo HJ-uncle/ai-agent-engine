@@ -58,6 +58,22 @@ export async function browserRoutes(fastify: FastifyInstance, options: { bridge?
     finally { reply.raw.removeListener('close', closed) }
   })
 
+  fastify.get<{ Params: { clientId: string; requestId: string }; Querystring: { wait?: boolean } }>(
+    '/browser/clients/:clientId/requests/:requestId/state', {
+      schema: {
+        params: { type: 'object', required: ['clientId', 'requestId'], properties: { clientId: idSchema, requestId: idSchema } },
+        querystring: { type: 'object', additionalProperties: false, properties: { wait: { type: 'boolean', default: true } } },
+      },
+    }, async (request, reply) => {
+      const controller = new AbortController()
+      const closed = () => { if (!reply.raw.writableEnded) controller.abort() }
+      reply.raw.once('close', closed)
+      try {
+        return success(await bridge.watchRequest(identity(request), request.params.clientId, token(request),
+          request.params.requestId, request.query.wait !== false, controller.signal))
+      } finally { reply.raw.removeListener('close', closed) }
+    })
+
   fastify.post<{ Params: { clientId: string }; Body: { requestId: string; success: boolean; output: string; error?: string } }>('/browser/clients/:clientId/results', {
     bodyLimit: 12 * 1024 * 1024,
     schema: { body: { type: 'object', additionalProperties: false, required: ['requestId', 'success', 'output'], properties: {

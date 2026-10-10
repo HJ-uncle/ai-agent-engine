@@ -81,3 +81,42 @@ describe('browser client routes', () => {
     expect((await app.inject({ method: 'POST', url: '/api/v1/browser/clients', payload: { sessionId: 'chat' } })).statusCode).toBe(409)
   })
 })
+
+describe('browser request cancellation watch routes', () => {
+  it('confirms a delivered request and independently reports its run cancellation', async () => {
+    const registration = await app.inject({ method: 'POST', url: '/api/v1/browser/clients', payload: { sessionId: 'chat' } })
+    const client = registration.json().data
+    expect(client.capabilities).toMatchObject({ requestWatch: true })
+    const headers = { 'x-aether-browser-token': client.clientToken }
+    const controller = new AbortController()
+    const action = bridge.execute('click', { tabId: 'A', navigationId: 1, ref: '1:1' }, { tenantId: 'a', sessionId: 'chat', signal: controller.signal })
+    const polled = await app.inject({ method: 'GET', url: `/api/v1/browser/clients/${client.clientId}/commands`, headers })
+    const command = polled.json().data.commands[0]
+    const url = `/api/v1/browser/clients/${client.clientId}/requests/${command.requestId}/state`
+    const initial = await app.inject({ method: 'GET', url: url + '?wait=false', headers })
+    expect(initial.statusCode).toBe(200)
+    expect(initial.headers['cache-control']).toBe('no-store')
+    expect(initial.json().data).toEqual({ active: true })
+    const waiting = app.inject({ method: 'GET', url: url + '?wait=true', headers }).then(response => response)
+    controller.abort()
+    expect((await waiting).json().data).toEqual({ active: false })
+    expect(await action).toMatchObject({ status: 'cancelled' })
+    expect((await app.inject({ method: 'GET', url: url + '?wait=false', headers })).json().data).toEqual({ active: false })
+    const late = await app.inject({ method: 'POST', url: `/api/v1/browser/clients/${client.clientId}/results`, headers,
+      payload: { requestId: command.requestId, success: true, output: 'late result' } })
+    expect(late.json().data.accepted).toBe(false)
+  })
+
+  it('does not expose request state without the original tenant, user and token', async () => {
+    const client = await register()
+    for (const headers of [{}, { 'x-aether-browser-token': 'wrong' },
+      { 'x-aether-browser-token': client.clientToken, 'x-test-tenant': 'other' },
+      { 'x-aether-browser-token': client.clientToken, 'x-test-user': 'other' }]) {
+      const response = await app.inject({ method: 'GET', url: `/api/v1/browser/clients/${client.clientId}/requests/unknown/state?wait=false`, headers })
+      expect(response.statusCode).toBe(404)
+    }
+    const headers = { 'x-aether-browser-token': client.clientToken }
+    expect((await app.inject({ method: 'GET', url: `/api/v1/browser/clients/${client.clientId}/requests/unknown/state?wait=invalid`, headers })).statusCode).toBe(400)
+    expect((await app.inject({ method: 'GET', url: `/api/v1/browser/clients/${client.clientId}/requests/unknown/state?wait=false`, headers })).json().data).toEqual({ active: false })
+  })
+})

@@ -87,7 +87,7 @@ export function extractSummary(output: string): string {
 
 /**
  * 构造压缩用的 summarizeFn：序列化消息 → 填 6 段模板 → 调 LLM → 提取 <summary>。
- * 供 react.ts 自动压缩与手动压缩端点共用，保证两条路径摘要质量一致。
+ * 供循环内自动压缩与回合结束后的自动维护共用，保持摘要质量一致。
  */
 export function buildCompactSummarizeFn(llm: CompactLLM, options: Pick<LLMAdapterOptions, 'signal' | 'onRequestAttempt'> & {
   contextWindow?: number; maxOutputTokens?: number; archiveAvailable?: boolean

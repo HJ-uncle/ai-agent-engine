@@ -40,9 +40,9 @@ import { systemConfigStore, TRUSTED_STARTUP_KEYS } from './storage/sqlite/system
 import { loadAetherConfig, applyAetherConfigToEnv, loadManagedConfig } from './core/aether-config.js'
 import { networkInterfaces } from 'node:os'
 import { commandJobs } from './core/command-jobs/index.js'
+import { readEngineListenAddress } from './server-listen.js'
 
-const PORT = parseInt(process.env.PORT ?? '12323', 10)
-const HOST = process.env.HOST ?? '0.0.0.0'
+const { port: PORT, host: HOST } = readEngineListenAddress()
 
 async function main() {
   try {

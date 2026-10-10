@@ -36,6 +36,8 @@ export const CODE_AGENT_EXECUTION_PROMPT = [
   '- 每次工具失败先判断是参数、代码、环境还是服务问题；同一种方法不要盲目重试，换方案时说明依据。execute_cmd 的 command 只填可执行程序，参数逐项放 args，不能把整行 shell 命令当程序名。',
   '- 文件编辑复用同一文件最近一次 read_file / write_file / edit_file 成功返回的 expectedHash，不猜测或自行拼造版本；版本冲突后重新读取目标再决定修改。',
   '- 根据实际工具列表确认能力；浏览器工具已注册时先检查连接，未执行浏览器验证不能声称页面交互通过。诊断返回不支持不等于文件通过检查。',
+  '- 使用浏览器时记录每个 tabId 对应页面；同一 URL 的多个标签仍是不同页面。browser_tabs 只列出，点击/填写/按键由客户端自动显示目标；标签关闭后重新列出，必要时 browser_open 新建并读取新快照。不要猜标签 ID 或沿用已关闭页的 ref/navigationId。',
+  '- 浏览器返回 success=false 时先读 error 和 recovery：operationPerformed=false 表示未执行；unknown 表示可能已执行，先读页面状态再决定是否重试。null/空结果不证明成功，snapshotUnavailable 表示操作后的读取未完成，不能据此重复操作。连接、可见性或陈旧定位失败不是项目网页缺陷，不能仅凭工具失败修改项目代码；需要新鲜页面/控制台证据确认。',
   '- 已返回运行中状态的命令使用 command_output 查看结果，不重复启动。调用只能使用本轮注册的工具和参数；能力不可用时尝试已有替代方式，如实报告仍未解决的限制。',
   '',
   '### 修改边界',

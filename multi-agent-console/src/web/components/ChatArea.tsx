@@ -2113,14 +2113,12 @@ export default function ChatArea() {
     prevStreamingRef.current = isStreaming;
   }, [isStreaming]);
 
-  const [isCompressing, setIsCompressing] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // 会话是否已开始 —— 直接从本地 messageMap 判断，无需额外 API 请求
   // 后端在首次 POST /chat 时自动绑定 agentId，messages.length > 0 即代表已锁定
   const sessionStarted = messages.length > 0;
-  const compressStats = session?.compressStats || null;
   const scrollRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [exportOpen, setExportOpen] = useState(false);
@@ -2367,43 +2365,6 @@ export default function ChatArea() {
       workspacePaths: currentPaths.filter((p) => p !== pathToRemove),
     });
     message.success("工作区路径已移除");
-  };
-
-  const handleCompress = async () => {
-    if (messages.length <= 1 || isCompressing || isStreaming) return;
-    setIsCompressing(true);
-    const hide = message.loading("正在用 AI 压缩上下文...", 0);
-    try {
-      const res = await fetch(
-        `${BASE_URL}/api/v1/conversation/compress?sessionId=${encodeURIComponent(
-          activeSessionId,
-        )}`,
-        {
-          method: "POST",
-        },
-      );
-      const resData = await res.json();
-      if (resData.code === 200 && resData.data?.success) {
-        if (resData.data.stats) {
-          updateSession(activeSessionId, { compressStats: resData.data.stats });
-          message.success(`压缩成功！从 ${resData.data.stats.originalTokens} 压缩到 ${resData.data.stats.compressedTokens} Tokens (比例 ${resData.data.stats.ratio})`);
-        } else {
-          message.success("上下文压缩成功！");
-        }
-        await fetchHistory(activeSessionId);
-        // Update usageMap with compression usage if available
-        if (resData.data.usage) {
-          useSessionStore.getState().updateUsage(activeSessionId, resData.data.usage);
-        }
-      } else {
-        message.error(`压缩失败: ${resData.message || "未知错误"}`);
-      }
-    } catch (err: any) {
-      message.error(`压缩失败: ${err.message}`);
-    } finally {
-      hide();
-      setIsCompressing(false);
-    }
   };
 
   // 检查是否正在等待用户在 ask_user 卡片中回复
@@ -2874,41 +2835,6 @@ export default function ChatArea() {
                         {Math.round((sessionUsage.totalTokens / 1000000) * 100)}% of 1000K
                       </span>
                     </div>
-                    {compressStats && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, fontSize: 11 }}>
-                        <span style={{ color: '#8b949e', flexShrink: 0 }}>最近一次压缩比例</span>
-                        <Tooltip title={`${compressStats.ratio} (${compressStats.originalTokens} → ${compressStats.compressedTokens})`}>
-                          <span style={{
-                            color: '#3fb950',
-                            fontWeight: 600,
-                            whiteSpace: 'nowrap',
-                            marginLeft: 8,
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            maxWidth: '180px',
-                            display: 'inline-block',
-                            direction: 'ltr'
-                          }}>
-                            {compressStats.ratio} ({compressStats.originalTokens} → {compressStats.compressedTokens})
-                          </span>
-                        </Tooltip>
-                      </div>
-                    )}
-                    <Button
-                      block
-                      size="small"
-                      onClick={() => handleCompress()}
-                      disabled={messages.length <= 1 || isStreaming || isCompressing}
-                      loading={isCompressing}
-                      style={{
-                        background: '#21262d',
-                        borderColor: '#30363d',
-                        color: '#c9d1d9',
-                        fontSize: 12
-                      }}
-                    >
-                      压缩
-                    </Button>
                   </div>
                 </div>
               }

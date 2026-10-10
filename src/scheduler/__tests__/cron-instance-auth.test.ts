@@ -17,6 +17,26 @@ afterEach(async () => {
 })
 
 describe('Owned-instance cron transport', () => {
+  it('uses the dedicated engine port instead of the inherited project PORT', async () => {
+    vi.stubEnv('AUTH_ENABLED', 'false')
+    vi.stubEnv('AETHER_INSTANCE_TOKEN', fixtureToken)
+    configureRequestAuthentication()
+    const app = Fastify()
+    apps.push(app)
+    app.addHook('onRequest', authMiddlewareHook)
+    let calls = 0
+    app.post('/api/v1/chat', async (_request, reply) => {
+      calls++
+      return reply.type('text/event-stream').send('data: {"type":"done"}\n\n')
+    })
+    const baseUrl = await app.listen({ host: '127.0.0.1', port: 0 })
+    vi.stubEnv('AETHER_ENGINE_PORT', new URL(baseUrl).port)
+    vi.stubEnv('PORT', '0')
+    await fire(new CronScheduler())(job)
+    expect(calls).toBe(1)
+    expect(process.env.PORT).toBe('0')
+  })
+
   it('reaches real instance-protected chat HTTP authentication in local single-user mode', async () => {
     vi.stubEnv('AUTH_ENABLED', 'false')
     vi.stubEnv('AETHER_INSTANCE_TOKEN', fixtureToken)

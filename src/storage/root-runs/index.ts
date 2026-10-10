@@ -2,6 +2,9 @@ import { randomUUID } from 'node:crypto'
 import type { Client } from '@libsql/client'
 import { getDb } from '../sqlite/db.js'
 import { withHistoryLock, isSessionHistoryMutating } from '../conversation/serialization.js'
+import type { CompactionState } from '../../core/subagent/types.js'
+
+export type { CompactionState } from '../../core/subagent/types.js'
 
 export type RootRunStatus = 'running' | 'waiting' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
 export interface RootPending {
@@ -42,6 +45,7 @@ export interface RootRun {
   modelId: string
   /** Last model that actually delivered output; modelId remains the requested resume configuration. */
   actualModelId?: string
+  compaction?: CompactionState
   /** Presence matters: omitted resources inherit from the agent, [] explicitly disables them. */
   requestConfig?: RootRunRequestConfig
   workspacePaths: string[]
@@ -100,10 +104,16 @@ export class RootRunStore {
         const rows = await db.execute('SELECT run_id,state FROM root_runs')
         for (const row of rows.rows) {
           const run = JSON.parse(String(row.state)) as StoredRun
-          if (run.status !== 'running') continue
-          run.status = 'interrupted'; run.stopReason = 'Engine restarted; execution was not resumed'
-          run.error = { code: 'ENGINE_RESTARTED', message: run.stopReason, retryable: false }
-          run.updatedAt = run.finishedAt = Date.now(); run.version++
+          if (run.status !== 'running' && run.compaction?.phase !== 'running') continue
+          const now = Date.now()
+          if (run.compaction?.phase === 'running') run.compaction = { ...run.compaction, phase: 'failed', finishedAt: now,
+            error: 'Engine restarted before automatic compaction completed; original history was preserved' }
+          if (run.status === 'running') {
+            run.status = 'interrupted'; run.stopReason = 'Engine restarted; execution was not resumed'
+            run.error = { code: 'ENGINE_RESTARTED', message: run.stopReason, retryable: false }
+            run.finishedAt = now
+          }
+          run.updatedAt = now; run.version++
           await db.execute({ sql: 'UPDATE root_runs SET state=? WHERE run_id=?', args: [JSON.stringify(run), String(row.run_id)] })
         }
       })()
@@ -155,8 +165,15 @@ export class RootRunStore {
       if (!run) return null
       if (expectedAttemptId && run.attemptId !== expectedAttemptId) return null
       if (change.status && !['running', 'waiting'].includes(run.status) && change.status !== run.status) return null
-      Object.assign(run, change, { updatedAt: Date.now(), version: run.version + 1 })
-      if (!['running', 'waiting'].includes(run.status)) run.finishedAt = Date.now()
+      const wasActive = ['running', 'waiting'].includes(run.status)
+      const previousFinishedAt = run.finishedAt
+      const now = Date.now()
+      Object.assign(run, change, { updatedAt: now, version: run.version + 1 })
+      // Post-turn maintenance has its own completion time. Keep the execution
+      // outcome's timestamp stable across later compaction/result updates.
+      if (!['running', 'waiting'].includes(run.status)) {
+        run.finishedAt = wasActive || previousFinishedAt === undefined ? now : previousFinishedAt
+      }
       const db = await this.ready()
       await db.execute({ sql: 'UPDATE root_runs SET state=? WHERE tenant_id=? AND run_id=?', args: [JSON.stringify(run), tenantId, runId] })
       return this.public(run)

@@ -9,7 +9,7 @@ import { applyOSMMultiplier, getOSMCompressRatio } from '../osm.js'
 import { getCodeToolOutputMaxChars, getToolOutputMaxChars } from './tool-output-limit.js'
 import { repairJson } from '../utils/json.js'
 import { TodoStore } from '../../storage/todo/index.js'
-import type { RunOutcome } from '../subagent/types.js'
+import type { CompactionState, RunOutcome } from '../subagent/types.js'
 import { FINALIZATION_PROMPT, estimateRequestInput, finalizationMessages, partialEvidence } from './finalization.js'
 import { executeRegisteredTool, executeToolBatch, normalizeToolResult, type RegisteredToolCall, type ParsedToolCall } from './tool-batch.js'
 import { resolveCapabilities } from '../model-capabilities/index.js'
@@ -514,16 +514,24 @@ export class ReActStrategy implements LoopStrategy {
         // 专职模型路由：配置了 LLM_SUMMARIZE_MODEL 时用轻量模型做总结，
         // 否则退回主模型（压缩发生在循环内，失败不可阻断对话）
         let summarizeLlm: LLMAdapter = this.llm
+        let summarizeWindow = ctx.modelCaps?.contextWindow
+          ?? resolveCapabilities({ model: summarizeLlm.model, provider: summarizeLlm.provider }).contextWindow
         if (process.env.LLM_SUMMARIZE_MODEL) {
           try {
-            const { createLLMAdapterWithDbConfig } = await import('../llm-adapter/index.js')
-            summarizeLlm = await createLLMAdapterWithDbConfig({ model: process.env.LLM_SUMMARIZE_MODEL })
+            const { createAdapterFromResolved, resolveModelConfig } = await import('../llm-adapter/resolve-model.js')
+            const resolved = await resolveModelConfig({ tenantId: ctx.tenantId, model: process.env.LLM_SUMMARIZE_MODEL, parent: ctx.resolvedModel })
+            summarizeLlm = createAdapterFromResolved(resolved)
+            summarizeWindow = resolved.capabilities.contextWindow
           } catch (err: any) {
             ctx.logger.warn({ err: err?.message }, 'Summarize model unavailable, falling back to main model')
           }
         }
+        let compaction: CompactionState | undefined
+        const notifyCompaction = async (state: CompactionState): Promise<void> => {
+          try { await ctx.runObserver?.onCompaction?.(state) }
+          catch (err) { ctx.logger.warn({ err }, 'Automatic compaction observer failed') }
+        }
         try {
-          const summarizeWindow = resolveCapabilities({ model: summarizeLlm.model, provider: summarizeLlm.provider }).contextWindow
           const summarize = buildCompactSummarizeFn(summarizeLlm, { signal: ctx.signal, onRequestAttempt: ctx.onRequestAttempt,
             contextWindow: Math.min(effectiveBudget, summarizeWindow ?? Infinity), maxOutputTokens: unboundedCode ? undefined : Math.min(4096, maxOutputTokens!),
             archiveAvailable: ctx.history.retainsArchive === true })
@@ -535,9 +543,22 @@ export class ReActStrategy implements LoopStrategy {
             Math.max(0, compressThreshold - fixedInputTokens - outputReservation - 8192)) / 2 ** compressionPass)
           const stats = await ctx.history.compress(
             ctx,
-            summarize,
+            async (source, evidence) => {
+              // Storage may decide there is nothing reducible. Publish progress
+              // only when it actually starts the asynchronous summary request.
+              compaction ??= { phase: 'running', startedAt: Date.now(), beforeTokens: estimateModelHistoryTokens(messages) }
+              await notifyCompaction(compaction)
+              return summarize(source, evidence)
+            },
             { keepRecentTokens, force: true },
           )
+          // The history commit has completed; observer errors must never turn
+          // durable reduction into a failed reduction or discard its result.
+          if (compaction) {
+            compaction = { ...compaction, phase: 'succeeded', finishedAt: Date.now(),
+              beforeTokens: stats.preTokens, afterTokens: stats.postTokens }
+            await notifyCompaction(compaction)
+          }
           const compressedMessages = await readModelHistory()
           const compressedRequestTokens = estimateRequestInput(compressedMessages, this.options.systemPrompt, effectiveTools) + outputReservation
           ctx.logger.info({ preTokens: stats.preTokens, postTokens: stats.postTokens,
@@ -545,6 +566,8 @@ export class ReActStrategy implements LoopStrategy {
           rawTokens = compressedRequestTokens
           if (rawTokens >= beforeCompression) break
         } catch (err: any) {
+          if (compaction?.phase === 'running') await notifyCompaction({ ...compaction, phase: 'failed', finishedAt: Date.now(),
+            error: typeof err?.message === 'string' ? err.message : 'Automatic compaction failed; original history was preserved' })
           ctx.logger.error({ err: err?.message, rawTokens }, 'Compression failed; checking the complete request before dispatch')
           break
         }

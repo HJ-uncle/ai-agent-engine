@@ -353,6 +353,11 @@ export async function chatRoutes(fastify: FastifyInstance) {
   // Reuse bounded revision caches across frequent snapshot refreshes.
   const snapshotHistory = createConversationHistory()
   const snapshotSubagents = new SubagentStore()
+  const compactionSnapshots = new Map<string, {
+    runId: string
+    history: Message[]
+    totals: { sessionUsage: Record<string, number>; turnUsage: Record<string, number> }
+  }>()
   // Initialize agent store
   const agentStore = new SQLiteAgentStore()
 
@@ -1185,6 +1190,19 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
         }
         ctx.onPending = async pending => { publishRun(await rootRunStore.pending(tenantId, rootRun.runId, pending, attemptId)) }
         ctx.runObserver = {
+          onCompaction: async compaction => {
+            const key = makeAbortKey(tenantId, sessionId)
+            if (compaction.phase === 'running') {
+              const history = await snapshotHistory.getFullHistory({ tenantId, sessionId })
+              const totals = snapshotHistory.getUsageTotals
+                ? await snapshotHistory.getUsageTotals({ tenantId, sessionId }, rootRun.turnId)
+                : { sessionUsage: await snapshotHistory.getSessionUsage({ tenantId, sessionId }),
+                  turnUsage: await snapshotHistory.getSessionUsage({ tenantId, sessionId }, rootRun.turnId) }
+              compactionSnapshots.set(key, { runId: rootRun.runId, history, totals })
+            }
+            publishRun(await rootRunStore.update(tenantId, rootRun.runId, { compaction }, attemptId))
+            if (compaction.phase !== 'running') compactionSnapshots.delete(key)
+          },
           onOutcome: async outcome => {
             const waiting = outcome.status === 'blocked' && rootRun.pending.some(item => item.status === 'pending')
             publishRun(await rootRunStore.update(tenantId, rootRun.runId, { status: waiting ? 'waiting' : outcome.stopReason === 'incomplete' ? 'interrupted' : outcome.status === 'blocked' ? 'failed' : outcome.status,
@@ -1429,21 +1447,21 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
             })
           }
 
-          // 上下文智能压缩：如果当前上下文占用超过有效窗口阈值，在后台触发压缩。
-          // 口径用单次调用快照 currentPromptTokens（当前上下文真实占用），
-          // 不用累计 totalTokens（跨轮计费口径，会严重误触发/漏触发）。
-          const autoCompactRatio = parseFloat(process.env.AUTO_COMPACT_THRESHOLD_RATIO ?? '0.92')
-          const contextWindow = modelCaps?.contextWindow ?? parseInt(process.env.AUTO_COMPACT_TOKEN_LIMIT ?? '500000', 10)
-          const currentPromptTokens = (finalUsage as any)?.currentPromptTokens ?? 0
-          if (currentPromptTokens > Math.floor(contextWindow * autoCompactRatio)) {
-            reqLogger.info({ currentPromptTokens, contextWindow }, 'Context usage exceeded, triggering auto-compaction')
-            import('./conversation.js').then(({ autoCompactSession }) => {
-              autoCompactSession(tenantId, sessionId, reqLogger).catch((err: any) => {
-                reqLogger.error({ err }, 'Auto-compaction failed')
-              })
-            })
-          }
         })
+        // Keep the producer open through post-turn maintenance so viewers receive
+        // durable start/result states instead of a detached job's log messages.
+        const autoCompactRatio = parseFloat(process.env.AUTO_COMPACT_THRESHOLD_RATIO ?? '0.92')
+        const contextWindow = modelCaps?.contextWindow ?? parseInt(process.env.AUTO_COMPACT_TOKEN_LIMIT ?? '500000', 10)
+        const currentPromptTokens = (finalUsage as any)?.currentPromptTokens ?? 0
+        if (!abortController.signal.aborted && currentPromptTokens > Math.floor(contextWindow * autoCompactRatio)) {
+          reqLogger.info({ currentPromptTokens, contextWindow }, 'Context usage exceeded, triggering auto-compaction')
+          try {
+            const { autoCompactSession } = await import('./conversation.js')
+            await autoCompactSession(tenantId, sessionId, reqLogger, ctx.resolvedModel, {
+              onCompaction: ctx.runObserver?.onCompaction, signal: abortController.signal,
+            })
+          } catch (err) { reqLogger.error({ err }, 'Auto-compaction failed; original history was preserved') }
+        }
       } catch (err: any) {
         publishRun(await rootRunStore.update(tenantId, rootRun.runId, { status: abortController.signal.aborted ? 'cancelled' : 'failed',
           error: { code: 'CHAT_FAILED', message: err.message || String(err), retryable: false } }, attemptId))
@@ -1473,6 +1491,9 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
           error: { code: 'CHAT_FAILED', message: err instanceof Error ? err.message : String(err), retryable: false } }, attemptId))
         streamBus.error(err)
       } finally {
+        if (compactionSnapshots.get(makeAbortKey(tenantId, sessionId))?.runId === rootRun.runId) {
+          compactionSnapshots.delete(makeAbortKey(tenantId, sessionId))
+        }
         if (streamBus.disconnectTimeout) {
           clearTimeout(streamBus.disconnectTimeout)
           streamBus.disconnectTimeout = null
@@ -1502,6 +1523,32 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
     const earlyBus = activeStreams.get(key)
     if (earlyBus?.disconnectTimeout) { clearTimeout(earlyBus.disconnectTimeout); earlyBus.disconnectTimeout = null }
     while (true) {
+      // A summarizer can hold the history lock while waiting on its provider.
+      // Replay the pre-compaction view plus current durable events immediately,
+      // so switching away and back does not hide or wait out the busy state.
+      const cache = compactionSnapshots.get(key)
+      const currentBus = activeStreams.get(key)
+      if (cache && currentBus && !isSessionHistoryMutating(tenantId, sessionId)) {
+        const [runs, todos, changes, jobs, childRuns] = await Promise.all([
+          rootRunStore.list(tenantId, sessionId), new TodoStore().list(tenantId, sessionId),
+          new ChangeStore().list(tenantId, sessionId), commandJobs.list({ tenantId, sessionId }), snapshotSubagents.listRunsForParent(tenantId, sessionId),
+        ])
+        const snapshot = currentBus.snapshot()
+        const run = snapshot.projection.find(payload => payload.run)?.run as RootRun | undefined
+        if (run?.runId === cache.runId && run.compaction?.phase === 'running' && runs.at(-1)?.runId === run.runId
+          && compactionSnapshots.get(key) === cache && !isSessionHistoryMutating(tenantId, sessionId)) {
+          const publishedUsage = snapshot.projection.find(frame => frame.usage)?.usage as Record<string, unknown> | undefined
+          const projectedRuns = [...runs.filter(item => item.runId !== run.runId), run].sort((a, b) => a.seq - b.seq)
+          const publishedChildren = await snapshotSubagents.getSnapshotsAtSequences(tenantId, snapshot.subagentWatermarks ?? [])
+          const subagentRuns = sessionSubagentRunsAtWatermark(childRuns, { tenantId, sessionId }, run.turnId,
+            [...snapshot.projection, ...publishedChildren.map(child => ({ subagentEvent: { snapshot: child } }))])
+          return reply.send(success({ ...snapshot, source: 'live', sessionId, run, runs: projectedRuns,
+            history: publicHistoryMessages(cache.history), historyCompacted: cache.history.some(message => message.role === 'system' && message.metadata?.isCompactSummary === true),
+            todos, changes, commandJobs: jobs, subagentRuns,
+            sessionUsage: sessionUsageAtWatermark(cache.totals.sessionUsage, cache.totals.turnUsage, publishedUsage),
+            sessionSubagentUsage: sessionSubagentUsage(subagentRuns, { tenantId, sessionId }) }))
+        }
+      }
       await Promise.all(pendingAdmissions.get(key) ?? [])
       const result = await withHistoryLock(tenantId, async () => {
         // An admission can begin while this reader was queued for the history lock.
@@ -1598,13 +1645,18 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
     const { sessionId, lastEventId } = request.query
 
     const tenantId = getTenantId(request)
-    const subscription = await withHistoryLock(tenantId, async () => {
+    const subscribe = async () => {
       const bus = activeStreams.get(makeAbortKey(tenantId, sessionId))
       const run = bus?.snapshot().projection.find(payload => payload.run)?.run as RootRun | undefined
       if (!bus || !run || (await rootRunStore.list(tenantId, sessionId)).at(-1)?.runId !== run.runId) return null
       try { return { bus, source: busToIterable(bus, lastEventId) } }
       catch { return null }
-    })
+    }
+    const key = makeAbortKey(tenantId, sessionId)
+    const cached = compactionSnapshots.get(key)
+    const busRun = activeStreams.get(key)?.snapshot().projection.find(payload => payload.run)?.run as RootRun | undefined
+    const subscription = cached?.runId === busRun?.runId && busRun?.compaction?.phase === 'running' && !isSessionHistoryMutating(tenantId, sessionId)
+      ? await subscribe() : await withHistoryLock(tenantId, subscribe)
     if (!subscription) return reply.code(409).send(fail(40902, 'snapshot_required'))
     const { bus: streamBus, source } = subscription
 

@@ -9,39 +9,75 @@ import { getSubagentStore } from '../../../core/subagent/store.js'
 import { getSubagentRunner } from '../../../core/subagent/runner.js'
 import { projectPendingSubagents } from '../../../core/subagent/projection.js'
 import { subagentRoutes } from './subagent.js'
-import { rootRunStore } from '../../../storage/root-runs/index.js'
+import { rootRunStore, type CompactionState } from '../../../storage/root-runs/index.js'
 import { withHistoryLock, invalidateSessionHistory, withSessionHistoryMutation, bindHistoryGeneration } from '../../../storage/conversation/serialization.js'
 import type { Message } from '../../../core/agent-context/types.js'
 import { commandJobs } from '../../../core/command-jobs/index.js'
 import { publicHistoryMessages } from '../history-projection.js'
+import { createAdapterFromResolved, resolveModelConfig, type ResolvedModelConfig } from '../../../core/llm-adapter/resolve-model.js'
+import type { CreateAdapterOptions } from '../../../core/llm-adapter/factory.js'
+import { compressionSplitIndex } from '../../../storage/conversation/compression.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
 
-export async function autoCompactSession(tenantId: string, sessionId: string, logger: any) {
+/** Recover legacy sessions without a live adapter; credentials still come from the tenant's model store. */
+async function resolveSessionCompactionModel(tenantId: string, sessionId: string, messages: Message[]): Promise<ResolvedModelConfig> {
+  const latestRun = (await rootRunStore.list(tenantId, sessionId)).at(-1)
+  const stored = latestRun ? await rootRunStore.get(tenantId, latestRun.runId) : null
+  const legacyModel = [...messages].reverse().find(message => typeof message.modelId === 'string' && message.modelId)?.modelId
+  const model = stored?.modelId || legacyModel
+  const overrides: CreateAdapterOptions = {}
+  if (typeof stored?.request.modelProvider === 'string' && stored.request.modelProvider) overrides.provider = stored.request.modelProvider
+  if (typeof stored?.request.modelBaseUrl === 'string' && stored.request.modelBaseUrl) overrides.baseUrl = stored.request.modelBaseUrl
+  return resolveModelConfig({ tenantId, model, ...(Object.keys(overrides).length ? { overrides } : {}) })
+}
+
+export async function autoCompactSession(tenantId: string, sessionId: string, logger: any, parent?: ResolvedModelConfig, options: {
+  onCompaction?: (state: CompactionState) => void | Promise<void>
+  signal?: AbortSignal
+} = {}) {
   const history = bindHistoryGeneration(createConversationHistory(), tenantId, sessionId)
   const messages = await history.getHistory({ tenantId, sessionId })
   if (messages.length <= 1) return
 
   // 专职模型路由：如果配置了 LLM_SUMMARIZE_MODEL，优先使用它
-  const { createLLMAdapterWithDbConfig } = await import('../../../core/llm-adapter/index.js')
   const { buildCompactSummarizeFn } = await import('../../../core/agent-loop/compact-prompt.js')
-  const summarizeModel = process.env.LLM_SUMMARIZE_MODEL || undefined
-  const llm = await createLLMAdapterWithDbConfig({ model: summarizeModel })
 
-  logger.info({ model: llm.model }, 'Starting background auto-compaction')
-
-  // 与手动端点同一条路：history.compress 统一落地与保留策略；后台压缩同样按条数保留
+  // Post-turn maintenance keeps recent complete exchanges through the storage's common commit path.
   const stats = await withHistoryLock(tenantId, async () => {
-    // A new turn may already be running when this detached post-turn job gets
-    // its lock. Leave that turn's context alone; its loop owns compaction.
+    // A new turn may already be running when maintenance gets its lock.
+    // Leave that turn's context alone; its loop owns compaction.
     if ((await rootRunStore.list(tenantId, sessionId)).some(run => run.status === 'running' || run.status === 'waiting')) return null
-    const result = await history.compress({ tenantId, sessionId }, buildCompactSummarizeFn(llm, { archiveAvailable: history.retainsArchive === true }), 6)
-    return result
+    const currentMessages = await history.getFullHistory({ tenantId, sessionId })
+    if (compressionSplitIndex(currentMessages, 6) === 0) return null
+    const startedAt = Date.now()
+    const notify = async (state: CompactionState) => {
+      try { await options.onCompaction?.(state) }
+      catch (error) { logger.warn?.({ error }, 'Could not publish auto-compaction state') }
+    }
+    await notify({ phase: 'running', startedAt })
+    try {
+      options.signal?.throwIfAborted()
+      const mainModel = parent ?? await resolveSessionCompactionModel(tenantId, sessionId, currentMessages)
+      const summarizeModel = process.env.LLM_SUMMARIZE_MODEL?.trim()
+      const resolved = summarizeModel ? await resolveModelConfig({ tenantId, model: summarizeModel, parent: mainModel }) : mainModel
+      const llm = createAdapterFromResolved(resolved)
+      logger.info({ model: llm.model }, 'Starting background auto-compaction')
+      const result = await history.compress({ tenantId, sessionId }, buildCompactSummarizeFn(llm, {
+        archiveAvailable: history.retainsArchive === true, contextWindow: resolved.capabilities.contextWindow, signal: options.signal,
+      }), 6)
+      await notify({ phase: 'succeeded', startedAt, finishedAt: Date.now(), beforeTokens: result.preTokens, afterTokens: result.postTokens })
+      return result
+    } catch (error) {
+      await notify({ phase: 'failed', startedAt, finishedAt: Date.now(), error: error instanceof Error ? error.message : String(error) })
+      throw error
+    }
   })
 
   if (!stats) return
   logger.info({ originalTokens: stats.preTokens, compressedTokens: stats.postTokens }, 'Auto-compaction finished')
+  return stats
 }
 
 export async function conversationRoutes(fastify: FastifyInstance) {
@@ -321,52 +357,4 @@ export async function conversationRoutes(fastify: FastifyInstance) {
     return reply.code(200).send(success({ success: true, removedFrom: messageId }))
   })
 
-  // POST /conversation/compress  — 压缩当前会话历史
-  fastify.post<{ Querystring: { sessionId: string } }>('/conversation/compress', async (request, reply) => {    const { sessionId } = request.query
-    const tenantId = (request as any).authContext?.tenantId ?? 'default'
-
-    if (!sessionId) {
-      return reply.code(200).send(fail(40001, '参数验证失败：sessionId 不能为空'))
-    }
-
-    const compactHistory = bindHistoryGeneration(history, tenantId, sessionId)
-    const messages = await compactHistory.getHistory({ tenantId, sessionId })
-    if (messages.length <= 4) {
-      return reply.code(200).send(success({ success: true, message: '消息数量过少，无需压缩' }))
-    }
-
-    const originalTokens = messages.reduce((sum, m) => sum + (m.tokens || 0) + (m.usage?.totalTokens || 0), 0)
-
-    // 动态导入避免循环依赖；摘要 prompt 与自动压缩（react.ts）共用同一份 6 段式模板
-    const { createLLMAdapter } = await import('../../../core/llm-adapter/factory.js')
-    const { buildCompactSummarizeFn } = await import('../../../core/agent-loop/compact-prompt.js')
-    const llm = createLLMAdapter()
-
-    try {
-      // 经 history.compress 统一处理：两套后端各自落地（SQLite 事务重建 / JSONL 追加 summary 行）。
-      // 手动压缩按条数保留（保底一半），保证「点了就一定压缩」——token 预算回溯只用于
-      // 自动压缩（react.ts），那里上下文大、预算回溯才有意义。
-      const stats = await withHistoryLock(tenantId, async () => {
-        // Manual maintenance must not mutate the context under an executing
-        // or approval-waiting root. It never cancels the task on the user's behalf.
-        if ((await rootRunStore.list(tenantId, sessionId)).some(run => run.status === 'running' || run.status === 'waiting')) return null
-        const result = await compactHistory.compress({ tenantId, sessionId }, buildCompactSummarizeFn(llm, { archiveAvailable: compactHistory.retainsArchive === true }), 6)
-        return result
-      })
-
-      if (!stats) return reply.code(409).send(fail(40900, '当前任务仍在运行或等待应答，请在任务结束后压缩上下文'))
-      return reply.code(200).send(success({
-        success: true,
-        message: '压缩成功',
-        stats: {
-          originalTokens: stats.preTokens || originalTokens,
-          compressedTokens: stats.postTokens,
-          ratio: stats.preTokens > 0 ? ((stats.preTokens - stats.postTokens) / stats.preTokens * 100).toFixed(1) + '%' : '0%'
-        }
-      }))
-    } catch (e: any) {
-      request.log.error(`压缩会话 ${sessionId} 失败: ${e.message}`)
-      return reply.code(200).send(fail(50000, `压缩失败: ${e.message}`))
-    }
-  })
 }

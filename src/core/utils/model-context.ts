@@ -1,10 +1,13 @@
 import type { Message } from '../agent-context/types.js'
 import { browserOutputPresentation } from './browser-output.js'
+import { legacyBrowserFailureContent } from './browser-failure.js'
 import { estimateTokens } from './tokens.js'
 import { estimateMultimodalContent, imageToolPayload } from './multimodal-context.js'
 
 /** The provider snapshot is independent from editable UI attachment/display content. */
 export function modelMessageContent(message: Message): Message['content'] {
+  const recovered = legacyBrowserFailureContent(message, message.modelInputContent ?? message.content)
+  if (recovered !== undefined) return recovered
   if (message.modelInputContent != null) return message.modelInputContent
   // Historical browser previews predate the separate model input column.
   return (message.role === 'tool' ? browserOutputPresentation(message.content)?.modelInputContent : undefined) ?? message.content

@@ -5,6 +5,7 @@
  */
 import { CronStore } from '../storage/cron/index.js'
 import { INSTANCE_TOKEN_HEADER } from '../auth/instance-token.js'
+import { readEngineListenAddress } from '../server-listen.js'
 
 // 简单 cron 解析：支持标准 5 字段 cron（分 时 日 月 周）
 function matchCron(expr: string, now: Date): boolean {
@@ -47,7 +48,7 @@ export class CronScheduler {
   private running = false
 
   constructor(baseUrl?: string) {
-    this.baseUrl = baseUrl ?? `http://127.0.0.1:${process.env.PORT ?? 12323}`
+    this.baseUrl = baseUrl ?? `http://127.0.0.1:${readEngineListenAddress().port}`
   }
 
   start() {

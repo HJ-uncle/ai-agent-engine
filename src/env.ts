@@ -1,5 +1,9 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { restoreEmbeddedProjectEnvironment } from './server-listen.js'
+
+// This is main.ts's first import: restore before later imports and .env defaults.
+restoreEmbeddedProjectEnvironment()
 
 /**
  * 手动加载 .env 文件到 process.env
