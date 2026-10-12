@@ -1,28 +1,18 @@
 import type { Client } from '@libsql/client'
 
 export async function up(client: Client): Promise<void> {
-  const statements = [
-    // Drop deleted_at from conversations
-    // Note: SQLite ALTER TABLE DROP COLUMN is supported in 3.35.0+
-    `ALTER TABLE conversations DROP COLUMN deleted_at`
-  ]
+  // Modern databases already lack this retired column. Checking metadata
+  // keeps subsequent startups free of unnecessary schema changes.
+  const columns = await client.execute('PRAGMA table_info(conversations)')
+  if (!columns.rows.some(row => row.name === 'deleted_at')) return
 
-  // wrap in try catch just in case it fails due to SQLite version or column not existing
-  try {
-    await client.batch(statements.map((sql) => ({ sql })), 'write')
-  } catch (err: any) {
-    console.warn('Migration 003: Failed to drop deleted_at, it might not exist or sqlite is too old. Error:', err.message)
-  }
+  // A real legacy column still needs migration. Dependency, lock and I/O
+  // errors must reach initialization rather than leave an unknown schema.
+  await client.execute('ALTER TABLE conversations DROP COLUMN deleted_at')
 }
 
 export async function down(client: Client): Promise<void> {
-  const statements = [
-    `ALTER TABLE conversations ADD COLUMN deleted_at INTEGER`
-  ]
-
-  try {
-    await client.batch(statements.map((sql) => ({ sql })), 'write')
-  } catch (err: any) {
-    console.warn('Migration 003 down: Failed to add deleted_at back. Error:', err.message)
-  }
+  const columns = await client.execute('PRAGMA table_info(conversations)')
+  if (columns.rows.some(row => row.name === 'deleted_at')) return
+  await client.execute('ALTER TABLE conversations ADD COLUMN deleted_at INTEGER')
 }

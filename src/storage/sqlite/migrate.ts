@@ -1,5 +1,6 @@
 import { up as up027 } from './migrations/027_cron_timeout.js'
 import { getDb, closeDb } from './db.js'
+import { repairLegacyCronTimeoutSchema } from './schema-compatibility.js'
 import { up } from './migrations/001_initial.js'
 import { up as up002 } from './migrations/002_add_message_id.js'
 import { up as up003 } from './migrations/003_drop_deleted_at.js'
@@ -55,6 +56,7 @@ async function migrate() {
   const db = getDb()
 
   try {
+    await repairLegacyCronTimeoutSchema(db)
     await up(db)
     console.log('✓ Migration 001_initial complete')
 

@@ -1,5 +1,6 @@
 import { up as up27 } from './migrations/027_cron_timeout.js'
 import type { Client } from '@libsql/client'
+import { repairLegacyCronTimeoutSchema } from './schema-compatibility.js'
 import { LocalSqliteProcessClient } from './local-process-client.js'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -92,6 +93,7 @@ export function initDb(): Promise<void> {
 
 async function initializeSchema(db: Client): Promise<void> {
   // 运行完整迁移（所有 CREATE TABLE IF NOT EXISTS，幂等）
+  await repairLegacyCronTimeoutSchema(db)
   await up(db)
   await up2(db)
   await up3(db)

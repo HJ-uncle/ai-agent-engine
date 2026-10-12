@@ -71,6 +71,55 @@ async function dispatch(history: ConversationHistory) {
 describe.each(['jsonl', 'sqlite'] as const)('subagent projection through %s history', backend => {
   const history = (): ConversationHistory => backend === 'jsonl' ? new JSONLConversationHistory() : new SQLiteConversationHistory()
 
+  it('filters legacy progress payloads before decoding and retains their archive', async () => {
+    const first = history()
+    const run = await dispatch(first)
+    const eventId = `${parent.tenantId}:${run.runId}:1`
+    // Old engines queued every event. An invalid payload proves recovery never
+    // decodes progress JSON; its large sibling also must remain untouched.
+    const legacyPayload = 'legacy progress must not be parsed:' + 'x'.repeat(1024 * 1024)
+    await state.db.execute({
+      sql: 'INSERT INTO subagent_outbox (id,tenant_id,run_id,seq,event) VALUES (?,?,?,?,?)',
+      args: [eventId, parent.tenantId, run.runId, 1, legacyPayload],
+    })
+    await state.store.appendSnapshot(parent.tenantId, run.runId, 'finished', { status: 'succeeded', resultSummary: 'Recovered final result' })
+    const archive = await state.db.execute({ sql: 'SELECT event FROM subagent_events WHERE tenant_id=? AND run_id=? ORDER BY seq', args: [parent.tenantId, run.runId] })
+    await projectPendingSubagents(first, parent.tenantId)
+    expect((await first.getFullHistory(parent)).filter(message => message.role === 'tool')).toHaveLength(1)
+    expect(await state.store.listPendingParentProjections(parent.tenantId)).toEqual([])
+    const retained = await state.db.execute({ sql: 'SELECT event,acknowledged FROM subagent_outbox WHERE id=?', args: [eventId] })
+    expect(retained.rows[0]).toMatchObject({ event: legacyPayload, acknowledged: 0 })
+    const after = await state.db.execute({ sql: 'SELECT event FROM subagent_events WHERE tenant_id=? AND run_id=? ORDER BY seq', args: [parent.tenantId, run.runId] })
+    expect(after.rows).toEqual(archive.rows)
+  })
+
+  it('drains multiple terminal pages without loading or acknowledging another tenant', async () => {
+    const first = history()
+    const runIds: string[] = []
+    for (let index = 0; index < 35; index++) {
+      const definition = { ...input, parentToolCallId: `page-spawn-${index}`, parentMessageId: `page-dispatch-${index}` }
+      await first.append({ id: definition.parentMessageId, role: 'assistant', content: '',
+        toolCall: { id: definition.parentToolCallId, name: 'subagent', args: {} } }, parent)
+      const run = (await state.store.createRun(definition)).snapshot
+      runIds.push(run.runId)
+      await state.store.appendSnapshot(parent.tenantId, run.runId, 'finished', { status: 'succeeded', resultSummary: `Result ${index}` })
+    }
+    const other = (await state.store.createRun({ ...input, tenantId: 'tenant-b' })).snapshot
+    await state.store.appendSnapshot('tenant-b', other.runId, 'finished', { status: 'succeeded', resultSummary: 'Other tenant' })
+    expect(await state.store.listPendingParentProjections(parent.tenantId)).toHaveLength(32)
+    expect(await state.store.listPendingParentProjections(parent.tenantId, 100)).toHaveLength(32)
+    const reads = vi.spyOn(state.store, 'listPendingParentProjections')
+    await projectPendingSubagents(first, parent.tenantId)
+    expect(reads.mock.calls).toHaveLength(36)
+    expect(reads.mock.calls.every(([tenantId, limit]) => tenantId === parent.tenantId && limit === 1)).toBe(true)
+    expect((await first.getFullHistory(parent)).filter(message => message.role === 'tool').map(message => message.id).sort())
+      .toEqual(runIds.map(runId => `subagent-result:${runId}`).sort())
+    expect(await state.store.listPendingParentProjections(parent.tenantId)).toEqual([])
+    expect((await state.store.listPendingParentProjections('tenant-b')).map(row => row.event.runId)).toEqual([other.runId])
+    await projectPendingSubagents(first, parent.tenantId)
+    expect((await first.getFullHistory(parent)).filter(message => message.role === 'tool')).toHaveLength(35)
+  })
+
   it('replays an unacknowledged append after restart exactly once, retaining metadata and tool pairing', async () => {
     const first = history()
     const run = await dispatch(first)

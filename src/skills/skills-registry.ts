@@ -103,7 +103,6 @@ export class SkillsRegistry {
       })
       this.watchers.push(watcher)
       this.watchedRoots.add(root)
-      logger.info({ root }, 'SkillsRegistry: watching for skill changes')
     } catch (err) {
       logger.warn({ err, root }, 'SkillsRegistry: failed to start watcher for layer')
     }
@@ -183,16 +182,6 @@ export class SkillsRegistry {
     }
     this.allSkills = [...merged.values()]
     this.skills = this.allSkills.filter((skill) => skill.enabled)
-    const after = this.skills.length
-
-    if (before !== after) {
-      logger.info(
-        { before, after, projectRoot: this.skillsRoot, globalRoot: this.globalRoot },
-        'SkillsRegistry: skills reloaded (count changed)',
-      )
-    } else {
-      logger.debug({ count: after }, 'SkillsRegistry: skills reloaded')
-    }
   }
 
   /** 获取当前技能列表（始终最新） */

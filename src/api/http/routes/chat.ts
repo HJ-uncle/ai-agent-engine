@@ -14,7 +14,7 @@ import { resolveModelConfig, createAdapterFromResolved } from '../../../core/llm
 import { RequestBudget, parseRequestTokenLimit } from '../../../core/subagent/budget.js'
 import { createRequestLogger, QALogger, type QALogEntry } from '../../../observability/index.js'
 import { buildSkillsSystemPrompt } from '../../../skills/index.js'
-import { getRequestToolProfile } from '../tool-profile.js'
+import { getRequestToolProfile, getRequestRunLifetime } from '../tool-profile.js'
 import { createToolRegistry } from '../../../tools/registry-factory.js'
 import { resolveOSMMode } from '../../../core/osm.js'
 import { success, fail } from '../response.js'
@@ -23,6 +23,7 @@ import { rootRunStore, type RootRun, type RootPending } from '../../../storage/r
 import { persistedTurnProjection } from '../chat-snapshot.js'
 import { continuedTurnUsage, sessionUsageAtWatermark, sessionSubagentUsage, sessionSubagentRunsAtWatermark } from '../chat-usage.js'
 import { SubagentStore } from '../../../core/subagent/store.js'
+import { CollaboratorError, prepareCollaborators, collaboratorTools, type CollaboratorInput } from '../../../core/subagent/collaborators.js'
 import { TodoStore } from '../../../storage/todo/index.js'
 import { ChangeStore } from '../../../storage/changes/index.js'
 import { commandJobs } from '../../../core/command-jobs/index.js'
@@ -71,6 +72,8 @@ import { extractAndStoreMemories, buildMemoryRecallBlock } from '../../../middle
 import { getSessionMemorySettings, setSessionMemoryScope, type MemoryMode } from '../../../storage/memory/settings.js'
 
 interface ChatBody {
+  /** Explicit @Agent/continue selections; never changes the bound main Agent. */
+  collaborators?: CollaboratorInput[]
   message: string
   sessionId?: string
   /** Per-conversation memory policy. Omitted means the stored session policy/default. */
@@ -469,6 +472,9 @@ export async function chatRoutes(fastify: FastifyInstance) {
           message: { type: ['string', 'null', 'array'] },
           sessionId: { type: 'string' },
           agentId: { type: 'string' },
+          collaborators: { type: 'array', maxItems: 8, items: { type: 'object', properties: {
+            agentId: { type: 'string', minLength: 1 }, resumeRunId: { type: 'string', minLength: 1 },
+          }, additionalProperties: false } },
           systemPrompt: { type: 'string' },
           maxAskUserCount: { type: 'number' },
           thinkingMode: { type: ['boolean', 'string'], enum: [true, false, 'low', 'medium', 'high'] },
@@ -512,8 +518,19 @@ export async function chatRoutes(fastify: FastifyInstance) {
     },
   }, async (request, reply) => {
     const toolProfile = getRequestToolProfile(request)
+    const runLifetime = getRequestRunLifetime(request)
     const requestId = uuidv4()
     request.body.sessionId ??= uuidv4()
+    let selectedCollaborators: Awaited<ReturnType<typeof prepareCollaborators>> = []
+    if (!request.body.toolResponse) {
+      try {
+        selectedCollaborators = await prepareCollaborators(getTenantId(request), request.body.sessionId, request.body.collaborators,
+          { workspacePaths: request.body.workspacePaths })
+      } catch (error) {
+        if (error instanceof CollaboratorError) return reply.code(error.statusCode).send(fail(error.statusCode === 400 ? 40001 : error.statusCode === 404 ? 40400 : 40900, error.message))
+        throw error
+      }
+    }
     const admissionKey = makeAbortKey(getTenantId(request), request.body.sessionId)
     const admissionEpoch = cancellationEpochs.get(admissionKey) ?? 0
     let resumeRecord = null as Awaited<ReturnType<typeof rootRunStore.get>>
@@ -745,8 +762,8 @@ export async function chatRoutes(fastify: FastifyInstance) {
     const preparing = preparingChatAborters.get(admissionKey) ?? new Set<AbortController>()
     preparing.add(abortController); preparingChatAborters.set(admissionKey, preparing)
     // Before root admission there is no durable producer to reconnect to.
-    // Stop only this preparation on disconnect, retaining the existing Code
-    // disconnect/replay behavior once a root has actually started below.
+    // Stop only this preparation on disconnect; the requested lifetime applies
+    // once a root has actually started below.
     const onPreparationClose = () => {
       if (!reply.raw.writableEnded) abortController.abort(new Error('Client disconnected during tool discovery'))
     }
@@ -762,6 +779,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
         memoryScope: effectiveMemoryScope,
         allowedSkills,
         allowedTools,
+        allowedMcpServers,
         inlineSkills: requestedInlineSkills,
         inlineMcpServers: requestedInlineMcpServers,
         inlineAgents: requestedInlineAgents,
@@ -778,9 +796,9 @@ export async function chatRoutes(fastify: FastifyInstance) {
     }
     const { registry, externalSkills, toolCategories } = prepared
 
-    // Code runs are durable root jobs: an SSE viewer may disconnect while the
-    // model/tools continue working and reconnect through /chat/stream later.
-    const streamBus = new StreamBus(abortController, { retainOnDisconnect: toolProfile === 'code' })
+    // Durable root jobs continue when an SSE viewer disconnects. Capability
+    // selection must not silently change this ownership/replay contract.
+    const streamBus = new StreamBus(abortController, { retainOnDisconnect: runLifetime === 'durable' })
     // Published only after the root run has been claimed below.
 
     // ── 客户端断开检测：给予重连宽限期 ───────────────────────────────────────
@@ -789,7 +807,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
       if (aborted || streamBus.finished) return
       aborted = true
       if (streamBus.retainOnDisconnect) {
-        reqLogger.info({ sessionId }, 'Client connection closed; retaining Code run for replay')
+        reqLogger.info({ sessionId }, 'Client connection closed; retaining durable run for replay')
         return
       }
       reqLogger.info({ sessionId }, 'Client connection closed, entering grace period')
@@ -830,6 +848,8 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
     ctx.emitSubagentEvent = (event) => { streamBus.push('\x00__subagent_event__' + JSON.stringify(event)) }
     ctx.rootSessionId = sessionId
+    ctx.resourceScope = { skills: allowedSkills?.length ? allowedSkills : null,
+      mcpServers: allowedMcpServers, knowledgeBases: boundKnowledgeBases ?? (toolProfile === 'code' ? [] : null) }
     // Spend accounting is shared by parent/children and independent of context capacity.
     // Code mode must not inherit an operator's cumulative token cap. The
     // provider and the model context window remain the only physical limits.
@@ -1341,7 +1361,8 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
         } })
         const llm = createAdapterFromResolved(ctx.resolvedModel)
         const strategy = new ReActStrategy(llm, {
-          systemPrompt: fullSystemPrompt || undefined,
+          delegatedTools: selectedCollaborators.length ? collaboratorTools(selectedCollaborators, prompt, ctx) : undefined,
+          systemPrompt: (fullSystemPrompt + (selectedCollaborators.length ? '\n\n用户本轮明确指定的协作子代理已由系统执行。基于历史中对应 subagent 的真实结果继续完成和汇总当前任务；不能要求用户新建任务来使用这些 Agent，不能把子代理当作更换主 Agent。需要追加工作时使用该结果中的 resumeRunId/runId 继续同一子代理上下文，避免重复创建或重复已完成工作。' : '')) || undefined,
           temperature: effectiveTemperature,
           unboundedCode: toolProfile === 'code',
           maxAskUserCount,

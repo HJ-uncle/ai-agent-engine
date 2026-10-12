@@ -29,6 +29,21 @@ export interface SubagentToolCall {
 }
 
 export interface SubagentContinuationProfile {
+  /** Frozen custom-Agent configuration; a follow-up must keep the same identity and permissions. */
+  agent?: {
+    id: string
+    name: string
+    description?: string
+    systemPrompt?: string
+    model?: string
+    temperature?: number
+    skills: string[]
+    mcpServers: string[]
+    knowledgeBases: string[]
+    allowedTools: string[]
+  }
+  /** Only a server-validated, explicit user delegation may use its Agent's own tool catalog. */
+  userDelegated?: boolean
   role?: string
   readOnly: boolean
   systemPrompt: string
@@ -49,6 +64,8 @@ export interface SubagentRun {
   parentToolCallId: string
   childSessionId: string
   resumeFromRunId?: string
+  agentId?: string
+  agentName?: string
   continuation?: SubagentContinuationProfile
   task: string
   description: string
@@ -82,6 +99,8 @@ export type CreateSubagentRun = Pick<SubagentRun, 'tenantId' | 'rootSessionId' |
   runId?: string
   childSessionId?: string
   resumeFromRunId?: string
+  agentId?: string
+  agentName?: string
   continuation?: SubagentContinuationProfile
 }
 

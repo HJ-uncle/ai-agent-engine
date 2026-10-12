@@ -5,7 +5,8 @@ import type { RegistryFactoryOptions } from '../../../../tools/registry-factory.
 import { toolRoutes } from '../tools.js'
 import { getRequestToolProfile } from '../../tool-profile.js'
 
-const fixtures = vi.hoisted(() => ({ factory: vi.fn(), getAgent: vi.fn() }))
+const fixtures = vi.hoisted(() => ({ factory: vi.fn(), getAgent: vi.fn(), projectDirectory: vi.fn() }))
+vi.mock('../../../../workspace/index.js', () => ({ workspaceManager: { resolveProjectDirectory: fixtures.projectDirectory } }))
 vi.mock('../../../../tools/registry-factory.js', () => ({ createToolRegistry: fixtures.factory }))
 vi.mock('../../../../skills/index.js', () => ({ skillsRegistry: { getSkills: () => [] } }))
 vi.mock('../../../../storage/agent/index.js', () => ({
@@ -15,6 +16,7 @@ vi.mock('../../../../storage/agent/index.js', () => ({
 let app: FastifyInstance
 beforeEach(async () => {
   fixtures.factory.mockReset()
+  fixtures.projectDirectory.mockReset().mockImplementation((_tenantId: string, root: string) => root)
   fixtures.getAgent.mockReset().mockResolvedValue(null)
   fixtures.factory.mockImplementation(async (options: RegistryFactoryOptions) => {
     const names = options.toolProfile === 'code' ? ['read_file', 'list_skills'] : ['read_file', 'agent_list', 'list_skills']
@@ -29,14 +31,14 @@ describe.each(['/tools', '/system-tools'])('%s tool-profile routing', (endpoint)
   it('keeps headerless clients in general even when the query asks for code', async () => {
     const response = await app.inject({ method: 'GET', url: `${endpoint}?toolProfile=code` })
     expect(response.statusCode).toBe(200)
-    expect(fixtures.factory).toHaveBeenCalledWith({ toolProfile: 'general', allowedTools: null, allowedSkills: null })
+    expect(fixtures.factory).toHaveBeenCalledWith({ toolProfile: 'general', allowedTools: null, allowedSkills: null, allowedMcpServers: null, workspaceRoot: undefined })
     expect(response.json().data.map((tool: { name: string }) => tool.name)).toContain('agent_list')
   })
 
   it('passes the code header to the factory and returns its effective list', async () => {
     const response = await app.inject({ method: 'GET', url: endpoint, headers: { 'X-Aether-Tool-Profile': 'code' } })
     expect(response.statusCode).toBe(200)
-    expect(fixtures.factory).toHaveBeenCalledWith({ toolProfile: 'code', allowedTools: null, allowedSkills: null })
+    expect(fixtures.factory).toHaveBeenCalledWith({ toolProfile: 'code', allowedTools: null, allowedSkills: null, allowedMcpServers: null, workspaceRoot: undefined })
     expect(response.json().data.map((tool: { name: string }) => tool.name)).toEqual(endpoint === '/tools' ? ['read_file', 'list_skills'] : ['read_file'])
   })
 
@@ -44,7 +46,7 @@ describe.each(['/tools', '/system-tools'])('%s tool-profile routing', (endpoint)
     await app.inject({ method: 'GET', url: endpoint, headers: { 'x-aether-tool-profile': 'code' } })
     const response = await app.inject({ method: 'GET', url: endpoint, headers: { 'x-aether-tool-profile': 'general' } })
     expect(response.statusCode).toBe(200)
-    expect(fixtures.factory).toHaveBeenLastCalledWith({ toolProfile: 'general', allowedTools: null, allowedSkills: null })
+    expect(fixtures.factory).toHaveBeenLastCalledWith({ toolProfile: 'general', allowedTools: null, allowedSkills: null, allowedMcpServers: null, workspaceRoot: undefined })
     expect(response.json().data.map((tool: { name: string }) => tool.name)).toContain('agent_list')
   })
 
@@ -57,12 +59,38 @@ describe.each(['/tools', '/system-tools'])('%s tool-profile routing', (endpoint)
   })
 
   it('does not let query or stored agent settings replace the code header', async () => {
-    fixtures.getAgent.mockResolvedValue({ allowedTools: ['agent_list', 'read_file'], skills: ['fixture-skill'], toolProfile: 'general' })
+    fixtures.getAgent.mockResolvedValue({ allowedTools: ['agent_list', 'read_file'], skills: ['fixture-skill'], mcpServers: ['project-mcp'], toolProfile: 'general' })
     const response = await app.inject({ method: 'GET', url: `${endpoint}?agentId=fixture&toolProfile=general&profile=general`, headers: { 'x-aether-tool-profile': 'code' } })
     expect(response.statusCode).toBe(200)
-    expect(fixtures.factory).toHaveBeenCalledWith({ toolProfile: 'code', allowedTools: ['agent_list', 'read_file'], allowedSkills: ['fixture-skill'] })
+    expect(fixtures.factory).toHaveBeenCalledWith({ toolProfile: 'code', allowedTools: ['agent_list', 'read_file'], allowedSkills: ['fixture-skill'], allowedMcpServers: ['project-mcp'], workspaceRoot: undefined })
     expect(response.json().data.map((tool: { name: string }) => tool.name)).not.toContain('agent_list')
   })
+  it('authorizes the requested project directory and passes its canonical root without changing profile', async () => {
+    fixtures.projectDirectory.mockReturnValue('/canonical/project')
+    fixtures.getAgent.mockResolvedValue({ allowedTools: ['read_file'], skills: [], mcpServers: ['selected-server'] })
+    const response = await app.inject({ method: 'GET', url: `${endpoint}?agentId=fixture&path=${encodeURIComponent('/selected/project')}`, headers: { 'x-aether-tool-profile': 'general' } })
+    expect(response.statusCode).toBe(200)
+    expect(fixtures.projectDirectory).toHaveBeenCalledWith('default', '/selected/project')
+    expect(fixtures.factory).toHaveBeenCalledWith({ toolProfile: 'general', allowedTools: ['read_file'], allowedSkills: [], allowedMcpServers: ['selected-server'], workspaceRoot: '/canonical/project' })
+    expect(fixtures.getAgent).toHaveBeenCalledWith('fixture', 'default')
+  })
+
+  it('rejects a disallowed directory before reading Agents or discovering MCP tools', async () => {
+    fixtures.projectDirectory.mockImplementation(() => { throw new Error('workspaceRoot belongs to another tenant') })
+    const response = await app.inject(`${endpoint}?agentId=fixture&path=${encodeURIComponent('/another/tenant')}`)
+    expect(response.statusCode).toBe(403)
+    expect(response.json().message).toContain('another tenant')
+    expect(fixtures.getAgent).not.toHaveBeenCalled()
+    expect(fixtures.factory).not.toHaveBeenCalled()
+  })
+
+  it('rejects malformed directory queries before authorization or discovery', async () => {
+    const response = await app.inject(`${endpoint}?path=bad%00directory`)
+    expect(response.statusCode).toBe(400)
+    expect(fixtures.projectDirectory).not.toHaveBeenCalled()
+    expect(fixtures.factory).not.toHaveBeenCalled()
+  })
+
 })
 
 describe('profile header authority', () => {

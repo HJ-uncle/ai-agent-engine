@@ -179,17 +179,34 @@ export class WorkspaceManager {
   bind(ctx: CtxLike, workspaceRoot: string): string {
     this.assertContext(ctx)
     const bindings = this.readBindings()
+    const canonical = this.validateSelectedDirectory(ctx.tenantId, workspaceRoot, bindings)
+    bindings.set(this.bindingKey(ctx), canonical)
+    this.persistBindings(bindings)
+    return canonical
+  }
+
+  /** Catalogue discovery checks the same directory boundary as binding, without
+   * changing any session selection. Single-user desktop contexts already allow
+   * explicit local projects; authenticated engines require the operator roots. */
+  resolveProjectDirectory(tenantId: string, workspaceRoot: string): string {
+    this.validateId(tenantId, 'tenantId')
+    const authenticated = this.isAuthenticated()
+    return this.validateSelectedDirectory(tenantId, workspaceRoot, authenticated ? this.readBindings() : new Map(), authenticated)
+  }
+
+  private validateSelectedDirectory(tenantId: string, workspaceRoot: string, bindings: Map<string, string>, restrictToAllowedRoots = true): string {
+    if (typeof workspaceRoot !== 'string' || workspaceRoot.length > 4096 || /[\u0000-\u001f\u007f]/.test(workspaceRoot)) throw new Error('workspaceRoot must be a valid server path')
     if (!workspaceRoot.trim() || !path.isAbsolute(workspaceRoot)) throw new Error('workspaceRoot must be an absolute server path')
     const resolved = path.resolve(workspaceRoot)
     const allowed = this.allowedRoots.some(base => {
       const relative = path.relative(base, resolved)
       return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep))
     })
-    if (!allowed) throw new Error('workspaceRoot is outside the engine allowed workspace roots')
+    if (restrictToAllowedRoots && !allowed) throw new Error('workspaceRoot is outside the engine allowed workspace roots')
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) throw new Error('workspaceRoot must be an existing directory')
     const canonical = fs.realpathSync(resolved)
     const canonicalAllowed = this.allowedRoots.some(base => this.isContained(this.realpathIfExists(base), canonical))
-    if (!canonicalAllowed) throw new Error('workspaceRoot resolves outside the engine allowed workspace roots')
+    if (restrictToAllowedRoots && !canonicalAllowed) throw new Error('workspaceRoot resolves outside the engine allowed workspace roots')
     // A configured root is an operator allow-list, not a tenant sharing grant.
     // In authenticated deployments do not let one tenant bind another tenant's
     // project (including a nested directory). Desktop/no-auth mode retains the
@@ -205,16 +222,14 @@ export class WorkspaceManager {
       // engine's private root. Operator-allowed project roots may legitimately
       // live beside that private root and are protected by persisted ownership below.
       if (isPrivate && privateParts.length === 0) throw new Error('The private workspace root cannot be bound')
-      if (isPrivate && privateParts.length > 0 && privateParts[0] !== ctx.tenantId) {
+      if (isPrivate && privateParts.length > 0 && privateParts[0] !== tenantId) {
         throw new Error('workspaceRoot belongs to another tenant')
       }
       const owner = [...bindings.entries()].find(([key, owned]) =>
-        key.split('\u0000')[0] !== ctx.tenantId && fs.existsSync(owned) && fs.statSync(owned).isDirectory() &&
+        key.split('\u0000')[0] !== tenantId && fs.existsSync(owned) && fs.statSync(owned).isDirectory() &&
         (this.isContained(fs.realpathSync(owned), canonical) || this.isContained(canonical, fs.realpathSync(owned))))
       if (owner) throw new Error('workspaceRoot is already bound to another tenant')
     }
-    bindings.set(this.bindingKey(ctx), canonical)
-    this.persistBindings(bindings)
     return canonical
   }
 

@@ -53,10 +53,14 @@ export class SubagentStore {
       sql: 'INSERT INTO subagent_events (tenant_id,run_id,seq,kind,event) VALUES (?,?,?,?,?)',
       args: [run.tenantId, run.runId, run.lastSeq, kind, encoded],
     })
-    await tx.execute({
-      sql: 'INSERT INTO subagent_outbox (id,tenant_id,run_id,seq,event) VALUES (?,?,?,?,?)',
-      args: [`${run.tenantId}:${run.runId}:${run.lastSeq}`, run.tenantId, run.runId, run.lastSeq, encoded],
-    })
+    // Only terminal results are projected into the parent transcript. Queuing every
+    // growing progress snapshot duplicates the archive and can exhaust memory on restart.
+    if (kind === 'finished' && isTerminalRun(run.status)) {
+      await tx.execute({
+        sql: 'INSERT INTO subagent_outbox (id,tenant_id,run_id,seq,event) VALUES (?,?,?,?,?)',
+        args: [`${run.tenantId}:${run.runId}:${run.lastSeq}`, run.tenantId, run.runId, run.lastSeq, encoded],
+      })
+    }
     return event
   }
 
@@ -85,7 +89,10 @@ export class SubagentStore {
         continuation = prior.continuation
       }
       const run: SubagentRun = {
-        ...input, continuation, schemaVersion: 1, runId: input.runId ?? randomUUID(), childSessionId,
+        ...input, continuation,
+        agentId: continuation?.agent?.id ?? input.agentId,
+        agentName: continuation?.agent?.name ?? input.agentName,
+        schemaVersion: 1, runId: input.runId ?? randomUUID(), childSessionId,
         status: 'queued', lastSeq: 1, createdAt: now, updatedAt: now,
         usage: {}, toolCalls: [], transcriptRef: `session:${childSessionId}`,
       }
@@ -185,11 +192,19 @@ export class SubagentStore {
     return result.rows.map((row) => JSON.parse(String(row.event)) as SubagentEvent)
   }
 
-  async listPendingParentProjections(tenantId?: string): Promise<ParentProjection[]> {
+  /** Read one bounded page; acknowledgment advances the queue without an OFFSET. */
+  async listPendingParentProjections(tenantId?: string, limit = 32): Promise<ParentProjection[]> {
+    if (!Number.isInteger(limit) || limit < 1) throw new RangeError('Projection page size must be a positive integer')
     await this.ready()
     const result = await this.db.execute({
-      sql: `SELECT id,tenant_id,event FROM subagent_outbox WHERE acknowledged=0${tenantId ? ' AND tenant_id=?' : ''} ORDER BY run_id,seq`,
-      args: tenantId ? [tenantId] : [],
+      // Legacy queues contain gigabytes of progress snapshots. Filter on indexed
+      // event identity and kind in SQLite, before any JSON crosses the process boundary.
+      // Retain those old rows and the canonical event archive without rewriting user data.
+      sql: `SELECT o.id,o.tenant_id,o.event FROM subagent_outbox o
+        JOIN subagent_events e ON e.tenant_id=o.tenant_id AND e.run_id=o.run_id AND e.seq=o.seq
+        WHERE o.acknowledged=0 AND e.kind='finished'${tenantId ? ' AND o.tenant_id=?' : ''}
+        ORDER BY o.tenant_id,o.run_id,o.seq LIMIT ?`,
+      args: [...(tenantId ? [tenantId] : []), Math.min(limit, 32)],
     })
     return result.rows.map((row) => ({ id: String(row.id), tenantId: String(row.tenant_id), event: JSON.parse(String(row.event)) as SubagentEvent }))
   }

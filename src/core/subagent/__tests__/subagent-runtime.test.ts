@@ -213,14 +213,17 @@ describe('SubagentRunner: typed outcome and durable lifecycle', () => {
 })
 
 describe('SubagentStore: transactional snapshots, event replay and recovery', () => {
-  it('creates idempotently and commits snapshot/event/outbox together', async () => {
+  it('creates idempotently, archives progress, and queues only terminal results', async () => {
     const definition = input()
     const event = await store.createRun(definition)
     const duplicate = await store.createRun(definition)
     expect(duplicate.runId).toBe(event.runId)
     expect((await store.listEvents('tenant-a', event.runId))).toHaveLength(1)
+    expect(await store.listPendingParentProjections('tenant-a')).toEqual([])
+    await store.appendSnapshot('tenant-a', event.runId, 'finished', { status: 'succeeded', resultSummary: 'Done' })
     const outbox = await store.listPendingParentProjections('tenant-a')
     expect(outbox).toHaveLength(1)
+    expect((await store.listEvents('tenant-a', event.runId)).map(item => item.kind)).toEqual(['created', 'finished'])
     expect(outbox[0].event.snapshot).toEqual(await store.getRun('tenant-a', event.runId))
     await store.ackProjection(outbox[0].id, 'other-tenant')
     expect(await store.listPendingParentProjections('tenant-a')).toHaveLength(1)
@@ -231,7 +234,7 @@ describe('SubagentStore: transactional snapshots, event replay and recovery', ()
   it('rolls back snapshot and event when outbox insertion fails', async () => {
     const event = await store.createRun(input())
     await db.execute("CREATE TRIGGER reject_test_outbox BEFORE INSERT ON subagent_outbox BEGIN SELECT RAISE(FAIL,'fixture outbox unavailable'); END")
-    await expect(store.appendSnapshot('tenant-a', event.runId, 'started', { status: 'running' })).rejects.toThrow('fixture outbox unavailable')
+    await expect(store.appendSnapshot('tenant-a', event.runId, 'finished', { status: 'succeeded' })).rejects.toThrow('fixture outbox unavailable')
     expect((await store.getRun('tenant-a', event.runId))?.status).toBe('queued')
     expect(await store.listEvents('tenant-a', event.runId)).toHaveLength(1)
   })

@@ -258,6 +258,8 @@ export interface IToolRegistry {
 // ─── AgentContext ──────────────────────────────────────────────────────────────
 
 export interface AgentContext {
+  /** Request-resolved resource ceiling for ordinary model-created children; explicit user-selected collaborators use their own bindings. */
+  resourceScope?: { skills?: readonly string[] | null; mcpServers?: readonly string[] | null; knowledgeBases?: readonly string[] | null }
   rootRunId?: string
   turnId?: string
   userMessageId?: string

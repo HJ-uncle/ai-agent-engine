@@ -128,6 +128,12 @@ export interface TokenUsage {
 }
 
 export interface ReActOptions {
+  /** Server-validated user delegations run before model generation; model arguments cannot create these hooks. */
+  delegatedTools?: Array<{
+    id: string
+    args: Record<string, unknown>
+    execute(ctx: AgentContext): Promise<ToolResult>
+  }>
   /** Reserve the final child iteration for returning evidence instead of starting more tools. */
   finalizeOnLimit?: boolean
   /** Code mode uses remaining context capacity without a fixed completion or cumulative budget. */
@@ -393,6 +399,46 @@ export class ReActStrategy implements LoopStrategy {
         ? { ...result, needsConfirmation: false, status: 'failed', success: false, output: '审批后策略仍未允许执行：' + result.output }
         : result, ctx)
       if (settled.failedToPersist) throw new Error('Approved tool result could not be persisted; execution will not be repeated automatically')
+      if (ctx.signal?.aborted) return
+    }
+
+    if (this.options.delegatedTools?.length) {
+      const launches: Array<RegisteredToolCall & { execute(ctx: AgentContext): Promise<ToolResult> }> = []
+      for (const delegation of this.options.delegatedTools) {
+        if (ctx.signal?.aborted) break
+        const call = { id: delegation.id, name: 'subagent', args: delegation.args }
+        const messageId = uuidv4()
+        await ctx.history.append({ id: messageId, role: 'assistant', content: '', toolCall: call,
+          toolCallId: call.id, createdAt: Date.now(), tokens: 0, conversationId: ctx.conversationId,
+          metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId, userDelegated: true } } as Message, ctx)
+        await ctx.runObserver?.onToolStart?.({ toolCallId: call.id, name: call.name, args: call.args })
+        yield '\x00__tool_start__' + JSON.stringify({ toolCallId: call.id, toolName: call.name,
+          name: call.name, args: call.args, messageId, rootRunId: ctx.rootRunId, turnId: ctx.turnId })
+        launches.push({ call, messageId, execute: delegation.execute })
+      }
+      // The runner's pool controls admitted child concurrency. Persist all announcements
+      // before starting so interrupted batches can be replayed without inventing work.
+      const pending = new Map(launches.map((item, index) => [index, (async () => {
+        let result: ToolResult
+        try {
+          result = ctx.signal?.aborted ? { success: false, status: 'cancelled', output: '用户已停止，未启动子代理。' }
+            : await item.execute({ ...ctx, currentMessageId: item.messageId, currentToolCallId: item.call.id })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          result = { success: false, status: ctx.signal?.aborted ? 'cancelled' : 'failed', output: message, error: message }
+        }
+        return { index, result }
+      })()]))
+      let failedToPersist = false
+      // Settle each finished child immediately; a failed sibling must not appear
+      // to be running merely because another collaborator is still working.
+      while (pending.size) {
+        const completed = await Promise.race(pending.values())
+        pending.delete(completed.index)
+        const settled = yield* this.settleTool(launches[completed.index], completed.result, ctx)
+        failedToPersist ||= settled.failedToPersist
+      }
+      if (failedToPersist) throw new Error('Delegated Agent result could not be persisted; execution will not be repeated automatically')
       if (ctx.signal?.aborted) return
     }
 

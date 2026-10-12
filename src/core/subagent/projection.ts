@@ -6,7 +6,11 @@ import { estimateTokens } from '../utils/tokens.js'
 /** Stable IDs bridge SQLite's transactional outbox and either transcript backend. */
 export async function projectPendingSubagents(history: ConversationHistory, tenantId?: string): Promise<void> {
   const store = getSubagentStore()
-  for (const row of await store.listPendingParentProjections(tenantId)) {
+  // A single result may contain a large tool transcript. Keep only one queued
+  // snapshot in memory, and leave it unacknowledged if transcript persistence fails.
+  while (true) {
+    const [row] = await store.listPendingParentProjections(tenantId, 1)
+    if (!row) break
     const run = row.event.snapshot
     if (row.event.kind === 'finished' && isTerminalRun(run.status)) {
       const ctx = { tenantId: row.tenantId, sessionId: run.parentSessionId }

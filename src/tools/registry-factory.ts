@@ -22,6 +22,7 @@ import { askUserTool } from './ask-user/index.js'
 import { createMemoryTools } from './memory/index.js'
 import { registerMCPTools } from './mcp/loader.js'
 import { createSkillTools, runSkillScriptTool } from './skill/index.js'
+import { createBoundSkillScriptTool } from './skill/bound-skill-script.js'
 import { globTool } from './search/glob-tool.js'
 import { grepTool } from './search/grep-tool.js'
 import { todoTools } from './todo/todo-tool.js'
@@ -62,8 +63,12 @@ export interface RegistryFactoryOptions {
   memoryScope?: import('../storage/memory/settings.js').MemoryMode
   /** 允许的 skill 列表，undefined = 全部，[] = 全部，传入列表则过滤 */
   allowedSkills?: string[] | null
+  /** Custom-Agent bindings are exact: [] exposes no external skills, rather than the legacy all-skills default. */
+  strictSkillBindings?: boolean
   /** undefined/null 使用 profile 默认集；[] 显式禁用；列表只能缩窄。general 保留原有始终注册的基础工具例外。 */
   allowedTools?: string[] | null
+  /** undefined/null discovers all configured MCP servers; [] disables MCP; IDs narrow both local and inline servers. */
+  allowedMcpServers?: string[] | null
   /**
    * 客户端透传的内联 Skill 列表（请求级；典型场景：桌面客户端把
    * 本地安装的 skill 在 chat 请求时一同下发）
@@ -270,7 +275,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
       externalSkills = [...externalSkills, ...inlineSkillsAsExternal]
     }
   }
-  if (opts.allowedSkills && opts.allowedSkills.length > 0) {
+  if (opts.allowedSkills && (opts.allowedSkills.length > 0 || opts.strictSkillBindings)) {
     // allowedSkills 可能是 skill name 或 skill id（客户端传的是目录名/ID），两者都接受
     externalSkills = externalSkills.filter((s) =>
       opts.allowedSkills!.includes(s.name) || (s.id != null && opts.allowedSkills!.includes(s.id))
@@ -282,7 +287,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
     if (registry.has(tool.name)) skillTools.push(tool.name)
   })
   if (shouldRegister('run_skill_script')) {
-    registry.register(runSkillScriptTool)
+    registry.register(opts.strictSkillBindings ? createBoundSkillScriptTool(externalSkills) : runSkillScriptTool)
     if (registry.has(runSkillScriptTool.name)) skillTools.push(runSkillScriptTool.name)
   }
 
@@ -330,7 +335,8 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
     opts.inlineMcpServers,
     opts.securityContext,
     opts.workspaceRoot,
-    opts.signal
+    opts.signal,
+    opts.allowedMcpServers
   )
   throwIfAborted(opts.signal)
 

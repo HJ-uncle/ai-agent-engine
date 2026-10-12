@@ -177,7 +177,7 @@ export function loadExternalSkills(skillsRoot?: string, options: { includeDisabl
   }
 
   skills.sort((a, b) => a.order - b.order)
-  logger.info({ count: skills.length, root }, 'External skills indexed')
+  // logger.info({ count: skills.length, root }, 'External skills indexed')
   return skills
 }
 

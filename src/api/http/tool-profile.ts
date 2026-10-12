@@ -8,3 +8,13 @@ export function getRequestToolProfile(request: Pick<FastifyRequest, 'headers'>):
   if (profile === 'code' || profile === 'general') return profile
   throw Object.assign(new Error('X-Aether-Tool-Profile must be code or general'), { statusCode: 400 })
 }
+
+export type RunLifetime = 'durable' | 'attached'
+
+/** Execution ownership is independent of tool capabilities; old clients retain their existing default. */
+export function getRequestRunLifetime(request: Pick<FastifyRequest, 'headers'>): RunLifetime {
+  const lifetime = request.headers['x-aether-run-lifetime']
+  if (lifetime === undefined) return getRequestToolProfile(request) === 'code' ? 'durable' : 'attached'
+  if (lifetime === 'durable' || lifetime === 'attached') return lifetime
+  throw Object.assign(new Error('X-Aether-Run-Lifetime must be durable or attached'), { statusCode: 400 })
+}

@@ -86,7 +86,7 @@ async function main() {
         process.env[key] = value
       }
     }
-    logger.info({ keys: Object.keys(dbConfig).length }, 'Synced system_config from DB to process.env')
+    // logger.info({ keys: Object.keys(dbConfig).length }, 'Synced system_config from DB to process.env')
 
     // 3.5 加载受管配置 (Managed Settings) 并应用（最高优先级，覆盖 DB 和本地配置）
     const managedConfig = loadManagedConfig()

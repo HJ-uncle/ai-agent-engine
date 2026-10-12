@@ -38,18 +38,23 @@ export async function registerMCPTools(
   inlineServers?: InlineMcpServer[],
   securityContext?: NetworkContext,
   workspaceRoot?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  allowedMcpServers?: readonly string[] | null
 ): Promise<string[]> {
   throwIfAborted(signal)
   const registeredNames: string[] = []
-  const localServers = listServers(workspaceRoot)
+  // Filter before constructing clients so an unbound server never starts a
+  // process or receives a handshake merely because another server was selected.
+  const allowedServerIds = allowedMcpServers == null ? null : new Set(allowedMcpServers)
+  if (allowedServerIds?.size === 0) return registeredNames
+  const localServers = listServers(workspaceRoot).filter(server => !allowedServerIds || allowedServerIds.has(server.id))
 
   // ── 合并 inlineServers（去重 + 仅保留远程协议） ─────────────────────────
   const localIds = new Set(localServers.map(s => s.id))
   const validInlineServers: InlineMcpServer[] = []
   if (Array.isArray(inlineServers) && inlineServers.length > 0) {
     for (const s of inlineServers) {
-      if (!s || !s.id || !s.name) continue
+      if (!s || !s.id || !s.name || (allowedServerIds && !allowedServerIds.has(s.id))) continue
       if (localIds.has(s.id)) {
         logger.debug({ id: s.id }, 'Inline MCP server overridden by local config, skipping')
         continue

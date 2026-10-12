@@ -411,7 +411,7 @@ describe('D7 command job HTTP and history lifecycle', () => {
     for (const { runId } of children) {
       expect((await store.getRun(tenantId, runId))?.status).toBe('succeeded')
       expect((await store.listEvents(tenantId, runId)).map(event => event.seq)).toEqual([1, 2, 3])
-      expect(outbox.filter(item => item.event.runId === runId).map(item => item.event.seq)).toEqual([1, 2, 3])
+      expect(outbox.filter(item => item.event.runId === runId).map(item => item.event.seq)).toEqual([3])
     }
   }, 15_000)
 
