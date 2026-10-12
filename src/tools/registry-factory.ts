@@ -137,7 +137,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   const registry = new ToolRegistry(profile === 'code' ? (tool) =>
     (isCodeProfileTool(tool as Tool & { source?: string }) || (memoryEnabled && memoryImplementations.has(tool))) &&
     (explicitAllowedTools === undefined || explicitAllowedTools.includes(tool.name))
-    : undefined)
+    : (tool) => explicitAllowedTools === undefined || explicitAllowedTools.includes(normalizeToolName(tool.name)))
 
   // ── Tool category tracking ────────────────────────────────────────────
   const builtinTools: string[] = []
@@ -225,8 +225,8 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   if (shouldRegister(cmdTool.name)) registerBuiltin(cmdTool)
   commandJobTools.forEach(tool => { if (shouldRegister(tool.name)) registerBuiltin(tool) })
 
-  // 4. 向用户提问工具 - 始终注册，交互需要
-  registerBuiltin(askUserTool)
+  // 4. Explicit capability selection also applies to interactive tools in unattended runs.
+  if (shouldRegister(askUserTool.name)) registerBuiltin(askUserTool)
 
   // Only these builtin implementations may extend the code profile, not an extension with the same name.
   if (memoryEnabled) memoryTools.forEach(t => {

@@ -102,6 +102,58 @@ async function replay(lastEventId: string, targetTenant = tenantId) {
 }
 
 describe('D4 chat snapshot and replay HTTP contract', () => {
+  it('serves lightweight status from the latest indexed run without cloning live history', async () => {
+    await seedTurn('succeeded')
+    const run = await seedTurn('running')
+    const bus = attachBus()
+    bus.push('\x00__run__' + JSON.stringify(run))
+    bus.push('large current output '.repeat(20_000))
+    const fullSnapshot = vi.spyOn(bus, 'snapshot').mockImplementation(() => { throw new Error('Status must not clone the projection') })
+    const fullRunList = vi.spyOn(rootRunStore, 'list').mockImplementation(async () => { throw new Error('Status must not load all turns') })
+    const latest = vi.spyOn(rootRunStore, 'latest')
+    const response = await app.inject('/chat/status?sessionId=' + sessionId)
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({ code: 200, data: { running: true, finished: false, run: { runId: run.runId, status: 'running' }, lastEventId: bus.lastEventId } })
+    expect(latest).toHaveBeenCalledWith(tenantId, sessionId)
+    expect(fullSnapshot).not.toHaveBeenCalled()
+    expect(fullRunList).not.toHaveBeenCalled()
+    const foreign = await app.inject({ url: '/chat/status?sessionId=' + sessionId, headers: { 'x-tenant': 'another-tenant' } })
+    expect(foreign.json()).toMatchObject({ code: 200, data: { running: false, finished: false } })
+    expect(foreign.json().data).not.toHaveProperty('run')
+  })
+
+  it('does not associate an older retained stream with the latest durable run', async () => {
+    const old = await seedTurn('succeeded')
+    const bus = attachBus()
+    bus.push('\x00__run__' + JSON.stringify(old))
+    const latest = await seedTurn('waiting')
+    const fullSnapshot = vi.spyOn(bus, 'snapshot').mockImplementation(() => { throw new Error('Status must not clone a stale stream') })
+    const response = await app.inject('/chat/status?sessionId=' + sessionId)
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({ code: 200, data: { running: false, finished: true, run: { runId: latest.runId, status: 'waiting' } } })
+    expect(response.json().data).not.toHaveProperty('lastEventId')
+    expect(fullSnapshot).not.toHaveBeenCalled()
+  })
+  it('persists and exposes Cron execution configuration through real runs/status/snapshot HTTP APIs without secrets', async () => {
+    const run = await rootRunStore.create(tenantId, sessionId, 'fixture-model', [fixture], {
+      cronJobId: 'cron-audit-fixture', cronTimeoutSeconds: 600, thinkingMode: false,
+      apiKey: 'must-stay-private', authorization: 'must-stay-private',
+    })
+    await rootRunStore.update(tenantId, run.runId, { status: 'succeeded' })
+    const stored = await rootRunStore.get(tenantId, run.runId)
+    expect(stored?.request.cronTimeoutSeconds).toBe(600)
+    expect(stored?.request.cronJobId).toBe('cron-audit-fixture')
+    expect(stored?.request.apiKey).toBeUndefined()
+    for (const endpoint of ['runs', 'status', 'snapshot']) {
+      const response = await fetch(baseUrl + '/chat/' + endpoint + '?sessionId=' + sessionId)
+      expect(response.status).toBe(200)
+      const payload = await response.json() as { data: { runs?: Array<{ requestConfig?: unknown }>; run?: { requestConfig?: unknown } } }
+      const actual = endpoint === 'runs' ? payload.data.runs?.[0] : payload.data.run
+      expect(actual?.requestConfig).toMatchObject({ cronJobId: 'cron-audit-fixture', cronTimeoutSeconds: 600, thinkingMode: false })
+      expect(JSON.stringify(payload)).not.toContain('must-stay-private')
+    }
+  })
+
   it('preserves session billing and unknown child lower bounds across compaction and archive pages', async () => {
     let latest = await seedTurn()
     for (let index = 0; index < 7; index++) {

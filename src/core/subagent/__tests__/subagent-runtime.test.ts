@@ -300,3 +300,48 @@ it('keeps browser tool overview JSON complete without copying archived screensho
   expect((await store.getRun('tenant-a', run.runId))?.toolCalls[0].output).toBe(preview)
   expect(events.at(-1)?.snapshot.toolCalls[0].output).toBe(preview)
 })
+
+describe('Subagent continuation ownership and concurrency', () => {
+  const profile = { readOnly: true, systemPrompt: 'Keep the prior context', toolNames: ['read_file'], workspacePaths: [] }
+  it('reuses the same durable child transcript while creating independent per-turn run records', async () => {
+    vi.stubEnv('DATA_DIR', path.join(fixtureDir, 'runs.db'))
+    const { JSONLConversationHistory } = await import('../../../storage/conversation/jsonl-history.js')
+    const first = await runner.run(input({ continuation: profile }), parent, async ({ snapshot, observer }) => {
+      const context = { tenantId: snapshot.tenantId, sessionId: snapshot.childSessionId }
+      const history = new JSONLConversationHistory()
+      await history.clear(context, { tombstone: false })
+      await new JSONLConversationHistory().append({ id: 'memory-one', role: 'user', content: 'The project codename is cedar-742.', createdAt: Date.now(), tokens: 10 }, context)
+      await observer.onOutcome({ status: 'succeeded', output: 'Stored the project context' })
+    })
+    let historyRead = ''
+    const next = await runner.run(input({ resumeFromRunId: first.runId }), parent, async ({ snapshot, observer }) => {
+      const history = new JSONLConversationHistory()
+      historyRead = (await history.getHistory({ tenantId: snapshot.tenantId, sessionId: snapshot.childSessionId })).map(row => row.content).join('\n')
+      await observer.onOutcome({ status: 'succeeded', output: 'Continued' })
+    })
+    expect(next.runId).not.toBe(first.runId)
+    expect(next.childSessionId).toBe(first.childSessionId)
+    expect(next.continuation).toEqual(profile)
+    expect(historyRead).toContain('cedar-742')
+    expect((await store.listRunsForParent('tenant-a', 'root')).length).toBe(2)
+  })
+  it('atomically refuses two concurrent resumptions of one child', async () => {
+    const first = await runner.run(input({ continuation: profile }), parent, async ({ observer }) => { await observer.onOutcome({ status: 'succeeded', output: 'first' }) })
+    const results = await Promise.allSettled([
+      store.createRun(input({ resumeFromRunId: first.runId })),
+      store.createRun(input({ resumeFromRunId: first.runId })),
+    ])
+    expect(results.filter(item => item.status === 'fulfilled')).toHaveLength(1)
+    const failure = results.find(item => item.status === 'rejected')
+    expect(failure && failure.status === 'rejected' ? String(failure.reason) : '').toContain('SUBAGENT_RESUME_BUSY')
+  })
+  it('rejects another tenant, parent or root and cannot forge a replacement child or permission profile', async () => {
+    const first = await runner.run(input({ continuation: profile }), parent, async ({ observer }) => { await observer.onOutcome({ status: 'succeeded', output: 'first' }) })
+    for (const overrides of [{ tenantId: 'other' }, { parentSessionId: 'other' }, { rootSessionId: 'other' }]) {
+      await expect(store.createRun(input({ ...overrides, resumeFromRunId: first.runId }))).rejects.toThrow('SUBAGENT_RESUME_NOT_OWNED')
+    }
+    const next = await store.createRun(input({ resumeFromRunId: first.runId, childSessionId: 'forged', continuation: { ...profile, readOnly: false, toolNames: ['execute_cmd'] } }))
+    expect(next.snapshot.childSessionId).toBe(first.childSessionId)
+    expect(next.snapshot.continuation).toEqual(profile)
+  })
+})

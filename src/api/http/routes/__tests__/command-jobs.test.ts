@@ -287,6 +287,32 @@ describe('D7 command job HTTP and history lifecycle', () => {
     await commandJobs.cancel({ tenantId, sessionId }, job.jobId, 'fixture completed')
   })
 
+  it('owned cancellation cannot abort a newer run or its commands in the same session', async () => {
+    const sessionId = 'owned-cancel-race'
+    const old = await rootRunStore.create(tenantId, sessionId, 'fixture-model', [fixture], {})
+    await rootRunStore.update(tenantId, old.runId, { status: 'succeeded' })
+    const newer = await rootRunStore.create(tenantId, sessionId, 'fixture-model', [fixture], {})
+    const { StreamBus, activeStreams } = await import('../../../../core/stream-pipeline/stream-bus.js')
+    const controller = new AbortController()
+    const bus = new StreamBus(controller)
+    bus.push('\x00__run__' + JSON.stringify(newer))
+    const key = tenantId + ':' + sessionId
+    activeStreams.set(key, bus)
+    const { job, marker } = await writingJob(sessionId, { runId: newer.runId, turnId: newer.turnId })
+    try {
+      const stale = await request({ method: 'POST', url: '/chat/cancel', payload: { sessionId, runId: old.runId } })
+      expect(stale.json().data.cancelled).toBe(false)
+      expect(controller.signal.aborted).toBe(false)
+      expect((await rootRunStore.get(tenantId, newer.runId))?.status).toBe('running')
+      await assertStillWriting(marker)
+      const owned = await request({ method: 'POST', url: '/chat/cancel', payload: { sessionId, runId: newer.runId } })
+      expect(owned.json().data.cancelled).toBe(true)
+      expect(controller.signal.aborted).toBe(true)
+      expect((await commandJobs.get({ tenantId, sessionId }, job.jobId))?.status).toBe('cancelled')
+      await assertStopped(marker)
+    } finally { activeStreams.delete(key); await commandJobs.cancel({ tenantId, sessionId }, job.jobId, 'fixture cleanup') }
+  }, 10_000)
+
   it('chat cancellation during initial job persistence prevents a late command spawn', async () => {
     const sessionId = 'cancel-start-admission'
     const marker = path.join(fixture, 'must-not-spawn-after-cancel.txt')

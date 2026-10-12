@@ -71,9 +71,21 @@ export class SubagentStore {
         return { schemaVersion: 1, kind: 'created', runId: run.runId, seq: run.lastSeq, snapshot: run }
       }
       const now = Date.now()
-      const childSessionId = input.childSessionId ?? `subagent-${randomUUID()}`
+      let childSessionId = input.childSessionId ?? `subagent-${randomUUID()}`
+      let continuation = input.continuation
+      if (input.resumeFromRunId) {
+        const source = await tx.execute({ sql: 'SELECT snapshot FROM subagent_runs WHERE tenant_id=? AND run_id=?', args: [input.tenantId, input.resumeFromRunId] })
+        const prior = source.rows[0] ? JSON.parse(String(source.rows[0].snapshot)) as SubagentRun : null
+        if (!prior || prior.parentSessionId !== input.parentSessionId || prior.rootSessionId !== input.rootSessionId) throw new Error('SUBAGENT_RESUME_NOT_OWNED: 子代理不属于当前父任务。')
+        if (!prior.continuation) throw new Error('SUBAGENT_RESUME_UNAVAILABLE: 旧记录缺少续跑权限信息。')
+        if (!isTerminalRun(prior.status)) throw new Error('SUBAGENT_RESUME_BUSY: 子代理仍在执行。')
+        const active = await tx.execute({ sql: "SELECT run_id FROM subagent_runs WHERE tenant_id=? AND child_session_id=? AND status IN ('queued','running','cancelling') LIMIT 1", args: [input.tenantId, prior.childSessionId] })
+        if (active.rows.length) throw new Error('SUBAGENT_RESUME_BUSY: 同一子代理已有正在执行的任务。')
+        childSessionId = prior.childSessionId
+        continuation = prior.continuation
+      }
       const run: SubagentRun = {
-        ...input, schemaVersion: 1, runId: input.runId ?? randomUUID(), childSessionId,
+        ...input, continuation, schemaVersion: 1, runId: input.runId ?? randomUUID(), childSessionId,
         status: 'queued', lastSeq: 1, createdAt: now, updatedAt: now,
         usage: {}, toolCalls: [], transcriptRef: `session:${childSessionId}`,
       }

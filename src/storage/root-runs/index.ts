@@ -23,6 +23,8 @@ export interface RootPending {
 }
 /** Public composer settings only; inline definitions and connection secrets stay private. */
 export interface RootRunRequestConfig {
+  cronJobId?: string
+  cronTimeoutSeconds?: number
   agentId?: string
   thinkingMode?: boolean | 'low' | 'medium' | 'high'
   subagentModel?: string
@@ -61,7 +63,7 @@ const schemas = new WeakMap<Client, Promise<void>>()
 
 /** Deliberately omit credentials; resume resolves the same model's stored connection. */
 export function resumableRequest(request: Record<string, unknown>): Record<string, unknown> {
-  const allowed = ['agentId', 'systemPrompt', 'maxAskUserCount', 'thinkingMode', 'inheritContext', 'workspacePaths',
+  const allowed = ['cronJobId', 'cronTimeoutSeconds', 'agentId', 'systemPrompt', 'maxAskUserCount', 'thinkingMode', 'inheritContext', 'workspacePaths',
     'model', 'subagentModel', 'utilityModel', 'modelBaseUrl', 'modelProvider', 'capabilities', 'skills', 'mcpServers',
     'knowledgeBases', 'memoryScope', 'allowedTools', 'inlineSkills', 'inlineAgents', 'inlineAgent', 'inlineKnowledgeBases', 'ragTopK', 'metadata', 'toolProfile']
   const clean = (value: unknown): unknown => {
@@ -75,13 +77,15 @@ export function resumableRequest(request: Record<string, unknown>): Record<strin
 
 export function publicRequestConfig(request: Record<string, unknown>): RootRunRequestConfig {
   const config: RootRunRequestConfig = {}
-  for (const key of ['agentId', 'subagentModel', 'utilityModel'] as const) {
+  for (const key of ['cronJobId', 'agentId', 'subagentModel', 'utilityModel'] as const) {
     if (typeof request[key] === 'string') config[key] = request[key]
   }
   for (const key of ['skills', 'mcpServers', 'knowledgeBases'] as const) {
     const value = request[key]
     if (Array.isArray(value) && value.every(id => typeof id === 'string')) config[key] = [...value]
   }
+  const timeout = request.cronTimeoutSeconds
+  if (typeof timeout === 'number' && Number.isInteger(timeout) && timeout >= 1 && timeout <= 86400) config.cronTimeoutSeconds = timeout
   const thinking = request.thinkingMode
   if (typeof thinking === 'boolean' || thinking === 'low' || thinking === 'medium' || thinking === 'high') config.thinkingMode = thinking
   const scope = request.memoryScope
@@ -133,6 +137,14 @@ export class RootRunStore {
     const db = await this.ready()
     const rows = await db.execute({ sql: 'SELECT seq,state FROM root_runs WHERE tenant_id=? AND session_id=? ORDER BY seq', args: [tenantId, sessionId] })
     return rows.rows.map(row => this.public({ ...JSON.parse(String(row.state)), seq: Number(row.seq) }))
+  }
+
+  /** The session index can answer status without decoding every archived turn. */
+  async latest(tenantId: string, sessionId: string): Promise<RootRun | null> {
+    const db = await this.ready()
+    const rows = await db.execute({ sql: 'SELECT seq,state FROM root_runs WHERE tenant_id=? AND session_id=? ORDER BY seq DESC LIMIT 1', args: [tenantId, sessionId] })
+    const row = rows.rows[0]
+    return row ? this.public({ ...JSON.parse(String(row.state)), seq: Number(row.seq) }) : null
   }
 
   async get(tenantId: string, runId: string): Promise<StoredRun | null> {

@@ -8,6 +8,7 @@ export interface ResolvedModelConfig extends CreateAdapterOptions {
   readonly model: string
   readonly provider: string
   readonly capabilities: ModelCapabilities
+  readonly reasoningEffort?: 'low' | 'medium' | 'high'
   readonly thinkingEnabled?: boolean
   readonly thinkingConfig?: Record<string, unknown> | null
   readonly responseThinkingField?: string | null
@@ -18,6 +19,7 @@ export interface ResolveModelOptions {
   model?: string
   parent?: ResolvedModelConfig
   overrides?: CreateAdapterOptions & {
+    reasoningEffort?: 'low' | 'medium' | 'high'
     thinkingEnabled?: boolean
     thinkingConfig?: Record<string, unknown> | null
     responseThinkingField?: string | null
@@ -44,10 +46,11 @@ export async function resolveModelConfig({tenantId, model, parent, overrides}: R
   })
   // Preserve intent across model changes without copying another provider's wire parameters.
   const thinkingEnabled = overrides?.thinkingEnabled ?? parent?.thinkingEnabled
+  const reasoningEffort = thinkingEnabled === false || !capabilities.thinking ? undefined : overrides?.reasoningEffort ?? parent?.reasoningEffort
   const whitelist = capabilities.thinking ? (await store.getWhitelists()).find(value => value.modelId === resolvedModel && value.thinkingMode) : undefined
   return Object.freeze({
-    ...resolved, model: resolvedModel, provider, capabilities, thinkingEnabled,
-    thinkingConfig: thinkingEnabled === false ? null : overrides?.thinkingConfig !== undefined ? overrides.thinkingConfig : whitelist?.thinkingConfig,
+    ...resolved, model: resolvedModel, provider, capabilities, thinkingEnabled, reasoningEffort,
+    thinkingConfig: thinkingEnabled === false ? null : overrides?.thinkingConfig !== undefined ? overrides.thinkingConfig : (reasoningEffort && /deepseek/i.test(provider + resolvedModel) ? { reasoning_effort: reasoningEffort } : whitelist?.thinkingConfig),
     responseThinkingField: thinkingEnabled === false ? null : overrides?.responseThinkingField !== undefined ? overrides.responseThinkingField : whitelist?.responseThinkingField,
   })
 }

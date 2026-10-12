@@ -28,6 +28,16 @@ export interface SubagentToolCall {
   durationMs?: number
 }
 
+export interface SubagentContinuationProfile {
+  role?: string
+  readOnly: boolean
+  systemPrompt: string
+  toolNames: string[]
+  workspacePaths: string[]
+  projectRoot?: string
+  cwd?: string
+}
+
 export interface SubagentRun {
   schemaVersion: 1
   runId: string
@@ -38,6 +48,8 @@ export interface SubagentRun {
   parentMessageId: string
   parentToolCallId: string
   childSessionId: string
+  resumeFromRunId?: string
+  continuation?: SubagentContinuationProfile
   task: string
   description: string
   modelId: string
@@ -69,6 +81,8 @@ export interface SubagentEvent {
 export type CreateSubagentRun = Pick<SubagentRun, 'tenantId' | 'rootSessionId' | 'parentSessionId' | 'parentConversationId' | 'parentMessageId' | 'parentToolCallId' | 'task' | 'description' | 'modelId'> & {
   runId?: string
   childSessionId?: string
+  resumeFromRunId?: string
+  continuation?: SubagentContinuationProfile
 }
 
 export type RunOutcome = {

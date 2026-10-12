@@ -196,3 +196,17 @@ describe('executable tool profiles', () => {
     expect(readOnly.list().every(item => parent.registry.has(item.name))).toBe(true)
   })
 })
+
+
+describe('explicit whitelists for unattended and custom Agent runs', () => {
+  it.each(['general', 'code'] as const)('%s never auto-registers ask_user or skills outside an explicit list', async toolProfile => {
+    const result = await createToolRegistry({ toolProfile, allowedTools: ['read_file'], allowedSkills: ['fixture-skill'], inlineSkills: [{ id: 'fixture-skill', name: 'Fixture Skill', promptContent: 'read only' }] })
+    expect(result.registry.list().map(item => item.name)).toEqual(['read_file'])
+    await expect(result.registry.preflight('ask_user', { question: 'unexpected pause' }, context)).rejects.toBeInstanceOf(ToolNotFoundError)
+    result.registry.register(tool('ask_user'))
+    expect(result.registry.has('ask_user')).toBe(false)
+    expectExactCategories(result)
+    const empty = await createToolRegistry({ toolProfile, allowedTools: [] })
+    expect(empty.registry.list()).toEqual([])
+  })
+})

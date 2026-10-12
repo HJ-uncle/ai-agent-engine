@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { StreamBus, busToIterable, type SseEventPayload } from '../stream-bus.js'
 
 async function collect(source: AsyncIterable<SseEventPayload>): Promise<SseEventPayload[]> {
@@ -21,6 +21,28 @@ function frame(name: string, payload: unknown): string {
 }
 
 describe('StreamBus resumable subscriptions', () => {
+  it('reads a stable run identity without cloning a large projection or exposing mutable state', () => {
+    const initial = { runId: 'seeded', version: 1, status: 'running', pending: [{ status: 'pending', requestId: 'approval' }] }
+    const bus = new StreamBus(new AbortController(), { initialProjection: [{ run: initial }] })
+    initial.runId = 'outside-mutation'
+    bus.push('x'.repeat(300_000))
+    const snapshot = bus.snapshot()
+    const snapshotRun = snapshot.projection.find(item => item.run)?.run as { runId: string }
+    snapshotRun.runId = 'snapshot-mutation'
+    const clone = vi.spyOn(globalThis, 'structuredClone')
+    const fullSnapshot = vi.spyOn(bus, 'snapshot')
+    let captured: string | undefined
+    try {
+      captured = bus.currentRunId
+      expect(captured).toBe('seeded')
+      expect(clone).not.toHaveBeenCalled()
+      expect(fullSnapshot).not.toHaveBeenCalled()
+    } finally { clone.mockRestore(); fullSnapshot.mockRestore() }
+    bus.push(frame('run', { runId: 'new-run', version: 1, status: 'running' }))
+    expect(captured).toBe('seeded')
+    expect(bus.currentRunId).toBe('new-run')
+    expect(new StreamBus(new AbortController()).currentRunId).toBeUndefined()
+  })
   it('retains the latest context and billing snapshot when long-turn details exceed the projection cap', () => {
     const bus = new StreamBus(new AbortController())
     const usage = { currentPromptTokens: 10_000, promptTokens: 44_000, contextWindow: 100_000 }

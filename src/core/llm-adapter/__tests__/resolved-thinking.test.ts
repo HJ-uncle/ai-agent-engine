@@ -42,3 +42,19 @@ describe('thinking intent inherited by child model resolution', () => {
     expect(child.thinkingConfig).toEqual({ enable_thinking: true })
   })
 })
+
+describe('child reasoning effort', () => {
+  it.each(['low', 'medium', 'high'] as const)('inherits %s into a changed DeepSeek model wire config', async effort => {
+    mocks.getModels.mockResolvedValue([{ id: 'child', modelId: 'deepseek-child', provider: 'deepseek', isEnabled: true, capabilities: { thinking: true } }])
+    mocks.getWhitelists.mockResolvedValue([])
+    const child = await resolveModelConfig({ tenantId: 't', model: 'deepseek-child', parent: { ...parent, thinkingEnabled: true, reasoningEffort: effort } })
+    expect(child.reasoningEffort).toBe(effort)
+    expect(child.thinkingConfig).toEqual({ reasoning_effort: effort })
+  })
+  it('lets explicit override win and removes effort for incapable models', async () => {
+    mocks.getModels.mockResolvedValue([{ id: 'child', modelId: 'plain-model', provider: 'openai', isEnabled: true, capabilities: { thinking: false } }])
+    mocks.getWhitelists.mockResolvedValue([])
+    const child = await resolveModelConfig({ tenantId: 't', model: 'plain-model', parent: { ...parent, thinkingEnabled: true, reasoningEffort: 'high' }, overrides: { reasoningEffort: 'low' } })
+    expect(child.reasoningEffort).toBeUndefined()
+  })
+})

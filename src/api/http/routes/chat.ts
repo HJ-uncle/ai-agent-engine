@@ -364,19 +364,47 @@ export async function chatRoutes(fastify: FastifyInstance) {
   // ── 取消正在运行的会话 ────────────────────────────────────────────────────
   // POST /chat/cancel  body: { sessionId }
   // 即使前端 SSE 连接异常未触发 close，前端也可主动调用此接口终止后端运行。
-  fastify.post<{ Body: { sessionId: string } }>('/chat/cancel', {
+  fastify.post<{ Body: { sessionId: string; runId?: string } }>('/chat/cancel', {
     schema: {
       body: {
         type: 'object',
         required: ['sessionId'],
         properties: {
           sessionId: { type: 'string', minLength: 1 },
+          runId: { type: 'string', minLength: 1 },
         },
       },
     },
   }, async (request, reply) => {
-    const { sessionId } = request.body
+    const { sessionId, runId } = request.body
     const tenantId = getTenantId(request)
+    // Scheduler cancellation owns one durable run, never a later request in this session.
+    if (runId) {
+      const cancelled = await withHistoryLock(tenantId, async () => {
+        const run = await rootRunStore.get(tenantId, runId)
+        if (!run || run.sessionId !== sessionId) return false
+        const key = makeAbortKey(tenantId, sessionId)
+        const bus = activeStreams.get(key)
+        const busRun = bus?.snapshot().projection.find(frame => frame.run)?.run as RootRun | undefined
+        let stopped = false
+        try {
+          if (busRun?.runId === runId && bus && !bus.abortController.signal.aborted) {
+            bus.abortController.abort(new Error('Owned run cancelled'))
+            stopped = true
+          }
+          if (run.status === 'running' || run.status === 'waiting') {
+            const updated = await rootRunStore.update(tenantId, runId, { status: 'cancelled', stopReason: 'Owned run cancelled' })
+            if (updated && busRun?.runId === runId) bus?.publishRunState(updated)
+            stopped = true
+          }
+        } finally {
+          const jobs = await commandJobs.cancelScope({ tenantId, sessionId, runId }, 'Owned run cancelled')
+          stopped ||= jobs.length > 0
+        }
+        return stopped
+      })
+      return reply.code(200).send({ code: 200, message: cancelled ? 'OK' : 'No active owned run', data: { sessionId, runId, cancelled }, timestamp: Date.now() })
+    }
     let cancelled = false
     try {
       cancelled = await withHistoryLock(tenantId, async () => {
@@ -1309,7 +1337,7 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
         ctx.resolvedModel = await resolveModelConfig({ tenantId, model: resolvedModel, overrides: {
           apiKey: modelApiKey, baseUrl: modelBaseUrl, provider: modelProvider,
           capabilities: modelCaps, extraHeaders: requestedExtraHeaders,
-          thinkingEnabled, thinkingConfig: finalThinkingConfig, responseThinkingField: finalResponseThinkingField,
+          thinkingEnabled, reasoningEffort: effectiveReasoningEffort, thinkingConfig: finalThinkingConfig, responseThinkingField: finalResponseThinkingField,
         } })
         const llm = createAdapterFromResolved(ctx.resolvedModel)
         const strategy = new ReActStrategy(llm, {
@@ -1614,10 +1642,9 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
   }, async (request, reply) => {
     const { sessionId } = request.query
     const streamBus = activeStreams.get(makeAbortKey(getTenantId(request), sessionId))
-    const runs = await rootRunStore.list(getTenantId(request), sessionId)
-    const run = runs.at(-1)
-    const busRun = streamBus?.snapshot().projection.find(payload => payload.run)?.run as RootRun | undefined
-    if (!streamBus || !busRun || runs.at(-1)?.runId !== busRun.runId) {
+    const run = (await rootRunStore.latest(getTenantId(request), sessionId)) ?? undefined
+    const busRunId = streamBus?.currentRunId
+    if (!streamBus || !busRunId || run?.runId !== busRunId) {
       return reply.code(200).send(success({ running: false, finished: Boolean(run), run }))
     }
     const lastEventId = streamBus.lastEventId

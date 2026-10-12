@@ -7,7 +7,7 @@ import { createAgentContext } from '../../core/agent-context/factory.js'
 import { createConversationHistory } from '../../storage/conversation/factory.js'
 import { resolveModelConfig, createAdapterFromResolved } from '../../core/llm-adapter/resolve-model.js'
 import { getSubagentRunner } from '../../core/subagent/runner.js'
-import { outcomeText } from '../../core/subagent/types.js'
+import { isTerminalRun, outcomeText } from '../../core/subagent/types.js'
 import { getProjectContextBlock } from '../../core/project-context.js'
 import { getSecurityMode, setSecurityMode, clearSecurityMode } from '../../security/policy-engine.js'
 import { skillsRegistry } from '../../skills/index.js'
@@ -95,11 +95,12 @@ export async function cancelSubagent(tenantId: string, sessionId: string, toolCa
 export const subagentTool: Tool = {
   name: 'subagent',
   displayName: '子代理',
-  description: '创建子代理执行独立任务。task 必须自包含，写清项目路径、目标、范围与期望输出。默认只读调研；实现类任务使用 implementer 角色或 access=inherit，工具权限仍不超过父任务。子代理没有提问或审批通道。',
+  description: '创建子代理或使用 resumeRunId 继续同一子代理上下文。task 必须自包含，写清项目路径、目标、范围与期望输出。默认只读调研；实现类任务使用 implementer 角色或 access=inherit，工具权限仍不超过父任务。子代理没有提问或审批通道。',
   parameters: {
     type: 'object',
     properties: {
       task: { type: 'string' },
+      resumeRunId: { type: 'string', description: '继续已完成子代理的 runId；复用同一 childSession 历史，不能并发续跑或改变原角色/权限。' },
       description: { type: 'string', description: '简短任务标题' },
       systemPrompt: { type: 'string' },
       model: { type: 'string' },
@@ -119,19 +120,29 @@ export const subagentTool: Tool = {
     if (args.role !== undefined && !ROLE_VALUES.includes(args.role as SubagentRole)) return { success: false, output: `subagent: 未知 role '${String(args.role)}'，可选值为 ${ROLE_VALUES.join(' / ')}` }
     if (args.access !== undefined && args.access !== 'read-only' && args.access !== 'inherit') return { success: false, output: 'subagent: access 必须为 read-only 或 inherit。' }
     if (args.maxSteps !== undefined && (typeof args.maxSteps !== 'number' || !Number.isInteger(args.maxSteps) || args.maxSteps < 1)) return { success: false, output: 'subagent: maxSteps 必须是大于等于 1 的整数（不传则不限步数）。' }
-    const role = args.role as SubagentRole | undefined
+    const runner = getSubagentRunner()
+    const resumeRunId = typeof args.resumeRunId === 'string' ? args.resumeRunId.trim() : undefined
+    if (args.resumeRunId !== undefined && !resumeRunId) return { success: false, output: 'subagent: resumeRunId 必须是非空字符串。' }
+    const prior = resumeRunId ? await runner.store.getRun(ctx.tenantId, resumeRunId) : null
+    if (resumeRunId && (!prior || prior.parentSessionId !== ctx.sessionId || prior.rootSessionId !== (ctx.rootSessionId ?? ctx.sessionId))) return { success: false, output: '子代理不属于当前父任务，不能继续。' }
+    if (prior && (!isTerminalRun(prior.status) || !prior.continuation)) return { success: false, output: !isTerminalRun(prior.status) ? '子代理仍在运行，请完成或停止后再继续。' : '旧子代理未保存续跑权限，无法安全恢复。' }
+    const saved = prior?.continuation
+    const allowedRoots = (ctx.workspacePaths ?? []).map(root => path.resolve(root))
+    if (saved?.workspacePaths.some(root => !allowedRoots.includes(path.resolve(root)))) return { success: false, output: '原子代理工作区不在当前父任务授权范围内，请恢复原工作区后继续。' }
+    if (saved && ((args.role !== undefined && args.role !== saved.role) || args.systemPrompt !== undefined || (args.access !== undefined && (args.access === 'read-only') !== saved.readOnly))) return { success: false, output: '继续子代理不能修改原角色、系统提示或访问权限；如需新角色请创建新子代理。' }
+    const role = (saved?.role ?? args.role) as SubagentRole | undefined
     const reviewer = role === 'spec-reviewer' || role === 'code-quality-reviewer'
-    const readOnly = reviewer || (args.access ? args.access === 'read-only' : role !== 'implementer')
+    const readOnly = saved?.readOnly ?? (reviewer || (args.access ? args.access === 'read-only' : role !== 'implementer'))
     // 不传 maxSteps = 不限步数：子代理跑到任务完成或 token 预算耗尽为止。
     // 原来默认 24（后提到 100）会在长调研半途硬截断，把"没查完"包装成"已完成"。
     // 真正需要收口的循环由 requestBudget / token 预算兜底，不靠一个人为步数天花板。
     const maxSteps = typeof args.maxSteps === 'number' ? args.maxSteps : Number.POSITIVE_INFINITY
-    const requestedModel = typeof args.model === 'string' && args.model.trim() ? args.model.trim() : ctx.subagentModel || ctx.modelName
+    const requestedModel = typeof args.model === 'string' && args.model.trim() ? args.model.trim() : ctx.subagentModel || prior?.modelId || ctx.modelName
     const description = (typeof args.description === 'string' && args.description.trim() ? args.description.trim() : task.replace(/\s+/g, ' ')).slice(0, 100)
     const mode = resolveOSMMode(ctx.logger)
     const rolePrompt = role && OSM_MODE_CONFIG[mode].methodology ? loadRoleTemplate(role) : null
-    const systemPrompt = [
-      '你是一个独立子代理，只完成首条用户消息里的任务。工作目录与项目根以执行上下文为准。',
+    const systemPrompt = saved?.systemPrompt ?? [
+      '你是一个独立子代理，保留此前上下文并执行最新用户消息里的任务。工作目录与项目根以执行上下文为准。',
       readOnly ? '这是只读调研任务。仅使用提供的只读与任务管理工具。' : '只能在父任务已经允许的工具与权限范围内执行。',
       '你没有子代理递归、提问或审批通道。需要授权时如实说明，禁止假报完成。',
       '最终结果必须用文本给出结论、证据和文件定位，不要仅写文件或复述过程。',
@@ -140,7 +151,9 @@ export const subagentTool: Tool = {
       rolePrompt,
       taskText ? suppliedPrompt : undefined,
     ].filter(Boolean).join('\n\n')
-    const runner = getSubagentRunner()
+    const childTools = createSubagentToolRegistry(ctx.tools, readOnly)
+    if (saved) for (const tool of childTools.list()) if (!saved.toolNames.includes(tool.name)) childTools.unregister(tool.name)
+    const continuation = saved ?? { role, readOnly, systemPrompt, toolNames: childTools.list().map(tool => tool.name), workspacePaths: ctx.workspacePaths ?? [], projectRoot: ctx.projectRoot, cwd: ctx.cwd }
     const run = await runner.run({
       tenantId: ctx.tenantId,
       rootSessionId: ctx.rootSessionId ?? ctx.sessionId,
@@ -148,6 +161,7 @@ export const subagentTool: Tool = {
       parentConversationId: ctx.conversationId ?? '',
       parentMessageId: ctx.currentMessageId ?? '',
       parentToolCallId: ctx.currentToolCallId ?? `direct-${randomUUID()}`,
+      resumeFromRunId: resumeRunId, continuation,
       task, description, modelId: requestedModel ?? '',
     }, ctx, async ({ snapshot, signal, observer, onRequestAttempt, requestBudget }) => {
       const resolved = await resolveModelConfig({ tenantId: ctx.tenantId, model: requestedModel, parent: ctx.resolvedModel })
@@ -163,10 +177,10 @@ export const subagentTool: Tool = {
       const child = createAgentContext({
         sessionId: snapshot.childSessionId,
         tenantId: ctx.tenantId,
-        workspacePaths: ctx.workspacePaths,
-        projectRoot: ctx.projectRoot ?? ctx.workspacePaths?.[0],
-        cwd: ctx.cwd ?? ctx.projectRoot ?? ctx.workspacePaths?.[0],
-        tools: createSubagentToolRegistry(ctx.tools, readOnly),
+        workspacePaths: continuation.workspacePaths,
+        projectRoot: continuation.projectRoot ?? continuation.workspacePaths[0],
+        cwd: continuation.cwd ?? continuation.projectRoot ?? continuation.workspacePaths[0],
+        tools: childTools,
         history: createConversationHistory(),
         logger: ctx.logger.child({ runId: snapshot.runId, subSessionId: snapshot.childSessionId }),
         tokenBudget: subagentTokenBudget,
@@ -197,6 +211,7 @@ export const subagentTool: Tool = {
           finalizeOnLimit: true,
           unboundedCode: ctx.toolProfile === 'code',
           thinkingEnabled: resolved.thinkingEnabled,
+          reasoningEffort: resolved.reasoningEffort,
           thinkingConfig: resolved.thinkingConfig,
           responseThinkingField: resolved.responseThinkingField,
           systemPrompt: [systemPrompt, '项目根目录：' + child.projectRoot, '当前工作目录：' + child.cwd, projectContext].filter(Boolean).join('\n\n'),

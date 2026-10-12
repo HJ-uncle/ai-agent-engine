@@ -61,6 +61,12 @@ export class StreamBus {
 
   get lastEventId(): string { return `${this.streamId}:${this.sequence}` }
 
+  /** Status probes need identity only; never clone transcript/image payloads or expose mutable run state. */
+  get currentRunId(): string | undefined {
+    const runId = this.projection.currentRun()?.runId
+    return typeof runId === 'string' ? runId : undefined
+  }
+
   /** Resume attempts can inherit their turn projection before publishing new events. */
   seedProjection(payloads: StreamEnvelope[], subagentWatermarks?: SubagentWatermark[], projectionTruncated = false): void {
     if (this.sequence || this.finished) throw new Error('Projection must be seeded before the first event')

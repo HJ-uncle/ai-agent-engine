@@ -1,6 +1,14 @@
 import { v4 as uuidv4 } from 'uuid'
 import { getDb } from '../sqlite/db.js'
 
+export const DEFAULT_CRON_TIMEOUT_SECONDS = 120
+export function validCronTimeoutSeconds(value: unknown): value is number | null | undefined {
+  return value == null || (typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 86400)
+}
+export type CronThinkingMode = boolean | 'low' | 'medium' | 'high' | null
+export function validCronThinkingMode(value: unknown): value is CronThinkingMode | undefined {
+  return value === undefined || value === null || typeof value === 'boolean' || value === 'low' || value === 'medium' || value === 'high'
+}
 export interface CronJob {
   id: string
   tenantId: string
@@ -10,6 +18,8 @@ export interface CronJob {
   message: string
   sessionId: string
   agentId?: string
+  thinkingMode?: CronThinkingMode
+  timeoutSeconds?: number | null
   enabled: boolean
   lastRunAt?: number
   nextRunAt?: number
@@ -24,6 +34,8 @@ export interface CreateCronJobInput {
   message: string
   sessionId: string
   agentId?: string
+  thinkingMode?: CronThinkingMode
+  timeoutSeconds?: number | null
   enabled?: boolean
 }
 
@@ -34,6 +46,8 @@ export interface UpdateCronJobInput {
   message?: string
   sessionId?: string
   agentId?: string
+  thinkingMode?: CronThinkingMode
+  timeoutSeconds?: number | null
   enabled?: boolean
 }
 
@@ -47,6 +61,8 @@ function rowToCronJob(row: Record<string, any>): CronJob {
     message: row['message'],
     sessionId: row['session_id'],
     agentId: row['agent_id'] ?? undefined,
+    thinkingMode: row['thinking_mode'] == null ? undefined : JSON.parse(row['thinking_mode']),
+    timeoutSeconds: row['timeout_seconds'] == null ? null : Number(row['timeout_seconds']),
     enabled: Boolean(row['enabled']),
     lastRunAt: row['last_run_at'] ?? undefined,
     nextRunAt: row['next_run_at'] ?? undefined,
@@ -59,14 +75,15 @@ export class CronStore {
   private get db() { return getDb() }
 
   async create(tenantId: string, input: CreateCronJobInput): Promise<CronJob> {
+    if (!validCronTimeoutSeconds(input.timeoutSeconds)) throw new Error('Invalid timeoutSeconds: expected integer 1..86400 or null')
     const id = uuidv4()
     const now = Date.now()
     await this.db.execute({
-      sql: `INSERT INTO cron_jobs (id, tenant_id, name, description, cron_expr, message, session_id, agent_id, enabled, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      sql: `INSERT INTO cron_jobs (id, tenant_id, name, description, cron_expr, message, session_id, agent_id, thinking_mode, timeout_seconds, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [id, tenantId, input.name, input.description ?? null, input.cronExpr,
-             input.message, input.sessionId, input.agentId ?? null,
-             input.enabled !== false ? 1 : 0, now, now],
+             input.message, input.sessionId, input.agentId ?? null, input.thinkingMode == null ? null : JSON.stringify(input.thinkingMode),
+             input.timeoutSeconds ?? null, input.enabled !== false ? 1 : 0, now, now],
     })
     return (await this.getById(id, tenantId))!
   }
@@ -88,11 +105,12 @@ export class CronStore {
   }
 
   async update(id: string, tenantId: string, input: UpdateCronJobInput): Promise<CronJob | null> {
+    if (!validCronTimeoutSeconds(input.timeoutSeconds)) throw new Error('Invalid timeoutSeconds: expected integer 1..86400 or null')
     const job = await this.getById(id, tenantId)
     if (!job) return null
     const now = Date.now()
     await this.db.execute({
-      sql: `UPDATE cron_jobs SET name=?, description=?, cron_expr=?, message=?, session_id=?, agent_id=?, enabled=?, updated_at=? WHERE id=? AND tenant_id=?`,
+      sql: `UPDATE cron_jobs SET name=?, description=?, cron_expr=?, message=?, session_id=?, agent_id=?, thinking_mode=?, timeout_seconds=?, enabled=?, updated_at=? WHERE id=? AND tenant_id=?`,
       args: [
         input.name ?? job.name,
         input.description !== undefined ? input.description : job.description ?? null,
@@ -100,6 +118,8 @@ export class CronStore {
         input.message ?? job.message,
         input.sessionId ?? job.sessionId,
         input.agentId !== undefined ? input.agentId : job.agentId ?? null,
+        (input.thinkingMode !== undefined ? input.thinkingMode : job.thinkingMode) == null ? null : JSON.stringify(input.thinkingMode !== undefined ? input.thinkingMode : job.thinkingMode),
+        input.timeoutSeconds !== undefined ? input.timeoutSeconds : job.timeoutSeconds ?? null,
         input.enabled !== undefined ? (input.enabled ? 1 : 0) : (job.enabled ? 1 : 0),
         now, id, tenantId,
       ],

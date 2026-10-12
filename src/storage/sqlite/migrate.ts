@@ -1,3 +1,4 @@
+import { up as up027 } from './migrations/027_cron_timeout.js'
 import { getDb, closeDb } from './db.js'
 import { up } from './migrations/001_initial.js'
 import { up as up002 } from './migrations/002_add_message_id.js'
@@ -23,6 +24,7 @@ import { up as up021 } from './migrations/021_accounts.js'
 import { up as up022 } from './migrations/022_account_external_flows.js'
 import { up as up023 } from './migrations/023_account_access_tokens.js'
 import { up as up024 } from './migrations/024_account_identity_profiles.js'
+import { up as up026 } from './migrations/026_cron_thinking_mode.js'
 import { up as up025 } from './migrations/025_conversation_usage_archive.js'
 
 const BUILTIN_TEMPLATES = [
@@ -203,6 +205,8 @@ async function migrate() {
     await up023(db)
     await up024(db)
     await up025(db)
+    await up026(db)
+    await up027(db)
 
     // Seed built-in prompt templates
     for (const tpl of BUILTIN_TEMPLATES) {

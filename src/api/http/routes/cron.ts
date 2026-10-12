@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify'
-import { CronStore } from '../../../storage/cron/index.js'
+import { CronStore, validCronThinkingMode, validCronTimeoutSeconds } from '../../../storage/cron/index.js'
 import { success, fail, paginateArray } from '../response.js'
 
 const store = new CronStore()
@@ -16,16 +16,20 @@ export async function cronRoutes(fastify: FastifyInstance) {
 
   fastify.post<{ Body: any }>('/cron', async (req, reply) => {
     const tenantId = (req as any).authContext?.tenantId ?? 'default'
-    const { name, cronExpr, message, sessionId, agentId, description, enabled } = req.body as any
+    const { name, cronExpr, message, sessionId, agentId, description, enabled, thinkingMode, timeoutSeconds } = req.body as any
     if (!name || !cronExpr || !message || !sessionId) {
       return reply.send(fail(40001, 'name, cronExpr, message, sessionId are required'))
     }
-    const job = await store.create(tenantId, { name, cronExpr, message, sessionId, agentId, description, enabled })
+    if (!validCronTimeoutSeconds(timeoutSeconds)) return reply.send(fail(40001, 'timeoutSeconds must be an integer from 1 to 86400, or null'))
+    if (!validCronThinkingMode(thinkingMode)) return reply.send(fail(40001, 'Invalid thinkingMode'))
+    const job = await store.create(tenantId, { name, cronExpr, message, sessionId, agentId, description, enabled, thinkingMode, timeoutSeconds })
     return reply.send(success(job))
   })
 
   fastify.put<{ Params: { id: string }; Body: any }>('/cron/:id', async (req, reply) => {
     const tenantId = (req as any).authContext?.tenantId ?? 'default'
+    if (!validCronTimeoutSeconds((req.body as { timeoutSeconds?: unknown })?.timeoutSeconds)) return reply.send(fail(40001, 'timeoutSeconds must be an integer from 1 to 86400, or null'))
+    if (!validCronThinkingMode((req.body as { thinkingMode?: unknown })?.thinkingMode)) return reply.send(fail(40001, 'Invalid thinkingMode'))
     const updated = await store.update(req.params.id, tenantId, req.body as any)
     if (!updated) return reply.send(fail(40400, 'Cron job not found'))
     return reply.send(success(updated))
