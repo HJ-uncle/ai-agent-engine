@@ -1,4 +1,4 @@
-import type { ConversationArchive, ConversationHistory, Message, AgentContext } from '../../core/agent-context/index.js'
+import type { ConversationArchive, ConversationConditionalAppend, ConversationHistory, ConversationToolCallAnchor, Message, AgentContext } from '../../core/agent-context/index.js'
 import { getDb } from '../sqlite/db.js'
 import type { Row } from '@libsql/client'
 import { v4 as uuidv4 } from 'uuid'
@@ -10,6 +10,14 @@ import { serializeMessageMetadata, restoreModelInputContent } from './model-inpu
 import { BILLING_USAGE_KEYS } from './usage.js'
 import { up as createUsageArchive } from '../sqlite/migrations/025_conversation_usage_archive.js'
 import type { Client } from '@libsql/client'
+import { createHash } from 'node:crypto'
+import { assertCompressionContext, withHistoryLock, withSessionHistoryCompression, awaitCompressionSummary } from './serialization.js'
+import { ensureProjectionReceipts, findActiveToolCallAnchor, readProjectionReceipt, validateProjection, writeProjectionReceipt } from './projection-receipts.js'
+import { acknowledgeAdmissionUser, readAdmissionSeed, validateAdmissionUser } from '../root-admission/projection.js'
+import { admissionError } from '../root-admission/index.js'
+import { ensureSQLiteDeliverySchema, invalidateSQLiteDeliveryStatements, sqliteHistoryScope } from '../../core/collaboration/delivery-schema.js'
+import { currentHistoryMaintenance, maintenancePinnedIds, maintenanceSummaryEvidence, reserveHistoryMaintenance } from '../../core/collaboration/history-maintenance.js'
+import { registerSQLiteHistory } from './sqlite-origin.js'
 
 type Ctx = { tenantId: string; sessionId: string }
 const usageArchiveReady = new WeakMap<Client, Promise<void>>()
@@ -187,6 +195,23 @@ export class SQLiteConversationHistory implements ConversationHistory {
    */
   constructor(maxTokens?: number) {
     this.maxTokens = maxTokens ?? getDefaultHistoryMaxTokens()
+    registerSQLiteHistory(this, getDb(), rowToMessage)
+  }
+
+  async appendAdmissionUser(message: Message, ctx: Ctx, anchor: import('../root-admission/projection.js').AdmissionMessageAnchor): Promise<string> {
+    return withHistoryLock(ctx.tenantId, async () => {
+      const db = getDb(), seed = await readAdmissionSeed(db, ctx, anchor.rootRunId)
+      validateAdmissionUser(message, seed, anchor)
+      await this.append(message, ctx)
+      const row = (await db.execute({ sql: 'SELECT role,content,conversation_id FROM conversations WHERE tenant_id=? AND session_id=? AND message_id=?', args: [ctx.tenantId, ctx.sessionId, anchor.userMessageId] })).rows[0]
+      // rowToMessage auto-parses JSON-looking strings. Admission instead
+      // verifies exact raw storage bytes against the captured original type.
+      const content = typeof seed.message.content === 'string' ? seed.message.content : JSON.stringify(seed.message.content)
+      if (!row || row.role !== 'user' || row.conversation_id !== anchor.turnId || row.content !== content) admissionError('ADMISSION_USER_PROJECTION_CONFLICT', 503)
+      if (getDb() !== db) admissionError('ADMISSION_DATASOURCE_CHANGED', 503)
+      await acknowledgeAdmissionUser(db, ctx, seed)
+      return anchor.userMessageId
+    })
   }
 
   async append(message: Message & { conversationId?: string }, ctx: Ctx): Promise<string> {
@@ -244,8 +269,65 @@ export class SQLiteConversationHistory implements ConversationHistory {
     return this.applyTokenWindow(cleanMessages)
   }
 
+  async appendIfActiveToolCallAnchor(message: Message & { conversationId?: string }, ctx: Ctx,
+    anchor: ConversationToolCallAnchor): Promise<ConversationConditionalAppend> {
+    const messageId = validateProjection(message, anchor), db = getDb()
+    await ensureUsageArchive(db)
+    await ensureProjectionReceipts(db)
+    const tx = await db.transaction('write')
+    try {
+      const prior = await readProjectionReceipt(tx, ctx, messageId, anchor)
+      if (prior?.disposition === 'pending') throw new Error('A pending JSONL projection must be reconciled by its owning backend')
+      let disposition: ConversationConditionalAppend['disposition']
+      if (prior) disposition = prior.disposition === 'appended' ? 'duplicate' : 'suppressed'
+      else {
+        const existing = (await tx.execute({ sql: `SELECT conversation_id, role, tool_call_id FROM conversations
+          WHERE tenant_id=? AND session_id=? AND message_id=?`, args: [ctx.tenantId, ctx.sessionId, messageId] })).rows[0]
+        const archived = (await tx.execute({ sql: `SELECT conversation_id FROM conversation_usage_archive
+          WHERE tenant_id=? AND session_id=? AND message_id=?`, args: [ctx.tenantId, ctx.sessionId, messageId] })).rows[0]
+        if (existing || archived) {
+          if (existing && (existing.role !== message.role || (existing.tool_call_id ?? null) !== (message.toolCallId ?? null)
+            || String(existing.conversation_id ?? '') !== anchor.conversationId)
+            || archived && String(archived.conversation_id ?? '') !== anchor.conversationId)
+            throw new Error('History projection result identity collision')
+          disposition = 'duplicate'
+        } else if (isTombstoned(ctx.tenantId, ctx.sessionId) || !await findActiveToolCallAnchor(tx, ctx, anchor)) disposition = 'suppressed'
+        else {
+          // The physical write transaction owns both this predicate and INSERT.
+          // A different connection's delete/compaction cannot interleave them.
+          await tx.execute({ sql: `INSERT INTO conversations
+            (tenant_id, session_id, conversation_id, message_id, role, content, reasoning_content, tool_call_id,
+              tool_call_name, tool_name, tool_args, tokens, token_usage, model_id, metadata)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            args: [ctx.tenantId, ctx.sessionId, message.conversationId ?? null, messageId, message.role,
+              typeof message.content === 'string' ? message.content : JSON.stringify(message.content), message.reasoningContent ?? null,
+              message.toolCallId ?? null, null, message.toolName ?? null, null, message.tokens ?? 0,
+              message.usage ? JSON.stringify(message.usage) : null, message.modelId ?? null, serializeMessageMetadata(message)] })
+          disposition = 'appended'
+        }
+        await writeProjectionReceipt(tx, ctx, messageId, anchor, { backend: 'sqlite', disposition: disposition === 'duplicate' ? 'appended' : disposition,
+          epoch: 0, anchorSequence: null })
+      }
+      await tx.commit()
+      return { messageId, disposition }
+    } catch (error) {
+      // A committed transaction may lose its ACK; do not mask that original
+      // persistence failure with a second request to its already closed handle.
+      if (!tx.closed) {
+        try { await tx.rollback() }
+        catch (rollbackError) { throw new AggregateError([error, rollbackError], 'History projection persistence failed and rollback did not complete') }
+      }
+      throw error
+    }
+    finally { tx.close() }
+  }
+
   async getFullHistory(ctx: Ctx): Promise<Message[]> {
     return this.getRawMessages(ctx)
+  }
+
+  async getActiveToolCallAnchor(ctx: Ctx, key: ConversationToolCallAnchor): Promise<ConversationToolCallAnchor | null> {
+    return findActiveToolCallAnchor(getDb(), ctx, key)
   }
 
   /**
@@ -278,7 +360,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
     const db = getDb()
     await ensureUsageArchive(db)
     const result = await db.execute({
-      sql: `SELECT id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id, model_id, metadata
+      sql: `SELECT *
             FROM conversations
             WHERE tenant_id = ? AND session_id = ?
             ORDER BY created_at ASC, id ASC`,
@@ -359,7 +441,12 @@ export class SQLiteConversationHistory implements ConversationHistory {
   async deleteMessage(messageId: string, tenantId: string): Promise<void> {
     const db = getDb()
     await ensureUsageArchive(db)
-    await db.batch([{
+    await ensureSQLiteDeliverySchema(db)
+    await db.batch([...invalidateSQLiteDeliveryStatements({
+      sql: `SELECT tenant_id,session_id FROM conversations WHERE tenant_id=? AND message_id=?
+        UNION SELECT tenant_id,history_session_id AS session_id FROM collaboration_deliveries WHERE tenant_id=? AND history_message_id=?`,
+      args: [tenantId, messageId, tenantId, messageId],
+    }), {
       sql: `DELETE FROM conversations WHERE message_id = ? AND tenant_id = ?`,
       args: [messageId, tenantId],
     }, { sql: 'DELETE FROM conversation_usage_archive WHERE message_id=? AND tenant_id=?', args: [messageId, tenantId] }], 'write')
@@ -368,7 +455,10 @@ export class SQLiteConversationHistory implements ConversationHistory {
   /** 更新消息内容（用于编辑功能） */
   async updateMessageContent(messageId: string, tenantId: string, content: string | any[], tokens: number, metadata?: any): Promise<void> {
     const db = getDb()
-    await db.execute({
+    await ensureSQLiteDeliverySchema(db)
+    await db.batch([...invalidateSQLiteDeliveryStatements({
+      sql: 'SELECT tenant_id,session_id FROM conversations WHERE tenant_id=? AND message_id=?', args: [tenantId, messageId],
+    }), {
       sql: `UPDATE conversations SET content = ?, tokens = ?, metadata = ? WHERE message_id = ? AND tenant_id = ?`,
       args: [
         typeof content === 'string' ? content : JSON.stringify(content), 
@@ -377,14 +467,15 @@ export class SQLiteConversationHistory implements ConversationHistory {
         messageId, 
         tenantId
       ],
-    })
+    }], 'write')
   }
 
   /** 硬删除指定ID之后的消息 */
   async deleteMessagesAfterId(id: number, sessionId: string, tenantId: string): Promise<void> {
     const db = getDb()
     await ensureUsageArchive(db)
-    await db.batch([{
+    await ensureSQLiteDeliverySchema(db)
+    await db.batch([...invalidateSQLiteDeliveryStatements(sqliteHistoryScope(tenantId, sessionId)), {
       sql: `DELETE FROM conversation_usage_archive WHERE tenant_id=? AND session_id=? AND
         (row_id>? OR message_id IN (SELECT message_id FROM conversations WHERE tenant_id=? AND session_id=? AND id>?))`,
       args: [tenantId, sessionId, id, tenantId, sessionId, id],
@@ -398,12 +489,17 @@ export class SQLiteConversationHistory implements ConversationHistory {
   async deleteByConversationId(conversationId: string, tenantId: string): Promise<number> {
     const db = getDb()
     await ensureUsageArchive(db)
+    await ensureSQLiteDeliverySchema(db)
     const before = await db.execute({
       sql: `SELECT COUNT(*) as cnt FROM conversations WHERE conversation_id = ? AND tenant_id = ?`,
       args: [conversationId, tenantId],
     })
     const count = Number(before.rows[0]?.['cnt'] ?? 0)
-    await db.batch([{
+    await db.batch([...invalidateSQLiteDeliveryStatements({
+      sql: `SELECT tenant_id,session_id FROM conversations WHERE tenant_id=? AND conversation_id=?
+        UNION SELECT tenant_id,session_id FROM conversation_usage_archive WHERE tenant_id=? AND conversation_id=?`,
+      args: [tenantId, conversationId, tenantId, conversationId],
+    }), {
       sql: `DELETE FROM conversations WHERE conversation_id = ? AND tenant_id = ?`,
       args: [conversationId, tenantId],
     }, { sql: 'DELETE FROM conversation_usage_archive WHERE conversation_id=? AND tenant_id=?', args: [conversationId, tenantId] }], 'write')
@@ -493,13 +589,14 @@ export class SQLiteConversationHistory implements ConversationHistory {
   async clear(ctx: Ctx, options?: { tombstone?: boolean }): Promise<void> {
     const db = getDb()
     await ensureUsageArchive(db)
+    await ensureSQLiteDeliverySchema(db)
     // 默认设置墓碑：阻止后续 N 秒内的 append（防止正在跑的 SSE 流回写"复活"会话）。
     // 调用方若要在删除后立即重建历史（如 compress），应传 { tombstone: false }，
     // 否则紧随其后的 append 会被墓碑静默丢弃，导致重建内容丢失。
     if (options?.tombstone !== false) {
       setTombstone(ctx.tenantId, ctx.sessionId)
     }
-    await db.batch([{
+    await db.batch([...invalidateSQLiteDeliveryStatements(sqliteHistoryScope(ctx.tenantId, ctx.sessionId)), {
       sql: 'DELETE FROM conversations WHERE tenant_id = ? AND session_id = ?',
       args: [ctx.tenantId, ctx.sessionId],
     }, { sql: 'DELETE FROM conversation_usage_archive WHERE tenant_id=? AND session_id=?', args: [ctx.tenantId, ctx.sessionId] }], 'write')
@@ -614,40 +711,61 @@ export class SQLiteConversationHistory implements ConversationHistory {
    * 重建包在事务里：clear + append 任一失败整体回滚，不留「历史已删摘要未写」的半重建状态。
    */
   async compress(
-    ctx: Ctx,
+    ctx: Ctx & { signal?: AbortSignal },
     summarizeFn: (messages: Message[]) => Promise<string>,
     keepRecent: number | CompressionOptions = 6,
   ): Promise<{ preTokens: number; postTokens: number }> {
+    return withSessionHistoryCompression(ctx, async signal => {
+    ctx = { ...ctx, signal }
     const db = getDb()
-    await ensureUsageArchive(db)
-    const result = await db.execute({
-      sql: `SELECT message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id, model_id, metadata
+    await ensureSQLiteDeliverySchema(db)
+    const maintenance = currentHistoryMaintenance(db, ctx, 'sqlite')
+    const readStatement = {
+      sql: `SELECT *
             FROM conversations
             WHERE tenant_id = ? AND session_id = ?
             ORDER BY created_at ASC, id ASC`,
       args: [ctx.tenantId, ctx.sessionId],
+    }
+    const digest = (rows: Row[]) => createHash('sha256').update(JSON.stringify(rows,
+      (_key, value) => typeof value === 'bigint' ? String(value) : value)).digest('hex')
+    const prepared = await withHistoryLock(ctx.tenantId, async () => {
+      assertCompressionContext(ctx)
+      await ensureUsageArchive(db)
+      const result = await db.execute(readStatement)
+      const allMessages = result.rows.map(rowToMessage)
+      const tokensBefore = estimateModelHistoryTokens(allMessages)
+      const splitIdx = compressionSplitIndex(allMessages, keepRecent)
+      const pinned = maintenance ? maintenancePinnedIds(allMessages, maintenance.anchorId) : new Set<string>()
+      const agentIds = Object.hasOwn(result.rows[0] ?? {}, 'agent_id')
+        ? new Map(result.rows.map(row => [String(row.message_id ?? ''), row.agent_id])) : undefined
+      return { tokensBefore, olderMessages: allMessages.slice(0, splitIdx).filter(message => !pinned.has(message.id ?? '')),
+        recentMessages: allMessages.filter((message, index) => index >= splitIdx || pinned.has(message.id ?? '')),
+        retiredRows: result.rows.filter((row, index) => index < splitIdx && !pinned.has(String(row.message_id))),
+        revision: digest(result.rows), agentIds }
     })
-    const allMessages = result.rows.map(rowToMessage)
-
-    const tokensBefore = estimateModelHistoryTokens(allMessages)
-    const splitIdx = compressionSplitIndex(allMessages, keepRecent)
-
-    const olderMessages = allMessages.slice(0, splitIdx)
-    const recentMessages = allMessages.slice(splitIdx)
-    if (olderMessages.length === 0) return { preTokens: tokensBefore, postTokens: tokensBefore }
-
-    const summaryContent = await summarizeFn(olderMessages)
+    const { tokensBefore, recentMessages } = prepared
+    if (!prepared.olderMessages.length) return { preTokens: tokensBefore, postTokens: tokensBefore }
+    const summaryContent = await awaitCompressionSummary(() => summarizeFn(maintenanceSummaryEvidence(prepared.olderMessages, maintenance)), ctx.signal)
     const summaryTokens = estimateTokens(summaryContent)
-
+    return withHistoryLock(ctx.tenantId, async () => {
+    assertCompressionContext(ctx)
     // 事务化重建：clear + summary + recent，任一失败整体回滚。
     // ⚠️ 不经 this.clear()：它是独立连接的非事务删除，失败时已无法回滚。
     // Keep the summary before the retained rows while preserving their original timestamps.
     const summaryMsg: Message = { role: 'system', content: summaryContent, tokens: summaryTokens,
       metadata: { isCompactSummary: true },
-      createdAt: olderMessages.at(-1)?.createdAt ?? Date.now() }
+      createdAt: prepared.olderMessages.at(-1)?.createdAt ?? Date.now() }
     const rebuilt: Message[] = [summaryMsg, ...recentMessages]
     const tx = await db.transaction('write')
     try {
+      assertCompressionContext(ctx)
+      // Compare all mutable fields inside the same physical write transaction
+      // as the rebuild; another connection cannot edit after this check.
+      if (digest((await tx.execute(readStatement)).rows) !== prepared.revision)
+        throw Object.assign(new Error('History changed during summary generation; original history was preserved'), { code: 'HISTORY_COMPRESSION_CONFLICT' })
+      if (maintenance) await maintenance.check(tx)
+      else for (const statement of invalidateSQLiteDeliveryStatements(sqliteHistoryScope(ctx.tenantId, ctx.sessionId))) await tx.execute(statement)
       await tx.execute({ sql: `INSERT INTO conversation_usage_archive
         (tenant_id, session_id, message_id, conversation_id, row_id, token_usage)
         SELECT tenant_id, session_id, message_id, conversation_id, id, token_usage FROM conversations
@@ -655,19 +773,24 @@ export class SQLiteConversationHistory implements ConversationHistory {
         ON CONFLICT(tenant_id, session_id, message_id) DO UPDATE SET
           conversation_id=excluded.conversation_id, row_id=excluded.row_id, token_usage=excluded.token_usage`,
         args: [ctx.tenantId, ctx.sessionId] })
-      await tx.execute({
-        sql: `DELETE FROM conversations WHERE tenant_id = ? AND session_id = ?`,
-        args: [ctx.tenantId, ctx.sessionId],
-      })
-      for (const msg of rebuilt) {
+      const retiredIds = JSON.stringify(prepared.retiredRows.map(row => Number(row.id)))
+      if (maintenance) await tx.execute({ sql: `UPDATE collaboration_deliveries SET state='suppressed',reason='history_compacted'
+        WHERE tenant_id=? AND history_session_id=? AND state='integrated' AND history_row_id IN (SELECT value FROM json_each(?))`,
+        args: [ctx.tenantId, ctx.sessionId, retiredIds] })
+      await tx.execute({ sql: `DELETE FROM conversations WHERE tenant_id=? AND session_id=?${maintenance ? ' AND id IN (SELECT value FROM json_each(?))' : ''}`,
+        args: maintenance ? [ctx.tenantId, ctx.sessionId, retiredIds] : [ctx.tenantId, ctx.sessionId] })
+      // A privileged compaction retains physical rows. Readable UUIDs never
+      // authenticate a replacement copy of the original seed or peer record.
+      for (const msg of maintenance ? [summaryMsg] : rebuilt) {
         await tx.execute({
           sql: `INSERT INTO conversations
-                (tenant_id, session_id, conversation_id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, model_id, metadata, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                (tenant_id, session_id, conversation_id, ${prepared.agentIds ? 'agent_id,' : ''} message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, model_id, metadata, created_at)
+                VALUES (?, ?, ?, ${prepared.agentIds ? '?,' : ''} ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           args: [
             ctx.tenantId,
             ctx.sessionId,
             (msg as { conversationId?: string }).conversationId ?? null,
+             ...(prepared.agentIds ? [prepared.agentIds.get(msg.id ?? '') ?? null] : []),
             msg.id ?? uuidv4(),
             msg.role,
             typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
@@ -684,6 +807,13 @@ export class SQLiteConversationHistory implements ConversationHistory {
           ],
         })
       }
+      if (maintenance) {
+        await maintenance.check(tx)
+        await reserveHistoryMaintenance(tx, maintenance, { kind: 'summary', before: prepared.revision,
+          after: digest((await tx.execute(readStatement)).rows), retiredRowIds: JSON.parse(retiredIds),
+          retained: recentMessages.map(message => message.id) }, true)
+      }
+      assertCompressionContext(ctx)
       await tx.commit()
     } catch (e) {
       await tx.rollback()
@@ -693,6 +823,8 @@ export class SQLiteConversationHistory implements ConversationHistory {
     const tokensAfter = estimateModelHistoryTokens(rebuilt)
     console.log(`[history] compress: ${tokensBefore} → ${tokensAfter} tokens (freed ${tokensBefore - tokensAfter})`)
     return { preTokens: tokensBefore, postTokens: tokensAfter }
+    })
+    })
   }
 
   /**
@@ -706,11 +838,14 @@ export class SQLiteConversationHistory implements ConversationHistory {
     ctx: Ctx,
     opts: { keepRecent?: number; maxChars?: number } = {},
   ): Promise<{ cleared: number; freedTokens: number }> {
-    const keepRecent = opts.keepRecent ?? 10
+    const keepRecent = Number.isFinite(opts.keepRecent) ? Math.max(0, Math.floor(opts.keepRecent!)) : 10
     const maxChars = Number.isFinite(opts.maxChars) && (opts.maxChars ?? 0) > 0 ? Math.floor(opts.maxChars!) : undefined
     const placeholder = '[tool result cleared]'
     const placeholderTokens = estimateTokens(placeholder)
     const db = getDb()
+    await ensureSQLiteDeliverySchema(db)
+
+    const maintenance = currentHistoryMaintenance(db, ctx, 'sqlite')
 
     // 取该会话全部消息（按写入顺序），排除最近 keepRecent 条消息范围内的
     const all = await db.execute({
@@ -720,11 +855,12 @@ export class SQLiteConversationHistory implements ConversationHistory {
       args: [ctx.tenantId, ctx.sessionId],
     })
     const rows = all.rows
+    const sourceDigest = maintenance ? createHash('sha256').update(JSON.stringify(rows)).digest('hex') : undefined
     // When the session is shorter than the retention window there is no
     // "old" row to compact.  Infinity used to make `id >= cutoffId` false
     // for every row, so even a short conversation lost all of its tool
     // evidence during the first micro-compact pass.
-    const cutoffId = rows.length > keepRecent
+    const cutoffId = keepRecent === 0 ? Number.POSITIVE_INFINITY : rows.length > keepRecent
       ? Number(rows[rows.length - keepRecent]['id'])
       : Number.NEGATIVE_INFINITY
 
@@ -732,6 +868,12 @@ export class SQLiteConversationHistory implements ConversationHistory {
     let cleared = 0
     let freedTokens = 0
     try {
+      if (maintenance) {
+        await maintenance.check(tx)
+        const current = await tx.execute({ sql: `SELECT id,role,content,tokens,metadata FROM conversations WHERE tenant_id=? AND session_id=? ORDER BY created_at ASC,id ASC`, args: [ctx.tenantId, ctx.sessionId] })
+        if (createHash('sha256').update(JSON.stringify(current.rows)).digest('hex') !== sourceDigest)
+          throw new Error('History changed before private micro maintenance')
+      }
       for (const row of rows) {
         const id = Number(row['id'])
         if (row['role'] !== 'tool') continue
@@ -750,12 +892,21 @@ export class SQLiteConversationHistory implements ConversationHistory {
         // since a prior pass, its current output supersedes the old archive.
         metadata[MICRO_COMPACT_ARCHIVE_KEY] = { content, tokens: oldTokens }
         metadata.outputPreview = content
+        if (cleared === 0 && !maintenance) {
+          for (const statement of invalidateSQLiteDeliveryStatements(sqliteHistoryScope(ctx.tenantId, ctx.sessionId)))
+            await tx.execute(statement)
+        }
         await tx.execute({
           sql: `UPDATE conversations SET content = ?, tokens = ?, metadata = ? WHERE id = ?`,
           args: [placeholder, placeholderTokens, JSON.stringify(metadata), id],
         })
         cleared++
         freedTokens += Math.max(0, oldTokens - placeholderTokens)
+      }
+      if (maintenance && cleared) {
+        await maintenance.check(tx)
+        await reserveHistoryMaintenance(tx, maintenance, { kind: 'micro', cleared,
+          sourceRows: rows.map(row => [row.id, row.role]), freedTokens }, true)
       }
       await tx.commit()
     } catch (e) {

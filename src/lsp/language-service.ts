@@ -127,7 +127,8 @@ function toLocation(project: Project, value: ts.FileTextChanges): any {
 }
 function commandResult(project: Project, method: string, params: any): any {
   if (method === 'initialize') return { capabilities: { completionProvider: { resolveProvider: true, triggerCharacters: ['.', '"', "'", '/', '@', '<'] }, hoverProvider: true, definitionProvider: true, referencesProvider: true, renameProvider: { prepareProvider: true }, documentFormattingProvider: true, documentRangeFormattingProvider: true, documentSymbolProvider: true, documentHighlightProvider: true, signatureHelpProvider: { triggerCharacters: ['(', ',', '<'], retriggerCharacters: [','] }, codeActionProvider: { codeActionKinds: ['quickfix', 'refactor', 'source'], resolveProvider: false } } }
-  if (method === 'shutdown' || method === 'exit' || method === 'initialized') return null
+  // Requests finish synchronously; advisory cancellation has no document URI to resolve.
+  if (method === 'shutdown' || method === 'exit' || method === 'initialized' || method === '$/cancelRequest') return null
   if (method === 'textDocument/didOpen') { const p = params.textDocument; const file = safeFile(project, p.uri); project.opened.set(file, { text: String(p.text ?? ''), version: Number(p.version) || 1 }); return null }
   if (method === 'textDocument/didChange') { const p = params.textDocument; const file = safeFile(project, p.uri); const last = p.contentChanges?.at(-1)?.text; if (typeof last === 'string') project.opened.set(file, { text: last, version: Number(p.version) || (project.opened.get(file)?.version ?? 0) + 1 }); return null }
   if (method === 'textDocument/didClose') { project.opened.delete(safeFile(project, params.textDocument.uri)); return null }

@@ -9,6 +9,8 @@ export interface NormalizedWriteFileArgs {
   data: unknown
   /** True when the legacy `content` property supplied the payload. */
   usedContentAlias: boolean
+  expectedHash?: string
+  createOnly?: boolean
 }
 
 export interface InvalidWriteFileArgs {
@@ -42,5 +44,17 @@ export function normalizeWriteFileArgs(rawArgs: unknown): WriteFileArgsResult {
     return { ok: false, error: { code: 'WRITE_INVALID_ARGUMENTS', message: 'write_file requires data (or legacy content); it must not be undefined.' } }
   }
 
-  return { ok: true, args: { path: input.path, data, usedContentAlias: usedContentAlias && hasContent } }
+  if (input.expectedHash !== undefined && (typeof input.expectedHash !== 'string' || !/^(missing|sha256:[a-f0-9]{64})$/.test(input.expectedHash))) {
+    return { ok: false, error: { code: 'WRITE_INVALID_ARGUMENTS', message: 'expectedHash must be the complete file version returned by a file tool, or missing for a new file.' } }
+  }
+  if (input.createOnly !== undefined && typeof input.createOnly !== 'boolean') {
+    return { ok: false, error: { code: 'WRITE_INVALID_ARGUMENTS', message: 'createOnly must be a boolean.' } }
+  }
+  if (input.createOnly === true && input.expectedHash !== undefined && input.expectedHash !== 'missing') {
+    return { ok: false, error: { code: 'WRITE_INVALID_ARGUMENTS', message: 'createOnly cannot be combined with an existing file version.' } }
+  }
+
+  return { ok: true, args: { path: input.path, data, usedContentAlias: usedContentAlias && hasContent,
+    ...(input.expectedHash === undefined ? {} : { expectedHash: input.expectedHash as string }),
+    ...(input.createOnly === undefined ? {} : { createOnly: input.createOnly as boolean }) } }
 }

@@ -5,20 +5,22 @@ import path from 'node:path'
 import { pino } from 'pino'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentContext, IToolRegistry } from '../../../core/agent-context/types.js'
-import type { CreateSubagentRun, SubagentRun } from '../../../core/subagent/types.js'
+import type { CreateSubagentRun, SubagentRun, SubagentRunHeader } from '../../../core/subagent/types.js'
 import type { SubagentExecution } from '../../../core/subagent/runner.js'
 import { createAgentContext } from '../../../core/agent-context/factory.js'
 import { createConversationHistory } from '../../../storage/conversation/factory.js'
-import { subagentTool } from '../subagent-tool.js'
+import { executeSubagent, subagentTool } from '../subagent-tool.js'
 
-const captured = vi.hoisted(() => ({ child: undefined as AgentContext | undefined, prior: null as SubagentRun | null }))
+const captured = vi.hoisted(() => ({ child: undefined as AgentContext | undefined, prior: null as SubagentRun | null,
+  getRunHeader: vi.fn() }))
 
 vi.mock('../../../core/subagent/runner.js', () => ({
   getSubagentRunner: () => ({
-    store: { getRun: async () => captured.prior },
+    store: { getRunHeader: captured.getRunHeader },
     run: async (input: CreateSubagentRun, _parent: AgentContext, execute: (execution: SubagentExecution) => Promise<void>) => {
-      const snapshot: SubagentRun = { ...input, schemaVersion: 1, runId: 'fixture-run', childSessionId: 'fixture-child',
-        status: 'running', lastSeq: 1, createdAt: 1, updatedAt: 1, usage: {}, toolCalls: [], transcriptRef: 'fixture' }
+      const snapshot: SubagentRunHeader = { ...input, schemaVersion: 1, runId: 'fixture-run', childSessionId: 'fixture-child',
+        status: 'running', lastSeq: 1, createdAt: 1, updatedAt: 1, usage: {}, toolCount: 0, activeToolCount: 0,
+        nonPlanToolCount: 0, transcriptRef: 'fixture' }
       await execute({ snapshot, signal: new AbortController().signal, onRequestAttempt: vi.fn(), observer: {
         onOutcome: vi.fn(), onToolStart: vi.fn(), onToolEnd: vi.fn(), onUsage: vi.fn(),
       } })
@@ -44,6 +46,13 @@ beforeEach(() => {
   vi.stubEnv('WORKSPACE_ROOT', fixtureDir)
   captured.child = undefined
   captured.prior = null
+  captured.getRunHeader.mockReset().mockImplementation(async (_tenant: string, _run: string, fullRecord: boolean) => {
+    expect(fullRecord).toBe(true)
+    if (!captured.prior) return null
+    const { toolCalls, ...header } = captured.prior
+    return { ...header, toolCount: toolCalls.length, activeToolCount: toolCalls.filter(tool => tool.status === 'running').length,
+      nonPlanToolCount: toolCalls.length }
+  })
 })
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -62,7 +71,7 @@ describe('reviewer role access through subagentTool.execute', () => {
     const child = captured.child
     expect(child).toBeDefined()
     if (!child) throw new Error('Child execution was not reached')
-    expect(child.tools.list().map((tool) => tool.name)).toEqual(['read_file'])
+    expect(child.tools.list().map((tool) => tool.name)).toEqual(['read_file', 'plan_update'])
     const blocked = await child.tools.execute('write_file', { path: 'README.md', data: 'unexpected mutation' }, child)
     expect(blocked).toMatchObject({ success: false, metadata: { blocked: true, code: 'TOOL_NOT_ALLOWED' } })
     expect(tools.execute).not.toHaveBeenCalled()
@@ -89,8 +98,9 @@ describe('subagent continuation tool preserves original capabilities', () => {
     const result = await subagentTool.execute({ task: 'next', resumeRunId: 'previous', ...(toolModel ? { model: toolModel } : {}) }, parent)
     expect(result.success).toBe(true)
     expect(captured.child?.modelName).toBe(expected)
-    expect(captured.child?.tools.list().map(tool => tool.name)).toEqual(['read_file'])
+    expect(captured.child?.tools.list().map(tool => tool.name)).toEqual(['read_file', 'plan_update'])
     expect(captured.child?.sessionId).toBe('fixture-child')
+    expect(captured.getRunHeader).toHaveBeenCalledWith('fixture', 'previous', true)
   })
   it('refuses role or access escalation and does not enter child execution', async () => {
     const parent = parentAndPrior()
@@ -104,7 +114,7 @@ describe('subagent continuation tool preserves original capabilities', () => {
   it('intersects saved child tools with the current parent and preserves the workspace', async () => {
     const parent = parentAndPrior()
     await subagentTool.execute({ task: 'next', resumeRunId: 'previous' }, parent)
-    expect(captured.child?.tools.list().map(tool => tool.name)).toEqual(['read_file'])
+    expect(captured.child?.tools.list().map(tool => tool.name)).toEqual(['read_file', 'plan_update'])
     expect(captured.child?.projectRoot).toBe(fixtureDir)
   })
   it('refuses a changed parent session or a no-longer-authorized workspace', async () => {
@@ -113,5 +123,34 @@ describe('subagent continuation tool preserves original capabilities', () => {
     expect((await subagentTool.execute({ task: 'next', resumeRunId: 'previous' }, other)).success).toBe(false)
     expect((await subagentTool.execute({ task: 'next', resumeRunId: 'previous' }, { ...parent, workspacePaths: [] })).success).toBe(false)
     expect(captured.child).toBeUndefined()
+  })
+})
+
+
+describe('custom Agent and legacy child builtin planning defaults', () => {
+  it.each([
+    { toolProfile: 'general' as const, userDelegated: false, access: 'read-only' },
+    { toolProfile: 'code' as const, userDelegated: false, access: 'inherit' },
+    { toolProfile: 'general' as const, userDelegated: true, access: 'inherit' },
+    { toolProfile: 'code' as const, userDelegated: true, access: 'read-only' },
+  ])('keeps session planning but no business capabilities for $toolProfile / $access / delegated=$userDelegated', async ({ toolProfile, userDelegated, access }) => {
+    const definitions = ['read_file', 'write_file', 'execute_cmd'].map(name => ({ name, description: name, parameters: { type: 'object' } }))
+    const tools: IToolRegistry = { register: vi.fn(), unregister: vi.fn(), has: name => definitions.some(tool => tool.name === name),
+      list: () => definitions, execute: vi.fn().mockResolvedValue({ success: true, output: 'business tool executed' }) }
+    const parent = createAgentContext({ tenantId: 'fixture', sessionId: 'parent', projectRoot: fixtureDir, toolProfile,
+      logger: pino({ level: 'silent' }), tools, history: createConversationHistory(), modelName: 'fixture' })
+    const agent = { id: 'no-business-tools', name: 'Planning reviewer', model: 'fixture',
+      systemPrompt: 'Review using the available capabilities.', skills: [], mcpServers: [], knowledgeBases: [], allowedTools: [] }
+    const result = await executeSubagent({ task: 'Plan the review', access }, parent, { userDelegated, agent })
+    expect(result.success).toBe(true)
+    expect(captured.child?.tools.list().map(tool => tool.name)).toEqual(['plan_update'])
+    expect(captured.child?.tools.executionMode?.('plan_update', { plan: [] })).toBe('serial')
+    expect(captured.child?.sessionId).toBe('fixture-child')
+    if (!captured.child) throw new Error('Child was not started')
+    expect(await captured.child.tools.preflight?.('plan_update', { plan: [] }, captured.child)).toBeUndefined()
+    for (const name of ['write_file', 'execute_cmd', 'ask_user', 'subagent']) {
+      expect(await captured.child.tools.execute(name, {}, captured.child)).toMatchObject({ success: false, metadata: { code: 'TOOL_NOT_ALLOWED' } })
+    }
+    expect(tools.execute).not.toHaveBeenCalled()
   })
 })

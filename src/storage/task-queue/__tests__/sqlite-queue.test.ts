@@ -27,9 +27,10 @@ describe('SQLiteTaskQueue polling', () => {
     vi.useFakeTimers()
 
     const queue = new SQLiteTaskQueue(10)
+    queue.registerHandler('test-handler', async () => undefined)
     queue.start()
     await vi.advanceTimersByTimeAsync(11)
-    queue.stop()
+    await queue.stop()
 
     // Schema creation runs during initDb and can lag queue construction. The
     // timer must tolerate that state without an unhandled rejection or noisy

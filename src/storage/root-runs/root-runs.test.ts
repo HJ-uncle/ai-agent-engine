@@ -176,7 +176,7 @@ describe('durable root run identity and pending claims', () => {
 })
 
 describe('history serialization across instances', () => {
-  it('serializes compaction, concurrent appends and truncate across separately created consumers', async () => {
+  it('rejects stale compaction without losing concurrent appends, then serializes fresh compaction and truncate', async () => {
     // No source database rows; JSONL is the configured backend.
     const historyA = createConversationHistory()
     const historyB = createConversationHistory()
@@ -187,18 +187,25 @@ describe('history serialization across instances', () => {
     const started = new Promise<void>(resolve => { entered = resolve })
     const gate = new Promise<void>(resolve => { release = resolve })
     const compact = historyA.compress(ctx, async () => { entered(); await gate; return 'Keep the critical constraint' }, 4)
+    const rejected = expect(compact).rejects.toMatchObject({ code: 'HISTORY_COMPRESSION_CONFLICT' })
     await started
-    const append = historyB.append({ id: 'new', role: 'user', content: 'new after compact', tokens: 10 }, ctx)
+    await historyB.append({ id: 'new', role: 'user', content: 'new during summary generation', tokens: 10 }, ctx)
+    expect((await historyB.getFullHistory(ctx)).map(message => message.id)).toEqual([...Array.from({ length: 8 }, (_, index) => `m${index}`), 'new'])
     release()
-    await Promise.all([compact, append])
+    await rejected
+    await historyA.compress(ctx, async () => 'Keep the critical constraint', 4)
     expect((await historyB.getFullHistory(ctx)).map(message => message.id)).toContain('new')
+    expect((await historyB.getFullHistory(ctx)).some(message => String(message.content).includes('critical constraint'))).toBe(true)
     const last = await historyA.getMessageById('new', ctx.tenantId)
     await withHistoryLock(ctx.tenantId, async () => {
       await historyA.deleteMessagesAfterId(last!.dbId, ctx.sessionId, ctx.tenantId)
       await historyA.deleteMessage('new', ctx.tenantId)
     })
     expect((await historyB.getFullHistory(ctx)).map(message => message.id)).not.toContain('new')
-    expect((await historyB.getFullHistory(ctx)).some(message => String(message.content).includes('critical constraint'))).toBe(true)
+    // The fresh summary was appended after the target event. Rolling back to
+    // that event retracts the summary and faithfully restores the original facts.
+    expect((await historyB.getFullHistory(ctx)).map(message => ({ id: message.id, content: message.content }))).toEqual(
+      Array.from({ length: 8 }, (_, index) => ({ id: `m${index}`, content: `message ${index}` })))
   })
 
   it('does not append a queued write after cancellation and history clear', async () => {

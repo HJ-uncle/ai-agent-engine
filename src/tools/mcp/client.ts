@@ -64,20 +64,20 @@ export class HTTPMCPClient implements MCPClient {
     return timeoutMs === 0 ? signal : signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs)
   }
 
-  private httpTimeoutOptions() {
-    return { timeoutMs: this.config.timeoutMs, overridePolicyTimeout: this.config.timeoutMs !== undefined }
+  private httpTimeoutOptions(timeoutMs = this.config.timeoutMs) {
+    return { timeoutMs, overridePolicyTimeout: timeoutMs !== undefined }
   }
 
   // ── JSON-RPC 2.0 请求 ─────────────────────────────────────────────────────
-  private async rpc<T>(method: string, params: unknown = {}, signal?: AbortSignal, ctx = this.securityContext): Promise<T> {
+  private async rpc<T>(method: string, params: unknown = {}, signal?: AbortSignal, ctx = this.securityContext, operationTimeoutMs?: number): Promise<T> {
     throwIfAborted(signal)
     const id = _rpcId++
     const body = JSON.stringify({ jsonrpc: '2.0', id, method, params })
 
     if (this.config.transportType === 'stdio') {
-      return this.stdioRpc<T>(id, body, signal)
+      return this.stdioRpc<T>(id, body, signal, operationTimeoutMs)
     }
-    if (this.config.transportType === 'sse') return this.legacySseRpc<T>(id, body, signal, ctx)
+    if (this.config.transportType === 'sse') return this.legacySseRpc<T>(id, body, signal, ctx, operationTimeoutMs)
     const endpoint = this.config.url
     if (!endpoint) throw new Error('MCP server URL is not configured')
 
@@ -91,8 +91,8 @@ export class HTTPMCPClient implements MCPClient {
       },
       body,
       stream: true,
-      signal: this.requestSignal(15_000, signal),
-      ...this.httpTimeoutOptions(),
+      signal: this.requestSignal(operationTimeoutMs ?? 15_000, signal),
+      ...this.httpTimeoutOptions(operationTimeoutMs ?? this.config.timeoutMs),
     })
 
     if (!res.ok) {
@@ -138,13 +138,13 @@ export class HTTPMCPClient implements MCPClient {
     return json.result as T
   }
 
-  private async stdioRpc<T>(id: number, body: string, signal?: AbortSignal): Promise<T> {
+  private async stdioRpc<T>(id: number, body: string, signal?: AbortSignal, operationTimeoutMs?: number): Promise<T> {
     if (!this.process) throw new Error('MCP stdio process is not running')
     let timeout: ReturnType<typeof setTimeout> | undefined
     let abortHandler: (() => void) | undefined
     const promise = new Promise<T>((resolve, reject) => {
       this.stdioPending.set(id, { resolve: resolve as (value: unknown) => void, reject })
-      const timeoutMs = this.config.timeoutMs ?? 15_000
+      const timeoutMs = operationTimeoutMs ?? this.config.timeoutMs ?? 15_000
       if (timeoutMs > 0) timeout = setTimeout(() => {
         const pending = this.stdioPending.get(id)
         if (pending) { this.stdioPending.delete(id); pending.reject(new Error('MCP stdio request timed out')) }
@@ -230,12 +230,12 @@ export class HTTPMCPClient implements MCPClient {
     if (!response.ok) throw new Error(`MCP notification ${response.status}`)
   }
 
-  private async legacySseRpc<T>(id: number, body: string, signal?: AbortSignal, ctx = this.securityContext): Promise<T> {
+  private async legacySseRpc<T>(id: number, body: string, signal?: AbortSignal, ctx = this.securityContext, operationTimeoutMs?: number): Promise<T> {
     const session = this.legacySse
     if (!session?.endpoint || session.closed) throw new Error('MCP SSE session is not connected')
     throwIfAborted(signal)
     const deadline = new AbortController()
-    const timeoutMs = this.config.timeoutMs ?? 15_000
+    const timeoutMs = operationTimeoutMs ?? this.config.timeoutMs ?? 15_000
     const timer = timeoutMs > 0 ? setTimeout(() => deadline.abort(new Error('MCP SSE request timed out')), timeoutMs) : undefined
     const requestSignal = AbortSignal.any([session.controller.signal, deadline.signal, ...(signal ? [signal] : [])])
     const pending = new Promise<T>((resolve, reject) => {
@@ -255,7 +255,7 @@ export class HTTPMCPClient implements MCPClient {
         body,
         signal: requestSignal,
         stream: true,
-        ...this.httpTimeoutOptions(),
+        ...this.httpTimeoutOptions(operationTimeoutMs ?? this.config.timeoutMs),
       }).then(async response => {
         try {
           if (!response.ok) throw new Error(`MCP SSE POST ${response.status}`)
@@ -408,8 +408,8 @@ export class HTTPMCPClient implements MCPClient {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...this.config.headers },
       body: JSON.stringify(args),
-      signal: this.requestSignal(30_000, signal),
-      ...this.httpTimeoutOptions(),
+      signal: this.requestSignal(this.config.timeoutMs ?? 0, signal),
+      ...this.httpTimeoutOptions(this.config.timeoutMs ?? 0),
     })
     if (!res.ok) throw new Error(`REST /tools/${name} ${res.status}`)
     const data = (await res.json()) as { result?: string; content?: Array<{type:string;text?:string}> }
@@ -549,7 +549,7 @@ export class HTTPMCPClient implements MCPClient {
         content?: Array<{ type: string; text?: string }>
         result?: unknown
         isError?: boolean
-      }>('tools/call', { name, arguments: args }, signal, ctx)
+      }>('tools/call', { name, arguments: args }, signal, ctx, this.config.timeoutMs ?? 0)
       if (result.isError) throw new Error(result.content?.map(c => c.text ?? '').join('\n') || 'MCP tool reported an error')
 
       // MCP 标准返回 content 数组

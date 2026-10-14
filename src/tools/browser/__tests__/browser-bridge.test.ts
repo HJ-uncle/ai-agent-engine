@@ -25,7 +25,7 @@ describe('browser reverse bridge', () => {
     const result = bridge.execute('snapshot', { tabId: 'tab-1' }, { ...ctx, sessionId: 'child', rootSessionId: ctx.sessionId })
     const [command] = await bridge.poll(identity, client.clientId, client.clientToken)
     expect(command).toMatchObject({ sessionId: 'chat-a', action: 'snapshot', args: { tabId: 'tab-1' } })
-    expect(command.expiresAt).toBeGreaterThan(Date.now())
+    expect(command.expiresAt).toBeNull()
     expect(bridge.result(identity, client.clientId, client.clientToken, command.requestId, { success: true, output: '{"text":"hello"}' })).toBe(true)
     expect(await result).toEqual({ success: true, output: '{"text":"hello"}' })
     expect(bridge.result(identity, client.clientId, client.clientToken, command.requestId, { success: true, output: 'duplicate' })).toBe(false)

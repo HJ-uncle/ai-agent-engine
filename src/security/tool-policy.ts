@@ -3,9 +3,17 @@ import { getSecurityMode } from './policy-engine.js'
 
 /** Trust attaches to implementations, not model-supplied or extension-supplied names. */
 const trustedModes = new WeakMap<Tool, 'readonly' | 'subagent' | 'serial'>()
-export function trustBuiltinTool<T extends Tool>(tool: T, mode: 'readonly' | 'subagent' | 'serial' = 'serial'): T {
+const orchestrationTools = new WeakSet<Tool>()
+export function trustBuiltinTool<T extends Tool>(tool: T, mode: 'readonly' | 'subagent' | 'serial' = 'serial', options: { orchestration?: boolean } = {}): T {
   trustedModes.set(tool, mode)
+  if (options.orchestration) orchestrationTools.add(tool)
+  else orchestrationTools.delete(tool)
   return tool
+}
+
+/** Joins and cancellation cannot compete with the child operations they must release. */
+export function bypassesOrdinaryToolPool(tool: Tool): boolean {
+  return orchestrationTools.has(tool) || toolExecutionMode(tool) === 'subagent'
 }
 
 export function toolExecutionMode(tool: Tool): 'readonly' | 'subagent' | 'serial' {

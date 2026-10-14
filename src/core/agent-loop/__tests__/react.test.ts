@@ -578,7 +578,7 @@ describe('run resource and permission boundaries', () => {
   })
 })
 
-it('does not execute partial tool dispatches when the provider hits its output limit', async () => {
+it('does not execute partial tool dispatches at the last admitted request output limit', async () => {
   const llm = makeLLMAdapter([])
   llm.stream = async function* () { yield { done: true, finishReason: 'length', toolCalls: [
     { id: 'complete-first', name: 'write_file', args: '{"path":"first.ts"}', index: 0 },
@@ -586,7 +586,7 @@ it('does not execute partial tool dispatches when the provider hits its output l
   ] } }
   const onOutcome = vi.fn()
   const ctx = makeCtx({ runObserver: { onOutcome } })
-  await collectYields(new ReActStrategy(llm).run('task', ctx))
+  await collectYields(new ReActStrategy(llm, { maxIterations: 1 }).run('task', ctx))
   expect(ctx.tools.execute).not.toHaveBeenCalled()
   expect(onOutcome).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'failed', stopReason: 'output_limit' }))
 })

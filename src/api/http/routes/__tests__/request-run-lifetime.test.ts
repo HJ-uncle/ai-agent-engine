@@ -16,9 +16,9 @@ import { rootRunStore } from '../../../../storage/root-runs/index.js'
 import * as toolFactory from '../../../../tools/registry-factory.js'
 
 describe('request run lifetime header', () => {
-  it('keeps the historical defaults when no lifetime header was sent', () => {
-    expect(getRequestRunLifetime({ headers: {} })).toBe('attached')
-    expect(getRequestRunLifetime({ headers: { 'x-aether-tool-profile': 'general' } })).toBe('attached')
+  it('defaults every profile to durable when no lifetime header was sent', () => {
+    expect(getRequestRunLifetime({ headers: {} })).toBe('durable')
+    expect(getRequestRunLifetime({ headers: { 'x-aether-tool-profile': 'general' } })).toBe('durable')
     expect(getRequestRunLifetime({ headers: { 'x-aether-tool-profile': 'code' } })).toBe('durable')
   })
 
@@ -35,7 +35,7 @@ describe('request run lifetime header', () => {
 
   it('does not let a body or query upgrade the request lifetime', () => {
     const request = { headers: { 'x-aether-tool-profile': 'general' }, body: { runLifetime: 'durable' }, query: { runLifetime: 'durable' } }
-    expect(getRequestRunLifetime(request)).toBe('attached')
+    expect(getRequestRunLifetime(request)).toBe('durable')
   })
 })
 

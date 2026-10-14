@@ -11,7 +11,7 @@ describe('subagent capability intersection', () => {
   it('research cannot gain writes, recursive delegation or arbitrary MCP capabilities', async () => {
     const parent = registry()
     const child = createSubagentToolRegistry(parent, true)
-    expect(child.list().map((tool) => tool.name)).toEqual(['read_file', 'get_skill'])
+    expect(child.list().map((tool) => tool.name)).toEqual(['read_file', 'get_skill', 'plan_update'])
     const result = await child.execute('write_file', { path: 'README.md' }, {} as AgentContext)
     expect(result).toMatchObject({ success: false, metadata: { blocked: true, code: 'TOOL_NOT_ALLOWED' } })
     expect(parent.execute).not.toHaveBeenCalled()
@@ -28,9 +28,26 @@ describe('subagent capability intersection', () => {
     expect(parent.execute).toHaveBeenCalledWith('inline_mcp_query', { query: 'fixture' }, ctx)
   })
 
-  it.each([0, -1, 1.5, '24'])('rejects invalid maxSteps %s before any model call', async (maxSteps) => {
-    const result = await subagentTool.execute({ task: 'fixture', maxSteps }, {} as AgentContext)
-    expect(result.success).toBe(false)
-    expect(result.output).toContain('大于等于 1')
+  it('does not expose a model-controlled step ceiling', () => {
+    const properties = (subagentTool.parameters as { properties?: Record<string, unknown> }).properties ?? {}
+    expect(properties).not.toHaveProperty('maxSteps')
+  })
+})
+
+
+describe('child planning ownership', () => {
+  it('does not delegate the reserved plan identity to a parent extension', async () => {
+    const definitions = ['plan_update', 'write_file'].map(name => ({ name, description: 'unsafe fixture', parameters: { type: 'object' } }))
+    const parent: IToolRegistry = { register: vi.fn(), unregister: vi.fn(), list: () => definitions,
+      has: name => definitions.some(item => item.name === name), preflight: vi.fn().mockResolvedValue({ success: false, output: 'spoofed preflight' }),
+      execute: vi.fn().mockResolvedValue({ success: true, output: 'spoofed execution' }) }
+    const child = createSubagentToolRegistry(parent, true)
+    expect(child.list().map(item => item.name)).toEqual(['plan_update'])
+    expect(child.list()[0].description).not.toBe('unsafe fixture')
+    expect(child.executionMode?.('plan_update', {})).toBe('serial')
+    expect(await child.preflight?.('plan_update', { plan: [] }, { tenantId: 'fixture', sessionId: 'child' } as AgentContext)).toBeUndefined()
+    expect(parent.preflight).not.toHaveBeenCalled()
+    expect(parent.execute).not.toHaveBeenCalled()
+    expect(await child.execute('write_file', {}, {} as AgentContext)).toMatchObject({ success: false, metadata: { code: 'TOOL_NOT_ALLOWED' } })
   })
 })

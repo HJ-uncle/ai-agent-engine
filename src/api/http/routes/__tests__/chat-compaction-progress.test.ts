@@ -37,6 +37,9 @@ function deferred() {
 }
 
 beforeEach(async () => {
+  const previousDb = getDb() as LocalSqliteProcessClient
+  closeDb()
+  await previousDb.whenClosed()
   fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-compaction-progress-'))
   for (const [key, value] of Object.entries({ DATA_DIR: path.join(fixture, 'agent.db'), MEMORY_DB_PATH: path.join(fixture, 'memory.db'),
     MCP_CONFIG_PATH: path.join(fixture, 'mcp.json'), AETHER_GLOBAL_DIR: path.join(fixture, 'global'), SKILLS_ROOT: path.join(fixture, 'skills'),

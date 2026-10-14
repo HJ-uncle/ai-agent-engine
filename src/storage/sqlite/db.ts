@@ -1,7 +1,10 @@
+import { up as up29 } from './migrations/029_cron_automation.js'
+import { up as up30 } from './migrations/030_conversation_projection_receipts.js'
+import { up as up28 } from './migrations/028_task_plans.js'
 import { up as up27 } from './migrations/027_cron_timeout.js'
 import type { Client } from '@libsql/client'
 import { repairLegacyCronTimeoutSchema } from './schema-compatibility.js'
-import { LocalSqliteProcessClient } from './local-process-client.js'
+import { LocalSqliteProcessClient, SqliteCloseLedger, getLocalSqliteEpoch, type SqliteDatabaseCloseReceipt } from './local-process-client.js'
 import path from 'node:path'
 import fs from 'node:fs'
 import { up } from './migrations/001_initial.js'
@@ -32,12 +35,22 @@ import { up as up24 } from './migrations/024_account_identity_profiles.js'
 import { up as up26 } from './migrations/026_cron_thinking_mode.js'
 import { up as up25 } from './migrations/025_conversation_usage_archive.js'
 
-let client: Client | null = null
+let client: LocalSqliteProcessClient | null = null
 let initialization: Promise<void> | null = null
+let closingReceipt: Promise<SqliteDatabaseCloseReceipt | null> | null = null
+const closeLedger = new SqliteCloseLedger()
+
+/** Unknown adapters do not acquire execution authority by claiming a source epoch. */
+export function getDbEpoch(db: Client): number | undefined {
+  return getLocalSqliteEpoch(db)
+}
 
 export function getDb(): Client {
   if (client && !client.closed) return client
-  if (client?.closed) { client = null; initialization = null }
+  if (client?.closed) {
+    closingReceipt = closeLedger.retire(client)
+    client = null; initialization = null
+  }
 
   const dbPath = process.env.DATA_DIR ?? './data/agent.db'
   const dbDir = path.dirname(path.resolve(dbPath))
@@ -52,6 +65,7 @@ export function getDb(): Client {
     cacheKb: Number(process.env.SQLITE_CACHE_KB ?? 20000),
     mmapBytes: Number(process.env.SQLITE_MMAP_BYTES ?? 268435456),
     busyTimeoutMs: Number(process.env.SQLITE_BUSY_TIMEOUT_MS ?? 5000),
+    readyAfter: closingReceipt?.then(() => {}),
   })
 
   return client
@@ -121,6 +135,9 @@ async function initializeSchema(db: Client): Promise<void> {
   await up25(db)
   await up26(db)
     await up27(db)
+  await up28(db)
+  await up29(db)
+  await up30(db)
   // 兼容旧数据库：补充新列
   // 必须串行执行并单独捕获异常。SQLite 不支持 ALTER TABLE ADD COLUMN IF NOT EXISTS，
   // 若使用 batch 批量执行，当遇到已存在的列时会抛出异常，导致事务回滚并中断后续的列补充，引发严重的数据不一致隐患。
@@ -138,10 +155,12 @@ async function initializeSchema(db: Client): Promise<void> {
   ).catch(() => {})
 }
 
-export function closeDb(): void {
+export function closeDb(): Promise<SqliteDatabaseCloseReceipt | null> {
   initialization = null
   if (client) {
-    client.close()
+    const previous = client
     client = null
+    closingReceipt = closeLedger.retire(previous)
   }
+  return closingReceipt ?? Promise.resolve(null)
 }

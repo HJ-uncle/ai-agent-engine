@@ -2,6 +2,10 @@
 // For non-streaming complete() calls, a cache layer could be added here keyed on
 // (message, sessionId, systemPrompt) to avoid redundant LLM roundtrips.
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import type { AuthContext } from '../../../auth/types.js'
+import { browserPrincipalFromAuth } from '../../../core/browser-execution.js'
+import { browserAuthorityFromRequest } from '../middleware.js'
+import { browserBridge } from '../../../tools/browser/browser-bridge.js'
 
 import { v4 as uuidv4 } from 'uuid'
 import { ReActStrategy } from '../../../core/agent-loop/index.js'
@@ -11,7 +15,8 @@ import { SQLiteConversationHistory } from '../../../storage/conversation/index.j
 import { createConversationHistory } from '../../../storage/conversation/factory.js'
 import { createLLMAdapterWithDbConfig } from '../../../core/llm-adapter/index.js'
 import { resolveModelConfig, createAdapterFromResolved } from '../../../core/llm-adapter/resolve-model.js'
-import { RequestBudget, parseRequestTokenLimit } from '../../../core/subagent/budget.js'
+import { RequestBudget } from '../../../core/subagent/budget.js'
+import { logRequestDispatch } from '../../../core/llm-adapter/dispatch-diagnostics.js'
 import { createRequestLogger, QALogger, type QALogEntry } from '../../../observability/index.js'
 import { buildSkillsSystemPrompt } from '../../../skills/index.js'
 import { getRequestToolProfile, getRequestRunLifetime } from '../tool-profile.js'
@@ -21,14 +26,23 @@ import { success, fail } from '../response.js'
 import { withHistoryLock, isSessionHistoryMutating } from '../../../storage/conversation/serialization.js'
 import { rootRunStore, type RootRun, type RootPending } from '../../../storage/root-runs/index.js'
 import { persistedTurnProjection } from '../chat-snapshot.js'
-import { continuedTurnUsage, sessionUsageAtWatermark, sessionSubagentUsage, sessionSubagentRunsAtWatermark } from '../chat-usage.js'
+import { continuedTurnUsage, sessionUsageAtWatermark, sessionSubagentUsage } from '../chat-usage.js'
 import { SubagentStore } from '../../../core/subagent/store.js'
+import { ParentPublicationAuthority } from '../../../core/subagent/parent-publication.js'
+import { PublishedTurnBootstraps, type TurnBootstrap } from '../../../core/subagent/turn-bootstrap.js'
 import { CollaboratorError, prepareCollaborators, collaboratorTools, type CollaboratorInput } from '../../../core/subagent/collaborators.js'
 import { TodoStore } from '../../../storage/todo/index.js'
 import { ChangeStore } from '../../../storage/changes/index.js'
-import { commandJobs } from '../../../core/command-jobs/index.js'
+import { commandJobs, type CommandScopeCapture } from '../../../core/command-jobs/index.js'
 import { CODE_AGENT_EXECUTION_PROMPT } from '../../../core/code-agent-prompt.js'
 import { publicHistoryMessages } from '../history-projection.js'
+import { getExecutionOwners, serviceForOwner, type ExecutionOwner } from '../../../core/collaboration/execution-owner.js'
+import { installProductionCollaborationBoundary } from '../../../core/collaboration/production-boundary.js'
+import { prepareUserAdmission, type UserAdmissionSelector } from '../../../storage/root-admission/index.js'
+import { admissionProjectingHistory, projectTerminalAdmissionUsers, readAdmissionSeed } from '../../../storage/root-admission/projection.js'
+import { registerUserAdmissionRoutes } from './chat-admission.js'
+import { registerChildRecoveryPages, checkedChildEnvelope, childProjectionReferences, sendChildRecoveryFailure } from './live-child-recovery.js'
+import { requireChildRecovery } from '../../../core/subagent/child-usage-authority.js'
 
 /**
  * 主 Agent 的子代理委派纪律（对齐 wuzu-client codeAgent.ts 的「探索预算」章节）。
@@ -57,7 +71,7 @@ const SUBAGENT_DISPATCH_PROMPT = [
   '',
   '回收纪律：已有路径和行号证据可以直接复用；如果当前工作树、时间或证据状态发生冲突，只做最小范围复核，不要整段重做。',
   '子代理结果必须包含 status、facts、evidence、actions、verification、unverified 和 next；主 Agent 根据结果决定是否继续，不把未核实项当成完成。',
-  '子任务因引擎本地预算或步数结束时，使用它返回的部分证据完成总结，并说明未核实范围。不要把本地预算解释为模型服务商欠费，也不要再次派发或接管同一探索。',
+  '子任务因取消、请求预算、上下文容量或无进展保护结束时，使用它返回的部分证据完成总结，并说明未核实范围。不要把本地预算解释为模型服务商欠费，也不要自行制造步数上限或再次派发同一探索。',
 ].join('\n')
 import { prependBootstrapToSystemPrompt } from '../../../core/osm-bootstrap.js'
 import { getProjectContextBlock } from '../../../core/project-context.js'
@@ -72,6 +86,10 @@ import { extractAndStoreMemories, buildMemoryRecallBlock } from '../../../middle
 import { getSessionMemorySettings, setSessionMemoryScope, type MemoryMode } from '../../../storage/memory/settings.js'
 
 interface ChatBody {
+  admission?: UserAdmissionSelector
+  automationRunId?: string
+  cronJobId?: string
+  cronTimeoutSeconds?: number
   /** Explicit @Agent/continue selections; never changes the bound main Agent. */
   collaborators?: CollaboratorInput[]
   message: string
@@ -254,6 +272,10 @@ interface ChatBody {
 }
 
 import { StreamBus, activeStreams, busToIterable } from '../../../core/stream-pipeline/stream-bus.js'
+import { getRequestSubagentProtocol, publishedSubagentRuns, subagentProjectionForViewer } from '../chat-subagent-protocol.js'
+import { subagentProtocolStream } from '../../../core/subagent/stream-protocol.js'
+import { validateAutomationAdmission, ensureCronRunSchema } from '../../../storage/cron/runs.js'
+import { getDb } from '../../../storage/sqlite/db.js'
 
 // ── 全局会话级 AbortController 注册表 ──────────────────────────────────────────
 // 用于支持前端通过 POST /chat/cancel 主动终止某个会话的流式生成。
@@ -269,6 +291,9 @@ function makeAbortKey(tenantId: string, sessionId: string): string {
 // Also cancel requests still preparing their model/registry before a controller exists.
 const cancellationEpochs = new Map<string, number>()
 const pendingAdmissions = new Map<string, Set<Promise<void>>>()
+const ownedRootPreparations = new Map<string, { controller: AbortController; done: Promise<void>; attemptId: string }>()
+const requestPreparationRoots = new WeakMap<Promise<void>, Map<string, string>>()
+const preparationRootKey = (tenantId: string, runId: string) => JSON.stringify([tenantId, runId])
 
 /**
  * Wait until a previous tool batch has durably settled before accepting a
@@ -276,10 +301,8 @@ const pendingAdmissions = new Map<string, Set<Promise<void>>>()
  * results have been persisted, so resuming immediately could race the old
  * batch and duplicate or reorder history.
  *
- * Code runs are durable jobs and may contain long running commands.  The old
- * fixed 30 second timeout turned a healthy long command into a spurious 409
- * and forced the user to retry the answer.  Keep the bounded guard for the
- * interactive profile, while Code waits for the producer's terminal event.
+ * Every profile waits for the producer's terminal event. A fixed wait here
+ * used to turn a healthy long command into a spurious 409 and force a retry.
  */
 export async function waitForPriorToolBatch(
   prior: Pick<StreamBus, 'finished' | 'emitter'>,
@@ -288,9 +311,7 @@ export async function waitForPriorToolBatch(
   if (prior.finished) return
   await new Promise<void>((resolve, reject) => {
     let settled = false
-    let timer: ReturnType<typeof setTimeout> | undefined
     const cleanup = () => {
-      if (timer) clearTimeout(timer)
       prior.emitter.off('end', finish)
       prior.emitter.off('error', failed)
     }
@@ -304,14 +325,6 @@ export async function waitForPriorToolBatch(
 
     prior.emitter.once('end', finish)
     prior.emitter.once('error', failed)
-    if (toolProfile !== 'code') {
-      timer = setTimeout(() => {
-        if (settled) return
-        settled = true
-        cleanup()
-        reject(Object.assign(new Error('Previous tool batch is still settling; retry this answer'), { statusCode: 409 }))
-      }, 30_000)
-    }
     // The producer can finish between the initial check and listener setup.
     if (prior.finished) finish()
   })
@@ -348,13 +361,166 @@ export function abortActiveChat(tenantId: string, sessionId: string, reason = 'U
   return true
 }
 
+/** Exact owned stop joins the producer; viewer disconnect is never this API. */
+export async function stopOwnedRoot(tenantId: string, sessionId: string, runId: string, reason = 'Owned run cancelled', expectedAttemptId?: string,
+  commandsAtBoundary?: CommandScopeCapture | null): Promise<boolean> {
+  // The precise preparation identity is registered before its root write. Do
+  // not wait for a held history/commit lease before revoking that dispatch.
+  const currentPreparation = ownedRootPreparations.get(preparationRootKey(tenantId, runId))
+  const preparationAtBoundary = !expectedAttemptId || currentPreparation?.attemptId === expectedAttemptId ? currentPreparation : undefined
+  const commands = commandsAtBoundary === undefined ? commandJobs.captureScope({ tenantId, sessionId, runId }) : commandsAtBoundary
+  preparationAtBoundary?.controller.abort(new Error(reason))
+  for (const cap of getExecutionOwners().ownedRoots()) {
+    const binding = serviceForOwner(cap).record(cap).binding
+    if (binding.tenantId === tenantId && binding.rootSessionId === sessionId && binding.rootRunId === runId
+      && (!expectedAttemptId || binding.rootAttemptId === expectedAttemptId)) serviceForOwner(cap).fence(cap, 'cancel', reason)
+  }
+  const captured = await withHistoryLock(tenantId, async () => {
+    const run = await rootRunStore.get(tenantId, runId)
+    if (!run || run.sessionId !== sessionId || !['running','waiting'].includes(run.status)
+      || expectedAttemptId && run.attemptId !== expectedAttemptId) return null
+    const owner = getExecutionOwners().find(tenantId, runId, run.attemptId)
+    const service = owner ? serviceForOwner(owner) : undefined
+    const record = owner ? service!.record(owner) : undefined
+    if (owner) service!.fence(owner, 'cancel', reason)
+    const preparation = preparationAtBoundary
+    if (preparation && !preparation.controller.signal.aborted) preparation.controller.abort(new Error(reason))
+    const bus = activeStreams.get(makeAbortKey(tenantId, sessionId))
+    const busRun = bus?.snapshot().projection.find(frame => frame.run)?.run as RootRun | undefined
+    if (busRun?.runId === runId && !bus?.abortController.signal.aborted) bus?.abortController.abort(new Error(reason))
+    return { run, owner, service, record, preparation, completion: record?.completion, bus: busRun?.runId === runId ? bus : undefined }
+  })
+  if (!captured) return false
+  if (!captured.owner && captured.preparation) {
+    await captured.preparation.done
+    const current = await rootRunStore.get(tenantId, runId)
+    if (!current || !['running','waiting'].includes(current.status)) return true
+    return stopOwnedRoot(tenantId, sessionId, runId, reason, captured.run.attemptId, commands)
+  }
+  // Tools may be waiting on independent command job completion. Cancel that
+  // exact scope before awaiting the child executor, without a history lease.
+  if (commands) await commandJobs.cancelCaptured(commands, reason)
+  let updated: RootRun | null
+  if (captured.owner) {
+    if (captured.record!.phase === 'closed') {
+      // The producer may release its cap while command exit persistence is
+      // held. Read its exact attempt/generation close; never use latest run.
+      await captured.record!.final
+      updated = await rootRunStore.terminalReceipt(captured.record!.binding, captured.service!.db, captured.record!.epoch)
+      if (updated.status !== 'cancelled') throw new Error('ROOT_CANCEL_RECEIPT_UNKNOWN')
+    } else {
+      updated = captured.record!.phase === 'parked'
+        ? await rootRunStore.cancelParked(captured.owner, reason)
+        : await rootRunStore.finishOwned(captured.owner, { status: 'cancelled', stopReason: reason })
+    }
+    await captured.completion
+  } else {
+    // This is an unstarted admission or a parked run recovered on startup.
+    // Recovery must already have interrupted any prior process executors.
+    updated = await rootRunStore.update(tenantId, runId, { status: 'cancelled', stopReason: reason }, captured.run.attemptId)
+  }
+  if (updated && captured.bus) await observePublication(captured.bus, () => captured.bus!.publishRunStateOrdered(updated!))
+  return true
+}
+
+export async function stopOwnedSession(tenantId: string, sessionId: string, reason: string, onStoppedRoot?: (runId: string) => void): Promise<boolean> {
+  const sessionKey = makeAbortKey(tenantId, sessionId)
+  // Freeze in-memory identities before waiting for a held history lease. A
+  // manual turn registered after this boundary belongs to a different stop.
+  const pending = [...(pendingAdmissions.get(sessionKey) ?? [])]
+  const commands = commandJobs.captureScope({ tenantId, sessionId })
+  const hadCommands = commandJobs.hasCapturedWork(commands)
+  const commandCompletion = commandJobs.cancelCaptured(commands, reason)
+  const owners = getExecutionOwners().ownedRoots().filter(cap => {
+    const binding = serviceForOwner(cap).record(cap).binding
+    return binding.tenantId === tenantId && binding.rootSessionId === sessionId
+  })
+  const identities = new Map(owners.map(cap => {
+    const binding = serviceForOwner(cap).record(cap).binding
+    return [binding.rootRunId, binding.rootAttemptId] as const
+  }))
+  cancellationEpochs.set(sessionKey, (cancellationEpochs.get(sessionKey) ?? 0) + 1)
+  const preparationCancelled = abortActiveChat(tenantId, sessionId, reason)
+  for (const cap of owners) serviceForOwner(cap).fence(cap, 'cancel', reason)
+  // create/answer enqueue their writes on this same queue. Enqueue the DB-only
+  // recovered/parked snapshot now, before the first await: later manual writes
+  // cannot cross this fence, even while the prior history lease is held.
+  const rootsAtBoundary = withHistoryLock(tenantId, async () => {
+    const roots = (await rootRunStore.list(tenantId, sessionId)).filter(run => ['running','waiting'].includes(run.status))
+    const stored = await Promise.all(roots.map(run => rootRunStore.get(tenantId, run.runId)))
+    return stored.filter((run): run is NonNullable<typeof run> => run !== null)
+  })
+  const preparationResults = await Promise.allSettled([rootsAtBoundary, ...pending])
+  const rootSnapshot = preparationResults[0]
+  if (rootSnapshot.status === 'fulfilled' && Array.isArray(rootSnapshot.value)) {
+    for (const run of rootSnapshot.value) if (!identities.has(run.runId)) identities.set(run.runId, run.attemptId)
+  }
+  for (const preparation of pending) for (const [id, attemptId] of requestPreparationRoots.get(preparation) ?? []) {
+    if (!identities.has(id)) identities.set(id, attemptId)
+  }
+  const outcomes = await Promise.allSettled([commandCompletion, ...[...identities].map(async ([runId, attemptId]) => {
+    if (await stopOwnedRoot(tenantId, sessionId, runId, reason, attemptId, null)) onStoppedRoot?.(runId)
+  })])
+  const failures = [...preparationResults, ...outcomes].filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+  if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'SESSION_CLEANUP_UNKNOWN')
+  return preparationCancelled || identities.size > 0 || pending.length > 0 || hadCommands
+}
+
+export async function stopAllOwnedExecutions(reason = 'Engine shutdown'): Promise<void> {
+  const service = getExecutionOwners()
+  service.stopAdmission()
+  for (const controllers of preparingChatAborters.values()) for (const controller of controllers) controller.abort(new Error(reason))
+  await service.joinPreparations()
+  const captured = service.unreleasedRoots().map(owner => ({ owner, record: service.record(owner) }))
+  const results = await Promise.allSettled(captured.map(async ({ owner, record }) => {
+    const binding = record.binding
+    // A durable terminal may precede its transport ACK or compaction. Always
+    // join the captured producer even when the root stop sees a terminal row.
+    const stopping = record.phase === 'closed'
+      ? Promise.resolve(service.stopMaintenance(owner, reason))
+      : stopOwnedRoot(binding.tenantId, binding.rootSessionId, binding.rootRunId, reason, binding.rootAttemptId)
+    const joined = await Promise.allSettled([stopping, record.completion])
+    const failures = joined.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+    if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'ROOT_PRODUCER_CLEANUP_UNKNOWN')
+  }))
+  const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+  if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'ROOT_CLEANUP_UNKNOWN')
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
 
-export async function chatRoutes(fastify: FastifyInstance) {
+export interface ChatRouteOptions {
+  /** Trusted registration only. New-stream evidence is not a public capability
+   * until resume, snapshot and client authority contracts are integrated. */
+  newStreamPublication?: boolean
+  /** Module contracts only until persisted/approval and client authority exist. */
+  liveChildRecovery?: boolean
+  /** Trusted candidate integration only. Public capabilities stay disabled. */
+  durableChildRecovery?: boolean
+}
+
+/** A viewer/evidence failure closes observation, never the executor. Callers
+ * still await the real publication barrier before advancing their producer. */
+async function observePublication(bus: StreamBus, publish: () => Promise<unknown>, report?: (error: unknown) => void): Promise<void> {
+  try { await publish() }
+  catch (error) {
+    if (bus.disconnectTimeout) { clearTimeout(bus.disconnectTimeout); bus.disconnectTimeout = null }
+    // Diagnostics are another observer and cannot convert preserved execution
+    // into a cancellation or provider failure either.
+    try { report?.(error) } catch { /* observation diagnostics only */ }
+  }
+}
+
+export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOptions = {}) {
   await rootRunStore.initialize()
   // Reuse bounded revision caches across frequent snapshot refreshes.
   const snapshotHistory = createConversationHistory()
+  await registerUserAdmissionRoutes(fastify, rootRunStore, snapshotHistory)
+  const modernChildren = options.liveChildRecovery === true && options.newStreamPublication === true
+  const durableChildren = modernChildren && options.durableChildRecovery === true
+  registerChildRecoveryPages(fastify, modernChildren)
+  const liveChildAuthorities = new WeakMap<StreamBus, ParentPublicationAuthority>()
   const snapshotSubagents = new SubagentStore()
   const compactionSnapshots = new Map<string, {
     runId: string
@@ -381,60 +547,18 @@ export async function chatRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     const { sessionId, runId } = request.body
     const tenantId = getTenantId(request)
-    // Scheduler cancellation owns one durable run, never a later request in this session.
-    if (runId) {
-      const cancelled = await withHistoryLock(tenantId, async () => {
-        const run = await rootRunStore.get(tenantId, runId)
-        if (!run || run.sessionId !== sessionId) return false
-        const key = makeAbortKey(tenantId, sessionId)
-        const bus = activeStreams.get(key)
-        const busRun = bus?.snapshot().projection.find(frame => frame.run)?.run as RootRun | undefined
-        let stopped = false
-        try {
-          if (busRun?.runId === runId && bus && !bus.abortController.signal.aborted) {
-            bus.abortController.abort(new Error('Owned run cancelled'))
-            stopped = true
-          }
-          if (run.status === 'running' || run.status === 'waiting') {
-            const updated = await rootRunStore.update(tenantId, runId, { status: 'cancelled', stopReason: 'Owned run cancelled' })
-            if (updated && busRun?.runId === runId) bus?.publishRunState(updated)
-            stopped = true
-          }
-        } finally {
-          const jobs = await commandJobs.cancelScope({ tenantId, sessionId, runId }, 'Owned run cancelled')
-          stopped ||= jobs.length > 0
-        }
-        return stopped
-      })
-      return reply.code(200).send({ code: 200, message: cancelled ? 'OK' : 'No active owned run', data: { sessionId, runId, cancelled }, timestamp: Date.now() })
-    }
+    const browserAuthority = browserAuthorityFromRequest(request)
     let cancelled = false
-    try {
-      cancelled = await withHistoryLock(tenantId, async () => {
-        const key = makeAbortKey(tenantId, sessionId)
-        cancellationEpochs.set(key, (cancellationEpochs.get(key) ?? 0) + 1)
-        let cancelled = abortActiveChat(tenantId, sessionId, 'Cancelled by user via /chat/cancel')
-        const active = (await rootRunStore.list(tenantId, sessionId)).filter(run => run.status === 'running' || run.status === 'waiting')
-        for (const run of active) {
-          const updated = await rootRunStore.update(tenantId, run.runId, { status: 'cancelled', stopReason: 'Cancelled by user' })
-          if (updated) activeStreams.get(key)?.publishRunState(updated)
-          cancelled = true
-        }
-        abortActiveChat(tenantId, sessionId, 'Cancelled by user via /chat/cancel')
-        return cancelled
+    if (runId) {
+      cancelled = await stopOwnedRoot(tenantId, sessionId, runId)
+      if (cancelled && browserAuthority) browserBridge.hostDemands.releaseRoot(browserAuthority, sessionId, runId)
+    } else {
+      cancelled = await stopOwnedSession(tenantId, sessionId, 'Cancelled by user via /chat/cancel', run => {
+        if (browserAuthority) browserBridge.hostDemands.releaseRoot(browserAuthority, sessionId, run)
       })
-    } finally {
-      // A failed state write must not leave root or child-owned commands running.
-      // Still surface the persistence error so a retry can reconcile the run state.
-      const jobs = await commandJobs.cancelScope({ tenantId, sessionId }, 'Cancelled by user via /chat/cancel')
-      cancelled ||= jobs.length > 0
     }
-    return reply.code(200).send({
-      code: 200,
-      message: cancelled ? 'OK' : 'No active chat for this session',
-      data: { sessionId, cancelled },
-      timestamp: Date.now(),
-    })
+    return reply.code(200).send({ code: 200, message: cancelled ? 'OK' : 'No active owned run',
+      data: { sessionId, ...(runId ? { runId } : {}), cancelled, settled: cancelled }, timestamp: Date.now() })
   })
 
   // ── 单独停止某个子代理 ────────────────────────────────────────────────────
@@ -517,10 +641,61 @@ export async function chatRoutes(fastify: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const subagentProtocol = getRequestSubagentProtocol(request)
     const toolProfile = getRequestToolProfile(request)
     const runLifetime = getRequestRunLifetime(request)
+    const keyedAdmission = prepareUserAdmission(request.body as unknown as Record<string, unknown>, { toolProfile, runLifetime, subagentProtocol })
     const requestId = uuidv4()
     request.body.sessionId ??= uuidv4()
+    const admissionKey = makeAbortKey(getTenantId(request), request.body.sessionId)
+    const admissionEpoch = cancellationEpochs.get(admissionKey) ?? 0
+    const abortController = new AbortController()
+    const executionService = getExecutionOwners()
+    const preparation = executionService.reservePreparation(abortController)
+    let finishAdmission!: () => void
+    const pendingAdmission = new Promise<void>(resolve => { finishAdmission = resolve })
+    const admissions = pendingAdmissions.get(admissionKey) ?? new Set<Promise<void>>()
+    admissions.add(pendingAdmission); pendingAdmissions.set(admissionKey, admissions)
+    const preparedRootIds = new Map<string, string>()
+    requestPreparationRoots.set(pendingAdmission, preparedRootIds)
+    let preparationFinished = false
+    const registerRootPreparation = (runId: string, attemptId: string) => {
+      preparedRootIds.set(runId, attemptId)
+      ownedRootPreparations.set(preparationRootKey(getTenantId(request), runId), { controller: abortController, done: pendingAdmission, attemptId })
+    }
+    const finishPreparation = () => {
+      if (preparationFinished) return
+      preparationFinished = true
+      admissions.delete(pendingAdmission)
+      if (!admissions.size && pendingAdmissions.get(admissionKey) === admissions) pendingAdmissions.delete(admissionKey)
+      for (const id of preparedRootIds.keys()) if (ownedRootPreparations.get(preparationRootKey(getTenantId(request), id))?.controller === abortController)
+        ownedRootPreparations.delete(preparationRootKey(getTenantId(request), id))
+      executionService.finishPreparation(preparation); finishAdmission()
+    }
+    const earlyPreparers = preparingChatAborters.get(admissionKey) ?? new Set<AbortController>()
+    earlyPreparers.add(abortController); preparingChatAborters.set(admissionKey, earlyPreparers)
+    try {
+    // Matching receipts replay before collaborator, memory or model resolution.
+    if (keyedAdmission) {
+      const previous = await rootRunStore.findUserAdmission(getTenantId(request), keyedAdmission.sessionId, keyedAdmission)
+      if (previous) {
+        await projectTerminalAdmissionUsers(await rootRunStore.admissionDatabase(), snapshotHistory, { tenantId: getTenantId(request), sessionId: keyedAdmission.sessionId }, previous.run.runId)
+        async function* duplicateAdmission() { yield '\x00__run__' + JSON.stringify(rootRunStore.public(previous!.run)) }
+        await sseStream(duplicateAdmission(), reply)
+        return
+      }
+    }
+    // Preserve the dispatch boundary before deriving memory/workspace defaults.
+    // A claim cannot turn arbitrary inline resources or model overrides into an automation.
+    const automationDispatchRequest = { ...request.body, toolProfile }
+    if (request.body.automationRunId !== undefined && !request.body.toolResponse) {
+      if (typeof request.body.automationRunId !== 'string' || !request.body.automationRunId.trim())
+        return reply.code(400).send(fail(40001, 'automationRunId must be a non-empty string'))
+      const db = getDb()
+      await ensureCronRunSchema(db)
+      await validateAutomationAdmission(db, getTenantId(request), request.body.sessionId,
+        automationDispatchRequest, { runId: request.body.automationRunId })
+    }
     let selectedCollaborators: Awaited<ReturnType<typeof prepareCollaborators>> = []
     if (!request.body.toolResponse) {
       try {
@@ -531,9 +706,8 @@ export async function chatRoutes(fastify: FastifyInstance) {
         throw error
       }
     }
-    const admissionKey = makeAbortKey(getTenantId(request), request.body.sessionId)
-    const admissionEpoch = cancellationEpochs.get(admissionKey) ?? 0
     let resumeRecord = null as Awaited<ReturnType<typeof rootRunStore.get>>
+    let predecessorBootstrap: TurnBootstrap | undefined
     if (request.body.toolResponse) {
       const response = request.body.toolResponse
       if (!response.runId || !response.requestId || !request.body.sessionId) {
@@ -553,6 +727,18 @@ export async function chatRoutes(fastify: FastifyInstance) {
       // The waiting frame may arrive before sibling result persistence finishes.
       const prior = activeStreams.get(makeAbortKey(getTenantId(request), resumeRecord.sessionId))
       if (prior && !prior.finished) await waitForPriorToolBatch(prior, toolProfile)
+      if (durableChildren) {
+        try {
+          // Save the private predecessor attempt before answer() changes owner.
+          // Missing durable evidence rejects before accepting that transition.
+          const authority = prior && liveChildAuthorities.get(prior)
+          predecessorBootstrap = authority && prior?.currentRunId === resumeRecord.runId
+            ? await authority.captureBootstrap(prior)
+            : await new PublishedTurnBootstraps(getDb()).latestForRun({ tenantId: getTenantId(request),parentSessionId: resumeRecord.sessionId,
+              rootSessionId: resumeRecord.sessionId,parentTurnId: resumeRecord.turnId,rootRunId: resumeRecord.runId,attemptId: resumeRecord.attemptId })
+          if (predecessorBootstrap.fence.attemptId !== resumeRecord.attemptId) requireChildRecovery('scope_changed')
+        } catch (error) { return sendChildRecoveryFailure(reply,error) }
+      }
       request.body = { ...resumeRecord.request, message: '', sessionId: resumeRecord.sessionId,
         model: resumeRecord.modelId, workspacePaths: resumeRecord.workspacePaths, toolResponse: response } as ChatBody
     }
@@ -613,6 +799,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     const binding = await sessionStore.getBinding(sessionId, tenantId)
 
     let effectiveAgentId = agentId ?? null
+    let effectiveAgentName: string | undefined
 
     if (binding === undefined) {
       // 首次请求：绑定当前 agentId（可为 null）及元数据
@@ -641,6 +828,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
     if (effectiveAgentId) {
       const agent = await agentStore.getById(effectiveAgentId, tenantId)
       if (agent) {
+        effectiveAgentName = agent.name
         effectiveSystemPrompt = systemPrompt ?? agent.systemPrompt
         effectiveModel = agent.model
         effectiveTemperature = agent.temperature
@@ -758,7 +946,6 @@ export async function chatRoutes(fastify: FastifyInstance) {
     // Build tool registry（统一工厂，含所有内置工具 + MCP + Skills）
     // 把客户端透传的 inline 资源（桌面端本地 skill / mcp）一并注入，
     // 让 list_skills / get_skill / MCP 工具都能即时看到 + 调用。
-    const abortController = new AbortController()
     const preparing = preparingChatAborters.get(admissionKey) ?? new Set<AbortController>()
     preparing.add(abortController); preparingChatAborters.set(admissionKey, preparing)
     // Before root admission there is no durable producer to reconnect to.
@@ -798,7 +985,32 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
     // Durable root jobs continue when an SSE viewer disconnects. Capability
     // selection must not silently change this ownership/replay contract.
-    const streamBus = new StreamBus(abortController, { retainOnDisconnect: runLifetime === 'durable' })
+    let publicationAuthority: ParentPublicationAuthority | undefined
+    const newStreamEvidence = options.newStreamPublication === true && (!toolResponse || durableChildren)
+    const streamBus = new StreamBus(abortController, {
+      retainOnDisconnect: runLifetime === 'durable',
+      ...(newStreamEvidence && durableChildren ? { childSequenceSource: 'published-store' as const } : {}),
+      ...(newStreamEvidence ? { publication: {
+        beforeAppend: async (sequence: number, chunk: string, streamId: string) => {
+          if (!publicationAuthority) throw new Error('PARENT_PUBLICATION_AUTHORITY_NOT_ADMITTED')
+          await publicationAuthority.hooks.beforeAppend(sequence, chunk, streamId)
+        },
+        beforeTerminal: async (sequence: number, streamId: string) => {
+          if (!publicationAuthority) throw new Error('PARENT_PUBLICATION_AUTHORITY_NOT_ADMITTED')
+          await publicationAuthority.hooks.beforeTerminal(sequence, streamId)
+        },
+        beforeVisible: async (prepare, chunk, sequence) => {
+          if (!publicationAuthority) throw new Error('PARENT_PUBLICATION_AUTHORITY_NOT_ADMITTED')
+          await publicationAuthority.hooks.beforeVisible?.(prepare,chunk,sequence)
+        },
+        beforeClose: async snapshot => {
+          if (!publicationAuthority) throw new Error('PARENT_PUBLICATION_AUTHORITY_NOT_ADMITTED')
+          await publicationAuthority.hooks.beforeClose?.(snapshot)
+        },
+      } } : {}),
+    })
+    const publishObserved = (publication: () => Promise<unknown>): Promise<void> => observePublication(streamBus, publication,
+      error => reqLogger.warn({ error, streamId: streamBus.streamId }, 'Stream observation requires recovery; durable execution continues'))
     // Published only after the root run has been claimed below.
 
     // ── 客户端断开检测：给予重连宽限期 ───────────────────────────────────────
@@ -833,6 +1045,8 @@ export async function chatRoutes(fastify: FastifyInstance) {
 
     // Build agent context
     const ctx = createAgentContext({
+      browserAuthority: browserAuthorityFromRequest(request),
+      browserPrincipal: browserPrincipalFromAuth((request as FastifyRequest & { authContext?: AuthContext }).authContext),
       toolProfile,
       memoryScope: effectiveMemoryScope,
       sessionId,
@@ -846,16 +1060,22 @@ export async function chatRoutes(fastify: FastifyInstance) {
       inheritContext,
     })
 
-    ctx.emitSubagentEvent = (event) => { streamBus.push('\x00__subagent_event__' + JSON.stringify(event)) }
+    // Shared producers always publish bounded deltas; each viewer negotiates its own conversion.
+    ctx.subagentEventVersion = 2
+    ctx.emitSubagentEvent = event => publishObserved(() => streamBus.publish('\x00__subagent_event__' + JSON.stringify(event)))
     ctx.rootSessionId = sessionId
     ctx.resourceScope = { skills: allowedSkills?.length ? allowedSkills : null,
       mcpServers: allowedMcpServers, knowledgeBases: boundKnowledgeBases ?? (toolProfile === 'code' ? [] : null) }
     // Spend accounting is shared by parent/children and independent of context capacity.
     // Code mode must not inherit an operator's cumulative token cap. The
     // provider and the model context window remain the only physical limits.
-    const requestBudget = new RequestBudget(toolProfile === 'code' ? Infinity : parseRequestTokenLimit(process.env.AGENT_TOTAL_TOKEN_LIMIT))
+    // Usage is recorded without a product-level cumulative cap.
+    const requestBudget = new RequestBudget(Infinity)
     ctx.requestBudget = requestBudget
-    ctx.onRequestAttempt = (event) => requestBudget.observe(event)
+    ctx.onRequestAttempt = (event) => {
+      requestBudget.observe(event)
+      logRequestDispatch(event, reqLogger)
+    }
     const skillsPrompt = buildSkillsSystemPrompt(externalSkills)
 
     // 注：客户端透传的 inlineSkills 已经在 createToolRegistry 内被合并到
@@ -1153,7 +1373,7 @@ export async function chatRoutes(fastify: FastifyInstance) {
 4. When providing a downloadable file to the user, ALWAYS present it as an HTTP download link using this exact Markdown format:
    [文件名](/api/v1/workspace/file/download?sessionId=${sessionId}&path=文件名)
    Use only the filename (not the full path) in the \`path\` parameter. Never use file:// URLs.
-5. 多步任务（≥3 步）必须先用 todo 工具建清单：用 \`todo_create\` 逐项创建步骤（标题用简短中文），开始某项前用 \`todo_update\` 置为 in_progress，完成后立即置为 done；全部完成才算任务结束。
+5. 多步任务使用内建 \`plan_update\` 静默维护完整任务计划；简单单步请求无需建计划。首次可省略 id，后续复用返回 id，保留仍需展示的已完成步骤。status 使用 pending/in_progress/completed/cancelled；只在步骤真实完成且有依据后标记 completed。计划由引擎持久化并独立展示，不复述创建/更新日志，不通过命令或脚本维护；失败先修正输入，不声称未落盘的状态已保存。
 6. **先给结论，再说理由。** 不要在回答里反复自我怀疑或把同一假设推演多遍；一旦确认了一件事，就把它当既定事实继续推进，不要回头重复论证。
 7. **禁止绕过工具链自造轮子。** 当现有工具做不到某件事时（例如看不到图片），**不要**自己写脚本去实现底层能力（手写 PNG/JPEG 解码器、二进制解析、像素取证、OCR 引擎等）。这类自造轮子几乎必然失败，且会烧掉几十轮工具调用。正确做法：① 换用受支持的路径（如 \`read_file mode:"ocr"\`）；② 确认该路径确实不可用后，直接向用户说明限制并给出替代方案。**同一件事尝试失败一次就换路径，绝不允许用「再换个脚本试试」的方式反复试探。**
 ${workspaceInfo}${codegraphBlock}${attachments && attachments.length > 0 ? `\n\n## 本次消息已附带以下文件\n${attachments.map(a => `- ${a.name}`).join('\n')}${visionCapabilityNote}` : ''}${codeExecutionPrompt}
@@ -1172,7 +1392,7 @@ ${workspaceInfo}${codegraphBlock}${attachments && attachments.length > 0 ? `\n\n
 4. When providing a downloadable file to the user, ALWAYS present it as an HTTP download link using this exact Markdown format:
    [文件名](/api/v1/workspace/file/download?sessionId=${sessionId}&path=文件名)
    Use only the filename (not the full path) in the \`path\` parameter. Never use file:// URLs.
-5. 多步任务（≥3 步）必须先用 todo 工具建清单：用 \`todo_create\` 逐项创建步骤（标题用简短中文），开始某项前用 \`todo_update\` 置为 in_progress，完成后立即置为 done；全部完成才算任务结束。
+5. 多步任务使用内建 \`plan_update\` 静默维护完整任务计划；简单单步请求无需建计划。首次可省略 id，后续复用返回 id，保留仍需展示的已完成步骤。status 使用 pending/in_progress/completed/cancelled；只在步骤真实完成且有依据后标记 completed。计划由引擎持久化并独立展示，不复述创建/更新日志，不通过命令或脚本维护；失败先修正输入，不声称未落盘的状态已保存。
 6. **先给结论，再说理由。** 不要在回答里反复自我怀疑或把同一假设推演多遍；一旦确认了一件事，就把它当既定事实继续推进，不要回头重复论证。
 7. **禁止绕过工具链自造轮子。** 当现有工具做不到某件事时（例如看不到图片），**不要**自己写脚本去实现底层能力（手写 PNG/JPEG 解码器、二进制解析、像素取证、OCR 引擎等）。这类自造轮子几乎必然失败，且会烧掉几十轮工具调用。正确做法：① 换用受支持的路径（如 \`read_file mode:"ocr"\`）；② 确认该路径确实不可用后，直接向用户说明限制并给出替代方案。**同一件事尝试失败一次就换路径，绝不允许用「再换个脚本试试」的方式反复试探。**
 ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
@@ -1198,89 +1418,140 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
     const systemToolsTokens = builtinToolsTokens + mcpToolsTokens
 
     let rootRun!: RootRun
+    const terminalPersistenceErrors: unknown[] = []
     let attemptId = ''
+    let executionOwner: ExecutionOwner | undefined
+    let admittedInputContent: import('../../../core/agent-context/types.js').Message['content'] | undefined
+    let pendingCandidate: Omit<RootPending, 'status'> | undefined
+    const finishRoot = (change: Partial<Pick<RootRun, 'status' | 'error' | 'stopReason'>>, pending?: Omit<RootPending, 'status'>): Promise<RootRun> => {
+      if (!executionOwner) throw new Error('ROOT_EXECUTION_OWNER_MISSING')
+      return rootRunStore.finishOwned(executionOwner, change, pending)
+    }
     let conversationId = ''
     let precedingTurnUsage: Record<string, number> = {}
     let resumedPending: RootPending | undefined
-    const publishRun = (run: RootRun | null) => {
+    const publishRun = async (run: RootRun | null): Promise<void> => {
       if (!run) return
+      // Execution state advances from its durable receipt even if the viewer
+      // has already entered recovery and cannot accept the matching frame.
       rootRun = run
-      streamBus.push('\x00__run__' + JSON.stringify(run))
+      await publishObserved(() => streamBus.publish('\x00__run__' + JSON.stringify(run)))
     }
-    // Snapshot readers await publication, while cancellation remains free to interrupt admission.
-    let finishAdmission!: () => void
-    const pendingAdmission = new Promise<void>(resolve => { finishAdmission = resolve })
-    const admissions = pendingAdmissions.get(admissionKey) ?? new Set<Promise<void>>()
-    admissions.add(pendingAdmission)
-    pendingAdmissions.set(admissionKey, admissions)
+    // The request preparation ticket was reserved before its first await.
+    // A queued same-session admission is cancellable before it owns a bus.
+    const waitingControllers = preparingChatAborters.get(admissionKey) ?? new Set<AbortController>()
+    waitingControllers.add(abortController); preparingChatAborters.set(admissionKey, waitingControllers)
     let admission: 'duplicate' | 'stopped' | 'started'
     try {
       admission = await (async () => {
       try {
         if (toolResponse) {
-          const accepted = await rootRunStore.answer(tenantId, sessionId, toolResponse.runId, toolResponse.requestId, toolResponse.toolCallId, toolResponse.name, toolResponse.output)
+          const accepted = await rootRunStore.answer(tenantId, sessionId, toolResponse.runId, toolResponse.requestId, toolResponse.toolCallId, toolResponse.name, toolResponse.output, abortController.signal, registerRootPreparation)
           rootRun = accepted.run
           if (accepted.duplicate) return 'duplicate' as const
           resumedPending = accepted.pending
+        } else if (keyedAdmission) {
+          const accepted = await rootRunStore.createUserAdmission(tenantId, resolvedModel ?? ctx.modelName ?? '', workspacePaths ?? [],
+            { ...request.body, memoryScope: selectedMemoryScope, toolProfile } as unknown as Record<string, unknown>, keyedAdmission, abortController.signal, registerRootPreparation)
+          rootRun = accepted.run
+          if (accepted.duplicate) return 'duplicate' as const
         } else {
-          rootRun = await rootRunStore.create(tenantId, sessionId, resolvedModel ?? ctx.modelName ?? '', workspacePaths ?? [], { ...request.body, memoryScope: selectedMemoryScope, toolProfile } as unknown as Record<string, unknown>)
+          rootRun = await rootRunStore.create(tenantId, sessionId, resolvedModel ?? ctx.modelName ?? '', workspacePaths ?? [],
+            { ...request.body, memoryScope: selectedMemoryScope, toolProfile } as unknown as Record<string, unknown>,
+            request.body.automationRunId ? { runId: request.body.automationRunId, dispatchRequest: automationDispatchRequest,
+              effectiveAgentId: effectiveAgentId ?? undefined, effectiveAgentName } : undefined, abortController.signal, registerRootPreparation)
         }
         attemptId = (await rootRunStore.get(tenantId, rootRun.runId))!.attemptId
+        executionOwner = await getExecutionOwners().admitRoot({ tenantId, rootRunId: rootRun.runId, rootAttemptId: attemptId, controller: abortController })
+        ctx.executionOwner = executionOwner
+        if (newStreamEvidence) publicationAuthority = new ParentPublicationAuthority(getDb(), {
+          tenantId, parentSessionId: sessionId, rootSessionId: sessionId,
+          parentTurnId: rootRun.turnId, rootRunId: rootRun.runId, attemptId,
+        }, { enabled: durableChildren, ...(durableChildren ? { childSequenceSource: 'published-store' as const } : {}) })
+        if (publicationAuthority) liveChildAuthorities.set(streamBus, publicationAuthority)
         conversationId = rootRun.turnId
         ctx.rootRunId = rootRun.runId
         ctx.turnId = rootRun.turnId
         ctx.userMessageId = rootRun.userMessageId
         ctx.assistantMessageId = rootRun.assistantMessageId
         ctx.conversationId = rootRun.turnId
+        // The persisted seed, rather than readable IDs or the mutable request,
+        // anchors the production mailbox and the user transcript projection.
+        if (rootRun.admissionReceipt || rootRun.serverAdmissionReceipt) {
+          const seed = await readAdmissionSeed(getDb(), { tenantId, sessionId }, rootRun.runId)
+          ctx.history = admissionProjectingHistory(ctx.history, seed.anchor)
+          admittedInputContent = seed.message.content
+          installProductionCollaborationBoundary(ctx)
+        }
         if (resumedPending) {
           ctx.resumeToolCall = { toolCall: { id: resumedPending.toolCallId, name: resumedPending.toolName, args: resumedPending.args },
             messageId: resumedPending.messageId ?? '', decision: resumedPending.kind === 'permission' ? (resumedPending.output === 'approved' ? 'approved' : 'rejected') : 'answered', output: resumedPending.output }
         }
-        ctx.onPending = async pending => { publishRun(await rootRunStore.pending(tenantId, rootRun.runId, pending, attemptId)) }
+        ctx.onPending = pending => { pendingCandidate = structuredClone(pending) }
+        ctx.commitPending = async pending => {
+          if (!pendingCandidate || pendingCandidate.requestId !== pending.requestId) throw new Error('PENDING_CANDIDATE_MISMATCH')
+          const parked = await finishRoot({ status: 'waiting' }, pendingCandidate)
+          await publishRun(parked)
+          if (parked.status !== 'waiting') throw new Error('PENDING_EXECUTION_CANCELLED')
+        }
         ctx.runObserver = {
           onCompaction: async compaction => {
             const key = makeAbortKey(tenantId, sessionId)
             if (compaction.phase === 'running') {
+              if (abortController.signal.aborted || activeStreams.get(key) !== streamBus) return
               const history = await snapshotHistory.getFullHistory({ tenantId, sessionId })
               const totals = snapshotHistory.getUsageTotals
                 ? await snapshotHistory.getUsageTotals({ tenantId, sessionId }, rootRun.turnId)
                 : { sessionUsage: await snapshotHistory.getSessionUsage({ tenantId, sessionId }),
                   turnUsage: await snapshotHistory.getSessionUsage({ tenantId, sessionId }, rootRun.turnId) }
+              if (abortController.signal.aborted || activeStreams.get(key) !== streamBus) return
               compactionSnapshots.set(key, { runId: rootRun.runId, history, totals })
             }
-            publishRun(await rootRunStore.update(tenantId, rootRun.runId, { compaction }, attemptId))
-            if (compaction.phase !== 'running') compactionSnapshots.delete(key)
+            await publishRun(await rootRunStore.update(tenantId, rootRun.runId, { compaction }, attemptId))
+            if (compaction.phase !== 'running' && compactionSnapshots.get(key)?.runId === rootRun.runId) compactionSnapshots.delete(key)
           },
           onOutcome: async outcome => {
             const waiting = outcome.status === 'blocked' && rootRun.pending.some(item => item.status === 'pending')
-            publishRun(await rootRunStore.update(tenantId, rootRun.runId, { status: waiting ? 'waiting' : outcome.stopReason === 'incomplete' ? 'interrupted' : outcome.status === 'blocked' ? 'failed' : outcome.status,
-              error: outcome.error, stopReason: outcome.stopReason }, attemptId))
+            try {
+              await publishRun(await finishRoot({ status: waiting ? 'waiting' : outcome.stopReason === 'incomplete' ? 'interrupted' : outcome.status === 'blocked' ? 'failed' : outcome.status,
+                error: outcome.error, stopReason: outcome.stopReason }))
+            } catch (persistenceError) {
+              terminalPersistenceErrors.push(persistenceError)
+              reqLogger.error({ persistenceError, outcome, runId: rootRun.runId }, 'Chat outcome could not be persisted')
+              throw persistenceError
+            }
           },
         }
         if (toolResponse) {
+          if (durableChildren) {
+            if (!predecessorBootstrap || !publicationAuthority) requireChildRecovery('bootstrap_unavailable')
+            const authority=publicationAuthority,predecessor=predecessorBootstrap
+            await publishObserved(()=>authority.resumeBootstrap(streamBus,predecessor))
+          } else {
           const prior = activeStreams.get(makeAbortKey(tenantId, sessionId))
           const priorSnapshot = prior?.snapshot()
           const priorRun = priorSnapshot?.projection.find(payload => payload.run)?.run as RootRun | undefined
           if (priorRun?.runId === rootRun.runId) streamBus.seedProjection(priorSnapshot!.projection, priorSnapshot!.subagentWatermarks, priorSnapshot!.projectionTruncated)
           else {
-            const precedingChildren = await snapshotSubagents.listRunsForParent(tenantId, sessionId)
+            const precedingChildren = await snapshotSubagents.listRunViewsForParent(tenantId, sessionId)
             streamBus.seedProjection(persistedTurnProjection(await ctx.history.getFullHistory(ctx), rootRun),
               precedingChildren.filter(child => child.parentConversationId === rootRun.turnId)
                 .map(child => ({ runId: child.runId, seq: child.lastSeq })))
           }
+          }
         } else {
-          streamBus.push('\x00__user_message__' + JSON.stringify({ id: rootRun.userMessageId, role: 'user', content: message,
+          await publishObserved(() => streamBus.publish('\x00__user_message__' + JSON.stringify({ id: rootRun.userMessageId, role: 'user', content: message,
             conversationId: rootRun.turnId, createdAt: rootRun.createdAt,
             metadata: { ...requestedMetadata, rootRunId: rootRun.runId, turnId: rootRun.turnId,
-              attachments: attachments?.map(item => ({ name: item.name, type: item.type })) } }))
+              attachments: attachments?.map(item => ({ name: item.name, type: item.type })) } })))
         }
         const started = await withHistoryLock(tenantId, async () => {
           const current = await rootRunStore.get(tenantId, rootRun.runId)
           const cancelledBeforeStart = (cancellationEpochs.get(admissionKey) ?? 0) !== admissionEpoch
           if (!current || current.status !== 'running' || current.attemptId !== attemptId || isSessionHistoryMutating(tenantId, sessionId) || cancelledBeforeStart) {
             abortController.abort(new Error('Run stopped before execution'))
-            if (current) publishRun(cancelledBeforeStart ? await rootRunStore.update(tenantId, rootRun.runId, { status: 'cancelled', stopReason: 'Cancelled before execution started' }, attemptId) : rootRunStore.public(current))
-            streamBus.end()
+            if (current) await publishRun(rootRunStore.public(current))
+            await publishObserved(() => streamBus.endOrdered())
             return false
           }
           if (toolResponse) {
@@ -1291,21 +1562,23 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
             // Earlier calls may have been compacted out of the persisted UI
             // projection. Seed their billing once, keeping occupancy paired
             // with the last actual input snapshot when one remains available.
-            streamBus.seedProjection([...projection.filter(frame => !frame.usage), { usage: {
+            if (!durableChildren) streamBus.seedProjection([...projection.filter(frame => !frame.usage), { usage: {
               ...priorUsage, ...precedingTurnUsage, sessionId, runId: rootRun.runId,
               turnId: rootRun.turnId, attemptId, usageScope: 'turn',
             } }], precedingSnapshot.subagentWatermarks, precedingSnapshot.projectionTruncated)
           }
           activeStreams.set(makeAbortKey(tenantId, sessionId), streamBus)
           registerActiveChat(tenantId, sessionId, abortController)
-          publishRun(rootRun)
+          await publishRun(rootRun)
           return true
         })
+        if (!started && rootRun.status === 'running') await publishRun(await finishRoot({ status: 'cancelled', stopReason: 'Cancelled before execution started' }))
+        if (!started && executionOwner) serviceForOwner(executionOwner).registerCompletion(executionOwner, Promise.resolve())
         return started ? 'started' as const : 'stopped' as const
       } finally {
-        admissions.delete(pendingAdmission)
-        if (!admissions.size) pendingAdmissions.delete(admissionKey)
-        finishAdmission()
+        waitingControllers.delete(abortController)
+        if (!waitingControllers.size && preparingChatAborters.get(admissionKey) === waitingControllers) preparingChatAborters.delete(admissionKey)
+        // Real ownership is handed off only after producer completion registration.
       }
       })()
     } catch (error) {
@@ -1313,6 +1586,13 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
       // after a restart or a database error). Do not leave request listeners or
       // a disconnect timer retaining the request and stream bus indefinitely.
       cleanupRequestListeners()
+      if (rootRun) {
+        if (executionOwner) {
+          serviceForOwner(executionOwner).registerCompletion(executionOwner, Promise.resolve())
+          await publishRun(await finishRoot({ status: abortController.signal.aborted ? 'cancelled' : 'failed', stopReason: 'Root admission failed',
+            error: { code: 'ROOT_ADMISSION_FAILED', message: error instanceof Error ? error.message : String(error), retryable: false } }))
+        } else await publishRun(await rootRunStore.update(tenantId, rootRun.runId, { status: abortController.signal.aborted ? 'cancelled' : 'failed', stopReason: 'Unstarted root admission failed' }, attemptId || undefined))
+      }
       throw error
     }
     if (admission === 'duplicate') {
@@ -1321,7 +1601,7 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
       return
     }
     if (admission === 'stopped') {
-      try { await sseStream(busToIterable(streamBus), reply) } finally { cleanupRequestListeners() }
+      try { await sseStream(subagentProtocolStream(busToIterable(streamBus), { protocol: subagentProtocol, tenantId, store: snapshotSubagents }), reply) } finally { cleanupRequestListeners() }
       return
     }
     let assistantResponse = ''
@@ -1365,14 +1645,13 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
           systemPrompt: (fullSystemPrompt + (selectedCollaborators.length ? '\n\n用户本轮明确指定的协作子代理已由系统执行。基于历史中对应 subagent 的真实结果继续完成和汇总当前任务；不能要求用户新建任务来使用这些 Agent，不能把子代理当作更换主 Agent。需要追加工作时使用该结果中的 resumeRunId/runId 继续同一子代理上下文，避免重复创建或重复已完成工作。' : '')) || undefined,
           temperature: effectiveTemperature,
           unboundedCode: toolProfile === 'code',
-          maxAskUserCount,
           conversationId,
           promptBreakdown: { systemPromptTokens, systemToolsTokens, skillTokens, ragTokens, builtinToolsTokens, mcpToolsTokens },
           thinkingEnabled,
           thinkingConfig: finalThinkingConfig,
           responseThinkingField: finalResponseThinkingField,
           reasoningEffort: effectiveReasoningEffort,
-          displayContent: message || null,
+          displayContent: admittedInputContent ?? (keyedAdmission ? keyedAdmission.userContent : message || null),
           metadata: { ...requestedMetadata,
             attachments: attachments?.map(item => ({ name: item.name, type: item.type })) },
         })
@@ -1382,7 +1661,7 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
         for await (let chunk of generator) {
           if (chunk.startsWith('\x00__assistant_msg_id__')) {
             const assistantMessageId = chunk.slice('\x00__assistant_msg_id__'.length)
-            if (assistantMessageId !== rootRun.assistantMessageId) publishRun(await rootRunStore.update(tenantId, rootRun.runId, { assistantMessageId }, attemptId))
+            if (assistantMessageId !== rootRun.assistantMessageId) await publishRun(await rootRunStore.update(tenantId, rootRun.runId, { assistantMessageId }, attemptId))
           }
           if (chunk.includes('\x00__thinking__')) {
             reasoningContent += chunk.split('\x00__thinking__')[1]
@@ -1400,7 +1679,7 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
               chunk = '\x00__usage__' + JSON.stringify(usage)
               finalUsage = { ...finalUsage, ...usage }
               if (typeof usage.modelId === 'string' && usage.modelId && usage.modelId !== rootRun.actualModelId) {
-                publishRun(await rootRunStore.update(tenantId, rootRun.runId, { actualModelId: usage.modelId }, attemptId))
+                await publishRun(await rootRunStore.update(tenantId, rootRun.runId, { actualModelId: usage.modelId }, attemptId))
               }
             } catch (e) {
               reqLogger.error({ err: e, chunk }, 'Failed to parse usage chunk')
@@ -1512,9 +1791,14 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
           } catch (err) { reqLogger.error({ err }, 'Auto-compaction failed; original history was preserved') }
         }
       } catch (err: any) {
-        publishRun(await rootRunStore.update(tenantId, rootRun.runId, { status: abortController.signal.aborted ? 'cancelled' : 'failed',
-          error: { code: 'CHAT_FAILED', message: err.message || String(err), retryable: false } }, attemptId))
         reqLogger.error({ err, agentId }, 'Agent execution error')
+        try {
+          await publishRun(await finishRoot({ status: abortController.signal.aborted ? 'cancelled' : 'failed',
+            error: { code: 'CHAT_FAILED', message: err.message || String(err), retryable: false } }))
+        } catch (persistenceError) {
+          reqLogger.error({ err, persistenceError, runId: rootRun.runId }, 'Agent failure could not be persisted')
+          throw new AggregateError([err, persistenceError], 'Agent failure could not be persisted')
+        }
         // DeepSeek 特有错误：附加 errorType 以便前端分级处理
         const dsErrorType: string | null =
           err?.constructor?.name?.startsWith('DeepSeek') ? err.constructor.name : null
@@ -1528,18 +1812,38 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
     reqLogger.info({ message: typeof message === 'string' ? message.slice(0, 100) : 'Multimodal message', agentId }, 'Chat request received')
 
     // 后台运行 Agent
-    ;(async () => {
+    const producer = (async () => {
+      let producerFailed = false
       try {
         for await (const chunk of runAgent()) {
-          streamBus.push(chunk)
+          await publishObserved(() => streamBus.publish(chunk))
         }
-        if (rootRun.status === 'running') publishRun(await rootRunStore.update(tenantId, rootRun.runId, { status: abortController.signal.aborted ? 'cancelled' : 'interrupted', stopReason: 'Execution ended without an outcome' }, attemptId))
-        streamBus.end()
+        if (rootRun.status === 'running') await publishRun(await finishRoot({ status: abortController.signal.aborted ? 'cancelled' : 'interrupted', stopReason: 'Execution ended without an outcome' }))
+        await publishObserved(() => streamBus.endOrdered())
       } catch (err) {
-        publishRun(await rootRunStore.update(tenantId, rootRun.runId, { status: abortController.signal.aborted ? 'cancelled' : 'failed',
-          error: { code: 'CHAT_FAILED', message: err instanceof Error ? err.message : String(err), retryable: false } }, attemptId))
-        streamBus.error(err)
+        producerFailed = true
+        let failure = err
+        try {
+          await publishRun(await finishRoot({ status: abortController.signal.aborted ? 'cancelled' : 'failed',
+            error: { code: 'CHAT_FAILED', message: err instanceof Error ? err.message : String(err), retryable: false } }))
+        } catch (persistenceError) {
+          // Producer cleanup cannot depend on a successful disk write. Preserve
+          // both failures and close the live stream even when recovery also fails.
+          reqLogger.error({ err, persistenceError, runId: rootRun.runId }, 'Chat terminal state could not be persisted')
+          failure = new AggregateError([...terminalPersistenceErrors, err, persistenceError], 'Chat terminal state could not be persisted')
+        } finally {
+          await publishObserved(() => streamBus.errorOrdered(failure))
+        }
       } finally {
+        // Only a healthy producer parked on durable user input owns a future
+        // continuation; a failed producer may still have a stale running row.
+        if (ctx.browserAuthority && (producerFailed || rootRun.status !== 'waiting')) {
+          browserBridge.hostDemands.releaseRoot(ctx.browserAuthority, sessionId, rootRun.runId)
+        }
+        if (executionOwner && !producerFailed) {
+          try { serviceForOwner(executionOwner).releaseRoot(executionOwner) }
+          catch (error) { reqLogger.error({ error, runId: rootRun.runId }, 'Execution owner cleanup remains unknown') }
+        }
         if (compactionSnapshots.get(makeAbortKey(tenantId, sessionId))?.runId === rootRun.runId) {
           compactionSnapshots.delete(makeAbortKey(tenantId, sessionId))
         }
@@ -1554,23 +1858,116 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
         }, 60000) // 运行结束后保留 1 分钟
       }
     })()
+    if (executionOwner) serviceForOwner(executionOwner).registerCompletion(executionOwner, producer)
+    finishPreparation()
 
     try {
-      await sseStream(busToIterable(streamBus), reply)
+      await sseStream(subagentProtocolStream(busToIterable(streamBus), { protocol: subagentProtocol, tenantId, store: snapshotSubagents }), reply)
     } finally {
       // The stream bus owns the durable producer; these request-local listeners
       // must still be detached after every viewer disconnects or completes.
       cleanupRequestListeners({ clearDisconnectTimeout: !aborted })
     }
+    } finally {
+      earlyPreparers.delete(abortController)
+      if (!earlyPreparers.size && preparingChatAborters.get(admissionKey) === earlyPreparers) preparingChatAborters.delete(admissionKey)
+      finishPreparation()
+    }
   })
 
-  fastify.get<{ Querystring: { sessionId: string } }>('/chat/snapshot', async (request, reply) => {
+  fastify.get<{ Querystring: { sessionId: string; childRecoveryProtocol?: string } }>('/chat/snapshot', async (request, reply) => {
+    const subagentProtocol = getRequestSubagentProtocol(request)
     const { sessionId } = request.query
     if (!sessionId) return reply.code(400).send(fail(40001, 'sessionId is required'))
     const tenantId = getTenantId(request)
     const key = makeAbortKey(tenantId, sessionId)
     const earlyBus = activeStreams.get(key)
     if (earlyBus?.disconnectTimeout) { clearTimeout(earlyBus.disconnectTimeout); earlyBus.disconnectTimeout = null }
+    if (request.query.childRecoveryProtocol !== undefined) {
+      try {
+        if (typeof sessionId !== 'string') requireChildRecovery('invalid_selector')
+        if (request.query.childRecoveryProtocol !== '1') requireChildRecovery('invalid_selector')
+        if (!modernChildren) requireChildRecovery('protocol_unavailable')
+        const capture = async (cached?: { runId: string; history: Message[]; totals: { sessionUsage: Record<string, number>; turnUsage: Record<string, number> } }) => {
+          if (isSessionHistoryMutating(tenantId, sessionId)) requireChildRecovery('history_mutating')
+          const bus = activeStreams.get(key), authority = bus && liveChildAuthorities.get(bus)
+          if (durableChildren) {
+            const [storedHistory,runs,todos,changes,jobs] = await Promise.all([
+              cached ? Promise.resolve(cached.history) : snapshotHistory.getFullHistory({tenantId,sessionId}),
+              rootRunStore.list(tenantId,sessionId),new TodoStore().list(tenantId,sessionId),new ChangeStore().list(tenantId,sessionId),commandJobs.list({tenantId,sessionId}),
+            ])
+            const latest = runs.at(-1), owned = latest && await rootRunStore.get(tenantId,latest.runId)
+            if (!owned) requireChildRecovery('bootstrap_unavailable')
+            // An active legacy bus cannot supply a durable owner. A restarted
+            // reader selects only the indexed current root/attempt checkpoint.
+            if (bus && !authority) requireChildRecovery('live_owner_unavailable')
+            const store = new PublishedTurnBootstraps(getDb())
+            const checkpoint = bus && authority ? await authority.captureBootstrap(bus)
+              : await store.latestForRun({tenantId,parentSessionId:sessionId,rootSessionId:sessionId,parentTurnId:owned.turnId,
+                rootRunId:owned.runId,attemptId:owned.attemptId})
+            const fence = checkpoint.fence, run = checkpoint.snapshot.projection.find(frame=>frame.run)?.run as RootRun | undefined
+            const stillOwned = await rootRunStore.get(tenantId,owned.runId)
+            if (!run || run.runId!==owned.runId || run.turnId!==owned.turnId || fence.attemptId!==owned.attemptId ||
+              stillOwned?.attemptId!==owned.attemptId || bus && activeStreams.get(key)!==bus || isSessionHistoryMutating(tenantId,sessionId) ||
+              cached && (cached.runId!==run.runId || compactionSnapshots.get(key)!==cached || run.compaction?.phase!=='running')) requireChildRecovery('scope_changed')
+            // The durable current-turn body is exact; history has a separate
+            // authority. Until an anchored compaction archive exists, a restart
+            // cannot present a newer summary as the original pre-compaction view.
+            if (!bus && storedHistory.some(item=>item.role==='system' && item.metadata?.isCompactSummary===true)) requireChildRecovery('history_anchor_unavailable')
+            const recovery = await store.recovery(fence,checkpoint.checkpointId)
+            const closure = await store.lifecycle(fence,checkpoint.checkpointId)
+            const totals = cached?.totals ?? (snapshotHistory.getUsageTotals
+              ? await snapshotHistory.getUsageTotals({tenantId,sessionId},run.turnId)
+              : {sessionUsage:await snapshotHistory.getSessionUsage({tenantId,sessionId}),turnUsage:await snapshotHistory.getSessionUsage({tenantId,sessionId},run.turnId)})
+            const publishedUsage = checkpoint.snapshot.projection.find(frame=>frame.usage)?.usage as Record<string,unknown>|undefined
+            return checkedChildEnvelope(success({...checkpoint.snapshot,finished:closure.closed,...(closure.error?{error:closure.error}:{}),
+              source:'persisted-published',sessionId,run,executionRun:rootRunStore.public(stillOwned!),
+              runs:[...runs.filter(item=>item.runId!==run.runId),run].sort((a,b)=>a.seq-b.seq),history:publicHistoryMessages(storedHistory),
+              historySource:cached?'pre-compaction-cache':'current-history',historyCompacted:storedHistory.some(item=>item.role==='system' && item.metadata?.isCompactSummary===true),
+              todos,changes,commandJobs:jobs,sessionUsage:sessionUsageAtWatermark(totals.sessionUsage,totals.turnUsage,publishedUsage),
+              currentTurnComplete:checkpoint.currentTurnComplete,bootstrap:{checkpointId:checkpoint.checkpointId,fence,currentTurnComplete:checkpoint.currentTurnComplete},
+              subagentRecovery:{source:'persisted-published',...recovery.recovery.data},
+              subagentProjectionArchive:{protocolVersion:1,snapshotId:recovery.recovery.data.snapshotId,totalCount:checkpoint.projectionReferenceCount,
+                originalProjectionCount:checkpoint.originalProjectionCount,endpoint:'/chat/snapshot/projection'}}))
+          }
+          // Persisted/legacy buses and resumed attempts need their own durable
+          // bootstrap. Never synthesize an old published prefix from child latest.
+          if (!bus || !authority) requireChildRecovery('live_owner_unavailable')
+          const [storedHistory, runs, todos, changes, jobs] = await Promise.all([
+            cached ? Promise.resolve(cached.history) : snapshotHistory.getFullHistory({ tenantId, sessionId }),
+            rootRunStore.list(tenantId, sessionId), new TodoStore().list(tenantId, sessionId),
+            new ChangeStore().list(tenantId, sessionId), commandJobs.list({ tenantId, sessionId }),
+          ])
+          const { snapshot, recovery } = await authority.captureSnapshot(bus)
+          const run = snapshot.projection.find(frame => frame.run)?.run as RootRun | undefined
+          const fence = recovery.data.fence
+          const owned = await rootRunStore.get(tenantId, fence.rootRunId)
+          if (!run || run.runId !== fence.rootRunId || run.turnId !== fence.parentTurnId || runs.at(-1)?.runId !== run.runId ||
+            owned?.attemptId !== fence.attemptId || activeStreams.get(key) !== bus || isSessionHistoryMutating(tenantId, sessionId) ||
+            cached && (cached.runId !== run.runId || compactionSnapshots.get(key) !== cached || run.compaction?.phase !== 'running')) requireChildRecovery('scope_changed')
+          const { projection, projectionIndices, entries } = childProjectionReferences(snapshot)
+          await authority.leases.retainProjection({ tenantId, parentSessionId: sessionId }, recovery.data.snapshotId, entries, snapshot.projection.length,
+            bus.childSequenceSource === 'published-store' ? { childSequenceSource: 'published-store' } : undefined)
+          const totals = cached?.totals ?? (snapshotHistory.getUsageTotals
+            ? await snapshotHistory.getUsageTotals({ tenantId, sessionId }, run.turnId)
+            : { sessionUsage: await snapshotHistory.getSessionUsage({ tenantId, sessionId }), turnUsage: await snapshotHistory.getSessionUsage({ tenantId, sessionId }, run.turnId) })
+          const publishedUsage = snapshot.projection.find(frame => frame.usage)?.usage as Record<string, unknown> | undefined
+          const { subagentWatermarks: _legacyWatermarks, ...header } = snapshot
+          return checkedChildEnvelope(success({ ...header, projection, projectionIndices, source: 'live', sessionId, run,
+            runs: [...runs.filter(item => item.runId !== run.runId), run].sort((a, b) => a.seq - b.seq),
+            history: publicHistoryMessages(storedHistory), historyCompacted: storedHistory.some(message => message.role === 'system' && message.metadata?.isCompactSummary === true),
+            todos, changes, commandJobs: jobs, sessionUsage: sessionUsageAtWatermark(totals.sessionUsage, totals.turnUsage, publishedUsage),
+            subagentRecovery: { source: 'live-published', ...recovery.data },
+            subagentProjectionArchive: { protocolVersion: 1, snapshotId: recovery.data.snapshotId, totalCount: entries.length,
+              originalProjectionCount: snapshot.projection.length, endpoint: '/chat/snapshot/projection' } }))
+        }
+        const cached = compactionSnapshots.get(key)
+        if (cached && activeStreams.get(key) && !isSessionHistoryMutating(tenantId, sessionId)) return reply.send(await capture(cached))
+        await Promise.all(pendingAdmissions.get(key) ?? [])
+        return reply.send(await withHistoryLock(tenantId, () => capture()))
+      } catch (error) { return sendChildRecoveryFailure(reply, error) }
+    }
+    try {
     while (true) {
       // A summarizer can hold the history lock while waiting on its provider.
       // Replay the pre-compaction view plus current durable events immediately,
@@ -1580,7 +1977,7 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
       if (cache && currentBus && !isSessionHistoryMutating(tenantId, sessionId)) {
         const [runs, todos, changes, jobs, childRuns] = await Promise.all([
           rootRunStore.list(tenantId, sessionId), new TodoStore().list(tenantId, sessionId),
-          new ChangeStore().list(tenantId, sessionId), commandJobs.list({ tenantId, sessionId }), snapshotSubagents.listRunsForParent(tenantId, sessionId),
+          new ChangeStore().list(tenantId, sessionId), commandJobs.list({ tenantId, sessionId }), (subagentProtocol === 2 ? snapshotSubagents.listRunViewsForParent(tenantId, sessionId) : snapshotSubagents.listRunsForParent(tenantId, sessionId)),
         ])
         const snapshot = currentBus.snapshot()
         const run = snapshot.projection.find(payload => payload.run)?.run as RootRun | undefined
@@ -1588,10 +1985,15 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
           && compactionSnapshots.get(key) === cache && !isSessionHistoryMutating(tenantId, sessionId)) {
           const publishedUsage = snapshot.projection.find(frame => frame.usage)?.usage as Record<string, unknown> | undefined
           const projectedRuns = [...runs.filter(item => item.runId !== run.runId), run].sort((a, b) => a.seq - b.seq)
-          const publishedChildren = await snapshotSubagents.getSnapshotsAtSequences(tenantId, snapshot.subagentWatermarks ?? [])
-          const subagentRuns = sessionSubagentRunsAtWatermark(childRuns, { tenantId, sessionId }, run.turnId,
-            [...snapshot.projection, ...publishedChildren.map(child => ({ subagentEvent: { snapshot: child } }))])
-          return reply.send(success({ ...snapshot, source: 'live', sessionId, run, runs: projectedRuns,
+          const watermarks = snapshot.subagentWatermarks ?? []
+          const publishedChildren = await (subagentProtocol === 2
+            ? snapshotSubagents.getViewsAtSequences(tenantId, watermarks)
+            : snapshotSubagents.getSnapshotsAtSequences(tenantId, watermarks))
+          if (watermarks.some(mark => !publishedChildren.some(child => child.runId === mark.runId && child.lastSeq === mark.seq)))
+            throw Object.assign(new Error('SUBAGENT_RECOVERY_REQUIRED: Published child checkpoint is unavailable'), { statusCode: 409 })
+          const subagentRuns = publishedSubagentRuns(childRuns, publishedChildren, { tenantId, sessionId }, subagentProtocol, run.turnId)
+          const projection = subagentProjectionForViewer(snapshot.projection, publishedChildren, subagentProtocol)
+          return reply.send(success({ ...snapshot, projection, source: 'live', sessionId, run, runs: projectedRuns,
             history: publicHistoryMessages(cache.history), historyCompacted: cache.history.some(message => message.role === 'system' && message.metadata?.isCompactSummary === true),
             todos, changes, commandJobs: jobs, subagentRuns,
             sessionUsage: sessionUsageAtWatermark(cache.totals.sessionUsage, cache.totals.turnUsage, publishedUsage),
@@ -1602,10 +2004,11 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
       const result = await withHistoryLock(tenantId, async () => {
         // An admission can begin while this reader was queued for the history lock.
         if (pendingAdmissions.get(key)?.size) return null
+        await projectTerminalAdmissionUsers(await rootRunStore.admissionDatabase(), snapshotHistory, { tenantId, sessionId })
         const [storedHistory, runs, todos, changes, jobs, childRuns] = await Promise.all([
           snapshotHistory.getFullHistory({ tenantId, sessionId }), rootRunStore.list(tenantId, sessionId),
           new TodoStore().list(tenantId, sessionId), new ChangeStore().list(tenantId, sessionId),
-          commandJobs.list({ tenantId, sessionId }), snapshotSubagents.listRunsForParent(tenantId, sessionId),
+          commandJobs.list({ tenantId, sessionId }), (subagentProtocol === 2 ? snapshotSubagents.listRunViewsForParent(tenantId, sessionId) : snapshotSubagents.listRunsForParent(tenantId, sessionId)),
         ])
         const latestTurnId = runs.at(-1)?.turnId
         const totals = latestTurnId && snapshotHistory.getUsageTotals
@@ -1627,10 +2030,15 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
           if (run && runs.at(-1)?.runId === run.runId) {
             const projectedRuns = [...runs.filter(item => item.runId !== run.runId), run].sort((a, b) => a.seq - b.seq)
             const publishedUsage = snapshot.projection.find(frame => frame.usage)?.usage as Record<string, unknown> | undefined
-            const publishedChildren = await snapshotSubagents.getSnapshotsAtSequences(tenantId, snapshot.subagentWatermarks ?? [])
-            const subagentRuns = sessionSubagentRunsAtWatermark(childRuns, { tenantId, sessionId }, run.turnId,
-              [...snapshot.projection, ...publishedChildren.map(child => ({ subagentEvent: { snapshot: child } }))])
-            return { ...snapshot, source: 'live', sessionId, run, runs: projectedRuns, history, historyCompacted, todos, changes, commandJobs: jobs,
+            const watermarks = snapshot.subagentWatermarks ?? []
+          const publishedChildren = await (subagentProtocol === 2
+            ? snapshotSubagents.getViewsAtSequences(tenantId, watermarks)
+            : snapshotSubagents.getSnapshotsAtSequences(tenantId, watermarks))
+          if (watermarks.some(mark => !publishedChildren.some(child => child.runId === mark.runId && child.lastSeq === mark.seq)))
+            throw Object.assign(new Error('SUBAGENT_RECOVERY_REQUIRED: Published child checkpoint is unavailable'), { statusCode: 409 })
+            const subagentRuns = publishedSubagentRuns(childRuns, publishedChildren, { tenantId, sessionId }, subagentProtocol, run.turnId)
+            const projection = subagentProjectionForViewer(snapshot.projection, publishedChildren, subagentProtocol)
+            return { ...snapshot, projection, source: 'live', sessionId, run, runs: projectedRuns, history, historyCompacted, todos, changes, commandJobs: jobs,
               sessionUsage: sessionUsageAtWatermark(totals.sessionUsage, totals.turnUsage, publishedUsage),
               sessionSubagentUsage: sessionSubagentUsage(subagentRuns, { tenantId, sessionId }), subagentRuns }
           }
@@ -1638,9 +2046,15 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
         return { schemaVersion: 1, source: 'persisted', sessionId, eventId: null, finished: true,
           projection: [], run: runs.at(-1), runs, history, historyCompacted, todos, changes, commandJobs: jobs,
           sessionUsage: totals.sessionUsage, sessionSubagentUsage: sessionSubagentUsage(childRuns, { tenantId, sessionId }),
-          subagentRuns: sessionSubagentRunsAtWatermark(childRuns, { tenantId, sessionId }) }
+          subagentRuns: publishedSubagentRuns(childRuns, [], { tenantId, sessionId }, subagentProtocol) }
       })
       if (result) return reply.send(success(result))
+    }
+    } catch (error) {
+      // A missing published checkpoint needs explicit recovery, not a generic server failure or a newer snapshot.
+      if (error instanceof Error && error.message.startsWith('SUBAGENT_RECOVERY_REQUIRED:'))
+        return reply.code(409).send(fail(40901, 'Subagent checkpoint required', { checkpointRequired: true }))
+      throw error
     }
   })
 
@@ -1690,6 +2104,7 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
       },
     },
   }, async (request, reply) => {
+    const subagentProtocol = getRequestSubagentProtocol(request)
     const { sessionId, lastEventId } = request.query
 
     const tenantId = getTenantId(request)
@@ -1727,7 +2142,7 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
     request.raw.on('aborted', onClientClose)
 
     try {
-      await sseStream(source, reply)
+      await sseStream(subagentProtocolStream(source, { protocol: subagentProtocol, tenantId, store: snapshotSubagents }), reply)
     } finally {
       reply.raw.off('close', onClientClose)
       request.raw.off('aborted', onClientClose)

@@ -260,18 +260,15 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     const prompt = newMessageContent ?? null
 
     const abortController = new AbortController()
-    const streamBus = new StreamBus(abortController)
+    const streamBus = new StreamBus(abortController, { retainOnDisconnect: true })
     activeStreams.set(sessionId, streamBus)
 
-    // ── 客户端断开检测：给予重连宽限期 ───────────────────────────────────────
+    // ── 客户端断开检测：断开不应终止后台任务 ────────────────────────────────
     let aborted = false
     const onClientClose = () => {
       if (aborted) return
       aborted = true
-      streamBus.disconnectTimeout = setTimeout(() => {
-        try { abortController.abort(new Error('Client disconnected timeout')) } catch { /* noop */ }
-        activeStreams.delete(sessionId)
-      }, 15000) // 15s grace period
+      // Keep the durable stream discoverable so a reconnect can replay it.
     }
     reply.raw.on('close', onClientClose)
     reply.raw.on('aborted', onClientClose)
@@ -289,7 +286,6 @@ export async function messagesRoutes(fastify: FastifyInstance) {
         const strategy = new ReActStrategy(llm, {
           systemPrompt: fullSystemPrompt || undefined,
           unboundedCode: toolProfile === 'code',
-          maxAskUserCount,
           conversationId,
           promptBreakdown: { systemPromptTokens, systemToolsTokens, skillTokens, ragTokens, builtinToolsTokens, mcpToolsTokens },
           thinkingEnabled: thinkingMode,

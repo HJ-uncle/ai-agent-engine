@@ -242,14 +242,18 @@ describe('D4 chat snapshot and replay HTTP contract', () => {
     }
   })
 
-  it('keeps the bounded answer wait for interactive profiles', async () => {
+  it('does not impose an answer wait timeout for interactive profiles', async () => {
     vi.useFakeTimers()
     try {
       const bus = attachBus()
       const waiting = waitForPriorToolBatch(bus, 'chat')
-      const rejected = expect(waiting).rejects.toMatchObject({ statusCode: 409 })
       await vi.advanceTimersByTimeAsync(30_001)
-      await rejected
+      let settled = false
+      void waiting.then(() => { settled = true })
+      await Promise.resolve()
+      expect(settled).toBe(false)
+      bus.end()
+      await expect(waiting).resolves.toBeUndefined()
     } finally {
       vi.useRealTimers()
     }
@@ -491,5 +495,57 @@ describe('D4 chat snapshot and replay HTTP contract', () => {
     expect(state).toMatchObject({ source: 'persisted', eventId: null, projection: [], runs: [], history: [] })
     expect(state.run).toBeUndefined()
     expect(JSON.stringify(state)).not.toContain('deleted turn secret')
+  })
+})
+
+describe('negotiated child snapshot HTTP recovery', () => {
+  it('serves exact bounded v2 checkpoints and full legacy canonical data at the same delivered cursor', async () => {
+    const run = await seedTurn('running')
+    const store = new SubagentStore(db)
+    const created = await store.createRunDelta({ tenantId, rootSessionId: sessionId, parentSessionId: sessionId,
+      parentConversationId: run.turnId, parentMessageId: run.assistantMessageId, parentToolCallId: 'modern-child',
+      task: 'synthetic protocol verification', description: 'HTTP boundary', modelId: 'fixture-model',
+      agentId: 'fixture-agent', continuation: { agent: { id: 'fixture-agent', name: 'Fixture', systemPrompt: 'private-fixture-body',
+        skills: [], mcpServers: [], knowledgeBases: [], allowedTools: ['read_file'] }, readOnly: false,
+        systemPrompt: 'private synthetic continuation', toolNames: ['read_file'], workspacePaths: [fixture] } })
+    expect(await store.appendHeader(tenantId, created.header.runId, 'started', { status: 'running' })).not.toBeNull()
+    const fullArgs = { path: 'synthetic-only', body: 'full-private-tool-args'.repeat(200) }
+    expect(await store.upsertTool(tenantId, created.header.runId, 'tool.started', { id: 'read-fixture', name: 'read_file', args: fullArgs, status: 'running' })).not.toBeNull()
+    const delivered = await store.recordUsageDelta(tenantId, created.header.runId, { invocationId: 'delivered', promptTokens: 4, completionTokens: 1 })
+    if (!delivered) throw new Error('Expected persisted delivered usage')
+    const bus = attachBus()
+    bus.push('\x00__run__' + JSON.stringify(run))
+    bus.push('\x00__subagent_event__' + JSON.stringify(delivered.event))
+    const cursor = bus.lastEventId
+    await store.recordUsageDelta(tenantId, created.header.runId, { invocationId: 'future', promptTokens: 900, completionTokens: 100 })
+    const response = await app.inject({ method: 'GET', url: '/chat/snapshot?sessionId=' + sessionId, headers: { 'x-aether-subagent-protocol': '2' } })
+    expect(response.statusCode, response.body).toBe(200)
+    const state = response.json().data
+    expect(state.eventId).toBe(cursor)
+    expect(state.subagentRuns).toHaveLength(1)
+    expect(state.subagentRuns[0]).toMatchObject({ schemaVersion: 2, view: 'summary', lastSeq: delivered.header.lastSeq })
+    expect(state.sessionSubagentUsage).toMatchObject({ totalTokens: 5, count: 1 })
+    expect(state.projection.find((frame: Record<string, unknown>) => frame.subagentEvent).subagentEvent)
+      .toMatchObject({ schemaVersion: 2, kind: 'snapshot', seq: delivered.header.lastSeq })
+    expect(response.body).not.toContain('private-fixture-body')
+    const legacy = await snapshot()
+    expect(legacy.eventId).toBe(cursor)
+    expect(legacy.subagentRuns[0]).toMatchObject({ schemaVersion: 1, lastSeq: delivered.header.lastSeq,
+      continuation: { agent: { id: 'fixture-agent', systemPrompt: 'private-fixture-body' } } })
+    expect(legacy.subagentRuns[0].toolCalls[0].args).toEqual(fullArgs)
+    expect(legacy.sessionSubagentUsage).toEqual(state.sessionSubagentUsage)
+  })
+
+  it('returns explicit checkpoint recovery for a missing exact watermark, while unrelated errors remain server errors', async () => {
+    const run = await seedTurn('running'), bus = attachBus()
+    bus.push('\x00__run__' + JSON.stringify(run))
+    const exact = vi.spyOn(SubagentStore.prototype, 'getViewsAtSequences').mockRejectedValue(new Error('SUBAGENT_RECOVERY_REQUIRED: Missing exact child checkpoint'))
+    const response = await app.inject({ url: '/chat/snapshot?sessionId=' + sessionId, headers: { 'x-aether-subagent-protocol': '2' } })
+    expect(response.statusCode).toBe(409)
+    expect(response.json()).toMatchObject({ code: 40901, data: { checkpointRequired: true } })
+    exact.mockRejectedValue(new Error('Unrelated fixture failure'))
+    const unrelated = await app.inject({ url: '/chat/snapshot?sessionId=' + sessionId, headers: { 'x-aether-subagent-protocol': '2' } })
+    expect(unrelated.statusCode).toBe(500)
+    expect(unrelated.body).not.toContain('checkpointRequired')
   })
 })

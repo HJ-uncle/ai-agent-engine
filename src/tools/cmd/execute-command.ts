@@ -63,7 +63,7 @@ export const cmdTool: Tool = {
       command: { type: 'string', description: '仅可执行文件名或路径，如 node、npm、C:\\Program Files\\nodejs\\node.exe；路径不要加引号，不要带参数。Windows 自动解析 PATH/PATHEXT 中的 .cmd/.bat。' },
       args: { type: 'array', items: { type: 'string' }, description: '逐项参数，保留原始内容，不手工包 shell 引号。例如 ["-v"] 或 ["-e", "console.log(\"hello\")"]。管道/重定向须显式使用对应 shell（Windows cmd.exe 的 args=["/d","/s","/c","完整 shell 脚本"]）；脚本内容由该 shell 解析。' },
       cwd: { type: 'string', description: '工作目录，仍受当前工作区安全策略限制' },
-      timeoutMs: { type: 'number', description: '可选超时毫秒数；省略时 Code 模式持续运行直到退出或取消，其他模式使用安全默认值' },
+      timeoutMs: { type: 'number', description: '可选超时毫秒数；省略时所有模式持续运行直到退出或取消' },
       background: { type: 'boolean', description: '默认false；true在成功启动后立即返回jobId，后续读取输出或取消' },
     }, required: ['command'],
   },
@@ -78,10 +78,10 @@ export const cmdTool: Tool = {
     const cwd = fs.realpathSync(workspaceManager.resolveSafePath(ctx, cwdArg ?? workspaceManager.getWorkingDirectory(ctx)))
     workspaceManager.resolveSafePath(ctx, cwd)
     throwIfAborted(ctx.signal)
-    const defaultTimeout = background ? 600_000 : mode === 'full-access' ? 120_000 : 30_000
-    // Code runs are durable work: an omitted deadline must not terminate a legitimate long build, test, or server.
-    const configuredTimeout = timeoutMs ?? (ctx.toolProfile === 'code' ? undefined : Number(process.env.CMD_TIMEOUT_MS ?? defaultTimeout))
-    const timeout = configuredTimeout === undefined ? undefined : (Number.isFinite(configuredTimeout) && configuredTimeout > 0 ? Math.max(1, Math.floor(configuredTimeout)) : defaultTimeout)
+    // An omitted deadline is unlimited in every profile. A caller can still
+    // opt into an explicit positive timeout for a bounded probe.
+    const timeout = timeoutMs === undefined ? undefined
+      : (Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.max(1, Math.floor(timeoutMs)) : undefined)
     const scope = commandJobScope(ctx)
     const launched = await commandJobs.start({ ...scope, ownerSessionId: ctx.sessionId,
       runId: ctx.rootRunId, ownerRunId: ctx.runId, turnId: ctx.turnId ?? ctx.conversationId, toolCallId: ctx.currentToolCallId,

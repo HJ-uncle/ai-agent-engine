@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { pino } from 'pino'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { LLMAdapter } from '../../../core/llm-adapter/types.js'
-import type { SubagentRun } from '../../../core/subagent/types.js'
+import type { SubagentRunView } from '../../../core/subagent/types.js'
 
 const rgAvailable = spawnSync('rg', ['--version'], { windowsHide: true }).status === 0
 const fixtureRoot = path.resolve('.e2e-tmp')
@@ -99,21 +99,28 @@ describe.skipIf(!rgAvailable)('subagent project overview with real search and hi
     parent.requestBudget = requestBudget
     parent.onRequestAttempt = (event) => requestBudget.observe(event)
     const task = 'Inspect this project: search its purpose, read the source evidence, and summarize it.'
-    await history.append({ role: 'user', content: 'Use a subagent to inspect this project.' }, parent)
+    await history.append({ role: 'user', content: 'Use a subagent to inspect this project.',
+      ...{ conversationId: parent.conversationId } }, parent)
     await history.append({ id: 'overview-dispatch', role: 'assistant', content: '', toolCallId: 'overview-spawn',
-      toolCall: { id: 'overview-spawn', name: 'subagent', args: { task } } }, parent)
+      toolCall: { id: 'overview-spawn', name: 'subagent', args: { task } },
+      ...{ conversationId: parent.conversationId } }, parent)
     const result = await subagentTool.execute({ task, description: 'Project overview' }, parent)
     expect(result.success).toBe(true)
     expect(calls).toBe(3)
     expect(result.output).toContain(searchEvidence)
     expect(result.output).toContain(readEvidence)
-    const run = result.metadata?.subagent as SubagentRun
+    const run = result.metadata?.subagent as SubagentRunView
     expect(run.status).toBe('succeeded')
-    expect(run.toolCalls.map((tool) => [tool.name, tool.status])).toEqual([['grep_search', 'succeeded'], ['read_file', 'succeeded']])
+    expect(run.schemaVersion).toBe(2)
+    expect(run.toolCount).toBe(2)
+    expect([...run.toolCalls].sort((a, b) => a.ordinal - b.ordinal).map((tool) => [tool.name, tool.status])).toEqual([['grep_search', 'succeeded'], ['read_file', 'succeeded']])
     expect(run.usage.totalTokens).toBe(600_000)
     expect(requestBudget.limit).toBe(Infinity)
     expect(requestBudget.snapshot).toMatchObject({ charged: 600_000, reserved: 0, remaining: Infinity })
-    expect((await getSubagentStore().getRun(parent.tenantId, run.runId))?.resultSummary).toBe(run.resultSummary)
+    const canonical = await getSubagentStore().getRun(parent.tenantId, run.runId)
+    expect(canonical?.schemaVersion).toBe(1)
+    expect(canonical?.resultSummary).toBe(run.resultSummary)
+    expect(canonical?.toolCalls.map(tool => [tool.name, tool.status])).toEqual([['grep_search', 'succeeded'], ['read_file', 'succeeded']])
     expect(result.output).toContain(`[子任务状态] {"runId":"${run.runId}"`)
     expect(result.output).toContain(run.resultSummary)
     const childHistory = await createConversationHistory().getFullHistory({ tenantId: parent.tenantId, sessionId: run.childSessionId })

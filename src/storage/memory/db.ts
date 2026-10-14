@@ -5,13 +5,15 @@
  * - F32_BLOB 在 Turso 和较新 libsql 本地客户端中可用
  * - 老旧 libsql 本地客户端不支持 F32_BLOB 时自动回退到 BLOB
  */
-import { LocalSqliteProcessClient } from '../sqlite/local-process-client.js'
+import { LocalSqliteProcessClient, SqliteCloseLedger, type SqliteDatabaseCloseReceipt } from '../sqlite/local-process-client.js'
 import type { Client } from '@libsql/client'
 import path from 'node:path'
 import fs from 'node:fs'
 
 let client: LocalSqliteProcessClient | null = null
 let initialization: Promise<void> | null = null
+let closingReceipt: Promise<SqliteDatabaseCloseReceipt | null> | null = null
+const closeLedger = new SqliteCloseLedger()
 
 export function resolveMemoryDbPath(): string {
   // DATA_DIR 语义与主 DB 对齐：始终视为 SQLite 数据库**文件**路径
@@ -27,8 +29,10 @@ export function resolveMemoryDbPath(): string {
 
 export function getMemoryDb(): Client {
   if (client && !client.closed) return client
-  if (client?.closed) { client = null; initialization = null }
-  client = new LocalSqliteProcessClient({ url: `file:${resolveMemoryDbPath()}` }, { cacheKb: 2000, mmapBytes: 0 })
+  if (client?.closed) { closingReceipt = closeLedger.retire(client); client = null; initialization = null }
+  client = new LocalSqliteProcessClient({ url: `file:${resolveMemoryDbPath()}` }, {
+    cacheKb: 2000, mmapBytes: 0, readyAfter: closingReceipt?.then(() => {}),
+  })
   return client
 }
 
@@ -135,11 +139,13 @@ async function migrateMemoryScopes(db: Client): Promise<void> {
   await db.execute('CREATE INDEX IF NOT EXISTS idx_memory_edges_target_scope ON memory_edges(tenant_id, scope, target_node_id, session_id)')
 }
 
-/** Clear ownership immediately; callers cleaning up files can await native handle release. */
-export function closeMemoryDb(): Promise<void> {
-  const previous = client
-  client = null
+/** Keep the exact native receipt after ownership is cleared; a replacement is a new epoch. */
+export function closeMemoryDb(): Promise<SqliteDatabaseCloseReceipt | null> {
   initialization = null
-  previous?.close()
-  return previous?.whenClosed() ?? Promise.resolve()
+  if (client) {
+    const previous = client
+    client = null
+    closingReceipt = closeLedger.retire(previous)
+  }
+  return closingReceipt ?? Promise.resolve(null)
 }

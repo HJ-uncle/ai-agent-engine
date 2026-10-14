@@ -9,6 +9,7 @@ import { readOldSnapshot, commitWriteChange, ChangeRecordingError, decodeEditabl
 import { readFileVersionSync, withFileLocks } from '../../shared/file-version.js'
 import { normalizeWriteFileArgs } from '../../shared/write-file-args.js'
 import { throwIfAborted } from '../../core/utils/abort.js'
+import { writeConditionalFile } from './conditional-write.js'
 
 export const readFileTool: Tool = {
   name: 'read_file',
@@ -135,6 +136,8 @@ export const writeFileTool: Tool = {
     type: 'object',
     properties: {
       path: { type: 'string', description: '文件路径。报告类任务强制使用 .docx，报表类任务强制使用 .xlsx。' },
+      expectedHash: { type: 'string', pattern: '^(missing|sha256:[a-f0-9]{64})$', description: '覆盖已有文件时传最近一次 read_file/write_file/edit_file 返回的完整文件版本；不匹配则拒绝覆盖。新文件可传 missing。共享项目写入必须使用版本条件。' },
+      createOnly: { type: 'boolean', description: '为 true 时只创建不存在的文件，已有文件会被保留。' },
       data: { 
         type: ['string', 'object', 'array', 'number', 'boolean', 'null'],
         description: `写入数据。
@@ -159,12 +162,13 @@ export const writeFileTool: Tool = {
       return { success: false, output: normalized.error.message, error: normalized.error.code,
         metadata: { code: normalized.error.code, fileMutationApplied: false } }
     }
-    const { path: filePath, data, usedContentAlias } = normalized.args
+    const { path: filePath, data, usedContentAlias, expectedHash, createOnly } = normalized.args
     try {
       const safePath = workspaceManager.resolveSafePath(ctx, filePath)
       return await withFileLocks([safePath], async ([canonicalPath]) => {
         throwIfAborted(ctx.signal)
         workspaceManager.resolveSafePath(ctx, canonicalPath)
+        if (expectedHash !== undefined || createOnly === true) return writeConditionalFile(normalized.args, canonicalPath, ctx)
         const snapshot = await readOldSnapshot(canonicalPath)
         fs.mkdirSync(path.dirname(canonicalPath), { recursive: true })
         const handler = handlerRegistry.getHandler(canonicalPath)

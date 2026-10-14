@@ -1,4 +1,3 @@
-import { createClient, type Client } from '@libsql/client'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -8,25 +7,29 @@ import { RequestBudget, BudgetExceededError } from '../budget.js'
 import { SubagentPool } from '../pool.js'
 import { SubagentRunner } from '../runner.js'
 import { SubagentStore } from '../store.js'
-import type { CreateSubagentRun, RunOutcome, SubagentEvent } from '../types.js'
+import { LocalSqliteProcessClient } from '../../../storage/sqlite/local-process-client.js'
+import { closeDb, getDb } from '../../../storage/sqlite/db.js'
+import type { CreateSubagentRun, RunOutcome, SubagentEvent, SubagentWireEvent } from '../types.js'
 
 vi.mock('../projection.js', () => ({ projectPendingSubagents: vi.fn().mockResolvedValue(undefined) }))
 
-let db: Client
+let db: LocalSqliteProcessClient
 let store: SubagentStore
 let runner: SubagentRunner
 let events: SubagentEvent[]
 let parent: AgentContext
 let sequence = 0
 let fixtureDir: string
+let ownedProjectionDb: LocalSqliteProcessClient | undefined
 
 function input(overrides: Partial<CreateSubagentRun> = {}): CreateSubagentRun {
   return { tenantId: 'tenant-a', rootSessionId: 'root', parentSessionId: 'root', parentConversationId: 'turn', parentMessageId: 'message', parentToolCallId: `tool-${++sequence}`, task: '读取 README', description: '同名调研', modelId: 'fixture', ...overrides }
 }
 
 beforeEach(() => {
+  ownedProjectionDb = undefined
   fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-subagent-runtime-'))
-  db = createClient({ url: `file:${path.join(fixtureDir, 'runs.db').replace(/\\/g, '/')}` })
+  db = new LocalSqliteProcessClient({ url: `file:${path.join(fixtureDir, 'runs.db').replace(/\\/g, '/')}` })
   store = new SubagentStore(db)
   runner = new SubagentRunner(store, new SubagentPool(1))
   events = []
@@ -37,18 +40,54 @@ beforeEach(() => {
   } as unknown as AgentContext
 })
 
-afterEach(() => {
+afterEach(async () => {
+  if (ownedProjectionDb) { closeDb(); await ownedProjectionDb.whenClosed() }
   vi.unstubAllEnvs()
   db.close()
+  await db.whenClosed()
   if (path.dirname(fixtureDir) !== path.resolve(os.tmpdir()) || !path.basename(fixtureDir).startsWith('aether-subagent-runtime-')) throw new Error('Unsafe fixture cleanup path')
-  try { fs.rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 2, retryDelay: 20 }) }
-  catch (error) {
-    // libsql detaches transaction connections; Windows may keep the fixture locked until the worker exits.
-    if (process.platform !== 'win32' || !(error instanceof Error) || !('code' in error) || error.code !== 'EPERM') throw error
-  }
+  // Join the production adapter's native process before removing its database.
+  fs.rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 })
 
 describe('SubagentRunner: typed outcome and durable lifecycle', () => {
+  it('uses keyed v2 mutations without materializing growing legacy snapshots or leaking server permissions', async () => {
+    const streamed: SubagentWireEvent[] = []
+    const modern = { ...parent, subagentEventVersion: 2 as const,
+      emitSubagentEvent: (event: SubagentWireEvent) => { streamed.push(event) } }
+    const fullReads = vi.spyOn(store, 'getRun')
+    const archiveReads = vi.spyOn(store, 'getSnapshotsAtSequences')
+    const profile = { readOnly: true, systemPrompt: 'PRIVATE_PERMISSION_CONFIGURATION', toolNames: ['read_file'], workspacePaths: [] }
+    let executionSawPermissions = false
+    const output = '数据'.repeat(8000)
+    const run = await runner.run(input({ continuation: profile }), modern, async ({ snapshot, observer }) => {
+      executionSawPermissions = snapshot.continuation?.systemPrompt === profile.systemPrompt
+      expect('toolCalls' in snapshot).toBe(false)
+      for (let index = 0; index < 80; index++) {
+        await observer.onToolStart({ toolCallId: `tool-${index}`, name: 'read_file', args: { path: `file-${index}` } })
+        await observer.onToolEnd({ toolCallId: `tool-${index}`, name: 'read_file', success: true, output })
+      }
+      const usage = { invocationId: 'v2-invocation', promptTokens: 3, completionTokens: 2 }
+      await observer.onUsage(usage)
+      await observer.onUsage(usage)
+      await observer.onOutcome({ status: 'succeeded', output: 'done' })
+    })
+    expect(executionSawPermissions).toBe(true)
+    expect(run).toMatchObject({ schemaVersion: 2, view: 'summary', status: 'succeeded', toolCount: 80, activeToolCount: 0,
+      usage: { totalTokens: 5 }, continuation: { readOnly: true } })
+    expect(run.toolCalls).toHaveLength(64)
+    expect(run.latestActivity?.id).toBe('tool-79')
+    expect(fullReads).not.toHaveBeenCalled()
+    expect(archiveReads).not.toHaveBeenCalled()
+    expect(streamed).toHaveLength(164)
+    expect(streamed.every(event => event.schemaVersion === 2 && !('snapshot' in event))).toBe(true)
+    expect(JSON.stringify(streamed)).not.toContain(profile.systemPrompt)
+    expect(JSON.stringify(run)).not.toContain(profile.systemPrompt)
+    const progress = streamed.filter(event => event.kind === 'tool.completed')
+    expect(progress).toHaveLength(80)
+    expect(Math.max(...progress.map(event => Buffer.byteLength(JSON.stringify(event), 'utf8')))).toBeLessThan(16 * 1024)
+  })
+
   it('persists tool details, per-invocation usage and a successful final result before returning', async () => {
     const run = await runner.run(input(), parent, async ({ observer }) => {
       await observer.onToolStart({ toolCallId: 'read-1', name: 'read_file', args: { path: 'README.md' } })
@@ -65,6 +104,43 @@ describe('SubagentRunner: typed outcome and durable lifecycle', () => {
     expect((await store.getRun('tenant-a', run.runId))?.status).toBe('succeeded')
     expect((await store.listEvents('tenant-a', run.runId)).map((event) => event.seq)).toEqual([1, 2, 3, 4, 5, 6])
     expect(events.at(-1)?.snapshot.status).toBe('succeeded')
+  })
+
+  it('cancels and joins every owned child across bounded run pages', async () => {
+    runner = new SubagentRunner(store, new SubagentPool(2))
+    const modern = { ...parent, subagentEventVersion: 2 as const, emitSubagentEvent: vi.fn() }
+    const started: string[] = []
+    const execute = async ({ snapshot, signal, observer }: Parameters<Parameters<SubagentRunner['run']>[2]>[0]) => {
+      started.push(snapshot.runId)
+      await new Promise<void>(resolve => {
+        if (signal.aborted) resolve()
+        else signal.addEventListener('abort', () => resolve(), { once: true })
+      })
+      await observer.onOutcome({ status: 'succeeded', output: 'late result' })
+    }
+    const first = runner.run(input(), modern, execute)
+    const second = runner.run(input(), modern, execute)
+    try {
+      await vi.waitFor(() => expect(started).toHaveLength(2))
+      const firstView = (await store.getRunView('tenant-a', started[0]))!
+      const secondView = (await store.getRunView('tenant-a', started[1]))!
+      const pages = vi.spyOn(store, 'listRunViewsPage').mockImplementation(async (_tenant, session, options) => ({
+        schemaVersion: 2 as const, parentSessionId: session, revision: 'fixture-revision', listComplete: options?.cursor !== undefined,
+        runs: options?.cursor ? [secondView] : [firstView], hasMore: options?.cursor === undefined,
+        ...(options?.cursor ? {} : { nextCursor: 'fixture-page-2' }),
+      }))
+      const fullList = vi.spyOn(store, 'listRunsForParent')
+      await runner.cancelRunsForParent('tenant-a', 'root')
+      expect((await first).status).toBe('cancelled')
+      expect((await second).status).toBe('cancelled')
+      expect(pages.mock.calls.map(call => call[2]?.cursor)).toEqual([undefined, 'fixture-page-2'])
+      expect(fullList).not.toHaveBeenCalled()
+      expect((await store.getRunHeader('tenant-a', firstView.runId))?.stopReason).toBe('parent_deleted')
+      expect((await store.getRunHeader('tenant-a', secondView.runId))?.stopReason).toBe('parent_deleted')
+    } finally {
+      for (const runId of started) await runner.cancel('tenant-a', runId, 'fixture_cleanup')
+      await Promise.all([first, second])
+    }
   })
 
   it.each<RunOutcome>([
@@ -142,28 +218,66 @@ describe('SubagentRunner: typed outcome and durable lifecycle', () => {
     expect(run.usage).toMatchObject({ totalTokens: 14, cacheReadTokens: 5, unknown: true })
   })
 
-  it('shares fallback reservations between concurrently active siblings until they finish', async () => {
+  it('shares unlimited fallback accounting across active siblings without legacy context or env caps', async () => {
     runner = new SubagentRunner(store, new SubagentPool(2))
     parent.tokenBudget = 100
     vi.stubEnv('SUBAGENT_TOKEN_LIMIT', '100')
+    let fallback: RequestBudget | undefined
     let releaseFirst!: () => void
     let firstReserved = false
-    const first = runner.run(input(), parent, async ({ observer, onRequestAttempt }) => {
+    const first = runner.run(input(), parent, async ({ observer, onRequestAttempt, requestBudget }) => {
+      fallback = requestBudget
+      expect(fallback?.limit).toBe(Infinity)
       await onRequestAttempt({ type: 'start', requestAttemptId: 'first', provider: 'fixture', model: 'fixture', reservationTokens: 60 })
       await new Promise<void>((resolve) => { releaseFirst = resolve; firstReserved = true })
-      await onRequestAttempt({ type: 'finish', requestAttemptId: 'first', provider: 'fixture', model: 'fixture', outcome: 'succeeded', usage: { promptTokens: 10, completionTokens: 5 } })
+      await onRequestAttempt({ type: 'finish', requestAttemptId: 'first', provider: 'fixture', model: 'fixture', outcome: 'succeeded', usage: { promptTokens: 60, completionTokens: 20 } })
       await observer.onOutcome({ status: 'succeeded', output: 'first done' })
     })
     await vi.waitFor(() => expect(firstReserved).toBe(true))
     try {
-      const second = await runner.run(input(), parent, async ({ observer, onRequestAttempt }) => {
+      const second = await runner.run(input(), parent, async ({ observer, onRequestAttempt, requestBudget }) => {
+        expect(requestBudget).toBe(fallback)
         await onRequestAttempt({ type: 'start', requestAttemptId: 'second', provider: 'fixture', model: 'fixture', reservationTokens: 60 })
-        await observer.onOutcome({ status: 'succeeded', output: 'must not have budget' })
+        expect(fallback?.snapshot).toEqual({ charged: 0, reserved: 120, remaining: Infinity, unknown: false })
+        await onRequestAttempt({ type: 'finish', requestAttemptId: 'second', provider: 'fixture', model: 'fixture', outcome: 'succeeded', usage: { promptTokens: 40, completionTokens: 30 } })
+        await observer.onOutcome({ status: 'succeeded', output: 'second done' })
       })
-      expect(second.status).toBe('failed')
-      expect(second.error?.code).toBe('TOKEN_BUDGET_EXCEEDED')
+      expect(second.status).toBe('succeeded')
+      expect(second.error).toBeUndefined()
+      expect(second.usage.totalTokens).toBe(70)
     } finally { releaseFirst(); await first }
     expect((await first).status).toBe('succeeded')
+    expect((await first).usage.totalTokens).toBe(80)
+    expect(fallback?.snapshot).toEqual({ charged: 150, reserved: 0, remaining: Infinity, unknown: false })
+  })
+
+  it('preserves explicit finite parent-budget slices and finalization reserves across active siblings', async () => {
+    runner = new SubagentRunner(store, new SubagentPool(2))
+    const budget = new RequestBudget(100)
+    parent.requestBudget = budget
+    parent.finalizationReserveTokens = 60
+    let releaseFirst!: () => void
+    let firstReserved = false
+    const first = runner.run(input(), parent, async ({ observer, onRequestAttempt, requestBudget }) => {
+      expect(requestBudget?.limit).toBe(25)
+      await onRequestAttempt({ type: 'start', requestAttemptId: 'first-finite', provider: 'fixture', model: 'fixture', reservationTokens: 20 })
+      await new Promise<void>(resolve => { releaseFirst = resolve; firstReserved = true })
+      await onRequestAttempt({ type: 'finish', requestAttemptId: 'first-finite', provider: 'fixture', model: 'fixture', outcome: 'succeeded', usage: { promptTokens: 10, completionTokens: 5 } })
+      await observer.onOutcome({ status: 'succeeded', output: 'first finite done' })
+    })
+    await vi.waitFor(() => expect(firstReserved).toBe(true))
+    try {
+      expect(budget.snapshot).toEqual({ charged: 0, reserved: 25, remaining: 75, unknown: false })
+      const secondExecute = vi.fn(async () => undefined)
+      const second = await runner.run(input(), parent, secondExecute)
+      expect(second.status).toBe('failed')
+      expect(second.error?.code).toBe('TOKEN_BUDGET_EXCEEDED')
+      expect(secondExecute).not.toHaveBeenCalled()
+      expect(budget.snapshot).toEqual({ charged: 0, reserved: 25, remaining: 75, unknown: false })
+    } finally { releaseFirst(); await first }
+    expect((await first).status).toBe('succeeded')
+    expect(budget.snapshot).toEqual({ charged: 15, reserved: 0, remaining: 85, unknown: false })
+    expect(budget.isClosed).toBe(false)
   })
 
   it('aborts an overdue child and persists its partial output with a failed deadline outcome', async () => {
@@ -224,7 +338,12 @@ describe('SubagentStore: transactional snapshots, event replay and recovery', ()
     const outbox = await store.listPendingParentProjections('tenant-a')
     expect(outbox).toHaveLength(1)
     expect((await store.listEvents('tenant-a', event.runId)).map(item => item.kind)).toEqual(['created', 'finished'])
-    expect(outbox[0].event.snapshot).toEqual(await store.getRun('tenant-a', event.runId))
+    if (outbox[0].event.schemaVersion === 1) expect(outbox[0].event.snapshot).toEqual(await store.getRun('tenant-a', event.runId))
+    else {
+      expect(outbox[0].event.kind).toBe('snapshot')
+      if (!('view' in outbox[0].event)) throw new Error('Terminal outbox lacks its bounded checkpoint view')
+      expect(outbox[0].event.view).toEqual(await store.getRunView('tenant-a', event.runId))
+    }
     await store.ackProjection(outbox[0].id, 'other-tenant')
     expect(await store.listPendingParentProjections('tenant-a')).toHaveLength(1)
     await store.ackProjection(outbox[0].id, 'tenant-a')
@@ -243,11 +362,16 @@ describe('SubagentStore: transactional snapshots, event replay and recovery', ()
     const event = await store.createRun(input())
     await store.appendSnapshot('tenant-a', event.runId, 'started', { status: 'running' })
     db.close()
-    db = createClient({ url: `file:${path.join(fixtureDir, 'runs.db').replace(/\\/g, '/')}` })
+    await db.whenClosed()
+    db = new LocalSqliteProcessClient({ url: `file:${path.join(fixtureDir, 'runs.db').replace(/\\/g, '/')}` })
     const reopened = new SubagentStore(db)
     const recovered = await reopened.recoverInterrupted()
     expect(recovered).toHaveLength(1)
-    expect(recovered[0].snapshot.status).toBe('interrupted')
+    expect(recovered[0]).toMatchObject({ runId: event.runId, kind: 'finished' })
+    expect((await reopened.getRunHeader('tenant-a', event.runId))?.status).toBe('interrupted')
+    const recoveredView = await reopened.getRunView('tenant-a', event.runId, { atSeq: recovered[0].seq })
+    expect(recoveredView?.status).toBe('interrupted')
+    expect(recoveredView?.lastSeq).toBe(recovered[0].seq)
     expect(await reopened.recoverInterrupted()).toHaveLength(0)
     expect(await reopened.appendSnapshot('tenant-a', event.runId, 'started', { status: 'running' })).toBeNull()
     expect((await reopened.getRun('tenant-a', event.runId))?.status).toBe('interrupted')
@@ -269,45 +393,84 @@ describe('RequestBudget', () => {
 })
 
 
-it('honors an explicitly configured child cap under an unlimited HTTP parent without limiting the parent', async () => {
+it('ignores legacy child env caps under an unlimited HTTP parent while retaining actual usage', async () => {
   vi.stubEnv('SUBAGENT_TOKEN_LIMIT', '100')
   const budget = new RequestBudget()
   parent.requestBudget = budget
   parent.onRequestAttempt = event => budget.observe(event)
-  const run = await runner.run(input(), parent, async ({ onRequestAttempt }) => {
-    await onRequestAttempt({ type: 'start', requestAttemptId: 'child-over-cap', provider: 'fixture', model: 'fixture', reservationTokens: 101 })
-    throw new Error('Over-cap child request must not start')
+  const run = await runner.run(input(), parent, async ({ observer, onRequestAttempt, requestBudget }) => {
+    expect(requestBudget).toBe(budget)
+    await onRequestAttempt({ type: 'start', requestAttemptId: 'child-over-legacy-cap', provider: 'fixture', model: 'fixture', reservationTokens: 101 })
+    expect(budget.snapshot).toEqual({ charged: 0, reserved: 101, remaining: Infinity, unknown: false })
+    await onRequestAttempt({ type: 'finish', requestAttemptId: 'child-over-legacy-cap', provider: 'fixture', model: 'fixture', outcome: 'succeeded', usage: { promptTokens: 90, completionTokens: 20 } })
+    await observer.onOutcome({ status: 'succeeded', output: 'Finished above the legacy child cap' })
   })
-  expect(run.status).toBe('failed')
-  expect(run.error?.code).toBe('TOKEN_BUDGET_EXCEEDED')
-  expect(budget.snapshot).toEqual({ charged: 0, reserved: 0, remaining: Infinity, unknown: false })
+  expect(run.status).toBe('succeeded')
+  expect(run.error).toBeUndefined()
+  expect(run.usage.totalTokens).toBe(110)
+  expect((await store.getRun('tenant-a', run.runId))?.usage.totalTokens).toBe(110)
+  expect(budget.snapshot).toEqual({ charged: 110, reserved: 0, remaining: Infinity, unknown: false })
+  expect(budget.isClosed).toBe(false)
   expect(budget.canAfford(600_000)).toBe(true)
 })
 
-it('keeps browser tool overview JSON complete without copying archived screenshot pixels into parent snapshots', async () => {
+it('archives complete browser screenshot output while keeping v2 event and resident previews bounded', async () => {
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDdwAAAAASUVORK5CYII=', 'base64')
   const dataUrl = 'data:image/png;base64,' + Buffer.concat([png, Buffer.alloc(100_000)]).toString('base64')
-  const output = JSON.stringify({ tab: { title: 'Login', url: 'https://example.test/' }, text: 'Log in',
+  const output = JSON.stringify({ tab: { title: 'Login', url: 'https://example.test/' }, text: '登录界面😀',
     elements: [{ role: 'button', name: 'Log in', bounds: { x: 20, y: 30, width: 80, height: 32 } }],
     viewport: { width: 1000, height: 700 }, screenshot: { dataUrl, width: 1, height: 1 }, truncated: false })
-  const run = await runner.run(input(), parent, async ({ observer }) => {
+  const streamed: SubagentWireEvent[] = []
+  const modern = { ...parent, subagentEventVersion: 2 as const,
+    emitSubagentEvent: (event: SubagentWireEvent) => { streamed.push(event) } }
+  const archiveReads = vi.spyOn(store, 'getSnapshotsAtSequences')
+  const run = await runner.run(input(), modern, async ({ observer }) => {
     await observer.onToolStart({ toolCallId: 'browser-1', name: 'browser_snapshot', args: {} })
     await observer.onToolEnd({ toolCallId: 'browser-1', name: 'browser_snapshot', success: true, output, durationMs: 3 })
     await observer.onOutcome({ status: 'succeeded', output: 'Inspected the page.' })
   })
   const preview = run.toolCalls[0].output!
-  expect(preview.length).toBeLessThanOrEqual(32_000)
-  expect(preview).not.toContain('data:image')
-  expect(JSON.parse(preview)).toMatchObject({ screenshot: { retainedForDisplay: true, width: 1, height: 1 },
-    elements: [{ name: 'Log in', bounds: { x: 20, y: 30, width: 80, height: 32 } }] })
-  expect((await store.getRun('tenant-a', run.runId))?.toolCalls[0].output).toBe(preview)
-  expect(events.at(-1)?.snapshot.toolCalls[0].output).toBe(preview)
+  expect(Buffer.byteLength(preview, 'utf8')).toBeLessThanOrEqual(2048)
+  expect(run.toolCalls[0]).toMatchObject({ detailTruncated: true,
+    detailRef: expect.stringContaining(`?atSeq=${run.toolCalls[0].revisionSeq}`) })
+  expect(run.coverage.truncated).toBe(true)
+  expect(archiveReads).not.toHaveBeenCalled()
+  expect(streamed.every(event => event.schemaVersion === 2 && !('snapshot' in event))).toBe(true)
+  expect(Math.max(...streamed.map(event => Buffer.byteLength(JSON.stringify(event), 'utf8')))).toBeLessThan(16 * 1024)
+  expect(JSON.stringify(streamed)).not.toContain(dataUrl)
+  expect(JSON.stringify(run)).not.toContain(dataUrl)
+
+  // The same watermark must page the original bytes, not a display-only
+  // replacement which could silently discard screenshot pixels forever.
+  let offset = 0, detailText = ''
+  do {
+    const chunk = await store.getToolDetail('tenant-a', run.runId, 'browser-1', { atSeq: run.lastSeq, offset, limitBytes: 4096 })
+    expect(chunk).not.toBeNull()
+    if (!chunk) throw new Error('Missing archived browser detail')
+    expect(chunk.asOfSeq).toBe(run.lastSeq)
+    expect(chunk.detail.offset).toBe(offset)
+    expect(Buffer.byteLength(chunk.detail.text, 'utf8')).toBeLessThanOrEqual(4096)
+    detailText += chunk.detail.text
+    if (!chunk.detail.hasMore) break
+    expect(chunk.detail.nextOffset).toBeGreaterThan(offset)
+    offset = chunk.detail.nextOffset!
+  } while (true)
+  const archived = JSON.parse(detailText) as { output: string }
+  expect(archived.output).toBe(output)
+  expect(JSON.parse(archived.output)).toMatchObject({ screenshot: { dataUrl }, text: '登录界面😀' })
+  const [canonical] = await store.getSnapshotsAtSequences('tenant-a', [{ runId: run.runId, seq: run.lastSeq }])
+  expect(canonical.schemaVersion).toBe(1)
+  expect(canonical.toolCalls).toHaveLength(1)
+  expect(canonical.toolCalls[0].output).toBe(output)
 })
 
 describe('Subagent continuation ownership and concurrency', () => {
   const profile = { readOnly: true, systemPrompt: 'Keep the prior context', toolNames: ['read_file'], workspacePaths: [] }
   it('reuses the same durable child transcript while creating independent per-turn run records', async () => {
     vi.stubEnv('DATA_DIR', path.join(fixtureDir, 'runs.db'))
+    const actual = getDb()
+    if (!(actual instanceof LocalSqliteProcessClient)) throw new Error('Expected the fixture-owned projection database adapter')
+    ownedProjectionDb = actual
     const { JSONLConversationHistory } = await import('../../../storage/conversation/jsonl-history.js')
     const first = await runner.run(input({ continuation: profile }), parent, async ({ snapshot, observer }) => {
       const context = { tenantId: snapshot.tenantId, sessionId: snapshot.childSessionId }
@@ -324,7 +487,8 @@ describe('Subagent continuation ownership and concurrency', () => {
     })
     expect(next.runId).not.toBe(first.runId)
     expect(next.childSessionId).toBe(first.childSessionId)
-    expect(next.continuation).toEqual(profile)
+    expect(next.continuation).toEqual({ readOnly: true })
+    expect((await store.getRunHeader('tenant-a', next.runId, true))?.continuation).toEqual(profile)
     expect(historyRead).toContain('cedar-742')
     expect((await store.listRunsForParent('tenant-a', 'root')).length).toBe(2)
   })
@@ -346,5 +510,81 @@ describe('Subagent continuation ownership and concurrency', () => {
     const next = await store.createRun(input({ resumeFromRunId: first.runId, childSessionId: 'forged', continuation: { ...profile, readOnly: false, toolNames: ['execute_cmd'] } }))
     expect(next.snapshot.childSessionId).toBe(first.childSessionId)
     expect(next.snapshot.continuation).toEqual(profile)
+  })
+})
+
+describe('cancelled session-local planning has no unknown external effects', () => {
+  it.each(['code', 'general'] as const)('%s persists real plan controls and their own session state without classifying cancellation as an external mutation', async toolProfile => {
+    const database = await import('../../../storage/sqlite/db.js')
+    const { up: todoSchema } = await import('../../../storage/sqlite/migrations/006_add_todos_cron.js')
+    const { up: planSchema } = await import('../../../storage/sqlite/migrations/028_task_plans.js')
+    const { todoTools } = await import('../../../tools/todo/todo-tool.js')
+    const { TodoStore } = await import('../../../storage/todo/index.js')
+    await todoSchema(db)
+    await planSchema(db)
+    const isolatedDb = vi.spyOn(database, 'getDb').mockReturnValue(db)
+    const todos = new TodoStore()
+    parent.toolProfile = toolProfile
+    let runId = '', childSessionId = ''
+    let readyToCancel = false
+    const pending = runner.run(input(), parent, async ({ snapshot, observer, signal }) => {
+      runId = snapshot.runId
+      childSessionId = snapshot.childSessionId
+      const child = { ...parent, sessionId: childSessionId }
+      const control = async (name: string, args: unknown) => {
+        const tool = todoTools.find(candidate => candidate.name === name)
+        if (!tool) throw new Error('Missing builtin plan control: ' + name)
+        const toolCallId = 'control-' + name
+        await observer.onToolStart({ toolCallId, name, args })
+        const result = await tool.execute(args, child)
+        expect(result.success).toBe(true)
+        await observer.onToolEnd({ toolCallId, name, success: result.success, output: result.output })
+      }
+      await control('plan_update', { plan: [{ step: 'Review retained changes', status: 'in_progress' }] })
+      await control('todo_list', {})
+      await control('todo_create', { title: 'Temporary local plan step' })
+      const temporary = (await todos.list('tenant-a', childSessionId)).find(todo => todo.title === 'Temporary local plan step')
+      expect(temporary).toBeDefined()
+      if (!temporary) throw new Error('The real create did not persist')
+      await control('todo_update', { id: temporary.id, status: 'done' })
+      expect((await todos.getById(temporary.id, 'tenant-a', childSessionId))?.status).toBe('done')
+      await control('todo_delete', { id: temporary.id })
+      expect(await todos.getById(temporary.id, 'tenant-a', childSessionId)).toBeNull()
+      readyToCancel = true
+      await new Promise<void>(resolve => {
+        if (signal.aborted) resolve()
+        else signal.addEventListener('abort', () => resolve(), { once: true })
+      })
+      await observer.onOutcome({ status: 'succeeded', output: 'Late plan-only result' })
+    })
+    try {
+      await vi.waitFor(() => expect(readyToCancel).toBe(true))
+      expect((await store.getRun('tenant-a', runId))?.status).toBe('running')
+      expect((await runner.cancel('tenant-a', runId, 'test_user_cancel'))?.status).toBe('cancelling')
+      const run = await pending
+      expect(run.status).toBe('cancelled')
+      expect(run.stopReason).toBe('test_user_cancel')
+      expect(run.resultSummary).toBeUndefined()
+      expect(run.partialOutput).toBe('Late plan-only result')
+      expect(run.externalEffectStatus).toBeUndefined()
+      expect([...run.toolCalls].sort((a, b) => a.ordinal - b.ordinal).map(tool => [tool.name, tool.status])).toEqual([
+        ['plan_update', 'succeeded'], ['todo_list', 'succeeded'], ['todo_create', 'succeeded'],
+        ['todo_update', 'succeeded'], ['todo_delete', 'succeeded'],
+      ])
+      const persisted = await store.getRun('tenant-a', runId)
+      expect(persisted?.status).toBe('cancelled')
+      expect(persisted?.externalEffectStatus).toBeUndefined()
+      expect((await store.getRunView('tenant-a', runId))?.externalEffectStatus).toBeUndefined()
+      expect(events.at(-1)?.snapshot.status).toBe('cancelled')
+      expect(events.at(-1)?.snapshot.externalEffectStatus).toBeUndefined()
+      expect((await todos.getPlan('tenant-a', childSessionId)).plan).toEqual([
+        { id: expect.any(String), step: 'Review retained changes', status: 'in_progress' },
+      ])
+      expect((await todos.getPlan('tenant-a', parent.sessionId)).plan).toEqual([])
+    } finally {
+      if (runId) await runner.cancel('tenant-a', runId, 'fixture_cleanup')
+      await pending
+      isolatedDb.mockRestore()
+    }
   })
 })

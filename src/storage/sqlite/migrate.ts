@@ -1,3 +1,6 @@
+import { up as up029 } from './migrations/029_cron_automation.js'
+import { up as up030 } from './migrations/030_conversation_projection_receipts.js'
+import { up as up028 } from './migrations/028_task_plans.js'
 import { up as up027 } from './migrations/027_cron_timeout.js'
 import { getDb, closeDb } from './db.js'
 import { repairLegacyCronTimeoutSchema } from './schema-compatibility.js'
@@ -209,6 +212,9 @@ async function migrate() {
     await up025(db)
     await up026(db)
     await up027(db)
+    await up028(db)
+    await up029(db)
+    await up030(db)
 
     // Seed built-in prompt templates
     for (const tpl of BUILTIN_TEMPLATES) {

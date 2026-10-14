@@ -47,6 +47,10 @@ export interface CommandJobScope {
   ownerRunId?: string
 }
 
+declare const capturedScopeAuthority: unique symbol
+/** Same-manager handle identities, captured before an asynchronous stop can admit a later turn. */
+export type CommandScopeCapture = Readonly<{ [capturedScopeAuthority]: 'command-scope' }>
+
 export interface CommandJobLaunch {
   tenantId: string
   sessionId: string

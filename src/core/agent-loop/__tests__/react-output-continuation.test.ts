@@ -138,11 +138,11 @@ describe('single-response output limit continuation', () => {
     expect(f.outcomes.at(-1)).toMatchObject({ status: 'succeeded', output: persisted })
   })
 
-  it('does not retry a reasoning-only response that used all output capacity', async () => {
+  it('stops a reasoning-only response after one safe regeneration', async () => {
     const f = fixture()
     f.llm.stream = vi.fn(async function* () { yield { done: true, reasoningContent: 'unfinished reasoning', finishReason: 'length' as const } })
     await f.run()
-    expect(f.llm.stream).toHaveBeenCalledTimes(1)
+    expect(f.llm.stream).toHaveBeenCalledTimes(2)
     expect(f.outcomes.at(-1)).toMatchObject({ status: 'failed', stopReason: 'output_limit' })
   })
 
@@ -166,7 +166,7 @@ describe('single-response output limit continuation', () => {
     const controller = new AbortController()
     f.ctx.signal = controller.signal
     f.llm.stream = vi.fn(async function* () { yield { done: true, content: 'saved first part', finishReason: 'length' as const } })
-    const frames = await f.run({}, frame => { if (frame.startsWith('\x00__usage__')) controller.abort() })
+    const frames = await f.run({}, frame => { if (frame.startsWith('\x00__usage__') && f.history.some(m => m.metadata?.outputContinuation)) controller.abort() })
     expect(f.llm.stream).toHaveBeenCalledTimes(1)
     expect(f.outcomes.at(-1)).toMatchObject({ status: 'cancelled', partialOutput: body(frames) })
   })
@@ -232,17 +232,19 @@ describe('single-response output limit continuation', () => {
     expect(f.outcomes.at(-1)).toMatchObject({ status: 'succeeded', output: body(frames) })
   })
 
-  it('does not execute or resubmit tool calls cut off by an output limit', async () => {
+  it('does not execute interrupted fragments while safely regenerating tool calls', async () => {
     const f = fixture()
+    let calls = 0
     f.llm.stream = vi.fn(async function* () {
-      yield { done: true, content: 'attempted write', finishReason: 'length' as const,
-        toolCalls: [{ id: 'incomplete-write', name: 'write_file', args: '{"path":"', index: 0 }] }
+      if (++calls <= 2) yield { done: true, content: 'attempted write', finishReason: 'length' as const,
+        toolCalls: [{ id: 'incomplete-write-' + calls, name: 'write_file', args: '{"path":"', index: 0 }] }
+      else yield { done: true, content: 'remaining work explained' }
     })
     const frames = await f.run()
-    expect(f.llm.stream).toHaveBeenCalledTimes(1)
+    expect(f.llm.stream).toHaveBeenCalledTimes(3)
     expect(f.ctx.tools.execute).not.toHaveBeenCalled()
-    expect(frames.filter(frame => frame.startsWith('\x00__tool_result__'))).toHaveLength(1)
-    expect(f.outcomes.at(-1)).toMatchObject({ status: 'failed', stopReason: 'output_limit' })
+    expect(frames.filter(frame => frame.startsWith('\x00__tool_result__'))).toHaveLength(2)
+    expect(f.outcomes.at(-1)).toMatchObject({ status: 'succeeded' })
   })
 
   it('can call remaining tools after a continuation without repeating previous response text', async () => {

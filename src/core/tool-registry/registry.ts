@@ -1,7 +1,7 @@
 import type { Tool, IToolRegistry, AgentContext, ToolResult, JSONSchema } from '../agent-context/index.js'
 import { DuplicateToolError, ToolNotFoundError } from '../agent-context/index.js'
 import { getGlobalToolPool } from '../utils/concurrency-pool.js'
-import { preflightTool, toolExecutionMode } from '../../security/tool-policy.js'
+import { bypassesOrdinaryToolPool, preflightTool, toolExecutionMode } from '../../security/tool-policy.js'
 
 export class ToolRegistry implements IToolRegistry {
   private tools = new Map<string, Tool>()
@@ -46,7 +46,7 @@ export class ToolRegistry implements IToolRegistry {
     // 若把子代理本身也放进池里，一轮并发派发 N 个子代理就会占满池槽位，
     // 它们的内层工具永远排不到队 —— 互相等待形成死锁。因此子代理自身不占池，
     // 内层工具照旧受限流保护。
-    if (this.executionMode(name, args) === 'subagent') {
+    if (bypassesOrdinaryToolPool(tool)) {
       return tool.execute(args, ctx)
     }
     // 全局并发池：防止大量并发调用把服务器打爆

@@ -3,16 +3,21 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { JSONLConversationHistory } from '../jsonl-history.js'
+import { closeDb, getDb } from '../../sqlite/db.js'
+import { LocalSqliteProcessClient } from '../../sqlite/local-process-client.js'
 
 let root: string
+let ownedProjectionDb: LocalSqliteProcessClient | undefined
 const ctx = { tenantId: 'cache-tenant', sessionId: 'cache-session' }
 const archiveFile = () => path.join(root, 'sessions', ctx.tenantId, `${ctx.sessionId}.jsonl`)
 beforeEach(() => {
+  ownedProjectionDb = undefined
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-jsonl-cache-'))
   vi.stubEnv('DATA_DIR', path.join(root, 'agent.db'))
   const file = archiveFile(); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, '')
 })
-afterEach(() => {
+afterEach(async () => {
+  if (ownedProjectionDb) { closeDb(); await ownedProjectionDb.whenClosed() }
   vi.restoreAllMocks(); vi.unstubAllEnvs()
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 })
 })
@@ -181,6 +186,9 @@ describe('JSONL bounded append projection cache', () => {
 
   it('clears cache accounting and rebuilds a new session without resurrecting the old archive', async () => {
     const history = restart()
+    const actual = getDb()
+    if (!(actual instanceof LocalSqliteProcessClient)) throw new Error('Expected the fixture-owned projection database adapter')
+    ownedProjectionDb = actual
     await history.append(message('old'), ctx)
     await history.clear(ctx)
     const now = Date.now(); vi.spyOn(Date, 'now').mockReturnValue(now + 6_000)

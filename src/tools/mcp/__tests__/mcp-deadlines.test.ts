@@ -75,14 +75,14 @@ describe('MCP explicit operation deadlines', () => {
     } finally { await app.close() }
   }, 20_000)
 
-  it('keeps the original 15s stdio default and lets zero/custom calls really run beyond it', async () => {
+  it('keeps a handshake watchdog while omitted/zero stdio calls run until completion', async () => {
     const normal = client(fixtureConfig())
     const unlimited = client(fixtureConfig(0))
     const extended = client(fixtureConfig(20_000))
     await Promise.all([normal.connect(), unlimited.connect(), extended.connect()])
     const began = Date.now()
     const outcomes = await Promise.allSettled([normal.callTool('delay', { ms: 15_500 }), unlimited.callTool('delay', { ms: 15_500 }), extended.callTool('delay', { ms: 15_500 })])
-    expect(outcomes[0]).toMatchObject({ status: 'rejected', reason: expect.objectContaining({ message: 'MCP stdio request timed out' }) })
+    expect(outcomes[0]).toMatchObject({ status: 'fulfilled', value: 'completed 15500' })
     expect(outcomes[1]).toMatchObject({ status: 'fulfilled', value: 'completed 15500' })
     expect(outcomes[2]).toMatchObject({ status: 'fulfilled', value: 'completed 15500' })
     expect(Date.now() - began).toBeGreaterThanOrEqual(15_000)
@@ -123,7 +123,7 @@ describe('MCP explicit operation deadlines', () => {
     const normal = client({ name: 'normal', transportType: 'http', url })
     const unlimited = client({ name: 'unlimited', transportType: 'http', url, timeoutMs: 0 })
     const extended = client({ name: 'extended', transportType: 'http', url, timeoutMs: 1_000 })
-    await expect(normal.callTool('delay', {})).rejects.toThrow()
+    expect(await normal.callTool('delay', {})).toBe('http completed')
     expect(await unlimited.callTool('delay', {})).toBe('http completed')
     expect(await extended.callTool('delay', {})).toBe('http completed')
     expect((await loadNetworkPolicy()).timeoutMs).toBe(100)

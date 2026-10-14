@@ -48,8 +48,8 @@ export async function lspRoutes(fastify: FastifyInstance) {
     if (!filePath) return reply.code(200).send(fail(40000, '缺少 filePath'))
 
     const tenantId = (request as any).authContext?.tenantId
-    if (timeoutMs !== undefined && (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
-      return reply.code(200).send(fail(40000, 'timeoutMs 必须为正数'))
+    if (timeoutMs !== undefined && (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs < 0)) {
+      return reply.code(200).send(fail(40000, 'timeoutMs 必须为非负数'))
     }
     // A session-bound diagnosis must resolve through the same workspace containment
     // check as file tools; raw path.resolve would permit an absolute escape.
@@ -79,7 +79,7 @@ export async function lspRoutes(fastify: FastifyInstance) {
       const result = await diagnoseFile(abs, {
         content, adapters, useCache,
         tenantId, sessionId, signal: controller.signal,
-        timeoutMs: timeoutMs === undefined ? undefined : Math.min(Math.floor(timeoutMs), 120_000),
+        timeoutMs: timeoutMs === undefined ? undefined : Math.floor(timeoutMs),
       })
       return reply.code(200).send(success(result))
     } finally {

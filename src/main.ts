@@ -34,7 +34,7 @@ if (typeof (Promise as any).withResolvers === 'undefined') {
 import { buildServer } from './api/http/index.js'
 import { logger } from './observability/index.js'
 import { skillsRegistry } from './skills/index.js'
-import { initDb } from './storage/sqlite/db.js'
+import { initDb, closeDb } from './storage/sqlite/db.js'
 import { initMemoryDb, closeMemoryDb, MEMORY_SCHEMA, MemoryConsolidator } from './storage/memory/index.js'
 import { systemConfigStore, TRUSTED_STARTUP_KEYS } from './storage/sqlite/system-config.js'
 import { loadAetherConfig, applyAetherConfigToEnv, loadManagedConfig } from './core/aether-config.js'
@@ -60,13 +60,6 @@ async function main() {
         logger.info('Memory database initialized')
       }),
     ])
-
-    // Unowned executions are interrupted after restart; never re-execute their side effects.
-    const { getSubagentStore } = await import('./core/subagent/store.js')
-    const { projectPendingSubagents } = await import('./core/subagent/projection.js')
-    const { createConversationHistory } = await import('./storage/conversation/factory.js')
-    await getSubagentStore().recoverInterrupted()
-    await projectPendingSubagents(createConversationHistory())
 
     // 2. 数据库就绪后，继续执行后续步骤
     // 启动记忆整理守护进程（它会自动处理延迟执行，不阻塞）
@@ -129,17 +122,23 @@ async function main() {
     console.log()
 
     // 优雅关闭：停止文件监听
-    const shutdown = async (signal: string) => {
+    let shutdownPromise: Promise<void> | undefined
+    const shutdown = (signal: string): Promise<void> => shutdownPromise ??= (async () => {
       logger.info({ signal }, 'Shutting down...')
       consolidator.stopDaemon()
       skillsRegistry.stop()
-      await commandJobs.shutdown('Engine shutdown')
-      closeMemoryDb()
       await server.close()
+      const receipts = await Promise.all([closeMemoryDb(), closeDb()])
+      const unhealthy = receipts.filter(receipt => receipt && !receipt.healthy)
+      if (unhealthy.length) throw new Error('Database cleanup unknown: ' + JSON.stringify(unhealthy))
       process.exit(0)
-    }
-    process.once('SIGINT', () => void shutdown('SIGINT'))
-    process.once('SIGTERM', () => void shutdown('SIGTERM'))
+    })()
+    const requestShutdown = (signal: string) => void shutdown(signal).catch(error => {
+      logger.error({ error, signal }, 'Shutdown failed; preserving nonzero exit and unknown cleanup evidence')
+      process.exitCode = 1
+    })
+    process.once('SIGINT', () => requestShutdown('SIGINT'))
+    process.once('SIGTERM', () => requestShutdown('SIGTERM'))
   } catch (err) {
     logger.error({ err }, 'Failed to start server')
     process.exit(1)

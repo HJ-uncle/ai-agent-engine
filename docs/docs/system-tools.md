@@ -434,7 +434,6 @@ src/tools/search/grep-tool.ts:14:async function hasRipgrep(): Promise<boolean> {
 | `task` | string | ✅ | 子代理任务描述 |
 | `systemPrompt` | string | 否 | 自定义系统提示词（覆盖角色预设模板） |
 | `model` | string | 否 | 使用的模型名 |
-| `maxSteps` | number | 否 | 最大迭代步数，默认 10 |
 | `role` | string | 否 | ⭐ 方法论角色预设：`implementer` / `spec-reviewer` / `code-quality-reviewer`（仅 `methodology` / `max` 模式；其余模式降级为默认行为并记录 warn 日志） |
 
 **role 参数说明：**
@@ -447,14 +446,15 @@ src/tools/search/grep-tool.ts:14:async function hasRipgrep(): Promise<boolean> {
 
 设置 `role` 时，对应模板会自动加载为默认系统提示词；若同时提供 `systemPrompt`，则 append 到模板之后。模板缺失时自动降级为内置默认提示词并记录 warn。
 
+子代理不提供模型可控的探索步数上限，旧调用传入的 `maxSteps` 会被兼容性忽略。Code 子代理不会因 `MAX_ITERATIONS`、`TOKEN_BUDGET` 或 `SUBAGENT_TOKEN_LIMIT` 环境配置被提前截断；有进展的任务持续执行到完成。用户取消、明确的父请求预算或配置的截止时间、模型上下文容量与无进展保护仍会产生如实记录的结束状态，不把部分结果标为完成。
+
 **示例**
 
 ```
 让代码审查子代理按 TDD 流程实现用户认证模块
 → 调用 subagent({
     task: "用 TDD 实现用户认证模块（注册/登录/令牌刷新）",
-    role: "implementer",
-    maxSteps: 20
+    role: "implementer"
   })
 
 让子代理对照 spec 审查实现
@@ -465,8 +465,7 @@ src/tools/search/grep-tool.ts:14:async function hasRipgrep(): Promise<boolean> {
 
 通用子代理调用（不指定 role，使用默认行为）
 → 调用 subagent({
-    task: "分析这段代码的性能瓶颈",
-    maxSteps: 10
+    task: "分析这段代码的性能瓶颈"
   })
 ```
 

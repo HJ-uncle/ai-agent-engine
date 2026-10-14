@@ -157,12 +157,12 @@ test('concurrency counts actual running overlap, not sequential sessions or boun
   assert.equal(sequential.maxConcurrentSessions,1);assert.equal(sequential.allFiveOverlapMs,0)
 })
 
-test('R3 prompt keeps strict ownership, static concise review, parallel A/B and 24 steps',()=>{
+test('R3 prompt keeps strict ownership, static concise review and parallel A/B without step ceilings',()=>{
   const session={title:'Formal',roleId:'ops-domain',workspace:'D:/project',role:{title:'domain',allowedFiles:['src/domain.mjs']}}
   const stage={index:3,title:'Search',prompt:'Implement search',testCommand:{command:'node',args:['tests/domain-test.mjs','3']}}
   const prompt=stagePrompt(session,stage,['A','B'],'review/ops-domain/3/')
-  assert.ok(prompt.includes("access:'read-only',maxSteps:24"));assert.ok(prompt.includes('同一个工具调用批次'));assert.ok(prompt.includes('禁止创建任何额外handoff'));assert.ok(prompt.includes('不要抢先实现后续阶段'));assert.ok(!prompt.includes('readonly:true'))
-  assert.ok(prompt.includes('禁止依次等待A再派B'));assert.ok(prompt.includes('没有execute_cmd工具'));assert.ok(prompt.includes('不超过400中文字'));assert.ok(prompt.includes('不读.test-data历史运行产物'));assert.ok(prompt.includes('上限而非必须用满'))
+  assert.ok(prompt.includes("access:'read-only'"));assert.ok(!prompt.includes('maxSteps'));assert.ok(prompt.includes('同一个工具调用批次'));assert.ok(prompt.includes('禁止创建任何额外handoff'));assert.ok(prompt.includes('不要抢先实现后续阶段'));assert.ok(!prompt.includes('readonly:true'))
+  assert.ok(prompt.includes('禁止依次等待A再派B'));assert.ok(prompt.includes('没有execute_cmd工具'));assert.ok(prompt.includes('不超过400中文字'));assert.ok(prompt.includes('不读.test-data历史运行产物'));assert.ok(prompt.includes('不设置人为探索步数上限'))
   const reused=stagePrompt(session,stage,[],'review/ops-domain/3/');assert.ok(reused.includes('不要重做评审'));assert.ok(!reused.includes('description须精确'))
 })
 

@@ -1,11 +1,16 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import type { RepositoryProcessScope } from '../../../workspace/repository-process.js'
+import type { RepositoryLeaseOwner } from '../../../workspace/repository-lease.js'
 
 export interface GitWorkspace {
   base: string
   cwd: string
-  repository?: { workTree: string; gitDir: string }
+  repository?: { workTree: string; gitDir: string; commonDir?: string }
+  assertBinding?: () => void
+  processScope?: RepositoryProcessScope
+  bindingResource?: RepositoryLeaseOwner['bindingLease']
 }
 
 function inside(base: string, target: string): boolean {
@@ -48,7 +53,7 @@ async function validateObjectDirectory(base: string, target: string, visited: Se
   }
 }
 
-async function validateGitDirectory(base: string, gitDir: string): Promise<void> {
+async function validateGitDirectory(base: string, gitDir: string): Promise<string> {
   if (!(await fs.stat(gitDir)).isDirectory()) throw new Error('Git directory is invalid')
   // Git follows these independently of cwd; a .git entry alone does not define
   // the repository boundary (linked worktrees share their common directory).
@@ -62,6 +67,7 @@ async function validateGitDirectory(base: string, gitDir: string): Promise<void>
     }
     await validateObjectDirectory(base, path.join(directory, 'objects'), new Set())
   }
+  return commonDir
 }
 
 export async function resolveGitWorkspace(basePath: string, cwdPath: string): Promise<GitWorkspace> {
@@ -86,8 +92,8 @@ export async function resolveGitWorkspace(basePath: string, cwdPath: string): Pr
         if (!match) throw new Error('Git directory pointer is invalid')
         gitDir = await bounded(base, path.resolve(candidate, match[1]))
       }
-      await validateGitDirectory(base, gitDir)
-      workspace.repository = { workTree: candidate, gitDir }
+      const commonDir = await validateGitDirectory(base, gitDir)
+      workspace.repository = { workTree: candidate, gitDir, commonDir }
       return workspace
     }
     if (candidate === base) break

@@ -28,7 +28,7 @@ import { grepTool } from './search/grep-tool.js'
 import { todoTools } from './todo/todo-tool.js'
 import { cronTools } from './cron/cron-tool.js'
 import { taskControlTools } from './task/task-tool.js'
-import { subagentTools } from './subagent/index.js'
+import { subagentTools, readonlySubagentTools } from './subagent/index.js'
 import { webFetchTool } from './web-fetch/index.js'
 import { httpRequestTool } from './http-request/index.js'
 import { getCurrentContextTool } from './get-context/index.js'
@@ -65,7 +65,7 @@ export interface RegistryFactoryOptions {
   allowedSkills?: string[] | null
   /** Custom-Agent bindings are exact: [] exposes no external skills, rather than the legacy all-skills default. */
   strictSkillBindings?: boolean
-  /** undefined/null 使用 profile 默认集；[] 显式禁用；列表只能缩窄。general 保留原有始终注册的基础工具例外。 */
+  /** undefined/null 使用 profile 默认集；[] 禁用业务工具，session 内建计划始终可用；列表只能缩窄。 */
   allowedTools?: string[] | null
   /** undefined/null discovers all configured MCP servers; [] disables MCP; IDs narrow both local and inline servers. */
   allowedMcpServers?: string[] | null
@@ -139,10 +139,16 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   const memoryTools = createMemoryTools()
   const memoryEnabled = opts.memoryScope !== 'off' && (profile !== 'code' || opts.memoryScope !== undefined)
   const memoryImplementations = new Set(memoryTools)
-  const registry = new ToolRegistry(profile === 'code' ? (tool) =>
-    (isCodeProfileTool(tool as Tool & { source?: string }) || (memoryEnabled && memoryImplementations.has(tool))) &&
-    (explicitAllowedTools === undefined || explicitAllowedTools.includes(tool.name))
-    : (tool) => explicitAllowedTools === undefined || explicitAllowedTools.includes(normalizeToolName(tool.name)))
+  const internalPlanTools = new Set(todoTools.filter(tool => tool.name === 'plan_update'))
+  const registry = new ToolRegistry(tool => {
+    // Planning changes only the current session's durable state. Trust its builtin
+    // implementation, rather than a matching extension name, outside business allowlists.
+    if (tool.name === 'plan_update') return internalPlanTools.has(tool)
+    return profile === 'code'
+      ? (isCodeProfileTool(tool as Tool & { source?: string }) || (memoryEnabled && memoryImplementations.has(tool))) &&
+        (explicitAllowedTools === undefined || explicitAllowedTools.includes(tool.name))
+      : explicitAllowedTools === undefined || explicitAllowedTools.includes(normalizeToolName(tool.name))
+  })
 
   // ── Tool category tracking ────────────────────────────────────────────
   const builtinTools: string[] = []
@@ -153,8 +159,12 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
     const readOnly = [readFileTool, listFilesTool, globTool, grepTool, getCurrentContextTool, searchHistoryTool,
       ...commandJobTools.filter(candidate => candidate.name === 'command_output')].includes(tool)
     const browserReadOnly = browserTools.includes(tool) && BROWSER_READONLY_TOOLS.has(tool.name)
-    const mode = subagentTools.includes(tool) ? 'subagent' : readOnly || browserReadOnly ? 'readonly' : 'serial'
-    registry.register(trustBuiltinTool(tool, mode))
+    const mode = tool.name === 'subagent' && subagentTools.includes(tool) ? 'subagent'
+      : readOnly || browserReadOnly || readonlySubagentTools.includes(tool) ? 'readonly' : 'serial'
+    // Observation keeps its readonly batch semantics, while trusted joins and
+    // cancellation never hold the ordinary slot needed by child execution.
+    const orchestration = subagentTools.includes(tool) && (tool.name === 'subagent_wait' || tool.name === 'subagent_cancel')
+    registry.register(trustBuiltinTool(tool, mode, { orchestration }))
     if (registry.has(tool.name)) builtinTools.push(tool.name)
   }
 
@@ -201,9 +211,10 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   }
 
   const shouldRegister = (toolName: string): boolean => {
+    if (toolName === 'plan_update') return true
     // undefined / null = 未配置，加载全部工具
     if (effectiveAllowedTools === undefined || effectiveAllowedTools === null) return true
-    // 空数组 = Agent 明确设置了"不允许任何工具"，禁用全部
+    // 空数组 = Agent 明确禁用业务工具；内建计划不属于业务权限
     if (effectiveAllowedTools.length === 0) return false
     return effectiveAllowedTools.includes(normalizeToolName(toolName))
   }
@@ -295,7 +306,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   if (shouldRegister(globTool.name)) registerBuiltin(globTool)
   if (shouldRegister(grepTool.name)) registerBuiltin(grepTool)
 
-  // 8. 待办任务工具（todo_list / todo_create / todo_update / todo_delete）
+  // 8. 内建 session 计划始终注册；兼容待办工具仍按业务权限过滤。
   todoTools.forEach(t => {
     if (shouldRegister(t.name)) registerBuiltin(t)
   })
@@ -311,7 +322,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   })
 
   // 11. Subagent 工具
-  if (shouldRegister('subagent')) subagentTools.forEach((t) => registerBuiltin(t))
+  subagentTools.forEach(tool => { if (shouldRegister(tool.name)) registerBuiltin(tool) })
 
   // 12. Web 获取工具
   if (shouldRegister('web_fetch')) registerBuiltin(webFetchTool)
@@ -351,7 +362,9 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   // 19. 代码图查询工具（codegraph：只读查询符号/调用关系/影响面；索引缺失仅提示）
   if (shouldRegister('codegraph')) registerBuiltin(codegraphTool)
 
-  if (profile === 'code') browserTools.forEach(tool => { if (shouldRegister(tool.name)) registerBuiltin(tool) })
+  // Both modes use the same session-owned transport; the profile and explicit
+  // allowlist still determine which actions are executable.
+  browserTools.forEach(tool => { if (shouldRegister(tool.name)) registerBuiltin(tool) })
 
   // ── Superpower 自检 ────────────────────────────────────────────────────
   // 验证 CORE 工具名与 registry 实际注册保持一致，避免 OFF 模式下 Agent

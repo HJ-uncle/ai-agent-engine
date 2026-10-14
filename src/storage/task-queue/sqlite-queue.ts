@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { getDb } from '../sqlite/db.js'
 import { logger } from '../../observability/index.js'
-import type { Row } from '@libsql/client'
+import type { Row, Transaction } from '@libsql/client'
 import type { Job, JobRecord, JobStatus, JobHandler, TaskQueue } from './types.js'
+import { ensureTaskClaimSchema } from './claim-schema.js'
 
 function isJobsTableNotReadyError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
@@ -34,31 +35,20 @@ export class SQLiteTaskQueue implements TaskQueue {
   private handlers = new Map<string, JobHandler>()
   private timer: NodeJS.Timeout | null = null
   private running = false
+  private processing: Promise<void> | null = null
+  private generation = 0
+  private controller: AbortController | null = null
+  private schema: Promise<void> | null = null
   private readonly pollIntervalMs: number
 
   constructor(pollIntervalMs = 1000) {
     this.pollIntervalMs = pollIntervalMs
-    // Recover stale jobs asynchronously on startup
-    void this.recoverStaleJobs()
-  }
-
-  private async recoverStaleJobs(): Promise<void> {
-    const db = getDb()
-    // Mark any running jobs as failed (service was restarted)
-    // 捕获错误：首次启动时 jobs 表可能尚未创建（initDb 在 main() 里调用，晚于 ESM 顶层代码），静默忽略即可
-    await db
-      .execute({
-        sql: `UPDATE jobs 
-            SET status = 'failed', error = 'Service restarted unexpectedly', updated_at = unixepoch()
-            WHERE status = 'running'`,
-        args: [],
-      })
-      .catch(() => {
-        // jobs 表不存在（首次启动/迁移尚未执行），忽略
-      })
+    // A management queue is not proof that another producer has died. Recovery
+    // needs an authoritative owner/lease, so construction must never alter jobs.
   }
 
   async enqueue(job: Job): Promise<string> {
+    if (!this.handlers.has(job.type)) throw new Error(`Unsupported background task type: ${job.type}`)
     const id = randomUUID()
     const db = getDb()
     await db.execute({
@@ -69,11 +59,12 @@ export class SQLiteTaskQueue implements TaskQueue {
     return id
   }
 
-  async getStatus(jobId: string): Promise<JobRecord | null> {
+  async getStatus(jobId: string, tenantId: string): Promise<JobRecord | null> {
+    if (!tenantId) throw new Error('Task tenant is required')
     const db = getDb()
     const result = await db.execute({
-      sql: 'SELECT * FROM jobs WHERE id = ?',
-      args: [jobId],
+      sql: 'SELECT * FROM jobs WHERE id = ? AND tenant_id = ?',
+      args: [jobId, tenantId],
     })
     const row = result.rows[0]
     return row ? rowToRecord(row) : null
@@ -88,12 +79,13 @@ export class SQLiteTaskQueue implements TaskQueue {
     return result.rows.map(rowToRecord)
   }
 
-  async cancel(jobId: string): Promise<boolean> {
+  async cancel(jobId: string, tenantId: string): Promise<boolean> {
+    if (!tenantId) throw new Error('Task tenant is required')
     const db = getDb()
     const result = await db.execute({
       sql: `UPDATE jobs SET status = 'cancelled', updated_at = unixepoch()
-            WHERE id = ? AND status = 'pending'`,
-      args: [jobId],
+            WHERE id = ? AND tenant_id = ? AND status = 'pending'`,
+      args: [jobId, tenantId],
     })
     return (result.rowsAffected ?? 0) > 0
   }
@@ -102,9 +94,13 @@ export class SQLiteTaskQueue implements TaskQueue {
     this.handlers.set(type, handler)
   }
 
+  supportedTypes(): string[] { return [...this.handlers.keys()].sort() }
+
   start(): void {
     if (this.running) return
+    if (this.processing) throw new Error('Previous task execution is still draining')
     this.running = true
+    this.generation++
     this.timer = setInterval(() => {
       // Polling runs in the background, so always observe its rejection.  The
       // jobs table is created by initDb during application startup and may not
@@ -116,24 +112,64 @@ export class SQLiteTaskQueue implements TaskQueue {
     }, this.pollIntervalMs)
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.running = false
+    this.generation++
+    this.controller?.abort()
     if (this.timer) {
       clearInterval(this.timer)
       this.timer = null
     }
+    if (!this.processing) return
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([this.processing, new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('Background task producer did not acknowledge stop; external effects remain unknown')), 3000)
+      })])
+    } finally { clearTimeout(timeout) }
   }
 
   private async processPending(): Promise<void> {
+    if (!this.running || this.processing || !this.handlers.size) return
+    const generation = this.generation, controller = new AbortController()
+    this.controller = controller
+    const task = this.processOne(generation, controller.signal)
+    this.processing = task
+    try { await task } finally {
+      if (this.processing === task) { this.processing = null; this.controller = null }
+    }
+  }
+
+  private async write<T>(operation: (tx: Transaction) => Promise<T>): Promise<T> {
+    const tx = await getDb().transaction('write')
+    try {
+      const result = await operation(tx)
+      await tx.commit()
+      return result
+    } catch (error) {
+      try { await tx.rollback() } catch (rollbackError) {
+        throw new AggregateError([error, rollbackError], 'Task claim transaction failed; rollback is unconfirmed', { cause: error })
+      }
+      throw error
+    } finally { tx.close() }
+  }
+
+  private async processOne(generation: number, signal: AbortSignal): Promise<void> {
     const db = getDb()
-    // Fetch one pending job
+    const current = (): boolean => this.running && generation === this.generation && !signal.aborted
+    // Initialization can retry after a missing-table startup, without rewriting jobs.
+    this.schema ??= ensureTaskClaimSchema(db).catch(error => { this.schema = null; throw error })
+    await this.schema
+    if (!current()) return
+    const types = this.supportedTypes()
+    // An unsupported old job must not starve every supported task behind it.
     const result = await db.execute({
-      sql: `SELECT * FROM jobs WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1`,
-      args: [],
+      sql: `SELECT * FROM jobs WHERE status = 'pending' AND type IN (${types.map(() => '?').join(',')}) ORDER BY created_at ASC, id ASC LIMIT 1`,
+      args: types,
     })
 
     const row = result.rows[0]
-    if (!row) return
+    if (!row || !current()) return
 
     const job = rowToRecord(row)
     const handler = this.handlers.get(job.type)
@@ -143,28 +179,46 @@ export class SQLiteTaskQueue implements TaskQueue {
       return
     }
 
-    // Mark as running
-    await db.execute({
-      sql: `UPDATE jobs SET status = 'running', started_at = unixepoch(), updated_at = unixepoch()
-            WHERE id = ? AND status = 'pending'`,
-      args: [job.id],
+    // Only the winner of the persisted pending→running claim may perform effects.
+    const claimId = randomUUID()
+    const claimed = await this.write(async tx => {
+      if (!current()) return false
+      const result = await tx.execute({
+        sql: `UPDATE jobs SET status = 'running', started_at = unixepoch(), updated_at = unixepoch()
+              WHERE id = ? AND tenant_id = ? AND status = 'pending'`,
+        args: [job.id, job.tenantId],
+      })
+      if (result.rowsAffected !== 1) return false
+      await tx.execute({ sql: 'INSERT INTO job_execution_claims(job_id,claim_id) VALUES(?,?)', args: [job.id, claimId] })
+      return true
     })
-
-    try {
-      const jobResult = await handler(job)
-      await db.execute({
-        sql: `UPDATE jobs 
-              SET status = 'done', result = ?, completed_at = unixepoch(), updated_at = unixepoch()
-              WHERE id = ?`,
-        args: [JSON.stringify(jobResult), job.id],
-      })
-    } catch (err) {
-      await db.execute({
-        sql: `UPDATE jobs 
-              SET status = 'failed', error = ?, completed_at = unixepoch(), updated_at = unixepoch()
-              WHERE id = ?`,
-        args: [err instanceof Error ? err.message : String(err), job.id],
-      })
+    if (!claimed) return
+    if (!current()) {
+      await this.finish(job, claimId, 'cancelled', undefined, 'Stopped before handler admission; no handler effects were performed')
+      return
     }
+
+    let jobResult: unknown
+    try { jobResult = await handler(job, signal) } catch (err) {
+      await this.finish(job, claimId, 'failed', undefined,
+        `${signal.aborted ? 'Execution interrupted; external effects may have occurred. ' : ''}${err instanceof Error ? err.message : String(err)}`)
+      return
+    }
+    // A failed completion ACK is not proof that the handler failed; never
+    // overwrite or replay its effects based on a transport exception here.
+    await this.finish(job, claimId, 'done', jobResult)
+  }
+
+  private async finish(job: JobRecord, claimId: string, status: JobStatus, result?: unknown, error?: string): Promise<void> {
+    await this.write(async tx => {
+      const updated = await tx.execute({
+        sql: `UPDATE jobs SET status=?,result=?,error=?,completed_at=unixepoch(),updated_at=unixepoch()
+          WHERE id=? AND tenant_id=? AND status='running'
+          AND EXISTS(SELECT 1 FROM job_execution_claims c WHERE c.job_id=jobs.id AND c.claim_id=?)`,
+        args: [status, result === undefined ? null : JSON.stringify(result), error ?? null, job.id, job.tenantId, claimId],
+      })
+      if (updated.rowsAffected !== 1) throw new Error('Task execution claim changed; completion was not committed')
+      await tx.execute({ sql: 'DELETE FROM job_execution_claims WHERE job_id=? AND claim_id=?', args: [job.id, claimId] })
+    })
   }
 }

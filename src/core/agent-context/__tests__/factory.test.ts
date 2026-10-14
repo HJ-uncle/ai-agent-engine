@@ -126,17 +126,17 @@ describe('createAgentContext / tokenBudget', () => {
     })
   })
 
-  it('未传入时 → 读 env 默认并按模式倍率放大', () => {
+  it('未传入时 → 忽略 env，不设置本地上限', () => {
     withEnv({ SUPERPOWER_MODE: 'max', SUPERPOWER_ENABLED: undefined, TOKEN_BUDGET: '60000' }, () => {
       const ctx = createAgentContext(deps())
-      expect(ctx.tokenBudget).toBe(300000)  // 60000 × 5
+      expect(ctx.tokenBudget).toBeUndefined()
     })
   })
 
-  it('off 模式未传入时 → 直接使用 env 默认值', () => {
+  it('off 模式未传入时 → 同样不设置本地上限', () => {
     withEnv({ SUPERPOWER_MODE: 'off', SUPERPOWER_ENABLED: undefined, TOKEN_BUDGET: '60000' }, () => {
       const ctx = createAgentContext(deps())
-      expect(ctx.tokenBudget).toBe(60000)
+      expect(ctx.tokenBudget).toBeUndefined()
     })
   })
 

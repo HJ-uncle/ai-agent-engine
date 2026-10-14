@@ -57,6 +57,9 @@ function discardSnapshot(ref: string | undefined): void {
   try { fs.unlinkSync(path.join(snapshotRoot(), ref)) } catch { /* best effort cleanup */ }
 }
 
+/** A rejected conditional write never publishes this rollback record. */
+export function discardUnpublishedSnapshot(snapshot: ChangeSnapshot): void { discardSnapshot(snapshot.snapshotRef) }
+
 /** Restore a pre-write snapshot without materializing a large file in JS memory. */
 export function restoreSnapshot(absPath: string, snapshot: ChangeSnapshot): void {
   if (snapshot.snapshotRef) {

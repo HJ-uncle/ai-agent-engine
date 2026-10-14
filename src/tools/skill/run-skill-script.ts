@@ -29,7 +29,6 @@ import { projectDataPath } from '../../core/project-storage.js'
 import { stopCommandProcessTree } from '../../core/command-jobs/process-tree.js'
 import { MAX_OPERATION_TIMEOUT_MS, validateOperationTimeout } from '../../core/utils/operation-timeout.js'
 
-const DEFAULT_TIMEOUT_MS = 60_000 // 技能脚本可能需要较长时间（如浏览器操作）
 
 /** Resolve the layer containing the skill named in a `$SKILLS_ROOT/...` path. */
 export function resolveSkillRoot(command: string, projectRoot?: string): string {
@@ -65,7 +64,7 @@ export const runSkillScriptTool: Tool & { source: string } = {
       },
       timeoutMs: {
         type: 'integer', minimum: 0, maximum: MAX_OPERATION_TIMEOUT_MS,
-        description: '执行超时时间（毫秒，默认 60000；0 表示不限时）。用户停止会话时仍会取消脚本。',
+        description: '可选执行超时时间（毫秒；省略或 0 表示不限时）。用户停止会话时仍会取消脚本。',
       },
     },
     required: ['command'],
@@ -74,7 +73,7 @@ export const runSkillScriptTool: Tool & { source: string } = {
   async execute(rawArgs, ctx): Promise<ToolResult> {
     const blocked = extensionPolicy(ctx)
     if (blocked) return blocked
-    const { command, timeoutMs = DEFAULT_TIMEOUT_MS } = rawArgs as {
+    const { command, timeoutMs } = rawArgs as {
       command: string
       timeoutMs?: number
     }
@@ -204,7 +203,7 @@ export const runSkillScriptTool: Tool & { source: string } = {
       }
       child.once('error', error => { void finish(null, null, error) })
       child.once('close', (code, signal) => { void finish(code, signal) })
-      if (timeoutMs > 0) timer = setTimeout(() => stop('timeout'), timeoutMs)
+      if (timeoutMs !== undefined && timeoutMs > 0) timer = setTimeout(() => stop('timeout'), timeoutMs)
       ctx.signal?.addEventListener('abort', abort, { once: true })
       if (ctx.signal?.aborted) abort()
     })

@@ -50,7 +50,8 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
     const { sessionId, workspaceRoot } = request.body ?? ({} as any)
     if (!sessionId || !workspaceRoot) return reply.code(200).send(fail(40001, 'sessionId and workspaceRoot are required'))
     try {
-      return reply.code(200).send(success({ workspaceRoot: workspaceManager.bind({ tenantId, sessionId }, workspaceRoot) }))
+      const selected = workspaceManager.bindSnapshot({ tenantId, sessionId }, workspaceRoot)
+      return reply.code(200).send(success({ workspaceRoot: selected.root, bindingEpoch: selected.epoch, contractVersion: 2 }))
     } catch (e: any) {
       return reply.code(200).send(fail(40300, e?.message ?? '无法绑定远端工作区'))
     }
@@ -64,17 +65,20 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
     const sessionId = request.query.sessionId || 'default'
     const relative = request.query.path || '.'
     try {
+      return await workspaceManager.withBindingLease({ tenantId, sessionId }, undefined, async binding => {
       const dir = workspaceManager.resolveSafePath({ tenantId, sessionId }, relative)
       const stat = await fsp.stat(dir)
       if (!stat.isDirectory()) return reply.code(200).send(fail(40000, 'path is not a directory'))
       const entries = (await fsp.readdir(dir, { withFileTypes: true })).filter(entry => !entry.isSymbolicLink()).map(entry => ({
         name: entry.name,
-        path: path.relative(workspaceManager.getWorkingDirectory({ tenantId, sessionId }), path.join(dir, entry.name)).replace(/\\/g, '/'),
+        path: path.relative(binding.snapshot.root, path.join(dir, entry.name)).replace(/\\/g, '/'),
         isDirectory: entry.isDirectory(),
         size: entry.isFile() ? fs.statSync(path.join(dir, entry.name)).size : 0,
         mtimeMs: fs.statSync(path.join(dir, entry.name)).mtimeMs
       }))
-      return reply.code(200).send(success({ root: workspaceManager.getWorkingDirectory({ tenantId, sessionId }), entries }))
+      binding.assertCurrent()
+      return reply.code(200).send(success({ root: binding.snapshot.root, bindingEpoch: binding.snapshot.epoch, contractVersion: 2, entries }))
+      }, 30_000)
     } catch (e: any) {
       return reply.code(200).send(fail(40400, e?.message ?? '无法读取远端目录'))
     }

@@ -17,11 +17,15 @@ import { resolveOSMMode, OSM_MODE_CONFIG } from '../../core/osm.js'
 import { CODE_AGENT_HANDOFF_PROMPT } from '../../core/code-agent-prompt.js'
 import { normalizeAllowedTools } from '../tool-profile.js'
 import { throwIfAborted } from '../../core/utils/abort.js'
+import { ToolRegistry } from '../../core/tool-registry/index.js'
+import { trustBuiltinTool } from '../../security/tool-policy.js'
+import { todoTools } from '../todo/todo-tool.js'
+import { installProductionCollaborationBoundary } from '../../core/collaboration/production-boundary.js'
 
 /**
  * Subagent 工具
  *
- * 创建一个子代理来执行特定任务，支持自定义系统提示词、模型和最大步数。
+ * 创建一个子代理来执行特定任务，支持自定义系统提示词与模型。
  * 子代理会在独立的会话中运行，完成后返回结果。
  *
  * 可选 `role` 参数（方法论模式下推荐使用）：
@@ -67,26 +71,35 @@ const RESEARCH_TOOLS = new Set([
   'read_file', 'smart_read', 'list_files', 'glob', 'glob_search', 'grep', 'grep_search',
   'list_skills', 'get_skill', 'codegraph', 'get_current_context', 'search_history',
   'browser_tabs', 'browser_snapshot', 'browser_screenshot', 'browser_console', 'browser_network', 'browser_network_request',
-  'todo_list', 'todo_create', 'todo_update', 'todo_delete',
+  'todo_list', 'todo_create', 'todo_update', 'todo_delete', 'plan_update',
   'recall', 'search_memory', 'list_memories',
+  'subagent_send', 'subagent_participants', 'subagent_inbox',
 ])
 
+const RECURSIVE_TOOLS = new Set(['subagent', 'subagent_start', 'spawn_agent', 'start_agent'])
+
 export function createSubagentToolRegistry(parent: IToolRegistry, readOnly: boolean): IToolRegistry {
-  const names = new Set(parent.list().filter((tool) => tool.name !== 'subagent' && tool.name !== 'ask_user' && (!readOnly || RESEARCH_TOOLS.has(tool.name))).map((tool) => tool.name))
+  // The child owns a session-local plan even when a legacy parent lacks this
+  // builtin. Never delegate its reserved identity to a parent extension.
+  const internalPlan = new ToolRegistry()
+  for (const tool of todoTools) if (tool.name === 'plan_update') internalPlan.register(trustBuiltinTool(tool))
+  const catalog = () => [...parent.list().filter(tool => tool.name !== 'plan_update'), ...internalPlan.list()]
+  const names = new Set(catalog().filter((tool) => !RECURSIVE_TOOLS.has(tool.name) && tool.name !== 'ask_user' && (!readOnly || RESEARCH_TOOLS.has(tool.name))).map((tool) => tool.name))
+  const owner = (name: string) => name === 'plan_update' ? internalPlan : parent
   return {
     register: () => { throw new Error('Child tool capability snapshot is immutable') },
     unregister: (name) => { names.delete(name) },
     has: (name) => names.has(name),
-    list: () => parent.list().filter((tool) => names.has(tool.name)),
+    list: () => catalog().filter((tool) => names.has(tool.name)),
     preflight: async (name, args, ctx) => {
       if (!names.has(name)) return { success: false, output: `子代理不允许使用工具 ${name}。`, metadata: { blocked: true, code: 'TOOL_NOT_ALLOWED' } }
-      return parent.preflight?.(name, args, ctx)
+      return owner(name).preflight?.(name, args, ctx)
     },
-    executionMode: (name, args) => names.has(name) ? parent.executionMode?.(name, args) ?? 'serial' : 'serial',
+    executionMode: (name, args) => names.has(name) ? owner(name).executionMode?.(name, args) ?? 'serial' : 'serial',
     execute: async (name, args, ctx) => {
       if (!names.has(name)) return { success: false, output: `子代理不允许使用工具 ${name}。`, metadata: { blocked: true, code: 'TOOL_NOT_ALLOWED' } }
       // Reuse the resolved parent implementations, including inline skill/MCP resources, without broadening capabilities.
-      return parent.execute(name, args, ctx)
+      return owner(name).execute(name, args, ctx)
     },
   }
 }
@@ -109,7 +122,6 @@ export const subagentTool: Tool = {
       description: { type: 'string', description: '简短任务标题' },
       systemPrompt: { type: 'string' },
       model: { type: 'string' },
-      maxSteps: { type: 'integer', minimum: 1, description: '可选。不传则不限制步数，子代理跑到任务完成或 token 预算耗尽为止；传入则作为该子任务的迭代上限。' },
       role: { type: 'string', enum: [...ROLE_VALUES] },
       access: { type: 'string', enum: ['read-only', 'inherit'], description: '默认read-only；implementer默认inherit，始终受父工具权限限制' },
     },
@@ -118,8 +130,14 @@ export const subagentTool: Tool = {
   execute: executeSubagent,
 }
 
+export const subagentStartTool: Tool = {
+  ...subagentTool, name: 'subagent_start', displayName: '启动子代理',
+  description: '异步启动子代理，持久接纳后立即返回 runId 和 childSessionId。启动回执不代表完成；使用 subagent_wait 查看实际终态，subagent_cancel 取消。父任务结束前仍等待真实执行和结果落盘。参数与 subagent 相同；子代理禁止递归启动。',
+  execute: (args, ctx) => executeSubagent(args, ctx, { asynchronous: true }),
+}
+
 /** The authorization flag is server-owned and never accepted from model tool arguments. */
-export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, options: { userDelegated?: boolean; agent?: SubagentContinuationProfile['agent'] } = {}): Promise<ToolResult> {
+export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, options: { userDelegated?: boolean; agent?: SubagentContinuationProfile['agent']; asynchronous?: boolean } = {}): Promise<ToolResult> {
     const args = rawArgs !== null && typeof rawArgs === 'object' ? rawArgs as Record<string, unknown> : {}
     const taskText = typeof args.task === 'string' ? args.task.trim() : ''
     const suppliedPrompt = typeof args.systemPrompt === 'string' ? args.systemPrompt : undefined
@@ -128,11 +146,10 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
     if (!task) return { success: false, output: 'subagent: task 参数为空。请传入完整任务描述。' }
     if (args.role !== undefined && !ROLE_VALUES.includes(args.role as SubagentRole)) return { success: false, output: `subagent: 未知 role '${String(args.role)}'，可选值为 ${ROLE_VALUES.join(' / ')}` }
     if (args.access !== undefined && args.access !== 'read-only' && args.access !== 'inherit') return { success: false, output: 'subagent: access 必须为 read-only 或 inherit。' }
-    if (args.maxSteps !== undefined && (typeof args.maxSteps !== 'number' || !Number.isInteger(args.maxSteps) || args.maxSteps < 1)) return { success: false, output: 'subagent: maxSteps 必须是大于等于 1 的整数（不传则不限步数）。' }
     const runner = getSubagentRunner()
     const resumeRunId = typeof args.resumeRunId === 'string' ? args.resumeRunId.trim() : undefined
     if (args.resumeRunId !== undefined && !resumeRunId) return { success: false, output: 'subagent: resumeRunId 必须是非空字符串。' }
-    const prior = resumeRunId ? await runner.store.getRun(ctx.tenantId, resumeRunId) : null
+    const prior = resumeRunId ? await runner.store.getRunHeader(ctx.tenantId, resumeRunId, true) : null
     if (resumeRunId && (!prior || prior.parentSessionId !== ctx.sessionId || prior.rootSessionId !== (ctx.rootSessionId ?? ctx.sessionId))) return { success: false, output: '子代理不属于当前父任务，不能继续。' }
     if (prior && (!isTerminalRun(prior.status) || !prior.continuation)) return { success: false, output: !isTerminalRun(prior.status) ? '子代理仍在运行，请完成或停止后再继续。' : '旧子代理未保存续跑权限，无法安全恢复。' }
     const saved = prior?.continuation
@@ -148,10 +165,10 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
     const role = (saved?.role ?? args.role) as SubagentRole | undefined
     const reviewer = role === 'spec-reviewer' || role === 'code-quality-reviewer'
     const readOnly = saved?.readOnly ?? (reviewer || (args.access ? args.access === 'read-only' : !configuredAgent && role !== 'implementer'))
-    // 不传 maxSteps = 不限步数：子代理跑到任务完成或 token 预算耗尽为止。
-    // 原来默认 24（后提到 100）会在长调研半途硬截断，把"没查完"包装成"已完成"。
-    // 真正需要收口的循环由 requestBudget / token 预算兜底，不靠一个人为步数天花板。
-    const maxSteps = typeof args.maxSteps === 'number' ? args.maxSteps : Number.POSITIVE_INFINITY
+    // 子代理没有产品层的探索步数天花板。旧客户端可能仍发送 maxSteps；
+    // 兼容时故意忽略它，避免模型或旧 UI 把长任务截断成“达到步骤上限”。
+    // 循环只由用户取消、模型/上下文能力、明确的请求预算以及无进展保护收口。
+    const maxSteps = Number.POSITIVE_INFINITY
     const requestedModel = typeof args.model === 'string' && args.model.trim() ? args.model.trim()
       : configuredAgent ? prior?.modelId || configuredAgent.model || ctx.subagentModel || ctx.modelName
         : ctx.subagentModel || prior?.modelId || ctx.modelName
@@ -163,7 +180,7 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
       readOnly ? '这是只读调研任务。仅使用提供的只读与任务管理工具。' : '只能使用本次明确提供的工具目录，遵守继承的工作区、安全模式和授权边界。',
       '你没有子代理递归、提问或审批通道。需要授权时如实说明，禁止假报完成。',
       '最终结果必须用文本给出结论、证据和文件定位，不要仅写文件或复述过程。',
-      '按请求深度收敛：概览只看入口与少量关键文件；优先搜索再按行范围读取，不要批量全文读取。证据足够就回答；同一工具错误不要原样重试。接近预算或步数限制时，只总结已有证据并说明未核实范围。',
+      '按请求深度收敛：概览只看入口与少量关键文件；优先搜索再按行范围读取，不要批量全文读取。证据足够就回答；同一工具错误不要原样重试。遇到取消、请求预算、上下文容量或无进展保护时如实说明未核实范围；不要自行制造步数上限。',
       configuredAgent ? `你是用户配置的 Agent「${configuredAgent.name}」。${configuredAgent.description ?? ''}` : undefined,
       configuredAgent?.systemPrompt,
       ctx.toolProfile === 'code' ? CODE_AGENT_HANDOFF_PROMPT : undefined,
@@ -172,8 +189,8 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
     ].filter(Boolean).join('\n\n')
     const inheritedTools = createSubagentToolRegistry(ctx.tools, readOnly)
     const plannedToolNames = configuredAgent
-      ? (normalizeAllowedTools(configuredAgent.allowedTools) ?? []).filter(name => name !== 'subagent' && name !== 'ask_user'
-        && (!readOnly || RESEARCH_TOOLS.has(name)) && (userDelegated || ctx.tools.has(name)))
+      ? [...new Set([...(normalizeAllowedTools(configuredAgent.allowedTools) ?? []).filter(name => !RECURSIVE_TOOLS.has(name) && name !== 'ask_user'
+        && (!readOnly || RESEARCH_TOOLS.has(name)) && (userDelegated || ctx.tools.has(name))), 'plan_update'])]
       : inheritedTools.list().map(tool => tool.name)
     const continuation: SubagentContinuationProfile = saved ?? {
       role, readOnly, systemPrompt, userDelegated,
@@ -183,7 +200,7 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
         knowledgeBases: [...configuredAgent.knowledgeBases], allowedTools: [...configuredAgent.allowedTools] } } : {}),
       toolNames: plannedToolNames, workspacePaths: [...(ctx.workspacePaths ?? [])], projectRoot: ctx.projectRoot, cwd: ctx.cwd,
     }
-    const run = await runner.run({
+    const result = await (options.asynchronous ? runner.start.bind(runner) : runner.run.bind(runner))({
       tenantId: ctx.tenantId,
       rootSessionId: ctx.rootSessionId ?? ctx.sessionId,
       parentSessionId: ctx.sessionId,
@@ -193,7 +210,7 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
       resumeFromRunId: resumeRunId, continuation,
       agentId: continuation.agent?.id, agentName: continuation.agent?.name,
       task, description, modelId: requestedModel ?? '',
-    }, ctx, async ({ snapshot, signal, observer, onRequestAttempt, requestBudget }) => {
+    }, ctx, async ({ snapshot, signal, observer, onRequestAttempt, requestBudget, executionOwner }) => {
       setSecurityMode(ctx.tenantId, snapshot.childSessionId, getSecurityMode(ctx.tenantId, ctx.sessionId))
       try {
       let resourcePrompt = ''
@@ -223,7 +240,7 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
           allowedTools: continuation.toolNames,
         })
         childTools = createSubagentToolRegistry(prepared.registry, readOnly)
-        if (!userDelegated) for (const tool of childTools.list()) if (!ctx.tools.has(tool.name)) childTools.unregister(tool.name)
+        if (!userDelegated) for (const tool of childTools.list()) if (tool.name !== 'plan_update' && !ctx.tools.has(tool.name)) childTools.unregister(tool.name)
         resourcePrompt = buildSkillsSystemPrompt(prepared.externalSkills)
         if (safeMode && configuredAgent.mcpServers.length) resourcePrompt += '\n\n安全模式下未连接绑定的 MCP 扩展；需要这些能力时如实说明限制。'
         if (selectedKnowledge.length) {
@@ -232,7 +249,9 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
           if (chunks.length) resourcePrompt += '\n\n## 绑定知识库参考\n' + chunks.map((chunk, index) => `[${index + 1}] ${chunk.filename}\n${chunk.content}`).join('\n\n')
         }
       }
-      for (const tool of childTools.list()) if (!continuation.toolNames.includes(tool.name)) childTools.unregister(tool.name)
+      // Old continuation snapshots retain business permissions; the newly builtin
+      // session plan is available without expanding any file, command or extension access.
+      for (const tool of childTools.list()) if (tool.name !== 'plan_update' && !continuation.toolNames.includes(tool.name)) childTools.unregister(tool.name)
       throwIfAborted(signal)
       const resolved = await resolveModelConfig({ tenantId: ctx.tenantId, model: requestedModel, parent: ctx.resolvedModel })
       const llm = createAdapterFromResolved(resolved)
@@ -245,6 +264,9 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
         ? undefined
         : Number.isFinite(subagentWindow) ? subagentWindow : undefined
       const child = createAgentContext({
+        executionOwner,
+        browserAuthority: ctx.browserAuthority,
+        browserPrincipal: ctx.browserPrincipal,
         sessionId: snapshot.childSessionId,
         tenantId: ctx.tenantId,
         workspacePaths: continuation.workspacePaths,
@@ -272,7 +294,10 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
         runObserver: observer,
         onRequestAttempt,
         requestBudget,
+        subagentEventVersion: ctx.subagentEventVersion,
+        emitSubagentEvent: ctx.emitSubagentEvent,
       })
+        if (child.executionOwner && (ctx.sqliteDelivery || ctx.jsonlDelivery)) installProductionCollaborationBoundary(child)
         const projectContext = getProjectContextBlock(child.projectRoot)
         const strategy = new ReActStrategy(llm, {
           maxIterations: maxSteps,
@@ -289,5 +314,9 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
         for await (const _chunk of strategy.run(task, child)) { /* parent prose remains separate from child events */ }
       } finally { clearSecurityMode(ctx.tenantId, snapshot.childSessionId) }
     })
-    return { success: run.status === 'succeeded', output: outcomeText(run), durationMs: run.durationMs, metadata: { subagent: run } }
+    if ('completion' in result) {
+      const admission = { state: 'admitted', runId: result.runId, childSessionId: result.childSessionId, admittedSeq: result.admittedSeq }
+      return { success: true, output: JSON.stringify(admission), metadata: { subagentAdmission: admission } }
+    }
+    return { success: result.status === 'succeeded', output: outcomeText(result), durationMs: result.durationMs, metadata: { subagent: result } }
 }

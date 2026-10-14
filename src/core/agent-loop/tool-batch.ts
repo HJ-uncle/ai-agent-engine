@@ -4,6 +4,7 @@ import { isAbortError } from '../utils/abort.js'
 export interface ParsedToolCall extends ToolCall {
   _parseError?: string
   _rawArgs?: string
+  _providerId?: string
 }
 
 export interface RegisteredToolCall {

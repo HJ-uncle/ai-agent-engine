@@ -1,175 +1,92 @@
+// Instance gate, redirects, durable disconnect and precise cancellation. Only local HTTP is used.
 import Fastify from 'fastify'
-import type { FastifyInstance } from 'fastify'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { CronScheduler } from '../cron-scheduler.js'
-import { authMiddlewareHook, configureRequestAuthentication } from '../../api/http/middleware.js'
-
-const fixtureToken = 'cron-runtime-auth-fixture-token'
-const apps: FastifyInstance[] = []
-interface FireJob { fireJob(job: { id: string; name: string; message: string; sessionId: string; agentId?: string }): Promise<void> }
-const fire = (scheduler: CronScheduler) => (scheduler as unknown as FireJob).fireJob.bind(scheduler)
-const job = { id: 'owned-cron', name: 'owned cron', message: 'continue development', sessionId: 'cron-session', agentId: 'fixture-agent' }
-
-afterEach(async () => {
-  for (const app of apps.splice(0)) await app.close()
-  vi.unstubAllEnvs()
-  configureRequestAuthentication()
-})
-
-describe('Owned-instance cron transport', () => {
-  it('uses the dedicated engine port instead of the inherited project PORT', async () => {
-    vi.stubEnv('AUTH_ENABLED', 'false')
-    vi.stubEnv('AETHER_INSTANCE_TOKEN', fixtureToken)
-    configureRequestAuthentication()
-    const app = Fastify()
-    apps.push(app)
-    app.addHook('onRequest', authMiddlewareHook)
-    let calls = 0
-    app.post('/api/v1/chat', async (_request, reply) => {
-      calls++
-      return reply.type('text/event-stream').send('data: {"run":{"runId":"fixture-run","sessionId":"cron-session","status":"succeeded"}}\n\n')
+import type {FastifyInstance} from 'fastify'
+import {afterEach,describe,it,expect,vi} from 'vitest'
+import {authMiddlewareHook,configureRequestAuthentication} from '../../api/http/middleware.js'
+import {CronScheduler} from '../cron-scheduler.js'
+import {dispatchCronRun,cancelCronRun} from '../cron-dispatch.js'
+import {rootRunStore} from '../../storage/root-runs/index.js'
+import {cronFixture} from './cron-v2-fixture.js'
+const fixture=cronFixture();const apps:FastifyInstance[]=[];const token='cron-runtime-auth-fixture-token'
+afterEach(async()=>{for(const app of apps.splice(0))await app.close();configureRequestAuthentication()})
+const frame=(sessionId:string,runId:string,status:string)=>'data: '+JSON.stringify({run:{runId,sessionId,status}})+'\n\n'
+async function server(){const app=Fastify({forceCloseConnections:true});apps.push(app);return app}
+describe('Owned instance Cron dispatch',()=>{
+  it('uses the dedicated engine port, obeys instance authentication, and carries explicit off/profile/protocol',async()=>{
+    vi.stubEnv('AETHER_INSTANCE_TOKEN',token);configureRequestAuthentication()
+    const run=await fixture.claim();const app=await server();app.addHook('onRequest',authMiddlewareHook);let delivered:Record<string,unknown>|undefined;let count=0
+    app.post('/api/v1/chat',async(request,reply)=>{
+      count++;delivered=request.body as Record<string,unknown>
+      expect(request.headers['x-aether-instance-token']).toBe(token)
+      expect(request.headers['x-aether-subagent-protocol']).toBe('2')
+      expect(request.headers['x-aether-tool-profile']).toBe('general')
+      const root=await fixture.admit(run,delivered);await rootRunStore.update('default',root.runId,{status:'succeeded'})
+      return reply.type('text/event-stream').send(frame(run.sessionId,root.runId,'succeeded'))
     })
-    const baseUrl = await app.listen({ host: '127.0.0.1', port: 0 })
-    vi.stubEnv('AETHER_ENGINE_PORT', new URL(baseUrl).port)
-    vi.stubEnv('PORT', '0')
-    await fire(new CronScheduler())(job)
-    expect(calls).toBe(1)
+    const url=await app.listen({host:'127.0.0.1',port:0});vi.stubEnv('AETHER_ENGINE_PORT',new URL(url).port);vi.stubEnv('PORT','0')
+    expect((await fetch(url+'/api/v1/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status).toBe(401)
+    expect(count).toBe(0);expect(await dispatchCronRun(run)).toMatchObject({status:'succeeded'})
+    expect(count).toBe(1);expect(delivered).toMatchObject({thinkingMode:false,automationRunId:run.id,cronJobId:run.jobId,sessionId:run.sessionId})
     expect(process.env.PORT).toBe('0')
   })
-
-  it('reaches real instance-protected chat HTTP authentication in local single-user mode', async () => {
-    vi.stubEnv('AUTH_ENABLED', 'false')
-    vi.stubEnv('AETHER_INSTANCE_TOKEN', fixtureToken)
-    configureRequestAuthentication()
-    const app = Fastify()
-    apps.push(app)
-    app.addHook('onRequest', authMiddlewareHook)
-    let calls = 0
-    let delivered: unknown
-    app.post('/api/v1/chat', async (request, reply) => {
-      calls++
-      delivered = request.body
-      expect(request.headers['x-aether-instance-token']).toBe(fixtureToken)
-      return reply.type('text/event-stream').send('data: {"run":{"runId":"fixture-run","sessionId":"cron-session","status":"succeeded"}}\n\n')
+  it('rejects remote credentials and refuses redirects without leaking to the destination',async()=>{
+    vi.stubEnv('AETHER_INSTANCE_TOKEN',token)
+    const remote=await fixture.claim();expect(await dispatchCronRun(remote,{baseUrl:'https://example.invalid'})).toMatchObject({status:'failed',reason:expect.stringContaining('loopback')})
+    const destination=await server();const redirect=await server();let leaked=0
+    destination.post('/sink',async()=>{leaked++;return 'unexpected'})
+    const destinationUrl=await destination.listen({host:'127.0.0.1',port:0})
+    redirect.post('/api/v1/chat',async(_request,reply)=>reply.code(307).header('Location',destinationUrl+'/sink').send())
+    const url=await redirect.listen({host:'127.0.0.1',port:0});const run=await fixture.claim()
+    expect(await dispatchCronRun(run,{baseUrl:url})).toMatchObject({status:'failed'});expect(leaked).toBe(0)
+  })
+  it('scheduler shutdown joins the exact admitted durable root before detaching its reader',async()=>{
+    const run=await fixture.claim();let signal:AbortSignal|undefined;let admitted!:()=>void;const ready=new Promise<void>(resolve=>{admitted=resolve})
+    const send=vi.spyOn(globalThis,'fetch').mockImplementation(async(_url,init)=>{
+      signal=init!.signal!;await fixture.admit(run,JSON.parse(String(init?.body)));admitted()
+      return new Promise<Response>((_resolve,reject)=>{signal!.addEventListener('abort',()=>reject(signal!.reason),{once:true})})
     })
-    const baseUrl = await app.listen({ host: '127.0.0.1', port: 0 })
-    expect((await fetch(baseUrl + '/api/v1/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(job) })).status).toBe(401)
-    expect(calls).toBe(0)
-    await fire(new CronScheduler(baseUrl))(job)
-    expect(calls).toBe(1)
-    expect(delivered).toEqual({ message: job.message, sessionId: job.sessionId, agentId: job.agentId, cronJobId: job.id, cronTimeoutSeconds: 120 })
+    const scheduler=new CronScheduler('http://127.0.0.1:12519')
+    const fire=(scheduler as unknown as {fireJob(input:typeof run):Promise<void>}).fireJob.bind(scheduler)
+    const running=fire(run);await ready;const duplicate=fire(run);expect(send).toHaveBeenCalledTimes(1)
+    await scheduler.stop();await Promise.all([running,duplicate]);expect(signal?.aborted).toBe(true)
+    expect(await fixture.runs.get('default',run.id)).toMatchObject({status:'cancelled'})
+    expect(send).toHaveBeenCalledTimes(1)
   })
-
-  it('does not forward instance credentials to a remote target', async () => {
-    vi.stubEnv('AETHER_INSTANCE_TOKEN', fixtureToken)
-    await expect(fire(new CronScheduler('https://example.invalid'))(job)).rejects.toThrow('loopback target')
-  })
-
-  it('does not follow a redirect that could leak the instance credential', async () => {
-    vi.stubEnv('AETHER_INSTANCE_TOKEN', fixtureToken)
-    const destination = Fastify()
-    const redirector = Fastify()
-    apps.push(destination, redirector)
-    let leakedRequests = 0
-    destination.post('/sink', async () => { leakedRequests++; return 'unexpected' })
-    const destinationUrl = await destination.listen({ host: '127.0.0.1', port: 0 })
-    redirector.post('/api/v1/chat', async (_, reply) => reply.code(307).header('Location', destinationUrl + '/sink').send())
-    const baseUrl = await redirector.listen({ host: '127.0.0.1', port: 0 })
-    await expect(fire(new CronScheduler(baseUrl))(job)).rejects.toThrow()
-    expect(leakedRequests).toBe(0)
-  })
-})
-
-describe('cron thinking and execution isolation', () => {
-  it('forwards explicit off, prevents overlap, aborts on stop and releases the job lock', async () => {
-    let delivered: Record<string, unknown> = {}
-    let calls = 0
-    let signal: AbortSignal | undefined
-    const original = globalThis.fetch
-    globalThis.fetch = vi.fn(async (_url, init) => {
-      if (String(_url).endsWith('/chat/cancel')) return new Response('ok')
-      calls++
-      delivered = JSON.parse(String(init?.body))
-      signal = init?.signal as AbortSignal
-      return await new Promise<Response>((_resolve, reject) => signal!.addEventListener('abort', () => reject(signal!.reason), { once: true }))
+  it.each(['malformed','oversized'])('retains root ownership after %s SSE without issuing broad cancellation',async kind=>{
+    const run=await fixture.claim();let rootId=''
+    const send=vi.spyOn(globalThis,'fetch').mockImplementation(async(_url,init)=>{
+      rootId=(await fixture.admit(run,JSON.parse(String(init?.body)))).runId
+      return new Response(frame(run.sessionId,rootId,'running')+(kind==='malformed'?'data: invalid-json\n\n':'data: '+'x'.repeat(1024*1024+1)),{headers:{'content-type':'text/event-stream'}})
     })
-    const scheduler = new CronScheduler('http://127.0.0.1:12519')
-    try {
-      const configured = { ...job, thinkingMode: false }
-      const first = fire(scheduler)(configured)
-      const rejected = expect(first).rejects.toThrow('Cron scheduler stopped')
-      await fire(scheduler)(configured)
-      expect(calls).toBe(1)
-      expect(delivered.thinkingMode).toBe(false)
-      scheduler.stop()
-      await rejected
-      expect(signal?.aborted).toBe(true)
-      globalThis.fetch = vi.fn(async () => new Response('data: {"run":{"runId":"fixture-run","sessionId":"cron-session","status":"succeeded"}}\n\n'))
-      await fire(scheduler)(configured)
-      expect(globalThis.fetch).toHaveBeenCalledTimes(1)
-    } finally { scheduler.stop(); globalThis.fetch = original }
+    expect(await dispatchCronRun(run)).toMatchObject({status:'running',rootRunId:rootId});expect(send).toHaveBeenCalledTimes(1)
   })
-})
-
-describe('Cron does not confuse stream completion with task success', () => {
-  it.each(['failed', 'cancelled', 'waiting', 'running'])('rejects %s root outcome even on HTTP 200', async status => {
-    const original = globalThis.fetch
-    globalThis.fetch = vi.fn(async url => String(url).endsWith('/chat/cancel') ? Response.json({code:200}) : new Response('data: ' + JSON.stringify({run:{runId:'fixture-run',sessionId:job.sessionId,status}}) + '\n\n'))
-    try { await expect(fire(new CronScheduler('http://127.0.0.1'))(job)).rejects.toThrow('did not succeed') }
-    finally { globalThis.fetch = original }
-  })
-  it('rejects missing terminal and a different session success', async () => {
-    const original = globalThis.fetch
-    globalThis.fetch = vi.fn(async () => new Response('data: ' + JSON.stringify({run:{runId:'fixture-run',sessionId:'other',status:'succeeded'}}) + '\n\n'))
-    try { await expect(fire(new CronScheduler('http://127.0.0.1'))(job)).rejects.toThrow('missing terminal') }
-    finally { globalThis.fetch = original }
-  })
-})
-
-
-describe('Cron cancellation ownership', () => {
-  it('sends only the observed runId and checks the cancellation response body', async () => {
-    const original = globalThis.fetch
-    let ready!: () => void
-    const observed = new Promise<void>(resolve => { ready = resolve })
-    let cancellation: unknown
-    globalThis.fetch = vi.fn(async (url, init) => {
-      if (String(url).endsWith('/chat/cancel')) {
-        cancellation = JSON.parse(String(init?.body))
-        return Response.json({code:40001})
-      }
-      const signal = init!.signal!
-      const body = new ReadableStream<Uint8Array>({ start(controller) {
-        controller.enqueue(new TextEncoder().encode('data: {"run":{"runId":"cron-owned-run","sessionId":"cron-session","status":"running"}}\n\n'))
-        signal.addEventListener('abort',()=>controller.error(signal.reason),{once:true})
-      }, pull() { ready() } })
-      return new Response(body,{headers:{'content-type':'text/event-stream'}})
+  it.each(['succeeded','waiting'])('releases an unclosed SSE reader after the persisted root becomes %s',async status=>{
+    const run=await fixture.claim();let rootId='';let signal:AbortSignal|undefined;let ready!:()=>void
+    const observed=new Promise<void>(resolve=>{ready=resolve})
+    const send=vi.spyOn(globalThis,'fetch').mockImplementation(async(_url,init)=>{
+      rootId=(await fixture.admit(run,JSON.parse(String(init?.body)))).runId;signal=init!.signal!
+      const stream=new ReadableStream<Uint8Array>({start(controller){
+        controller.enqueue(new TextEncoder().encode(frame(run.sessionId,rootId,'running')))
+        signal!.addEventListener('abort',()=>controller.error(signal!.reason),{once:true});ready()
+      }})
+      return new Response(stream,{headers:{'content-type':'text/event-stream'}})
     })
-    const scheduler = new CronScheduler('http://127.0.0.1')
-    try {
-      const running = fire(scheduler)(job)
-      const rejected = expect(running).rejects.toThrow('Cron cancellation rejected')
-      await observed
-      scheduler.stop()
-      await rejected
-      expect(cancellation).toEqual({sessionId:job.sessionId,runId:'cron-owned-run'})
-    } finally { globalThis.fetch = original; scheduler.stop() }
+    const scheduler=new CronScheduler('http://127.0.0.1:12519')
+    const fire=(scheduler as unknown as {fireJob(input:typeof run):Promise<void>}).fireJob.bind(scheduler)
+    try{
+      const watching=fire(run);await observed
+      if(status==='waiting')await rootRunStore.pending('default',rootId,{requestId:'pending',kind:'ask',toolCallId:'pending',toolName:'ask_user',args:{}})
+      else await rootRunStore.update('default',rootId,{status:'succeeded'})
+      await scheduler.checkAndRun();await watching
+      expect(signal?.aborted).toBe(true);expect(send).toHaveBeenCalledTimes(1)
+      expect(await fixture.runs.get('default',run.id)).toMatchObject({status,rootRunId:rootId})
+      expect(await rootRunStore.get('default',rootId)).toMatchObject({status})
+    }finally{scheduler.stop()}
   })
-})
-
-
-describe('Cron malformed stream cleanup', () => {
-  it.each(['malformed','oversized'])('cancels only its observed run after %s stream failure', async kind => {
-    const original = globalThis.fetch
-    const calls: unknown[] = []
-    const running = 'data: {"run":{"runId":"older-owned","sessionId":"cron-session","status":"running"}}\n\n'
-    globalThis.fetch = vi.fn(async (url, init) => {
-      if (String(url).endsWith('/chat/cancel')) { calls.push(JSON.parse(String(init?.body))); return Response.json({code:200,data:{cancelled:false}}) }
-      return new Response(running + (kind === 'malformed' ? 'data: invalid-json\n\n' : 'data: ' + 'x'.repeat(1024*1024+1)),{headers:{'content-type':'text/event-stream'}})
-    })
-    try {
-      await expect(fire(new CronScheduler('http://127.0.0.1'))(job)).rejects.toThrow(kind === 'malformed' ? 'malformed SSE' : 'size limit')
-      expect(calls).toEqual([{sessionId:job.sessionId,runId:'older-owned'}])
-    } finally { globalThis.fetch = original }
+  it('checks cancellation response body and retains the true running state when cancellation is rejected',async()=>{
+    const run=await fixture.claim();const root=await fixture.admit(run,{message:run.snapshot.message,sessionId:run.sessionId,automationRunId:run.id,cronJobId:run.jobId,thinkingMode:false,cronTimeoutSeconds:null})
+    let cancellation:unknown;vi.spyOn(globalThis,'fetch').mockImplementation(async(_url,init)=>{cancellation=JSON.parse(String(init?.body));return Response.json({code:40001})})
+    await expect(cancelCronRun('default',run.id)).rejects.toThrow('rejected')
+    expect(cancellation).toEqual({sessionId:run.sessionId,runId:root.runId});expect(await fixture.runs.get('default',run.id)).toMatchObject({status:'running'})
   })
 })

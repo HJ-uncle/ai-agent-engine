@@ -21,6 +21,8 @@ describe('browser failure presentation', () => {
     ['浏览器标签已关闭，请重新打开', 'BROWSER_TAB_CLOSED'],
     ['浏览器标签已关闭，尚未执行页面操作', 'BROWSER_TAB_CLOSED'],
     ['页面已经变化，请重新读取快照后操作', 'BROWSER_STALE_NAVIGATION'],
+    ['这个浏览器标签尚未添加到当前会话，请让用户在标签右键菜单中选择“添加到当前会话”，无需重新打开网页', 'BROWSER_TAB_NOT_SHARED'],
+    ['这个浏览器标签属于其他会话或引擎，请在当前会话重新打开', 'BROWSER_TAB_NOT_SHARED'],
   ])('retains the precise pre-dispatch rejection: %s', async (error, code) => {
     vi.spyOn(browserBridge, 'execute').mockResolvedValue({ success: false, output: 'null', error })
     const result = await click.execute({ tabId: 'tab-A', navigationId: 2, ref: '2:3' }, ctx)
@@ -35,6 +37,15 @@ describe('browser failure presentation', () => {
     const result = await click.execute({ tabId: 'tab-A', x: 100 }, ctx)
     expect(dispatch).not.toHaveBeenCalled()
     expect(JSON.parse(result.output)).toMatchObject({ success: false, code: 'BROWSER_INVALID_ARGUMENTS', operationPerformed: false })
+  })
+
+  it('recovers unshared tabs through an explicit user attachment instead of replacing the page', () => {
+    const error = '这个浏览器标签尚未添加到当前会话，请让用户在标签右键菜单中选择“添加到当前会话”，无需重新打开网页'
+    const failure = JSON.parse(normalizeBrowserFailure({ success: false, output: 'null', error }, 'snapshot', 'original-page').output)
+    expect(failure).toMatchObject({ code: 'BROWSER_TAB_NOT_SHARED', operationPerformed: false, tabId: 'original-page' })
+    expect(failure.recovery).toContain('添加到当前会话')
+    expect(failure.recovery).toContain('同一 tabId')
+    expect(failure.recovery).toContain('不要通过 browser_open')
   })
 
   it('does not turn unknown input failures or a delivered cancellation into safe-to-repeat evidence', () => {

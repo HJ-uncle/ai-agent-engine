@@ -2,8 +2,9 @@ import path from 'node:path'
 import { projectDataPath } from '../project-storage.js'
 import fs from 'node:fs'
 import type { AgentContext, CreateAgentContextOptions } from './types.js'
-import { applyOSMMultiplier, resolveOSMMode, OSM_MODE_CONFIG } from '../osm.js'
+import { resolveOSMMode, OSM_MODE_CONFIG } from '../osm.js'
 import { bindHistoryGeneration } from '../../storage/conversation/serialization.js'
+import { assertOwnedDispatch } from '../collaboration/execution-owner.js'
 
 export function createAgentContext(options: CreateAgentContextOptions): AgentContext {
   const tenantId = options.tenantId ?? 'default'
@@ -36,7 +37,7 @@ export function createAgentContext(options: CreateAgentContextOptions): AgentCon
   // tokenBudget 决策顺序：
   //   1. options.tokenBudget 显式传入 → 原样使用（如 subagent 为子代理限定预算的场景，
   //      这个数字是调用方经过推导的，不应再被 superpower 倍率干预）
-  //   2. 未显式传入 → 读 env TOKEN_BUDGET，再按 superpower 开关应用倍率
+  //   2. 未显式传入 → 不设本地预算。TOKEN_BUDGET 不再作为产品默认上限。
   //   3. env 也没配 → **不设本地预算**（没有 tokenBudget 键）
   //
   // 之前的实现把显式 options.tokenBudget 也乘以倍率，会把子代理预算无意放大 5×，
@@ -50,13 +51,9 @@ export function createAgentContext(options: CreateAgentContextOptions): AgentCon
   // 由模型窗口/服务端决定上限，避免"引擎比模型更早拒答"。
   const unboundedCode = options.toolProfile === 'code'
   const hasExplicitBudget = !unboundedCode && typeof options.tokenBudget === 'number'
-  const configuredBudget = parseInt(process.env.TOKEN_BUDGET ?? '', 10)
-  const hasEnvBudget = !unboundedCode && Number.isFinite(configuredBudget) && configuredBudget > 0
   const tokenBudget = hasExplicitBudget
     ? (options.tokenBudget as number)
-    : hasEnvBudget
-      ? applyOSMMultiplier('tokenBudget', configuredBudget)
-      : undefined
+    : undefined
 
   return {
     ...options,
@@ -67,7 +64,19 @@ export function createAgentContext(options: CreateAgentContextOptions): AgentCon
     projectRoot,
     cwd,
     workspacePaths: options.workspacePaths,
-    tools: options.tools,
+    tools: new Proxy(options.tools, {
+      get(target, property) {
+        if (property === 'execute') return (name: string, args: unknown, ctx: AgentContext) => {
+          assertOwnedDispatch(ctx.executionOwner)
+          return target.execute(name, args, ctx)
+        }
+        if (property === 'preflight' && target.preflight) return (name: string, args: unknown, ctx: AgentContext) => {
+          assertOwnedDispatch(ctx.executionOwner)
+          return target.preflight!(name, args, ctx)
+        }
+        return Reflect.get(target, property, target)
+      },
+    }),
     history: bindHistoryGeneration(options.history, tenantId, options.sessionId),
     logger: options.logger.child({ tenantId, sessionId: options.sessionId }),
     tokenBudget,

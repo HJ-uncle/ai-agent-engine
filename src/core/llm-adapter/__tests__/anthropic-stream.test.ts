@@ -1,7 +1,7 @@
 /** Real SDK + in-memory SSE: gateways may put content in start frames, not only deltas. */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AnthropicAdapter } from '../anthropic.js'
-import { APIConnectionError } from '@anthropic-ai/sdk'
+import { AnthropicStreamError } from '../anthropic-stream-error.js'
 import type { LLMAdapterOptions, LLMStreamChunk } from '../types.js'
 
 afterEach(() => vi.unstubAllGlobals())
@@ -122,7 +122,7 @@ describe('Anthropic streaming block fidelity', () => {
     const chunks: LLMStreamChunk[] = []
     await expect(consume([start(), block(0, { type: 'tool_use', id: 'unfinished', name: 'write_file', input: {} }),
       delta(0, { type: 'input_json_delta', partial_json: '{"path":"' }),
-      { type: 'error', error: { type: 'overloaded_error', message: 'fixture provider unavailable' } }], chunks)).rejects.toBeInstanceOf(APIConnectionError)
+      { type: 'error', error: { type: 'overloaded_error', message: 'fixture provider unavailable' } }], chunks)).rejects.toBeInstanceOf(AnthropicStreamError)
     expect(calls(chunks)).toEqual([])
     expect(chunks.some(chunk => chunk.done)).toBe(false)
   })

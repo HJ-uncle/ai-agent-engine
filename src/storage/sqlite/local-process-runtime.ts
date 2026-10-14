@@ -9,22 +9,39 @@ let configured = false
 let active = null
 let busy = false
 let closing = false
+let disposed = false
+let shutdownPromise
+const closeErrors = []
 const queue = []
 const error = (message, code) => Object.assign(new Error(message), { code })
 const wireError = value => ({
   name: value?.name || 'Error', message: value?.message || String(value), code: value?.code,
   extendedCode: value?.extendedCode, rawCode: value?.rawCode, statementIndex: value?.statementIndex,
 })
-const send = value => { if (process.connected) process.send(value, () => {}) }
-function shutdown() {
-  closing = true
-  try { active?.tx.close() } catch {}
+// IPC send completion is part of the close protocol. process.exit() immediately
+// after enqueueing a reply can lose its ACK even when SQLite closed correctly.
+const send = value => new Promise(resolve => {
+  if (!process.connected) { resolve(false); return }
+  try { process.send(value, cause => resolve(!cause)) } catch { resolve(false) }
+})
+function disposeNative() {
+  if (disposed) return
+  disposed = true
+  try { active?.tx.close() } catch (cause) { closeErrors.push(wireError(cause).message) }
   active = null
-  try { db?.close(); if (nativeDb?.open) nativeDb.close() } catch {}
-  // The process owns its only native connection and closes it explicitly.
-  process.exit(0)
+  try { db?.close() } catch (cause) { closeErrors.push(wireError(cause).message) }
+  try { if (nativeDb?.open) nativeDb.close() } catch (cause) { closeErrors.push(wireError(cause).message) }
+  if (nativeDb && nativeDb.open !== false) closeErrors.push('Native SQLite connection did not confirm closure')
 }
-process.on('disconnect', shutdown)
+function shutdown(code = 1) {
+  if (shutdownPromise) return shutdownPromise
+  closing = true
+  disposeNative()
+  shutdownPromise = Promise.resolve().then(() => process.exit(closeErrors.length ? 1 : code))
+  return shutdownPromise
+}
+// A vanished owner is cleanup, not an acknowledged normal shutdown.
+process.on('disconnect', () => { void shutdown(1) })
 const result = value => ({
   columns: value.columns, columnTypes: value.columnTypes, rowsAffected: value.rowsAffected,
   lastInsertRowid: value.lastInsertRowid,
@@ -41,9 +58,9 @@ async function handle(request) {
   const { op, args = [], txId } = request
   if (op === 'close') {
     closing = true
-    for (const waiting of queue.splice(0)) send({ id: waiting.id, error: wireError(error('The client is closed', 'CLIENT_CLOSED')) })
-    try { active?.tx.close() } finally { active = null; db?.close() }
-    return
+    for (const waiting of queue.splice(0)) await send({ id: waiting.id, error: wireError(error('The client is closed', 'CLIENT_CLOSED')) })
+    disposeNative()
+    return { token: request.closeToken, nativeClosed: !nativeDb || nativeDb.open === false, errors: closeErrors }
   }
   if (txId) {
     if (!active || active.id !== txId) throw error('The transaction is closed', 'TRANSACTION_CLOSED')
@@ -84,14 +101,16 @@ async function drain() {
   if (index < 0 || !queue.length) return
   busy = true
   const request = queue.splice(index, 1)[0]
+  let closeAckSent = false
   try {
     const value = await handle(request)
-    send({ id: request.id, value, txClosed: request.txId ? active?.id !== request.txId : undefined })
+    if (request.op === 'close') closeAckSent = await send({ id: request.id, closeControl: value })
+    else await send({ id: request.id, value, txClosed: request.txId ? active?.id !== request.txId : undefined })
   } catch (cause) {
-    send({ id: request.id, error: wireError(cause), txClosed: request.txId ? active?.id !== request.txId : undefined })
+    await send({ id: request.id, error: wireError(cause), txClosed: request.txId ? active?.id !== request.txId : undefined })
   } finally {
     busy = false
-    if (closing) shutdown()
+    if (closing) await shutdown(closeAckSent ? 0 : 1)
     else void drain()
   }
 }
@@ -128,12 +147,11 @@ process.on('message', request => {
       Sqlite3Transaction = Transaction
       pragmas = settings
     } catch (cause) {
-      if (process.connected) process.send({ fatal: wireError(cause) }, shutdown)
-      else shutdown()
+      void send({ fatal: wireError(cause) }).then(() => shutdown(1))
     }
     return
   }
-  if (closing) { send({ id: request.id, error: wireError(error('The client is closed', 'CLIENT_CLOSED')) }); return }
+  if (closing) { void send({ id: request.id, error: wireError(error('The client is closed', 'CLIENT_CLOSED')) }); return }
   queue.push(request)
   void drain()
 })

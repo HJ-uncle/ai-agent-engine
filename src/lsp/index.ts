@@ -5,6 +5,7 @@ import { getDb } from '../storage/sqlite/db.js'
 import { createPool } from '../core/utils/concurrency-pool.js'
 import { isAbortError, throwIfAborted } from '../core/utils/abort.js'
 import { auditLogStore } from '../security/audit-log.js'
+import { scheduleDeadline } from '../core/utils/deadline.js'
 import type { Diagnostic, DiagnoseResult, LspAdapter } from './types.js'
 import { typescriptAdapter } from './adapters/typescript.js'
 import { eslintAdapter } from './adapters/eslint.js'
@@ -69,9 +70,13 @@ export async function diagnoseFile(filePath: string, opts: DiagnoseOptions = {})
   const abort = () => controller.abort(opts.signal?.reason)
   opts.signal?.addEventListener('abort', abort, { once: true })
   if (opts.signal?.aborted) abort()
-  const timeoutMs = Number.isFinite(opts.timeoutMs) && opts.timeoutMs! > 0 ? Math.min(opts.timeoutMs!, 120_000) : 30_000
-  const timer = setTimeout(() => controller.abort(Object.assign(new Error(`诊断请求超时 (${timeoutMs}ms)`), { code: 'LSP_TIMEOUT' })), timeoutMs)
-  timer.unref()
+  // Diagnostics are part of an interactive agent request and must not be
+  // truncated by an engine-selected wall-clock budget.  A caller may still
+  // opt into a deadline explicitly; zero (and omission) means until the
+  // adapter completes or the caller aborts.
+  const timeoutMs = Number.isFinite(opts.timeoutMs) && opts.timeoutMs! > 0 ? opts.timeoutMs! : undefined
+  const cancelTimer = timeoutMs === undefined ? undefined : scheduleDeadline(
+    () => controller.abort(Object.assign(new Error(`诊断请求超时 (${timeoutMs}ms)`), { code: 'LSP_TIMEOUT' })), timeoutMs)
   const started = Date.now()
   const ext = path.extname(filePath).toLowerCase()
   let language = ext.slice(1) || 'unknown'
@@ -146,7 +151,7 @@ export async function diagnoseFile(filePath: string, opts: DiagnoseOptions = {})
       ? finish('cancelled', [], '诊断已取消')
       : finish('error', [], error instanceof Error ? error.message : String(error))
   } finally {
-    clearTimeout(timer)
+    cancelTimer?.()
     opts.signal?.removeEventListener('abort', abort)
   }
 }

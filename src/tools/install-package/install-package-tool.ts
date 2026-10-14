@@ -1,10 +1,7 @@
 import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
-import { exec } from 'child_process'
-import { promisify } from 'util'
 import path from 'path'
 import fs from 'fs'
-
-const execAsync = promisify(exec)
+import { cmdTool } from '../cmd/execute-command.js'
 
 /**
  * Install Package 工具
@@ -23,14 +20,20 @@ export const installPackageTool: Tool = {
       global: { type: 'boolean' },
       saveDev: { type: 'boolean', description: '--save-dev' },
       installPath: { type: 'string' },
+      timeoutMs: { type: 'integer', minimum: 0, description: '可选安装超时毫秒数；省略或 0 表示直到完成或取消' },
       confirm: { type: 'boolean', description: '确认后设为 true 执行' }
     },
     required: ['packageName']
   },
   async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
-    const { packageName, version, global = false, saveDev = false, installPath, confirm = false } = rawArgs as any
+    const { packageName, version, global = false, saveDev = false, installPath, timeoutMs, confirm = false } = rawArgs as any
 
     try {
+      if (typeof packageName !== 'string' || !packageName.trim() || packageName.includes('\0')
+        || (version !== undefined && (typeof version !== 'string' || version.includes('\0')))
+        || (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0))) {
+        return { success: false, error: 'INSTALL_INVALID_ARGUMENTS', output: '安装参数无效：packageName 必填，timeoutMs 必须是非负整数。' }
+      }
       let fullPackageName = packageName
       if (version && !packageName.includes('@')) {
         fullPackageName = `${packageName}@${version}`
@@ -87,85 +90,17 @@ export const installPackageTool: Tool = {
         }
       }
 
-      // 用户已确认，执行安装
-      let command: string
-      if (global) {
-        command = `npm install -g ${fullPackageName}`
-      } else {
-        command = `cd "${targetPath}" && npm install ${saveDev ? '--save-dev ' : ''}${fullPackageName}`
-      }
-
       ctx.logger.info(`[install_package] Installing ${fullPackageName} to ${targetPath}`)
 
-      const timeout = 120000
-
-      try {
-        const { stdout, stderr } = await execAsync(command, { timeout, cwd: targetPath })
-
-        const successOutput = [
-          `✅ 包安装成功！`,
-          ``,
-          `**安装信息**`,
-          `- 包名: ${fullPackageName}`,
-          `- 安装路径: ${global ? '全局' : targetPath}`,
-          `- 作为开发依赖: ${saveDev ? '是' : '否'}`,
-          ``,
-        ]
-
-        if (stdout) {
-          successOutput.push(`**安装日志**`)
-          successOutput.push('```')
-          successOutput.push(stdout.slice(-1000))
-          successOutput.push('```')
-        }
-
-        if (stderr && !stderr.includes('npm warn')) {
-          successOutput.push(`**警告**`)
-          successOutput.push('```')
-          successOutput.push(stderr.slice(-500))
-          successOutput.push('```')
-        }
-
-        ctx.logger.info(`[install_package] Successfully installed ${fullPackageName}`)
-
-        return {
-          success: true,
-          output: successOutput.join('\n')
-        }
-      } catch (execErr: any) {
-        const errorMessage = execErr.message || ''
-
-        if (errorMessage.includes('ENOTEMPTY') || errorMessage.includes('ETIMEDOUT') || execErr.code === 'ETIMEDOUT') {
-          return {
-            success: false,
-            output: `❌ 包安装超时（超过 ${timeout / 1000} 秒）\n\n可能的原因：\n- 网络连接缓慢\n- 包体积较大\n- npm 仓库响应慢\n\n建议：\n1. 稍后重试\n2. 检查网络连接\n3. 尝试使用国内镜像：npm install ${fullPackageName} --registry=https://registry.npmmirror.com`
-          }
-        }
-
-        if (errorMessage.includes('E404') || errorMessage.includes('404 Not Found')) {
-          return {
-            success: false,
-            output: `❌ 包未找到: ${fullPackageName}\n\n请检查：\n1. 包名拼写是否正确\n2. 包是否已发布到 npm\n3. 是否使用了私有包（需要配置 .npmrc）`
-          }
-        }
-
-        if (errorMessage.includes('EACCES')) {
-          return {
-            success: false,
-            output: `❌ 权限被拒绝\n\n无法在 ${targetPath} 写入文件。\n\n解决方案：\n1. 检查目录权限\n2. 使用全局安装: install_package({ packageName: "${fullPackageName}", global: true, confirm: true })\n3. 使用 sudo（不推荐）`
-          }
-        }
-
-        if (errorMessage.includes('ENOENT')) {
-          return {
-            success: false,
-            output: `❌ 目录不存在: ${targetPath}\n\n请确保工作区目录存在，或指定正确的 installPath`
-          }
-        }
-
-        throw execErr
-      }
+      const timeout = typeof timeoutMs === 'number' && timeoutMs > 0 ? Math.floor(timeoutMs) : undefined
+      const args = ['install', ...(global ? ['-g'] : []), ...(saveDev ? ['--save-dev'] : []), fullPackageName]
+      const result = await cmdTool.execute({ command: 'npm', args, cwd: targetPath, ...(timeout !== undefined ? { timeoutMs: timeout } : {}), background: false }, ctx)
+      if (ctx.signal?.aborted) throw ctx.signal.reason ?? new Error('Installation cancelled')
+      if (!result.success) return { ...result, output: `❌ 安装失败：${result.output ?? result.error ?? 'npm install failed'}` }
+      ctx.logger.info(`[install_package] Successfully installed ${fullPackageName}`)
+      return { success: true, output: [`✅ 包安装成功！`, ``, `**安装信息**`, `- 包名: ${fullPackageName}`, `- 安装路径: ${global ? '全局' : targetPath}`, `- 作为开发依赖: ${saveDev ? '是' : '否'}`, ``, result.output ?? ''].join('\n') }
     } catch (err: any) {
+      if (ctx.signal?.aborted) throw ctx.signal.reason ?? err
       ctx.logger.error(`[install_package] Failed to install ${packageName}: ${err.message}`)
       return {
         success: false,

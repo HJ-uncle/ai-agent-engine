@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentContext } from '../../../core/agent-context/types.js'
 import { grepTool } from '../grep-tool.js'
 
+// Keep the real workspace resolver while preventing policy DB/audit loading in this isolated test.
+vi.mock('../../../security/policy-engine.js', () => ({ getSecurityMode: () => 'safe' }))
+
 const rgAvailable = spawnSync('rg', ['--version'], { windowsHide: true }).status === 0
 const fixtureRoot = path.resolve('.e2e-tmp')
 let fixtureDir: string
@@ -31,7 +34,7 @@ describe.skipIf(!rgAvailable)('grep_search with real ripgrep', () => {
     const result = await grepTool.execute({ pattern: 'needle', ...(maxResults === undefined ? {} : { maxResults }) }, ctx)
     expect(result.success).toBe(true)
     const [heading, ...lines] = result.output.split('\n')
-    expect(heading).toBe(`Found ${expected} match(es) [ripgrep]:`)
+    expect(heading).toMatch(new RegExp(`^Found ${expected} match\\(es\\) \\[ripgrep\\]: offset=0 count=${expected} `))
     expect(lines).toHaveLength(expected)
     expect(lines.every((line) => /\.txt:\d+:needle /.test(line))).toBe(true)
   }
@@ -66,7 +69,9 @@ describe.skipIf(!rgAvailable)('grep_search with real ripgrep', () => {
 
   it('treats rg exit 1 as a successful empty search', async () => {
     const result = await grepTool.execute({ pattern: 'absent-pattern' }, ctx)
-    expect(result).toEqual({ success: true, output: 'No matches found for "absent-pattern"' })
+    expect(result).toMatchObject({ success: true, metadata: { count: 0, offset: 0, hasMore: false, nextOffset: null } })
+    expect(result.output).toContain('No matches found for "absent-pattern"')
+    expect(result.output).toContain('hasMore=false nextOffset=null')
   })
 
   it('reports a real regex command error instead of success or no matches', async () => {

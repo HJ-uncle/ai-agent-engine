@@ -18,12 +18,22 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { assertCompressionContext, withHistoryLock, withSessionHistoryCompression, awaitCompressionSummary } from './serialization.js'
 import { createInterface } from 'node:readline'
-import type { AgentContext, CompactionArchiveEvidence, ConversationArchive, ConversationHistory, HistorySearchOptions, HistorySearchResult, Message } from '../../core/agent-context/types.js'
+import type { AgentContext, CompactionArchiveEvidence, ConversationArchive, ConversationConditionalAppend, ConversationHistory, ConversationToolCallAnchor, HistorySearchOptions, HistorySearchResult, Message } from '../../core/agent-context/types.js'
 import { estimateTokens } from '../../core/utils/tokens.js'
 import { estimateModelHistoryTokens } from '../../core/utils/model-context.js'
 import { compressionSplitIndex, type CompressionOptions } from './compression.js'
 import { addMessageUsage, emptyBillingUsage } from './usage.js'
+import { getDb } from '../sqlite/db.js'
+import { advanceProjectionEpoch, commitProjectionReceipt, ensureProjectionReceipts, projectionEpoch, readProjectionReceipt, validateProjection } from './projection-receipts.js'
+import { acknowledgeAdmissionUser, readAdmissionSeed, validateAdmissionUser, type AdmissionMessageAnchor } from '../root-admission/projection.js'
+import { admissionError } from '../root-admission/index.js'
+import { registerJSONLHistory, canonicalJSONLMessage, jsonlHistoryEpoch, type JSONLAppendPlan, type JSONLPhysicalSnapshot } from './jsonl-origin.js'
+import { invalidateJSONLDeliveries } from '../../core/collaboration/jsonl-delivery-schema.js'
+import { CollaborationError } from '../../core/collaboration/types.js'
+import { currentHistoryMaintenance, maintenancePinnedIds, maintenanceSummaryEvidence, maintenanceDigest, ensureHistoryMaintenanceSchema, reserveHistoryMaintenance,
+  type HistoryMaintenanceLease } from '../../core/collaboration/history-maintenance.js'
 
 type Ctx = Pick<AgentContext, 'tenantId' | 'sessionId'>
 
@@ -53,6 +63,8 @@ interface JsonlRow {
   summary?: string
   leafUuid?: string
   leafSeq?: number
+  /** Private maintenance keeps the original admitted input and pending dispatches physical. */
+  retainedUuids?: string[]
   preTokens?: number
   postTokens?: number
   transcriptPath?: string
@@ -146,9 +158,78 @@ function truncateFilter(cuts: Array<{ ordinal: number; afterSeq: number }>): (se
   }
 }
 
+function scopedJsonlRow(line: string, ctx: Ctx): JsonlRow | undefined {
+  try {
+    const row = JSON.parse(line) as JsonlRow | null
+    return row && row.tenantId === ctx.tenantId && row.sessionId === ctx.sessionId ? row : undefined
+  } catch { return undefined }
+}
+
+async function* forwardScopedRows(handle: Awaited<ReturnType<typeof fs.promises.open>>, size: number, ctx: Ctx) {
+  let suffix: Buffer[] = [], offset = 0, position = 0
+  while (position < size) {
+      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, size - position))
+      let bytesRead = 0
+      while (bytesRead < buffer.length) {
+        const read = await handle.read(buffer, bytesRead, buffer.length - bytesRead, position + bytesRead)
+        if (!read.bytesRead) break
+        bytesRead += read.bytesRead
+      }
+      if (!bytesRead) break
+      position += bytesRead
+      let start = 0
+      while (start < bytesRead) {
+        const newline = buffer.indexOf(10, start)
+        if (newline < 0 || newline >= bytesRead) { suffix.push(buffer.subarray(start, bytesRead)); break }
+        const line = Buffer.concat([...suffix, buffer.subarray(start, newline)])
+        const row = scopedJsonlRow(line.toString('utf8'), ctx), lineStart = offset
+        offset += line.length + 1
+        suffix = []
+        if (row) yield { row, offset: lineStart }
+        start = newline + 1
+      }
+  }
+  if (suffix.length) {
+      const row = scopedJsonlRow(Buffer.concat(suffix).toString('utf8'), ctx)
+      if (row) yield { row, offset }
+  }
+}
+
+/** Reverse folding needs only suffix minima, rather than a growing tombstone index. */
+async function* reverseScopedRows(handle: Awaited<ReturnType<typeof fs.promises.open>>, size: number, ctx: Ctx) {
+  let position = size
+  let suffix: Buffer[] = []
+  while (position > 0) {
+    const start = Math.max(0, position - 64 * 1024)
+    const buffer = Buffer.allocUnsafe(position - start)
+    let bytesRead = 0
+    while (bytesRead < buffer.length) {
+      const read = await handle.read(buffer, bytesRead, buffer.length - bytesRead, start + bytesRead)
+      if (!read.bytesRead) break
+      bytesRead += read.bytesRead
+    }
+    position = start
+    let end = bytesRead
+    while (end > 0) {
+      const newline = buffer.lastIndexOf(10, end - 1)
+      if (newline < 0) { suffix.unshift(buffer.subarray(0, end)); break }
+      const line = Buffer.concat([buffer.subarray(newline + 1, end), ...suffix]).toString('utf8')
+      suffix = []
+      const row = scopedJsonlRow(line, ctx)
+      if (row) yield { row, offset: start + newline + 1 }
+      end = newline
+    }
+  }
+  if (suffix.length) {
+    const row = scopedJsonlRow(Buffer.concat(suffix).toString('utf8'), ctx)
+    if (row) yield { row, offset: 0 }
+  }
+}
+
 export class JSONLConversationHistory implements ConversationHistory {
   readonly retainsArchive = true
   private readonly rootDir: string
+  private readonly dataPath: string
   private readonly maxTokens?: number
   private readonly states = new Map<string, SessionState>()
   private readonly usageCache = new Map<string, {
@@ -164,7 +245,88 @@ export class JSONLConversationHistory implements ConversationHistory {
   constructor(maxTokens?: number) {
     this.maxTokens = maxTokens
     const dataDir = process.env.DATA_DIR ?? './data/agent.db'
-    this.rootDir = path.join(path.dirname(dataDir), 'sessions')
+    this.dataPath = path.resolve(dataDir)
+    this.rootDir = path.join(path.dirname(this.dataPath), 'sessions')
+    registerJSONLHistory(this, {
+      db: () => this.projectionDb(),
+      withLease: (scope, action) => withHistoryLock(scope.tenantId, () => this.enqueue(this.sessionKey(scope), action)),
+      inspect: async scope => { await this.recoverCollaborationMaintenance(scope); return this.inspectCollaborationArchive(scope) },
+      assertRevision: async (scope, snapshot) => {
+        const stat = await fs.promises.stat(this.filePath(scope))
+        if (this.fileRevision(stat) !== snapshot.revision || this.collaborationFileIdentity(stat) !== snapshot.fileIdentity)
+          throw new CollaborationError('conflict', 'JSONL archive changed during origin authentication')
+      },
+      plan: (scope, snapshot, message) => {
+        const row: JsonlRow = { uuid: message.id!, parentUuid: snapshot.lastId, type: message.role,
+          timestamp: new Date().toISOString(), ...scope, isSidechain: scope.sessionId.startsWith('subagent-'),
+          dbSeq: snapshot.nextSequence, payload: this.messageToPayload(message),
+          ...((message as Message & { conversationId?: string }).conversationId ? { conversationId: (message as Message & { conversationId?: string }).conversationId } : {}) }
+        const encoded = JSON.stringify(row) + '\n'
+        return { fileIdentity: snapshot.fileIdentity, offset: snapshot.size, bytes: Buffer.byteLength(encoded),
+          hash: crypto.createHash('sha256').update(encoded).digest('hex'), encoded }
+      },
+      persist: (scope, plan) => this.persistCollaborationRow(scope, plan),
+    })
+  }
+
+  private collaborationFileIdentity(stat: fs.Stats): string { return `${stat.dev}:${stat.ino}:${stat.birthtimeMs}` }
+
+  /** Physical offsets authenticate receipt rows; folded messages retain every active tool/system field. */
+  private async inspectCollaborationArchive(ctx: Ctx): Promise<JSONLPhysicalSnapshot> {
+    const state = await this.loadSession(ctx), file = this.filePath(ctx), handle = await fs.promises.open(file, 'r')
+    try {
+      const stat = await handle.stat()
+      if (!this.matchesFile(state, stat)) throw new CollaborationError('conflict', 'JSONL active projection and archive revisions differ')
+      const data = Buffer.alloc(stat.size)
+      let read = 0
+      while (read < data.length) { const next = await handle.read(data, read, data.length - read, read); if (!next.bytesRead) throw new CollaborationError('conflict', 'JSONL archive was truncated while reading'); read += next.bytesRead }
+      const rows: JSONLPhysicalSnapshot['rows'] = []
+      let offset = 0
+      while (offset < data.length) {
+        const newline = data.indexOf(10, offset)
+        if (newline < 0) break
+        const end = newline + 1, bytes = data.subarray(offset, end), row = scopedJsonlRow(bytes.toString('utf8'), ctx)
+        if (row?.payload && ['system', 'user', 'assistant', 'tool'].includes(row.type)) rows.push({ id: row.uuid, offset,
+          bytes: bytes.length, hash: crypto.createHash('sha256').update(bytes).digest('hex'), sequence: row.dbSeq, message: this.rowToMessage(row) })
+        offset = end
+      }
+      if (this.fileRevision(await handle.stat()) !== this.fileRevision(stat)) throw new CollaborationError('conflict', 'JSONL archive changed while reading')
+      return { fileIdentity: this.collaborationFileIdentity(stat), revision: this.fileRevision(stat), size: stat.size,
+        contentHash: maintenanceDigest(data.toString('base64')), nextSequence: state.nextSeq, lastId: state.lastUuid, rows, active: structuredClone(state.messages) }
+    } finally { await handle.close() }
+  }
+
+  /** Reconcile exact reserved bytes, including a failed partial suffix, before a durable receipt can finish. */
+  private async persistCollaborationRow(ctx: Ctx, plan: JSONLAppendPlan): Promise<void> {
+    if (!Number.isSafeInteger(plan.offset) || plan.offset < 0 || !Number.isSafeInteger(plan.bytes) || plan.bytes < 1
+      || Buffer.byteLength(plan.encoded) !== plan.bytes || !plan.encoded.endsWith('\n')
+      || crypto.createHash('sha256').update(plan.encoded).digest('hex') !== plan.hash)
+      throw new CollaborationError('conflict', 'JSONL reserved envelope is invalid')
+    const handle = await fs.promises.open(this.filePath(ctx), 'r+')
+    try {
+      const stat = await handle.stat()
+      if (this.collaborationFileIdentity(stat) !== plan.fileIdentity || stat.size < plan.offset)
+        throw new CollaborationError('conflict', 'JSONL reserved archive identity changed')
+      const encoded = Buffer.from(plan.encoded), available = Math.min(plan.bytes, stat.size - plan.offset), existing = Buffer.alloc(available)
+      if (plan.prefixHash) {
+        const prefix = Buffer.alloc(plan.offset)
+        let copied = 0
+        while (copied < prefix.length) { const next = await handle.read(prefix, copied, prefix.length - copied, copied); if (!next.bytesRead) throw new CollaborationError('conflict', 'JSONL maintenance prefix was truncated'); copied += next.bytesRead }
+        if (maintenanceDigest(prefix.toString('base64')) !== plan.prefixHash) throw new CollaborationError('conflict', 'JSONL maintenance source prefix changed')
+      }
+      let read = 0
+      while (read < available) { const next = await handle.read(existing, read, available - read, plan.offset + read); if (!next.bytesRead) throw new CollaborationError('conflict', 'JSONL reserved suffix was truncated'); read += next.bytesRead }
+      if (!existing.equals(encoded.subarray(0, available)) || available < plan.bytes && stat.size !== plan.offset + available)
+        throw new CollaborationError('conflict', 'JSONL reserved suffix was replaced')
+      let written = available
+      while (written < encoded.length) { const next = await handle.write(encoded, written, encoded.length - written, plan.offset + written); if (!next.bytesWritten) throw new Error('JSONL delivery write made no progress'); written += next.bytesWritten }
+      await handle.sync()
+      const persisted = Buffer.alloc(encoded.length)
+      let verified = 0
+      while (verified < persisted.length) { const next = await handle.read(persisted, verified, persisted.length - verified, plan.offset + verified); if (!next.bytesRead) throw new CollaborationError('conflict', 'JSONL synced row disappeared'); verified += next.bytesRead }
+      if (!persisted.equals(encoded) || this.collaborationFileIdentity(await handle.stat()) !== plan.fileIdentity)
+        throw new CollaborationError('conflict', 'JSONL synced row lost physical identity')
+    } finally { this.invalidate(ctx); await handle.close() }
   }
 
   private sessionKey(ctx: Ctx): string {
@@ -380,12 +542,13 @@ export class JSONLConversationHistory implements ConversationHistory {
     state.deletedUuids = deletedUuids
     state.deletedConvIds = deletedConvIds
 
+    const retainedUuids = new Set(lastSummary?.retainedUuids ?? [])
     let lastUuid: string | null = null
     for (const row of rows) {
       if (row.dbSeq <= clearSeq) continue
       if ((rowOrdinals.get(row) ?? -1) <= clearOrdinal) continue
       if (isTruncated(row.dbSeq, rowOrdinals.get(row) ?? -1)) continue
-      if (row.dbSeq <= summaryFloor) continue
+      if (row.dbSeq <= summaryFloor && !retainedUuids.has(row.uuid)) continue
       if (deletedUuids.has(row.uuid)) continue
       if (row.conversationId && deletedConvIds.has(row.conversationId)) continue
       const msg = this.rowToMessage(row)
@@ -537,10 +700,11 @@ export class JSONLConversationHistory implements ConversationHistory {
 
   // ─── ConversationHistory 接口 ────────────────────────────────
 
-  async append(message: Message, ctx: Ctx): Promise<string> {
+  async append(message: Message & { conversationId?: string }, ctx: Ctx): Promise<string> {
     if (this.isTombstoned(ctx)) return message.id ?? ''
     const key = this.sessionKey(ctx)
     return this.enqueue(key, async () => {
+      await this.recoverCollaborationMaintenance(ctx)
       const state = await this.loadSession(ctx)
       const precedingRevision = this.fileRevision(state)
       const uuid = message.id || crypto.randomUUID()
@@ -605,6 +769,124 @@ export class JSONLConversationHistory implements ConversationHistory {
     })
   }
 
+  async appendAdmissionUser(message: Message, ctx: Ctx, anchor: AdmissionMessageAnchor): Promise<string> {
+    return withHistoryLock(ctx.tenantId, async () => {
+      const db = this.projectionDb(), seed = await readAdmissionSeed(db, ctx, anchor.rootRunId)
+      validateAdmissionUser(message, seed, anchor)
+      // Ordinary append owns its own file queue. Nesting enqueue here would
+      // wait on itself; the reentrant tenant lock orders delete/append/ACK.
+      await this.append(message, ctx)
+      const archive = await this.getArchive(ctx)
+      const persisted = archive.messages.find(row => row.id === anchor.userMessageId)
+      if (!persisted) admissionError('ADMISSION_USER_PROJECTION_UNAVAILABLE', 503)
+      validateAdmissionUser(persisted, seed, anchor)
+      const file = this.filePath(ctx), handle = await fs.promises.open(file, 'r+')
+      try {
+        // Read the actual owned file, not only an optimistic append cache.
+        const stat = await handle.stat()
+        let rawUser: Message | undefined
+        for await (const { row } of forwardScopedRows(handle, stat.size, ctx)) {
+          if (row.uuid === anchor.userMessageId && row.type === 'user') rawUser = this.rowToMessage(row)
+        }
+        if (!rawUser) admissionError('ADMISSION_USER_PROJECTION_UNAVAILABLE', 503)
+        validateAdmissionUser(rawUser, seed, anchor)
+        await handle.sync()
+        const current = await fs.promises.stat(file)
+        if (stat.dev !== current.dev || stat.ino !== current.ino || stat.size !== current.size) admissionError('ADMISSION_TRANSCRIPT_CHANGED', 503)
+      } finally { await handle.close() }
+      if (db !== this.projectionDb()) admissionError('ADMISSION_DATASOURCE_CHANGED', 503)
+      await acknowledgeAdmissionUser(db, ctx, seed)
+      return anchor.userMessageId
+    })
+  }
+
+  private projectionDb() {
+    // This file owner cannot use another data source's replay ledger after rebind.
+    if (path.resolve(process.env.DATA_DIR ?? './data/agent.db') !== this.dataPath)
+      throw new Error('JSONL projection source changed; use a history instance for the current data source')
+    return getDb()
+  }
+
+  private async hasPersistedProjection(ctx: Ctx, message: Message, anchor: ConversationToolCallAnchor): Promise<boolean> {
+    const messageId = message.id!
+    let handle: Awaited<ReturnType<typeof fs.promises.open>>
+    try { handle = await fs.promises.open(this.filePath(ctx), 'r') }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error }
+    try {
+      let found = false
+      for await (const { row } of forwardScopedRows(handle, (await handle.stat()).size, ctx)) {
+        if (row.uuid !== messageId || !row.payload) continue
+        // Original rows survive compaction/delete tombstones. Their stable ID,
+        // rather than the active projection cache, reconciles an uncertain flush.
+        if (row.type !== message.role || row.payload.id !== messageId || row.payload.role !== message.role || row.payload.toolCallId !== message.toolCallId
+          || String(row.payload.conversationId ?? row.conversationId ?? '') !== anchor.conversationId)
+          throw new Error('History projection result identity collision')
+        found = true
+      }
+      return found
+    } finally { await handle.close() }
+  }
+
+  async appendIfActiveToolCallAnchor(message: Message, ctx: Ctx,
+    anchor: ConversationToolCallAnchor): Promise<ConversationConditionalAppend> {
+    const messageId = validateProjection(message, anchor)
+    // Validate both scoped path segments even if the receipt avoids file I/O.
+    const file = this.filePath(ctx), db = this.projectionDb()
+    await ensureProjectionReceipts(db)
+    return this.enqueue(this.sessionKey(ctx), async () => {
+      await this.recoverCollaborationMaintenance(ctx)
+      const prior = await readProjectionReceipt(db, ctx, messageId, anchor)
+      if (prior && prior.disposition !== 'pending')
+        return { messageId, disposition: prior.disposition === 'appended' ? 'duplicate' : 'suppressed' }
+      if (prior && prior.backend !== 'jsonl') throw new Error('Pending projection belongs to another backend')
+      const state = await this.loadSession(ctx)
+      const epoch = await projectionEpoch(db, ctx)
+      if (await this.hasPersistedProjection(ctx, message, anchor)) {
+        // A previous append may have succeeded before fsync/receipt ACK failed.
+        // Never infer durability solely from bytes visible in the page cache.
+        const handle = await fs.promises.open(file, 'r+')
+        try { await handle.sync() } finally { await handle.close() }
+        await commitProjectionReceipt(db, ctx, messageId, anchor, { backend: 'jsonl', disposition: 'appended',
+          epoch: prior?.epoch ?? epoch, anchorSequence: prior?.anchorSequence ?? null })
+        return { messageId, disposition: 'duplicate' }
+      }
+      const active = await this.getActiveToolCallAnchor(ctx, anchor)
+      const anchorMessage = state.byId.get(anchor.messageId) as (Message & { dbId?: number }) | undefined
+      const anchorSequence = anchorMessage?.dbId ?? null
+      // A truncate may later append the same UUID; only the reserved original
+      // dispatch sequence can resume an uncertain file write. Clear has a durable
+      // epoch because it resets both file identity and sequence numbers.
+      if (!active || this.isTombstoned(ctx) || prior && (prior.epoch !== epoch || prior.anchorSequence !== anchorSequence)) {
+        await commitProjectionReceipt(db, ctx, messageId, anchor, { backend: 'jsonl', disposition: 'suppressed',
+          epoch: prior?.epoch ?? epoch, anchorSequence: prior?.anchorSequence ?? anchorSequence })
+        return { messageId, disposition: 'suppressed' }
+      }
+      if (!prior) await commitProjectionReceipt(db, ctx, messageId, anchor, { backend: 'jsonl', disposition: 'pending', epoch, anchorSequence })
+      const row: JsonlRow = {
+        uuid: messageId, parentUuid: state.lastUuid, type: message.role, timestamp: new Date().toISOString(),
+        sessionId: ctx.sessionId, tenantId: ctx.tenantId,
+        isSidechain: ctx.sessionId.startsWith('subagent-') || Boolean((ctx as Partial<AgentContext>).parentSessionId),
+        dbSeq: state.nextSeq, payload: this.messageToPayload(message), conversationId: anchor.conversationId,
+      }
+      await fs.promises.mkdir(path.dirname(file), { recursive: true })
+      const handle = await fs.promises.open(file, 'a+')
+      try {
+        // A failed prior append may leave a partial final row. Separate it before
+        // retrying; never concatenate a valid result into that corrupted line.
+        const size = (await handle.stat()).size
+        if (size) {
+          const last = Buffer.alloc(1)
+          await handle.read(last, 0, 1, size - 1)
+          if (last[0] !== 10) await handle.writeFile('\n')
+        }
+        await handle.writeFile(JSON.stringify(row) + '\n')
+        await handle.sync()
+      } finally { this.invalidate(ctx); await handle.close() }
+      await commitProjectionReceipt(db, ctx, messageId, anchor, { backend: 'jsonl', disposition: 'appended', epoch, anchorSequence })
+      return { messageId, disposition: 'appended' }
+    })
+  }
+
   async getHistory(
     ctx: Pick<AgentContext, 'tenantId' | 'sessionId' | 'inheritContext'>,
   ): Promise<Message[]> {
@@ -620,6 +902,72 @@ export class JSONLConversationHistory implements ConversationHistory {
   async getFullHistory(ctx: Ctx): Promise<Message[]> {
     const state = await this.loadSession(ctx)
     return state.messages
+  }
+
+  async getActiveToolCallAnchor(ctx: Ctx, key: ConversationToolCallAnchor): Promise<ConversationToolCallAnchor | null> {
+    if (!key.messageId || !key.toolCallId || typeof key.conversationId !== 'string') return null
+    const file = this.filePath(ctx)
+    let handle: Awaited<ReturnType<typeof fs.promises.open>>
+    try { handle = await fs.promises.open(file, 'r') }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      // A cleared/migrated JSONL source is authoritative. A legacy-only source
+      // can answer the same narrow query without importing its whole session.
+      try { if ((await fs.promises.readFile(this.migratedPath(ctx), 'utf8')).trim()) return null }
+      catch (markerError) { if ((markerError as NodeJS.ErrnoException).code !== 'ENOENT') throw markerError }
+      const { SQLiteConversationHistory } = await import('./history.js')
+      return new SQLiteConversationHistory().getActiveToolCallAnchor(ctx, key)
+    }
+    try {
+      const stat = await handle.stat(), size = stat.size
+      const rows = () => forwardScopedRows(handle, size, ctx)
+      // Deletions are global, including rows appended after their tombstone.
+      // Retain only this queried identity's decisions, never all session IDs.
+      let deleted = false, clearSeq = -1
+      for await (const { row } of rows()) {
+        if (row.type !== 'tombstone') continue
+        if (row.scope === 'message' && row.targetUuid === key.messageId
+          || row.scope === 'conversation' && row.conversationId === key.conversationId) deleted = true
+        if (row.scope === 'clear') clearSeq = Math.max(clearSeq, row.dbSeq ?? 0)
+      }
+      if (deleted) return null
+      let truncateFloor = Infinity, anchorSeq = -1
+      let selectedSummary: { leafSeq?: number; leafUuid?: string; retainedUuids?: string[]; offset: number } | undefined
+      for await (const entry of reverseScopedRows(handle, size, ctx)) {
+        const { row } = entry
+        if (row.type === 'tombstone') {
+          if (row.scope === 'clear') break
+          if (row.scope === 'truncate' && typeof row.afterSeq === 'number') truncateFloor = Math.min(truncateFloor, row.afterSeq)
+          continue
+        }
+        if (row.dbSeq > truncateFloor) continue
+        if (row.type === 'summary') { selectedSummary ??= { leafSeq: row.leafSeq, leafUuid: row.leafUuid, retainedUuids: row.retainedUuids, offset: entry.offset }; continue }
+        if (!['user', 'assistant', 'tool', 'system'].includes(row.type) || row.dbSeq <= clearSeq || row.uuid !== key.messageId) continue
+        const payload = row.payload, tool = payload?.toolCall
+        if (payload && (payload.id ?? row.uuid) === key.messageId && (payload.conversationId ?? '') === key.conversationId
+          && (!row.conversationId || row.conversationId === key.conversationId)
+          && tool && typeof tool === 'object' && 'id' in tool && tool.id === key.toolCallId) {
+          anchorSeq = Math.max(anchorSeq, row.dbSeq)
+        }
+      }
+      if (anchorSeq < 0) return null
+      let summaryFloor = selectedSummary?.leafSeq ?? -1
+      if (selectedSummary && typeof selectedSummary.leafSeq !== 'number') {
+        let leafSeq: number | undefined, previousSeq = -1
+        for await (const { row, offset } of rows()) {
+          if (['summary', 'update', 'usage'].includes(row.type)) continue
+          if (offset < selectedSummary.offset) previousSeq = Math.max(previousSeq, row.dbSeq)
+          if (row.type !== 'tombstone' && leafSeq === undefined && row.uuid === selectedSummary.leafUuid) leafSeq = row.dbSeq
+        }
+        summaryFloor = leafSeq ?? previousSeq
+      }
+      // Standalone queries detect replacement. Conditional projection additionally
+      // holds the backend write lease through its predicate, append and flush.
+      const current = await fs.promises.stat(file)
+      if (current.ino !== stat.ino || current.dev !== stat.dev || current.size !== stat.size
+        || current.mtimeMs !== stat.mtimeMs || current.ctimeMs !== stat.ctimeMs) throw new Error('Parent history changed while verifying its active tool anchor')
+      return anchorSeq > summaryFloor || selectedSummary?.retainedUuids?.includes(key.messageId) ? { ...key } : null
+    } finally { await handle.close() }
   }
 
   /**
@@ -755,7 +1103,7 @@ export class JSONLConversationHistory implements ConversationHistory {
       const updates = new Map<string, JsonlRow>(), deleted = new Set<string>(), deletedTurns = new Set<string>()
       const originalSequences = new Map<string, number>()
       const truncations: Array<{ ordinal: number; afterSeq: number }> = []
-      const summaries: Array<{ ordinal: number; dbSeq: number; floor: number; hasSummary: boolean }> = []
+      const summaries: Array<{ ordinal: number; dbSeq: number; floor: number; hasSummary: boolean; retainedUuids?: string[] }> = []
       let clearAfter = -1, latestSummary: JsonlRow | undefined, previousMessageSeq = -1
       for await (const { row, ordinal } of rows()) {
         if (row.payload && ['user', 'assistant', 'tool', 'system'].includes(row.type)) {
@@ -770,7 +1118,7 @@ export class JSONLConversationHistory implements ConversationHistory {
           if (row.scope === 'message' && row.targetUuid) deleted.add(row.targetUuid)
           if (row.scope === 'conversation' && row.conversationId) deletedTurns.add(row.conversationId)
         } else if (row.type === 'summary' && ordinal > clearAfter) {
-          summaries.push({ ordinal, dbSeq: row.dbSeq, hasSummary: Boolean(row.summary), floor: typeof row.leafSeq === 'number' ? row.leafSeq
+          summaries.push({ ordinal, dbSeq: row.dbSeq, hasSummary: Boolean(row.summary), retainedUuids: row.retainedUuids, floor: typeof row.leafSeq === 'number' ? row.leafSeq
             : row.leafUuid && originalSequences.has(row.leafUuid) ? originalSequences.get(row.leafUuid)! : previousMessageSeq })
         }
       }
@@ -786,7 +1134,7 @@ export class JSONLConversationHistory implements ConversationHistory {
         if (ordinal === selectedSummary?.ordinal && row.type === 'summary') latestSummary = row
         if (!row.payload || !['user', 'assistant', 'tool', 'system'].includes(row.type)) continue
         if (ordinal <= clearAfter || isTruncated(row.dbSeq, ordinal) || deleted.has(row.uuid) || row.conversationId && deletedTurns.has(row.conversationId)) continue
-        if (row.dbSeq > summaryFloor) currentMessageCount++
+        if (row.dbSeq > summaryFloor || selectedSummary?.retainedUuids?.includes(row.uuid)) currentMessageCount++
         if (totalMessageCount >= page.offset && messages.length < page.limit) {
           const message = this.rowToMessage(row), update = updates.get(row.uuid)
           if (update) applyUpdate(message, update, true)
@@ -888,15 +1236,22 @@ export class JSONLConversationHistory implements ConversationHistory {
     const file = this.filePath(ctx)
     // Validate the marker before renaming history or setting a tombstone.
     this.migratedPath(ctx)
-    this.tombstones.set(key, Date.now())
+    if (options?.tombstone === false) this.tombstones.delete(key)
+    else this.tombstones.set(key, Date.now())
     await this.enqueue(key, async () => {
+      // This fence survives rename and a failing clear fallback. A pending
+      // projection can never resume into a recreated archive with the same IDs.
+      await advanceProjectionEpoch(this.projectionDb(), ctx)
+      if (fs.existsSync(this.dataPath)) await invalidateJSONLDeliveries(this.projectionDb(), ctx)
       try {
         if (fs.existsSync(file)) {
           await fs.promises.rename(file, `${file}.${Date.now()}.bak`)
         }
       } catch {
         // Windows 文件锁失败：退化为逻辑 clear tombstone
-        await this.appendRow(ctx, {
+        // We already own this session's queue; enqueueing again waits on
+        // ourselves forever when Windows refuses the rename.
+        await this.appendRowWithinLease(ctx, {
           uuid: crypto.randomUUID(),
           parentUuid: null,
           type: 'tombstone',
@@ -1021,7 +1376,7 @@ export class JSONLConversationHistory implements ConversationHistory {
     ctx: Ctx,
     opts: { keepRecent?: number; maxChars?: number } = {},
   ): Promise<{ cleared: number; freedTokens: number }> {
-    const keepRecent = opts.keepRecent ?? 10
+    const keepRecent = Number.isFinite(opts.keepRecent) ? Math.max(0, Math.floor(opts.keepRecent!)) : 10
     const maxChars = Number.isFinite(opts.maxChars) && (opts.maxChars ?? 0) > 0 ? Math.floor(opts.maxChars!) : undefined
     const placeholder = '[tool result cleared]'
     const placeholderTokens = estimateTokens(placeholder)
@@ -1146,49 +1501,58 @@ export class JSONLConversationHistory implements ConversationHistory {
   }
 
   async compress(
-    ctx: Ctx,
+    ctx: Ctx & { signal?: AbortSignal },
     summarizeFn: (messages: Message[], evidence?: CompactionArchiveEvidence) => Promise<string>,
     keepRecentOrOpts?: number | CompressionOptions,
   ): Promise<{ preTokens: number; postTokens: number }> {
-    const state = await this.loadSession(ctx)
-    const all = state.messages
-    const preTokens = estimateModelHistoryTokens(all)
-    const splitIdx = compressionSplitIndex(all, keepRecentOrOpts ?? {})
-
-    const older = all.slice(0, splitIdx)
-    const recent = all.slice(splitIdx)
-    if (older.length === 0) return { preTokens, postTokens: preTokens }
-
-    const leaf = older[older.length - 1]
-    const leafSeq = ((leaf as unknown as Record<string, unknown>).dbId as number)
-      ?? (leaf.metadata?.isCompactSummary ? leaf.metadata.compactionLeafSeq : undefined) ?? 0
-    // Read actual system rows, not the legacy summary's textual role markers.
-    // Only rows covered by this summary belong here; recent rows stay verbatim.
-    const archivedSystems = await this.searchArchive(ctx, { role: 'system', limit: Number.MAX_SAFE_INTEGER })
-    const systemMessages = archivedSystems.messages.filter(message => message.role === 'system'
-      && !message.metadata?.isCompactSummary && (message as Message & { dbId: number }).dbId <= leafSeq)
-    const summary = await summarizeFn(older, { systemMessages })
-    const postTokens = estimateModelHistoryTokens([{ role: 'system', content: `【历史上下文摘要】${summary}` }, ...recent])
-
-    await this.appendRow(ctx, {
-      uuid: crypto.randomUUID(),
-      parentUuid: null,
-      type: 'summary',
-      timestamp: new Date().toISOString(),
-      sessionId: ctx.sessionId,
-      tenantId: ctx.tenantId,
-      isSidechain: ctx.sessionId.startsWith('subagent-') || Boolean((ctx as Partial<AgentContext>).parentSessionId),
-      dbSeq: state.nextSeq++,
-      summary,
-      leafUuid: leaf.id,
-      leafSeq,
-      preTokens,
-      postTokens,
-      transcriptPath: this.filePath(ctx),
+    return withSessionHistoryCompression(ctx, async signal => {
+    ctx = { ...ctx, signal }
+    const prepared = await withHistoryLock(ctx.tenantId, async () => {
+      assertCompressionContext(ctx)
+      const state = await this.loadSession(ctx)
+      const all = structuredClone(state.messages)
+      const preTokens = estimateModelHistoryTokens(all)
+      const splitIdx = compressionSplitIndex(all, keepRecentOrOpts ?? {})
+      const maintenance = fs.existsSync(this.dataPath) ? currentHistoryMaintenance(this.projectionDb(), ctx, 'jsonl') : undefined
+      const pinned = maintenance ? maintenancePinnedIds(all, maintenance.anchorId) : new Set<string>()
+      const older = all.slice(0, splitIdx).filter(message => !pinned.has(message.id ?? ''))
+      const recent = all.filter((message, index) => index >= splitIdx || pinned.has(message.id ?? ''))
+      if (!older.length) return { preTokens, older, recent, revision: this.fileRevision(state), nextSeq: state.nextSeq,
+        leafUuid: undefined, leafSeq: 0, retainedUuids: [...pinned], systemMessages: [] as Message[] }
+      const leaf = older[older.length - 1]
+      const leafSeq = ((leaf as unknown as Record<string, unknown>).dbId as number)
+        ?? (leaf.metadata?.isCompactSummary ? leaf.metadata.compactionLeafSeq : undefined) ?? 0
+      // Archive evidence stays tied to the prepared prefix, not a newer file.
+      const archivedSystems = await this.searchArchive(ctx, { role: 'system', limit: Number.MAX_SAFE_INTEGER })
+      const systemMessages = structuredClone(archivedSystems.messages.filter(message => message.role === 'system'
+        && !message.metadata?.isCompactSummary && (message as Message & { dbId: number }).dbId <= leafSeq))
+      return { preTokens, older, recent, revision: this.fileRevision(state), nextSeq: state.nextSeq,
+        leafUuid: leaf.id, leafSeq, retainedUuids: [...pinned], systemMessages }
     })
-    this.invalidate(ctx)
-    console.log(`[jsonl-history] compressed ${ctx.sessionId}: ${preTokens} → ${postTokens} tokens`)
-    return { preTokens, postTokens }
+    if (!prepared.older.length) return { preTokens: prepared.preTokens, postTokens: prepared.preTokens }
+    const maintenance = fs.existsSync(this.dataPath) ? currentHistoryMaintenance(this.projectionDb(), ctx, 'jsonl') : undefined
+    const summary = await awaitCompressionSummary(() => summarizeFn(maintenanceSummaryEvidence(prepared.older, maintenance), { systemMessages: prepared.systemMessages }), ctx.signal)
+    return withHistoryLock(ctx.tenantId, async () => {
+      assertCompressionContext(ctx)
+      const postTokens = estimateModelHistoryTokens([{ role: 'system', content: `【历史上下文摘要】${summary}` }, ...prepared.recent])
+      await this.appendRow(ctx, {
+        uuid: crypto.randomUUID(), parentUuid: null, type: 'summary', timestamp: new Date().toISOString(),
+        sessionId: ctx.sessionId, tenantId: ctx.tenantId,
+        isSidechain: ctx.sessionId.startsWith('subagent-') || Boolean((ctx as Partial<AgentContext>).parentSessionId),
+        dbSeq: prepared.nextSeq, summary, leafUuid: prepared.leafUuid, leafSeq: prepared.leafSeq,
+        ...(prepared.retainedUuids.length ? { retainedUuids: prepared.retainedUuids } : {}),
+        preTokens: prepared.preTokens, postTokens, transcriptPath: this.filePath(ctx),
+      }, async () => {
+        assertCompressionContext(ctx)
+        const state = await this.loadSession(ctx)
+        if (this.fileRevision(state) !== prepared.revision || state.nextSeq !== prepared.nextSeq)
+          throw Object.assign(new Error('History changed during summary generation; original history was preserved'), { code: 'HISTORY_COMPRESSION_CONFLICT' })
+        assertCompressionContext(ctx)
+      }, () => assertCompressionContext(ctx))
+      this.invalidate(ctx)
+      return { preTokens: prepared.preTokens, postTokens }
+    })
+    })
   }
 
   async summarize(ctx: AgentContext): Promise<void> {
@@ -1256,13 +1620,97 @@ export class JSONLConversationHistory implements ConversationHistory {
 
   // ─── 内部工具 ────────────────────────────────────────────────
 
-  private async appendRow(ctx: Ctx, row: JsonlRow): Promise<void> {
+  private async appendRow(ctx: Ctx, row: JsonlRow, beforeWrite?: () => Promise<void>, beforeAppend?: () => void): Promise<void> {
     const key = this.sessionKey(ctx)
     await this.enqueue(key, async () => {
-      const file = this.filePath(ctx)
-      await fs.promises.mkdir(path.dirname(file), { recursive: true })
-      await fs.promises.appendFile(file, JSON.stringify(row) + '\n')
+      await beforeWrite?.()
+      await this.appendRowWithinLease(ctx, row, beforeAppend)
     })
+  }
+
+  private async appendRowWithinLease(ctx: Ctx, row: JsonlRow, beforeAppend?: () => void): Promise<void> {
+    const file = this.filePath(ctx)
+    await fs.promises.mkdir(path.dirname(file), { recursive: true })
+    beforeAppend?.()
+    const maintenance = fs.existsSync(this.dataPath) ? currentHistoryMaintenance(this.projectionDb(), ctx, 'jsonl') : undefined
+    if (maintenance && (row.type === 'summary' || row.type === 'update')) { await this.appendMaintenanceRow(ctx, row, maintenance); return }
+    if (fs.existsSync(this.dataPath) && (row.type === 'tombstone' || row.type === 'update' || row.type === 'summary')) await invalidateJSONLDeliveries(this.projectionDb(), ctx)
+    await fs.promises.appendFile(file, JSON.stringify(row) + '\n')
+  }
+
+  private maintenanceAnchor(snapshot: JSONLPhysicalSnapshot, anchorId: string): string {
+    const rows = snapshot.rows.filter(row => row.id === anchorId), active = snapshot.active.filter(message => message.id === anchorId)
+    if (rows.length !== 1 || active.length !== 1 || active[0].role !== 'user') throw new CollaborationError('conflict', 'Maintenance lost its original physical input')
+    return JSON.stringify([snapshot.fileIdentity, rows[0].offset, rows[0].bytes, rows[0].hash, canonicalJSONLMessage(active[0])])
+  }
+
+  /** File sync and the retirement receipt reconcile by exact reserved bytes after lost ACK or restart. */
+  private async recoverCollaborationMaintenance(ctx: Ctx): Promise<void> {
+    // Plain JSONL archives have no SQL authority to recover. Starting a receipt
+    // datasource here would couple ordinary file appends to engine startup.
+    if (!fs.existsSync(this.dataPath)) return
+    const db = this.projectionDb()
+    await ensureHistoryMaintenanceSchema(db)
+    const pending = (await db.execute({ sql: `SELECT maintenance_id,history_epoch,typeof(history_epoch) AS epoch_type,anchor_id,anchor_fingerprint,payload_json,payload_hash
+      FROM collaboration_history_maintenance WHERE tenant_id=? AND session_id=? AND backend='jsonl' AND state='pending' ORDER BY rowid`, args: [ctx.tenantId, ctx.sessionId] })).rows
+    for (const receipt of pending) {
+      if (receipt.epoch_type !== 'integer' || !Number.isSafeInteger(Number(receipt.history_epoch)) || Number(receipt.history_epoch) < 0)
+        throw new CollaborationError('conflict', 'JSONL maintenance receipt epoch is invalid')
+      const json = String(receipt.payload_json)
+      if (maintenanceDigest(json) !== receipt.payload_hash) throw new CollaborationError('conflict', 'JSONL maintenance receipt changed')
+      const payload = JSON.parse(json) as { plan: JSONLAppendPlan; retired: string[] }
+      if (!payload || !payload.plan || !Array.isArray(payload.retired) || !payload.retired.every(id => typeof id === 'string'))
+        throw new CollaborationError('conflict', 'JSONL maintenance reservation is malformed')
+      if (await jsonlHistoryEpoch(db, ctx, true) !== Number(receipt.history_epoch)) throw new CollaborationError('conflict', 'JSONL maintenance epoch was revoked')
+      let snapshot = await this.inspectCollaborationArchive(ctx)
+      if (this.maintenanceAnchor(snapshot, String(receipt.anchor_id)) !== receipt.anchor_fingerprint) throw new CollaborationError('conflict', 'JSONL maintenance input identity changed')
+      const deliveries = (await db.execute({ sql: `SELECT history_message_id,file_identity,row_offset,row_bytes,row_hash,history_epoch
+        FROM collaboration_jsonl_deliveries WHERE tenant_id=? AND history_session_id=? AND state='integrated'`, args: [ctx.tenantId, ctx.sessionId] })).rows
+      const physicalById = new Map<string, typeof snapshot.rows>()
+      for (const row of snapshot.rows) { const rows = physicalById.get(row.id) ?? []; rows.push(row); physicalById.set(row.id, rows) }
+      for (const delivery of deliveries) {
+        const rows = physicalById.get(String(delivery.history_message_id)) ?? [], physical = rows[0]
+        if (rows.length !== 1 || delivery.history_epoch !== receipt.history_epoch || delivery.file_identity !== snapshot.fileIdentity
+          || Number(delivery.row_offset) !== physical.offset || Number(delivery.row_bytes) !== physical.bytes || delivery.row_hash !== physical.hash)
+          throw new CollaborationError('conflict', 'Maintenance cannot retire a peer whose original physical record changed')
+      }
+      await this.persistCollaborationRow(ctx, payload.plan)
+      snapshot = await this.inspectCollaborationArchive(ctx)
+      if (this.maintenanceAnchor(snapshot, String(receipt.anchor_id)) !== receipt.anchor_fingerprint) throw new CollaborationError('conflict', 'JSONL maintenance changed its original input')
+      const tx = await db.transaction('write')
+      try {
+        if (await jsonlHistoryEpoch(tx, ctx, true) !== Number(receipt.history_epoch)) throw new CollaborationError('conflict', 'JSONL maintenance epoch changed after sync')
+        await tx.execute({ sql: `UPDATE collaboration_jsonl_deliveries SET state='suppressed',reason='history_compacted'
+          WHERE tenant_id=? AND history_session_id=? AND state='integrated' AND history_message_id IN (SELECT value FROM json_each(?))`,
+          args: [ctx.tenantId, ctx.sessionId, JSON.stringify(payload.retired)] })
+        await tx.execute({ sql: `UPDATE collaboration_history_maintenance SET state='committed',committed_at=? WHERE maintenance_id=? AND state='pending'`, args: [Date.now(), receipt.maintenance_id] })
+        await tx.commit()
+      } catch (error) { if (!tx.closed) await tx.rollback().catch(() => undefined); throw error }
+      finally { tx.close() }
+    }
+  }
+
+  private async appendMaintenanceRow(ctx: Ctx, row: JsonlRow, maintenance: HistoryMaintenanceLease): Promise<void> {
+    await maintenance.check()
+    const snapshot = await this.inspectCollaborationArchive(ctx)
+    if (this.maintenanceAnchor(snapshot, maintenance.anchorId) !== maintenance.anchorFingerprint) throw new CollaborationError('conflict', 'Private maintenance changed its seed')
+    if (row.type === 'update' && snapshot.active.find(message => message.id === row.targetUuid)?.role !== 'tool')
+      throw new CollaborationError('forbidden', 'Private micro maintenance may only reduce tool output')
+    const pins = maintenancePinnedIds(snapshot.active, maintenance.anchorId)
+    if (row.type === 'summary' && [...pins].some(id => !row.retainedUuids?.includes(id))) throw new CollaborationError('conflict', 'Summary would remove an admitted input or pending dispatch')
+    const encoded = JSON.stringify(row) + '\n'
+    const plan: JSONLAppendPlan = { fileIdentity: snapshot.fileIdentity, offset: snapshot.size, bytes: Buffer.byteLength(encoded),
+      hash: maintenanceDigest(encoded), encoded, prefixHash: snapshot.contentHash }
+    const retained = new Set(row.retainedUuids ?? [])
+    const retired = row.type === 'summary' ? snapshot.rows.filter(item => item.sequence <= (row.leafSeq ?? 0) && !retained.has(item.id)).map(item => item.id) : []
+    const db = this.projectionDb(), tx = await db.transaction('write')
+    try {
+      if (await jsonlHistoryEpoch(tx, ctx, true) !== maintenance.epoch) throw new CollaborationError('conflict', 'JSONL maintenance epoch changed before reservation')
+      await reserveHistoryMaintenance(tx, maintenance, { kind: row.type, plan, retired, retained: [...retained], before: snapshot.revision }, false)
+      await tx.commit()
+    } catch (error) { if (!tx.closed) await tx.rollback().catch(() => undefined); throw error }
+    finally { tx.close() }
+    await this.recoverCollaborationMaintenance(ctx)
   }
 
   private invalidate(ctx: Ctx): void {

@@ -75,10 +75,12 @@ describe('legacy cron timeout schema compatibility', () => {
     expect((await db.execute('PRAGMA writable_schema')).rows[0].writable_schema).toBe(0)
     const backup = (await db.execute('SELECT * FROM _aether_schema_repairs')).rows
     expect(backup).toHaveLength(1)
-    expect(backup[0]).toMatchObject({ repair_name: 'cron-timeout-integer-literal-v1', table_name: 'cron_jobs', original_sql: original, original_schema_version: version })
+    expect(backup[0]).toMatchObject({ repair_name: 'cron-timeout-unbounded-v2', table_name: 'cron_jobs', original_sql: original, original_schema_version: version })
     await db.execute('ALTER TABLE conversations DROP COLUMN deleted_at')
     expect((await db.execute('SELECT content FROM conversations')).rows[0].content).toBe('保留会话')
-    for (const value of [0, 86401, 1.5, 'bad']) await expect(db.execute({ sql: "UPDATE cron_jobs SET timeout_seconds=? WHERE id='job-1'", args: [value] })).rejects.toThrow('CHECK constraint failed')
+    await db.execute({ sql: "UPDATE cron_jobs SET timeout_seconds=0 WHERE id='job-1'" })
+    await db.execute({ sql: "UPDATE cron_jobs SET timeout_seconds=86401 WHERE id='job-1'" })
+    for (const value of [-1, 1.5, 'bad']) await expect(db.execute({ sql: "UPDATE cron_jobs SET timeout_seconds=? WHERE id='job-1'", args: [value] })).rejects.toThrow('CHECK constraint failed')
     await db.execute("UPDATE cron_jobs SET name='已更新' WHERE id='job-1'")
     expect((await db.execute("SELECT value FROM cron_refs WHERE value='已更新'")).rows).toHaveLength(1)
   })
@@ -101,6 +103,20 @@ describe('legacy cron timeout schema compatibility', () => {
       expect((await db.execute('PRAGMA schema_version')).rows[0].schema_version).toBe(version)
       expect((await db.execute('SELECT count(*) AS n FROM _aether_schema_repairs')).rows[0].n).toBe(1)
     }
+  })
+
+  it('widens an already deployed 24-hour CHECK without rebuilding the table', async () => {
+    const current = await cronSchema()
+    const bounded = current.replace('timeout_seconds >= 0', 'timeout_seconds BETWEEN 1 AND 86400').replace("'integer'", '"integer"')
+    const version = Number((await db.execute('PRAGMA schema_version')).rows[0].schema_version)
+    await db.execute('PRAGMA writable_schema=ON')
+    await db.execute({ sql: "UPDATE sqlite_schema SET sql=? WHERE type='table' AND name='cron_jobs'", args: [bounded] })
+    await db.execute(`PRAGMA schema_version=${version + 1}`)
+    await db.execute('PRAGMA writable_schema=RESET')
+    await repairLegacyCronTimeoutSchema(db)
+    expect(await cronSchema()).toContain("timeout_seconds >= 0")
+    await db.execute('INSERT INTO cron_jobs(id,name,cron_expr,message,session_id,created_at,updated_at,timeout_seconds) VALUES(\'wide\',\'wide\',\'* * * * *\',\'run\',\'fixture\',1,1,86401)')
+    await db.execute("UPDATE cron_jobs SET timeout_seconds=0 WHERE id='wide'")
   })
 
   it.each(['validation', 'commit'] as const)('rolls back schema and backup records after %s failure and disables schema writes', async failure => {

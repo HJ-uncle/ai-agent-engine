@@ -62,6 +62,8 @@ export interface SubagentRun {
   parentConversationId: string
   parentMessageId: string
   parentToolCallId: string
+  /** Server-owned admission mode; async completion is a separate notification. */
+  parentToolName?: 'subagent' | 'subagent_start'
   childSessionId: string
   resumeFromRunId?: string
   agentId?: string
@@ -95,7 +97,83 @@ export interface SubagentEvent {
   snapshot: SubagentRun
 }
 
+/** A resident sample is deliberately distinct from the canonical v1 archive. */
+export interface SubagentToolSummary extends SubagentToolCall {
+  revisionSeq: number
+  ordinal: number
+  detailRef: string
+  detailTruncated: boolean
+  argsPreview?: string
+  outputPreview?: string
+}
+
+export interface SubagentCoverage {
+  asOfSeq: number
+  toolCount: number
+  includedToolCount: number
+  activeToolCount: number
+  includedActiveToolCount: number
+  ids: string[]
+  hasMore: boolean
+  truncated: boolean
+  completeness: 'complete' | 'partial' | 'unknown'
+  nextCursor?: string
+}
+
+export interface SubagentRunView extends Omit<SubagentRun, 'schemaVersion' | 'toolCalls' | 'continuation'> {
+  schemaVersion: 2
+  view: 'summary'
+  continuation?: Pick<SubagentContinuationProfile, 'role' | 'readOnly'>
+  toolCalls: SubagentToolSummary[]
+  toolCount: number
+  activeToolCount: number
+  coverage: SubagentCoverage
+  latestActivity?: SubagentToolSummary
+  recoveryRequired?: boolean
+  residentToolCount?: number
+  residentBytes?: number
+}
+
+export type SubagentIdentity = Pick<SubagentRun, 'tenantId' | 'rootSessionId' | 'parentSessionId' | 'parentConversationId' | 'parentMessageId' | 'parentToolCallId' | 'childSessionId'>
+export type SubagentViewHeader = Omit<SubagentRunView, 'toolCalls' | 'coverage'>
+export interface SubagentDeltaEvent {
+  schemaVersion: 2
+  kind: SubagentEvent['kind']
+  runId: string
+  seq: number
+  baseSeq: number
+  identity: SubagentIdentity
+  header?: SubagentViewHeader
+  headerPatch: Partial<Omit<SubagentViewHeader, 'schemaVersion' | 'view'>>
+  toolUpsert?: SubagentToolSummary
+  coverage?: SubagentCoverage
+}
+/** Exact bounded checkpoint for negotiated recovery and legacy stream conversion. */
+export interface SubagentViewEvent {
+  schemaVersion: 2
+  kind: 'snapshot'
+  runId: string
+  seq: number
+  view: SubagentRunView
+}
+export type SubagentWireEvent = SubagentEvent | SubagentDeltaEvent | SubagentViewEvent
+/** Immutable permissions stay in the server record, never in live deltas. */
+export interface SubagentRunHeader extends Omit<SubagentRun, 'toolCalls'> {
+  toolCount: number
+  activeToolCount: number
+  latestActivity?: SubagentToolSummary
+  nonPlanToolCount: number
+  /** A display-only read never pretends to contain executable permissions. */
+  continuationDisplay?: Pick<SubagentContinuationProfile, 'role' | 'readOnly'>
+}
+export interface SubagentMutation {
+  event: SubagentWireEvent
+  header: SubagentRunHeader
+  view: SubagentRunView
+}
+
 export type CreateSubagentRun = Pick<SubagentRun, 'tenantId' | 'rootSessionId' | 'parentSessionId' | 'parentConversationId' | 'parentMessageId' | 'parentToolCallId' | 'task' | 'description' | 'modelId'> & {
+  parentToolName?: SubagentRun['parentToolName']
   runId?: string
   childSessionId?: string
   resumeFromRunId?: string
@@ -164,7 +242,7 @@ export function isTerminalRun(status: RunStatus): boolean {
   return TERMINAL_RUN_STATUSES.has(status)
 }
 
-export function outcomeText(run: SubagentRun): string {
+export function outcomeText(run: Pick<SubagentRun, 'runId' | 'parentToolCallId' | 'status' | 'stopReason' | 'error' | 'resultSummary' | 'partialOutput'>): string {
   // The parent may retain several attempts in history. Bind the evidence to this
   // invocation before model-authored prose (which can claim a conflicting status).
   const state = `[子任务状态] ${JSON.stringify({ runId: run.runId, parentToolCallId: run.parentToolCallId,

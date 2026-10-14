@@ -73,7 +73,7 @@ describe('executable tool profiles', () => {
     const readOnlySelection = await createToolRegistry({ allowedTools: ['read_file'] })
     expect(readOnlySelection.registry.has('edit_file')).toBe(false)
     const editSelection = await createToolRegistry({ toolProfile: 'code', allowedTools: ['edit_file'] })
-    expect(editSelection.registry.list().map(item => item.name)).toEqual(['edit_file'])
+    expect(editSelection.registry.list().map(item => item.name)).toEqual(['edit_file', 'plan_update'])
   })
 
   it('does not leak tool selections between general, code and subsequent general registries', async () => {
@@ -92,13 +92,13 @@ describe('executable tool profiles', () => {
     expectExactCategories(second)
   })
 
-  it('intersects explicit lists with code capabilities and does not restore excluded tools or mandatory helpers', async () => {
+  it('intersects explicit lists with code capabilities while preserving only the builtin plan helper', async () => {
     const result = await createToolRegistry({ toolProfile: 'code', allowedTools: ['read_file', ...excluded] })
-    expect(result.registry.list().map(item => item.name)).toEqual(['read_file'])
+    expect(result.registry.list().map(item => item.name)).toEqual(['read_file', 'plan_update'])
     await expect(result.registry.execute('cron_create', {}, context)).rejects.toBeInstanceOf(ToolNotFoundError)
     expectExactCategories(result)
     const empty = await createToolRegistry({ toolProfile: 'code', allowedTools: [] })
-    expect(empty.registry.list()).toEqual([])
+    expect(empty.registry.list().map(item => item.name)).toEqual(['plan_update'])
     expectExactCategories(empty)
   })
 
@@ -107,7 +107,7 @@ describe('executable tool profiles', () => {
     expect(normalizeToolName('cron_create')).toBe('cron_create')
     expect(normalizeToolName('toString')).toBe('toString')
     const result = await createToolRegistry({ toolProfile: 'code', allowedTools: ['smart_read', 'run_command', 'glob', 'grep'] })
-    expect(result.registry.list().map(item => item.name).sort()).toEqual(['read_file', 'execute_cmd', 'glob_search', 'grep_search'].sort())
+    expect(result.registry.list().map(item => item.name).sort()).toEqual(['read_file', 'execute_cmd', 'glob_search', 'grep_search', 'plan_update'].sort())
     for (const name of ['smart_read', 'run_command', 'glob', 'grep']) {
       expect(result.registry.has(name)).toBe(false)
       await expect(result.registry.execute(name, {}, context)).rejects.toBeInstanceOf(ToolNotFoundError)
@@ -138,7 +138,7 @@ describe('executable tool profiles', () => {
       allowedSkills: ['fixture-skill'], inlineMcpServers: mcpServers,
       inlineSkills: [{ id: 'fixture-skill', name: 'Fixture Skill', promptContent: 'Fixture instructions' }],
     })
-    expect(result.registry.list().map(item => item.name).sort()).toEqual(['get_skill', 'mcp_fixture_query'])
+    expect(result.registry.list().map(item => item.name).sort()).toEqual(['get_skill', 'mcp_fixture_query', 'plan_update'].sort())
     await expect(result.registry.execute('mcp_fixture_write', {}, context)).rejects.toBeInstanceOf(ToolNotFoundError)
     expectExactCategories(result)
   })
@@ -188,6 +188,8 @@ describe('executable tool profiles', () => {
     }
     const readOnly = createSubagentToolRegistry(parent.registry, true)
     expect(readOnly.has('read_file')).toBe(true)
+    expect(readOnly.has('plan_update')).toBe(true)
+    expect(readOnly.executionMode?.('plan_update', {})).toBe('serial')
     expect(readOnly.has('execute_cmd')).toBe(false)
     expect(readOnly.has('cancel_command')).toBe(false)
     expect(readOnly.has('edit_file')).toBe(false)
@@ -201,12 +203,42 @@ describe('executable tool profiles', () => {
 describe('explicit whitelists for unattended and custom Agent runs', () => {
   it.each(['general', 'code'] as const)('%s never auto-registers ask_user or skills outside an explicit list', async toolProfile => {
     const result = await createToolRegistry({ toolProfile, allowedTools: ['read_file'], allowedSkills: ['fixture-skill'], inlineSkills: [{ id: 'fixture-skill', name: 'Fixture Skill', promptContent: 'read only' }] })
-    expect(result.registry.list().map(item => item.name)).toEqual(['read_file'])
+    expect(result.registry.list().map(item => item.name)).toEqual(['read_file', 'plan_update'])
     await expect(result.registry.preflight('ask_user', { question: 'unexpected pause' }, context)).rejects.toBeInstanceOf(ToolNotFoundError)
     result.registry.register(tool('ask_user'))
     expect(result.registry.has('ask_user')).toBe(false)
     expectExactCategories(result)
     const empty = await createToolRegistry({ toolProfile, allowedTools: [] })
-    expect(empty.registry.list()).toEqual([])
+    expect(empty.registry.list().map(item => item.name)).toEqual(['plan_update'])
+  })
+})
+
+
+describe('session-local planning is builtin in every execution profile', () => {
+  it.each(['general', 'code'] as const)('%s exposes planning with zero business capabilities in all security modes', async toolProfile => {
+    for (const securityMode of ['safe', 'standard', 'full-access'] as const) {
+      setSecurityMode(context.tenantId, context.sessionId, securityMode)
+      const result = await createToolRegistry({ toolProfile, allowedTools: [], allowedMcpServers: [], allowedSkills: [] })
+      expect(result.registry.list().map(item => item.name)).toEqual(['plan_update'])
+      expect(result.registry.executionMode('plan_update', {})).toBe('serial')
+      expect(await result.registry.preflight('plan_update', { plan: [] }, context)).toBeUndefined()
+      for (const name of ['execute_cmd', 'write_file', 'ask_user', 'cron_create', 'todo_create']) {
+        expect(result.registry.has(name), name).toBe(false)
+        await expect(result.registry.execute(name, {}, context)).rejects.toBeInstanceOf(ToolNotFoundError)
+      }
+      expectExactCategories(result)
+    }
+  })
+
+  it.each(['general', 'code'] as const)('%s rejects extensions and late registrations impersonating the builtin plan', async toolProfile => {
+    const result = await createToolRegistry({ toolProfile, allowedTools: [], allowedMcpServers: [] })
+    result.registry.unregister('plan_update')
+    for (const source of [undefined, 'skill', 'mcp']) {
+      const impostor = tool('plan_update', source)
+      result.registry.register(impostor)
+      expect(result.registry.has('plan_update')).toBe(false)
+      await expect(result.registry.execute('plan_update', {}, context)).rejects.toBeInstanceOf(ToolNotFoundError)
+      expect(impostor.execute).not.toHaveBeenCalled()
+    }
   })
 })

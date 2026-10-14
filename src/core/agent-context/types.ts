@@ -3,7 +3,8 @@ import type { ToolProfile } from '../../tools/tool-profile.js'
 import type { RequestBudget } from '../subagent/budget.js'
 import type { ResolvedModelConfig } from '../llm-adapter/resolve-model.js'
 import type { LLMRequestAttemptEvent } from '../llm-adapter/types.js'
-import type { RunObserver, SubagentEvent } from '../subagent/types.js'
+import type { RunObserver, SubagentWireEvent } from '../subagent/types.js'
+import type { AuthContext } from '../../auth/types.js'
 
 // ─── JSON Schema ───────────────────────────────────────────────────────────────
 
@@ -137,10 +138,19 @@ export interface ConversationHistory {
   readonly retainsArchive?: boolean
   searchArchive?(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>, options: HistorySearchOptions): Promise<HistorySearchResult>
   append(message: Message, ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<string>
+  /** Persist an admitted user seed before acknowledging its durable outbox. */
+  appendAdmissionUser?(message: Message, ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>,
+    anchor: import('../../storage/root-admission/projection.js').AdmissionMessageAnchor): Promise<string>
+  /** Conditional result persistence and replay receipt share the storage mutation boundary. */
+  appendIfActiveToolCallAnchor?(message: Message, ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>,
+    anchor: ConversationToolCallAnchor): Promise<ConversationConditionalAppend>
   /** Returns windowed messages for LLM context (applying token window). */
   getHistory(ctx: Pick<AgentContext, 'tenantId' | 'sessionId' | 'inheritContext'>): Promise<Message[]>
   /** Returns ALL stored messages without any windowing/truncation. */
   getFullHistory(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>): Promise<Message[]>
+  /** Only current model-projection anchors qualify; archived or deleted dispatches do not. */
+  getActiveToolCallAnchor?(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>,
+    key: ConversationToolCallAnchor): Promise<ConversationToolCallAnchor | null>
   /**
    * Returns the user-visible transcript, including messages hidden by a
    * JSONL compaction summary.  This is deliberately separate from
@@ -185,7 +195,7 @@ export interface ConversationHistory {
    * 返回值：压缩前后历史 token 估算（供自动压缩状态与审计日志使用）
    */
   compress(
-    ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>,
+    ctx: Pick<AgentContext, 'tenantId' | 'sessionId'> & Pick<Partial<AgentContext>, 'signal'>,
     summarizeFn: (messages: Message[], evidence?: CompactionArchiveEvidence) => Promise<string>,
     keepRecent?: number | { keepRecentTokens?: number; force?: boolean },
   ): Promise<{ preTokens: number; postTokens: number }>
@@ -198,6 +208,18 @@ export interface ConversationHistory {
     ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>,
     opts?: { keepRecent?: number; maxChars?: number },
   ): Promise<{ cleared: number; freedTokens: number }>
+}
+
+/** Narrow parent identity, deliberately excluding message content and tool arguments. */
+export interface ConversationToolCallAnchor {
+  messageId: string
+  toolCallId: string
+  conversationId: string
+}
+
+export interface ConversationConditionalAppend {
+  messageId: string
+  disposition: 'appended' | 'duplicate' | 'suppressed'
 }
 
 /** Storage-authenticated original messages covered by the next archive summary. */
@@ -257,7 +279,20 @@ export interface IToolRegistry {
 
 // ─── AgentContext ──────────────────────────────────────────────────────────────
 
+export type BrowserPrincipal = Pick<AuthContext, 'tenantId' | 'userId' | 'method'>
+
 export interface AgentContext {
+  /** Trusted server capability; never copied into model metadata or continuation. */
+  executionOwner?: import('../collaboration/execution-owner.js').ExecutionOwner
+  /** Private backend capability minted only after canonical production admission. */
+  sqliteDelivery?: import('../collaboration/sqlite-react-boundary.js').SQLiteReActBoundary
+  jsonlDelivery?: import('../collaboration/jsonl-react-boundary.js').JSONLReActBoundary
+  /** Candidate notification is separate from the answerable durable commit. */
+  commitPending?: (pending: Pending) => void | Promise<void>
+  /** A current trusted HTTP authority snapshot; not persisted in continuation profiles. */
+  browserAuthority?: import('../browser-authority.js').BrowserHostAuthority
+  /** Native host routing uses server authentication; never accept this from model/user args. */
+  browserPrincipal?: Readonly<BrowserPrincipal>
   /** Request-resolved resource ceiling for ordinary model-created children; explicit user-selected collaborators use their own bindings. */
   resourceScope?: { skills?: readonly string[] | null; mcpServers?: readonly string[] | null; knowledgeBases?: readonly string[] | null }
   rootRunId?: string
@@ -278,7 +313,8 @@ export interface AgentContext {
   requestBudget?: RequestBudget
   finalizationReserveTokens?: number
   runObserver?: Partial<RunObserver>
-  emitSubagentEvent?: (event: SubagentEvent) => void | Promise<void>
+  subagentEventVersion?: 2
+  emitSubagentEvent?: (event: SubagentWireEvent) => void | Promise<void>
   rootSessionId?: string
   parentSessionId?: string
   parentConversationId?: string
@@ -315,6 +351,10 @@ export interface AgentContext {
 // ─── AgentContext Factory Options ─────────────────────────────────────────────
 
 export interface CreateAgentContextOptions {
+  executionOwner?: import('../collaboration/execution-owner.js').ExecutionOwner
+  commitPending?: (pending: Pending) => void | Promise<void>
+  browserAuthority?: import('../browser-authority.js').BrowserHostAuthority
+  browserPrincipal?: Readonly<BrowserPrincipal>
   rootRunId?: string
   turnId?: string
   userMessageId?: string
@@ -332,7 +372,8 @@ export interface CreateAgentContextOptions {
   requestBudget?: RequestBudget
   finalizationReserveTokens?: number
   runObserver?: Partial<RunObserver>
-  emitSubagentEvent?: (event: SubagentEvent) => void | Promise<void>
+  subagentEventVersion?: 2
+  emitSubagentEvent?: (event: SubagentWireEvent) => void | Promise<void>
   rootSessionId?: string
   parentSessionId?: string
   parentConversationId?: string

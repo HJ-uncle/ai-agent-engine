@@ -21,13 +21,13 @@ export interface JobRecord {
   completedAt?: number
 }
 
-export type JobHandler = (job: JobRecord) => Promise<unknown>
+export type JobHandler = (job: JobRecord, signal: AbortSignal) => Promise<unknown>
 
 export interface TaskQueue {
   enqueue(job: Job): Promise<string>
-  getStatus(jobId: string): Promise<JobRecord | null>
-  cancel(jobId: string): Promise<boolean>
+  getStatus(jobId: string, tenantId: string): Promise<JobRecord | null>
+  cancel(jobId: string, tenantId: string): Promise<boolean>
   registerHandler(type: string, handler: JobHandler): void
   start(): void
-  stop(): void
+  stop(): Promise<void>
 }

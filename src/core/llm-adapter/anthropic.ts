@@ -2,6 +2,8 @@ import { applyThinkingPreference } from './thinking.js'
 import { observeRequest, observeStreamRequest, anthropicUsage, anthropicUsageSnapshot, anthropicUsageFromSnapshot, prepareRequestContext,
   type AnthropicUsageSnapshot } from './request-attempt.js'
 import Anthropic from '@anthropic-ai/sdk'
+import type { Fetch } from '@anthropic-ai/sdk/core'
+import { preserveAnthropicStreamErrors } from './anthropic-stream-error.js'
 import type { LLMAdapter, LLMResponse, LLMAdapterOptions, LLMStreamChunk } from './types.js'
 import type { Message, Tool } from '../agent-context/index.js'
 import { estimateTokens } from '../utils/tokens.js'
@@ -277,17 +279,18 @@ export class AnthropicAdapter implements LLMAdapter {
       baseURL: baseURL || process.env.ANTHROPIC_BASE_URL,
       // X-Access-Token 鉴权：通过自定义 fetch 移除 SDK 自动生成的 X-API-Key 头，
       // 并手动注入全部自定义头，避免上游报 "duplicated valid auth method"。
-      ...(hasTokenAuth ? {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        fetch: (async (url: any, init?: any) => {
-          const headers = new Headers(init?.headers)
+      ...(defaultHeaders && !hasTokenAuth ? { defaultHeaders } : {}),
+      // SDK 0.20 declares node-fetch response extras; its stream parser uses
+      // only the standard fetch surface provided by this native transport.
+      fetch: (async (url: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers)
+        if (hasTokenAuth) {
           headers.delete('X-API-Key')
-          for (const [k, v] of Object.entries(defaultHeaders!)) {
-            headers.set(k, v)
-          }
-          return globalThis.fetch(url as RequestInfo | URL, { ...init, headers })
-        }) as any
-      } : (defaultHeaders && Object.keys(defaultHeaders).length ? { defaultHeaders } : {}))
+          for (const [key, value] of Object.entries(defaultHeaders!)) headers.set(key, value)
+        }
+        const response = await globalThis.fetch(url as RequestInfo | URL, { ...init, headers })
+        return preserveAnthropicStreamErrors(response, init?.signal)
+      }) as unknown as Fetch,
     })
   }
 
@@ -491,7 +494,9 @@ export class AnthropicAdapter implements LLMAdapter {
     type Stream = AsyncIterable<StreamEvent> & {
       abort(): void
       on?(name: 'streamEvent', listener: (event: StreamEvent) => void): unknown
+      on?(name: 'error', listener: (error: unknown) => void): unknown
       off?(name: 'streamEvent', listener: (event: StreamEvent) => void): unknown
+      off?(name: 'error', listener: (error: unknown) => void): unknown
       finalMessage(): Promise<{ content?: ContentBlock[]; usage: Usage; model: string; stop_reason: string | null }>
     }
     type BlockState = {
@@ -554,6 +559,8 @@ export class AnthropicAdapter implements LLMAdapter {
     }
 
     let stream: Stream | undefined
+    let streamFailure: unknown
+    const captureFailure = (error: unknown) => { streamFailure = error }
     let usageSnapshot: AnthropicUsageSnapshot | undefined
     const requestContext = prepareRequestContext(options, streamParams, Number(streamParams.max_tokens))
     if (options?.contextWindow && Number.isFinite(options.contextWindow)) streamParams.max_tokens = requestContext.maxTokens
@@ -562,7 +569,15 @@ export class AnthropicAdapter implements LLMAdapter {
         stream(params: Record<string, unknown>, requestOptions: { signal?: AbortSignal }): Stream
       }).stream(streamParams, { signal: options?.signal })
       stream.on?.('streamEvent', snapshotStart)
-      return stream
+      stream.on?.('error', captureFailure)
+      const sdkStream = stream
+      // SDK 0.20 can finish its iterator after queued events while discarding
+      // an already emitted error. Drain delivered usage/content, then retain
+      // the terminal cause rather than replacing it with INCOMPLETE_STREAM.
+      return (async function* () {
+        for await (const event of sdkStream) yield event
+        if (streamFailure !== undefined) throw streamFailure
+      })()
     }, requestContext, this.provider, String(streamParams.model),
     originalEvent => {
       // SDK 0.20 only updates output_tokens in finalMessage().usage. Read the
@@ -633,6 +648,7 @@ export class AnthropicAdapter implements LLMAdapter {
       }
     } finally {
       stream?.off?.('streamEvent', snapshotStart)
+      stream?.off?.('error', captureFailure)
       stream?.abort()
     }
   }

@@ -1,27 +1,45 @@
 import { randomUUID } from 'node:crypto'
 import type { Client, Transaction } from '@libsql/client'
 
-const REPAIR_NAME = 'cron-timeout-integer-literal-v1'
+const REPAIR_NAME = 'cron-timeout-unbounded-v2'
 const CRON_SCHEMA_QUERY = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='cron_jobs'"
-const LEGACY_TIMEOUT_CHECK = [
+const TIMEOUT_CHECK_PREFIX = [
   'timeout_seconds', 'integer', 'check', '(', 'timeout_seconds', 'is', 'null',
   'or', '(', 'typeof', '(', 'timeout_seconds', ')', '=', '"integer"',
-  'and', 'timeout_seconds', 'between', '1', 'and', '86400', ')', ')',
 ]
 
-/** Match the known old CHECK as SQL tokens, never inside a string or comment. */
+/** Match and widen the old CHECK as SQL tokens, never inside a string or comment. */
 function correctedCronSchema(sql: string): string | null {
   const tokens = Array.from(sql.matchAll(/--[^\r\n]*|\/\*[\s\S]*?\*\/|'(?:''|[^'])*'|"(?:""|[^"])*"|`(?:``|[^`])*`|\[[^\]]*\]|[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[^\s]/g))
     .filter(token => !token[0].startsWith('--') && !token[0].startsWith('/*'))
   const matches: number[] = []
-  for (let index = 0; index + LEGACY_TIMEOUT_CHECK.length <= tokens.length; index++) {
-    if (LEGACY_TIMEOUT_CHECK.every((value, offset) => offset === 14
-      ? tokens[index + offset][0] === value
-      : tokens[index + offset][0].toLowerCase() === value)) matches.push(index)
+  for (let index = 0; index + TIMEOUT_CHECK_PREFIX.length <= tokens.length; index++) {
+    if (TIMEOUT_CHECK_PREFIX.every((value, offset) => {
+      const token = tokens[index + offset][0]
+      if (offset === 14) return token === "'integer'" || token === '"integer"'
+      return token.toLowerCase() === value
+    })) {
+      const range = tokens.slice(index + 15, index + 21).map(token => token[0].toLowerCase())
+      const unlimited = tokens.slice(index + 15, index + 20).map(token => token[0].toLowerCase())
+      if (range.join(' ') === 'and timeout_seconds between 1 and 86400') matches.push(index)
+      else if (unlimited.join(' ') === 'and timeout_seconds > = 0') matches.push(index)
+    }
   }
   if (matches.length !== 1) return null
-  const literal = tokens[matches[0] + 14]
-  return sql.slice(0, literal.index) + "'integer'" + sql.slice(literal.index! + literal[0].length)
+  const match = matches[0]
+  const literal = tokens[match + 14]
+  const edits = [
+    ...(literal[0] === '"integer"' ? [{ start: literal.index!, end: literal.index! + literal[0].length, value: "'integer'" }] : []),
+  ]
+  if (tokens[match + 17]?.[0].toLowerCase() === 'between') {
+    const lowerBound = tokens[match + 17]
+    const upperBound = tokens[match + 20]
+    edits.push({ start: lowerBound.index!, end: upperBound.index! + upperBound[0].length, value: '>= 0' })
+  }
+  edits.sort((a, b) => b.start - a.start)
+  let result = sql
+  for (const edit of edits) result = result.slice(0, edit.start) + edit.value + result.slice(edit.end)
+  return result === sql ? null : result
 }
 
 async function schemaSql(db: Client | Transaction): Promise<string | null> {
@@ -36,9 +54,10 @@ function schemaVersion(value: unknown): number {
 }
 
 /**
- * Old ALTER ADD COLUMN accepted a double-quoted string in this CHECK, but a
- * later ALTER reparses every table with stricter quoting. Repair before any
- * migration, preserving rows, rootpages, indexes, triggers and foreign keys.
+ * Old ALTER ADD COLUMN accepted a double-quoted string and a 24-hour bound in
+ * this CHECK, but later ALTERs reparse every table with stricter quoting. Widen
+ * it before any migration, preserving rows, rootpages, indexes, triggers and
+ * foreign keys.
  */
 export async function repairLegacyCronTimeoutSchema(db: Client): Promise<void> {
   const candidate = await schemaSql(db)

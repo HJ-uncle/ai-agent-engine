@@ -5,7 +5,10 @@ import { fail } from './response.js'
 import { logger } from '../../observability/index.js'
 import type { AuthMiddleware } from '../../auth/types.js'
 import { createAuthMiddleware } from '../../auth/index.js'
-import { configureInstanceToken, hasValidInstanceToken, isPublicInstanceProbe } from '../../auth/instance-token.js'
+import { configureInstanceToken, hasValidInstanceToken, hasOwnedInstanceToken, isPublicInstanceProbe } from '../../auth/instance-token.js'
+import type { AuthContext } from '../../auth/types.js'
+import { browserAuthorityFromTrustedState, type BrowserHostAuthority } from '../../core/browser-authority.js'
+import { getRuntimeIdentity } from '../../runtime/identity.js'
 
 // White listed paths that do not require login state (reserved for future JWT)
 // Also we bypass header checks for standard health checks to avoid breaking internal ops
@@ -16,6 +19,16 @@ export const WHITELIST_PATHS = ['/health', '/meta']
 // been applied.  Keeping a fallback makes isolated route tests deterministic.
 let authMiddleware: AuthMiddleware = createAuthMiddleware()
 let authenticationRequired = process.env.AUTH_ENABLED !== 'false'
+
+/** Read the same frozen boundary used by the request gate; settings cannot enable dispatch. */
+export function isRequestAuthenticationRequired(): boolean { return authenticationRequired }
+
+/** Authenticated actor or a configured process-local gate, never a supplied body authority. */
+export function browserAuthorityFromRequest(request: FastifyRequest): BrowserHostAuthority | undefined {
+  const auth = (request as FastifyRequest & { authContext?: AuthContext }).authContext
+  return browserAuthorityFromTrustedState(auth, { authenticationRequired, gateVerified: hasOwnedInstanceToken(request.headers),
+    instanceId: getRuntimeIdentity().instanceId })
+}
 
 export function configureRequestAuthentication(): void {
   authMiddleware = createAuthMiddleware()

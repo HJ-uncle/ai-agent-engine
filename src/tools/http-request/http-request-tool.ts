@@ -33,7 +33,7 @@ export const httpRequestTool: Tool = {
       method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] },
       headers: { type: 'object' },
       body: { type: 'string', description: '请求体' },
-      timeout: { type: 'integer', description: '超时ms，默认30000' },
+      timeout: { type: 'integer', minimum: 0, description: '可选超时ms；省略或 0 表示直到完成或取消' },
       auth: {
         type: 'object',
         description: '认证: {type:"bearer",token:"xxx"} 或 {type:"basic",username,password} 或 {type:"apikey",apiKey,apiKeyHeader,apiKeyPrefix}',
@@ -49,7 +49,7 @@ export const httpRequestTool: Tool = {
       method = 'GET', 
       headers = {}, 
       body, 
-      timeout = 30000,
+      timeout,
       auth,
       followRedirects = true,
       responseType = 'auto'
@@ -74,7 +74,7 @@ export const httpRequestTool: Tool = {
       const requestHeaders = await buildHeaders(headers, auth, ctx)
 
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), timeout)
+      const timeoutId = timeout && timeout > 0 ? setTimeout(() => controller.abort(), timeout) : undefined
 
       try {
         const response = await guardedHttp(url, ctx, 'http_request', {
@@ -82,11 +82,11 @@ export const httpRequestTool: Tool = {
           headers: requestHeaders,
           body: body && ['POST', 'PUT', 'PATCH'].includes(method) ? body : undefined,
           signal: ctx.signal ? AbortSignal.any([controller.signal, ctx.signal]) : controller.signal,
-          timeoutMs: timeout,
+          ...(timeout !== undefined && timeout > 0 ? { timeoutMs: timeout } : {}),
           followRedirects
         })
 
-        clearTimeout(timeoutId)
+        if (timeoutId) clearTimeout(timeoutId)
 
         const statusText = response.statusText || ''
         const responseHeaders: Record<string, string> = {}
@@ -150,7 +150,7 @@ export const httpRequestTool: Tool = {
 
         return { success: true, output: result }
       } catch (fetchErr: any) {
-        clearTimeout(timeoutId)
+        if (timeoutId) clearTimeout(timeoutId)
         throw fetchErr
       }
     } catch (err: any) {

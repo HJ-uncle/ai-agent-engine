@@ -561,7 +561,9 @@ interface ParsedToolCall {
 function normalizeParsedToolArgs(name: string, args: Record<string, unknown>): Record<string, unknown> {
   if (name !== 'write_file') return args
   const normalized = normalizeWriteFileArgs(args)
-  return normalized.ok ? { path: normalized.args.path, data: normalized.args.data } : args
+  return normalized.ok ? { path: normalized.args.path, data: normalized.args.data,
+    ...(normalized.args.expectedHash === undefined ? {} : { expectedHash: normalized.args.expectedHash }),
+    ...(normalized.args.createOnly === undefined ? {} : { createOnly: normalized.args.createOnly }) } : args
 }
 
 // Parameter-key → tool-name heuristics for when the model emits <function=> with empty name

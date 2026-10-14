@@ -5,20 +5,32 @@ import type { LLMAdapter, LLMAdapterOptions } from '../llm-adapter/index.js'
 import type { Message, ToolResult } from '../agent-context/index.js'
 import { estimateTokens } from '../utils/tokens.js'
 import { v4 as uuidv4 } from 'uuid'
-import { applyOSMMultiplier, getOSMCompressRatio } from '../osm.js'
+import { getOSMCompressRatio } from '../osm.js'
 import { getCodeToolOutputMaxChars, getToolOutputMaxChars } from './tool-output-limit.js'
 import { repairJson } from '../utils/json.js'
 import { TodoStore } from '../../storage/todo/index.js'
+import { isTaskPlanControl } from '../task-plan/control.js'
+import { TASK_PLAN_EXECUTION_PROMPT } from '../task-plan-prompt.js'
 import type { CompactionState, RunOutcome } from '../subagent/types.js'
 import { FINALIZATION_PROMPT, estimateRequestInput, finalizationMessages, partialEvidence } from './finalization.js'
 import { executeRegisteredTool, executeToolBatch, normalizeToolResult, type RegisteredToolCall, type ParsedToolCall } from './tool-batch.js'
+import { assertOwnedDispatch } from '../collaboration/execution-owner.js'
+import { bindSQLiteReActBoundary, readSQLiteReActHistory, consumeSQLiteReActIteration, assertSQLiteReActDispatch, maintainSQLiteReActHistory } from '../collaboration/sqlite-react-boundary.js'
+import { bindJSONLReActBoundary, readJSONLReActHistory, consumeJSONLReActIteration, assertJSONLReActDispatch, maintainJSONLReActHistory } from '../collaboration/jsonl-react-boundary.js'
+import { readAuthenticatedJSONLHistory } from '../../storage/conversation/jsonl-origin.js'
+import { readAuthenticatedSQLiteHistory } from '../../storage/conversation/sqlite-origin.js'
 import { resolveCapabilities } from '../model-capabilities/index.js'
 import { ToolProgressTracker, toolFailureLimit } from './tool-progress.js'
+import { projectReadonlyHistory, readonlyHistoryNotice, type ReadonlyHistoryProjection } from './readonly-history.js'
 import { estimateModelHistoryTokens, estimateModelMessageTokens, modelMessageContent } from '../utils/model-context.js'
 import { createHash } from 'node:crypto'
 import { browserOutputPresentation } from '../utils/browser-output.js'
 
 const OUTPUT_CONTINUATION_PROMPT = 'The previous model response reached its single-response output limit. Continue the same user task from the retained partial response and history, starting exactly where the response stopped. Do not repeat text already emitted, restart completed work, or repeat executed tools. Use tools only for remaining work; finish normally when the original task is complete.'
+
+const REASONING_OUTPUT_RECOVERY_PROMPT = 'The previous model response reached its single-response output limit before producing a public answer or a complete tool call. Continue the original user task using the retained task and completed tool evidence. Provide a concise public conclusion or the next necessary complete tool call. Do not repeat completed work or expose hidden reasoning. Task scope, permissions and budgets remain unchanged.'
+
+const TOOL_OUTPUT_RECOVERY_PROMPT = 'The previous model response reached its single-response output limit while generating tool calls. None of the tool calls in that response executed, including any complete sibling calls; their interrupted receipts are retained in history. Continue the original user task by generating new complete calls with smaller self-contained arguments. Do not continue or repair the unfinished JSON fragment, repeat already completed work, or assume an interrupted call succeeded. Where the task permits, reference existing authorized workspace files rather than copying large payloads into arguments, and preserve all required information. This guidance does not change the task, tool permissions, workspace boundaries, or budgets.'
 
 /**
  * Truncate tool output that is too long.
@@ -191,16 +203,30 @@ export function pairToolHistory(messages: Message[]): Message[] {
   })
 }
 
+/** Recovery evidence stays durable, but private-only fragments are not a provider message. */
+function isReasoningRecoverySegment(message: Message): boolean {
+  const content = modelMessageContent(message)
+  return message.role === 'assistant' && message.metadata?.outputReasoningRecovery === true
+    && message.metadata.partial === true && message.metadata.status === 'failed' && message.metadata.stopReason === 'output_limit'
+    && Boolean(message.reasoningContent?.trim()) && !message.toolCall && !message.toolCallId
+    && typeof content === 'string' && !content.trim()
+}
+
 /** Read the complete active history so backend windows cannot hide system constraints. */
-async function requestHistory(ctx: AgentContext): Promise<Message[]> {
-  const all = typeof ctx.history.getFullHistory === 'function'
-    ? await ctx.history.getFullHistory(ctx) : await ctx.history.getHistory(ctx)
+async function requestHistory(ctx: AgentContext): Promise<ReadonlyHistoryProjection> {
+  const sqlite = ctx.sqliteDelivery ? await readSQLiteReActHistory(ctx.sqliteDelivery, ctx)
+    : ctx.jsonlDelivery ? await readJSONLReActHistory(ctx.jsonlDelivery, ctx)
+      : await readAuthenticatedSQLiteHistory(ctx.history, ctx) ?? await readAuthenticatedJSONLHistory(ctx.history, ctx)
+  const all = sqlite ?? (typeof ctx.history.getFullHistory === 'function'
+    ? await ctx.history.getFullHistory(ctx) : await ctx.history.getHistory(ctx))
   let selected = all
-  if (ctx.inheritContext === false) {
+  if (sqlite === undefined && ctx.inheritContext === false) {
     const lastUser = all.map(message => message.role).lastIndexOf('user')
     if (lastUser >= 0) selected = all.slice(lastUser)
   }
-  return pairToolHistory(selected.map(projectModelMessage))
+  const projected = projectReadonlyHistory(selected.filter(message => !isReasoningRecoverySegment(message)),
+    call => ctx.tools.executionMode?.(call.name, call.args))
+  return { ...projected, messages: pairToolHistory(projected.messages.map(projectModelMessage)) }
 }
 
 /** User replay evidence must not be counted or sent as live model context. */
@@ -219,10 +245,21 @@ export class ReActStrategy implements LoopStrategy {
 
   /** Settle one invocation without letting storage/observer failure skip siblings. */
   private async *settleTool(item: RegisteredToolCall, rawResult: ToolResult, ctx: AgentContext): AsyncGenerator<string, { tokens: number; failedToPersist: boolean }> {
-    const result = normalizeToolResult(rawResult)
+    let result = normalizeToolResult(rawResult)
     const { call, messageId } = item
+    const internalPlan = isTaskPlanControl(call.name)
+    let planSnapshot: Awaited<ReturnType<TodoStore['list']>> | undefined
+    if (internalPlan && result.status === 'succeeded') {
+      try { planSnapshot = await todoStore.list(ctx.tenantId, ctx.sessionId) }
+      catch (error) {
+        // A write may have committed. Keep the previous client snapshot and
+        // report uncertainty instead of silently claiming synchronized progress.
+        const message = `任务计划可能已保存，但读取更新失败：${error instanceof Error ? error.message : String(error)}`
+        result = { ...result, success: false, status: 'failed', output: message, error: message }
+      }
+    }
     const output = String(result.output)
-    const metadata = { ...result.metadata, status: result.status, success: result.success, error: result.error,
+    const metadata = { ...result.metadata, ...(internalPlan ? { toolName: call.name } : {}), status: result.status, success: result.success, error: result.error,
       durationMs: result.durationMs, rootRunId: ctx.rootRunId, turnId: ctx.turnId,
       ...(result.change ? { change: { ...result.change, toolCallId: call.id } } : {}) }
     let failedToPersist = false
@@ -259,30 +296,60 @@ export class ReActStrategy implements LoopStrategy {
         ctx.logger.error({ err: error, toolCallId: call.id }, 'Failed to persist tool observer outcome')
       }
     }
-    const frame = { toolCallId: call.id, toolName: call.name, name: call.name, messageId,
-      success: result.success, status: result.status, output: truncated, outputPreview: truncated,
+    if (internalPlan && result.status === 'succeeded' && failedToPersist) {
+      result = { ...result, success: false, status: 'failed',
+        output: '任务计划已更新，但执行回执保存失败。请检查存储状态后继续。', error: 'TASK_PLAN_RECEIPT_SAVE_FAILED' }
+      metadata.status = result.status
+      metadata.success = false
+      metadata.error = result.error
+    }
+    const frame = { toolCallId: call.id, toolName: call.name, name: call.name, args: call.args, messageId,
+      success: result.success, status: result.status, output: failedToPersist && internalPlan ? String(result.output) : truncated,
+      outputPreview: failedToPersist && internalPlan ? String(result.output) : truncated,
       error: result.error, metadata, durationMs: result.durationMs,
       rootRunId: ctx.rootRunId, turnId: ctx.turnId }
-    yield `\x00__tool_end__${JSON.stringify(frame)}`
-    yield `\x00__tool_result__${JSON.stringify(frame)}`
-    if (call.name.startsWith('todo_') && result.status !== 'waiting') yield* yieldTodoFrame(ctx)
+    if (!internalPlan || result.status !== 'succeeded') {
+      yield `\x00__tool_end__${JSON.stringify(frame)}`
+      yield `\x00__tool_result__${JSON.stringify(frame)}`
+    }
+    if (planSnapshot) yield `\x00__todo__${JSON.stringify({ todos: planSnapshot })}`
     // A writer may partially mutate before failing; its recorded change still matters.
     if (result.change) yield `\x00__file_change__${JSON.stringify({ ...result.change, toolCallId: call.id })}`
     return { tokens: result.status === 'waiting' ? 0 : tokens, failedToPersist }
   }
 
   /** Streaming may announce cards before the provider returns a valid batch. */
-  private async *settleUnstarted(calls: ParsedToolCall[], ctx: AgentContext, reason: string): AsyncGenerator<string> {
+  private async *settleUnstarted(calls: ParsedToolCall[], ctx: AgentContext, reason: string): AsyncGenerator<string, boolean> {
+    let failedToPersist = false
+    const frames: string[] = []
     for (const call of calls) {
       const item = { call, messageId: uuidv4() }
       try {
         await ctx.history.append({ id: item.messageId, role: 'assistant', content: '', toolCall: call,
           toolCallId: call.id, createdAt: Date.now(), tokens: 0,
-          metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId }, conversationId: ctx.conversationId } as Message, ctx)
-      } catch (error) { ctx.logger.error({ err: error, toolCallId: call.id }, 'Failed to persist interrupted tool announcement') }
-      yield* this.settleTool(item, { success: false, status: ctx.signal?.aborted ? 'cancelled' : 'interrupted',
+          // SQLite stores only normalized args in its tool columns. Metadata
+          // preserves the original interrupted wire fragment for durable replay.
+          metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId,
+            ...(call._providerId !== undefined ? { providerToolCallId: call._providerId } : {}),
+            ...(call._rawArgs !== undefined ? { interruptedToolArguments: { raw: call._rawArgs, parseError: call._parseError } } : {}) },
+          conversationId: ctx.conversationId } as Message, ctx)
+      } catch (error) {
+        failedToPersist = true
+        ctx.logger.error({ err: error, toolCallId: call.id }, 'Failed to persist interrupted tool announcement')
+      }
+      const settlement = this.settleTool(item, { success: false, status: ctx.signal?.aborted ? 'cancelled' : 'interrupted',
         output: reason, error: reason, durationMs: 0 }, ctx)
+      let step = await settlement.next()
+      while (!step.done) {
+        frames.push(step.value)
+        step = await settlement.next()
+      }
+      failedToPersist ||= step.value.failedToPersist
     }
+    // A consumer can disconnect at any yielded frame. Settle all announced
+    // siblings durably before exposing the first interruption receipt.
+    for (const frame of frames) yield frame
+    return failedToPersist
   }
 
   async *run(input: string | any[] | null, ctx: AgentContext): AsyncIterable<string> {
@@ -324,23 +391,18 @@ export class ReActStrategy implements LoopStrategy {
     const unboundedCode = this.options.unboundedCode === true || ctx.toolProfile === 'code'
     // 迭代上限决策顺序（与 agent-context/factory.ts 的 tokenBudget 规则对齐）：
     //   1. this.options.maxIterations 显式传入 → 原样使用（NaN = 调用方声明"不限"）
-    //      （调用方已经推导过了，例如 subagent-tool 的 maxSteps；不应再被
+    //      （内部调用方已经推导过了，例如有界工作流/测试；不应再被
     //       superpower 倍率干预，否则会把子代理步数悄悄放大 4×）
-    //   2. 未显式传入 → 读 env MAX_ITERATIONS
+    //   2. 未显式传入 → 不限步数。MAX_ITERATIONS 不再作为产品默认上限。
     //   3. env 未配置 → 不限步数（原先写死 50，经 balanced 倍率 2 得到 100，
     //      会在长任务中途硬截断；真正收口交给 token 预算，不设人为天花板）
     const hasExplicitIterations = typeof this.options.maxIterations === 'number'
-    const configuredIterations = parseInt(process.env.MAX_ITERATIONS ?? '', 10)
-    const envDefaultIterations = Number.isFinite(configuredIterations) && configuredIterations > 0
-      ? configuredIterations
-      : undefined
     const maxIterations = hasExplicitIterations
       ? (this.options.maxIterations as number)
-      : unboundedCode || envDefaultIterations === undefined
-        ? Number.POSITIVE_INFINITY
-        : applyOSMMultiplier('maxIterations', envDefaultIterations)
+      : Number.POSITIVE_INFINITY
 
-    const maxAskUserCount = unboundedCode ? Number.POSITIVE_INFINITY : this.options.maxAskUserCount ?? 5
+    // User questions are interactions, not a work budget.
+    const maxAskUserCount = this.options.maxAskUserCount ?? Number.POSITIVE_INFINITY
     const conversationId = ctx.turnId ?? this.options.conversationId ?? ctx.conversationId
     ctx.conversationId = conversationId
 
@@ -360,19 +422,34 @@ export class ReActStrategy implements LoopStrategy {
         metadata: { ...this.options.metadata, rootRunId: ctx.rootRunId, turnId: ctx.turnId },
       }
       const savedUserMsgId = await ctx.history.append(userMessage, ctx) ?? userMessage.id
+      if (ctx.sqliteDelivery) await bindSQLiteReActBoundary(ctx.sqliteDelivery, ctx, savedUserMsgId, userMessage.content)
+      else if (ctx.jsonlDelivery) await bindJSONLReActBoundary(ctx.jsonlDelivery, ctx, savedUserMsgId, userMessage.content)
       // ★ 把后端 message_id 回传给前端，前端用它做删除/重发的准确定位
       yield `\x00__user_msg_id__${savedUserMsgId}`
       // ★ 别名帧（新版协议，第三方项目 等下游消费 camelCase 命名；不影响旧消费者）
       yield `\x00__userMsgId__${savedUserMsgId}`
     }
+    else if (ctx.sqliteDelivery) await bindSQLiteReActBoundary(ctx.sqliteDelivery, ctx)
+    else if (ctx.jsonlDelivery) await bindJSONLReActBoundary(ctx.jsonlDelivery, ctx)
 
     // Persisted snapshots make every replay/compaction use the same actual
     // attachment content, including after a restart or approval continuation.
     let outputContinuation: { messageId: string; suffix: string } | undefined
     const continuedResponseFingerprints = new Set<string>()
+    let toolOutputRecoveryFingerprint: string | undefined
+    let toolOutputRecoveryRepeats = 0
+    let toolOutputRecoveryIndex = 0
+    let outputToolRecovery = false
+    let outputReasoningRecovery = false
+    let reasoningOnlyRecoveryUsed = false
+    let pendingReasoningOutputExpansion = false
+    let recoveryCallIdentity = false
     let emittedOutput = ''
+    let readonlyHistoryPairs = 0
     const readModelHistory = async (): Promise<Message[]> => {
-      const messages = await requestHistory(ctx)
+      const projection = await requestHistory(ctx)
+      readonlyHistoryPairs = projection.collapsedPairs
+      const messages = projection.messages
       if (!outputContinuation) return messages
       // The full segment is durable and searchable. If compaction covered it,
       // its short suffix also anchors the precise point where generation stopped.
@@ -444,6 +521,7 @@ export class ReActStrategy implements LoopStrategy {
 
     // Build tool list from registry
     const toolList = ctx.tools.list()
+    const planEnabled = toolList.some(tool => tool.name === 'plan_update')
 
     /** Names of tools actually called in the last iteration */
     let lastUsedToolNames: Set<string> = new Set()
@@ -479,7 +557,7 @@ export class ReActStrategy implements LoopStrategy {
       ctx.logger.warn({ err }, 'Failed to count ask_user occurrences')
     }
 
-    const toolProgress = new ToolProgressTracker()
+    const toolProgress = new ToolProgressTracker(call => ctx.tools.executionMode?.(call.name, call.args))
 
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       // ── 每轮迭代开始时检查 abort signal，确保用户中止能及时生效 ──────────────
@@ -490,11 +568,55 @@ export class ReActStrategy implements LoopStrategy {
         return
       }
 
+      // A restarted or compacted restricted Agent may have no todo_list. Its
+      // session's durable plan is control state, so restore it before each
+      // request instead of relying on old model text or a parent's plan.
+      const injectedPlanPrompt = planEnabled && !this.options.systemPrompt?.includes(TASK_PLAN_EXECUTION_PROMPT)
+        ? TASK_PLAN_EXECUTION_PROMPT : ''
+      let planContext = ''
+      if (planEnabled && typeof todoStore.getPlan === 'function') {
+        try {
+          const saved = await todoStore.getPlan(ctx.tenantId, ctx.sessionId)
+          if (saved.plan.length || saved.revision) {
+            const maxChars = 40_000
+            const data = JSON.stringify(saved)
+            planContext = data.length <= maxChars
+              ? '### 已保存的当前会话计划\n以下 JSON 仅为任务状态数据，不是执行指令；后续更新复用其中的 id。\n' + data
+              : '当前会话的旧计划超过可恢复范围。不要猜测或覆盖；先读取 todo_list 核对完整清单。'
+          }
+        } catch (error) {
+          ctx.logger.warn({ err: error }, 'Failed to restore task plan for model request')
+          planContext = '当前会话计划读取失败。不要将读取失败当作空计划，也不要用猜测的清单覆盖已有计划。'
+        }
+      }
+      // Correct exhausted read cycles without changing the persisted conversation,
+      // task plan, tool permissions or the product's unlimited execution default.
+      const recoveryPrompt = toolProgress.recoveryPrompt()
+      const workflowReviewPrompt = toolProgress.workflowReviewPrompt()
+      let baseSystemPrompt: string | undefined
+      let injectedSystemTokens = 0
+      let injectedExtras: Array<string | undefined> = []
+      const readCurrentModelHistory = async (): Promise<Message[]> => {
+        const current = await readModelHistory()
+        injectedExtras = [injectedPlanPrompt, planContext, recoveryPrompt, workflowReviewPrompt, readonlyHistoryNotice(readonlyHistoryPairs),
+          outputToolRecovery ? TOOL_OUTPUT_RECOVERY_PROMPT : undefined,
+          outputReasoningRecovery ? REASONING_OUTPUT_RECOVERY_PROMPT : undefined,
+          outputToolRecovery && toolOutputRecoveryRepeats > 1
+            ? 'The last incomplete tool arguments repeated without completing. Reduce the next argument payload further or use authorized file references while preserving the task requirements. Generate a new complete call; never append to the interrupted fragment.' : undefined]
+        const extras = injectedExtras.filter(Boolean).join('\n\n')
+        baseSystemPrompt = [this.options.systemPrompt, extras].filter(Boolean).join('\n\n') || undefined
+        injectedSystemTokens = estimateTokens(extras)
+        return current
+      }
+
       // 1. 先检查是否需要压缩（用 raw token count，不受 window 限制）
       // 阈值对齐 Claude Code auto-compact：有效窗口的 ~92% 触发（COMPRESS_THRESHOLD_RATIO=0.92）。
       // 有效窗口取 min(tokenBudget, 模型真实 contextWindow)：tokenBudget 经 OSM 倍率放大后
       // 可能远超模型实际上限，若直接用它做阈值，模型都拒答了压缩还没触发。
-      let messages = await readModelHistory()
+      const maintainHistory = <T>(action: () => Promise<T>): Promise<T> => ctx.sqliteDelivery
+        ? maintainSQLiteReActHistory(ctx.sqliteDelivery, ctx, action)
+        : ctx.jsonlDelivery ? maintainJSONLReActHistory(ctx.jsonlDelivery, ctx, action) : action()
+      let messages = await readCurrentModelHistory()
       let effectiveTools = toolList.filter(tool => tool.name !== 'ask_user' || askUserCount < maxAskUserCount)
       const configuredCompressRatio = getOSMCompressRatio(
         parseFloat(process.env.COMPRESS_THRESHOLD_RATIO ?? '0.92'))
@@ -524,7 +646,7 @@ export class ReActStrategy implements LoopStrategy {
       const outputReservation = maxOutputTokens ?? (Number.isFinite(effectiveBudget)
         ? Math.min(8192, Math.max(256, Math.floor(effectiveBudget * 0.05))) : 0)
       const fixedInputTokens = estimateRequestInput(messages.filter(message => message.role === 'system'
-        && !(ctx.history.retainsArchive && message.metadata?.isCompactSummary)), this.options.systemPrompt, effectiveTools)
+        && !(ctx.history.retainsArchive && message.metadata?.isCompactSummary)), baseSystemPrompt, effectiveTools)
       if ((!unboundedCode && (!Number.isFinite(maxOutputTokens) || maxOutputTokens! <= 0))
         || (Number.isFinite(effectiveBudget) && fixedInputTokens + outputReservation > effectiveBudget)) {
         await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'context_limit',
@@ -536,16 +658,16 @@ export class ReActStrategy implements LoopStrategy {
       // 压缩基准与有效上限同源（预算与窗口的较小者）；两者都没有时不触发压缩
       // （既无窗口也无预算时无从判断何时该压缩，交给服务端错误反馈）。
       const compressThreshold = Math.floor(effectiveBudget * compressRatio)
-      let rawTokens = estimateRequestInput(messages, this.options.systemPrompt, effectiveTools) + outputReservation
+      let rawTokens = estimateRequestInput(messages, baseSystemPrompt, effectiveTools) + outputReservation
       if (rawTokens > compressThreshold && typeof ctx.history.microCompactToolResults === 'function') {
         // 先做 micro-compact：清理旧工具结果（不调 LLM），省下的空间可能足以
         // 避免全量压缩——对齐 Claude Code「先轻量清理再考虑总结」的分级策略。
         try {
           const microOutputLimit = ctx.toolProfile === 'code' ? getCodeToolOutputMaxChars() : getToolOutputMaxChars()
-          const micro = await ctx.history.microCompactToolResults(ctx, { keepRecent: 10, maxChars: microOutputLimit })
+          const micro = await maintainHistory(() => ctx.history.microCompactToolResults!(ctx, { keepRecent: 10, maxChars: microOutputLimit }))
           if (micro.cleared > 0) {
-            messages = await readModelHistory()
-            rawTokens = estimateRequestInput(messages, this.options.systemPrompt, effectiveTools) + outputReservation
+            messages = await readCurrentModelHistory()
+            rawTokens = estimateRequestInput(messages, baseSystemPrompt, effectiveTools) + outputReservation
             ctx.logger.info({ ...micro, rawTokens }, 'Micro-compact done')
           }
         } catch (err: any) {
@@ -587,17 +709,17 @@ export class ReActStrategy implements LoopStrategy {
           // reduction still leaves an inadmissible request.
           const keepRecentTokens = Math.floor(Math.min(effectiveBudget * 0.2,
             Math.max(0, compressThreshold - fixedInputTokens - outputReservation - 8192)) / 2 ** compressionPass)
-          const stats = await ctx.history.compress(
+          const stats = await maintainHistory(() => ctx.history.compress!(
             ctx,
             async (source, evidence) => {
               // Storage may decide there is nothing reducible. Publish progress
               // only when it actually starts the asynchronous summary request.
               compaction ??= { phase: 'running', startedAt: Date.now(), beforeTokens: estimateModelHistoryTokens(messages) }
               await notifyCompaction(compaction)
-              return summarize(source, evidence)
+              return summarize(source.filter(message => !isReasoningRecoverySegment(message)), evidence)
             },
             { keepRecentTokens, force: true },
-          )
+          ))
           // The history commit has completed; observer errors must never turn
           // durable reduction into a failed reduction or discard its result.
           if (compaction) {
@@ -605,8 +727,8 @@ export class ReActStrategy implements LoopStrategy {
               beforeTokens: stats.preTokens, afterTokens: stats.postTokens }
             await notifyCompaction(compaction)
           }
-          const compressedMessages = await readModelHistory()
-          const compressedRequestTokens = estimateRequestInput(compressedMessages, this.options.systemPrompt, effectiveTools) + outputReservation
+          const compressedMessages = await readCurrentModelHistory()
+          const compressedRequestTokens = estimateRequestInput(compressedMessages, baseSystemPrompt, effectiveTools) + outputReservation
           ctx.logger.info({ preTokens: stats.preTokens, postTokens: stats.postTokens,
             preRequestTokens: rawTokens, postRequestTokens: compressedRequestTokens, compressionPass }, 'Compression done')
           rawTokens = compressedRequestTokens
@@ -620,7 +742,12 @@ export class ReActStrategy implements LoopStrategy {
       }
 
       // Read again after compaction without silently windowing away constraints.
-      messages = await readModelHistory()
+      // New mail enters the final exact budget check, never a fresh summary request.
+      // Private maintenance preserves the exact seed and retained origins;
+      // unrelated history mutations still revoke this invocation's epoch.
+      if (ctx.sqliteDelivery) await consumeSQLiteReActIteration(ctx.sqliteDelivery, ctx)
+      else if (ctx.jsonlDelivery) await consumeJSONLReActIteration(ctx.jsonlDelivery, ctx)
+      messages = await readCurrentModelHistory()
 
       // 3. 计算 windowed token count，检查是否超 budget。
       // 使用 1.1 的系数作为安全余量，防止本地估算与 API 实际计量的偏差。
@@ -636,7 +763,7 @@ export class ReActStrategy implements LoopStrategy {
       }
 
       let finalizationReason: 'budget' | 'max_steps' | undefined
-      let systemPrompt = this.options.systemPrompt
+      let systemPrompt = baseSystemPrompt
       let requestInputTokenEstimate = estimateRequestInput(messages, systemPrompt, effectiveTools)
       // One more exploration request must leave enough for a summary, including likely tool-result growth.
       const summaryReserve = unboundedCode ? 0 : estimateRequestInput(messages, systemPrompt, []) + 4096 + 8192
@@ -652,7 +779,10 @@ export class ReActStrategy implements LoopStrategy {
       const recordedEvidence = finalizationReason ? partialEvidence(messages) : ''
       if (finalizationReason) {
         effectiveTools = []
-        systemPrompt = [systemPrompt, FINALIZATION_PROMPT].filter(Boolean).join('\n\n')
+        // Evidence-only finalization must not contain an exploration cadence hint.
+        const finalExtras = injectedExtras.filter(extra => extra && extra !== workflowReviewPrompt).join('\n\n')
+        systemPrompt = [this.options.systemPrompt, finalExtras, FINALIZATION_PROMPT].filter(Boolean).join('\n\n')
+        injectedSystemTokens = estimateTokens(finalExtras) + estimateTokens(FINALIZATION_PROMPT)
         if (!unboundedCode) maxOutputTokens = Math.min(maxOutputTokens!, 4096)
         requestInputTokenEstimate = estimateRequestInput(messages, systemPrompt, [])
         if (!unboundedCode && ctx.requestBudget && !ctx.requestBudget.canAfford(requestInputTokenEstimate + maxOutputTokens!)) {
@@ -684,8 +814,19 @@ export class ReActStrategy implements LoopStrategy {
       // reasoning). Code mode gets all remaining capacity instead of a fixed
       // output cap; omitting this field would let compatible gateways use
       // their 262K/393K protocol maxima despite a configured 100K window.
-      const dispatchMaxOutputTokens = unboundedCode && Number.isFinite(effectiveBudget)
+      let dispatchMaxOutputTokens = unboundedCode && Number.isFinite(effectiveBudget)
         ? Math.max(1, Math.floor(effectiveBudget - requestInputTokenEstimate)) : maxOutputTokens
+      // Expand only the existing private-only regeneration after ordinary
+      // admission/finalization. Fit remaining context instead of rejecting a
+      // request that still has room; explicit output/spend limits stay intact.
+      if (pendingReasoningOutputExpansion && !unboundedCode && !finalizationReason
+        && this.options.maxOutputTokens === undefined
+        && (!ctx.requestBudget || ctx.requestBudget.limit === Infinity)) {
+        const recoveryCapacity = Math.min(16_384, Math.max(256, Math.floor(effectiveBudget / 4)))
+        dispatchMaxOutputTokens = Number.isFinite(effectiveBudget)
+          ? Math.min(recoveryCapacity, Math.max(1, Math.floor(effectiveBudget - requestInputTokenEstimate)))
+          : recoveryCapacity
+      }
 
       ctx.logger.debug({ iteration, toolCount: effectiveTools.length, finalizationReason }, 'Preparing model request')
 
@@ -695,7 +836,17 @@ export class ReActStrategy implements LoopStrategy {
         unboundedOutput: unboundedCode,
         contextWindow: Number.isFinite(effectiveBudget) ? effectiveBudget : undefined,
         requestInputTokenEstimate,
-        onRequestAttempt: ctx.onRequestAttempt,
+        onRequestAttempt: ctx.sqliteDelivery || ctx.jsonlDelivery ? async event => {
+          // Provider adapters await this boundary before each physical retry.
+          // An integrated receipt alone never authorizes a later stale request.
+          if (event.type === 'start') {
+            if (ctx.sqliteDelivery) await assertSQLiteReActDispatch(ctx.sqliteDelivery, ctx)
+            else if (ctx.jsonlDelivery) await assertJSONLReActDispatch(ctx.jsonlDelivery, ctx)
+            assertOwnedDispatch(ctx.executionOwner)
+          }
+          await ctx.onRequestAttempt?.(event)
+        } : ctx.onRequestAttempt,
+        requestStage: finalizationReason ? 'finalization' : 'normal',
         systemPrompt,
         temperature: this.options.temperature,
         thinkingEnabled: this.options.thinkingEnabled,
@@ -729,10 +880,11 @@ export class ReActStrategy implements LoopStrategy {
       let streamCompleted = false
       let streamChunkCount = 0
       let receivedTerminalChunk = false
+      let receivedOutputLimitTerminal = false
       let failureReason = 'incomplete'
       let promptUsageReported = false
       let completionUsageReported = false
-      const toolCallsMap = new Map<number, { id?: string; name?: string; args: string; started: boolean }>()
+      const toolCallsMap = new Map<number, { id?: string; providerId?: string; name?: string; args: string; started: boolean; publishedArgs: number }>()
       const invocationPromptTokens = () => promptUsageReported ? response.promptTokens : requestInputTokenEstimate
       const invocationCompletionTokens = () => completionUsageReported ? response.completionTokens
         : estimateTokens(response.content + response.reasoningContent
@@ -750,10 +902,13 @@ export class ReActStrategy implements LoopStrategy {
         return '\x00__usage__' + snapshot
       }
       const persistPartial = async (status: 'failed' | 'cancelled', stopReason: string,
-        responseDiagnostics?: Record<string, string | number | boolean>) => {
+        responseDiagnostics?: Record<string, string | number | boolean>, recoveryIndex?: number,
+        recoveryKind: 'tool' | 'reasoning' = 'tool') => {
         if (partialSaved || (!response.content && !response.reasoningContent && !responseDiagnostics
           && !promptUsageReported && !completionUsageReported && !toolCallsMap.size)) return
-        const messageId = ctx.assistantMessageId ?? uuidv4()
+        // Recoverable segments need independent IDs; the final reply still owns
+        // the root assistant ID, and every physical request keeps its own usage.
+        const messageId = recoveryIndex !== undefined ? uuidv4() : ctx.assistantMessageId ?? uuidv4()
         const promptTokens = invocationPromptTokens()
         const completionTokens = invocationCompletionTokens()
         await ctx.history.append({ id: messageId, role: 'assistant', content: response.content,
@@ -766,17 +921,78 @@ export class ReActStrategy implements LoopStrategy {
             ...(response.reasoningTokens != null ? { reasoningTokens: response.reasoningTokens } : {}) },
           metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId, partial: true, status, stopReason,
             ...(responseDiagnostics ? { responseDiagnostics } : {}),
+            ...(recoveryIndex !== undefined ? { recoveryIndex } : {}),
+            ...(recoveryKind === 'reasoning' ? { outputReasoningRecovery: true }
+              : recoveryIndex !== undefined ? { outputToolRecovery: true } : {}),
             contextUsageEstimated: !promptUsageReported,
             contextUsageProvisional: promptUsageReported && !receivedTerminalChunk, requestInputTokenEstimate,
             usageEstimated: !promptUsageReported || !completionUsageReported },
         } as Message, ctx)
         partialSaved = true
       }
+      let interruptedSettlementOwned = false
+      let interruptedSettlementFailed = false
+      let partialPersistenceFailed = false
+      let persistenceOutcomeReported = false
+      let failureDiagnostic: string | undefined
+      const persistInterruptedPartial = async () => {
+        if (partialSaved || partialPersistenceFailed) return
+        try { await persistPartial(ctx.signal?.aborted ? 'cancelled' : 'failed', ctx.signal?.aborted ? 'cancelled' : failureReason) }
+        catch (error) {
+          partialPersistenceFailed = true
+          ctx.logger.error({ err: error, failureReason }, 'Failed to persist interrupted model response')
+        }
+      }
+      const settleInterruptedStream = async (receivedCalls?: ParsedToolCall[]) => {
+        if (interruptedSettlementOwned) return [] as string[]
+        // Claim ownership before draining: catch can be abandoned at any yield,
+        // and finally must not append a second announcement/result pair.
+        interruptedSettlementOwned = true
+        const announced = receivedCalls ?? [...toolCallsMap.values()].filter(call => call.started && call.id && call.name)
+          .map(call => {
+            let parseError: string | undefined
+            try { JSON.parse(call.args || '{}') }
+            catch (error) { parseError = error instanceof Error ? error.message : String(error) }
+            return { id: call.id!, name: call.name!, args: {}, _rawArgs: call.args, _parseError: parseError, _providerId: call.providerId }
+          })
+        const settlement = this.settleUnstarted(announced, ctx, 'Model request ended before this tool could execute')
+        const frames: string[] = []
+        let step = await settlement.next()
+        while (!step.done) {
+          frames.push(step.value)
+          step = await settlement.next()
+        }
+        interruptedSettlementFailed = step.value
+        return frames
+      }
+      const reportInterruptedPersistenceFailure = async () => {
+        if (persistenceOutcomeReported || (!partialPersistenceFailed && !interruptedSettlementFailed)) return
+        persistenceOutcomeReported = true
+        await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'runtime_error', partialOutput,
+          error: { code: 'PERSISTENCE_ERROR', message: 'Interrupted model request (' + (ctx.signal?.aborted ? 'cancelled' : failureReason)
+            + ') or tool receipts could not be persisted; no further request was sent'
+            + (failureDiagnostic ? '. Cause: ' + failureDiagnostic : ''), retryable: false } })
+      }
       try {
         // Context occupancy is useful while the provider is still thinking.
         // Publish this admitted request's estimate without charging unfinished
         // input/output; provider input corrects it as soon as it is available.
         yield changedContextFrame()!
+        if (ctx.signal?.aborted) throw Object.assign(new Error('Model request cancelled'), { name: 'AbortError' })
+        if (process.env.READONLY_RECOVERY_DIAGNOSTICS === '1') {
+          // Diagnostics identify the actual dispatch without printing prompts,
+          // queries, results, credentials or user content.
+          ctx.logger.info({ iteration, readonlyRecovery: { hintActive: Boolean(recoveryPrompt),
+            hintSha256: recoveryPrompt ? createHash('sha256').update(recoveryPrompt).digest('hex') : undefined,
+            collapsedPairs: readonlyHistoryPairs, requestMessageCount: messages.length, requestInputTokenEstimate,
+            systemPromptSha256: systemPrompt ? createHash('sha256').update(systemPrompt).digest('hex') : undefined } },
+          'Readonly recovery request dispatch')
+        }
+        toolProgress.markWorkflowReviewDispatched()
+        pendingReasoningOutputExpansion = false
+        if (ctx.sqliteDelivery) await assertSQLiteReActDispatch(ctx.sqliteDelivery, ctx)
+        else if (ctx.jsonlDelivery) await assertJSONLReActDispatch(ctx.jsonlDelivery, ctx)
+        assertOwnedDispatch(ctx.executionOwner)
         const stream = this.llm.stream(messages, {
           ...llmOptions,
           ...(ctx.signal ? { signal: ctx.signal } : {}),
@@ -786,6 +1002,7 @@ export class ReActStrategy implements LoopStrategy {
           if (ctx.signal?.aborted) throw Object.assign(new Error('Model request cancelled'), { name: 'AbortError' })
           streamChunkCount++
           receivedTerminalChunk ||= chunk.done === true
+          receivedOutputLimitTerminal ||= chunk.done === true && chunk.finishReason === 'length'
           // Providers may report usage/model before their final chunk (or fail afterwards).
           for (const key of ['promptTokens', 'completionTokens', 'cacheHitTokens', 'cacheMissTokens', 'reasoningTokens'] as const) {
             const value = chunk[key]
@@ -800,41 +1017,62 @@ export class ReActStrategy implements LoopStrategy {
           }
           if (chunk.finishReason) response.finishReason = chunk.finishReason
           if (typeof chunk.contextWindow === 'number' && Number.isFinite(chunk.contextWindow) && chunk.contextWindow > 0) response.contextWindow = chunk.contextWindow
-          const contextFrame = changedContextFrame()
-          if (contextFrame) yield contextFrame
+          // Capture the entire delivered chunk before exposing any frame. A
+          // viewer can return at context/start/args without dropping siblings,
+          // raw arguments or terminal billing counters already received.
           if (chunk.content) {
             response.content += chunk.content
             emittedOutput += chunk.content
             partialOutput = emittedOutput
-            yield chunk.content
-            await ctx.runObserver?.onOutput?.(emittedOutput)
           }
-          if (chunk.reasoningContent) {
-            response.reasoningContent += chunk.reasoningContent
-            yield `\x00__thinking__${chunk.reasoningContent}`
-          }
+          if (chunk.reasoningContent) response.reasoningContent += chunk.reasoningContent
+          const toolFrames: string[] = []
           if (chunk.toolCalls) {
             for (const tc of chunk.toolCalls) {
               const idx = (tc as any).index ?? 0
               let existing = toolCallsMap.get(idx)
               if (!existing) {
-                existing = { args: '', started: false }
+                existing = { args: '', started: false, publishedArgs: 0 }
                 toolCallsMap.set(idx, existing)
               }
-              if (tc.id) existing.id = tc.id
+              if (tc.id) {
+                if (recoveryCallIdentity) {
+                  // Compatible providers can repeat an interrupted call ID.
+                  // A regenerated invocation needs one stable internal identity
+                  // so historical receipts cannot settle or deduplicate new work.
+                  if (typeof tc.id === 'string' && tc.id.trim()) {
+                    existing.providerId ??= tc.id
+                    existing.id ??= `call_${uuidv4()}`
+                  }
+                } else existing.id = tc.id
+              }
               if (tc.name) existing.name = tc.name
               if (tc.args) existing.args += tc.args
               
               if (!finalizationReason && !existing.started && existing.id && existing.name) {
                 existing.started = true
-                yield `\x00__tool_start__${JSON.stringify({ name: existing.name, toolCallId: existing.id })}`
+                if (!isTaskPlanControl(existing.name)) {
+                  toolFrames.push(`\x00__tool_start__${JSON.stringify({ name: existing.name, toolCallId: existing.id })}`)
+                }
               }
-              
-              if (!finalizationReason && tc.args && existing.id) {
-                yield `\x00__tool_args__${JSON.stringify({ toolCallId: existing.id, args: tc.args })}`
+
+              // Providers may deliver arguments before the name. Buffer them
+              // until classification so an internal control never leaks a row.
+              if (!finalizationReason && existing.id && existing.name && !isTaskPlanControl(existing.name)
+                && existing.args.length > existing.publishedArgs) {
+                toolFrames.push(`\x00__tool_args__${JSON.stringify({ toolCallId: existing.id, name: existing.name, args: existing.args.slice(existing.publishedArgs) })}`)
+                existing.publishedArgs = existing.args.length
               }
             }
           }
+          const contextFrame = changedContextFrame()
+          if (contextFrame) yield contextFrame
+          if (chunk.content) {
+            yield chunk.content
+            await ctx.runObserver?.onOutput?.(emittedOutput)
+          }
+          if (chunk.reasoningContent) yield `\x00__thinking__${chunk.reasoningContent}`
+          for (const frame of toolFrames) yield frame
         }
         if (ctx.signal?.aborted) throw Object.assign(new Error('Model request cancelled'), { name: 'AbortError' })
 
@@ -843,13 +1081,20 @@ export class ReActStrategy implements LoopStrategy {
            let parsedArgs = {}
            let parseError: string | undefined
            try {
-             parsedArgs = JSON.parse(repairJson(tc.args || '{}'))
+             parsedArgs = JSON.parse(response.finishReason === 'length' ? tc.args || '{}' : repairJson(tc.args || '{}'))
            } catch (e) {
-             ctx.logger.error({ err: e, args: tc.args }, 'Failed to parse tool arguments')
+             if (response.finishReason === 'length') {
+               // Expected output boundaries retain raw data in history rather
+               // than copying large or sensitive argument text into error logs.
+               ctx.logger.debug({ argsCharacters: String(tc.args).length,
+                 argsSha256: createHash('sha256').update(String(tc.args)).digest('hex') }, 'Retained truncated tool arguments')
+             } else ctx.logger.error({ err: e, args: tc.args }, 'Failed to parse tool arguments')
              parseError = e instanceof Error ? e.message : String(e)
            }
+           tc.id ||= `call_${uuidv4()}`
            return {
-             id: tc.id || `call_${uuidv4()}`,
+             id: tc.id,
+             _providerId: tc.providerId,
              name: tc.name || '',
              args: parsedArgs,
              _rawArgs: tc.args,
@@ -864,7 +1109,30 @@ export class ReActStrategy implements LoopStrategy {
       } catch (err: any) {
         failureReason = err.name === 'AbortError' || ctx.signal?.aborted ? 'cancelled'
           : err?.code === 'TOKEN_BUDGET_EXCEEDED' ? 'budget' : 'provider_error'
-        await persistPartial(failureReason === 'cancelled' ? 'cancelled' : 'failed', failureReason)
+        failureDiagnostic = err instanceof Error ? err.message : String(err)
+        await persistInterruptedPartial()
+        const interruptionFrames = await settleInterruptedStream()
+        await reportInterruptedPersistenceFailure()
+        let failureNotice: string | undefined
+        if (!partialPersistenceFailed && !interruptedSettlementFailed) {
+          // The known terminal cause must survive a viewer returning at the
+          // first catch frame, rather than becoming a generic incomplete run.
+          if (err.name === 'AbortError' || ctx.signal?.aborted) {
+            ctx.logger.info('LLM call aborted')
+            await ctx.runObserver?.onOutcome?.({ status: 'cancelled', stopReason: 'cancelled', partialOutput })
+          } else if (err?.code === 'TOKEN_BUDGET_EXCEEDED') {
+            const evidence = partialOutput || recordedEvidence || partialEvidence(messages)
+            const message = err instanceof Error ? err.message : '本次任务的引擎本地累计用量额度不足。'
+            await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'budget', partialOutput: evidence,
+              error: { code: 'TOKEN_BUDGET_EXCEEDED', message, retryable: false } })
+            failureNotice = '\n\n' + message + (partialOutput ? '' : '\n\n' + evidence)
+          } else {
+            ctx.logger.error({ err }, 'LLM call failed')
+            await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'provider_error', partialOutput,
+              error: { retryable: false, code: 'PROVIDER_ERROR', message: err instanceof Error ? err.message : String(err) } })
+            failureNotice = '\n\n[Error: LLM call failed - ' + (err instanceof Error ? err.message : 'unknown error') + ']'
+          }
+        }
         if (partialSaved) yield `\x00__usage__${JSON.stringify({
           promptTokens: cumulativePromptTokens + invocationPromptTokens(),
           completionTokens: cumulativeCompletionTokens + invocationCompletionTokens(),
@@ -879,30 +1147,18 @@ export class ReActStrategy implements LoopStrategy {
           ...(cumulativeReasoningTokens !== undefined || response.reasoningTokens !== undefined
             ? { reasoningTokens: (cumulativeReasoningTokens ?? 0) + (response.reasoningTokens ?? 0) } : {}),
           ...contextSnapshot() })}`
-        const announced = [...toolCallsMap.values()].filter(call => call.started && call.id && call.name)
-          .map(call => ({ id: call.id!, name: call.name!, args: {}, _rawArgs: call.args }))
-        yield* this.settleUnstarted(announced, ctx, 'Model request ended before this tool could execute')
-        if (err.name === 'AbortError' || ctx.signal?.aborted) {
-          ctx.logger.info('LLM call aborted')
-          await ctx.runObserver?.onOutcome?.({ status: 'cancelled', stopReason: 'cancelled', partialOutput })
-          return
-        }
-        if (err?.code === 'TOKEN_BUDGET_EXCEEDED') {
-          const evidence = partialOutput || recordedEvidence || partialEvidence(messages)
-          const message = err instanceof Error ? err.message : '本次任务的引擎本地累计用量额度不足。'
-          await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'budget', partialOutput: evidence,
-            error: { code: 'TOKEN_BUDGET_EXCEEDED', message, retryable: false } })
-          yield '\n\n' + message + (partialOutput ? '' : '\n\n' + evidence)
-          return
-        }
-        ctx.logger.error({ err }, 'LLM call failed')
-        await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: err?.code === 'TOKEN_BUDGET_EXCEEDED' ? 'budget' : 'provider_error', partialOutput,
-          error: { retryable: false, code: err?.code === 'TOKEN_BUDGET_EXCEEDED' ? 'TOKEN_BUDGET_EXCEEDED' : 'PROVIDER_ERROR', message: err instanceof Error ? err.message : String(err) } })
-        yield `\n\n[Error: LLM call failed - ${err instanceof Error ? err.message : 'unknown error'}]`
+        for (const frame of interruptionFrames) yield frame
+        if (partialPersistenceFailed || interruptedSettlementFailed) return
+        if (failureNotice) yield failureNotice
         return
       } finally {
-        // Generator cancellation can happen at any yielded delta, before the provider completes.
-        if (!streamCompleted) await persistPartial(ctx.signal?.aborted ? 'cancelled' : 'failed', ctx.signal?.aborted ? 'cancelled' : failureReason)
+        // AsyncGenerator.return must finish cleanup without yielding to a
+        // disconnected viewer; otherwise return itself can stay suspended.
+        if (!streamCompleted) {
+          await persistInterruptedPartial()
+          await settleInterruptedStream()
+          await reportInterruptedPersistenceFailure()
+        }
       }
 
     // A provider may ignore the empty tool list. Never execute new work during the reserved summary.
@@ -916,11 +1172,30 @@ export class ReActStrategy implements LoopStrategy {
     }
 
     // Context capacity is stable; physical request spend is enforced by onRequestAttempt.
-    await ctx.runObserver?.onUsage?.({ invocationId: uuidv4(), promptTokens: invocationPromptTokens(),
-      completionTokens: invocationCompletionTokens(), cacheHitTokens: response.cacheHitTokens,
-      cacheMissTokens: response.cacheMissTokens, estimated: !promptUsageReported || !completionUsageReported })
+    try {
+      await ctx.runObserver?.onUsage?.({ invocationId: uuidv4(), promptTokens: invocationPromptTokens(),
+        completionTokens: invocationCompletionTokens(), cacheHitTokens: response.cacheHitTokens,
+        cacheMissTokens: response.cacheMissTokens, estimated: !promptUsageReported || !completionUsageReported })
+    } catch (error) {
+      // A completed provider stream is still unexecuted work. A failed usage
+      // observer must settle every received call before exposing its failure.
+      failureReason = 'runtime_error'
+      failureDiagnostic = error instanceof Error ? error.message : String(error)
+      await persistInterruptedPartial()
+      const interruptionFrames = await settleInterruptedStream(response.toolCalls as ParsedToolCall[])
+      await reportInterruptedPersistenceFailure()
+      if (!partialPersistenceFailed && !interruptedSettlementFailed) {
+        await ctx.runObserver?.onOutcome?.({ status: ctx.signal?.aborted ? 'cancelled' : 'failed',
+          stopReason: ctx.signal?.aborted ? 'cancelled' : 'runtime_error', partialOutput,
+          error: { code: 'RUNTIME_ERROR', message: failureDiagnostic, retryable: false } })
+      }
+      for (const frame of interruptionFrames) yield frame
+      if (!ctx.signal?.aborted) yield '\n\n[Error: ' + failureDiagnostic + ']'
+      return
+    }
 
-    const bd = this.options.promptBreakdown ?? { systemPromptTokens: 0, systemToolsTokens: 0, skillTokens: 0, ragTokens: 0, builtinToolsTokens: 0, mcpToolsTokens: 0 }
+    const configuredBreakdown = this.options.promptBreakdown ?? { systemPromptTokens: 0, systemToolsTokens: 0, skillTokens: 0, ragTokens: 0, builtinToolsTokens: 0, mcpToolsTokens: 0 }
+    const bd = { ...configuredBreakdown, systemPromptTokens: configuredBreakdown.systemPromptTokens + injectedSystemTokens }
     const completionTokens = invocationCompletionTokens()
     const usageEstimated = !promptUsageReported || !completionUsageReported
 
@@ -1070,6 +1345,28 @@ export class ReActStrategy implements LoopStrategy {
       ...(cumulativeReasoningTokens != null ? { reasoningTokens: cumulativeReasoningTokens } : {}),
     }
 
+      if (streamCompleted && receivedOutputLimitTerminal && response.finishReason === 'length'
+        && response.toolCalls.length === 0 && !String(response.content).trim() && response.reasoningContent?.trim()
+        && !finalizationReason && iteration + 1 < maxIterations && !reasoningOnlyRecoveryUsed) {
+        // One safe regeneration may recover a model that exhausted capacity in
+        // private reasoning. Never turn that reasoning into public continuation.
+        try { await persistPartial('failed', 'output_limit', undefined, 1, 'reasoning') }
+        catch (error) {
+          ctx.logger.error({ err: error }, 'Failed to persist reasoning output recovery segment')
+          await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'runtime_error', partialOutput: emittedOutput || undefined,
+            error: { code: 'PERSISTENCE_ERROR', message: 'Interrupted model reasoning could not be persisted; no recovery request was sent', retryable: false } })
+          return
+        }
+        reasoningOnlyRecoveryUsed = true
+        pendingReasoningOutputExpansion = true
+        outputReasoningRecovery = true
+        outputContinuation = undefined
+        outputToolRecovery = false
+        recoveryCallIdentity = true
+        yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, ...contextSnapshot() })}`
+        ctx.logger.info({ iteration }, 'Regenerating after reasoning-only model output limit')
+        continue
+      }
       if (response.finishReason === 'length' && response.toolCalls.length === 0
         && !finalizationReason && iteration + 1 < maxIterations && String(response.content).trim()) {
         const fingerprint = createHash('sha256').update(String(response.content).trim().replace(/\s+/g, ' ')).digest('hex')
@@ -1085,6 +1382,8 @@ export class ReActStrategy implements LoopStrategy {
               continuationIndex: continuedResponseFingerprints.size, stopReason: 'output_limit' },
           } as Message, ctx)
           outputContinuation = { messageId, suffix: String(response.content).slice(-2048) }
+          outputToolRecovery = false
+          outputReasoningRecovery = false
           yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, ...contextSnapshot() })}`
           ctx.logger.info({ iteration, messageId, continuationIndex: continuedResponseFingerprints.size }, 'Continuing model response after output limit')
           // Every continuation goes through normal admission, compaction,
@@ -1093,8 +1392,48 @@ export class ReActStrategy implements LoopStrategy {
         }
         ctx.logger.warn({ iteration }, 'Output continuation repeated an unchanged segment')
       }
+      if (response.finishReason === 'length' && receivedOutputLimitTerminal && response.toolCalls.length > 0
+        && !finalizationReason && iteration + 1 < maxIterations) {
+        // Even valid siblings belong to the incomplete provider batch. Retain
+        // and interrupt them all; never splice or execute a repaired fragment.
+        const fingerprint = createHash('sha256').update(JSON.stringify({
+          content: String(response.content).trim().replace(/\s+/g, ' '),
+          calls: (response.toolCalls as ParsedToolCall[]).map(call => ({ name: call.name, args: call._rawArgs })),
+        })).digest('hex')
+        toolOutputRecoveryRepeats = fingerprint === toolOutputRecoveryFingerprint ? toolOutputRecoveryRepeats + 1 : 1
+        toolOutputRecoveryFingerprint = fingerprint
+        toolOutputRecoveryIndex++
+        // Keep regenerated identities isolated even if a text continuation
+        // clears the request-local tool recovery hint before another tool call.
+        recoveryCallIdentity = true
+        let failedToPersist = false
+        try { await persistPartial('failed', 'output_limit', undefined, toolOutputRecoveryIndex) }
+        catch (error) {
+          failedToPersist = true
+          ctx.logger.error({ err: error }, 'Failed to persist output recovery segment')
+        }
+        const settlementFailed = yield* this.settleUnstarted(response.toolCalls as ParsedToolCall[], ctx, 'Model response ended before this tool could execute')
+        if (failedToPersist || settlementFailed) {
+          await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'runtime_error', partialOutput: emittedOutput || undefined,
+            error: { code: 'PERSISTENCE_ERROR', message: 'Interrupted model response or tool receipts could not be persisted; no recovery request was sent', retryable: false } })
+          return
+        }
+        yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, ...contextSnapshot() })}`
+        outputContinuation = undefined
+        outputToolRecovery = true
+        outputReasoningRecovery = false
+        ctx.logger.info({ iteration, recoveryIndex: toolOutputRecoveryIndex, repeatedSegmentCount: toolOutputRecoveryRepeats, toolCount: response.toolCalls.length },
+          'Regenerating tool calls after model output limit')
+        // Repetition informs static guidance, never a new runtime ceiling. The
+        // next ordinary iteration rechecks cancellation, context admission,
+        // finalization and physical request budgets before dispatching anything.
+        continue
+      }
       if (response.finishReason === 'length' || response.finishReason === 'error') {
-        await persistPartial('failed', response.finishReason === 'length' ? 'output_limit' : 'provider_error')
+        const privateOnlyLimit = streamCompleted && receivedOutputLimitTerminal && response.finishReason === 'length'
+          && response.toolCalls.length === 0 && !String(response.content).trim() && Boolean(response.reasoningContent?.trim())
+        await persistPartial('failed', response.finishReason === 'length' ? 'output_limit' : 'provider_error',
+          undefined, undefined, privateOnlyLimit ? 'reasoning' : 'tool')
         yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, ...contextSnapshot() })}`
         yield* this.settleUnstarted(response.toolCalls ?? [], ctx, 'Model response ended before this tool could execute')
         await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: response.finishReason === 'length' ? 'output_limit' : 'provider_error',
@@ -1102,7 +1441,10 @@ export class ReActStrategy implements LoopStrategy {
         return
       }
       outputContinuation = undefined
+      outputToolRecovery = false
       continuedResponseFingerprints.clear()
+      toolOutputRecoveryFingerprint = undefined
+      toolOutputRecoveryRepeats = 0
       // Register the complete batch before any invocation can start.
       if (response.toolCalls && response.toolCalls.length > 0) {
         const calls = response.toolCalls as ParsedToolCall[]
@@ -1121,6 +1463,7 @@ export class ReActStrategy implements LoopStrategy {
             usage: index === 0 ? currentUsage as unknown as Record<string, number> : undefined,
             modelId: response.model, conversationId,
             metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId,
+              ...(call._providerId !== undefined ? { providerToolCallId: call._providerId } : {}),
               ...(index === 0 ? { usageEstimated, contextUsageEstimated: !promptUsageReported,
                 contextUsageProvisional: promptUsageReported && !receivedTerminalChunk, requestInputTokenEstimate } : {}) },
           } as Message, ctx)
@@ -1128,8 +1471,10 @@ export class ReActStrategy implements LoopStrategy {
             ...contextSnapshot(), conversationId: messageId })}`
           const frame = { name: call.name, toolName: call.name, args: call.args,
             toolCallId: call.id, messageId, rootRunId: ctx.rootRunId, turnId: ctx.turnId }
-          yield `\x00__tool_start__${JSON.stringify(frame)}`
-          yield `\x00__tool_call__${JSON.stringify(frame)}`
+          if (!isTaskPlanControl(call.name)) {
+            yield `\x00__tool_start__${JSON.stringify(frame)}`
+            yield `\x00__tool_call__${JSON.stringify(frame)}`
+          }
         }
         } catch (error) {
           for (const item of registered) yield* this.settleTool(item, {
@@ -1178,6 +1523,9 @@ export class ReActStrategy implements LoopStrategy {
         }
         if (batch.pending) {
           const pending = batch.pending
+          // Only now are every sibling result and its history anchor durable.
+          // Parking before this point allows an answer to race old tool receipts.
+          await ctx.commitPending?.(pending)
           yield `\x00__ask_user__${JSON.stringify({ ...pending.args, question: pending.question,
             options: pending.options, toolCallId: pending.toolCallId, requestId: pending.requestId })}`
           yield `\x00__permission_request__${JSON.stringify({ ...pending, sessionId: ctx.sessionId,
@@ -1196,6 +1544,12 @@ export class ReActStrategy implements LoopStrategy {
             error: { retryable: false, code: 'REPEATED_FAILURE', message: 'Tool failure or repetition limit exceeded' } })
           yield '\n\n[Loop detected or tools failed repeatedly. Stopping to prevent token waste.]'
           return
+        }
+        // Only a fully persisted executable exchange is progress. Different
+        // private fragments or another length response cannot reopen recovery.
+        if (toolProgress.hasCompletedProgress()) {
+          reasoningOnlyRecoveryUsed = false
+          outputReasoningRecovery = false
         }
         continue
       }

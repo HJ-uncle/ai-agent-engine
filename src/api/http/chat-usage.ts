@@ -1,5 +1,6 @@
 import { BILLING_USAGE_KEYS } from '../../storage/conversation/usage.js'
-import type { SubagentRun } from '../../core/subagent/types.js'
+import type { SubagentRun, SubagentRunView } from '../../core/subagent/types.js'
+import { projectSubagentRunView, mergeSubagentViews } from '../../core/subagent/view.js'
 
 /** ReAct counters reset per attempt; an approval continuation keeps its turn. */
 export function continuedTurnUsage(previous: Record<string, number>, current: Record<string, unknown>): Record<string, unknown> {
@@ -28,26 +29,45 @@ export function sessionUsageAtWatermark(session: Record<string, number>, persist
   }))
 }
 
-export function sessionSubagentRunsAtWatermark(runs: SubagentRun[], ctx: { tenantId: string; sessionId: string },
-  activeTurnId?: string, projection: Record<string, unknown>[] = []): SubagentRun[] {
-  const visible = new Map<string, SubagentRun>()
+export interface SubagentWatermarkContext {
+  tenantId: string
+  sessionId: string
+  onConflict?: (runId: string, seq: number, reason: string) => void
+}
+
+export function sessionSubagentRunsAtWatermark(runs: (SubagentRun | SubagentRunView)[], ctx: SubagentWatermarkContext,
+  activeTurnId?: string, projection: Record<string, unknown>[] = []): SubagentRunView[] {
+  const visible = new Map<string, SubagentRunView>()
   const add = (candidate: unknown) => {
     if (!candidate || typeof candidate !== 'object') return
-    const run = candidate as SubagentRun
+    const run = candidate as SubagentRun | SubagentRunView
     if (typeof run.runId !== 'string' || run.tenantId !== ctx.tenantId || run.parentSessionId !== ctx.sessionId) return
-    if (!visible.has(run.runId) || visible.get(run.runId)!.lastSeq < run.lastSeq) visible.set(run.runId, run)
+    let view: SubagentRunView
+    try { view = projectSubagentRunView(run) }
+    catch (error) {
+      ctx.onConflict?.(run.runId, run.lastSeq, error instanceof Error ? error.message : 'Invalid subagent view')
+      return
+    }
+    const previous = visible.get(run.runId)
+    if (!previous) { visible.set(run.runId, view); return }
+    const merge = mergeSubagentViews(previous, view)
+    if (merge.status === 'merged') visible.set(run.runId, merge.view)
+    else {
+      visible.set(run.runId, { ...previous, recoveryRequired: true })
+      ctx.onConflict?.(run.runId, run.lastSeq, merge.reason ?? 'Subagent watermark conflict')
+    }
   }
   for (const run of runs) if (activeTurnId === undefined || run.parentConversationId !== activeTurnId) add(run)
   if (activeTurnId !== undefined) for (const envelope of projection) {
-    const event = envelope.subagentEvent as { snapshot?: unknown } | undefined
+    const event = envelope.subagentEvent as { snapshot?: unknown; view?: unknown } | undefined
     const tool = (envelope.toolResult ?? envelope.toolEnd) as { subagent?: unknown; metadata?: { subagent?: unknown } } | undefined
-    const candidate = event?.snapshot ?? tool?.subagent ?? tool?.metadata?.subagent
+    const candidate = event?.snapshot ?? event?.view ?? tool?.subagent ?? tool?.metadata?.subagent
     if (candidate && typeof candidate === 'object' && (candidate as SubagentRun).parentConversationId === activeTurnId) add(candidate)
   }
   return [...visible.values()]
 }
 
-export function sessionSubagentUsage(runs: SubagentRun[], ctx: { tenantId: string; sessionId: string },
+export function sessionSubagentUsage(runs: (SubagentRun | SubagentRunView)[], ctx: SubagentWatermarkContext,
   activeTurnId?: string, projection: Record<string, unknown>[] = []): {
   totalTokens: number; count: number; unknown: number; finishedAt?: number
 } {

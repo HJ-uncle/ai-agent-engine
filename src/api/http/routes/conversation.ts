@@ -3,14 +3,14 @@ import { createConversationHistory } from '../../../storage/conversation/factory
 import { SessionStore } from '../../../storage/session/index.js'
 import { success, fail, paginateArray, successWithPagination } from '../response.js'
 import { workspaceManager } from '../../../workspace/index.js'
-import { abortActiveChat } from './chat.js'
+import { abortActiveChat, stopOwnedSession } from './chat.js'
 import fs from 'node:fs'
 import { getSubagentStore } from '../../../core/subagent/store.js'
 import { getSubagentRunner } from '../../../core/subagent/runner.js'
 import { projectPendingSubagents } from '../../../core/subagent/projection.js'
 import { subagentRoutes } from './subagent.js'
 import { rootRunStore, type CompactionState } from '../../../storage/root-runs/index.js'
-import { withHistoryLock, invalidateSessionHistory, withSessionHistoryMutation, bindHistoryGeneration } from '../../../storage/conversation/serialization.js'
+import { withHistoryLock, invalidateSessionHistory, withSessionHistoryMutation, bindHistoryGeneration, withSessionHistoryCompression } from '../../../storage/conversation/serialization.js'
 import type { Message } from '../../../core/agent-context/types.js'
 import { commandJobs } from '../../../core/command-jobs/index.js'
 import { publicHistoryMessages } from '../history-projection.js'
@@ -45,26 +45,32 @@ export async function autoCompactSession(tenantId: string, sessionId: string, lo
   const { buildCompactSummarizeFn } = await import('../../../core/agent-loop/compact-prompt.js')
 
   // Post-turn maintenance keeps recent complete exchanges through the storage's common commit path.
-  const stats = await withHistoryLock(tenantId, async () => {
+  return withSessionHistoryCompression({ tenantId, sessionId, signal: options.signal }, async signal => {
+  options = { ...options, signal }
+  const eligible = await withHistoryLock(tenantId, async () => {
     // A new turn may already be running when maintenance gets its lock.
     // Leave that turn's context alone; its loop owns compaction.
-    if ((await rootRunStore.list(tenantId, sessionId)).some(run => run.status === 'running' || run.status === 'waiting')) return null
+    if ((await rootRunStore.list(tenantId, sessionId)).some(run => run.status === 'running' || run.status === 'waiting')) return false
     const currentMessages = await history.getFullHistory({ tenantId, sessionId })
-    if (compressionSplitIndex(currentMessages, 6) === 0) return null
+    return compressionSplitIndex(currentMessages, 6) !== 0 ? currentMessages : null
+  })
+  if (!eligible) return
+  const stats = await (async () => {
     const startedAt = Date.now()
     const notify = async (state: CompactionState) => {
       try { await options.onCompaction?.(state) }
       catch (error) { logger.warn?.({ error }, 'Could not publish auto-compaction state') }
     }
-    await notify({ phase: 'running', startedAt })
     try {
       options.signal?.throwIfAborted()
-      const mainModel = parent ?? await resolveSessionCompactionModel(tenantId, sessionId, currentMessages)
+      await notify({ phase: 'running', startedAt })
+      const mainModel = parent ?? await resolveSessionCompactionModel(tenantId, sessionId, eligible)
       const summarizeModel = process.env.LLM_SUMMARIZE_MODEL?.trim()
       const resolved = summarizeModel ? await resolveModelConfig({ tenantId, model: summarizeModel, parent: mainModel }) : mainModel
       const llm = createAdapterFromResolved(resolved)
       logger.info({ model: llm.model }, 'Starting background auto-compaction')
-      const result = await history.compress({ tenantId, sessionId }, buildCompactSummarizeFn(llm, {
+      const compressionContext = { tenantId, sessionId, signal: options.signal }
+      const result = await history.compress(compressionContext, buildCompactSummarizeFn(llm, {
         archiveAvailable: history.retainsArchive === true, contextWindow: resolved.capabilities.contextWindow, signal: options.signal,
       }), 6)
       await notify({ phase: 'succeeded', startedAt, finishedAt: Date.now(), beforeTokens: result.preTokens, afterTokens: result.postTokens })
@@ -73,11 +79,12 @@ export async function autoCompactSession(tenantId: string, sessionId: string, lo
       await notify({ phase: 'failed', startedAt, finishedAt: Date.now(), error: error instanceof Error ? error.message : String(error) })
       throw error
     }
-  })
+  })()
 
   if (!stats) return
   logger.info({ originalTokens: stats.preTokens, compressedTokens: stats.postTokens }, 'Auto-compaction finished')
   return stats
+  })
 }
 
 export async function conversationRoutes(fastify: FastifyInstance) {
@@ -101,7 +108,6 @@ export async function conversationRoutes(fastify: FastifyInstance) {
     invalidateSessionHistory(tenantId, sessionId)
     abortActiveChat(tenantId, sessionId, reason)
     const active = (await rootRunStore.list(tenantId, sessionId)).filter(run => run.status === 'running' || run.status === 'waiting')
-    for (const run of active) await rootRunStore.update(tenantId, run.runId, { status: 'cancelled', stopReason: reason })
     return active.map(run => run.turnId)
   }
 
@@ -114,6 +120,7 @@ export async function conversationRoutes(fastify: FastifyInstance) {
         return interruptSession(tenantId, sessionId, reason)
       })
       if (initial === null) return null
+      await stopOwnedSession(tenantId, sessionId, reason)
       await getSubagentRunner().cancelRunsForParent(tenantId, sessionId)
       await commandJobs.cancelScope({ tenantId, sessionId }, reason)
       return withHistoryLock(tenantId, async () => {

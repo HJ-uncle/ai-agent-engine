@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { requestDispatchDiagnostic } from './dispatch-diagnostics.js'
 import type { LLMAdapterOptions, RequestAttemptUsage } from './types.js'
 import { isAbortError, throwIfAborted } from '../utils/abort.js'
 import { estimateProviderRequestInput } from '../utils/multimodal-context.js'
@@ -8,7 +9,8 @@ export function prepareRequestContext(options: LLMAdapterOptions | undefined,
   request: { model?: unknown; messages?: unknown; tools?: unknown; system?: unknown }, wireMaxTokens?: number): LLMAdapterOptions {
   const requestInputTokenEstimate = Math.max(options?.requestInputTokenEstimate ?? 0, estimateProviderRequestInput(request))
   const contextWindow = options?.contextWindow
-  const result = { ...options, model: String(request.model ?? options?.model ?? ''), requestInputTokenEstimate }
+  const result = { ...options, model: String(request.model ?? options?.model ?? ''), requestInputTokenEstimate,
+    requestDispatchDiagnostic: requestDispatchDiagnostic(request, options?.requestStage) }
   if (typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0) {
     const remaining = Math.floor(contextWindow - requestInputTokenEstimate)
     if (remaining < 1) throw Object.assign(new Error('Provider request input exceeds its configured context window'),
@@ -22,7 +24,9 @@ type Outcome = 'succeeded' | 'failed' | 'cancelled'
 async function begin(options: LLMAdapterOptions | undefined, provider: string, model: string) {
   throwIfAborted(options?.signal)
   const identity = { requestAttemptId: randomUUID(), provider, model }
-  await options?.onRequestAttempt?.({ type: 'start', ...identity, estimatedInputTokens: options?.requestInputTokenEstimate, maxOutputTokens: options?.maxTokens })
+  await options?.onRequestAttempt?.({ type: 'start', ...identity,
+    ...(options?.requestDispatchDiagnostic ? { dispatchDiagnostic: options.requestDispatchDiagnostic } : {}),
+    estimatedInputTokens: options?.requestInputTokenEstimate, maxOutputTokens: options?.maxTokens })
   return async (outcome: Outcome, usage?: RequestAttemptUsage) => {
     await options?.onRequestAttempt?.({ type: 'finish', ...identity, outcome, ...(usage ? { usage } : {}) })
   }

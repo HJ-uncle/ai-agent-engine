@@ -2,14 +2,18 @@ import { spawn } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
 import { throwIfAborted } from '../../core/utils/abort.js'
 import { stopCommandProcessTree } from '../../core/command-jobs/process-tree.js'
+import { scheduleDeadline } from '../../core/utils/deadline.js'
 
-/** Diagnose in a bounded child; successful cancellation waits for process-tree exit. */
+/** Run a diagnostic child; successful cancellation waits for process-tree exit. */
 export function runDiagnosticProcess(command: string, args: string[], options: {
   cwd?: string; input?: string; signal?: AbortSignal; timeoutMs?: number; maxOutputBytes?: number
 } = {}): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
   const { signal } = options
   throwIfAborted(signal)
-  const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs! > 0 ? Math.min(options.timeoutMs!, 120_000) : 30_000
+  // No implicit deadline: a project diagnostic can legitimately take longer
+  // than a fixed engine watchdog.  Explicit positive values remain available
+  // for callers that want a per-operation deadline; cancellation always wins.
+  const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs! > 0 ? options.timeoutMs! : undefined
   const outputLimit = Number.isFinite(options.maxOutputBytes) && options.maxOutputBytes! > 0 ? options.maxOutputBytes! : 4 * 1024 * 1024
   return new Promise((resolve, reject) => {
     const startedAt = Date.now()
@@ -26,7 +30,7 @@ export function runDiagnosticProcess(command: string, args: string[], options: {
     let closed = false
     let stopDeadline: ReturnType<typeof setTimeout> | undefined
     const cleanup = () => {
-      clearTimeout(timer)
+      cancelTimer?.()
       if (stopDeadline) clearTimeout(stopDeadline)
       signal?.removeEventListener('abort', abort)
     }
@@ -45,11 +49,10 @@ export function runDiagnosticProcess(command: string, args: string[], options: {
         try { child.kill('SIGKILL') } catch { /* already exited */ }
       })
     }
-    const timer = setTimeout(() => {
+    const cancelTimer = timeoutMs === undefined ? undefined : scheduleDeadline(() => {
       stoppedError = Object.assign(new Error(`诊断进程超时 (${timeoutMs}ms)`), { code: 'LSP_TIMEOUT' })
       stop()
     }, timeoutMs)
-    timer.unref()
     const abort = () => { stop() }
     const append = (stream: 'stdout' | 'stderr', chunk: Buffer) => {
       if (settled || stoppedError) return

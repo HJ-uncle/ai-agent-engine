@@ -12,6 +12,8 @@ import { workspaceManager } from '../../../../workspace/index.js'
 const scope = vi.hoisted(() => ({ base: '' }))
 vi.mock('../../../../workspace/index.js', () => ({ workspaceManager: {
   getWorkingDirectory: () => scope.base,
+  getBindingSnapshot: () => ({ root: scope.base, epoch: 'fixture-epoch' }),
+  withBindingLease: async (_context: unknown, _expected: unknown, action: (lease: { snapshot: { root: string; epoch: string }; assertCurrent(): void }) => Promise<unknown>) => action({ snapshot: { root: scope.base, epoch: 'fixture-epoch' }, assertCurrent() {} }),
   resolveSafePath: (_context: unknown, name: string) => path.resolve(scope.base, name)
 } }))
 let app: FastifyInstance
@@ -34,7 +36,7 @@ async function query(op = 'status', queryString = '') {
   return (await app.inject({ method: 'GET', url: `/git/${op}?sessionId=session${queryString}` })).json()
 }
 async function action(op: string, rest: Record<string, unknown> = {}) {
-  return (await app.inject({ method: 'POST', url: '/git/action', payload: { sessionId: 'session', op, ...rest } })).json()
+  return (await app.inject({ method: 'POST', url: '/git/action', payload: { sessionId: 'session', expectedRoot: scope.base, bindingEpoch: 'fixture-epoch', op, ...rest } })).json()
 }
 beforeEach(async () => {
   fixture = path.resolve('.e2e-tmp', `git-workspace-${randomUUID()}`)

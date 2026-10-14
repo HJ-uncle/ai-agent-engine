@@ -78,7 +78,7 @@ describe('Agent MCP server scope', () => {
   it('server IDs and explicit tool permissions intersect without widening either scope', async () => {
     const result = await createToolRegistry({ workspaceRoot: root, allowedMcpServers: ['alpha'], allowedTools: ['read_file', 'mcp_beta_query'] })
     expect(fixtures.connected).toEqual(['alpha'])
-    expect(result.registry.list().map(tool => tool.name)).toEqual(['read_file'])
+    expect(result.registry.list().map(tool => tool.name)).toEqual(['read_file', 'plan_update'])
     await expect(result.registry.execute('mcp_alpha_query', {}, context)).rejects.toBeInstanceOf(ToolNotFoundError)
     await expect(result.registry.execute('mcp_beta_query', {}, context)).rejects.toBeInstanceOf(ToolNotFoundError)
   })

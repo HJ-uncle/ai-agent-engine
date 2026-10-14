@@ -13,13 +13,14 @@ import { conversationRoutes } from '../conversation.js'
 
 const mocks = vi.hoisted(() => ({
   abort: vi.fn(),
+  stop: vi.fn(),
   cancelChildren: vi.fn(),
   listChildren: vi.fn(),
   deleteChildren: vi.fn(),
   deleteAllChildren: vi.fn(),
 }))
 
-vi.mock('../chat.js', () => ({ abortActiveChat: mocks.abort }))
+vi.mock('../chat.js', () => ({ abortActiveChat: mocks.abort, stopOwnedSession: mocks.stop }))
 vi.mock('../subagent.js', () => ({ subagentRoutes: async () => {} }))
 vi.mock('../../../../core/subagent/runner.js', () => ({
   getSubagentRunner: () => ({ cancelRunsForParent: mocks.cancelChildren }),
@@ -52,6 +53,14 @@ beforeEach(async () => {
   db = createClient({ url: `file:${path.join(fixture, 'agent.db').replace(/\\/g, '/')}` })
   vi.spyOn(database, 'getDb').mockReturnValue(db)
   for (const mock of Object.values(mocks)) mock.mockReset()
+  // This fixture isolates destructive history semantics. Real owner joins and
+  // held HTTP/preparation boundaries are covered by owned-stop-http.test.ts.
+  mocks.stop.mockImplementation(async (tenant: string, session: string, reason: string) => {
+    mocks.abort(tenant, session, reason)
+    const roots = (await rootRunStore.list(tenant, session)).filter(run => ['running','waiting'].includes(run.status))
+    for (const run of roots) await rootRunStore.update(tenant, run.runId, { status: 'cancelled', stopReason: reason })
+    return roots.length > 0
+  })
   mocks.cancelChildren.mockResolvedValue(undefined)
   mocks.listChildren.mockResolvedValue([])
   mocks.deleteChildren.mockResolvedValue(undefined)

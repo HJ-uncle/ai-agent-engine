@@ -39,6 +39,36 @@ const call = (id: string, name = 'write_file'): ToolCall => ({ id, name, args: {
 const toolResults = (frames: string[]) => frames.filter(frame => frame.startsWith('\x00__tool_result__')).map(frame => JSON.parse(frame.slice('\x00__tool_result__'.length)))
 
 describe('D3 batch side effects and terminal evidence', () => {
+  it('commits answerable pending only after every held sibling receipt is durable', async () => {
+    const f = fixture([call('before'), { id: 'ask', name: 'ask_user', args: { question: 'Synthetic choice', options: ['A', 'B'] } }, call('after')])
+    let release!: () => void, entered!: () => void
+    const hold = new Promise<void>(yes => { release = yes }), started = new Promise<void>(yes => { entered = yes })
+    const append = f.ctx.history.append.bind(f.ctx.history)
+    f.ctx.history.append = async (message, scope) => {
+      if (message.role === 'tool' && message.toolCallId === 'after') { entered(); await hold }
+      return append(message, scope)
+    }
+    let committed = false
+    f.ctx.commitPending = async pending => {
+      expect(pending.requestId).toBe('ask')
+      expect(f.history.filter(message => message.role === 'tool').map(message => message.toolCallId)).toEqual(['before', 'after'])
+      committed = true
+    }
+    const running = f.run(); await started
+    expect(f.ctx.onPending).toHaveBeenCalledOnce(); expect(committed).toBe(false)
+    release(); const frames = await running
+    expect(committed).toBe(true); expect(frames.some(frame => frame.startsWith('\x00__permission_request__'))).toBe(true)
+  })
+  it('never publishes answerable frames when the pending commit cannot park its execution', async () => {
+    const f = fixture([{ id: 'ask', name: 'ask_user', args: { question: 'Synthetic question', options: ['A', 'B'] } }])
+    f.ctx.commitPending = async () => { throw new Error('Synthetic park receipt unknown') }
+    const frames = await f.run()
+    expect(frames.some(frame => frame.startsWith('\x00__ask_user__') || frame.startsWith('\x00__permission_request__'))).toBe(false)
+    expect(f.outcomes.at(-1)).toMatchObject({ status: 'failed', stopReason: 'runtime_error',
+      error: { code: 'RUNTIME_ERROR', message: 'Synthetic park receipt unknown' } })
+    expect(frames.join('')).toContain('[Error: Synthetic park receipt unknown]')
+    expect(f.ctx.tools.execute).not.toHaveBeenCalled()
+  })
   it('keeps the complete tool result in Code mode instead of applying the chat truncation cap', async () => {
     const f = fixture([call('large', 'read_file')])
     const content = 'source line\n'.repeat(1_000)
@@ -220,10 +250,10 @@ describe('D3 batch side effects and terminal evidence', () => {
     expect(f.outcomes.at(-1)).toMatchObject({ status: 'cancelled' })
   })
 
-  it('marks announced tools interrupted on an output limit without executing them', async () => {
+  it('marks announced tools interrupted at a final request output limit without executing them', async () => {
     const f = fixture([])
     f.llm.stream = async function* () { yield { done: true, finishReason: 'length', toolCalls: [{ id: 'limited', name: 'write_file', args: '{}', index: 0 }] } }
-    const frames = await f.run()
+    const frames = await f.run('task', 1)
     expect(f.ctx.tools.execute).not.toHaveBeenCalled()
     expect(toolResults(frames)).toMatchObject([{ toolCallId: 'limited', status: 'interrupted' }])
     expect(f.outcomes.at(-1)).toMatchObject({ status: 'failed', stopReason: 'output_limit' })

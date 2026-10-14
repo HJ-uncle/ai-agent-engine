@@ -167,7 +167,7 @@ describe('explicit custom Agent collaboration through real chat', () => {
     expect(childCalls[0].options?.tools?.map(tool => tool.name)).not.toContain('subagent')
     expect(childCalls[0].options?.tools?.map(tool => tool.name)).not.toContain('ask_user')
     const parentCall = modelCalls.find(call => call.model === 'main-fixture')!
-    expect(parentCall.options?.tools).toEqual([])
+    expect(parentCall.options?.tools?.map(tool => tool.name)).toEqual(['plan_update'])
     expect(parentCall.messages.some(message => message.role === 'tool' && String(message.content).includes('CHILD_FIRST_CONTEXT_SENTINEL'))).toBe(true)
     const { getSubagentStore } = await import('../../../../core/subagent/store.js')
     const runsBefore = await getSubagentStore().listRunsForParent(tenantId, sessionId)
@@ -298,19 +298,28 @@ describe('explicit custom Agent collaboration through real chat', () => {
     const { subagentTool, executeSubagent } = await import('../../../../tools/subagent/subagent-tool.js')
     const { setSecurityMode, clearSecurityMode } = await import('../../../../security/policy-engine.js')
     const parent = createAgentContext({ sessionId: 'model-created-boundary', tenantId, workspacePaths: [fixture], projectRoot: fixture,
-      tools: new ToolRegistry(), history: createConversationHistory(), modelName: 'main-fixture', logger: pino({ level: 'silent' }), memoryScope: 'off' })
+      tools: new ToolRegistry(), history: createConversationHistory(), modelName: 'main-fixture', logger: pino({ level: 'silent' }), memoryScope: 'off',
+      conversationId: 'model-created-turn', currentMessageId: 'model-created-dispatch' })
+    parent.currentToolCallId = 'model-created-child'
+    await parent.history.append({ id: parent.currentMessageId, role: 'assistant', content: '',
+      toolCall: { id: parent.currentToolCallId!, name: 'subagent', args: {} } }, parent)
     parent.resourceScope = { skills: [], mcpServers: [], knowledgeBases: [] }
     const beforeMcp = executedMcp
     const ordinary = await subagentTool.execute({ agentId: frontend.id, task: '普通模型创建的子代理，不得扩权。', userDelegated: true }, parent)
     expect(ordinary.success).toBe(true)
-    expect(modelCalls.filter(call => call.model === 'frontend-fixture').at(-1)?.options?.tools).toEqual([])
+    expect(modelCalls.filter(call => call.model === 'frontend-fixture').at(-1)?.options?.tools?.map(tool => tool.name)).toEqual(['plan_update'])
     expect(modelCalls.filter(call => call.model === 'frontend-fixture').at(-1)?.options?.systemPrompt).not.toContain('FRONTEND_KNOWLEDGE_CONTEXT')
     expect(modelCalls.filter(call => call.model === 'frontend-fixture').at(-1)?.options?.systemPrompt).not.toContain('DESIGN_SKILL_INDEX')
-    expect((ordinary.metadata?.subagent as SubagentRun).continuation?.userDelegated).toBe(false)
+    const { getSubagentStore } = await import('../../../../core/subagent/store.js')
+    const ordinaryView = ordinary.metadata?.subagent as SubagentRun
+    expect(ordinaryView.continuation).toEqual({ readOnly: false })
+    expect((await getSubagentStore().getRun(tenantId, ordinaryView.runId))?.continuation?.userDelegated).toBe(false)
     setSecurityMode(parent.tenantId, parent.sessionId, 'safe')
     try {
+      await parent.history.append({ id: 'safe-explicit-dispatch', role: 'assistant', content: '',
+        toolCall: { id: 'safe-explicit-collaboration', name: 'subagent', args: {} } }, parent)
       const safe = await executeSubagent({ agentId: frontend.id, task: '安全模式下明确委派，仍需遵守扩展限制。' },
-        { ...parent, currentToolCallId: 'safe-explicit-collaboration' }, { userDelegated: true })
+        { ...parent, currentMessageId: 'safe-explicit-dispatch', currentToolCallId: 'safe-explicit-collaboration' }, { userDelegated: true })
       expect(safe.success).toBe(true)
       expect(mcpDiscoveryScopes.at(-1)?.servers).toEqual([])
       expect(modelCalls.filter(call => call.model === 'frontend-fixture').at(-1)?.options?.tools?.map(tool => tool.name)).not.toContain('mcp_docs_lookup')
@@ -328,7 +337,11 @@ describe('explicit custom Agent collaboration through real chat', () => {
     const project = path.join(fixture, 'restricted-project')
     fs.mkdirSync(project)
     const parent = createAgentContext({ sessionId: 'workspace-boundary-collaboration', tenantId, workspacePaths: [project], projectRoot: project,
-      tools: new ToolRegistry(), history: createConversationHistory(), modelName: 'main-fixture', logger: pino({ level: 'silent' }), memoryScope: 'off' })
+      tools: new ToolRegistry(), history: createConversationHistory(), modelName: 'main-fixture', logger: pino({ level: 'silent' }), memoryScope: 'off',
+      conversationId: 'workspace-boundary-turn', currentMessageId: 'workspace-boundary-dispatch' })
+    parent.currentToolCallId = 'workspace-boundary-child'
+    await parent.history.append({ id: parent.currentMessageId, role: 'assistant', content: '',
+      toolCall: { id: parent.currentToolCallId!, name: 'subagent', args: {} } }, parent)
     setSecurityMode(parent.tenantId, parent.sessionId, 'safe')
     try {
       const result = await executeSubagent({ agentId: frontend.id, task: '越界文件：尝试写到授权项目外。' }, parent, { userDelegated: true })
@@ -336,7 +349,9 @@ describe('explicit custom Agent collaboration through real chat', () => {
       expect(child.toolCalls).toHaveLength(1)
       expect(child.toolCalls[0]).toMatchObject({ name: 'write_file', status: 'failed' })
       expect(fs.existsSync(path.join(fixture, 'outside-boundary.txt'))).toBe(false)
-      expect(child.continuation?.workspacePaths).toEqual([project])
+      const { getSubagentStore } = await import('../../../../core/subagent/store.js')
+      expect(child.continuation).toEqual({ readOnly: false })
+      expect((await getSubagentStore().getRun(tenantId, child.runId))?.continuation?.workspacePaths).toEqual([project])
     } finally { clearSecurityMode(parent.tenantId, parent.sessionId) }
   }, 15_000)
 })

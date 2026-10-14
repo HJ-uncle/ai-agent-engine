@@ -29,3 +29,14 @@ it('keeps real workspace declarations in completion and excludes attachment decl
   expect(result.items.map(item => item.label)).toContain('workspaceVisible')
   expect(result.items.map(item => item.label)).not.toContain('runtimeAttachmentOnly')
 })
+
+
+it('accepts advisory cancellation without a document and retains document validation', () => {
+  root = path.resolve('.e2e-tmp', 'lsp-cancellation-' + randomUUID())
+  fs.mkdirSync(root, { recursive: true })
+  vi.spyOn(workspaceManager, 'getWorkingDirectory').mockReturnValue(root)
+  expect(handleLanguageRequest(ctx, '$/cancelRequest', { id: 42 })).toBeNull()
+  expect(handleLanguageRequest(ctx, '$/cancelRequest', {})).toBeNull()
+  expect(() => handleLanguageRequest(ctx, 'textDocument/hover', {})).toThrow('缺少 textDocument.uri')
+  expect(() => handleLanguageRequest(ctx, 'textDocument/hover', { textDocument: { uri: path.join(root, '..', 'outside.ts') } })).toThrow('文件路径不在当前工作区内')
+})

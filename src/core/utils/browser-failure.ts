@@ -38,6 +38,11 @@ function classify(reason: string, metadata: ToolResult['metadata']): { code: str
     code = 'BROWSER_TAB_NOT_VISIBLE'; knownBeforeDispatch = true
   } else if (reason === '页面已经变化，请重新读取快照后操作') {
     code = 'BROWSER_STALE_NAVIGATION'; knownBeforeDispatch = true
+  } else if ([
+    '这个浏览器标签属于其他会话或引擎，请在当前会话重新打开',
+    '这个浏览器标签尚未添加到当前会话，请让用户在标签右键菜单中选择“添加到当前会话”，无需重新打开网页',
+  ].includes(reason)) {
+    code = 'BROWSER_TAB_NOT_SHARED'; knownBeforeDispatch = true
   } else if (['BROWSER_INVALID_ARGUMENTS', 'BROWSER_UNKNOWN_ACTION', 'BROWSER_CLIENT_UNAVAILABLE',
     'BROWSER_QUEUE_FULL', 'BROWSER_VISION_UNAVAILABLE'].includes(code)) knownBeforeDispatch = true
   return { code, operationPerformed: explicit ?? (knownBeforeDispatch ? false : 'unknown') }
@@ -47,6 +52,7 @@ function recoveryFor(code: string, performed: Performed): string {
   if (code === 'BROWSER_NAVIGATION_FAILED') return '页面加载失败时标签可能已经创建。使用返回的 tabId，或先调用 browser_tabs 找到该标签，再用 browser_navigate 修正地址并读取快照；不要反复 browser_open 创建重复标签。'
   if (code === 'BROWSER_TAB_CLOSED') return '先调用 browser_tabs 重新取得当前会话的有效 tabId；目标已关闭时用 browser_open 打开原地址，再读取快照。不要猜 tabId 或复用旧 ref/navigationId。'
   if (code === 'BROWSER_TAB_NOT_VISIBLE') return '客户端会自动显示操作目标标签；请恢复 Aether 窗口、关闭遮挡弹窗，再用 browser_tabs 确认目标并重新读取快照。不要靠换坐标或修改项目网页解决浏览器可见性失败。'
+  if (code === 'BROWSER_TAB_NOT_SHARED') return '请用户在已有浏览器标签的右键菜单选择“添加到当前会话”，随后用 browser_tabs 确认同一 tabId 再读取快照。不得自行转移其他会话的页面，也不要通过 browser_open 复制页面来代替原标签。'
   if (code === 'BROWSER_CLIENT_UNAVAILABLE' || code === 'BROWSER_CLIENT_DISCONNECTED') return '恢复 Aether 客户端连接并启用浏览器 AI 操作；用 browser_tabs 确认连接和有效标签，再读取实际页面状态。已交付的操作可能已生效，不要盲目重复提交。'
   if (code === 'BROWSER_STALE_NAVIGATION' || code === 'BROWSER_INVALID_ARGUMENTS') return '重新读取 browser_snapshot，使用返回的 tabId/navigationId/ref 修正参数；不要修改项目源码来掩盖工具调用失败。'
   if (performed !== false) return '执行状态不确定；先重新读取页面状态确认是否已经生效，不要盲目重复点击、填写或提交。工具失败本身不是网页缺陷证据。'

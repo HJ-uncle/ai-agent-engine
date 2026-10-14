@@ -43,8 +43,8 @@ interface FileEdit {
 async function executeEdits(sessionId: string, files: FileEdit[], externalContent?: string) {
   const registration = await runtime.createToolRegistry({ toolProfile: 'code', allowedTools: ['read_file', 'edit_file'],
     securityContext: { tenantId, sessionId, toolProfile: 'code' } })
-  expect(registration.registry.list().map(tool => tool.name).sort()).toEqual(['edit_file', 'read_file'])
-  expect(registration.toolCategories.builtinTools.sort()).toEqual(['edit_file', 'read_file'])
+  expect(registration.registry.list().map(tool => tool.name).sort()).toEqual(['edit_file', 'plan_update', 'read_file'])
+  expect(registration.toolCategories.builtinTools.sort()).toEqual(['edit_file', 'plan_update', 'read_file'])
   expect(registration.registry.executionMode('read_file', {})).toBe('readonly')
   expect(registration.registry.executionMode('edit_file', {})).toBe('serial')
 

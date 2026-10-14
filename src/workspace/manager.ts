@@ -1,10 +1,14 @@
 import path from 'node:path'
 import fs from 'node:fs'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
+import { acquireResourceLease, acquireResourceLeaseAsync } from './binding-lease.js'
 import type { AgentContext } from '../core/agent-context/index.js'
 import { getSecurityMode } from '../security/policy-engine.js'
 
 type CtxLike = Pick<AgentContext, 'tenantId' | 'sessionId' | 'workspacePaths' | 'cwd' | 'projectRoot' | 'scratchDir'>
+type Bindings = Map<string, string> & { epochs: Map<string, string> }
+export interface WorkspaceBindingSnapshot { root: string; epoch: string }
+export interface WorkspaceBindingLease { snapshot: Readonly<WorkspaceBindingSnapshot>; resource:{file:string;generation:string;pid:number}; assertCurrent(): void }
 
 export class WorkspaceManager {
   private readonly root: string
@@ -34,9 +38,9 @@ export class WorkspaceManager {
       path.join(this.root, '.aether-workspace-bindings.json')
   }
 
-  private readBindings(): Map<string, string> {
+  private readBindings(): Bindings {
     const file = this.bindingsFile()
-    const bindings = new Map<string, string>()
+    const bindings: Bindings = Object.assign(new Map<string, string>(), { epochs: new Map<string, string>() })
     let parsed: unknown
     try {
       if (fs.lstatSync(file).isSymbolicLink()) throw new Error('binding state must not be a symbolic link')
@@ -61,11 +65,15 @@ export class WorkspaceManager {
       // Retain unavailable/disallowed selections. Reading that session must
       // report the problem, never quietly change its development directory.
       bindings.set(key, path.resolve(item.workspaceRoot))
+      if (item.epoch !== undefined && (typeof item.epoch !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.epoch))) {
+        throw new Error('Workspace binding state contains an invalid epoch')
+      }
+      bindings.epochs.set(key, item.epoch ?? `legacy:${createHash('sha256').update(key + '\0' + path.resolve(item.workspaceRoot)).digest('hex')}`)
     }
     return bindings
   }
 
-  private persistBindings(state: Map<string, string>): void {
+  private persistBindings(state: Bindings): void {
     const file = this.bindingsFile()
     try {
       if (fs.lstatSync(file).isSymbolicLink()) throw new Error('Workspace binding state must not be a symbolic link')
@@ -74,7 +82,9 @@ export class WorkspaceManager {
     }
     const bindings = [...state.entries()].map(([key, workspaceRoot]) => {
       const separator = key.indexOf('\u0000')
-      return { tenantId: key.slice(0, separator), sessionId: key.slice(separator + 1), workspaceRoot }
+      const epoch = state.epochs.get(key)
+      return { tenantId: key.slice(0, separator), sessionId: key.slice(separator + 1), workspaceRoot,
+        ...(epoch && !epoch.startsWith('legacy:') ? { epoch } : {}) }
     })
     fs.mkdirSync(path.dirname(file), { recursive: true })
     const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
@@ -153,16 +163,65 @@ export class WorkspaceManager {
   }
 
   getWorkingDirectory(ctx: CtxLike): string {
+    return this.getBindingSnapshot(ctx).root
+  }
+
+  getBindingSnapshot(ctx: CtxLike): Readonly<WorkspaceBindingSnapshot> {
     this.assertContext(ctx)
     const bindings = this.readBindings()
     const bound = bindings.get(this.bindingKey(ctx))
-    if (bound) return this.validateBoundDirectory(ctx, bound, bindings)
+    if (bound) return Object.freeze({ root: this.validateBoundDirectory(ctx, bound, bindings), epoch: bindings.epochs.get(this.bindingKey(ctx))! })
     // Authenticated requests must bind through the operator-checked endpoint;
     // request context paths are not an authorization mechanism.
     if (this.isAuthenticated()) {
-      return this.getScratchDirectory(ctx)
+      const root = this.getScratchDirectory(ctx)
+      return Object.freeze({ root, epoch: `scratch:${createHash('sha256').update(this.bindingKey(ctx) + '\0' + root).digest('hex')}` })
     }
-    return path.resolve(ctx.cwd ?? ctx.projectRoot ?? ctx.workspacePaths?.[0] ?? this.getScratchDirectory(ctx))
+    const root = path.resolve(ctx.cwd ?? ctx.projectRoot ?? ctx.workspacePaths?.[0] ?? this.getScratchDirectory(ctx))
+    return Object.freeze({ root, epoch: `unbound:${createHash('sha256').update(this.bindingKey(ctx) + '\0' + root).digest('hex')}` })
+  }
+
+  private sessionLeaseFile(ctx: Pick<CtxLike, 'tenantId' | 'sessionId'>): string {
+    return `${this.bindingsFile()}.session-${createHash('sha256').update(this.bindingKey(ctx)).digest('hex')}.lock`
+  }
+
+  /** Hold the selection through asynchronous side effects. CAS also guards
+   * every actual dispatch against direct external state edits while awaiting. */
+  async withBindingLease<T>(ctx: CtxLike, expected: WorkspaceBindingSnapshot | undefined, action: (lease: WorkspaceBindingLease) => Promise<T>, waitMs = 0): Promise<T> {
+    this.assertContext(ctx)
+    const held = await acquireResourceLeaseAsync(this.sessionLeaseFile(ctx), 'workspace session', { tenantId: ctx.tenantId!, sessionId: ctx.sessionId! }, waitMs)
+    try {
+      const snapshot = this.getBindingSnapshot(ctx)
+      if (expected && (expected.root !== snapshot.root || expected.epoch !== snapshot.epoch)) throw new Error('Workspace binding changed; refresh the task target before retrying')
+      const assertCurrent = () => {
+        held.assertOwned()
+        const next = this.getBindingSnapshot(ctx)
+        if (snapshot.root !== next.root || snapshot.epoch !== next.epoch) throw new Error('Workspace binding changed before dispatch; operation rejected')
+      }
+      assertCurrent()
+      return await action({ snapshot, assertCurrent, resource:{file:this.sessionLeaseFile(ctx),generation:held.owner.generation,pid:held.owner.pid} })
+    } finally { held.release() }
+  }
+
+  /** Git recovery may release only the exact interrupted selection lease that
+   * its native-audited repository owner recorded before any child dispatch. */
+  recoverInterruptedGitBinding(ctx: CtxLike, expected: WorkspaceBindingSnapshot, resource:{file:string;generation:string;pid:number;root:string;epoch:string}, originalPid:number): void {
+    this.assertContext(ctx)
+    const file=this.sessionLeaseFile(ctx),snapshot=this.getBindingSnapshot(ctx)
+    if(resource.file!==file || resource.pid!==originalPid || resource.root!==expected.root || resource.epoch!==expected.epoch || snapshot.root!==expected.root || snapshot.epoch!==expected.epoch)throw new Error('Interrupted Git binding lease does not match this session')
+    let held: {pid?:number;generation?:string}
+    try {if(fs.lstatSync(file).isSymbolicLink() || fs.statSync(file).size>16*1024)throw new Error('Binding lease is untrusted');held=JSON.parse(fs.readFileSync(file,'utf8')) as typeof held}
+    catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return;throw error}
+    if(held.pid!==resource.pid || held.generation!==resource.generation)throw new Error('Binding lease generation changed; recovery refused')
+    fs.renameSync(file,`${file}.recovered-${resource.generation}.json`)
+  }
+
+  /** Automation follows an explicit project selection; scratch is not a selected project. */
+  getBoundDirectory(ctx: Pick<CtxLike, 'tenantId' | 'sessionId'>): string | null {
+    this.assertContext(ctx)
+    const bindings = this.readBindings()
+    const bound = bindings.get(this.bindingKey(ctx))
+    return bound ? this.validateBoundDirectory(ctx, bound, bindings) : null
   }
 
   getPaths(ctx: CtxLike): string[] {
@@ -177,12 +236,24 @@ export class WorkspaceManager {
 
   /** Bind a session only inside operator-declared engine workspace roots. */
   bind(ctx: CtxLike, workspaceRoot: string): string {
+    return this.bindSnapshot(ctx, workspaceRoot).root
+  }
+
+  bindSnapshot(ctx: CtxLike, workspaceRoot: string): Readonly<WorkspaceBindingSnapshot> {
     this.assertContext(ctx)
-    const bindings = this.readBindings()
-    const canonical = this.validateSelectedDirectory(ctx.tenantId, workspaceRoot, bindings)
-    bindings.set(this.bindingKey(ctx), canonical)
-    this.persistBindings(bindings)
-    return canonical
+    const session = acquireResourceLease(this.sessionLeaseFile(ctx), 'workspace session', { tenantId: ctx.tenantId!, sessionId: ctx.sessionId! })
+    try {
+      const state = acquireResourceLease(`${this.bindingsFile()}.write.lock`, 'workspace binding state')
+      try {
+        const bindings = this.readBindings()
+        const canonical = this.validateSelectedDirectory(ctx.tenantId, workspaceRoot, bindings)
+        bindings.set(this.bindingKey(ctx), canonical)
+        const epoch = randomUUID()
+        bindings.epochs.set(this.bindingKey(ctx), epoch)
+        this.persistBindings(bindings)
+        return Object.freeze({ root: canonical, epoch })
+      } finally { state.release() }
+    } finally { session.release() }
   }
 
   /** Catalogue discovery checks the same directory boundary as binding, without

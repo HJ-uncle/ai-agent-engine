@@ -55,8 +55,30 @@ export interface RequestAttemptUsage {
   reasoningTokens?: number
 }
 
+/** Local final-wire observation, not provider receipt or permission state. */
+export type RequestDispatchStage = 'normal' | 'finalization' | 'unknown'
+interface RequestDispatchDiagnosticFields {
+  availability: 'captured' | 'unavailable'
+  requestStage: RequestDispatchStage
+  wireMessageCount: number
+  systemPromptSha256?: string
+  workflowHintPresent?: boolean
+  readonlyHintPresent?: boolean
+}
+/** Legacy records cannot prove whether the later mutation advisory was sent. */
+export interface RequestDispatchDiagnosticV1 extends RequestDispatchDiagnosticFields {
+  schemaVersion: 1
+}
+export interface RequestDispatchDiagnosticV2 extends RequestDispatchDiagnosticFields {
+  schemaVersion: 2
+  mutationHintPresent?: boolean
+}
+export type RequestDispatchDiagnostic = RequestDispatchDiagnosticV1 | RequestDispatchDiagnosticV2
+
 export type LLMRequestAttemptEvent = {
   type: 'start'
+  /** Safe hash/flags captured from the actual adapter request, with no prompt body. */
+  dispatchDiagnostic?: RequestDispatchDiagnostic
   estimatedInputTokens?: number
   maxOutputTokens?: number
   requestAttemptId: string
@@ -92,6 +114,10 @@ export interface LLMAdapterOptions {
   reasoningEffort?: 'low' | 'medium' | 'high'
   signal?: AbortSignal
   onRequestAttempt?: (event: LLMRequestAttemptEvent) => void | Promise<void>
+  /** Set by the request loop; utility requests remain unknown. Not a wire parameter. */
+  requestStage?: RequestDispatchStage
+  /** Rebuilt by prepareRequestContext from final wire parameters before each attempt. */
+  requestDispatchDiagnostic?: RequestDispatchDiagnostic
   /** Internal estimate computed from the provider request, for shared budget reservations. */
   requestInputTokenEstimate?: number
   // ── DeepSeek 专有可选项 ───────────────────────────────────────────────

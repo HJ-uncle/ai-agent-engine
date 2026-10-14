@@ -1,5 +1,4 @@
 /** Real SQLite outbox + both transcript backends: crash recovery, isolation and deletion. */
-import { createClient, type Client } from '@libsql/client'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -9,9 +8,10 @@ import { JSONLConversationHistory } from '../../../storage/conversation/jsonl-hi
 import { SQLiteConversationHistory } from '../../../storage/conversation/history.js'
 import { projectPendingSubagents } from '../projection.js'
 import { SubagentStore } from '../store.js'
+import { LocalSqliteProcessClient } from '../../../storage/sqlite/local-process-client.js'
 import type { CreateSubagentRun } from '../types.js'
 
-const state = vi.hoisted(() => ({ db: null as unknown as Client, store: null as unknown as SubagentStore }))
+const state = vi.hoisted(() => ({ db: null as unknown as LocalSqliteProcessClient, store: null as unknown as SubagentStore }))
 vi.mock('../../../storage/sqlite/db.js', () => ({ getDb: () => state.db }))
 vi.mock('../store.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('../store.js')>()
@@ -26,7 +26,7 @@ let input: CreateSubagentRun
 beforeEach(async () => {
   fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-subagent-projection-'))
   vi.stubEnv('DATA_DIR', path.join(fixtureDir, 'history.db'))
-  state.db = createClient({ url: `file:${path.join(fixtureDir, 'history.db').replace(/\\/g, '/')}` })
+  state.db = new LocalSqliteProcessClient({ url: `file:${path.join(fixtureDir, 'history.db').replace(/\\/g, '/')}` })
   await state.db.execute(`CREATE TABLE conversations (
     id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL, session_id TEXT NOT NULL,
     conversation_id TEXT, message_id TEXT, role TEXT NOT NULL, content TEXT NOT NULL,
@@ -45,16 +45,15 @@ beforeEach(async () => {
   }
 })
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks()
   vi.unstubAllEnvs()
   state.db.close()
+  await state.db.whenClosed()
   const target = path.resolve(fixtureDir)
   if (path.dirname(target) !== path.resolve(os.tmpdir()) || !path.basename(target).startsWith('aether-subagent-projection-')) throw new Error('Unsafe fixture cleanup path')
-  try { fs.rmSync(target, { recursive: true, force: true, maxRetries: 2, retryDelay: 20 }) }
-  catch (error) {
-    if (process.platform !== 'win32' || !(error instanceof Error) || !('code' in error) || error.code !== 'EPERM') throw error
-  }
+  // Do not leave native transactions alive across transcript backend fixtures.
+  fs.rmSync(target, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 })
 
 async function dispatch(history: ConversationHistory) {
@@ -69,7 +68,7 @@ async function dispatch(history: ConversationHistory) {
 }
 
 describe.each(['jsonl', 'sqlite'] as const)('subagent projection through %s history', backend => {
-  const history = (): ConversationHistory => backend === 'jsonl' ? new JSONLConversationHistory() : new SQLiteConversationHistory()
+  const history = () => backend === 'jsonl' ? new JSONLConversationHistory() : new SQLiteConversationHistory()
 
   it('filters legacy progress payloads before decoding and retains their archive', async () => {
     const first = history()
@@ -99,7 +98,8 @@ describe.each(['jsonl', 'sqlite'] as const)('subagent projection through %s hist
     for (let index = 0; index < 35; index++) {
       const definition = { ...input, parentToolCallId: `page-spawn-${index}`, parentMessageId: `page-dispatch-${index}` }
       await first.append({ id: definition.parentMessageId, role: 'assistant', content: '',
-        toolCall: { id: definition.parentToolCallId, name: 'subagent', args: {} } }, parent)
+        toolCall: { id: definition.parentToolCallId, name: 'subagent', args: {} },
+        ...{ conversationId: definition.parentConversationId } }, parent)
       const run = (await state.store.createRun(definition)).snapshot
       runIds.push(run.runId)
       await state.store.appendSnapshot(parent.tenantId, run.runId, 'finished', { status: 'succeeded', resultSummary: `Result ${index}` })
@@ -128,6 +128,10 @@ describe.each(['jsonl', 'sqlite'] as const)('subagent projection through %s hist
       toolCalls: [{ id: 'read-1', name: 'read_file', args: { path: 'README.md' }, status: 'succeeded', output: 'Full README contents' }],
       usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10 },
     })
+    const archiveBefore = await state.db.execute({
+      sql: 'SELECT event FROM subagent_events WHERE tenant_id=? AND run_id=? AND seq=2',
+      args: [parent.tenantId, run.runId],
+    })
     const ack = state.store.ackProjection.bind(state.store)
     vi.spyOn(state.store, 'ackProjection').mockImplementation(async (id, tenantId) => {
       if (id.endsWith(':2')) throw new Error('simulated crash after transcript append')
@@ -146,10 +150,26 @@ describe.each(['jsonl', 'sqlite'] as const)('subagent projection through %s hist
     expect(results[0]).toMatchObject({
       id: `subagent-result:${run.runId}`, toolCallId: input.parentToolCallId,
       content: expect.stringContaining('README describes the application.'), metadata: { success: true, subagent: {
-        runId: run.runId, status: 'succeeded', usage: { totalTokens: 10 },
-        toolCalls: [{ id: 'read-1', args: { path: 'README.md' }, output: 'Full README contents' }],
+        schemaVersion: 2, view: 'summary', runId: run.runId, status: 'succeeded', usage: { totalTokens: 10 },
+        coverage: { asOfSeq: 2, toolCount: 1, includedToolCount: 1, activeToolCount: 0,
+          includedActiveToolCount: 0, ids: ['read-1'], hasMore: false, completeness: 'complete' },
+        toolCalls: expect.arrayContaining([expect.objectContaining({ id: 'read-1', args: { path: 'README.md' }, output: 'Full README contents' })]),
       } },
     })
+    // Summary order and previews are allowed to change; the exact v1 archive
+    // must retain full details and its original tool order through recovery.
+    const [canonical] = await state.store.getSnapshotsAtSequences(parent.tenantId, [{ runId: run.runId, seq: 2 }])
+    expect(canonical.schemaVersion).toBe(1)
+    expect(canonical.lastSeq).toBe(2)
+    expect(canonical.toolCalls).toEqual([
+      { id: 'read-1', name: 'read_file', args: { path: 'README.md' }, status: 'succeeded', output: 'Full README contents' },
+    ])
+    const archiveAfter = await state.db.execute({
+      sql: 'SELECT event FROM subagent_events WHERE tenant_id=? AND run_id=? AND seq=2',
+      args: [parent.tenantId, run.runId],
+    })
+    expect(archiveAfter.rows).toEqual(archiveBefore.rows)
+    expect(JSON.parse(String(archiveAfter.rows[0].event))).toMatchObject({ schemaVersion: 1, seq: 2, snapshot: canonical })
     expect(await state.store.listPendingParentProjections(parent.tenantId)).toEqual([])
     if (backend === 'jsonl') {
       const lines = fs.readFileSync(path.join(fixtureDir, 'sessions', parent.tenantId, `${parent.sessionId}.jsonl`), 'utf8').trim().split('\n')
@@ -166,7 +186,7 @@ describe.each(['jsonl', 'sqlite'] as const)('subagent projection through %s hist
     await state.store.appendSnapshot(parent.tenantId, run.runId, 'finished', {
       status: 'failed', stopReason: 'llm_error', error: { code: 'LLM_ERROR', message: '400 Request body format invalid', retryable: false },
     })
-    vi.spyOn(first, 'append').mockRejectedValueOnce(new Error('simulated transcript write failure'))
+    vi.spyOn(first, 'appendIfActiveToolCallAnchor').mockRejectedValueOnce(new Error('simulated transcript write failure'))
     await expect(projectPendingSubagents(first, parent.tenantId)).rejects.toThrow('transcript write failure')
     expect((await state.store.getRun(parent.tenantId, run.runId))?.status).toBe('failed')
     expect(await state.store.listPendingParentProjections(parent.tenantId)).toHaveLength(1)
@@ -189,6 +209,10 @@ describe.each(['jsonl', 'sqlite'] as const)('subagent projection through %s hist
       ],
       usage: { totalTokens: 23 },
     })
+    const archiveBefore = await state.db.execute({
+      sql: 'SELECT event FROM subagent_events WHERE tenant_id=? AND run_id=? AND seq=2',
+      args: [parent.tenantId, run.runId],
+    })
     state.store = new SubagentStore(state.db)
     const recovered = await state.store.recoverInterrupted()
     expect(recovered).toHaveLength(1)
@@ -197,10 +221,34 @@ describe.each(['jsonl', 'sqlite'] as const)('subagent projection through %s hist
     await projectPendingSubagents(restarted, parent.tenantId)
     const result = (await restarted.getFullHistory(parent)).find(message => message.role === 'tool')
     expect(result).toMatchObject({ metadata: { success: false, subagent: {
-      status: 'interrupted', stopReason: 'engine_restarted', partialOutput: 'Located the entry point.',
+      schemaVersion: 2, view: 'summary', status: 'interrupted', stopReason: 'engine_restarted', partialOutput: 'Located the entry point.',
       usage: { totalTokens: 23, unknown: true },
-      toolCalls: [{ id: 'read-1', status: 'succeeded', output: 'Persisted README' }, { id: 'read-2', status: 'cancelled' }],
+      coverage: { asOfSeq: recovered[0].seq, toolCount: 2, includedToolCount: 2, activeToolCount: 0,
+        includedActiveToolCount: 0, ids: expect.arrayContaining(['read-1', 'read-2']), hasMore: false, completeness: 'complete' },
+      toolCalls: expect.arrayContaining([
+        expect.objectContaining({ id: 'read-1', status: 'succeeded', output: 'Persisted README' }),
+        expect.objectContaining({ id: 'read-2', status: 'cancelled' }),
+      ]),
     } } })
+    const [prior, canonical] = await state.store.getSnapshotsAtSequences(parent.tenantId, [
+      { runId: run.runId, seq: 2 }, { runId: run.runId, seq: recovered[0].seq },
+    ])
+    expect(prior.schemaVersion).toBe(1)
+    expect(prior.toolCalls).toEqual([
+      { id: 'read-1', name: 'read_file', args: { path: 'README.md' }, status: 'succeeded', output: 'Persisted README' },
+      { id: 'read-2', name: 'read_file', args: { path: 'package.json' }, status: 'running' },
+    ])
+    expect(canonical.schemaVersion).toBe(1)
+    expect(canonical.lastSeq).toBe(recovered[0].seq)
+    expect(canonical.toolCalls.map(tool => tool.id)).toEqual(['read-1', 'read-2'])
+    expect(canonical.toolCalls[0]).toEqual(prior.toolCalls[0])
+    expect(canonical.toolCalls[1]).toMatchObject({ id: 'read-2', name: 'read_file', args: { path: 'package.json' }, status: 'cancelled' })
+    const archiveAfter = await state.db.execute({
+      sql: 'SELECT event FROM subagent_events WHERE tenant_id=? AND run_id=? AND seq=2',
+      args: [parent.tenantId, run.runId],
+    })
+    expect(archiveAfter.rows).toEqual(archiveBefore.rows)
+    expect(JSON.parse(String(archiveAfter.rows[0].event))).toMatchObject({ schemaVersion: 1, seq: 2, snapshot: prior })
     expect(result?.content).toContain('Located the entry point.')
     expect((await state.store.listEvents(parent.tenantId, run.runId)).map(event => event.kind)).toEqual(['created', 'started', 'finished'])
   })

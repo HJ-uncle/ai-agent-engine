@@ -11,10 +11,10 @@ export function getRequestToolProfile(request: Pick<FastifyRequest, 'headers'>):
 
 export type RunLifetime = 'durable' | 'attached'
 
-/** Execution ownership is independent of tool capabilities; old clients retain their existing default. */
+/** Execution ownership is independent of tool capabilities; runs are durable by default. */
 export function getRequestRunLifetime(request: Pick<FastifyRequest, 'headers'>): RunLifetime {
   const lifetime = request.headers['x-aether-run-lifetime']
-  if (lifetime === undefined) return getRequestToolProfile(request) === 'code' ? 'durable' : 'attached'
+  if (lifetime === undefined) return 'durable'
   if (lifetime === 'durable' || lifetime === 'attached') return lifetime
   throw Object.assign(new Error('X-Aether-Run-Lifetime must be durable or attached'), { statusCode: 400 })
 }

@@ -12,13 +12,15 @@ const input={name:'Timeout contract',cronExpr:'* * * * *',message:'Develop',sess
 beforeAll(async()=>{
  fixture=fs.mkdtempSync(path.join(os.tmpdir(),'aether-cron-timeout-'))
  vi.stubEnv('DATA_DIR',path.join(fixture,'agent.db'))
+ vi.stubEnv('AUTH_ENABLED','false')
+ ;(await import('../../../api/http/middleware.js')).configureRequestAuthentication()
  const database=await import('../../sqlite/db.js')
  await database.initDb(); closeDb=database.closeDb; db=database.getDb()
  store=new (await import('../index.js')).CronStore()
  await (await import('../../../api/http/routes/cron.js')).cronRoutes(app)
  await app.ready()
 })
-afterAll(async()=>{await app.close();closeDb?.();vi.unstubAllEnvs();if(fixture && path.dirname(fixture)===path.resolve(os.tmpdir()) && path.basename(fixture).startsWith('aether-cron-timeout-'))await fs.promises.rm(fixture,{recursive:true,force:true,maxRetries:10,retryDelay:100})})
+afterAll(async()=>{await app.close();closeDb?.();await (db as import('@libsql/client').Client & {whenClosed?:()=>Promise<void>}).whenClosed?.();vi.unstubAllEnvs();if(fixture && path.dirname(fixture)===path.resolve(os.tmpdir()) && path.basename(fixture).startsWith('aether-cron-timeout-'))await fs.promises.rm(fixture,{recursive:true,force:true,maxRetries:10,retryDelay:100})})
 describe('per-job timeout persistence and HTTP contract',()=>{
  it('creates, preserves on unrelated edit, persists through reopen and resets explicitly',async()=>{
   const job=await store.create('default',{...input,timeoutSeconds:600})
@@ -38,16 +40,20 @@ describe('per-job timeout persistence and HTTP contract',()=>{
   const reset=await app.inject({method:'PUT',url:'/cron/'+job.id,payload:{timeoutSeconds:null}})
   expect(reset.json().data.timeoutSeconds).toBeNull()
  })
- it.each([0,-1,86401,1.5,'600',true,{},[]])('rejects invalid timeout %j in create and update',async value=>{
+ it.each([-1,1.5,'600',true,{},[]])('rejects invalid timeout %j in create and update',async value=>{
   for(const method of ['POST','PUT'] as const){
    const result=await app.inject({method,url:method==='POST'?'/cron':'/cron/missing',payload:{...input,timeoutSeconds:value}})
    expect(result.json().code).toBe(40001)
   }
   await expect(store.create('default',{...input,timeoutSeconds:value as number})).rejects.toThrow('Invalid timeoutSeconds')
  })
+ it.each([0,86401,172800])('accepts unlimited zero and deadlines beyond 24 hours: %s',async timeoutSeconds=>{
+  const job=await store.create('default',{...input,timeoutSeconds})
+  expect(job.timeoutSeconds).toBe(timeoutSeconds)
+ })
  it('migration is idempotent and enforces database bounds',async()=>{
   const {up}=await import('../../sqlite/migrations/027_cron_timeout.js');await up(db);await up(db)
   const job=await store.create('default',{...input,timeoutSeconds:1});expect(job.timeoutSeconds).toBe(1)
-  await expect(db.execute({sql:'UPDATE cron_jobs SET timeout_seconds=0 WHERE id=?',args:[job.id]})).rejects.toThrow()
+  await db.execute({sql:'UPDATE cron_jobs SET timeout_seconds=0 WHERE id=?',args:[job.id]})
  })
 })

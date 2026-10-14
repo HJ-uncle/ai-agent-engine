@@ -7,7 +7,7 @@ import { throwIfAborted } from '../utils/abort.js'
 import { stopCommandProcessTree } from './process-tree.js'
 import { createCommandLaunchPlan } from './launch-plan.js'
 import { COMMAND_OUTPUT_BYTES, COMMAND_PAGE_BYTES, commandJobIsTerminal,
-  type CommandJobLaunch, type CommandJobOutput, type CommandJobScope, type CommandJobSnapshot, type CommandOutputEntry } from './types.js'
+  type CommandJobLaunch, type CommandJobOutput, type CommandJobScope, type CommandJobSnapshot, type CommandOutputEntry, type CommandScopeCapture } from './types.js'
 
 const schemas = new WeakMap<Client, Promise<void>>()
 
@@ -47,7 +47,8 @@ export interface CommandJobManagerOptions {
   retentionMs?: number
 }
 
-interface Admission { input: CommandJobLaunch; cancelled: boolean; done: Promise<void> }
+interface Admission { input: CommandJobLaunch; db: Client; cancelled: boolean; done: Promise<void>; live?: LiveJob }
+interface CapturedScope { db: Client; admissions: Admission[]; jobs: LiveJob[]; cancellation?: Promise<CommandJobSnapshot[]> }
 
 const scopeMatches = (stored: StoredJob, scope: CommandJobScope) => stored.tenantId === scope.tenantId && stored.job.sessionId === scope.sessionId &&
   (scope.runId === undefined || stored.job.runId === scope.runId) &&
@@ -67,6 +68,8 @@ export class CommandJobManager {
   private stopping = false
   private currentDb?: Client
   private readonly admissions = new Set<Admission>()
+  private readonly capturedScopes = new WeakMap<CommandScopeCapture, CapturedScope>()
+  private readonly shutdowns = new WeakMap<Client, Promise<void>>()
   /** Terminal jobs whose final durable write is waiting for a transient DB recovery. */
   private readonly retrying = new Set<LiveJob>()
 
@@ -263,8 +266,10 @@ export class CommandJobManager {
   }
 
   async start(input: CommandJobLaunch): Promise<CommandJobSnapshot> {
+    // Ownership and launch data belong to this admission, not a caller's mutable object.
+    input = { ...input, args: [...input.args], env: { ...input.env } }
     let release!: () => void
-    const admission: Admission = { input, cancelled: false, done: new Promise<void>(done => { release = done }) }
+    const admission: Admission = { input, db: this.db, cancelled: false, done: new Promise<void>(done => { release = done }) }
     this.admissions.add(admission)
     try { return await this.startAdmitted(input, admission) }
     finally { this.admissions.delete(admission); release() }
@@ -273,6 +278,7 @@ export class CommandJobManager {
   private async startAdmitted(input: CommandJobLaunch, admission: Admission): Promise<CommandJobSnapshot> {
     await this.initialize()
     throwIfAborted(input.signal)
+    if (this.db !== admission.db) throw new Error('Command datasource changed during admission')
     if (this.stopping || admission.cancelled) throw new Error('Command service or owner is stopping')
     if (this.active.size + this.starting >= this.concurrentLimit) throw Object.assign(new Error('Too many active command jobs'), { code: 'COMMAND_CAPACITY', statusCode: 429 })
     if (!input.tenantId || !input.sessionId || !input.ownerSessionId ||
@@ -287,8 +293,9 @@ export class CommandJobManager {
     }
     let resolve!: (value: CommandJobSnapshot) => void
     const completion = new Promise<CommandJobSnapshot>(done => { resolve = done })
-    const live: LiveJob = { db: this.db, tenantId: input.tenantId, job, entries: [], retainedBytes: 0, completion, resolve,
+    const live: LiveJob = { db: admission.db, tenantId: input.tenantId, job, entries: [], retainedBytes: 0, completion, resolve,
       closed: false, cleanupSignal: () => {}, writes: Promise.resolve(), pendingOutput: [], pendingOutputBytes: 0, outputPaused: false }
+    admission.live = live
     try {
       await this.persist(live)
       throwIfAborted(input.signal)
@@ -471,26 +478,83 @@ export class CommandJobManager {
     return live ? this.stop(live, 'cancelled', reason) : clone(stored.job)
   }
 
-  async cancelScope(scope: CommandJobScope, reason = 'Owner stopped'): Promise<CommandJobSnapshot[]> {
-    await this.initialize()
-    const admissions = [...this.admissions].filter(admission => scopeMatches({ tenantId: admission.input.tenantId,
-      job: admission.input as unknown as CommandJobSnapshot, entries: [] }, scope))
-    for (const admission of admissions) admission.cancelled = true
-    await Promise.all(admissions.map(admission => admission.done))
-    const jobs = [...this.active.values()].filter(job => job.db === this.db && scopeMatches(job, scope))
-    return Promise.all(jobs.map(job => this.stop(job, 'cancelled', reason)))
+  captureScope(scope: CommandJobScope): CommandScopeCapture {
+    const db = this.db
+    const admissions = [...this.admissions].filter(admission => admission.db === db &&
+      admission.input.tenantId === scope.tenantId && admission.input.sessionId === scope.sessionId &&
+      (scope.runId === undefined || admission.input.runId === scope.runId) &&
+      (scope.ownerSessionId === undefined || admission.input.ownerSessionId === scope.ownerSessionId) &&
+      (scope.ownerRunId === undefined || admission.input.ownerRunId === scope.ownerRunId))
+    const jobs = [...this.active.values()].filter(job => job.db === db && scopeMatches(job, scope))
+    const capture = Object.freeze({}) as CommandScopeCapture
+    this.capturedScopes.set(capture, { db, admissions, jobs })
+    return capture
   }
 
-  async shutdown(reason = 'Engine shutting down'): Promise<void> {
+  private captured(capture: CommandScopeCapture): CapturedScope {
+    const owned = this.capturedScopes.get(capture)
+    if (!owned || owned.db !== this.db || owned.db.closed) throw new Error('A live same-manager command scope capture is required')
+    return owned
+  }
+
+  hasCapturedWork(capture: CommandScopeCapture): boolean {
+    const owned = this.captured(capture)
+    return owned.admissions.length > 0 || owned.jobs.length > 0
+  }
+
+  cancelCaptured(capture: CommandScopeCapture, reason = 'Owner stopped'): Promise<CommandJobSnapshot[]> {
+    const owned = this.captured(capture)
+    if (!owned.cancellation) {
+      // Revoke these admissions and handles before any await. Joining the old
+      // set must never perform another broad lookup after a later manual start.
+      for (const admission of owned.admissions) admission.cancelled = true
+      const stops = owned.jobs.map(job => this.stop(job, 'cancelled', reason))
+      owned.cancellation = (async () => {
+        const results = await Promise.allSettled([...stops, ...owned.admissions.map(admission => admission.done)])
+        const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+        if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'COMMAND_CLEANUP_UNKNOWN')
+        return results.slice(0, stops.length).map(result => (result as PromiseFulfilledResult<CommandJobSnapshot>).value)
+      })()
+      void owned.cancellation.catch(() => undefined)
+    }
+    return owned.cancellation
+  }
+
+  cancelScope(scope: CommandJobScope, reason = 'Owner stopped'): Promise<CommandJobSnapshot[]> {
+    return this.cancelCaptured(this.captureScope(scope), reason)
+  }
+
+  shutdown(reason = 'Engine shutting down'): Promise<void> {
+    const db = this.db, previous = this.shutdowns.get(db)
+    if (previous) return previous
     this.stopping = true
-    for (const admission of this.admissions) admission.cancelled = true
-    await Promise.all([...this.admissions].map(admission => admission.done))
-    await Promise.all([...this.active.values()].map(job => this.stop(job, 'cancelled', reason)))
-    for (const live of this.retrying) {
+    // The service close owns these exact handles. A failed stop must not let
+    // another child's close/persistence ACK outlive the database close gate.
+    const admissions = [...this.admissions], jobs = [...this.active.values()], retries = [...this.retrying]
+    for (const admission of admissions) admission.cancelled = true
+    // Stop future retries synchronously; an already dispatched retry still
+    // owns a real write promise which must finish before the datasource closes.
+    for (const live of retries) {
       if (live.persistRetryTimer) clearTimeout(live.persistRetryTimer)
       live.persistRetryTimer = undefined
     }
-    this.retrying.clear()
+    const retryWrites = retries.flatMap(live => live.flushing ? [live.flushing] : [])
+    const stops = jobs.map(job => this.stop(job, 'cancelled', reason))
+    const closing = (async () => {
+      const results = await Promise.allSettled([...stops, ...admissions.map(admission => admission.done), ...retryWrites])
+      const owned = new Set([...jobs, ...retries, ...admissions.flatMap(admission => admission.live ? [admission.live] : [])])
+      const failures: unknown[] = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map(result => result.reason)
+      for (const live of owned) {
+        if (live.persistRetryTimer) clearTimeout(live.persistRetryTimer)
+        live.persistRetryTimer = undefined
+        this.retrying.delete(live)
+        if (live.job.error?.code === 'COMMAND_PERSIST_FAILED') failures.push(new Error(live.job.error.message))
+      }
+      if (failures.length) throw new AggregateError(failures, 'COMMAND_CLEANUP_UNKNOWN')
+    })()
+    this.shutdowns.set(db, closing)
+    void closing.catch(() => undefined)
+    return closing
   }
 }
 

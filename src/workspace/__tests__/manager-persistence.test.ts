@@ -4,7 +4,6 @@ import os from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { WorkspaceManager } from '../manager.js'
 
@@ -53,8 +52,7 @@ describe('WorkspaceManager persistent selections', () => {
   it('restores the selected real directory in a genuinely new process after the binding process exits', () => {
     const f = fixture(), project = f.directory('restart-project')
     fs.writeFileSync(path.join(project, 'kept.txt'), 'retained project content')
-    const require = createRequire(import.meta.url), loader = pathToFileURL(require.resolve('tsx')).href
-    const managerUrl = new URL('../manager.ts', import.meta.url).href
+    const managerUrl = pathToFileURL(path.join(process.env.AETHER_GIT_TEST_COMPILED_ROOT ?? path.resolve('../owned-compiled'), 'workspace/manager.js')).href
     const script = `import fs from 'node:fs';import {WorkspaceManager} from ${JSON.stringify(managerUrl)};
       const m=new WorkspaceManager(process.env.WORKSPACE_ROOT),c={tenantId:'tenant',sessionId:'session'};
       const selected=process.env.TEST_BIND_PROJECT?m.bind(c,process.env.TEST_BIND_PROJECT):m.getWorkingDirectory(c);
@@ -62,7 +60,7 @@ describe('WorkspaceManager persistent selections', () => {
     const execute = (bind: boolean) => {
       const env = { ...process.env, ...(bind ? { TEST_BIND_PROJECT: project } : {}) }
       if (!bind) delete env.TEST_BIND_PROJECT
-      const child = spawnSync(process.execPath, ['--import', loader, '--input-type=module', '--eval', script], {
+      const child = spawnSync(process.execPath, ['--input-type=module', '--eval', script], {
         cwd: path.resolve('.'), env, encoding: 'utf8', windowsHide: true, timeout: 15000,
       })
       expect(child.error).toBeUndefined()
@@ -118,7 +116,7 @@ describe('WorkspaceManager persistent selections', () => {
     expect(fs.readFileSync(f.state)).toEqual(before)
     expect(fs.existsSync(path.join(f.privateRoot, 'tenant', 'session'))).toBe(false)
     manager.bind(ctx('tenant', 'second'), b)
-    expect(readState(f.state).bindings).toContainEqual({ ...ctx(), workspaceRoot: a })
+    expect(readState(f.state).bindings).toContainEqual(expect.objectContaining({ ...ctx(), workspaceRoot: a }))
     expect(() => manager.getWorkingDirectory(ctx())).toThrow(/no longer available/)
     expect(manager.bind(ctx(), b)).toBe(b)
   })
@@ -132,7 +130,7 @@ describe('WorkspaceManager persistent selections', () => {
     // and block unrelated tenants from using another retained project.
     expect(() => f.manager().getWorkingDirectory(ctx('owner', 'session'))).toThrow(/no longer available/)
     expect(f.manager().bind(ctx('other', 'session'), available)).toBe(available)
-    expect(readState(f.state).bindings).toContainEqual({ tenantId: 'owner', sessionId: 'session', workspaceRoot: moved })
+    expect(readState(f.state).bindings).toContainEqual(expect.objectContaining({ tenantId: 'owner', sessionId: 'session', workspaceRoot: moved }))
   })
 
   it('a narrowed allowlist reports the old selection and preserves it instead of silently resetting', () => {
@@ -144,7 +142,7 @@ describe('WorkspaceManager persistent selections', () => {
     expect(() => narrowed.getWorkingDirectory({ ...ctx(), cwd: b, projectRoot: b })).toThrow(/outside.*allowed/)
     expect(fs.readFileSync(f.state)).toEqual(before)
     narrowed.bind(ctx('tenant', 'second'), b)
-    expect(readState(f.state).bindings).toContainEqual({ ...ctx(), workspaceRoot: a })
+    expect(readState(f.state).bindings).toContainEqual(expect.objectContaining({ ...ctx(), workspaceRoot: a }))
     expect(() => narrowed.getWorkingDirectory(ctx())).toThrow(/outside.*allowed/)
     expect(fs.existsSync(path.join(f.privateRoot, 'tenant', 'session'))).toBe(false)
   })

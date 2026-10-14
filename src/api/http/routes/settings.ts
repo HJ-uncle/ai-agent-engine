@@ -4,7 +4,7 @@ import { loadSecurityConfig, saveSecurityConfig, WebFetchConfig } from '../../..
 import { systemConfigStore, SECRET_KEYS, BOOT_PATH_KEYS, TRUSTED_STARTUP_KEYS } from '../../../storage/sqlite/system-config.js'
 import { requireRoles } from '../../../auth/guards.js'
 import { setGlobalToolPoolLimit } from '../../../core/utils/concurrency-pool.js'
-import { resolveOSMMode, isValidMode, OSM_MODES, applyOSMMultiplier, getOSMCompressRatio } from '../../../core/osm.js'
+import { resolveOSMMode, isValidMode, OSM_MODES, getOSMCompressRatio } from '../../../core/osm.js'
 import { logger as engineLogger } from '../../../observability/index.js'
 import { MANAGED_KEYS } from '../../../core/aether-config.js'
 import { MAX_FILE_SIZE } from '../../../tools/file/constants.js'
@@ -14,6 +14,14 @@ const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId 
 
 
 let __legacyWriteWarned = false
+let __legacyRuntimeSettingsWriteWarned = false
+
+// These keys remain in the settings payload for clients that still render the
+// old configuration form.  They are compatibility metadata only: the agent
+// runtime no longer reads them as implicit iteration, token, or command
+// deadlines.  Keep the set in one place so PUT cannot accidentally make an
+// obsolete value live again through process.env.
+const LEGACY_RUNTIME_LIMIT_KEYS = new Set(['MAX_ITERATIONS', 'TOKEN_BUDGET', 'CMD_TIMEOUT_MS'])
 
 /** 所有通过 PUT /settings 保存的字段都写数据库 */
 export async function settingsRoutes(fastify: FastifyInstance) {
@@ -68,8 +76,10 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       DEEPSEEK_INCLUDE_STREAM_USAGE:  getStr('DEEPSEEK_INCLUDE_STREAM_USAGE', 'true') !== 'false',
       DEEPSEEK_LOG_CACHE_HITS:        getStr('DEEPSEEK_LOG_CACHE_HITS', 'true') !== 'false',
       // ── Agent ────────────────────────────────────────────────────────────
-      MAX_ITERATIONS:          configuredIterations,
-      TOKEN_BUDGET:            configuredTokenBudget,
+      // Keep these legacy keys in the schema for old clients, but never
+      // return a number that could be mistaken for an active global cap.
+      MAX_ITERATIONS:          null,
+      TOKEN_BUDGET:            null,
       HISTORY_MAX_TOKENS:      parseInt(getStr('HISTORY_MAX_TOKENS',      '20000'),   10),
       TOOL_OUTPUT_MAX_CHARS:   parseInt(getStr('TOOL_OUTPUT_MAX_CHARS',   '4000'),    10),
       COMPRESS_THRESHOLD_RATIO: baseCompressRatio,
@@ -78,7 +88,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       SKILLS_ROOT:   getStr('SKILLS_ROOT',   ''),
       BASH_PATH:     getStr('BASH_PATH',     ''),
       // ── Tools ────────────────────────────────────────────────────────────
-      CMD_TIMEOUT_MS:      configuredCommandTimeout,
+      CMD_TIMEOUT_MS:      null,
       MAX_FILE_SIZE_BYTES: parseInt(getStr('MAX_FILE_SIZE_BYTES', String(MAX_FILE_SIZE)), 10),
       WEB_SEARCH_SERVER:   getStr('WEB_SEARCH_SERVER', 'http://127.0.0.1:8923'),
       // ── Workspace ────────────────────────────────────────────────────────
@@ -115,18 +125,29 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       webFetch: securityConfig.webFetch,
       // ── Managed Settings ────────────────────────────────────────────────
       managedKeys: Array.from(MANAGED_KEYS),
-      // Read-only applicability: null means no configured cap, or the
-      // profile-specific command default. Keep explicit settings above intact.
+      // Read-only applicability.  The legacy keys above are kept for settings
+      // round-trips, but no profile applies them as an implicit runtime cap.
+      // Explicit per-request cancellation/timeout controls remain separate.
       runtimeLimits: {
-        code: { maxIterations: null, tokenBudget: null, commandTimeoutMs: null },
+        unlimited: true,
+        ignoredByRuntime: true,
+        code: { maxIterations: null, tokenBudget: null, commandTimeoutMs: null, unlimited: true },
         otherProfiles: {
-          maxIterations: configuredIterations !== null && configuredIterations > 0
-            ? applyOSMMultiplier('maxIterations', configuredIterations) : null,
-          tokenBudget: configuredTokenBudget !== null && configuredTokenBudget > 0
-            ? applyOSMMultiplier('tokenBudget', configuredTokenBudget) : null,
-          commandTimeoutMs: configuredCommandTimeout !== null && configuredCommandTimeout > 0
-            ? configuredCommandTimeout : null,
-          commandDefaults: { foregroundStandard: 30_000, foregroundFullAccess: 120_000, background: 600_000 },
+          maxIterations: null,
+          tokenBudget: null,
+          commandTimeoutMs: null,
+          unlimited: true,
+          commandDefaults: { foregroundStandard: null, foregroundFullAccess: null, background: null },
+        },
+        // Preserve the old values so an older settings UI can display and
+        // clear them, while making it explicit that they are not effective.
+        legacy: {
+          ignoredByRuntime: true,
+          configured: {
+            MAX_ITERATIONS: configuredIterations,
+            TOKEN_BUDGET: configuredTokenBudget,
+            CMD_TIMEOUT_MS: configuredCommandTimeout,
+          },
         },
         compression: { configuredRatio: baseCompressRatio, effectiveRatio: effectiveCompressRatio },
       },
@@ -216,6 +237,18 @@ export async function settingsRoutes(fastify: FastifyInstance) {
         continue
       }
       await systemConfigStore.set(k, strVal, SECRET_KEYS.has(k))
+      if (LEGACY_RUNTIME_LIMIT_KEYS.has(k)) {
+        // Keep the value for backwards-compatible settings round-trips, but
+        // never inject it into the live process environment.  The runtime
+        // deliberately ignores these keys and uses only explicit per-request
+        // controls, so an old client cannot reintroduce a global cap.
+        if (!__legacyRuntimeSettingsWriteWarned) {
+          __legacyRuntimeSettingsWriteWarned = true
+          engineLogger.warn({ keys: [...LEGACY_RUNTIME_LIMIT_KEYS] },
+            'DEPRECATION: legacy runtime limit settings are stored for compatibility but ignored by the runtime.')
+        }
+        continue
+      }
       // 同步更新 process.env，保证当前进程内立即生效
       process.env[k] = strVal
     }
