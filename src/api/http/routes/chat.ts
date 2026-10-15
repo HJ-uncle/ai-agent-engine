@@ -19,6 +19,7 @@ import { RequestBudget } from '../../../core/subagent/budget.js'
 import { logRequestDispatch } from '../../../core/llm-adapter/dispatch-diagnostics.js'
 import { createRequestLogger, QALogger, type QALogEntry } from '../../../observability/index.js'
 import { buildSkillsSystemPrompt } from '../../../skills/index.js'
+import { buildOfficeExecutionPrompt } from '../../../core/office-prompt.js'
 import { getRequestToolProfile, getRequestRunLifetime } from '../tool-profile.js'
 import { createToolRegistry } from '../../../tools/registry-factory.js'
 import { resolveOSMMode } from '../../../core/osm.js'
@@ -1361,6 +1362,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
       allWorkspacePaths[0]
     )
 
+    const officeExecutionPrompt = buildOfficeExecutionPrompt(toolProfile, registry, externalSkills)
     const codeExecutionPrompt = toolProfile === 'code' ? `\n\n${CODE_AGENT_EXECUTION_PROMPT}` : ''
     const fullSystemPrompt = baseSystemPrompt + ragPrompt + memoryRecallBlock + `
 ---
@@ -1376,7 +1378,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
 5. 多步任务使用内建 \`plan_update\` 静默维护完整任务计划；简单单步请求无需建计划。首次可省略 id，后续复用返回 id，保留仍需展示的已完成步骤。status 使用 pending/in_progress/completed/cancelled；只在步骤真实完成且有依据后标记 completed。计划由引擎持久化并独立展示，不复述创建/更新日志，不通过命令或脚本维护；失败先修正输入，不声称未落盘的状态已保存。
 6. **先给结论，再说理由。** 不要在回答里反复自我怀疑或把同一假设推演多遍；一旦确认了一件事，就把它当既定事实继续推进，不要回头重复论证。
 7. **禁止绕过工具链自造轮子。** 当现有工具做不到某件事时（例如看不到图片），**不要**自己写脚本去实现底层能力（手写 PNG/JPEG 解码器、二进制解析、像素取证、OCR 引擎等）。这类自造轮子几乎必然失败，且会烧掉几十轮工具调用。正确做法：① 换用受支持的路径（如 \`read_file mode:"ocr"\`）；② 确认该路径确实不可用后，直接向用户说明限制并给出替代方案。**同一件事尝试失败一次就换路径，绝不允许用「再换个脚本试试」的方式反复试探。**
-${workspaceInfo}${codegraphBlock}${attachments && attachments.length > 0 ? `\n\n## 本次消息已附带以下文件\n${attachments.map(a => `- ${a.name}`).join('\n')}${visionCapabilityNote}` : ''}${codeExecutionPrompt}
+${workspaceInfo}${codegraphBlock}${attachments && attachments.length > 0 ? `\n\n## 本次消息已附带以下文件\n${attachments.map(a => `- ${a.name}`).join('\n')}${visionCapabilityNote}` : ''}${codeExecutionPrompt}${officeExecutionPrompt}
 `
 
     // ── Estimate token counts for each injected prompt section ──────────
@@ -1395,7 +1397,7 @@ ${workspaceInfo}${codegraphBlock}${attachments && attachments.length > 0 ? `\n\n
 5. 多步任务使用内建 \`plan_update\` 静默维护完整任务计划；简单单步请求无需建计划。首次可省略 id，后续复用返回 id，保留仍需展示的已完成步骤。status 使用 pending/in_progress/completed/cancelled；只在步骤真实完成且有依据后标记 completed。计划由引擎持久化并独立展示，不复述创建/更新日志，不通过命令或脚本维护；失败先修正输入，不声称未落盘的状态已保存。
 6. **先给结论，再说理由。** 不要在回答里反复自我怀疑或把同一假设推演多遍；一旦确认了一件事，就把它当既定事实继续推进，不要回头重复论证。
 7. **禁止绕过工具链自造轮子。** 当现有工具做不到某件事时（例如看不到图片），**不要**自己写脚本去实现底层能力（手写 PNG/JPEG 解码器、二进制解析、像素取证、OCR 引擎等）。这类自造轮子几乎必然失败，且会烧掉几十轮工具调用。正确做法：① 换用受支持的路径（如 \`read_file mode:"ocr"\`）；② 确认该路径确实不可用后，直接向用户说明限制并给出替代方案。**同一件事尝试失败一次就换路径，绝不允许用「再换个脚本试试」的方式反复试探。**
-${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
+${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}${officeExecutionPrompt}
 `
     const skillTokens = estimateTokens(skillsPrompt)
     // Skills are already embedded in baseSystemPrompt, but have their own

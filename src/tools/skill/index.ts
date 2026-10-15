@@ -9,6 +9,7 @@
 import type { Tool } from '../../core/agent-context/index.js'
 import type { ExternalSkill } from '../../skills/external-loader.js'
 import { getSkillContent } from '../../skills/external-loader.js'
+import { readSkillResource } from './skill-resource.js'
 
 export { runSkillScriptTool } from './run-skill-script.js'
 
@@ -65,11 +66,17 @@ export function createSkillTools(skills: ExternalSkill[], osm: SkillToolOsmConte
           type: 'string',
           description: '想要查看的技能名称（须与 list_skills 中列出的名称一致）',
         },
+        resource: {
+          type: 'string', minLength: 1, maxLength: 1024,
+          description: '可选：所选技能中按需读取的 references/*.md 相对路径；不传时返回原 SKILL.md 正文。',
+        },
       },
       required: ['name'],
     },
     async execute(input, _ctx) {
-      const { name } = input as { name: string }
+      const { name, resource } = input as { name: string; resource?: string }
+      if (typeof name !== 'string' || (resource !== undefined && typeof resource !== 'string')) return { success: false, output: 'A skill name and optional Markdown resource path are required.' }
+      if (resource !== undefined) return readSkillResource(skills, name, resource)
       const content = getSkillContent(skills, name)
       if (!content) {
         // 区分"被 OSM 模式隐藏"与"真的不存在"，避免误导 Agent

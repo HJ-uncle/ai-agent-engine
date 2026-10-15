@@ -73,9 +73,9 @@ describe('project skills use .ae without displacing existing project files', () 
     skill('.aether/skills', 'before')
     vi.spyOn(process, 'cwd').mockReturnValue(root)
     registry.start()
-    expect(registry.count).toBe(1)
+    expect(registry.getSkills().filter((entry) => !entry.builtin).map((entry) => entry.name)).toEqual(['before'])
     skill('.ae/skills', 'after')
-    expect(registry.getSkills().map((entry) => entry.name).sort()).toEqual(['after', 'before'])
+    expect(registry.getSkills().filter((entry) => !entry.builtin).map((entry) => entry.name).sort()).toEqual(['after', 'before'])
   })
 
 

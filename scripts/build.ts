@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createBuildManifest } from '../src/runtime/build-identity.js'
@@ -28,6 +28,8 @@ copyFileSync(path.join(root, 'src/terminal/workspace-shell.mjs'), shellAsset)
 const supervisorAssets=path.join(root,'dist/workspace/assets')
 mkdirSync(supervisorAssets,{recursive:true})
 for(const name of ['repository-supervisor.exe','repository-supervisor.sha256','repository-supervisor.cs'])copyFileSync(path.join(root,'src/workspace/assets',name),path.join(supervisorAssets,name))
+// Skill Markdown and references are runtime assets, included under dist/**.
+cpSync(path.join(root, 'src/skills/builtin'), path.join(root, 'dist/skills/builtin'), { recursive: true })
 const after = createBuildManifest(root)
 if (after.buildId !== before.buildId) throw new Error('Engine sources changed during compilation; rebuild before using this artifact')
 mkdirSync(directory, { recursive: true })

@@ -16,6 +16,7 @@ import path from 'node:path'
 import { loadExternalSkills, type ExternalSkill } from './external-loader.js'
 import { logger } from '../observability/index.js'
 import { loadProjectSkills, projectSkillRoots } from './project-skills.js'
+import { loadBuiltinOfficeSkills } from './builtin-office.js'
 
 /** 全局层根目录（集群部署时可设 AETHER_GLOBAL_DIR 指向共享卷） */
 function globalLayerRoot(): string {
@@ -24,8 +25,8 @@ function globalLayerRoot(): string {
 }
 
 export class SkillsRegistry {
-  private skills: ExternalSkill[] = []
-  private allSkills: ExternalSkill[] = []
+  private skills: ExternalSkill[] = loadBuiltinOfficeSkills().filter(skill => skill.enabled)
+  private allSkills: ExternalSkill[] = loadBuiltinOfficeSkills()
   private watchers: fs.FSWatcher[] = []
   private watchedRoots = new Set<string>()
   private debounceTimer: ReturnType<typeof setTimeout> | null = null
@@ -70,7 +71,7 @@ export class SkillsRegistry {
       }
     }
 
-    if (!this.skillsRoot && !this.globalRoot) {
+    if (!this.skillsRoot && !this.globalRoot && (this.singleRootMode || loadBuiltinOfficeSkills().length === 0)) {
       logger.warn('SkillsRegistry: no skills layer available, skills disabled')
       return
     }
@@ -163,6 +164,9 @@ export class SkillsRegistry {
   reload(): void {
     const before = this.skills.length
     const merged = new Map<string, ExternalSkill>()
+    // Explicit start(root) retains isolated deployment/test semantics. Global
+    // and project copies (including disabled copies) override packaged defaults.
+    if (!this.singleRootMode) for (const skill of loadBuiltinOfficeSkills()) merged.set(skill.name.toLowerCase(), skill)
     // 先加载全局层，后加载项目层 → 项目层覆盖同名
     for (const [root, scope] of [
       [this.globalRoot, 'global'],
@@ -240,6 +244,7 @@ export class SkillsRegistry {
     if (this.explicitRoot && !projectRoots.includes(this.explicitRoot)) roots.push([this.explicitRoot, 'global'])
     if (this.globalRoot && this.globalRoot !== this.explicitRoot) roots.push([this.globalRoot, 'global'])
     const merged = new Map<string, ExternalSkill>()
+    if (!this.singleRootMode) for (const skill of loadBuiltinOfficeSkills()) merged.set(skill.name.toLowerCase(), skill)
     for (const [root, scope] of roots) {
       if (!root) continue
       // Load disabled entries while merging so a disabled project skill still

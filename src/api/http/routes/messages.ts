@@ -6,6 +6,7 @@ import { createAgentContext } from '../../../core/agent-context/index.js'
 import { createAdapterFromResolved, resolveModelConfig } from '../../../core/llm-adapter/resolve-model.js'
 import { createRequestLogger } from '../../../observability/index.js'
 import { buildSkillsSystemPrompt } from '../../../skills/index.js'
+import { buildOfficeExecutionPrompt } from '../../../core/office-prompt.js'
 import type { ToolProfile } from '../../../tools/tool-profile.js'
 import { getRequestToolProfile } from '../tool-profile.js'
 import { createToolRegistry } from '../../../tools/registry-factory.js'
@@ -219,8 +220,9 @@ export async function messagesRoutes(fastify: FastifyInstance) {
       }, { sessionId, scope: effectiveMemoryScope === 'session' ? 'session' : 'global' })
     }
 
+    const officeExecutionPrompt = buildOfficeExecutionPrompt(toolProfile, registry, externalSkills)
     const codeExecutionPrompt = toolProfile === 'code' ? `\n\n${CODE_AGENT_EXECUTION_PROMPT}` : ''
-    const fullSystemPrompt = finalSystemPrompt + ragPrompt + memoryRecallBlock + codeExecutionPrompt + `
+    const fullSystemPrompt = finalSystemPrompt + ragPrompt + memoryRecallBlock + codeExecutionPrompt + officeExecutionPrompt + `
 ---
 # 智能交互规则
 1. 当你需要澄清用户的意图、确认关键操作或提供选择时，请调用 \`ask_user\` 工具。调用该工具后，系统将自动暂停执行，并向用户展示交互式选择界面，等待用户回复后再继续。
@@ -229,7 +231,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 `
 
     // systemPromptTokens: pure system prompt (excluding RAG)
-    const pureSystemPromptForMessages = finalSystemPrompt + memoryRecallBlock + codeExecutionPrompt + `
+    const pureSystemPromptForMessages = finalSystemPrompt + memoryRecallBlock + codeExecutionPrompt + officeExecutionPrompt + `
 ---
 # 智能交互规则
 1. 当你需要澄清用户的意图、确认关键操作或提供选择时，请调用 \`ask_user\` 工具。调用该工具后，系统将自动暂停执行，并向用户展示交互式选择界面，等待用户回复后再继续。

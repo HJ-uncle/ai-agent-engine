@@ -66,7 +66,7 @@ const RECENT_READONLY_OUTCOMES = 64
 const RECENT_MUTATION_OUTCOMES = 128
 // Generic serial tools may be queries or remote operations with unknown effects.
 // Restrict action advice to the builtin write/edit/exec contracts we can verify.
-const MUTATION_ADVICE_TOOLS = new Set(['write_file', 'edit_file', 'execute_cmd'])
+const MUTATION_ADVICE_TOOLS = new Set(['write_file', 'edit_file', 'office_document', 'execute_cmd'])
 // Static engine guidance must never promote paths, arguments or tool output into instructions.
 export const READONLY_REPETITION_PROMPT = 'The last two tool batches repeated successful read-only calls with the same arguments and results already observed recently, without obtaining new evidence. Break this query cycle while continuing the original task: use the evidence already collected to take the next unfinished step, or change the query, path, range or approach to obtain genuinely new information. Do not alternate the same exhausted queries or rerun them unchanged. Re-read unchanged inputs only when a relevant change or an active operation justifies it. Continue to obey the existing permissions and safety policy; this notice does not grant additional access or ask you to stop.'
 

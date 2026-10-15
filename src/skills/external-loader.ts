@@ -28,6 +28,8 @@ export interface ExternalSkill {
   enabled: boolean
   /** 来源层级：project（项目 .aether/skills）| global（~/.aether/skills，仅 registry 标注） */
   scope?: 'global' | 'project'
+  /** Packaged fallback; management must not treat the installation path as a user project. */
+  builtin?: boolean
   /**
    * 内联 SKILL.md 内容（来自用户端 inlineSkills 透传）
    * 当此字段非空时，getSkillContent 优先返回它而不再读 skillMdPath。
@@ -230,7 +232,7 @@ export function buildSkillsSystemPrompt(skills: ExternalSkill[]): string {
     '',
     `你有 ${skills.length} 个外部技能。当用户请求**确实匹配**下列技能时（中文意图需映射到英文技能名，如「查新闻」→ \`web-search\`）：`,
     '1. 先用 `get_skill({name: "<英文技能名>"})` 取回 SKILL.md 并阅读；',
-    '2. 再按 SKILL.md 里的命令调用 `run_skill_script` 执行。',
+    '2. 按 SKILL.md 的实际说明使用现有工具；只有技能提供并要求执行脚本时才调用 `run_skill_script`。',
     '',
     '不匹配任何技能时**忽略本段**，不要为了「走流程」而强行套用技能；不确定是否有匹配可用 `list_skills` 查全量。',
     '禁止凭空编造技能名或工具名。',

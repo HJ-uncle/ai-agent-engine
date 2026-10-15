@@ -16,7 +16,7 @@ const context = { tenantId: 'profile-test', sessionId: 'session' } as AgentConte
 const mcpServers = [{ id: 'fixture', name: 'fixture', transportType: 'http' as const, url: 'http://fixture.invalid' }]
 const excluded = [
   'calculate', 'get_time', 'remember', 'recall', 'search_memory', 'list_memories', 'forget', 'link_memories',
-  'install_package', 'list_packages', 'cron_list', 'cron_create', 'cron_update', 'cron_delete',
+  'install_package', 'list_packages', 'office_document', 'cron_list', 'cron_create', 'cron_update', 'cron_delete',
   'agent_list', 'agent_get', 'agent_create', 'agent_do_create', 'agent_update', 'agent_do_update', 'agent_delete', 'agent_do_delete',
   'task_list', 'task_cancel', 'task_status',
 ]
@@ -76,6 +76,17 @@ describe('executable tool profiles', () => {
     expect(editSelection.registry.list().map(item => item.name)).toEqual(['edit_file', 'plan_update'])
   })
 
+  it('keeps office inspect and mutation trusted serial in general, with no widening of readonly children', async () => {
+    vi.stubEnv('OSM_MODE', 'off')
+    const general = await createToolRegistry({ toolProfile: 'general' })
+    expect(general.registry.has('office_document')).toBe(true)
+    for (const operation of ['inspect', 'create', 'edit']) expect(general.registry.executionMode('office_document', { operation })).toBe('serial')
+    const readonlyChild = createSubagentToolRegistry(general.registry, true)
+    expect(readonlyChild.has('office_document')).toBe(false)
+    expect(createSubagentToolRegistry(general.registry, false).has('office_document')).toBe(true)
+    const narrowed = await createToolRegistry({ allowedTools: ['read_file'] })
+    expect(narrowed.registry.has('office_document')).toBe(false)
+  })
   it('does not leak tool selections between general, code and subsequent general registries', async () => {
     const first = await createToolRegistry({ toolProfile: 'general' })
     const code = await createToolRegistry({ toolProfile: 'code' })

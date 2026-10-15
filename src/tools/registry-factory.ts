@@ -17,6 +17,7 @@ import {
   writeFileTool,
   editFileTool,
 } from './file/index.js'
+import { officeDocumentTool } from './office/index.js'
 import { cmdTool, commandJobTools } from './cmd/index.js'
 import { askUserTool } from './ask-user/index.js'
 import { createMemoryTools } from './memory/index.js'
@@ -236,6 +237,9 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   fileTools.forEach(t => {
     if (shouldRegister(t.name)) registerBuiltin(t)
   })
+
+  // Mixed Office inspect/create/edit stays trusted serial and general-only.
+  if (profile === 'general' && shouldRegister(officeDocumentTool.name)) registerBuiltin(officeDocumentTool)
 
   // 3. 命令行工具
   if (shouldRegister(cmdTool.name)) registerBuiltin(cmdTool)

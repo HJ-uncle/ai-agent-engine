@@ -1,9 +1,18 @@
 import type { FastifyInstance } from 'fastify'
+import { createRuntimeDiagnostics } from '../../../runtime/runtime-diagnostics.js'
 import { success } from '../response.js'
 import { getDbStats, getDb } from '../../../storage/sqlite/db.js'
 import { getGlobalToolPool, setGlobalToolPoolLimit } from '../../../core/utils/concurrency-pool.js'
 
 export async function performanceRoutes(fastify: FastifyInstance) {
+  const runtime = createRuntimeDiagnostics()
+  fastify.addHook('onClose', async () => runtime.dispose())
+  // Protected by the same global authentication gate as other business routes.
+  fastify.get('/performance/runtime', async (_request, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    return reply.send(success(runtime.read()))
+  })
+
   fastify.get('/performance/stats', async (_request, reply) => {
     const dbPragmas = await getDbStats()
     const pool = getGlobalToolPool()
