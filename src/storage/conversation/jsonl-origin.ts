@@ -1,3 +1,4 @@
+import { assertControllerDeliveryOrigins } from '../../core/collaboration/controller-origin.js'
 import type { Client } from '@libsql/client'
 import type { ConversationHistory, Message } from '../../core/agent-context/types.js'
 import { CollaborationError } from '../../core/collaboration/types.js'
@@ -83,6 +84,7 @@ export async function authenticatedJSONLHistory(origin: JSONLHistoryOrigin, scop
       file_identity,row_offset,row_bytes,row_hash FROM collaboration_jsonl_deliveries WHERE tenant_id=? AND history_session_id=?`,
       args: [scope.tenantId, scope.sessionId] })).rows
     epoch = await jsonlHistoryEpoch(tx, scope, receipts.some(receipt => receipt.state === 'integrated'))
+    await assertControllerDeliveryOrigins(tx, scope, 'jsonl')
     await tx.commit()
   } catch (error) { if (!tx.closed) await tx.rollback().catch(() => undefined); throw error }
   finally { tx.close() }

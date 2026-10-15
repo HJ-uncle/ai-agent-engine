@@ -1,3 +1,4 @@
+import { assertControllerDeliveryOrigins } from '../../core/collaboration/controller-origin.js'
 import type { Client, Row, Transaction } from '@libsql/client'
 import type { ConversationHistory, Message } from '../../core/agent-context/types.js'
 import { CollaborationError } from '../../core/collaboration/types.js'
@@ -28,6 +29,7 @@ export function sqliteHistoryIdentity(history: ConversationHistory): Identity | 
 /** Readable metadata and peer-prefixed IDs cannot authenticate a message's origin. */
 export async function authenticatedSQLiteRows(query: Pick<Transaction, 'execute'>, scope: Scope,
   inheritContext = true, requiredAnchorId?: string): Promise<Row[]> {
+  await assertControllerDeliveryOrigins(query, scope, 'sqlite')
   // Compare receipt bodies inside SQLite against the exact physical primary key.
   // Retired mail contributes only its ID/state, never its historical large body.
   const deliveries = (await query.execute({ sql: `SELECT d.history_message_id,d.state,

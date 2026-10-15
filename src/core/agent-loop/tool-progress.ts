@@ -27,10 +27,25 @@ function canonical(value: unknown): unknown {
   return value
 }
 
+/** Builtin read instrumentation is not new file evidence. Keep the model-visible result untouched. */
+function evidenceOutput(call: Pick<ToolCall, 'name'>, result: ToolResult): string {
+  if (call.name !== 'read_file' || result.status !== 'succeeded') return result.output
+  const monitor = /^(\[读取监控\] 耗时: )(\d+(?:\.\d+)?)(ms \| 原始大小: \d+B \| 压缩后: \d+B \| 压缩率: -?\d+(?:\.\d+)?%)\r?\n\[文件版本\] ([^\r\n]+)\r?\n/.exec(result.output)
+  if (!monitor) return result.output
+  let version: unknown
+  try { version = JSON.parse(monitor[4]) } catch { return result.output }
+  if (!version || typeof version !== 'object' || Array.isArray(version)
+    || !('path' in version) || typeof version.path !== 'string' || !version.path
+    || !('expectedHash' in version) || typeof version.expectedHash !== 'string'
+    || !/^sha256:[a-f0-9]{64}$/i.test(version.expectedHash)) return result.output
+  // Normalize only this header's elapsed number; content, version, diagnostics and errors retain identity.
+  return monitor[1] + '[elapsed]' + result.output.slice(monitor[1].length + monitor[2].length)
+}
+
 /** Hash all arguments and output; changes after character 200 are real progress too. */
 function outcomeFingerprint(call: Pick<ToolCall, 'name' | 'args'>, result: ToolResult): string {
   return createHash('sha256').update(JSON.stringify({ name: call.name, args: canonical(call.args),
-    status: result.status, output: result.output, error: result.error })).digest('hex')
+    status: result.status, output: evidenceOutput(call, result), error: result.error })).digest('hex')
 }
 
 export function waitingOnActiveWork(call: Pick<ToolCall, 'name'>, result: ToolResult): boolean {

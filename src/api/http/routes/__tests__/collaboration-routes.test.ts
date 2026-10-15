@@ -1,4 +1,4 @@
-// Real loopback HTTP and SQLite receipts. Authentication is the only substituted boundary.
+// Real Fastify injection and SQLite receipts. Authentication is the only substituted boundary.
 // No network model, browser, business DB or user workspace is involved.
 import fs from 'node:fs'
 import path from 'node:path'
@@ -11,16 +11,17 @@ import { SubagentStore } from '../../../../core/subagent/store.js'
 import { CollaborationStore } from '../../../../core/collaboration/store.js'
 import { CollaborationRuntime } from '../../../../core/collaboration/runtime.js'
 import * as runtimes from '../../../../core/collaboration/runtime.js'
+import * as executionOwners from '../../../../core/collaboration/execution-owner.js'
 import type { CollaborationReceipt, CollaborationRootScope } from '../../../../core/collaboration/types.js'
 import { collaborationRoutes } from '../collaboration.js'
 
 let directory: string, db: LocalSqliteProcessClient, app: FastifyInstance, runtime: CollaborationRuntime
-let endpoint: string, participantId: string, receipt: CollaborationReceipt
+let participantId: string, receipt: CollaborationReceipt
 const scope: CollaborationRootScope = { tenantId: 'tenant-a', rootRunId: 'root-a', rootAttemptId: 'attempt-a', rootSessionId: 'session-a' }
 const query = new URLSearchParams({ rootAttemptId: scope.rootAttemptId, rootSessionId: scope.rootSessionId }).toString()
-async function request(url: string, actor = 'alice', init: RequestInit = {}) {
-  const response = await fetch(endpoint + url, { ...init, headers: { 'x-fixture-actor': actor, ...init.headers } })
-  return { status: response.status, body: await response.json() as { code: number; message: string; data: Record<string, unknown> } }
+async function request(url: string, actor = 'alice', init: {method?:'GET'|'POST';headers?:Record<string,string>;body?:string} = {}) {
+  const response = await app.inject({url,method:init.method??'GET',headers:{'x-fixture-actor':actor,...init.headers},payload:init.body})
+  return { status: response.statusCode, body: response.json() as { code: number; message: string; data: Record<string, unknown> } }
 }
 
 beforeEach(async () => {
@@ -36,6 +37,7 @@ beforeEach(async () => {
   participantId = `child:${child.mutation.header.childSessionId}`
   receipt = await runtime.send(root, { recipientParticipantId: participantId, message: 'synthetic private mailbox body', requestKey: 'receipt-one' })
   vi.spyOn(runtimes, 'getCollaborationRuntime').mockReturnValue(runtime)
+  vi.spyOn(executionOwners, 'getExecutionOwners').mockReturnValue(new executionOwners.ExecutionOwners(db,runtime))
   app = Fastify(); app.decorateRequest('authContext', null)
   app.addHook('onRequest', async request => {
     const actor = request.headers['x-fixture-actor']
@@ -44,7 +46,7 @@ beforeEach(async () => {
       : { method: 'jwt', tenantId: actor === 'bob' ? 'tenant-b' : 'tenant-a', userId: actor === 'bob' ? 'bob' : 'alice' }
   })
   await app.register(collaborationRoutes)
-  endpoint = await app.listen({ host: '127.0.0.1', port: 0 })
+  await app.ready()
 })
 afterEach(async () => {
   await app?.close(); vi.restoreAllMocks(); db.close(); await db.whenClosed()
@@ -59,7 +61,7 @@ describe('collaboration HTTP inspection protocol', () => {
     expect(result.body.data).toMatchObject({ durableQueueReceipts: true, mailboxConsumer: false, runtimeCommunication: false,
       asynchronousAgentTools: false, userControllerMutation: false, jsonlDelivery: false })
   })
-  it('reads a durable accepted receipt over actual loopback HTTP after a separate reconnect', async () => {
+  it('reads a durable accepted receipt over actual HTTP injection on a separate request', async () => {
     const result = await request(`/collaboration/roots/root-a/receipts/${receipt.messageId}?${query}`)
     expect(result.status).toBe(200); expect(result.body.data).toEqual(receipt)
     expect(JSON.stringify(result.body)).not.toContain('private mailbox body')
@@ -104,8 +106,8 @@ describe('collaboration HTTP inspection protocol', () => {
     const result = await request(`/collaboration/roots/root-a/messages?${query}`, 'alice', { method: 'POST',
       headers: { 'content-type': 'application/json' }, body: JSON.stringify({ senderParticipantId: 'root:root-a', rootRunId: 'root-a',
         rootAttemptId: 'attempt-a', tenantId: 'tenant-b', producer: {}, recipientParticipantId: participantId, message: 'forged', requestKey: 'forged' }) })
-    expect(result.status).toBe(501)
-    expect(result.body.code).toBe(50101)
+    expect(result.status).toBe(400)
+    expect(result.body.code).toBe(40001)
     expect((await db.execute('SELECT count(*) AS count FROM collaboration_messages')).rows[0].count).toBe(1)
   })
   it('ordinary HTTP GET never performs startup interruption/recovery', async () => {

@@ -4,7 +4,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { AuthContext } from '../../../auth/types.js'
 import { browserPrincipalFromAuth } from '../../../core/browser-execution.js'
-import { browserAuthorityFromRequest } from '../middleware.js'
+import { browserAuthorityFromRequest, controllerSubjectFromRequest } from '../middleware.js'
 import { browserBridge } from '../../../tools/browser/browser-bridge.js'
 
 import { v4 as uuidv4 } from 'uuid'
@@ -1462,7 +1462,8 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
               effectiveAgentId: effectiveAgentId ?? undefined, effectiveAgentName } : undefined, abortController.signal, registerRootPreparation)
         }
         attemptId = (await rootRunStore.get(tenantId, rootRun.runId))!.attemptId
-        executionOwner = await getExecutionOwners().admitRoot({ tenantId, rootRunId: rootRun.runId, rootAttemptId: attemptId, controller: abortController })
+        executionOwner = await getExecutionOwners().admitRoot({ tenantId, rootRunId: rootRun.runId, rootAttemptId: attemptId,
+          controller: abortController, controllerSubject: controllerSubjectFromRequest(request) })
         ctx.executionOwner = executionOwner
         if (newStreamEvidence) publicationAuthority = new ParentPublicationAuthority(getDb(), {
           tenantId, parentSessionId: sessionId, rootSessionId: sessionId,
@@ -1840,7 +1841,13 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}
         if (ctx.browserAuthority && (producerFailed || rootRun.status !== 'waiting')) {
           browserBridge.hostDemands.releaseRoot(ctx.browserAuthority, sessionId, rootRun.runId)
         }
-        if (executionOwner && !producerFailed) {
+        // A producer error does not by itself mean ownership cleanup failed.
+        // The catch path first attempts to persist the exact terminal receipt;
+        // when that succeeds, the owner is closed and must be released just
+        // like the normal path.  Keeping this conditional on !producerFailed
+        // retained closed owners, child tickets and collaboration capabilities
+        // for every recoverable provider/stream failure.
+        if (executionOwner) {
           try { serviceForOwner(executionOwner).releaseRoot(executionOwner) }
           catch (error) { reqLogger.error({ error, runId: rootRun.runId }, 'Execution owner cleanup remains unknown') }
         }

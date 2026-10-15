@@ -9,6 +9,7 @@ import { ensureParentChildUsage, readChildUsageFence, readDurableChildUsage, rec
 import { appendDiscoveryLifecycle, ensureParentDiscovery, readDiscoveryPage, resetParentDiscovery, tombstoneDiscoveryRun, type DiscoveryOptions, type DiscoveryPage } from './discovery.js'
 import { projectSubagentRunView, summarizeSubagentTool } from './view.js'
 import { isTaskPlanControl } from '../task-plan/control.js'
+import { interruptControllerInvocation } from '../collaboration/controller-origin.js'
 import { isTerminalRun, type CreateSubagentRun, type RunInvocationUsage, type RunStatus, type SubagentEvent, type SubagentRun, type SubagentRunHeader, type SubagentMutation, type SubagentRunView, type SubagentToolCall, type SubagentToolSummary, type SubagentDeltaEvent, type SubagentIdentity, type SubagentWireEvent } from './types.js'
 
 type RunPatch = Partial<Pick<SubagentRun, 'status' | 'startedAt' | 'finishedAt' | 'durationMs' | 'stopReason' | 'error' | 'resultSummary' | 'partialOutput' | 'usage' | 'toolCalls' | 'modelId' | 'externalEffectStatus'>>
@@ -385,6 +386,7 @@ export class SubagentStore {
     await tx.execute({ sql: 'INSERT INTO subagent_checkpoints(tenant_id,run_id,seq,header) VALUES (?,?,?,?)', args: [next.tenantId, next.runId, next.lastSeq, state] })
     await tx.execute({ sql: 'UPDATE subagent_runs SET status=?,seq=?,updated_at=?,snapshot=? WHERE tenant_id=? AND run_id=?', args: [next.status, next.lastSeq, next.updatedAt, JSON.stringify({ schemaVersion: 2, runId: next.runId, ...stateOf(next) }), next.tenantId, next.runId] })
     await appendDiscoveryLifecycle(tx, next)
+    if (isTerminalRun(next.status) && (!prior || !isTerminalRun(prior.status))) await interruptControllerInvocation(tx, next)
     // Tool/output progress has no billing effect. Avoid two ledger probes per
     // token/tool update; a pre-migration parent can bootstrap on its first read.
     if (!prior || !sameChildUsage(prior, next)) await recordDurableChildUsage(tx, next)
@@ -541,6 +543,7 @@ export class SubagentStore {
       args: [run.status, run.lastSeq, run.updatedAt, JSON.stringify(run), run.tenantId, run.runId],
     })
     await appendDiscoveryLifecycle(tx, run)
+    if (isTerminalRun(run.status)) await interruptControllerInvocation(tx, run)
     await recordDurableChildUsage(tx, run)
     await tx.execute({
       sql: 'INSERT INTO subagent_events (tenant_id,run_id,seq,kind,event) VALUES (?,?,?,?,?)',

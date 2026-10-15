@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { logger } from '../../observability/index.js'
 import { createAuthMiddleware } from '../../auth/index.js'
 import { chatRoutes, stopAllOwnedExecutions } from './routes/chat.js'
+import { collaborationRoutes } from './routes/collaboration.js'
 import { initializeOwnedExecutionStartup } from '../../core/collaboration/execution-owner.js'
 import { memoryRoutes } from './routes/memory.js'
 import { conversationRoutes } from './routes/conversation.js'
@@ -111,6 +112,9 @@ export async function buildServer() {
   // Register routes under /api/v1
   await fastify.register(async (api) => {
     await api.register(chatRoutes)
+    // Controller input and receipts must be reachable through the same authenticated
+    // production server as chat; registering them only in fixtures hides missing APIs.
+    await api.register(collaborationRoutes)
     await api.register(memoryRoutes)
     await api.register(conversationRoutes)
     await api.register(taskRoutes)

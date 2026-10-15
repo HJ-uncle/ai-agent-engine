@@ -16,6 +16,9 @@ import {ReActStrategy} from '../../../../core/agent-loop/index.js'
 import * as resolver from '../../../../core/llm-adapter/resolve-model.js'
 import {resolveCapabilities} from '../../../../core/model-capabilities/index.js'
 import {chatRoutes,stopAllOwnedExecutions} from '../chat.js'
+import {collaborationRoutes} from '../collaboration.js'
+import {serviceForOwner} from '../../../../core/collaboration/execution-owner.js'
+import {controllerSubject} from '../../../../core/collaboration/controller-origin.js'
 
 const tenantId='p5-inject',sessionId='p5-parent'
 let directory:string,app:FastifyInstance
@@ -32,13 +35,13 @@ beforeEach(async()=>{
     fs.writeFileSync(path.join(directory,'http-handler-error.json'),JSON.stringify(diagnostic,null,2));reply.type('application/json').code(500).send(diagnostic)
   })
   app.addHook('onRequest',async(request,reply)=>{
-    Object.assign(request,{authContext:{tenantId}})
+    Object.assign(request,{authContext:{tenantId,userId:'fixture-alice',method:'jwt'}})
     // light-my-request requires a callback although ServerResponse's real API
     // permits setTimeout(0). Normalize only this injected response adapter.
     const timeout=reply.raw.setTimeout
     reply.raw.setTimeout=function(milliseconds,callback){return timeout.call(this,milliseconds,callback??(()=>{}))}
   })
-  await app.register(chatRoutes,{newStreamPublication:true,liveChildRecovery:true,durableChildRecovery:true});await app.ready()
+  await app.register(chatRoutes,{newStreamPublication:true,liveChildRecovery:true,durableChildRecovery:true});await app.register(collaborationRoutes);await app.ready()
 })
 afterEach(async()=>{
   await stopAllOwnedExecutions('P5 inject fixture cleanup');await app.close()
@@ -113,4 +116,29 @@ it('post-answer durable seed failure marks observer recovery while the accepted 
   expect(bus.snapshot()).toMatchObject({publicationRecovery:{reason:'evidence_unavailable',lastConfirmedEventId:bus.streamId+':0'}})
   const snapshot=await app.inject('/chat/snapshot?sessionId='+sessionId+'&childRecoveryProtocol=1')
   expect(snapshot.statusCode).toBe(409);expect(snapshot.json().data.recoveryRequired).toBe(true)
+},20000)
+it('actual POST chat admits the authenticated user controller and its receipt stays readable after completion',async()=>{
+  let frozen:{rootRunId:string;rootAttemptId:string;rootSessionId:string}|undefined
+  const requestKey='actual-chat-controller'
+  vi.spyOn(ReActStrategy.prototype,'run').mockImplementation(async function*(_prompt,ctx){
+    const b=serviceForOwner(ctx.executionOwner!).controllerBinding(ctx.executionOwner!)
+    frozen={rootRunId:b.rootRunId,rootAttemptId:b.rootAttemptId,rootSessionId:b.rootSessionId}
+    const source=(await getDb().execute({sql:'SELECT subject_key,subject_kind,auth_method FROM collaboration_controller_roots WHERE tenant_id=? AND root_run_id=? AND root_attempt_id=?',args:[tenantId,b.rootRunId,b.rootAttemptId]})).rows[0]
+    expect(source).toMatchObject({subject_key:controllerSubject({kind:'account',tenantId,userId:'fixture-alice'},'jwt').key,subject_kind:'account',auth_method:'jwt'})
+    const query=new URLSearchParams({rootAttemptId:b.rootAttemptId,rootSessionId:b.rootSessionId})
+    const context=await app.inject({url:`/collaboration/roots/${b.rootRunId}/controller-context?rootSessionId=${b.rootSessionId}&recipientParticipantId=${encodeURIComponent(b.participantId)}`})
+    expect(context.statusCode,context.body).toBe(200);expect(context.json().data.scope).toEqual(frozen)
+    const accepted=await app.inject({method:'POST',url:`/collaboration/roots/${b.rootRunId}/messages?${query}`,payload:{recipientParticipantId:b.participantId,recipientInvocationRunId:b.invocationRunId,message:'User addition through actual chat-owned scope',requestKey}})
+    expect(accepted.statusCode,accepted.body).toBe(200);expect(accepted.json().data.receipt.state).toBe('queued')
+    yield 'Owned actual chat controller accepted'
+    await ctx.runObserver?.onOutcome?.({status:'succeeded',stopReason:'completed'})
+  })
+  const response=await app.inject({method:'POST',url:'/chat',headers:{'x-aether-tool-profile':'general','x-aether-run-lifetime':'durable','x-aether-subagent-protocol':'2'},payload:{sessionId,message:'Current original human task',memoryScope:'off'}})
+  expect(response.statusCode,response.body).toBe(200);expect(frozen).toBeDefined()
+  await vi.waitFor(async()=>expect((await rootRunStore.get(tenantId,frozen!.rootRunId))?.status).toBe('succeeded'))
+  const query=new URLSearchParams({rootAttemptId:frozen!.rootAttemptId,rootSessionId:frozen!.rootSessionId})
+  const receipt=await app.inject({url:`/collaboration/roots/${frozen!.rootRunId}/controller-receipts/${requestKey}?${query}`})
+  expect(receipt.statusCode,receipt.body).toBe(200);expect(receipt.json().data.receipt.state).toBe('rejected')
+  const context=await app.inject({url:`/collaboration/roots/${frozen!.rootRunId}/controller-context?rootSessionId=${sessionId}`})
+  expect(context.statusCode).toBe(409)
 },20000)

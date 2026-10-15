@@ -1,5 +1,6 @@
 import type { Client } from '@libsql/client'
 import { randomBytes } from 'node:crypto'
+import { ensureControllerSchema } from './controller-origin.js'
 
 const prepared = new WeakMap<Client, Promise<void>>()
 /** Preparation has no recovery side effects. Only the explicit startup owner recovers. */
@@ -7,6 +8,7 @@ export function ensureCollaborationSchema(db: Client): Promise<void> {
   let pending = prepared.get(db)
   if (!pending) {
     pending = (async () => {
+      await ensureControllerSchema(db)
       await db.execute(`CREATE TABLE IF NOT EXISTS collaboration_roots (
         tenant_id TEXT NOT NULL, root_run_id TEXT NOT NULL, root_attempt_id TEXT NOT NULL,
         root_session_id TEXT NOT NULL, turn_id TEXT NOT NULL, generation TEXT NOT NULL,

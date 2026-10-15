@@ -3,6 +3,8 @@ import { getDb, getDbEpoch } from '../../storage/sqlite/db.js'
 import { getCollaborationRuntime, type CollaborationRuntime } from './runtime.js'
 import type { CollaborationProducer, CollaborationBinding } from './types.js'
 import type { SubagentRunView } from '../subagent/types.js'
+import { registerControllerRoot, type ControllerSubject } from './controller-origin.js'
+import { CollaborationError } from './types.js'
 
 declare const authority: unique symbol
 /** These objects are service-owned identities, never serialized request fields. */
@@ -78,7 +80,7 @@ export class ExecutionOwners {
     this.preparing.delete(cap); record!.finish(); preparations.delete(cap)
   }
   async joinPreparations(): Promise<void> { await Promise.all([...this.preparing].map(cap => preparations.get(cap)!.settled)) }
-  async admitRoot(input: { tenantId: string; rootRunId: string; rootAttemptId: string; controller: AbortController }): Promise<ExecutionOwner> {
+  async admitRoot(input: { tenantId: string; rootRunId: string; rootAttemptId: string; controller: AbortController; controllerSubject?: ControllerSubject }): Promise<ExecutionOwner> {
     if (this.stopping || input.controller.signal.aborted) fail('Service is stopping or admission was cancelled')
     const initialEpoch = getDbEpoch(this.db)
     if (initialEpoch === undefined || this.db.closed) fail('Datasource has no live trusted reconnect epoch')
@@ -93,6 +95,7 @@ export class ExecutionOwners {
       producer = recovered
     }
     const binding = this.collaboration.executionBinding(producer)
+    if (input.controllerSubject) await registerControllerRoot(this.db, binding, input.controllerSubject)
     if (this.db.closed || getDbEpoch(this.db) !== initialEpoch) fail('Datasource changed during root admission')
     const id = key(input.tenantId, input.rootRunId, input.rootAttemptId)
     const prior = this.roots.get(id)
@@ -128,6 +131,29 @@ export class ExecutionOwners {
     const record = found!.record; this.live(record)
     const allowed = found!.child ? record.phase === 'accepting' || record.phase === 'draining' && record.intent === 'finish' : record.phase === 'accepting'
     if (!allowed || record.controller.signal.aborted || found!.child?.controller.signal.aborted) fail('Attempt dispatch is revoked')
+  }
+  /** Controllers borrow no model producer. Only an existing accepting root may be steered. */
+  controllerBinding(cap: ExecutionOwner, recipientParticipantId?: string): CollaborationBinding {
+    try {
+      const record = this.record(cap)
+      const childContinuation = record.phase === 'draining' && record.intent === 'finish'
+        && recipientParticipantId !== undefined && recipientParticipantId !== record.binding.participantId
+      if (record.controller.signal.aborted || record.phase !== 'accepting' && !childContinuation)
+        throw new Error('Attempt is not accepting this controller input')
+      return record.binding
+    } catch { throw new CollaborationError('closed', 'The selected attempt is no longer accepting user input') }
+  }
+  assertControllerRecipient(cap: ExecutionOwner, participantId: string, invocationRunId: string): void {
+    const b = this.controllerBinding(cap, participantId)
+    if (participantId === b.participantId && invocationRunId === b.invocationRunId) return
+    const record = this.record(cap)
+    for (const ticket of record.tickets) {
+      if (ticket.done || ticket.controller.signal.aborted || !ticket.producer || ticket.runId !== invocationRunId) continue
+      const child = this.collaboration.executionBinding(ticket.producer)
+      if (child.participantId === participantId && child.invocationRunId === invocationRunId
+        && child.rootRunId === b.rootRunId && child.rootAttemptId === b.rootAttemptId && child.generation === b.generation) return
+    }
+    throw new CollaborationError('closed', 'The selected child invocation has no live owned executor')
   }
   reserveChild(cap: ExecutionOwner): ChildTicket {
     this.assertDispatch(cap)

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { authenticatedControllerOrigin, collaborationEnvelope } from './controller-origin.js'
 import type { Client, Transaction, Row } from '@libsql/client'
 import { estimateTokens } from '../utils/tokens.js'
 import { ensureSQLiteDeliverySchema } from './delivery-schema.js'
@@ -86,8 +87,10 @@ export class SQLiteCollaborationDelivery {
     if (!fence || fence.producer !== producer) fail('forbidden', 'A live private consumer is required for maintenance')
     await ensureHistoryMaintenanceSchema(this.store.db)
     await this.snapshot(consumer, true)
-    const peerMessageIds = new Set((await this.store.db.execute({ sql: `SELECT history_message_id FROM collaboration_deliveries
-      WHERE tenant_id=? AND history_session_id=? AND state='integrated'`, args: [fence!.binding.tenantId, fence!.binding.sessionId] })).rows.map(row => String(row.history_message_id)))
+    const peerMessageIds = new Set((await this.store.db.execute({ sql: `SELECT d.history_message_id FROM collaboration_deliveries d
+      WHERE d.tenant_id=? AND d.history_session_id=? AND d.state='integrated'
+      AND NOT EXISTS (SELECT 1 FROM collaboration_controller_origins o WHERE o.tenant_id=d.tenant_id
+        AND o.root_run_id=d.root_run_id AND o.root_attempt_id=d.root_attempt_id AND o.message_id=d.message_id)`, args: [fence!.binding.tenantId, fence!.binding.sessionId] })).rows.map(row => String(row.history_message_id)))
     const check = async (tx?: Transaction): Promise<void> => {
       if (!tx) { await this.snapshot(consumer, true); return }
       const b = this.resolveProducer(fence!.producer)
@@ -182,12 +185,10 @@ export class SQLiteCollaborationDelivery {
       for (const row of selected.rows.slice(0, maxRows)) {
         if (digest(String(row.body)) !== row.payload_hash || Buffer.byteLength(String(row.body), 'utf8') !== Number(row.payload_bytes))
           fail('conflict', 'Durable message payload does not match its acceptance receipt')
-        const historyMessageId = 'peer:' + digest(JSON.stringify([...scope(b), row.message_id]))
-        // The header describes authenticated peer data; it never grants system/tool permissions.
-        const content = '[对等 Agent 消息]\n' + JSON.stringify({ sender: String(row.sender_participant_id),
-          invocation: String(row.sender_invocation_run_id), messageId: String(row.message_id) }) + '\n\n' + String(row.body)
-        const metadata = JSON.stringify({ collaborationDelivery: { version: 1, messageId: String(row.message_id),
-          rootRunId: b.rootRunId, recipientInvocationRunId: b.invocationRunId } })
+        const userOrigin = await authenticatedControllerOrigin(tx, b, row, b.invocationRunId)
+        const envelope = collaborationEnvelope(b, row, userOrigin)
+        const { historyMessageId, content } = envelope
+        const metadata = JSON.stringify(envelope.metadata)
         const receipt: SQLiteDeliveryReceipt = { messageId: String(row.message_id), historyMessageId,
           invocationRunId: b.invocationRunId, state: 'integrated' }
         const itemBytes = Buffer.byteLength(JSON.stringify({ content, metadata, receipt }), 'utf8')

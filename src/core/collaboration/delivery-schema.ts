@@ -1,3 +1,4 @@
+import { ensureControllerSchema } from './controller-origin.js'
 import type { Client, InStatement } from '@libsql/client'
 
 const prepared = new WeakMap<Client, Promise<void>>()
@@ -5,6 +6,7 @@ export function ensureSQLiteDeliverySchema(db: Client): Promise<void> {
   let pending = prepared.get(db)
   if (!pending) {
     pending = (async () => {
+      await ensureControllerSchema(db)
       await db.execute(`CREATE TABLE IF NOT EXISTS collaboration_history_epochs (
         tenant_id TEXT NOT NULL, session_id TEXT NOT NULL, epoch INTEGER NOT NULL,
         PRIMARY KEY(tenant_id,session_id))`)

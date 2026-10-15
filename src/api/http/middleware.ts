@@ -9,6 +9,7 @@ import { configureInstanceToken, hasValidInstanceToken, hasOwnedInstanceToken, i
 import type { AuthContext } from '../../auth/types.js'
 import { browserAuthorityFromTrustedState, type BrowserHostAuthority } from '../../core/browser-authority.js'
 import { getRuntimeIdentity } from '../../runtime/identity.js'
+import { controllerSubject, type ControllerSubject } from '../../core/collaboration/controller-origin.js'
 
 // White listed paths that do not require login state (reserved for future JWT)
 // Also we bypass header checks for standard health checks to avoid breaking internal ops
@@ -28,6 +29,13 @@ export function browserAuthorityFromRequest(request: FastifyRequest): BrowserHos
   const auth = (request as FastifyRequest & { authContext?: AuthContext }).authContext
   return browserAuthorityFromTrustedState(auth, { authenticationRequired, gateVerified: hasOwnedInstanceToken(request.headers),
     instanceId: getRuntimeIdentity().instanceId })
+}
+export function controllerSubjectFromRequest(request: FastifyRequest): ControllerSubject | undefined {
+  const authority = browserAuthorityFromRequest(request)
+  const auth = (request as FastifyRequest & { authContext?: AuthContext }).authContext
+  if (!authority || !auth) return undefined
+  return controllerSubject(authority, authority.kind === 'instance' ? 'local-instance'
+    : auth.method === 'none' ? 'local-instance' : auth.method)
 }
 
 export function configureRequestAuthentication(): void {

@@ -10,6 +10,19 @@ import { estimateTokens } from '../utils/tokens.js'
 import { modelMessageContent } from '../utils/model-context.js'
 import { isFailedBrowserMessage } from '../utils/browser-failure.js'
 
+// SDK 0.20 retains anonymous abort listeners after successful requests. A removable
+// relay prevents a long-lived agent signal from retaining every SDK stream/history.
+function createRequestSignal(parent?: AbortSignal): { signal: AbortSignal; dispose(): void } {
+  const controller = new AbortController()
+  const forwardAbort = () => controller.abort(parent?.reason)
+  if (parent?.aborted) forwardAbort()
+  else parent?.addEventListener('abort', forwardAbort, { once: true })
+  return {
+    signal: controller.signal,
+    dispose: () => parent?.removeEventListener('abort', forwardAbort),
+  }
+}
+
 // Anthropic SDK v0.20 does not expose Tool types directly; we use a minimal inline type.
 interface AnthropicTool {
   name: string
@@ -379,7 +392,11 @@ export class AnthropicAdapter implements LLMAdapter {
     }>
     const requestContext = prepareRequestContext(options, params, Number(params.max_tokens))
     if (options?.contextWindow && Number.isFinite(options.contextWindow)) params.max_tokens = requestContext.maxTokens
-    const response = await observeRequest(() => (this.client.messages.create as unknown as CreateFn)(params, { signal: options?.signal }), requestContext, this.provider, String(params.model), value => anthropicUsage(value.usage))
+    const requestSignal = createRequestSignal(options?.signal)
+    let response: Awaited<ReturnType<CreateFn>>
+    try {
+      response = await observeRequest(() => (this.client.messages.create as unknown as CreateFn)(params, { signal: requestSignal.signal }), requestContext, this.provider, String(params.model), value => anthropicUsage(value.usage))
+    } finally { requestSignal.dispose() }
 
     let content = ''
     let reasoningContent = ''
@@ -564,31 +581,32 @@ export class AnthropicAdapter implements LLMAdapter {
     let usageSnapshot: AnthropicUsageSnapshot | undefined
     const requestContext = prepareRequestContext(options, streamParams, Number(streamParams.max_tokens))
     if (options?.contextWindow && Number.isFinite(options.contextWindow)) streamParams.max_tokens = requestContext.maxTokens
-    const observed = await observeStreamRequest(async () => {
-      stream = (this.client.messages as unknown as {
-        stream(params: Record<string, unknown>, requestOptions: { signal?: AbortSignal }): Stream
-      }).stream(streamParams, { signal: options?.signal })
-      stream.on?.('streamEvent', snapshotStart)
-      stream.on?.('error', captureFailure)
-      const sdkStream = stream
-      // SDK 0.20 can finish its iterator after queued events while discarding
-      // an already emitted error. Drain delivered usage/content, then retain
-      // the terminal cause rather than replacing it with INCOMPLETE_STREAM.
-      return (async function* () {
-        for await (const event of sdkStream) yield event
-        if (streamFailure !== undefined) throw streamFailure
-      })()
-    }, requestContext, this.provider, String(streamParams.model),
-    originalEvent => {
-      // SDK 0.20 only updates output_tokens in finalMessage().usage. Read the
-      // actual events, including gateway input/cache corrections, and preserve
-      // absent fields independently instead of reusing its stale final snapshot.
-      const event = startSnapshots.get(originalEvent) ?? originalEvent
-      usageSnapshot = anthropicUsageSnapshot(event.type === 'message_start' ? event.message?.usage : event.usage, usageSnapshot)
-      return anthropicUsageFromSnapshot(usageSnapshot)
-    },
-    event => event.type === 'message_stop')
+    const requestSignal = createRequestSignal(options?.signal)
     try {
+      const observed = await observeStreamRequest(async () => {
+        stream = (this.client.messages as unknown as {
+          stream(params: Record<string, unknown>, requestOptions: { signal?: AbortSignal }): Stream
+        }).stream(streamParams, { signal: requestSignal.signal })
+        stream.on?.('streamEvent', snapshotStart)
+        stream.on?.('error', captureFailure)
+        const sdkStream = stream
+        // SDK 0.20 can finish its iterator after queued events while discarding
+        // an already emitted error. Drain delivered usage/content, then retain
+        // the terminal cause rather than replacing it with INCOMPLETE_STREAM.
+        return (async function* () {
+          for await (const event of sdkStream) yield event
+          if (streamFailure !== undefined) throw streamFailure
+        })()
+      }, requestContext, this.provider, String(streamParams.model),
+      originalEvent => {
+        // SDK 0.20 only updates output_tokens in finalMessage().usage. Read the
+        // actual events, including gateway input/cache corrections, and preserve
+        // absent fields independently instead of reusing its stale final snapshot.
+        const event = startSnapshots.get(originalEvent) ?? originalEvent
+        usageSnapshot = anthropicUsageSnapshot(event.type === 'message_start' ? event.message?.usage : event.usage, usageSnapshot)
+        return anthropicUsageFromSnapshot(usageSnapshot)
+      },
+      event => event.type === 'message_stop')
       for await (const originalEvent of observed) {
         const event = startSnapshots.get(originalEvent) ?? originalEvent
         const rawUsage = event.type === 'message_start' ? event.message?.usage : event.usage
@@ -637,6 +655,8 @@ export class AnthropicAdapter implements LLMAdapter {
       for (const [index, block] of (finalMessage.content ?? []).entries()) yield* acceptBlock(index, block)
       for (const index of blocks.keys()) yield* finishTool(index)
       const usage = anthropicUsageFromSnapshot(usageSnapshot)
+      // A consumer may stop reading as soon as it sees done, without closing the generator.
+      requestSignal.dispose()
       yield {
         done: true,
         finishReason: reason === 'max_tokens' ? 'length' : reason === 'tool_use' ? 'tool_calls' : 'stop',
@@ -647,9 +667,11 @@ export class AnthropicAdapter implements LLMAdapter {
         ...(usage?.cacheMissTokens !== undefined ? { cacheMissTokens: usage.cacheMissTokens } : {}),
       }
     } finally {
-      stream?.off?.('streamEvent', snapshotStart)
-      stream?.off?.('error', captureFailure)
-      stream?.abort()
+      requestSignal.dispose()
+      try {
+        stream?.off?.('streamEvent', snapshotStart)
+        stream?.off?.('error', captureFailure)
+      } finally { stream?.abort() }
     }
   }
 

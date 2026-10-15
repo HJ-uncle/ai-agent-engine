@@ -1,3 +1,4 @@
+import { ensureControllerSchema } from './controller-origin.js'
 import type { Client } from '@libsql/client'
 import { ensureHistoryMaintenanceSchema } from './history-maintenance.js'
 
@@ -6,6 +7,7 @@ export function ensureJSONLDeliverySchema(db: Client): Promise<void> {
   let pending = prepared.get(db)
   if (!pending) {
     pending = (async () => {
+      await ensureControllerSchema(db)
       await db.execute(`CREATE TABLE IF NOT EXISTS collaboration_jsonl_epochs (
         tenant_id TEXT NOT NULL,session_id TEXT NOT NULL,epoch INTEGER NOT NULL,
         PRIMARY KEY(tenant_id,session_id))`)

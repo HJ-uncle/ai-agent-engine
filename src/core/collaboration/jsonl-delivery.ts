@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { authenticatedControllerOrigin, collaborationEnvelope } from './controller-origin.js'
 import type { Client, Transaction, Row } from '@libsql/client'
 import type { Message } from '../agent-context/types.js'
 import { estimateTokens } from '../utils/tokens.js'
@@ -86,8 +87,10 @@ export class JSONLCollaborationDelivery {
     if (fence.producer !== producer) fail('forbidden', 'Maintenance consumer belongs to another execution')
     await ensureHistoryMaintenanceSchema(this.store.db)
     await this.snapshot(consumer, true)
-    const peerMessageIds = new Set((await this.store.db.execute({ sql: `SELECT history_message_id FROM collaboration_jsonl_deliveries
-      WHERE tenant_id=? AND history_session_id=? AND state='integrated'`, args: [fence.binding.tenantId, fence.binding.sessionId] })).rows.map(row => String(row.history_message_id)))
+    const peerMessageIds = new Set((await this.store.db.execute({ sql: `SELECT d.history_message_id FROM collaboration_jsonl_deliveries d
+      WHERE d.tenant_id=? AND d.history_session_id=? AND d.state='integrated'
+      AND NOT EXISTS (SELECT 1 FROM collaboration_controller_origins o WHERE o.tenant_id=d.tenant_id
+        AND o.root_run_id=d.root_run_id AND o.root_attempt_id=d.root_attempt_id AND o.message_id=d.message_id)`, args: [fence.binding.tenantId, fence.binding.sessionId] })).rows.map(row => String(row.history_message_id)))
     return { db: this.store.db, backend: 'jsonl', binding: fence.binding,
       epoch: fence.epoch, anchorId: fence.anchorId, anchorFingerprint: fence.anchor, peerMessageIds,
       // Storage invokes this again inside its own file lease. Re-entering the
@@ -120,7 +123,7 @@ export class JSONLCollaborationDelivery {
       fail('invalid', 'Invalid JSONL delivery batch budget')
     return fence.origin.withLease(b, async () => {
       let snapshot = await this.inspect(fence)
-      const selected = (await this.store.db.execute({ sql: `SELECT m.seq,m.message_id,m.sender_participant_id,m.sender_invocation_run_id,m.body,m.payload_hash,m.payload_bytes,
+      const selected = (await this.store.db.execute({ sql: `SELECT m.seq,m.message_id,m.sender_participant_id,m.sender_invocation_run_id,m.recipient_participant_id,m.request_key,m.accepted_at,m.body,m.payload_hash,m.payload_bytes,
         d.state AS delivery_state,d.history_message_id,d.recipient_invocation_run_id,d.file_identity,d.row_offset,d.row_bytes,d.row_hash,d.encoded_row,d.history_epoch
         FROM collaboration_messages m LEFT JOIN collaboration_jsonl_deliveries d ON d.tenant_id=m.tenant_id AND d.root_run_id=m.root_run_id
           AND d.root_attempt_id=m.root_attempt_id AND d.message_id=m.message_id
@@ -130,10 +133,9 @@ export class JSONLCollaborationDelivery {
       let bytes = 0, hasMore = selected.length > maxRows
       for (const row of selected.slice(0, maxRows)) {
         if (digest(String(row.body)) !== row.payload_hash || Buffer.byteLength(String(row.body)) !== Number(row.payload_bytes)) fail('conflict', 'JSONL durable message payload changed')
-        const historyMessageId = 'peer:' + digest(JSON.stringify([...scope(b), row.message_id]))
-        const content = '[对等 Agent 消息]\n' + JSON.stringify({ sender: String(row.sender_participant_id), invocation: String(row.sender_invocation_run_id), messageId: String(row.message_id) }) + '\n\n' + String(row.body)
-        const message: Message & { conversationId: string } = { id: historyMessageId, role: 'user', content, tokens: estimateTokens(content), conversationId: b.turnId,
-          metadata: { collaborationDelivery: { version: 1, messageId: String(row.message_id), rootRunId: b.rootRunId, recipientInvocationRunId: b.invocationRunId } } }
+        const userOrigin = await authenticatedControllerOrigin(this.store.db, b, row, b.invocationRunId)
+        const { historyMessageId, content, metadata } = collaborationEnvelope(b, row, userOrigin)
+        const message: Message & { conversationId: string } = { id: historyMessageId, role: 'user', content, tokens: estimateTokens(content), conversationId: b.turnId, metadata }
         let plan: JSONLAppendPlan
         if (row.delivery_state === 'pending') {
           if (row.history_message_id !== historyMessageId || row.recipient_invocation_run_id !== b.invocationRunId || Number(row.history_epoch) !== fence.epoch)
@@ -152,6 +154,7 @@ export class JSONLCollaborationDelivery {
         if (itemBytes > maxBytes && !receipts.length) fail('too_large', 'A complete JSONL peer envelope exceeds the batch budget')
         if (bytes + itemBytes > maxBytes) { hasMore = true; break }
         if (row.delivery_state !== 'pending') await this.sql(async tx => {
+          await authenticatedControllerOrigin(tx, b, row, b.invocationRunId)
           await assertDeliveryProducer(this.store, tx, fence.producer, b, fence.executionOwner)
           if (await jsonlHistoryEpoch(tx, b, true) !== fence.epoch) fail('conflict', 'JSONL epoch changed before reservation')
           await tx.execute({ sql: `INSERT INTO collaboration_jsonl_deliveries
@@ -166,6 +169,7 @@ export class JSONLCollaborationDelivery {
         if (physical.length !== 1 || snapshot.fileIdentity !== plan.fileIdentity || physical[0].offset !== plan.offset || physical[0].bytes !== plan.bytes || physical[0].hash !== plan.hash)
           fail('conflict', 'JSONL synced delivery lost exact physical identity')
         await this.sql(async tx => {
+          await authenticatedControllerOrigin(tx, b, row, b.invocationRunId)
           await assertDeliveryProducer(this.store, tx, fence.producer, b, fence.executionOwner)
           if (await jsonlHistoryEpoch(tx, b, true) !== fence.epoch) fail('conflict', 'JSONL epoch changed after file sync')
           await tx.execute({ sql: `UPDATE collaboration_jsonl_deliveries SET state='integrated',integrated_at=?
