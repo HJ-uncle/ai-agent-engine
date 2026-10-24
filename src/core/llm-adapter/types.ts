@@ -24,6 +24,17 @@ export interface LLMResponse {
   contextWindow?: number
 }
 
+/** Bounded protocol shape only; never contains provider text, arguments or headers. */
+export interface LLMStreamDiagnostics {
+  schemaVersion: 1
+  protocol: 'anthropic'
+  rawStopReason: 'end_turn' | 'stop_sequence' | 'tool_use' | 'max_tokens' | 'refusal' | 'other' | null
+  eventTypes: Record<string, number>
+  blockTypes: Record<string, number>
+  deltaTypes: Record<string, number>
+  finalBlockTypes: Record<string, number>
+}
+
 export interface LLMStreamChunk {
   content?: string
   reasoningContent?: string
@@ -42,6 +53,7 @@ export interface LLMStreamChunk {
   reasoningTokens?: number
   model?: string
   contextWindow?: number
+  streamDiagnostics?: LLMStreamDiagnostics
 }
 
 export interface RequestAttemptUsage {

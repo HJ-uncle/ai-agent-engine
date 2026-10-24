@@ -8,6 +8,26 @@ export class JsonHandler implements FileHandler {
   async read(filePath: string, _ctx: AgentContext, options?: ReadOptions): Promise<ReadResult> {
     const raw = fs.readFileSync(filePath, 'utf-8')
     const mode = options?.mode || 'auto'
+    // Like TextHandler, full requests the whole document regardless of a range.
+    if (mode !== 'full' && (options?.startLine !== undefined || options?.endLine !== undefined)) {
+      if ([options.startLine, options.endLine].some(value => value !== undefined && (!Number.isSafeInteger(value) || value < 1)))
+        throw new Error('start_line and end_line must be positive safe integers.')
+      // Formatting/minifying JSON changes line identities. Explicit pages must
+      // refer to the source even when a page is not independently valid JSON.
+      const lines = raw.split(/\r\n|\r|\n/), totalLines = lines.length
+      const startLine = options.startLine ?? 1
+      if (options.endLine !== undefined && options.endLine < startLine)
+        throw new Error('end_line must not be before start_line.')
+      if (startLine > totalLines) throw new Error(`start_line ${startLine} is beyond the file's ${totalLines} lines.`)
+      const endLine = Math.min(options.endLine ?? startLine + 299, totalLines)
+      const selected = lines.slice(startLine - 1, endLine)
+      return {
+        type: 'text',
+        data: selected.join('\n'),
+        content: `[源文件第 ${startLine}-${endLine} 行，共 ${totalLines} 行；以下为原文行号展示，分页片段不一定是完整 JSON]\n`
+          + selected.map((line, index) => `${startLine + index} | ${line}`).join('\n'),
+      }
+    }
     try {
       const data = JSON.parse(raw)
       let displayContent = ''

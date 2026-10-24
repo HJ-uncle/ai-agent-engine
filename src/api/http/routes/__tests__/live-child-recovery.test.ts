@@ -84,6 +84,35 @@ const lookupUrl = (id: string, runId: string) => '/chat/snapshot/children/' + en
 const projectionUrl = (id: string, cursor?: string | null) => '/chat/snapshot/projection?sessionId=' + sessionId + '&childRecoveryProtocol=1&snapshotId=' + encodeURIComponent(id) + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '')
 
 describe('P5a live fixed child recovery HTTP', () => {
+  it('exposes current execution independently while the terminal frame has not advanced the exact live publication prefix', async () => {
+    await start()
+    const cursor = bus.lastEventId
+    const pending = await read(snapshotUrl)
+    expect(pending.status).toBe(200)
+    expect(pending.json.data).toMatchObject({ source: 'live', finished: false, eventId: cursor,
+      run: { status: 'running' }, executionRun: { status: 'running' } })
+    const terminalGate = barrier(), publish = bus.publish.bind(bus)
+    let terminalHeld = false
+    vi.spyOn(bus, 'publish').mockImplementation(async chunk => {
+      if (chunk.startsWith('\x00__run__') && JSON.parse(chunk.slice('\x00__run__'.length)).status === 'succeeded') {
+        terminalHeld = true; await terminalGate.promise
+      }
+      return publish(chunk)
+    })
+    try {
+      mainGate.release()
+      await vi.waitFor(() => expect(terminalHeld).toBe(true))
+      const frozen = bus.snapshot()
+      const recovered = await read(snapshotUrl)
+      expect(recovered.status).toBe(200)
+      expect(recovered.json.data).toMatchObject({ source: 'live', finished: false, eventId: frozen.eventId,
+        run: { runId: pending.json.data.run.runId, status: 'running' },
+        executionRun: { runId: pending.json.data.run.runId, status: 'succeeded' } })
+      expect(recovered.json.data.projection).toEqual(frozen.projection)
+      expect(bus.abortController.signal.aborted).toBe(false)
+    } finally { terminalGate.release() }
+  }, 25_000)
+
   it('returns exact first/page/lookup authority with archived late projection positions and no full child helpers', async () => {
     await start(); for (let index = 0; index < 70; index++) await child('run-' + index, 2)
     await child('older-turn', 7, false, 'prior-turn')

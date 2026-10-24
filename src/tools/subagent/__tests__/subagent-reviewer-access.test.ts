@@ -10,6 +10,9 @@ import type { SubagentExecution } from '../../../core/subagent/runner.js'
 import { createAgentContext } from '../../../core/agent-context/factory.js'
 import { createConversationHistory } from '../../../storage/conversation/factory.js'
 import { executeSubagent, subagentTool } from '../subagent-tool.js'
+import { ToolRegistry } from '../../../core/tool-registry/index.js'
+import { trustBuiltinTool } from '../../../security/tool-policy.js'
+import { officeInspectTool } from '../../office/index.js'
 
 const captured = vi.hoisted(() => ({ child: undefined as AgentContext | undefined, prior: null as SubagentRun | null,
   getRunHeader: vi.fn() }))
@@ -128,6 +131,23 @@ describe('subagent continuation tool preserves original capabilities', () => {
 
 
 describe('custom Agent and legacy child builtin planning defaults', () => {
+  it.each([
+    { trusted: true, allowedTools: ['office_inspect'], expected: ['office_inspect', 'plan_update'] },
+    { trusted: true, allowedTools: [], expected: ['plan_update'] },
+    { trusted: false, allowedTools: ['office_inspect'], expected: ['plan_update'] },
+  ])('intersects configured readonly Office inspection with trusted parent and explicit selection: %j', async ({ trusted, allowedTools, expected }) => {
+    const tools = new ToolRegistry()
+    const inspector = { ...officeInspectTool, execute: vi.fn().mockResolvedValue({ success: true, output: 'unused' }) }
+    tools.register(trusted ? trustBuiltinTool(inspector, 'readonly') : inspector)
+    const parent = createAgentContext({ tenantId: 'fixture', sessionId: 'parent', projectRoot: fixtureDir, toolProfile: 'general',
+      logger: pino({ level: 'silent' }), tools, history: createConversationHistory(), modelName: 'fixture' })
+    const agent = { id: 'office-reviewer', name: 'Office reviewer', model: 'fixture', systemPrompt: 'Review only.', skills: [], mcpServers: [], knowledgeBases: [], allowedTools }
+    expect((await executeSubagent({ task: 'Inspect saved workbook diagnostics', access: 'read-only' }, parent, { agent })).success).toBe(true)
+    expect(captured.child?.tools.list().map(tool => tool.name).sort()).toEqual(expected)
+    expect(captured.child?.tools.has('office_document')).toBe(false)
+    expect(inspector.execute).not.toHaveBeenCalled()
+  })
+
   it.each([
     { toolProfile: 'general' as const, userDelegated: false, access: 'read-only' },
     { toolProfile: 'code' as const, userDelegated: false, access: 'inherit' },

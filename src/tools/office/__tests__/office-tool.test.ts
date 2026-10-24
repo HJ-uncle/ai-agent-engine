@@ -50,13 +50,13 @@ describe('native office tool publication and artifact evidence', () => {
     expect(result).toMatchObject({ success: true, metadata: { format: 'docx', fileMutationApplied: true, rollbackAvailable: true, validation: 'structure-checked', visualValidation: 'not-performed' } })
     const file = path.join(root, '周报.docx'), bytes = fs.readFileSync(file)
     expect(bytes.subarray(0, 4)).toEqual(Buffer.from([80, 75, 3, 4]))
-    expect(result.change).toMatchObject({ path: file, kind: 'write', isNew: true, oldHash: 'missing', newHash: hashFileContent(bytes), runId: 'office-run', turnId: 'office-turn', newSnapshotRef: expect.any(String) })
+    expect(result.change).toMatchObject({ path: fs.realpathSync.native(file), kind: 'write', isNew: true, oldHash: 'missing', newHash: hashFileContent(bytes), runId: 'office-run', turnId: 'office-turn', newSnapshotRef: expect.any(String) })
     const parts = readOfficeZip(bytes)
     expect(Object.keys(parts)).toContain('word/document.xml')
     expect(Buffer.from(parts['word/document.xml']).toString('utf8')).toContain('接口联调已完成')
     const inspected = await officeDocumentTool.execute({ operation: 'inspect', path: file }, ctx)
     expect(inspected.success).toBe(true)
-    expect(JSON.parse(inspected.output)).toMatchObject({ path: file, expectedHash: hashFileContent(bytes), format: 'docx', content: expect.stringContaining('接口联调已完成') })
+    expect(JSON.parse(inspected.output)).toMatchObject({ path: fs.realpathSync.native(file), expectedHash: hashFileContent(bytes), format: 'docx', content: expect.stringContaining('接口联调已完成') })
     expect(await store.list(ctx.tenantId, ctx.sessionId)).toHaveLength(1)
     expect(fs.readdirSync(root).filter(name => name.startsWith('.aether-office-'))).toEqual([])
   })
@@ -97,6 +97,49 @@ describe('native office tool publication and artifact evidence', () => {
     expect(changed.getWorksheet('预算')!.getCell('B2').value).toBe(15)
     expect(changed.getWorksheet('预算')!.getCell('B4').value).toMatchObject({ formula: 'SUM(B2:B3)', result: 23 })
     expect(edited.metadata!.expectedHash).toBe(hashFileContent(fs.readFileSync(file)))
+  })
+
+  it('appends one sheet with a real version, preserves old worksheet bytes and supports exact binary rollback', async () => {
+    const file = path.join(root, '增量台账.xlsx')
+    const created = await officeDocumentTool.execute({ operation: 'create', path: file, expectedHash: 'missing', workbook: {
+      sheets: [{ name: '文档主表', columns: [{ header: '文件', key: 'file' }], rows: [{ file: '保留.docx' }] }],
+    } }, ctx)
+    expect(created.success).toBe(true)
+    const before = fs.readFileSync(file), beforeParts = readOfficeZip(before)
+    const appended = await officeDocumentTool.execute({ operation: 'append_sheets', path: file, expectedHash: created.metadata!.expectedHash,
+      workbook: { sheets: [{ name: '校验表', columns: [{ header: '项', key: 'item' }], rows: [{ item: '实际追加' }] }] } }, ctx)
+    expect(appended).toMatchObject({ success: true, metadata: { fileMutationApplied: true, rollbackAvailable: true, format: 'xlsx' } })
+    expect(appended.change).toMatchObject({ isNew: false, oldHash: hashFileContent(before), newHash: hashFileContent(fs.readFileSync(file)) })
+    expect(JSON.parse(appended.output).warnings.join('\n')).toContain('旧公式缓存未经重新计算')
+    const afterParts = readOfficeZip(fs.readFileSync(file))
+    expect(afterParts['xl/worksheets/sheet1.xml']).toEqual(beforeParts['xl/worksheets/sheet1.xml'])
+    const book = new ExcelJS.Workbook(); await book.xlsx.readFile(file)
+    expect(book.getWorksheet('文档主表')!.getCell('A2').value).toBe('保留.docx')
+    expect(book.getWorksheet('校验表')!.getCell('A2').value).toBe('实际追加')
+    const reverted = await store.revertBatch(ctx.tenantId, { sessionId: ctx.sessionId, ids: [String(appended.change!.id)] })
+    expect(reverted.reverted).toBe(1)
+    expect(fs.readFileSync(file)).toEqual(before)
+  })
+
+  it('admits only one concurrent append for a version and preserves bytes on stale, duplicate and oversized-sheet retries', async () => {
+    const file = path.join(root, '并发追加.xlsx')
+    const definition = (name: string) => ({ name, columns: [{ header: '值', key: 'v' }], rows: [{ v: name }] })
+    const created = await officeDocumentTool.execute({ operation: 'create', path: file, expectedHash: 'missing', workbook: { sheets: [definition('原表')] } }, ctx)
+    expect(created.success).toBe(true)
+    const results = await Promise.all(['角色甲', '角色乙'].map(name => officeDocumentTool.execute({ operation: 'append_sheets', path: file,
+      expectedHash: created.metadata!.expectedHash, workbook: { sheets: [definition(name)] } }, ctx)))
+    expect(results.filter(result => result.success)).toHaveLength(1)
+    expect(results.filter(result => !result.success)).toMatchObject([{ error: 'OFFICE_VERSION_CONFLICT', metadata: { fileMutationApplied: false } }])
+    const before = fs.readFileSync(file), expectedHash = hashFileContent(before)
+    for (const input of [
+      { operation: 'append_sheets', path: file, expectedHash, workbook: { sheets: [definition('原表')] } },
+      { operation: 'append_sheets', path: file, expectedHash: 'missing', workbook: { sheets: [definition('新表')] } },
+      { operation: 'append_sheets', path: file, expectedHash, workbook: { sheets: Array.from({ length: 5 }, (_, index) => definition('批次' + index)) } },
+      { operation: 'append_sheets', path: '不支持.docx', expectedHash, workbook: { sheets: [definition('新表')] } },
+    ]) expect(await officeDocumentTool.execute(input, ctx)).toMatchObject({ success: false, metadata: { fileMutationApplied: false } })
+    expect(fs.readFileSync(file)).toEqual(before)
+    expect(await store.list(ctx.tenantId, ctx.sessionId)).toHaveLength(2)
+    expect(fs.readdirSync(root).filter(name => name.startsWith('.aether-office-'))).toEqual([])
   })
 
   it('refuses stale edits and create collisions without replacing bytes or recording a change', async () => {

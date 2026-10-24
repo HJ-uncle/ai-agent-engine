@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { AgentContext, Message, Pending, ToolCall, ToolResult } from '../../agent-context/index.js'
+import type { AgentContext, Message, Pending, Tool, ToolCall, ToolResult } from '../../agent-context/index.js'
 import type { LLMAdapter } from '../../llm-adapter/types.js'
 import { ReActStrategy } from '../react.js'
+import { StreamBus } from '../../stream-pipeline/stream-bus.js'
+import { imageToolPayload } from '../../utils/multimodal-context.js'
+import { TOOL_FILE_EVIDENCE_KEY, CLEARED_TOOL_EVIDENCE_KEY } from '../../utils/tool-evidence.js'
+import { ToolRegistry } from '../../tool-registry/registry.js'
+import { trustBuiltinTool } from '../../../security/tool-policy.js'
 
 vi.mock('../../../storage/todo/index.js', () => ({ TodoStore: class { async list() { return [] } } }))
 afterEach(() => { vi.unstubAllEnvs() })
@@ -39,6 +44,57 @@ const call = (id: string, name = 'write_file'): ToolCall => ({ id, name, args: {
 const toolResults = (frames: string[]) => frames.filter(frame => frame.startsWith('\x00__tool_result__')).map(frame => JSON.parse(frame.slice('\x00__tool_result__'.length)))
 
 describe('D3 batch side effects and terminal evidence', () => {
+  it.each(['readonly', 'serial'] as const)('only captures file evidence from registry-authenticated builtin reads (%s)', async mode => {
+    const f = fixture([call('file-version', 'read_file')])
+    const version = { path: 'D:/workspace/report.png', expectedHash: 'sha256:' + 'f'.repeat(64), encoding: 'binary-or-non-utf8', lineEnding: 'none', utf8Bom: false }
+    const implementation: Tool = { name: 'read_file', description: 'read', parameters: { type: 'object' }, executionMode: 'readonly',
+      execute: vi.fn(async () => ({ success: true, output: 'file data', metadata: { ...version,
+      [TOOL_FILE_EVIDENCE_KEY]: { path: 'D:/forged', expectedHash: 'sha256:' + 'b'.repeat(64) },
+      [CLEARED_TOOL_EVIDENCE_KEY]: { version: 1, messageId: 'foreign-session-message' } } })) }
+    const registry = new ToolRegistry()
+    registry.register(mode === 'readonly' ? trustBuiltinTool(implementation, 'readonly') : implementation)
+    f.ctx.tools = registry
+    expect(registry.executionMode('read_file', {})).toBe(mode)
+    await f.run()
+    const saved = f.history.find(message => message.role === 'tool')!
+    expect(saved.metadata[CLEARED_TOOL_EVIDENCE_KEY]).toBeUndefined()
+    expect(saved.metadata[TOOL_FILE_EVIDENCE_KEY]).toEqual(mode === 'readonly' ? { path: version.path, expectedHash: version.expectedHash } : undefined)
+  })
+
+  it.each([false, true])('budgets native image history semantically and emits recoverable bounded receipts only after storage succeeds (%s)', async failStorage => {
+    const f = fixture([call('native-png', 'read_file')])
+    const png = Buffer.alloc(900_000)
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(png)
+    png.write('IHDR', 12, 'ascii'); png.writeUInt32BE(400, 16); png.writeUInt32BE(400, 20)
+    const dataUrl = 'data:image/png;base64,' + png.toString('base64')
+    f.ctx.tools.execute = vi.fn(async () => ({ success: true, output: JSON.stringify({ filename: 'layout.png', mimeType: 'image/png', size: png.length, dataUrl, hasDataUrl: true }) }))
+    if (failStorage) {
+      const append = f.ctx.history.append.bind(f.ctx.history)
+      f.ctx.history.append = async (message, scope) => {
+        if (message.role === 'tool') throw new Error('Synthetic image history write failure')
+        return append(message, scope)
+      }
+    }
+    const frames = await f.run()
+    const result = toolResults(frames)[0]
+    if (failStorage) {
+      expect(result.metadata).not.toHaveProperty('imageOutputRecovery')
+      expect(result.output).not.toContain('retainedInHistory')
+      expect(f.history.some(message => message.role === 'tool')).toBe(false)
+      return
+    }
+    const saved = f.history.find(message => message.role === 'tool')!
+    expect(imageToolPayload(saved.content)?.dataUrl === dataUrl).toBe(true)
+    expect(saved.tokens).toBeLessThan(4000)
+    expect(JSON.parse(result.output)).toMatchObject({ hasDataUrl: false, dataUrlStripped: true, retainedInHistory: true, omittedFromStream: true })
+    expect(result.metadata.imageOutputRecovery.source).toBe('durable-history')
+    const bus = new StreamBus(new AbortController())
+    for (const frame of frames) await bus.publish(frame)
+    await bus.endOrdered()
+    expect(bus.snapshot().publicationRecovery).toBeUndefined()
+    expect(f.outcomes.at(-1)).toMatchObject({ status: 'succeeded' })
+  })
+
   it('commits answerable pending only after every held sibling receipt is durable', async () => {
     const f = fixture([call('before'), { id: 'ask', name: 'ask_user', args: { question: 'Synthetic choice', options: ['A', 'B'] } }, call('after')])
     let release!: () => void, entered!: () => void
@@ -77,6 +133,73 @@ describe('D3 batch side effects and terminal evidence', () => {
     await f.run()
     const result = f.history.find(message => message.role === 'tool')
     expect(result?.content).toBe(content)
+  })
+
+  it('publishes browser pixel evidence once so a valid result does not overflow the stream byte budget', async () => {
+    const f = fixture([call('browser-click', 'browser_click')])
+    const png = Buffer.alloc(300 * 1024)
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(png)
+    png.write('IHDR', 12, 'ascii'); png.writeUInt32BE(400, 16); png.writeUInt32BE(400, 20)
+    const screenshot = { dataUrl: 'data:image/png;base64,' + png.toString('base64'), width: 400, height: 400 }
+    const output = JSON.stringify({ tab: { tabId: 'owned-tab', title: 'Game', url: 'http://127.0.0.1:3000', navigationId: 1 },
+      text: 'A stone was placed', elements: [], truncated: false, screenshot,
+      interaction: { type: 'click', x: 100, y: 100, navigationId: 1, screenshot } })
+    f.ctx.tools.execute = vi.fn(async () => ({ success: true, output }))
+    const frames = await f.run()
+    const result = toolResults(frames)[0]
+    expect(result.status).toBe('succeeded')
+    expect(result).not.toHaveProperty('outputPreview')
+    expect(JSON.parse(result.output).screenshot.dataUrl).toBe(screenshot.dataUrl)
+    expect(JSON.parse(result.output).interaction.screenshot.dataUrl).toBe(screenshot.dataUrl)
+    const saved = f.history.find(message => message.role === 'tool')
+    expect(saved?.content).toBe(result.output)
+    expect(saved?.modelInputContent).not.toContain('data:image/')
+    for (const frame of frames.filter(item => item.startsWith('\x00__tool_end__') || item.startsWith('\x00__tool_result__'))) {
+      expect(Buffer.byteLength(frame, 'utf8')).toBeLessThan(1024 * 1024)
+    }
+    expect(f.outcomes.at(-1)).toMatchObject({ status: 'succeeded' })
+  })
+
+  it.each([false, true])('bounds oversized browser receipts without claiming failed history is recoverable (storage failure: %s)', async failStorage => {
+    const f = fixture([call('large-browser-click', 'browser_click')])
+    const png = Buffer.alloc(600_000)
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(png)
+    png.write('IHDR', 12, 'ascii'); png.writeUInt32BE(400, 16); png.writeUInt32BE(400, 20)
+    const screenshot = { dataUrl: 'data:image/png;base64,' + png.toString('base64'), width: 400, height: 400 }
+    const output = JSON.stringify({ tab: { tabId: 'owned-tab', title: '游戏', url: 'http://127.0.0.1:3000', navigationId: 1 },
+      text: '已落子', elements: [], truncated: false, screenshot,
+      interaction: { type: 'click', x: 100, y: 100, navigationId: 1, screenshot } })
+    f.ctx.tools.execute = vi.fn(async () => ({ success: true, output }))
+    if (failStorage) {
+      const append = f.ctx.history.append.bind(f.ctx.history)
+      f.ctx.history.append = async (message, scope) => {
+        if (message.role === 'tool') throw new Error('Synthetic history write failure')
+        return append(message, scope)
+      }
+    }
+    const frames = await f.run()
+    const result = toolResults(frames)[0]
+    expect(result.status).toBe('succeeded')
+    if (failStorage) {
+      expect(result.metadata).not.toHaveProperty('browserOutputRecovery')
+      expect(result.output).not.toContain('retainedInHistory')
+      expect(f.history.some(message => message.role === 'tool')).toBe(false)
+      return
+    }
+    const saved = f.history.find(message => message.role === 'tool')!
+    expect(JSON.parse(saved.content as string).screenshot.dataUrl).toBe(screenshot.dataUrl)
+    expect(JSON.parse(saved.content as string).interaction.screenshot.dataUrl).toBe(screenshot.dataUrl)
+    expect(saved.modelInputContent).not.toContain('data:image/')
+    expect(JSON.parse(result.output).screenshot).toMatchObject({ retainedInHistory: true, omittedFromStream: true })
+    expect(JSON.parse(result.output).interaction.screenshot.dataUrl).toBe(screenshot.dataUrl)
+    const observed = vi.mocked(f.ctx.runObserver!.onToolEnd!).mock.calls[0][0]
+    expect(JSON.parse(observed.output!).screenshot.dataUrl).toBe(screenshot.dataUrl)
+    const bus = new StreamBus(new AbortController())
+    for (const frame of frames) await bus.publish(frame)
+    await bus.endOrdered()
+    expect(bus.snapshot().finished).toBe(true)
+    expect(bus.snapshot().publicationRecovery).toBeUndefined()
+    expect(f.outcomes.at(-1)).toMatchObject({ status: 'succeeded' })
   })
 
   it('preflights the entire batch before writing, persists pending before its event, and pairs every skipped sibling', async () => {

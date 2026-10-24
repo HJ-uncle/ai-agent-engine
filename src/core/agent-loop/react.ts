@@ -2,10 +2,12 @@ import { isThinkingDisabled } from '../llm-adapter/thinking.js'
 import type { LoopStrategy } from './strategy.js'
 import type { AgentContext } from '../agent-context/index.js'
 import type { LLMAdapter, LLMAdapterOptions } from '../llm-adapter/index.js'
+import type { LLMStreamDiagnostics } from '../llm-adapter/types.js'
 import type { Message, ToolResult } from '../agent-context/index.js'
 import { estimateTokens } from '../utils/tokens.js'
 import { v4 as uuidv4 } from 'uuid'
 import { getOSMCompressRatio } from '../osm.js'
+import { effectiveContextWindow } from '../context-budget.js'
 import { getCodeToolOutputMaxChars, getToolOutputMaxChars } from './tool-output-limit.js'
 import { repairJson } from '../utils/json.js'
 import { TodoStore } from '../../storage/todo/index.js'
@@ -19,18 +21,24 @@ import { bindSQLiteReActBoundary, readSQLiteReActHistory, consumeSQLiteReActIter
 import { bindJSONLReActBoundary, readJSONLReActHistory, consumeJSONLReActIteration, assertJSONLReActDispatch, maintainJSONLReActHistory } from '../collaboration/jsonl-react-boundary.js'
 import { readAuthenticatedJSONLHistory } from '../../storage/conversation/jsonl-origin.js'
 import { readAuthenticatedSQLiteHistory } from '../../storage/conversation/sqlite-origin.js'
+import { consumeEmptyOutputRecovery } from '../../storage/conversation/empty-output-recovery.js'
 import { resolveCapabilities } from '../model-capabilities/index.js'
 import { ToolProgressTracker, toolFailureLimit } from './tool-progress.js'
 import { projectReadonlyHistory, readonlyHistoryNotice, type ReadonlyHistoryProjection } from './readonly-history.js'
 import { estimateModelHistoryTokens, estimateModelMessageTokens, modelMessageContent } from '../utils/model-context.js'
 import { createHash } from 'node:crypto'
-import { browserOutputPresentation } from '../utils/browser-output.js'
+import { browserOutputFramePayload, browserOutputPresentation } from '../utils/browser-output.js'
+import { DEFAULT_PUBLICATION_MAX_BYTES } from '../stream-pipeline/publication-queue.js'
+import { imageFileVersion, imageToolFramePayload, imageToolPayload, MAX_NATIVE_IMAGE_BASE64_CHARS } from '../utils/multimodal-context.js'
+import { captureFileEvidence, clearedToolModelContent, isClearedToolMessage, TOOL_FILE_EVIDENCE_KEY, CLEARED_TOOL_EVIDENCE_KEY, CLEARED_TOOL_RESULT } from '../utils/tool-evidence.js'
 
 const OUTPUT_CONTINUATION_PROMPT = 'The previous model response reached its single-response output limit. Continue the same user task from the retained partial response and history, starting exactly where the response stopped. Do not repeat text already emitted, restart completed work, or repeat executed tools. Use tools only for remaining work; finish normally when the original task is complete.'
 
 const REASONING_OUTPUT_RECOVERY_PROMPT = 'The previous model response reached its single-response output limit before producing a public answer or a complete tool call. Continue the original user task using the retained task and completed tool evidence. Provide a concise public conclusion or the next necessary complete tool call. Do not repeat completed work or expose hidden reasoning. Task scope, permissions and budgets remain unchanged.'
 
 const TOOL_OUTPUT_RECOVERY_PROMPT = 'The previous model response reached its single-response output limit while generating tool calls. None of the tool calls in that response executed, including any complete sibling calls; their interrupted receipts are retained in history. Continue the original user task by generating new complete calls with smaller self-contained arguments. Do not continue or repair the unfinished JSON fragment, repeat already completed work, or assume an interrupted call succeeded. Where the task permits, reference existing authorized workspace files rather than copying large payloads into arguments, and preserve all required information. This guidance does not change the task, tool permissions, workspace boundaries, or budgets.'
+
+const EMPTY_OUTPUT_RECOVERY_PROMPT = 'The previous model response ended normally without a public answer or any tool call. Continue the same user task from the retained history and completed tool evidence. Provide the next necessary complete tool call or a concise public answer. Do not repeat completed work or replay tools that already executed. Task scope, permissions, model configuration and budgets remain unchanged.'
 
 /**
  * Truncate tool output that is too long.
@@ -48,7 +56,7 @@ export function truncateToolOutput(output: string, maxChars: number = getToolOut
         const imageData = typeof record.dataUrl === 'string'
           ? /^data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/]+={0,2})$/i.exec(record.dataUrl)
           : null
-        if (imageData && imageData[2].length % 4 === 0) {
+        if (imageData && imageData[2].length <= MAX_NATIVE_IMAGE_BASE64_CHARS && imageData[2].length % 4 === 0) {
           // Keep the payload and bounded identity fields; unrelated metadata
           // alongside a genuine image must not smuggle a megabyte text log.
           return JSON.stringify({
@@ -58,6 +66,7 @@ export function truncateToolOutput(output: string, maxChars: number = getToolOut
             size: typeof record.size === 'number' ? record.size : undefined,
             dataUrl: record.dataUrl,
             hasDataUrl: true,
+            fileVersion: imageFileVersion(record.fileVersion),
           })
         }
         if (typeof record.dataUrl === 'string' || record.hasDataUrl === true) {
@@ -212,8 +221,16 @@ function isReasoningRecoverySegment(message: Message): boolean {
     && typeof content === 'string' && !content.trim()
 }
 
+function isEmptyRecoverySegment(message: Message): boolean {
+  const content = modelMessageContent(message)
+  return message.role === 'assistant' && message.metadata?.emptyOutputRecovery === true
+    && message.metadata.partial === true && message.metadata.status === 'failed' && message.metadata.stopReason === 'empty_output'
+    && !message.reasoningContent && !message.toolCall && !message.toolCallId
+    && typeof content === 'string' && !content
+}
+
 /** Read the complete active history so backend windows cannot hide system constraints. */
-async function requestHistory(ctx: AgentContext): Promise<ReadonlyHistoryProjection> {
+async function requestHistory(ctx: AgentContext, recoveryToolInRequest: boolean): Promise<ReadonlyHistoryProjection & { emptyRecoveryUsed: boolean }> {
   const sqlite = ctx.sqliteDelivery ? await readSQLiteReActHistory(ctx.sqliteDelivery, ctx)
     : ctx.jsonlDelivery ? await readJSONLReActHistory(ctx.jsonlDelivery, ctx)
       : await readAuthenticatedSQLiteHistory(ctx.history, ctx) ?? await readAuthenticatedJSONLHistory(ctx.history, ctx)
@@ -224,14 +241,25 @@ async function requestHistory(ctx: AgentContext): Promise<ReadonlyHistoryProject
     const lastUser = all.map(message => message.role).lastIndexOf('user')
     if (lastUser >= 0) selected = all.slice(lastUser)
   }
-  const projected = projectReadonlyHistory(selected.filter(message => !isReasoningRecoverySegment(message)),
+  const projected = projectReadonlyHistory(selected.filter(message => !isReasoningRecoverySegment(message) && !isEmptyRecoverySegment(message)),
     call => ctx.tools.executionMode?.(call.name, call.args))
-  return { ...projected, messages: pairToolHistory(projected.messages.map(projectModelMessage)) }
+  const searchHistoryAvailable = recoveryToolInRequest && ctx.tools.has('search_history') && ctx.tools.executionMode?.('search_history', {}) === 'readonly'
+  return { ...projected, messages: pairToolHistory(projected.messages.map(message => projectModelMessage(message, searchHistoryAvailable))),
+    emptyRecoveryUsed: ctx.rootRunId !== undefined && all.some(message => isEmptyRecoverySegment(message)
+      && message.metadata?.rootRunId === ctx.rootRunId && message.metadata?.turnId === ctx.turnId) }
 }
 
 /** User replay evidence must not be counted or sent as live model context. */
-export function projectModelMessage(message: Message): Message {
-  const projected = { ...message, content: modelMessageContent(message) }
+export function projectModelMessage(message: Message, searchHistoryAvailable = false): Message {
+  // Finalization removes every tool after ordinary history projection. Recognize
+  // only our exact prior projection so its recovery hint can be withdrawn safely.
+  const projectedIndex = message.role === 'tool' && typeof message.content === 'string' && message.content.startsWith(CLEARED_TOOL_RESULT + '\n')
+    && (message.content === clearedToolModelContent(message, true) || message.content === clearedToolModelContent(message, false))
+  const cleared = isClearedToolMessage(message) || projectedIndex
+  const projected = { ...message, content: cleared ? clearedToolModelContent(message, searchHistoryAvailable) : modelMessageContent(message) }
+  // Adapters project again. The archived provider snapshot must not revive
+  // pixels after this request has replaced the marker with its bounded index.
+  if (cleared) delete projected.modelInputContent
   if (!message.metadata || typeof message.metadata !== 'object') return projected
   const { outputPreview: _preview, __aetherMicroCompactArchive: _archive, ...metadata } = message.metadata
   return { ...projected, metadata }
@@ -259,9 +287,16 @@ export class ReActStrategy implements LoopStrategy {
       }
     }
     const output = String(result.output)
-    const metadata = { ...result.metadata, ...(internalPlan ? { toolName: call.name } : {}), status: result.status, success: result.success, error: result.error,
+    const metadata: Record<string, unknown> = { ...result.metadata, ...(internalPlan ? { toolName: call.name } : {}), status: result.status, success: result.success, error: result.error,
       durationMs: result.durationMs, rootRunId: ctx.rootRunId, turnId: ctx.turnId,
       ...(result.change ? { change: { ...result.change, toolCallId: call.id } } : {}) }
+    // Reserved evidence fields are minted here, never accepted from extensions.
+    delete metadata[CLEARED_TOOL_EVIDENCE_KEY]
+    delete metadata[TOOL_FILE_EVIDENCE_KEY]
+    if (call.name === 'read_file' && result.success && ctx.tools.executionMode?.(call.name, call.args) === 'readonly') {
+      const evidence = captureFileEvidence(result.metadata)
+      if (evidence) metadata[TOOL_FILE_EVIDENCE_KEY] = evidence
+    }
     let failedToPersist = false
     // Code mode gets a larger cap for source and compiler diagnostics, but it
     // must still be bounded.  A complete build log can contain megabytes of
@@ -274,7 +309,9 @@ export class ReActStrategy implements LoopStrategy {
     const modelInputContent = presentation?.modelInputContent
     const outputWasTruncated = truncated.length < output.length
     if (outputWasTruncated) (metadata as Record<string, unknown>).outputTruncated = true
-    const tokens = estimateTokens(modelInputContent ?? truncated)
+    const nativeImage = imageToolPayload(truncated)
+    const tokens = nativeImage ? estimateModelMessageTokens({ role: 'tool', content: truncated, toolCallId: call.id })
+      : estimateTokens(modelInputContent ?? truncated)
     if (result.status !== 'waiting') {
       const subagent = result.metadata?.subagent as { runId?: string } | undefined
       try {
@@ -303,14 +340,23 @@ export class ReActStrategy implements LoopStrategy {
       metadata.success = false
       metadata.error = result.error
     }
+    const displayOutput = failedToPersist && internalPlan ? String(result.output) : truncated
     const frame = { toolCallId: call.id, toolName: call.name, name: call.name, args: call.args, messageId,
-      success: result.success, status: result.status, output: failedToPersist && internalPlan ? String(result.output) : truncated,
-      outputPreview: failedToPersist && internalPlan ? String(result.output) : truncated,
+      success: result.success, status: result.status, output: displayOutput,
+      // Consumers already prefer output. Repeating image evidence in the
+      // optional preview can turn a valid result into an oversized stream frame.
+      ...(Buffer.byteLength(displayOutput, 'utf8') <= 16 * 1024 ? { outputPreview: displayOutput } : {}),
       error: result.error, metadata, durationMs: result.durationMs,
       rootRunId: ctx.rootRunId, turnId: ctx.turnId }
     if (!internalPlan || result.status !== 'succeeded') {
-      yield `\x00__tool_end__${JSON.stringify(frame)}`
-      yield `\x00__tool_result__${JSON.stringify(frame)}`
+      // Full browser pixels are already durable. Budget the entire wire payload,
+      // not each image independently; two valid pictures can exceed one frame.
+      const frameBudget = DEFAULT_PUBLICATION_MAX_BYTES - Buffer.byteLength('\x00__tool_result__')
+      const payload = !failedToPersist && result.status !== 'waiting'
+        ? (presentation ? browserOutputFramePayload(frame, frameBudget) : nativeImage ? imageToolFramePayload(frame, frameBudget) : undefined) ?? JSON.stringify(frame)
+        : JSON.stringify(frame)
+      yield `\x00__tool_end__${payload}`
+      yield `\x00__tool_result__${payload}`
     }
     if (planSnapshot) yield `\x00__todo__${JSON.stringify({ todos: planSnapshot })}`
     // A writer may partially mutate before failing; its recorded change still matters.
@@ -443,11 +489,14 @@ export class ReActStrategy implements LoopStrategy {
     let outputReasoningRecovery = false
     let reasoningOnlyRecoveryUsed = false
     let pendingReasoningOutputExpansion = false
+    let emptyOutputRecoveryUsed = false
+    let pendingEmptyOutputRecovery = false
     let recoveryCallIdentity = false
     let emittedOutput = ''
     let readonlyHistoryPairs = 0
     const readModelHistory = async (): Promise<Message[]> => {
-      const projection = await requestHistory(ctx)
+      const projection = await requestHistory(ctx, toolList.some(tool => tool.name === 'search_history'))
+      emptyOutputRecoveryUsed ||= projection.emptyRecoveryUsed
       readonlyHistoryPairs = projection.collapsedPairs
       const messages = projection.messages
       if (!outputContinuation) return messages
@@ -601,6 +650,7 @@ export class ReActStrategy implements LoopStrategy {
         injectedExtras = [injectedPlanPrompt, planContext, recoveryPrompt, workflowReviewPrompt, readonlyHistoryNotice(readonlyHistoryPairs),
           outputToolRecovery ? TOOL_OUTPUT_RECOVERY_PROMPT : undefined,
           outputReasoningRecovery ? REASONING_OUTPUT_RECOVERY_PROMPT : undefined,
+          pendingEmptyOutputRecovery ? EMPTY_OUTPUT_RECOVERY_PROMPT : undefined,
           outputToolRecovery && toolOutputRecoveryRepeats > 1
             ? 'The last incomplete tool arguments repeated without completing. Reduce the next argument payload further or use authorized file references while preserving the task requirements. Generate a new complete call; never append to the interrupted fragment.' : undefined]
         const extras = injectedExtras.filter(Boolean).join('\n\n')
@@ -611,8 +661,7 @@ export class ReActStrategy implements LoopStrategy {
 
       // 1. 先检查是否需要压缩（用 raw token count，不受 window 限制）
       // 阈值对齐 Claude Code auto-compact：有效窗口的 ~92% 触发（COMPRESS_THRESHOLD_RATIO=0.92）。
-      // 有效窗口取 min(tokenBudget, 模型真实 contextWindow)：tokenBudget 经 OSM 倍率放大后
-      // 可能远超模型实际上限，若直接用它做阈值，模型都拒答了压缩还没触发。
+      // 使用单次上下文预算与模型真实窗口中的较小者，避免超出模型容量后才开始压缩。
       const maintainHistory = <T>(action: () => Promise<T>): Promise<T> => ctx.sqliteDelivery
         ? maintainSQLiteReActHistory(ctx.sqliteDelivery, ctx, action)
         : ctx.jsonlDelivery ? maintainJSONLReActHistory(ctx.jsonlDelivery, ctx, action) : action()
@@ -624,18 +673,11 @@ export class ReActStrategy implements LoopStrategy {
       // compaction and allow the hard model window to be reached first.
       const compressRatio = Number.isFinite(configuredCompressRatio) && configuredCompressRatio > 0
         ? Math.min(configuredCompressRatio, 0.95) : 0.92
-      // 有效上限 = 已知预算与模型窗口中的较小者；两者都未知才不设上限。
-      // 窗口这一侧必须保留：装不下的请求要在本地拒发（而不是静默丢掉存储的强制
-      // 约束，或明知会被服务端拒还硬发一次）。真正要消除的是**被人为推导出来的
-      // 预算**压低下限 —— 历史上 env 缺省 60000 经 balanced 倍率 2 得到 120000，
-      // 比模型 128k 窗口还小 8k，于是引擎比模型更早拒答
-      // （"Request input (112210) plus output reservation (8192) exceeds context window
-      // (120000)"）。该默认值已在 agent-context/factory.ts 移除，这里不再引入新的推导预算。
-      const effectiveBudget = unboundedCode
-        ? (ctx.modelCaps?.contextWindow ?? Number.POSITIVE_INFINITY)
-        : Math.min(
-          typeof ctx.tokenBudget === 'number' ? ctx.tokenBudget : Number.POSITIVE_INFINITY,
-          ctx.modelCaps?.contextWindow ?? Number.POSITIVE_INFINITY)
+      // Code keeps unlimited run duration/output policy, but shares the same
+      // per-request context window. Legacy TOKEN_BUDGET and OSM multipliers do
+      // not change this policy or the model's capability metadata.
+      const effectiveBudget = effectiveContextWindow(ctx.modelCaps?.contextWindow,
+        unboundedCode ? undefined : ctx.tokenBudget)
       // Code mode derives its dispatch cap from the remaining context later,
       // instead of stopping at the old fixed 8192-token output cap.
       let maxOutputTokens = unboundedCode
@@ -655,8 +697,7 @@ export class ReActStrategy implements LoopStrategy {
         yield '\n\n[Response truncated: token budget exceeded]'
         return
       }
-      // 压缩基准与有效上限同源（预算与窗口的较小者）；两者都没有时不触发压缩
-      // （既无窗口也无预算时无从判断何时该压缩，交给服务端错误反馈）。
+      // 压缩、请求准入和用量显示必须使用同一个有效窗口。
       const compressThreshold = Math.floor(effectiveBudget * compressRatio)
       let rawTokens = estimateRequestInput(messages, baseSystemPrompt, effectiveTools) + outputReservation
       if (rawTokens > compressThreshold && typeof ctx.history.microCompactToolResults === 'function') {
@@ -776,6 +817,7 @@ export class ReActStrategy implements LoopStrategy {
       const finalizationNotice = finalizationReason === 'budget'
         ? '已接近本次任务的引擎本地累计用量上限，停止探索并交回已有证据；尚未完成全部核实。'
         : '已达到本次子任务的探索步数上限，停止探索并交回已有证据；尚未完成全部核实。'
+      if (finalizationReason) messages = messages.map(message => projectModelMessage(message, false))
       const recordedEvidence = finalizationReason ? partialEvidence(messages) : ''
       if (finalizationReason) {
         effectiveTools = []
@@ -880,6 +922,8 @@ export class ReActStrategy implements LoopStrategy {
       let streamCompleted = false
       let streamChunkCount = 0
       let receivedTerminalChunk = false
+      let receivedStopTerminal = false
+      let streamDiagnostics: LLMStreamDiagnostics | undefined
       let receivedOutputLimitTerminal = false
       let failureReason = 'incomplete'
       let promptUsageReported = false
@@ -902,8 +946,8 @@ export class ReActStrategy implements LoopStrategy {
         return '\x00__usage__' + snapshot
       }
       const persistPartial = async (status: 'failed' | 'cancelled', stopReason: string,
-        responseDiagnostics?: Record<string, string | number | boolean>, recoveryIndex?: number,
-        recoveryKind: 'tool' | 'reasoning' = 'tool') => {
+        responseDiagnostics?: Record<string, unknown>, recoveryIndex?: number,
+        recoveryKind: 'tool' | 'reasoning' | 'empty' = 'tool') => {
         if (partialSaved || (!response.content && !response.reasoningContent && !responseDiagnostics
           && !promptUsageReported && !completionUsageReported && !toolCallsMap.size)) return
         // Recoverable segments need independent IDs; the final reply still owns
@@ -920,9 +964,12 @@ export class ReActStrategy implements LoopStrategy {
             ...(response.cacheMissTokens != null ? { cacheMissTokens: response.cacheMissTokens } : {}),
             ...(response.reasoningTokens != null ? { reasoningTokens: response.reasoningTokens } : {}) },
           metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId, partial: true, status, stopReason,
-            ...(responseDiagnostics ? { responseDiagnostics } : {}),
+            ...(responseDiagnostics || streamDiagnostics ? { responseDiagnostics: {
+              ...responseDiagnostics, ...(streamDiagnostics ? { providerStream: streamDiagnostics } : {}),
+            } } : {}),
             ...(recoveryIndex !== undefined ? { recoveryIndex } : {}),
             ...(recoveryKind === 'reasoning' ? { outputReasoningRecovery: true }
+              : recoveryKind === 'empty' ? { emptyOutputRecovery: true }
               : recoveryIndex !== undefined ? { outputToolRecovery: true } : {}),
             contextUsageEstimated: !promptUsageReported,
             contextUsageProvisional: promptUsageReported && !receivedTerminalChunk, requestInputTokenEstimate,
@@ -990,6 +1037,7 @@ export class ReActStrategy implements LoopStrategy {
         }
         toolProgress.markWorkflowReviewDispatched()
         pendingReasoningOutputExpansion = false
+        pendingEmptyOutputRecovery = false
         if (ctx.sqliteDelivery) await assertSQLiteReActDispatch(ctx.sqliteDelivery, ctx)
         else if (ctx.jsonlDelivery) await assertJSONLReActDispatch(ctx.jsonlDelivery, ctx)
         assertOwnedDispatch(ctx.executionOwner)
@@ -1002,6 +1050,8 @@ export class ReActStrategy implements LoopStrategy {
           if (ctx.signal?.aborted) throw Object.assign(new Error('Model request cancelled'), { name: 'AbortError' })
           streamChunkCount++
           receivedTerminalChunk ||= chunk.done === true
+          receivedStopTerminal ||= chunk.done === true && chunk.finishReason === 'stop'
+          if (chunk.streamDiagnostics) streamDiagnostics = chunk.streamDiagnostics
           receivedOutputLimitTerminal ||= chunk.done === true && chunk.finishReason === 'length'
           // Providers may report usage/model before their final chunk (or fail afterwards).
           for (const key of ['promptTokens', 'completionTokens', 'cacheHitTokens', 'cacheMissTokens', 'reasoningTokens'] as const) {
@@ -1016,7 +1066,9 @@ export class ReActStrategy implements LoopStrategy {
             response.model = response.reportedModel = chunk.model
           }
           if (chunk.finishReason) response.finishReason = chunk.finishReason
-          if (typeof chunk.contextWindow === 'number' && Number.isFinite(chunk.contextWindow) && chunk.contextWindow > 0) response.contextWindow = chunk.contextWindow
+          if (typeof chunk.contextWindow === 'number' && Number.isFinite(chunk.contextWindow) && chunk.contextWindow > 0) {
+            response.contextWindow = Math.min(effectiveBudget, chunk.contextWindow)
+          }
           // Capture the entire delivered chunk before exposing any frame. A
           // viewer can return at context/start/args without dropping siblings,
           // raw arguments or terminal billing counters already received.
@@ -1562,8 +1614,39 @@ export class ReActStrategy implements LoopStrategy {
           contentCharacters: String(response.content ?? '').length,
           reasoningCharacters: String(response.reasoningContent ?? '').length,
           promptTokens: Number(response.promptTokens), completionTokens: Number(response.completionTokens),
+          ...(streamDiagnostics ? { providerStream: streamDiagnostics } : {}),
         }
         ctx.logger.warn({ rootRunId: ctx.rootRunId, sessionId: ctx.sessionId, ...responseDiagnostics }, 'Model response had no final answer')
+        // One fresh generation continues from durable history; it never reruns
+        // prior tool dispatch. Ordinary next-iteration admission still owns
+        // cancellation, context, physical-request and finalization budgets.
+        const recoverEmpty = streamCompleted && receivedStopTerminal && response.finishReason === 'stop'
+          && !receivedOutputLimitTerminal && !ctx.signal?.aborted && !finalizationReason
+          && iteration + 1 < maxIterations && !emptyOutputRecoveryUsed
+          && !response.content && !response.reasoningContent && toolCallsMap.size === 0
+          && streamDiagnostics?.rawStopReason !== 'refusal' && streamDiagnostics?.rawStopReason !== 'other'
+          && !streamDiagnostics?.blockTypes.other && !streamDiagnostics?.finalBlockTypes.other
+          && !streamDiagnostics?.deltaTypes.other && !streamDiagnostics?.eventTypes.other
+        if (recoverEmpty) {
+          let claimed = false
+          try {
+            claimed = await consumeEmptyOutputRecovery(ctx)
+            if (claimed) await persistPartial('failed', 'empty_output', responseDiagnostics, 1, 'empty')
+          }
+          catch (error) {
+            ctx.logger.error({ err: error }, 'Failed to persist empty-output recovery evidence')
+            await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'runtime_error', partialOutput: emittedOutput || undefined,
+              error: { code: 'PERSISTENCE_ERROR', message: 'Empty model response could not be persisted; no recovery request was sent', retryable: false } })
+            return
+          }
+          emptyOutputRecoveryUsed = true
+          if (claimed) {
+            pendingEmptyOutputRecovery = true
+            yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, ...contextSnapshot() })}`
+            ctx.logger.info({ rootRunId: ctx.rootRunId, iteration }, 'Regenerating once after empty terminal model response')
+            continue
+          }
+        }
         await persistPartial('failed', 'empty_output', responseDiagnostics)
         yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, ...contextSnapshot() })}`
         const message = response.reasoningContent?.trim()

@@ -95,7 +95,9 @@ function imageMarker(image: Screenshot | undefined, original: unknown): RecordVa
   const marker = object(original)
   if (marker?.retainedForDisplay === true && typeof marker.width === 'number' && Number.isInteger(marker.width) &&
       marker.width >= 1 && marker.width <= 1600 && typeof marker.height === 'number' && Number.isInteger(marker.height) &&
-      marker.height >= 1 && marker.height <= 1600) return { width: marker.width, height: marker.height, retainedForDisplay: true }
+      marker.height >= 1 && marker.height <= 1600) return { width: marker.width, height: marker.height, retainedForDisplay: true,
+        ...(marker.omittedFromStream === true && marker.retainedInHistory === true
+          ? { omittedFromStream: true, retainedInHistory: true, reason: 'stream-byte-budget' } : {}) }
   return { unavailable: true }
 }
 
@@ -135,4 +137,52 @@ export function browserOutputPresentation(output: unknown, maxChars = 64 * 1024)
   if (clickImage && object(display.interaction)) display.interaction = { ...object(display.interaction), screenshot: clickImage }
   return { displayOutput: JSON.stringify(display), modelInputContent: modelText,
     imageChars: (image?.dataUrl.length ?? 0) + (clickImage && object(display.interaction) ? clickImage.dataUrl.length : 0) }
+}
+
+/** Budget the serialized receipt, including escaping and surrounding metadata.
+ * Call only after durable persistence: optional pixels can then be recovered from
+ * history without breaking JSON, click geometry, or the tool's execution result. */
+export function browserOutputFramePayload(frame: RecordValue, maxBytes: number): string | undefined {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new RangeError('Invalid browser frame budget')
+  const source = snapshotSource(frame.output)
+  if (!source) return undefined
+  let encoded = JSON.stringify(frame)
+  if (Buffer.byteLength(encoded, 'utf8') <= maxBytes) return encoded
+  const originalFrameBytes = Buffer.byteLength(encoded, 'utf8')
+  const omittedImages: string[] = []
+  const bounded = { ...frame }
+  delete bounded.outputPreview
+  bounded.metadata = { ...object(frame.metadata), browserOutputRecovery: {
+    reason: 'stream-byte-budget', source: 'durable-history', originalFrameBytes, omittedImages,
+  } }
+  const serialize = (output: RecordValue): string => {
+    bounded.output = JSON.stringify(output)
+    return JSON.stringify(bounded)
+  }
+  encoded = serialize(source)
+  // The click card uses the pre-action picture. Prefer retaining it over the
+  // post-action page picture when both cannot fit in the same publication.
+  for (const [owner, key, path] of [[source, 'screenshot', 'screenshot'],
+    [object(source.interaction), 'screenshot', 'interaction.screenshot']] as const) {
+    if (Buffer.byteLength(encoded, 'utf8') <= maxBytes) return encoded
+    const image = screenshot(owner?.[key])
+    if (!owner || !image) continue
+    owner[key] = { width: image.width, height: image.height, retainedForDisplay: true,
+      omittedFromStream: true, retainedInHistory: true, reason: 'stream-byte-budget' }
+    omittedImages.push(path)
+    encoded = serialize(source)
+  }
+  // Character caps alone cannot bound CJK or JSON escaping. Reuse the schema
+  // sanitizer at decreasing text limits and measure the complete UTF-8 payload.
+  for (let limit = MAX_BROWSER_DISPLAY_TEXT; Buffer.byteLength(encoded, 'utf8') > maxBytes && limit >= 256; limit = Math.floor(limit / 2)) {
+    const presentation = browserOutputPresentation(JSON.stringify(source), limit)
+    if (!presentation) break
+    const compact = object(JSON.parse(presentation.modelInputContent))
+    if (!compact) break
+    compact.truncated = true
+    encoded = serialize(compact)
+  }
+  // Oversized unrelated args/metadata retain the normal publication failure;
+  // a browser-shaped result must never authorize truncating arbitrary fields.
+  return Buffer.byteLength(encoded, 'utf8') <= maxBytes ? encoded : undefined
 }

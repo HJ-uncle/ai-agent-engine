@@ -3,12 +3,14 @@ import path from 'node:path'
 import { z } from 'zod'
 import type { AgentContext, Tool, ToolResult } from '../../core/agent-context/index.js'
 import { throwIfAborted } from '../../core/utils/abort.js'
+import { getToolOutputLimit } from '../../core/agent-loop/tool-output-limit.js'
 import { canonicalFilePathSync, hashFileContent, readFileVersionSync, withFileLocks } from '../../shared/file-version.js'
 import { workspaceManager } from '../../workspace/index.js'
 import { ChangeRecordingError, commitWriteChange, discardUnpublishedSnapshot, readOldSnapshot, type ChangeSnapshot } from '../file/change-recorder.js'
 import { createDocx, editDocx, inspectDocx } from './docx.js'
-import { createXlsx, editXlsx, inspectXlsx } from './xlsx.js'
+import { createXlsx, editXlsx, inspectXlsx, appendXlsxSheets } from './xlsx.js'
 import { MAX_OFFICE_FILE_BYTES } from './office-zip.js'
+import { officeFailure, officeReceipt } from './output.js'
 
 const text = z.string().max(32_000)
 const formula = z.object({ formula: z.string().min(1).max(2000) }).strict()
@@ -36,19 +38,25 @@ const workbook = z.object({ sheets: z.array(z.object({
   if (count > 100_000) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Workbook supports at most 100000 data cells' })
 })
 const filePath = z.string().min(1).max(4096).refine(value => value.trim().length > 0 && !value.includes('\0'), 'Invalid file path')
-const inspectArguments = z.object({ operation: z.literal('inspect'), path: filePath }).strict()
+// DOCX allows 2 Mi characters of paragraph text plus separators; the package's
+// 500000-element bound keeps their combined preview below 3 Mi UTF-16 units.
+const maxContentOffset = 3 * 1024 * 1024
+const inspectArguments = z.object({ operation: z.literal('inspect'), path: filePath,
+  expectedHash: z.string().regex(/^sha256:[a-f0-9]{64}$/).optional(),
+  contentOffset: z.number().int().min(0).max(maxContentOffset).optional(),
+  contentLimit: z.number().int().min(2).max(32_000).optional(),
+}).strict()
+const readonlyInspectArguments = inspectArguments.omit({ operation: true })
 const createArguments = z.object({ operation: z.literal('create'), path: filePath, expectedHash: z.literal('missing'),
   markdown: z.string().min(1).max(300_000).optional(), title: z.string().max(256).optional(), author: z.string().max(200).optional(), workbook: workbook.optional() }).strict()
 const editArguments = z.object({ operation: z.literal('edit'), path: filePath, expectedHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   edits: z.union([textEdits, cellEdits]) }).strict()
-const argumentsSchema = z.discriminatedUnion('operation', [inspectArguments, createArguments, editArguments])
+const appendSheetsArguments = z.object({ operation: z.literal('append_sheets'), path: filePath,
+  expectedHash: z.string().regex(/^sha256:[a-f0-9]{64}$/), workbook: workbook.refine(value => value.sheets.length <= 4, 'Append at most four sheets per call') }).strict()
+const argumentsSchema = z.discriminatedUnion('operation', [inspectArguments, createArguments, editArguments, appendSheetsArguments])
 type Arguments = z.infer<typeof argumentsSchema>
 type Inspection = Awaited<ReturnType<typeof inspectDocx>> | Awaited<ReturnType<typeof inspectXlsx>>
 
-function failure(code: string, message: string, metadata: Record<string, unknown> = {}): ToolResult {
-  const details = { code, fileMutationApplied: false, ...metadata }
-  return { success: false, error: code, output: JSON.stringify({ message, ...details }), metadata: details }
-}
 function samePath(left: string, right: string): boolean {
   return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right
 }
@@ -87,26 +95,21 @@ function readBoundedVersion(file: string) {
 function inspect(format: 'docx' | 'xlsx', bytes: Buffer): Promise<Inspection> {
   return format === 'docx' ? inspectDocx(bytes) : inspectXlsx(bytes)
 }
-function receipt(file: string, hash: string, bytes: number, inspection: Inspection, includeContent: boolean) {
-  const previewLimit = 120_000
-  return { path: file, expectedHash: hash, sizeBytes: bytes, ...inspection,
-    content: includeContent ? inspection.content.slice(0, previewLimit) : undefined,
-    contentTruncated: includeContent && inspection.content.length > previewLimit,
-    validation: 'structure-checked', visualValidation: 'not-performed' }
-}
 
 export const officeDocumentTool: Tool = {
   name: 'office_document', displayName: '办公文档',
-  description: '创建、检查和定点编辑真实 Word(.docx) 与 Excel(.xlsx) 文件。办公写作/排版优先读取 aether-office skill；已有 read_file 读取能力保留。inspect 返回真实正文/表格摘要、warnings 和完整字节 expectedHash；create 必须传 expectedHash="missing"，不覆盖已有文件；edit 必须使用同文件最近一次 inspect/read_file/create/edit 返回的 sha256 版本。Word 新建用 markdown（标题/列表/表格），编辑用唯一 oldText/newText；Excel 新建用 workbook，编辑用 sheet/cell/value。公式值用 {formula:"SUM(B2:B4)"}，禁止以普通字符串冒充已计算结果。内部生成、结构校验、版本检查完成后才原子发布，并记录真实改动及撤回快照；结构检查不等于视觉排版或公式重算验证。只支持 docx/xlsx，不生成伪装扩展名文件，不需要 Python、shell 或 pip。',
+  description: '创建、检查和定点编辑真实 Word(.docx) 与 Excel(.xlsx) 文件。办公写作/排版优先读取 aether-office skill；已有 read_file 读取能力保留。inspect 返回真实正文/表格预览、完整 warnings 和字节 expectedHash；按 contentPage.nextOffset 继续时传 contentOffset 与同文件 expectedHash。分页仅覆盖已提取预览：Excel最多2000单元格、单格600字符，Word仅主文档文字，不能声称全文/视觉完整。create 必须传 expectedHash="missing"，不覆盖已有文件；edit/append_sheets 必须复用同文件最近一次工具返回的 sha256。Word 新建用 markdown，编辑用唯一 oldText/newText；Excel 新建用 workbook，定点修改已有表用 sheet/cell/value。Excel 分批添加新表用 append_sheets + workbook.sheets（每次1-4张，建议一张），保留旧表与图表/图片部件，禁止为加表删除重建或整包重发；旧公式缓存保留但未重算，不能当最新结果。普通单元格新增行可分批edit，不自动扩展结构化表/图表/公式范围。公式值用 {formula:"SUM(B2:B4)"}。内部结构校验、版本检查后原子发布，记录改动及撤回快照；结构检查不等于视觉排版或公式重算验证。只支持 docx/xlsx，不需要 Python、shell 或 pip。',
   parameters: {
     type: 'object', additionalProperties: false,
     properties: {
-      operation: { type: 'string', enum: ['inspect', 'create', 'edit'] },
+      operation: { type: 'string', enum: ['inspect', 'create', 'edit', 'append_sheets'] },
       path: { type: 'string', minLength: 1, maxLength: 4096, description: '当前工作区中的 .docx 或 .xlsx 目标路径。' },
-      expectedHash: { type: 'string', pattern: '^(missing|sha256:[a-f0-9]{64})$', description: 'create 必须为 missing；edit 必须复用同文件最近一次工具返回的 sha256；inspect 无需此参数。' },
+      expectedHash: { type: 'string', pattern: '^(missing|sha256:[a-f0-9]{64})$', description: 'create 必须为 missing；edit/append_sheets 必须复用同文件最近一次工具返回的 sha256；inspect 首次可省略，contentOffset>0时必须传同文件上一页的 sha256，防止混读不同版本。' },
+      contentOffset: { type: 'integer', minimum: 0, maximum: maxContentOffset, description: '仅 inspect：使用上页 contentPage.nextOffset（UTF-16字符位置）；只分页检查预览，不代表完整文档。' },
+      contentLimit: { type: 'integer', minimum: 2, maximum: 32000, description: '仅 inspect：本页预览字符上限，实际会按工具输出预算进一步缩短。' },
       markdown: { type: 'string', minLength: 1, maxLength: 300000, description: '仅 Word create 使用，支持标题、正文、列表、表格。' },
       title: { type: 'string', maxLength: 256, description: '可选的独立可见标题，同时写入文档属性；避免与 Markdown 首标题重复。' }, author: { type: 'string', maxLength: 200 },
-      workbook: { type: 'object', additionalProperties: false, properties: { sheets: { type: 'array', minItems: 1, maxItems: 12,
+      workbook: { type: 'object', additionalProperties: false, description: 'Excel create 或 append_sheets 的新增表内容。append_sheets 每次最多4张（建议一张），不重复提交已存在的表。', properties: { sheets: { type: 'array', minItems: 1, maxItems: 12,
         items: { type: 'object', additionalProperties: false, properties: {
           name: { type: 'string', minLength: 1, maxLength: 31 },
           columns: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'object', additionalProperties: false, properties: {
@@ -130,15 +133,23 @@ export const officeDocumentTool: Tool = {
   // This mixed read/write implementation must remain trusted serial in the
   // registry. A model-supplied operation never changes its scheduling authority.
   async execute(raw: unknown, ctx: AgentContext): Promise<ToolResult> {
+    const outputLimit = getToolOutputLimit(ctx.toolProfile)
+    const failure = (code: string, message: string, metadata: Record<string, unknown> = {}) => officeFailure(code, message, metadata, outputLimit)
+    const outputFailure = (result: { code: string; requiredChars?: number }, inspection: Inspection) => failure(result.code,
+      result.code === 'OFFICE_INVALID_CONTENT_OFFSET' ? 'Use a valid contentPage.nextOffset from the same file version; the offset is outside the preview or splits a Unicode character.'
+        : 'The output budget cannot hold the complete path, version, summary, warnings and a progressing preview page. Increase TOOL_OUTPUT_MAX_CHARS; no document bytes were published.',
+      { requiredOutputChars: result.requiredChars, outputLimit, warnings: inspection.warnings })
     if (!boundedInput(raw)) return failure('OFFICE_INPUT_TOO_LARGE', 'Office arguments must fit within 2 MiB of text, 220000 values and bounded nesting.')
     const parsed = argumentsSchema.safeParse(raw)
     if (!parsed.success) return failure('OFFICE_INVALID_ARGUMENTS', parsed.error.issues.slice(0, 5).map(issue => `${issue.path.join('.') || 'arguments'}: ${issue.message}`).join('; '))
     const args: Arguments = parsed.data
+    if (args.operation === 'inspect' && (args.contentOffset ?? 0) > 0 && !args.expectedHash) return failure('OFFICE_INSPECT_VERSION_REQUIRED', 'Continue inspection with the previous page expectedHash so pages cannot mix file versions.')
     const extension = path.extname(args.path).toLowerCase()
     if (extension !== '.docx' && extension !== '.xlsx') return failure('OFFICE_UNSUPPORTED_FORMAT', 'Only real .docx and .xlsx files are supported. Existing read_file still reads other supported office formats.')
     const format = extension === '.docx' ? 'docx' : 'xlsx'
     if (args.operation === 'create' && (format === 'docx' ? !args.markdown || args.workbook !== undefined : !args.workbook || args.markdown !== undefined || args.title !== undefined || args.author !== undefined)) return failure('OFFICE_INVALID_ARGUMENTS', 'Word creation requires markdown; Excel creation requires workbook. Do not mix the two inputs.')
     if (args.operation === 'edit' && !args.edits.every(edit => format === 'docx' ? 'oldText' in edit : 'cell' in edit)) return failure('OFFICE_INVALID_ARGUMENTS', 'Word edits require oldText/newText; Excel edits require sheet/cell/value.')
+    if (args.operation === 'append_sheets' && format !== 'xlsx') return failure('OFFICE_INVALID_ARGUMENTS', 'append_sheets only adds new worksheets to an existing .xlsx file.')
     let published = false
     try {
       throwIfAborted(ctx.signal)
@@ -149,30 +160,39 @@ export const officeDocumentTool: Tool = {
         const original = readBoundedVersion(canonical)
         if (args.operation === 'inspect') {
           if (!original.content) return failure('OFFICE_FILE_MISSING', 'The document does not exist. Use create with expectedHash="missing" for a new document.')
+          if (args.expectedHash && args.expectedHash !== original.hash) return failure('OFFICE_VERSION_CONFLICT', 'The document changed between inspection pages. Restart at contentOffset=0 without the old hash.', { expectedHash: args.expectedHash, actualHash: original.hash })
           const inspection = await inspect(format, original.content)
           throwIfAborted(ctx.signal)
           workspaceManager.resolveSafePath(ctx, canonical)
           if (!samePath(canonicalFilePathSync(workspaceManager.resolveSafePath(ctx, args.path)), canonical) || readBoundedVersion(canonical).hash !== original.hash) return failure('OFFICE_VERSION_CONFLICT', 'The file changed during inspection. Inspect it again to obtain matching content and expectedHash.')
-          const result = receipt(canonical, original.hash, original.content.length, inspection, true)
-          return { success: true, output: JSON.stringify(result), metadata: { path: canonical, expectedHash: original.hash, format, sizeBytes: original.content.length, fileMutationApplied: false } }
+          const result = officeReceipt(canonical, original.hash, original.content.length, inspection, outputLimit, { offset: args.contentOffset, limit: args.contentLimit })
+          if (!result.ok) return outputFailure(result, inspection)
+          return { success: true, output: result.output, metadata: { path: canonical, expectedHash: original.hash, format, sizeBytes: original.content.length, fileMutationApplied: false, contentTruncated: result.contentTruncated } }
         }
         if (original.hash !== args.expectedHash) return failure('OFFICE_VERSION_CONFLICT', 'The destination changed or already exists. Inspect the current file before editing; generated bytes were not published.', { expectedHash: args.expectedHash, actualHash: original.hash })
-        if (args.operation === 'edit' && !original.content) return failure('OFFICE_FILE_MISSING', 'The document does not exist; create requires expectedHash="missing".')
+        if (args.operation !== 'create' && !original.content) return failure('OFFICE_FILE_MISSING', 'The document does not exist; create requires expectedHash="missing".')
         let generated: Buffer
         try {
           generated = args.operation === 'create'
             ? format === 'docx' ? await createDocx({ markdown: args.markdown!, title: args.title, author: args.author }) : await createXlsx(args.workbook!)
+            : args.operation === 'append_sheets' ? await appendXlsxSheets(original.content!, args.workbook)
             : format === 'docx'
               ? await editDocx(original.content!, args.edits.filter((edit): edit is { oldText: string; newText: string } => 'oldText' in edit))
               : await editXlsx(original.content!, args.edits.filter((edit): edit is { sheet: string; cell: string; value: z.infer<typeof cell> } => 'cell' in edit))
         } catch (error) { return failure('OFFICE_FORMAT_FAILED', error instanceof Error ? error.message : String(error)) }
         if (!generated.length || generated.length > MAX_OFFICE_FILE_BYTES) return failure('OFFICE_FILE_TOO_LARGE', 'Generated office document is empty or exceeds 32 MiB; original bytes were preserved.')
         const inspection = await inspect(format, generated)
+        if (args.operation === 'append_sheets') inspection.warnings.unshift('已追加新工作表；原有工作表、图表/图片等部件内容保留。旧公式缓存未经重新计算，新增表可能改变依赖，不得把旧缓存当最新结果；已要求打开时完整重算。旧扩展属性/应用统计保留，可能需 Office 刷新。')
         throwIfAborted(ctx.signal)
-        if (original.content?.equals(generated)) {
+        const noChange = original.content?.equals(generated) === true
+        // Refuse before publication if mandatory identity or warning evidence cannot cross
+        // the model channel. A successful mutation must never lose its actionable receipt.
+        const preparedReceipt = officeReceipt(canonical, hashFileContent(generated), generated.length, inspection, outputLimit, undefined, noChange)
+        if (!preparedReceipt.ok) return outputFailure(preparedReceipt, inspection)
+        if (noChange) {
           workspaceManager.resolveSafePath(ctx, canonical)
           if (!samePath(canonicalFilePathSync(workspaceManager.resolveSafePath(ctx, args.path)), canonical) || readBoundedVersion(canonical).hash !== original.hash) return failure('OFFICE_VERSION_CONFLICT', 'The document changed during validation; inspect its current version before retrying.')
-          return { success: true, output: JSON.stringify({ ...receipt(canonical, original.hash, generated.length, inspection, false), noChange: true }), metadata: { path: canonical, expectedHash: original.hash, noChange: true, fileMutationApplied: false } }
+          return { success: true, output: preparedReceipt.output, metadata: { path: canonical, expectedHash: original.hash, noChange: true, fileMutationApplied: false } }
         }
         let snapshot: ChangeSnapshot | undefined, ownedStage: string | undefined
         try {
@@ -204,7 +224,10 @@ export const officeDocumentTool: Tool = {
           published = true
           const change = await commitWriteChange(ctx, args.path, canonical, snapshot)
           const expectedHash = change.newHash
-          return { success: true, change, output: JSON.stringify(receipt(canonical, String(expectedHash), generated.length, inspection, false)),
+          const committedReceipt = officeReceipt(canonical, String(expectedHash), generated.length, inspection, outputLimit)
+          // commitWriteChange returns a SHA of the same fixed width checked before publication.
+          if (!committedReceipt.ok) return failure('OFFICE_OUTPUT_BUDGET_TOO_SMALL', 'The document was published but its receipt exceeds the output budget; inspect the current version before further edits.', { fileMutationApplied: true, expectedHash, warnings: inspection.warnings })
+          return { success: true, change, output: committedReceipt.output,
             metadata: { path: canonical, expectedHash, oldHash: original.hash, newHash: expectedHash, sizeBytes: generated.length, format,
               fileMutationApplied: true, rollbackAvailable: (snapshot.exists ? typeof change.oldSnapshotRef === 'string' : true) && typeof change.newSnapshotRef === 'string',
               validation: 'structure-checked', visualValidation: 'not-performed', generatedHash: hashFileContent(generated) } }
@@ -224,5 +247,28 @@ export const officeDocumentTool: Tool = {
       if (error instanceof ChangeRecordingError) return failure('OFFICE_RECORD_FAILED', error.message, { fileMutationApplied: true, rollbackAvailable: false })
       return failure('OFFICE_FAILED', error instanceof Error ? error.message : String(error), { fileMutationApplied: published })
     }
+  },
+}
+
+export const officeInspectTool: Tool = {
+  name: 'office_inspect', displayName: '检查办公文档',
+  description: '只读检查工作区中的真实 Word(.docx) 与 Excel(.xlsx)，返回正文/各工作表的有界预览、公式与已保存错误诊断、warnings 和 expectedHash；不写文件、不记录改动。Excel预览在整个工作簿中最多2000单元格、单格600字符，已保存错误计数遍历全部工作表（包括预览之外），仅列出有限错误位置；不重算公式、不验证业务正确性或视觉排版，不能声称全文/整本工作簿内容已读完。按 contentPage.nextOffset 继续时传 contentOffset 与同文件 expectedHash；分页仅覆盖提取出的预览，不能绕过预览上限。Word仅主文档文字。只接受 path、expectedHash、contentOffset、contentLimit；编辑请使用获授权的 office_document。',
+  parameters: {
+    type: 'object', additionalProperties: false,
+    properties: {
+      path: { type: 'string', minLength: 1, maxLength: 4096, description: '当前工作区中的 .docx 或 .xlsx 文件路径。' },
+      expectedHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$', description: '首次可省略；分页时必须复用同文件上一页返回的 sha256，防止混读不同版本。' },
+      contentOffset: { type: 'integer', minimum: 0, maximum: maxContentOffset, description: '上页 contentPage.nextOffset（UTF-16字符位置），仅覆盖已提取预览。' },
+      contentLimit: { type: 'integer', minimum: 2, maximum: 32000, description: '本页预览字符上限，仍受工具输出预算限制。' },
+    }, required: ['path'],
+  },
+  async execute(raw: unknown, ctx: AgentContext): Promise<ToolResult> {
+    const outputLimit = getToolOutputLimit(ctx.toolProfile)
+    if (!boundedInput(raw)) return officeFailure('OFFICE_INPUT_TOO_LARGE', 'Office arguments must fit within 2 MiB of text, 220000 values and bounded nesting.', {}, outputLimit)
+    const parsed = readonlyInspectArguments.safeParse(raw)
+    if (!parsed.success) return officeFailure('OFFICE_INVALID_ARGUMENTS', parsed.error.issues.slice(0, 5).map(issue => `${issue.path.join('.') || 'arguments'}: ${issue.message}`).join('; '), {}, outputLimit)
+    // Parse a strict read-only contract before fixing the operation. The shared
+    // inspect branch retains the same byte, workspace, version and paging fences.
+    return officeDocumentTool.execute({ ...parsed.data, operation: 'inspect' }, ctx)
   },
 }

@@ -6,6 +6,7 @@ import type { AgentContext } from '../../../core/agent-context/types.js'
 import { JSONLConversationHistory } from '../../../storage/conversation/jsonl-history.js'
 import { searchHistoryTool } from '../search-history-tool.js'
 import * as database from '../../../storage/sqlite/db.js'
+import { TOOL_FILE_EVIDENCE_KEY } from '../../../core/utils/tool-evidence.js'
 
 let fixture: string
 let history: JSONLConversationHistory
@@ -29,6 +30,29 @@ afterEach(async () => {
   fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 })
 })
 const context = () => ({ ...scope, history } as unknown as AgentContext)
+
+it.each([
+  { toolName: 'extension_image', capturedHash: undefined, trusted: false },
+  { toolName: 'read_file', capturedHash: undefined, trusted: false },
+  { toolName: 'read_file', capturedHash: 'b', trusted: false },
+  { toolName: 'extension_image', capturedHash: 'a', trusted: false },
+  { toolName: 'read_file', capturedHash: 'a', trusted: true },
+])('preserves file-version provenance through archive recovery (%j)', async ({ toolName, capturedHash, trusted }) => {
+  const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII='
+  const claimedVersion = { path: 'D:/unverified/report.png', expectedHash: 'sha256:' + 'a'.repeat(64), encoding: 'binary-or-non-utf8', lineEnding: 'none', utf8Bom: false }
+  await history.append({ id: 'extension-image', role: 'tool', toolName, toolCallId: 'extension-call',
+    content: JSON.stringify({ dataUrl, fileVersion: claimedVersion }),
+    metadata: capturedHash ? { [TOOL_FILE_EVIDENCE_KEY]: { path: claimedVersion.path, expectedHash: 'sha256:' + capturedHash.repeat(64) } } : undefined }, scope)
+  const recovered = await searchHistoryTool.execute({ messageId: 'extension-image', imageIndex: 0 }, context())
+  expect(recovered.success).toBe(true)
+  const output = JSON.parse(recovered.output)
+  expect(output.dataUrl).toBe(dataUrl)
+  expect(output.fileVersion).toEqual(trusted ? claimedVersion : undefined)
+  expect(output.archivedFileVersionDeclaration).toEqual(trusted ? undefined : claimedVersion)
+  expect(output.description).toContain(trusted ? 'fileVersion matches the captured builtin read_file receipt'
+    : 'archivedFileVersionDeclaration is an unverified historical declaration, not a trusted file receipt')
+  expect(recovered.metadata?.[TOOL_FILE_EVIDENCE_KEY]).toBeUndefined()
+})
 
 it('finds exact old evidence after compaction and restart, without exposing another session or tenant', async () => {
   await history.append({ id: 'early-decision', role: 'user', content: 'Settlement reference: amber-7319; preserve integer cents.', metadata: { turnId: 'early-turn' } }, scope)

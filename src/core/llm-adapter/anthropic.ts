@@ -4,10 +4,11 @@ import { observeRequest, observeStreamRequest, anthropicUsage, anthropicUsageSna
 import Anthropic from '@anthropic-ai/sdk'
 import type { Fetch } from '@anthropic-ai/sdk/core'
 import { preserveAnthropicStreamErrors } from './anthropic-stream-error.js'
-import type { LLMAdapter, LLMResponse, LLMAdapterOptions, LLMStreamChunk } from './types.js'
+import type { LLMAdapter, LLMResponse, LLMAdapterOptions, LLMStreamChunk, LLMStreamDiagnostics } from './types.js'
 import type { Message, Tool } from '../agent-context/index.js'
 import { estimateTokens } from '../utils/tokens.js'
 import { modelMessageContent } from '../utils/model-context.js'
+import { imageToolPayload, imageVersionDescription } from '../utils/multimodal-context.js'
 import { isFailedBrowserMessage } from '../utils/browser-failure.js'
 
 // SDK 0.20 retains anonymous abort listeners after successful requests. A removable
@@ -121,9 +122,13 @@ function normalizeOutputTokenLimit(value: number | undefined, fallback: number, 
 function messageToAnthropic(
   msg: Message,
   validToolUseIds?: Set<string>,
-  validToolResultIds?: Set<string>
+  validToolResultIds?: Set<string>,
+  supportsVision = true,
 ): AnthropicMessageParam | null {
   msg = { ...msg, content: modelMessageContent(msg) }
+  if (!supportsVision && Array.isArray(msg.content)) msg.content = msg.content.map(part =>
+    part?.type === 'image' || part?.type === 'image_url'
+      ? { type: 'text', text: 'Image pixels were not sent: vision is disabled for the selected model.' } : part)
   // ── tool result → Anthropic user/tool_result ─────────────────────────────
   if (msg.role === 'tool') {
     // Drop orphaned tool_result blocks (no matching tool_use was emitted)
@@ -140,10 +145,10 @@ function messageToAnthropic(
       let parsed: any = null
       try {
         parsed = JSON.parse(String(msg.content))
-        if (parsed.dataUrl) {
+        if (imageToolPayload(String(msg.content))) {
           // 如果是 smart_read 的图片 JSON 结果，转换成多模态格式
-          toolContent = [
-            { type: 'text', text: `图片文件 ${parsed.filename} 已读取：${typeof parsed.description === 'string' ? '\n' + parsed.description.slice(0, 1024) : ''}` },
+          toolContent = supportsVision ? [
+            { type: 'text', text: `图片文件 ${parsed.filename} 已读取：${typeof parsed.description === 'string' ? '\n' + parsed.description.slice(0, 1024) : ''}${imageVersionDescription(parsed.fileVersion)}` },
             { 
               type: 'image', 
               source: { 
@@ -152,11 +157,13 @@ function messageToAnthropic(
                 data: parsed.dataUrl.replace(/^data:.*;base64,/, '') 
               } 
             }
-          ]
+          ] : `Image pixels were not sent: vision is disabled for the selected model.${imageVersionDescription(parsed.fileVersion)}`
         } else if (parsed.dataUrlStripped) {
           toolContent = parsed.hasDataUrl === false
             ? `图片文件 ${parsed.filename || 'image'} 已读取，但图像内容未写入上下文。需要像素级检查时请改用 OCR 或较小图片。`
-            : `图片文件 ${parsed.filename || 'image'} 已读取，图像内容已通过视觉通道提供。`
+            : `图片文件 ${parsed.filename || 'image'} 没有保留图像内容；无法确认此前是否发送。需要像素检查时重新读取。`
+        } else if (typeof parsed?.dataUrl === 'string') {
+          toolContent = 'Image pixels were not sent: the native image payload is invalid or exceeds the byte limit.'
         } else {
           toolContent = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
         }
@@ -284,7 +291,7 @@ export class AnthropicAdapter implements LLMAdapter {
   readonly provider = 'anthropic'
   private client: Anthropic
 
-  constructor(readonly model: string = 'claude-3-5-sonnet-20241022', apiKey?: string, baseURL?: string, defaultHeaders?: Record<string, string>) {
+  constructor(readonly model: string = 'claude-3-5-sonnet-20241022', apiKey?: string, baseURL?: string, defaultHeaders?: Record<string, string>, private readonly supportsVision = true) {
     const hasTokenAuth = defaultHeaders && 'X-Access-Token' in defaultHeaders
     this.client = new Anthropic({
       apiKey: apiKey || process.env.ANTHROPIC_API_KEY,
@@ -329,7 +336,7 @@ export class AnthropicAdapter implements LLMAdapter {
 
     const anthropicMessages = mergeAdjacentRoles(
       messages
-        .map((m) => messageToAnthropic(m, validToolUseIds, validToolResultIds))
+        .map((m) => messageToAnthropic(m, validToolUseIds, validToolResultIds, this.supportsVision))
         .filter((m): m is AnthropicMessageParam => m !== null),
     )
 
@@ -469,7 +476,7 @@ export class AnthropicAdapter implements LLMAdapter {
     }
     const anthropicMessages = mergeAdjacentRoles(
       messages
-        .map((m) => messageToAnthropic(m, validToolUseIds, validToolResultIds))
+        .map((m) => messageToAnthropic(m, validToolUseIds, validToolResultIds, this.supportsVision))
         .filter((m): m is AnthropicMessageParam => m !== null),
     )
 
@@ -521,6 +528,22 @@ export class AnthropicAdapter implements LLMAdapter {
       tool?: { id: string; name: string; input?: unknown; args: string; emitted: boolean }
     }
     const blocks = new Map<number, BlockState>()
+    const streamDiagnostics: LLMStreamDiagnostics = {
+      schemaVersion: 1, protocol: 'anthropic', rawStopReason: null,
+      eventTypes: {}, blockTypes: {}, deltaTypes: {}, finalBlockTypes: {},
+    }
+    // Protocol labels can also be supplied by an untrusted gateway. Store only
+    // known labels, folding every unknown value into one bounded counter.
+    const countType = (counts: Record<string, number>, value: string, known: readonly string[]) => {
+      const key = known.includes(value) ? value : 'other'
+      counts[key] = Math.min(Number.MAX_SAFE_INTEGER, (counts[key] ?? 0) + 1)
+    }
+    const eventTypes = ['message_start', 'message_delta', 'message_stop', 'content_block_start', 'content_block_delta', 'content_block_stop', 'ping', 'error']
+    const blockTypes = ['text', 'tool_use', 'thinking', 'reasoning', 'reasoning_content', 'redacted_thinking', 'custom_reasoning']
+    const deltaTypes = ['text_delta', 'input_json_delta', 'thinking_delta', 'reasoning_delta', 'reasoning_content_delta', 'signature_delta', 'custom_reasoning_delta']
+    const customThinkingKind = options?.responseThinkingField?.replace(/_delta$/, '')
+    const countBlock = (counts: Record<string, number>, type: string) => countType(counts,
+      type === customThinkingKind ? 'custom_reasoning' : type, blockTypes)
     const startSnapshots = new WeakMap<StreamEvent, StreamEvent>()
     // SDK 0.20 mutates block-start objects while accumulating later deltas.
     // Capture them synchronously before its async iterator can see the final text.
@@ -609,6 +632,16 @@ export class AnthropicAdapter implements LLMAdapter {
       event => event.type === 'message_stop')
       for await (const originalEvent of observed) {
         const event = startSnapshots.get(originalEvent) ?? originalEvent
+        countType(streamDiagnostics.eventTypes, event.type, eventTypes)
+        if (event.type === 'message_start') {
+          for (const block of event.message?.content ?? []) countBlock(streamDiagnostics.blockTypes, block.type)
+        } else if (event.type === 'content_block_start' && event.content_block) {
+          countBlock(streamDiagnostics.blockTypes, event.content_block.type)
+        } else if (event.type === 'content_block_delta' && event.delta) {
+          const type = event.delta.type
+          countType(streamDiagnostics.deltaTypes,
+            type.replace(/_delta$/, '') === customThinkingKind ? 'custom_reasoning_delta' : type, deltaTypes)
+        }
         const rawUsage = event.type === 'message_start' ? event.message?.usage : event.usage
         if (rawUsage && usageSnapshot) {
           const usage = anthropicUsageFromSnapshot(usageSnapshot)!
@@ -646,6 +679,10 @@ export class AnthropicAdapter implements LLMAdapter {
 
       const finalMessage = await stream!.finalMessage()
       const reason = finalMessage.stop_reason
+      streamDiagnostics.rawStopReason = reason === null ? null
+        : ['end_turn', 'stop_sequence', 'tool_use', 'max_tokens', 'refusal'].includes(reason)
+          ? reason as Exclude<LLMStreamDiagnostics['rawStopReason'], 'other' | null> : 'other'
+      for (const block of finalMessage.content ?? []) countBlock(streamDiagnostics.finalBlockTypes, block.type)
       // A missing/unknown terminal reason must not turn a truncated stream into success.
       if (!reason || !['end_turn', 'stop_sequence', 'tool_use', 'max_tokens', 'refusal'].includes(reason)) {
         throw Object.assign(new Error(`Anthropic response has no supported completion reason (${reason ?? 'missing'})`), {
@@ -659,6 +696,7 @@ export class AnthropicAdapter implements LLMAdapter {
       requestSignal.dispose()
       yield {
         done: true,
+        streamDiagnostics,
         finishReason: reason === 'max_tokens' ? 'length' : reason === 'tool_use' ? 'tool_calls' : 'stop',
         ...(usageSnapshot?.input_tokens !== undefined ? { promptTokens: usage!.promptTokens } : {}),
         ...(usageSnapshot?.output_tokens !== undefined ? { completionTokens: usage!.completionTokens } : {}),

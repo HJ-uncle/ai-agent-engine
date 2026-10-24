@@ -4,6 +4,7 @@ import { randomUUID, createHash } from 'node:crypto'
 import { acquireResourceLease, acquireResourceLeaseAsync } from './binding-lease.js'
 import type { AgentContext } from '../core/agent-context/index.js'
 import { getSecurityMode } from '../security/policy-engine.js'
+import { canonicalFilePathSync } from '../shared/file-version.js'
 
 type CtxLike = Pick<AgentContext, 'tenantId' | 'sessionId' | 'workspacePaths' | 'cwd' | 'projectRoot' | 'scratchDir'>
 type Bindings = Map<string, string> & { epochs: Map<string, string> }
@@ -104,23 +105,30 @@ export class WorkspaceManager {
   private validateBoundDirectory(ctx: CtxLike, bound: string, bindings: Map<string, string>): string {
     if (!fs.existsSync(bound) || !fs.statSync(bound).isDirectory()) throw new Error('Bound workspace is no longer available')
     const canonical = fs.realpathSync(bound)
-    if (!this.allowedRoots.some(base => this.isContained(this.realpathIfExists(base), canonical))) {
+    const actual = canonicalFilePathSync(bound)
+    // A desktop-owned, no-auth engine may bind an operator-selected local
+    // project outside its private scratch root.  `bindSnapshot` already uses
+    // the same exception when accepting the selection; applying it here keeps
+    // persisted bindings valid after restart instead of rejecting the exact
+    // project that was just selected.
+    const allowDesktopSelection = process.env.AETHER_DESKTOP_OWNED === '1' && !this.isAuthenticated()
+    if (!allowDesktopSelection && !this.allowedRoots.some(base => this.isContained(canonicalFilePathSync(base), actual))) {
       throw new Error('Bound workspace is outside the engine allowed workspace roots')
     }
     if (this.isAuthenticated()) {
       const privateRoot = this.canonicalPrivateRoot()
-      const tenant = this.isContained(privateRoot, canonical)
-        ? path.relative(privateRoot, canonical).split(path.sep).filter(Boolean)[0]
+      const tenant = this.isContained(privateRoot, actual)
+        ? path.relative(privateRoot, actual).split(path.sep).filter(Boolean)[0]
         : undefined
       if (tenant && tenant !== ctx.tenantId) throw new Error('Bound workspace belongs to another tenant')
-      if (this.isContained(privateRoot, canonical) && !tenant) throw new Error('The private workspace root cannot be bound')
+      if (this.isContained(privateRoot, actual) && !tenant) throw new Error('The private workspace root cannot be bound')
     }
     if (this.isAuthenticated()) {
       for (const [key, owned] of bindings) {
         if (key.split('\u0000')[0] === ctx.tenantId) continue
         if (!fs.existsSync(owned) || !fs.statSync(owned).isDirectory()) continue
-        const other = fs.realpathSync(owned)
-        if (this.isContained(other, canonical) || this.isContained(canonical, other)) {
+        const other = canonicalFilePathSync(owned)
+        if (this.isContained(other, actual) || this.isContained(actual, other)) {
           throw new Error('Bound workspace overlaps a binding belonging to another tenant')
         }
       }
@@ -131,7 +139,7 @@ export class WorkspaceManager {
   private isAuthenticated(): boolean { return process.env.AUTH_ENABLED !== 'false' }
 
   private canonicalPrivateRoot(): string {
-    return fs.existsSync(this.root) ? this.realpathIfExists(this.root) : path.resolve(this.root)
+    return canonicalFilePathSync(this.root)
   }
 
   /** IDs are path components, never user supplied paths. Keep this strict on
@@ -204,16 +212,46 @@ export class WorkspaceManager {
   }
 
   /** Git recovery may release only the exact interrupted selection lease that
-   * its native-audited repository owner recorded before any child dispatch. */
-  recoverInterruptedGitBinding(ctx: CtxLike, expected: WorkspaceBindingSnapshot, resource:{file:string;generation:string;pid:number;root:string;epoch:string}, originalPid:number): void {
+   * its native-audited repository owner recorded before any child dispatch.
+   *
+   * A repository lock can outlive an engine process or be recovered by a
+   * different session that happens to share the same physical repository.
+   * In those cases the binding receipt is useful evidence, but it is not a
+   * release certificate for this session.  Keep the external/stale binding
+   * lease in place and let its owner (or a later explicit recovery) handle it.
+   */
+  recoverInterruptedGitBinding(ctx: CtxLike, expected: WorkspaceBindingSnapshot, resource:{file:string;generation:string;pid:number;root:string;epoch:string}, originalPid:number): boolean {
     this.assertContext(ctx)
     const file=this.sessionLeaseFile(ctx),snapshot=this.getBindingSnapshot(ctx)
-    if(resource.file!==file || resource.pid!==originalPid || resource.root!==expected.root || resource.epoch!==expected.epoch || snapshot.root!==expected.root || snapshot.epoch!==expected.epoch)throw new Error('Interrupted Git binding lease does not match this session')
+    const samePath=(left:string,right:string):boolean=>{
+      if(!path.isAbsolute(left) || !path.isAbsolute(right)) return false
+      const a=path.resolve(left),b=path.resolve(right)
+      return process.platform==='win32' ? a.toLowerCase()===b.toLowerCase() : a===b
+    }
+    // A mismatch identifies a stale lease from another session, an older
+    // binding selection, or a newer engine owner.  It is safe to retain it,
+    // but unsafe to remove it just because the repository lease was verified.
+    if(!samePath(resource.file,file) || resource.pid!==originalPid || resource.root!==expected.root || resource.epoch!==expected.epoch || snapshot.root!==expected.root || snapshot.epoch!==expected.epoch) return false
     let held: {pid?:number;generation?:string}
-    try {if(fs.lstatSync(file).isSymbolicLink() || fs.statSync(file).size>16*1024)throw new Error('Binding lease is untrusted');held=JSON.parse(fs.readFileSync(file,'utf8')) as typeof held}
-    catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return;throw error}
-    if(held.pid!==resource.pid || held.generation!==resource.generation)throw new Error('Binding lease generation changed; recovery refused')
-    fs.renameSync(file,`${file}.recovered-${resource.generation}.json`)
+    try {
+      const stat=fs.lstatSync(file)
+      if(stat.isSymbolicLink() || stat.size>16*1024) return false
+      held=JSON.parse(fs.readFileSync(file,'utf8')) as typeof held
+    } catch(error){
+      if((error as NodeJS.ErrnoException).code==='ENOENT') return false
+      // The file is not ours to repair when its metadata cannot be trusted.
+      // Keep it for explicit operator investigation instead of blocking the
+      // verified repository recovery with a second error.
+      return false
+    }
+    if(held.pid!==resource.pid || held.generation!==resource.generation) return false
+    try {
+      fs.renameSync(file,`${file}.recovered-${resource.generation}.json`)
+      return true
+    } catch(error) {
+      if((error as NodeJS.ErrnoException).code==='ENOENT') return false
+      throw error
+    }
   }
 
   /** Automation follows an explicit project selection; scratch is not a selected project. */
@@ -234,7 +272,15 @@ export class WorkspaceManager {
     return [...new Set(paths)]
   }
 
-  /** Bind a session only inside operator-declared engine workspace roots. */
+  /**
+   * Bind a session to an explicitly selected project.
+   *
+   * The embedded desktop engine is a single-user, instance-token protected
+   * process.  In that mode the directory picker is the operator grant, so a
+   * project selected in Aether Code/Work must not be rejected merely because
+   * it lives outside the engine's private scratch directory.  Remote and
+   * authenticated engines continue to require their declared allow-list.
+   */
   bind(ctx: CtxLike, workspaceRoot: string): string {
     return this.bindSnapshot(ctx, workspaceRoot).root
   }
@@ -246,7 +292,49 @@ export class WorkspaceManager {
       const state = acquireResourceLease(`${this.bindingsFile()}.write.lock`, 'workspace binding state')
       try {
         const bindings = this.readBindings()
-        const canonical = this.validateSelectedDirectory(ctx.tenantId, workspaceRoot, bindings)
+        const allowDesktopSelection = process.env.AETHER_DESKTOP_OWNED === '1' && !this.isAuthenticated()
+        const canonical = this.validateSelectedDirectory(
+          ctx.tenantId,
+          workspaceRoot,
+          bindings,
+          !allowDesktopSelection
+        )
+        bindings.set(this.bindingKey(ctx), canonical)
+        const epoch = randomUUID()
+        bindings.epochs.set(this.bindingKey(ctx), epoch)
+        this.persistBindings(bindings)
+        return Object.freeze({ root: canonical, epoch })
+      } finally { state.release() }
+    } finally { session.release() }
+  }
+
+  /**
+   * Bind a session while queuing behind an in-flight bind for the same
+   * session. Work mode can mount the workspace and Git panels together; both
+   * issue the bind request during their first render. The synchronous API
+   * intentionally keeps its fail-fast behaviour for callers that already
+   * own the lifecycle lock, while HTTP callers use this variant so a
+   * duplicate request waits for the first one to finish.
+   */
+  async bindSnapshotAsync(ctx: CtxLike, workspaceRoot: string, waitMs = 30_000): Promise<Readonly<WorkspaceBindingSnapshot>> {
+    this.assertContext(ctx)
+    const session = await acquireResourceLeaseAsync(
+      this.sessionLeaseFile(ctx),
+      'workspace session',
+      { tenantId: ctx.tenantId!, sessionId: ctx.sessionId! },
+      waitMs
+    )
+    try {
+      const state = await acquireResourceLeaseAsync(`${this.bindingsFile()}.write.lock`, 'workspace binding state', undefined, waitMs)
+      try {
+        const bindings = this.readBindings()
+        const allowDesktopSelection = process.env.AETHER_DESKTOP_OWNED === '1' && !this.isAuthenticated()
+        const canonical = this.validateSelectedDirectory(
+          ctx.tenantId,
+          workspaceRoot,
+          bindings,
+          !allowDesktopSelection
+        )
         bindings.set(this.bindingKey(ctx), canonical)
         const epoch = randomUUID()
         bindings.epochs.set(this.bindingKey(ctx), epoch)
@@ -269,14 +357,12 @@ export class WorkspaceManager {
     if (typeof workspaceRoot !== 'string' || workspaceRoot.length > 4096 || /[\u0000-\u001f\u007f]/.test(workspaceRoot)) throw new Error('workspaceRoot must be a valid server path')
     if (!workspaceRoot.trim() || !path.isAbsolute(workspaceRoot)) throw new Error('workspaceRoot must be an absolute server path')
     const resolved = path.resolve(workspaceRoot)
-    const allowed = this.allowedRoots.some(base => {
-      const relative = path.relative(base, resolved)
-      return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep))
-    })
+    const actual = canonicalFilePathSync(resolved)
+    const allowed = this.allowedRoots.some(base => this.hasAllowedPathSpelling(base, resolved, canonicalFilePathSync(base), actual))
     if (restrictToAllowedRoots && !allowed) throw new Error('workspaceRoot is outside the engine allowed workspace roots')
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) throw new Error('workspaceRoot must be an existing directory')
     const canonical = fs.realpathSync(resolved)
-    const canonicalAllowed = this.allowedRoots.some(base => this.isContained(this.realpathIfExists(base), canonical))
+    const canonicalAllowed = this.allowedRoots.some(base => this.isContained(canonicalFilePathSync(base), actual))
     if (restrictToAllowedRoots && !canonicalAllowed) throw new Error('workspaceRoot resolves outside the engine allowed workspace roots')
     // A configured root is an operator allow-list, not a tenant sharing grant.
     // In authenticated deployments do not let one tenant bind another tenant's
@@ -287,8 +373,8 @@ export class WorkspaceManager {
       // tenant must never bind another tenant's private scratch directory,
       // even before that directory has been explicitly bound.
       const privateRoot = this.canonicalPrivateRoot()
-      const isPrivate = this.isContained(privateRoot, canonical)
-      const privateParts = isPrivate ? path.relative(privateRoot, canonical).split(path.sep).filter(Boolean) : []
+      const isPrivate = this.isContained(privateRoot, actual)
+      const privateParts = isPrivate ? path.relative(privateRoot, actual).split(path.sep).filter(Boolean) : []
       // Only apply the tenant/session partition rule to paths inside the
       // engine's private root. Operator-allowed project roots may legitimately
       // live beside that private root and are protected by persisted ownership below.
@@ -298,7 +384,7 @@ export class WorkspaceManager {
       }
       const owner = [...bindings.entries()].find(([key, owned]) =>
         key.split('\u0000')[0] !== tenantId && fs.existsSync(owned) && fs.statSync(owned).isDirectory() &&
-        (this.isContained(fs.realpathSync(owned), canonical) || this.isContained(canonical, fs.realpathSync(owned))))
+        (this.isContained(canonicalFilePathSync(owned), actual) || this.isContained(actual, canonicalFilePathSync(owned))))
       if (owner) throw new Error('workspaceRoot is already bound to another tenant')
     }
     return canonical
@@ -322,16 +408,14 @@ export class WorkspaceManager {
     if (this.hasSymlinkComponent(this.root, scratch)) throw new Error('Workspace session root contains a symbolic link')
     const resolved = path.resolve(this.getWorkingDirectory(ctx), userPath)
     if (getSecurityMode(ctx.tenantId, ctx.sessionId) !== 'safe') return resolved
-    // Normalize before testing containment so absolute paths with '..' cannot bypass it.
+    // Writers recheck the canonical path after locking. Windows 8.3 and long
+    // names can denote the same root despite differing lexical prefixes. Keep
+    // missing suffixes when canonicalizing: their nearest existing ancestor
+    // alone must never grant access to adjacent, not-yet-created directories.
+    const actual = canonicalFilePathSync(resolved)
     const contained = this.getPaths(ctx).some(base => {
-      const lexical = this.isContained(path.resolve(base), resolved)
-      if (!lexical) return false
-      // Check the actual target when it exists, otherwise check the nearest
-      // existing parent. This catches junctions/symlinks while retaining the
-      // documented caveat that a concurrent rename can still race this check.
-      const actual = this.realpathIfExists(resolved)
-      const actualBase = this.realpathIfExists(base)
-      return this.isContained(actualBase, actual)
+      const actualBase = canonicalFilePathSync(base)
+      return this.hasAllowedPathSpelling(base, resolved, actualBase, actual) && this.isContained(actualBase, actual)
     })
     if (!contained) throw new Error(`Path "${userPath}" is outside any bound workspace`)
     return resolved
@@ -342,14 +426,13 @@ export class WorkspaceManager {
     return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep))
   }
 
-  private realpathIfExists(target: string): string {
-    let candidate = path.resolve(target)
-    while (!fs.existsSync(candidate)) {
-      const parent = path.dirname(candidate)
-      if (parent === candidate) return candidate
-      candidate = parent
-    }
-    try { return fs.realpathSync.native(candidate) } catch { return candidate }
+  private hasAllowedPathSpelling(base: string, target: string, actualBase: string, actual: string): boolean {
+    if (this.isContained(base, target) || this.isContained(actualBase, target)) return true
+    // An external link pointing inward is not an 8.3 alias. Returning that
+    // spelling could let an unlink/rename act on the external directory entry.
+    // Alias fallback therefore requires both real containment and a link-free
+    // path. Callers still check real containment for lexically accepted paths.
+    return this.isContained(actualBase, actual) && !this.hasSymlinkComponent(path.parse(target).root, target)
   }
 
   private hasSymlinkComponent(base: string, target: string): boolean {

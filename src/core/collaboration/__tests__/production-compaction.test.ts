@@ -152,7 +152,11 @@ describe.each(['jsonl', 'sqlite'] as const)('%s exact private compaction continu
     expect(await receipt(accepted.messageId)).toEqual(peerBefore)
     const messages = vi.mocked(llm.stream).mock.calls[0][0]
     expect(messages.find(message => message.id === userId)?.content).toBe(task)
-    expect(messages.find(message => message.id === 'huge-output-result')?.content).toBe('[tool result cleared]')
+    const cleared = String(messages.find(message => message.id === 'huge-output-result')?.content)
+    expect(cleared).toContain('[tool result cleared]')
+    expect(cleared).toContain('"messageId":"huge-output-result"')
+    expect(cleared).not.toContain('search_history')
+    expect(cleared.length).toBeLessThanOrEqual(2048)
     expect(await maintenanceCount()).toBe(1)
   })
 
@@ -271,6 +275,125 @@ describe.each(['jsonl', 'sqlite'] as const)('%s exact private compaction continu
 
 describe('JSONL durable private compaction recovery', () => {
   beforeAll(() => { backend = 'jsonl' })
+  it('micro-compacts 144 large tool results with bounded batch reads and durable receipts', async () => {
+    await seed(); const accepted = await mail('Unchanged peer evidence'); await consume()
+    const before = await identity(userId), peerBefore = await receipt(accepted.messageId)
+    const body = 'large browser evidence '.repeat(3000)
+    for (let index = 0; index < 144; index++) await addTool('batch-' + index, body)
+    const file = path.join(directory, 'sessions', scope.tenantId, scope.sessionId + '.jsonl')
+    const originalBytes = fs.statSync(file).size, open = fs.promises.open.bind(fs.promises)
+    let archiveReads = 0, archiveReadBytes = 0
+    const reader = vi.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+      const handle = await open(...args)
+      if (String(args[0]) !== file || !['r', 'r+'].includes(String(args[1]))) return handle
+      archiveReads++
+      return new Proxy(handle, { get(value, property) {
+        if (property === 'read') return async (...readArgs: unknown[]) => {
+          const result: { bytesRead: number } = await Reflect.apply(value.read, value, readArgs)
+          archiveReadBytes += result.bytesRead; return result
+        }
+        const method = Reflect.get(value, property); return typeof method === 'function' ? method.bind(value) : method
+      } })
+    })
+    const result = await maintain(() => ctx.history.microCompactToolResults!(ctx, { keepRecent: 0 }))
+    reader.mockRestore()
+    expect(result.cleared).toBe(144)
+    // This fails the former per-row full-prefix rescans without relying on a
+    // machine-specific wall-clock threshold. Two byte-bounded batches suffice.
+    expect(archiveReads).toBeGreaterThan(0); expect(archiveReads).toBeLessThanOrEqual(16)
+    expect(archiveReadBytes).toBeLessThan(originalBytes * 24)
+    const receipts = (await observer.execute('SELECT state,payload_json FROM collaboration_history_maintenance')).rows
+    expect(receipts).toHaveLength(2)
+    for (const row of receipts) {
+      expect(row.state).toBe('committed')
+      const payload = JSON.parse(String(row.payload_json))
+      expect(payload.plan.bytes).toBeLessThanOrEqual(8 * 1024 * 1024)
+      expect(payload.plan.encoded.trimEnd().split('\n').length).toBeLessThanOrEqual(128)
+    }
+    expect(await identity(userId)).toEqual(before); expect(await receipt(accepted.messageId)).toEqual(peerBefore)
+    const reopened = new JSONLConversationHistory(), activeRows = await reopened.getFullHistory(scope)
+    expect(activeRows.filter(message => message.role === 'tool' && message.content === '[tool result cleared]')).toHaveLength(144)
+    expect((await reopened.getArchive(scope)).messages.filter(message => message.role === 'tool').every(message => message.content === body)).toBe(true)
+    expect(await maintain(() => ctx.history.microCompactToolResults!(ctx, { keepRecent: 0 }))).toEqual({ cleared: 0, freedTokens: 0 })
+  }, 30000)
+
+  it.each(['reservation-rollback', 'reservation-ACK', 'final-ACK', 'partial-write'] as const)('recovers a multi-row micro-compaction batch after %s without duplicate updates', async kind => {
+    await seed(); const accepted = await mail('Preserved peer'); await consume()
+    const before = await identity(userId), peerBefore = await receipt(accepted.messageId)
+    const bodies = Array.from({ length: 3 }, (_, index) => `Original evidence ${index} `.repeat(2000))
+    for (let index = 0; index < bodies.length; index++) await addTool('recover-' + index, bodies[index])
+    const native = db.transaction.bind(db), open = fs.promises.open.bind(fs.promises)
+    let lost = false
+    const fault = kind === 'partial-write' ? vi.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+      const handle = await open(...args)
+      if (args[1] !== 'r+') return handle
+      return new Proxy(handle, { get(value, property) {
+        if (property === 'write') return async (buffer: Uint8Array, offset: number, length: number, position: number) => {
+          if (!lost) { lost = true; await value.write(buffer, offset, Math.floor(length / 2), position); throw new Error('batch write lost') }
+          return value.write(buffer, offset, length, position)
+        }
+        const method = Reflect.get(value, property); return typeof method === 'function' ? method.bind(value) : method
+      } })
+    }) : vi.spyOn(db, 'transaction').mockImplementation(async mode => {
+      const tx = await native(mode); let target = false
+      return new Proxy(tx, { get(value, property) {
+        if (property === 'execute') return async (statement: Parameters<Transaction['execute']>[0]) => {
+          const sql = typeof statement === 'string' ? statement : statement.sql
+          target ||= kind === 'final-ACK' ? sql.includes("UPDATE collaboration_history_maintenance SET state='committed'") : sql.includes('INSERT INTO collaboration_history_maintenance')
+          if (target && kind === 'reservation-rollback' && !lost) { lost = true; throw new Error('batch reservation rolled back') }
+          return value.execute(statement)
+        }
+        if (property === 'commit') return async () => { await value.commit(); if (target && !lost) { lost = true; throw new Error('batch ACK lost') } }
+        const method = Reflect.get(value, property); return typeof method === 'function' ? method.bind(value) : method
+      } })
+    })
+    await expect(maintain(() => ctx.history.microCompactToolResults!(ctx, { keepRecent: 0 }))).rejects.toThrow('batch')
+    expect(lost).toBe(true); fault.mockRestore()
+    if (kind === 'reservation-rollback') {
+      expect(await maintenanceCount()).toBe(0)
+      expect((await raw.getFullHistory(scope)).filter(message => message.role === 'tool').map(message => message.content)).toEqual(bodies)
+      await maintain(() => ctx.history.microCompactToolResults!(ctx, { keepRecent: 0 }))
+    }
+    const reopened = new JSONLConversationHistory()
+    await reopened.append({ id: 'after-batch', role: 'assistant', content: 'Continue', conversationId: turnId }, scope)
+    expect(await identity(userId)).toEqual(before); expect(await receipt(accepted.messageId)).toEqual(peerBefore)
+    expect(await maintenanceCount()).toBe(1)
+    expect((await observer.execute('SELECT state FROM collaboration_history_maintenance')).rows[0].state).toBe('committed')
+    expect((await reopened.getFullHistory(scope)).filter(message => message.role === 'tool').map(message => message.content)).toEqual(Array(3).fill('[tool result cleared]'))
+    expect((await reopened.getArchive(scope)).messages.filter(message => message.role === 'tool').map(message => message.content)).toEqual(bodies)
+    const rows = fs.readFileSync(path.join(directory, 'sessions', scope.tenantId, scope.sessionId + '.jsonl'), 'utf8').trimEnd().split('\n').map(line => JSON.parse(line))
+    expect(rows.filter(row => row.type === 'update').map(row => row.targetUuid)).toEqual(['recover-0-result', 'recover-1-result', 'recover-2-result'])
+  })
+
+  it('recovers a partial second micro-compaction batch without repeating the committed first batch', async () => {
+    await seed(); const accepted = await mail('Exact cross-batch peer'); await consume()
+    const before = await identity(userId), peerBefore = await receipt(accepted.messageId)
+    for (let index = 0; index < 129; index++) await addTool('cross-' + index, 'Original cross-batch evidence ' + index)
+    const open = fs.promises.open.bind(fs.promises); let writes = 0
+    const fault = vi.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+      const handle = await open(...args)
+      if (args[1] !== 'r+') return handle
+      return new Proxy(handle, { get(value, property) {
+        if (property === 'write') return async (buffer: Uint8Array, offset: number, length: number, position: number) => {
+          if (++writes === 2) { await value.write(buffer, offset, Math.floor(length / 2), position); throw new Error('second batch partial write') }
+          return value.write(buffer, offset, length, position)
+        }
+        const method = Reflect.get(value, property); return typeof method === 'function' ? method.bind(value) : method
+      } })
+    })
+    await expect(maintain(() => ctx.history.microCompactToolResults!(ctx, { keepRecent: 0 }))).rejects.toThrow('second batch partial write')
+    fault.mockRestore(); expect(writes).toBe(2)
+    const reopened = new JSONLConversationHistory()
+    await reopened.append({ id: 'after-cross-batch', role: 'assistant', content: 'Continue', conversationId: turnId }, scope)
+    expect(await maintain(() => ctx.history.microCompactToolResults!(ctx, { keepRecent: 0 }))).toEqual({ cleared: 0, freedTokens: 0 })
+    expect(await identity(userId)).toEqual(before); expect(await receipt(accepted.messageId)).toEqual(peerBefore)
+    expect((await observer.execute('SELECT state FROM collaboration_history_maintenance')).rows.map(row => row.state)).toEqual(['committed', 'committed'])
+    expect((await reopened.getFullHistory(scope)).filter(row => row.role === 'tool' && row.content === '[tool result cleared]')).toHaveLength(129)
+    expect((await reopened.getArchive(scope)).messages.filter(row => row.role === 'tool').map(row => row.content)).toEqual(Array.from({ length: 129 }, (_, index) => 'Original cross-batch evidence ' + index))
+    const rows = fs.readFileSync(path.join(directory, 'sessions', scope.tenantId, scope.sessionId + '.jsonl'), 'utf8').trimEnd().split('\n').map(line => JSON.parse(line))
+    expect(rows.filter(row => row.type === 'update').map(row => row.targetUuid)).toEqual(Array.from({ length: 129 }, (_, index) => 'cross-' + index + '-result'))
+  })
+
   it.each(['reservation-ACK', 'final-ACK', 'partial-write', 'sync-ACK'] as const)('reconciles %s without repeating summary generation, moving the seed or replaying retired mail', async kind => {
     await seed(); const accepted = await mail('Archive exact peer evidence'); await consume()
     const before = await identity(userId), native = db.transaction.bind(db), open = fs.promises.open.bind(fs.promises)

@@ -168,8 +168,8 @@ export interface ConversationHistory {
   deleteMessagesAfterId(dbId: number, sessionId: string, tenantId: string): Promise<void>
   /** 删除一整轮（该 conversation_id 的所有行），返回删除条数 */
   deleteByConversationId(conversationId: string, tenantId: string): Promise<number>
-  /** 按 messageId 查询单条消息（含 dbId / conversationId） */
-  getMessageById(messageId: string, tenantId: string): Promise<(Message & { conversationId?: string; dbId: number }) | null>
+  /** Exact message lookup, including archived evidence; a supplied sessionId confines reads to that tenant/session. */
+  getMessageById(messageId: string, tenantId: string, sessionId?: string): Promise<(Message & { conversationId?: string; dbId: number }) | null>
   /** 按 conversationId 查询整轮消息 */
   getByConversationId(conversationId: string, tenantId: string): Promise<(Message & { conversationId?: string })[]>
   /** 会话列表（供历史面板展示） */
@@ -310,6 +310,7 @@ export interface AgentContext {
   toolProfile?: ToolProfile
   /** Memory mode is selected by the root request; each context uses its own sessionId boundary. */
   memoryScope?: import('../../storage/memory/settings.js').MemoryMode
+  memoryScopes?: readonly import('../../storage/memory/types.js').MemoryScope[]
   requestBudget?: RequestBudget
   finalizationReserveTokens?: number
   runObserver?: Partial<RunObserver>
@@ -369,6 +370,7 @@ export interface CreateAgentContextOptions {
   onRequestAttempt?: (event: LLMRequestAttemptEvent) => void | Promise<void>
   toolProfile?: ToolProfile
   memoryScope?: import('../../storage/memory/settings.js').MemoryMode
+  memoryScopes?: readonly import('../../storage/memory/types.js').MemoryScope[]
   requestBudget?: RequestBudget
   finalizationReserveTokens?: number
   runObserver?: Partial<RunObserver>

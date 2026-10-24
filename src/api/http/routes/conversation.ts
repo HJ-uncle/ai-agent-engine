@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { createConversationHistory } from '../../../storage/conversation/factory.js'
 import { SessionStore } from '../../../storage/session/index.js'
+import { effectiveContextWindow } from '../../../core/context-budget.js'
 import { success, fail, paginateArray, successWithPagination } from '../response.js'
 import { workspaceManager } from '../../../workspace/index.js'
 import { abortActiveChat, stopOwnedSession } from './chat.js'
@@ -71,7 +72,7 @@ export async function autoCompactSession(tenantId: string, sessionId: string, lo
       logger.info({ model: llm.model }, 'Starting background auto-compaction')
       const compressionContext = { tenantId, sessionId, signal: options.signal }
       const result = await history.compress(compressionContext, buildCompactSummarizeFn(llm, {
-        archiveAvailable: history.retainsArchive === true, contextWindow: resolved.capabilities.contextWindow, signal: options.signal,
+        archiveAvailable: history.retainsArchive === true, contextWindow: effectiveContextWindow(resolved.capabilities.contextWindow), signal: options.signal,
       }), 6)
       await notify({ phase: 'succeeded', startedAt, finishedAt: Date.now(), beforeTokens: result.preTokens, afterTokens: result.postTokens })
       return result

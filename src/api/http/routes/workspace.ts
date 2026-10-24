@@ -41,6 +41,11 @@ interface WorkspaceItem {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
+const sameCanonicalPath = (left: string, right: string) => {
+  const a = path.resolve(left)
+  const b = path.resolve(right)
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+}
 
 export async function workspaceRoutes(fastify: FastifyInstance) {
   // The client may select a server directory only when it is inside the
@@ -50,7 +55,26 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
     const { sessionId, workspaceRoot } = request.body ?? ({} as any)
     if (!sessionId || !workspaceRoot) return reply.code(200).send(fail(40001, 'sessionId and workspaceRoot are required'))
     try {
-      const selected = workspaceManager.bindSnapshot({ tenantId, sessionId }, workspaceRoot)
+      const context = { tenantId, sessionId }
+      // A long-running Git operation may legitimately hold the session lease.
+      // Workspace and Git panels can still initialize concurrently when they
+      // refer to the already-selected directory; avoid rewriting the binding
+      // (and waiting behind Git) for this idempotent request.
+      const existing = workspaceManager.getBoundDirectory(context)
+      if (existing && path.isAbsolute(workspaceRoot) && fs.existsSync(workspaceRoot) && fs.statSync(workspaceRoot).isDirectory()) {
+        let requested: string | undefined
+        try { requested = fs.realpathSync(workspaceRoot) } catch { requested = undefined }
+        if (requested && sameCanonicalPath(requested, existing)) {
+          const current = workspaceManager.getBindingSnapshot(context)
+          if (sameCanonicalPath(current.root, existing)) {
+            return reply.code(200).send(success({ workspaceRoot: current.root, bindingEpoch: current.epoch, contractVersion: 2 }))
+          }
+        }
+      }
+      // Work mode mounts the workspace and Git panels together. Their first
+      // render can send duplicate bind requests, so queue behind the active
+      // session lease instead of surfacing a transient 403 to the user.
+      const selected = await workspaceManager.bindSnapshotAsync(context, workspaceRoot)
       return reply.code(200).send(success({ workspaceRoot: selected.root, bindingEpoch: selected.epoch, contractVersion: 2 }))
     } catch (e: any) {
       return reply.code(200).send(fail(40300, e?.message ?? '无法绑定远端工作区'))

@@ -232,12 +232,16 @@ it('native SQLite summary INSERT failure rolls back prior DELETE and archive wri
 
 it('SQLite cancellation after commit request dispatch reports the real successful commit',async()=>{
   const history=await seed('sqlite'),controller=new AbortController(),call=db.call.bind(db)
-  let dispatched=false,acknowledged=false
+  let dispatched=false,acknowledged=false,summaryTransaction:Parameters<typeof call>[2]
   vi.spyOn(db,'call').mockImplementation(async(op,args=[],tx)=>{
+    const statement=args[0],sql=typeof statement==='string'?statement:statement&&typeof statement==='object'&&'sql' in statement?String(statement.sql):''
+    // Schema migrations also commit. Cancel only the transaction that actually
+    // replaced this history, after its native commit request has been sent.
+    if(op==='execute'&&tx&&sql.startsWith('DELETE FROM conversations'))summaryTransaction=tx
     const operation=call(op,args,tx)
-    if(op==='commit'&&tx){dispatched=true;controller.abort(new Error('Synthetic abort after commit dispatch'))}
+    if(op==='commit'&&tx&&tx===summaryTransaction){dispatched=true;controller.abort(new Error('Synthetic abort after commit dispatch'))}
     const value=await operation
-    if(op==='commit'&&tx)acknowledged=true
+    if(op==='commit'&&tx&&tx===summaryTransaction)acknowledged=true
     return value
   })
   await expect(history.compress({...ctx,signal:controller.signal},async()=> 'Synthetic committed summary',2)).resolves.toMatchObject({preTokens:expect.any(Number),postTokens:expect.any(Number)})

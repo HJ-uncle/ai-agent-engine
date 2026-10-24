@@ -1,3 +1,4 @@
+import { BlockList, isIP } from 'node:net'
 import { isPublicAccountRoute } from './routes/accounts.js'
 import { isPublicExternalAccountRoute, isExternalAccountCallback } from './routes/account-external.js'
 import type { FastifyRequest, FastifyReply } from 'fastify'
@@ -20,6 +21,31 @@ export const WHITELIST_PATHS = ['/health', '/meta']
 // been applied.  Keeping a fallback makes isolated route tests deterministic.
 let authMiddleware: AuthMiddleware = createAuthMiddleware()
 let authenticationRequired = process.env.AUTH_ENABLED !== 'false'
+let desktopOwnedLoopback = false
+
+export interface RequestAuthenticationStartup {
+  /** Actual host passed to listen(), captured before project settings are loaded. */
+  listenHost?: string
+  /** Process-launcher decision; never derive this from a request or business settings. */
+  desktopOwned?: boolean
+}
+
+const loopbackAddresses = new BlockList()
+loopbackAddresses.addSubnet('127.0.0.0', 8, 'ipv4')
+loopbackAddresses.addAddress('::1', 'ipv6')
+function isLoopbackAddress(address: string | undefined): boolean {
+  if (!address) return false
+  const family = isIP(address)
+  return family !== 0 && loopbackAddresses.check(address, family === 6 ? 'ipv6' : 'ipv4')
+}
+
+/** A local session capability, not an instance-admin role or a replacement tenant. */
+export function canUseDesktopSessionFullAccess(request: FastifyRequest): boolean {
+  const auth = (request as FastifyRequest & { authContext?: AuthContext }).authContext
+  return desktopOwnedLoopback && !!auth && auth.method !== 'none' &&
+    auth.roles?.includes('tenant-admin') === true &&
+    isLoopbackAddress(request.raw.socket.remoteAddress) && hasOwnedInstanceToken(request.headers)
+}
 
 /** Read the same frozen boundary used by the request gate; settings cannot enable dispatch. */
 export function isRequestAuthenticationRequired(): boolean { return authenticationRequired }
@@ -38,9 +64,10 @@ export function controllerSubjectFromRequest(request: FastifyRequest): Controlle
     : auth.method === 'none' ? 'local-instance' : auth.method)
 }
 
-export function configureRequestAuthentication(): void {
+export function configureRequestAuthentication(startup: RequestAuthenticationStartup = {}): void {
   authMiddleware = createAuthMiddleware()
   authenticationRequired = process.env.AUTH_ENABLED !== 'false'
+  desktopOwnedLoopback = startup.desktopOwned === true && !authenticationRequired && isLoopbackAddress(startup.listenHost)
   configureInstanceToken()
 }
 

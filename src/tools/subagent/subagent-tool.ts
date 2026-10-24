@@ -20,6 +20,8 @@ import { throwIfAborted } from '../../core/utils/abort.js'
 import { ToolRegistry } from '../../core/tool-registry/index.js'
 import { trustBuiltinTool } from '../../security/tool-policy.js'
 import { todoTools } from '../todo/todo-tool.js'
+import { officeEnvironmentTool } from '../office/environment.js'
+import { officeInspectTool } from '../office/index.js'
 import { installProductionCollaborationBoundary } from '../../core/collaboration/production-boundary.js'
 
 /**
@@ -78,13 +80,21 @@ const RESEARCH_TOOLS = new Set([
 
 const RECURSIVE_TOOLS = new Set(['subagent', 'subagent_start', 'spawn_agent', 'start_agent'])
 
+function readonlyChildTool(parent: IToolRegistry, name: string): boolean {
+  return RESEARCH_TOOLS.has(name) || (name === officeEnvironmentTool.name || name === officeInspectTool.name)
+    && parent.executionMode?.(name, {}) === 'readonly'
+}
+
 export function createSubagentToolRegistry(parent: IToolRegistry, readOnly: boolean): IToolRegistry {
   // The child owns a session-local plan even when a legacy parent lacks this
   // builtin. Never delegate its reserved identity to a parent extension.
   const internalPlan = new ToolRegistry()
   for (const tool of todoTools) if (tool.name === 'plan_update') internalPlan.register(trustBuiltinTool(tool))
   const catalog = () => [...parent.list().filter(tool => tool.name !== 'plan_update'), ...internalPlan.list()]
-  const names = new Set(catalog().filter((tool) => !RECURSIVE_TOOLS.has(tool.name) && tool.name !== 'ask_user' && (!readOnly || RESEARCH_TOOLS.has(tool.name))).map((tool) => tool.name))
+  // list() contains public definitions, so implementation identity is unavailable;
+  // only the parent's trusted readonly policy admits this diagnostic to research.
+  const names = new Set(catalog().filter((tool) => !RECURSIVE_TOOLS.has(tool.name) && tool.name !== 'ask_user'
+    && (!readOnly || readonlyChildTool(parent, tool.name))).map((tool) => tool.name))
   const owner = (name: string) => name === 'plan_update' ? internalPlan : parent
   return {
     register: () => { throw new Error('Child tool capability snapshot is immutable') },
@@ -190,7 +200,7 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
     const inheritedTools = createSubagentToolRegistry(ctx.tools, readOnly)
     const plannedToolNames = configuredAgent
       ? [...new Set([...(normalizeAllowedTools(configuredAgent.allowedTools) ?? []).filter(name => !RECURSIVE_TOOLS.has(name) && name !== 'ask_user'
-        && (!readOnly || RESEARCH_TOOLS.has(name)) && (userDelegated || ctx.tools.has(name))), 'plan_update'])]
+        && (!readOnly || readonlyChildTool(ctx.tools, name)) && (userDelegated || ctx.tools.has(name))), 'plan_update'])]
       : inheritedTools.list().map(tool => tool.name)
     const continuation: SubagentContinuationProfile = saved ?? {
       role, readOnly, systemPrompt, userDelegated,
@@ -232,6 +242,7 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
           securityContext: { tenantId: ctx.tenantId, sessionId: snapshot.childSessionId, toolProfile: ctx.toolProfile },
           workspaceRoot: continuation.projectRoot ?? continuation.workspacePaths[0],
           memoryScope: ctx.memoryScope,
+        memoryScopes: ctx.memoryScopes,
           allowedSkills: selectedSkills,
           strictSkillBindings: true,
           // MCP stdio initialization may itself execute code. Safe mode must not
@@ -291,6 +302,7 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
         parentToolCallId: snapshot.parentToolCallId,
         toolProfile: ctx.toolProfile,
         memoryScope: ctx.memoryScope,
+          memoryScopes: ctx.memoryScopes,
         runObserver: observer,
         onRequestAttempt,
         requestBudget,

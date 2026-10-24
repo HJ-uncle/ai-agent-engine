@@ -1,4 +1,18 @@
 export const MEMORY_SCHEMA: string[] = [
+  `CREATE TABLE IF NOT EXISTS memory_preferences (
+    tenant_id TEXT PRIMARY KEY,
+    global_enabled INTEGER NOT NULL DEFAULT 0 CHECK(global_enabled IN (0,1)),
+    session_default_enabled INTEGER NOT NULL DEFAULT 1 CHECK(session_default_enabled IN (0,1)),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE TABLE IF NOT EXISTS memory_session_preferences (
+    tenant_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    session_enabled INTEGER CHECK(session_enabled IS NULL OR session_enabled IN (0,1)),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (tenant_id, session_id)
+  )`,
+
   `CREATE TABLE IF NOT EXISTS memory_session_settings (
     tenant_id  TEXT NOT NULL,
     session_id TEXT NOT NULL,

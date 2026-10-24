@@ -1,4 +1,6 @@
+import { deduplicateMemories, memoryContexts } from '../../middleware/memory/policy.js'
 import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
+import { effectiveContextWindow } from '../../core/context-budget.js'
 
 /**
  * Get Current Context 工具
@@ -68,9 +70,9 @@ export const getCurrentContextTool: Tool = {
         ...(primaryWorkspace !== ctx.workspaceDir
           ? [`- **本会话私有目录**: ${ctx.workspaceDir}`]
           : []),
-        `- **Token 预算**: ${typeof ctx.tokenBudget === 'number' ? ctx.tokenBudget : '未设置（由模型窗口/服务端决定上限）'}`,
-        ...(typeof ctx.tokenBudget === 'number'
-          ? [`- **Token 剩余**: ${ctx.tokenBudget - ((ctx as any)._usedTokens || 0)}`]
+        `- **有效上下文窗口**: ${effectiveContextWindow(ctx.modelCaps?.contextWindow, ctx.toolProfile === 'code' ? undefined : ctx.tokenBudget)} tokens（单次请求，接近阈值时自动压缩）`,
+        ...(ctx.modelCaps?.contextWindow
+          ? [`- **模型能力上限**: ${ctx.modelCaps.contextWindow} tokens`]
           : []),
       ]
 
@@ -125,8 +127,8 @@ export const getCurrentContextTool: Tool = {
         }
       }
 
-      // Code conversations access memory only after an explicit per-conversation selection.
-      if (ctx.memoryScope !== 'off' && (ctx.toolProfile !== 'code' || ctx.memoryScope !== undefined)) {
+      const contexts = memoryContexts(ctx)
+      if (contexts.length) {
         contextInfo.push(``)
         contextInfo.push(`### 记忆信息`)
         try {
@@ -136,10 +138,9 @@ export const getCurrentContextTool: Tool = {
           // A subagent carries rootSessionId for run lineage, but that value is
           // not its conversation scope; using it here would expose parent
           // session memories while memory tools correctly use ctx.sessionId.
-          const memories = await manager.listNodes({ limit: 5, orderBy: 'timestamp', orderDir: 'DESC' }, {
-            tenantId: ctx.tenantId, sessionId: ctx.sessionId,
-            ...(ctx.memoryScope ? { scope: ctx.memoryScope } : {}),
-          })
+          const memories = deduplicateMemories((await Promise.all(contexts.map(context =>
+            manager.listNodes({ limit: 5, orderBy: 'timestamp', orderDir: 'DESC' }, context)))).flat())
+            .sort((a, b) => b.timestamp - a.timestamp).slice(0, 5)
           contextInfo.push(`**已存储近期记忆**\n`)
           for (const mem of memories) {
             const value = typeof mem.summary === 'string' ? mem.summary.slice(0, 80) : ''

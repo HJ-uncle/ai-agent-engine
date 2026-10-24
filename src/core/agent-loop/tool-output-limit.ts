@@ -2,7 +2,9 @@ import { applyOSMMultiplier } from '../osm.js'
 import type { ToolProfile } from '../../tools/tool-profile.js'
 
 export function getToolOutputMaxChars(): number {
-  const base = parseInt(process.env.TOOL_OUTPUT_MAX_CHARS ?? '4000', 10)
+  const configured = parseInt(process.env.TOOL_OUTPUT_MAX_CHARS ?? '', 10)
+  // A zero/negative/NaN cap cannot carry even an error receipt; match Code's fallback policy.
+  const base = Number.isFinite(configured) && configured > 0 ? configured : 4000
   return applyOSMMultiplier('toolOutputMaxChars', base)
 }
 

@@ -16,9 +16,11 @@ import { FlowEventBus } from './flow-event-bus.js'
 import { FlowExecutor, topologicalLevels } from './flow-executor.js'
 import { getRequestToolProfile } from '../../tool-profile.js'
 import type { RunFlowOptions } from './flow-types.js'
+import type { AuthContext } from '../../../../auth/types.js'
 
 /** 活跃 Flow 运行注册表（runId → FlowEventBus + AbortController） */
-const activeFlows = new Map<string, { bus: FlowEventBus; abortController: AbortController }>()
+const activeFlows = new Map<string, { bus: FlowEventBus; abortController: AbortController; tenantId: string }>()
+const getTenantId = (request: FastifyRequest) => (request as FastifyRequest & { authContext?: AuthContext }).authContext?.tenantId ?? 'default'
 
 export async function flowRoutes(fastify: FastifyInstance): Promise<void> {
   // ── POST /flows/run ────────────────────────────────────────────────
@@ -73,7 +75,7 @@ export async function flowRoutes(fastify: FastifyInstance): Promise<void> {
   }, async (request: FastifyRequest<{ Body: RunFlowOptions }>, reply: FastifyReply) => {
     const toolProfile = getRequestToolProfile(request)
     const body = request.body
-    const tenantId = (request as any).tenantId ?? 'flow-tenant'
+    const tenantId = getTenantId(request)
 
     // 校验 Flow 定义（环检测在 topologicalLevels 内抛错，这里提前做一次结构校验）
     if (!body.nodes || body.nodes.length === 0) {
@@ -93,12 +95,12 @@ export async function flowRoutes(fastify: FastifyInstance): Promise<void> {
 
     const abortController = new AbortController()
     const bus = new FlowEventBus(body.flowId, abortController)
-    activeFlows.set(bus.runId, { bus, abortController })
+    activeFlows.set(bus.runId, { bus, abortController, tenantId })
 
     logger.info({ flowId: body.flowId, runId: bus.runId, tenantId }, '[Flow] 收到执行请求，启动 SSE')
 
     // 异步启动执行器（不阻塞 SSE 响应）
-    const executor = new FlowExecutor(bus, abortController.signal, toolProfile)
+    const executor = new FlowExecutor(bus, abortController.signal, toolProfile, tenantId)
     executor.run(body).catch((err) => {
       logger.error({ err, runId: bus.runId }, '[Flow] 执行器异常')
       bus.error(err)
@@ -116,7 +118,7 @@ export async function flowRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post<{ Params: { runId: string } }>('/flows/:runId/stop', async (request, reply) => {
     const { runId } = request.params
     const entry = activeFlows.get(runId)
-    if (!entry) {
+    if (!entry || entry.tenantId !== getTenantId(request)) {
       return reply.code(200).send(success({ runId, cancelled: false }, 'Flow 不存在或已结束'))
     }
     entry.abortController.abort()

@@ -13,6 +13,8 @@ export interface PublicationQueueStats {
   maxInFlight: number; closed: boolean; failed: boolean
 }
 
+export const DEFAULT_PUBLICATION_MAX_BYTES = 1024 * 1024
+
 /** A queue slot includes its active operation until the real promise settles.
  * A timeout/observer disconnect cannot release an evidence write's ownership. */
 export class BoundedPublicationQueue {
@@ -26,7 +28,7 @@ export class BoundedPublicationQueue {
   private closed = false
   private failure?: PublicationUnavailableError
   private idle: Array<() => void> = []
-  constructor(readonly maxEvents = 256, readonly maxBytes = 1024 * 1024) {
+  constructor(readonly maxEvents = 256, readonly maxBytes = DEFAULT_PUBLICATION_MAX_BYTES) {
     if (!Number.isSafeInteger(maxEvents) || maxEvents < 1 || maxEvents > 4096 ||
       !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 8 * 1024 * 1024) throw new RangeError('Invalid publication budget')
   }

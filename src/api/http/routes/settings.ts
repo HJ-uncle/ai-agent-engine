@@ -8,6 +8,7 @@ import { resolveOSMMode, isValidMode, OSM_MODES, getOSMCompressRatio } from '../
 import { logger as engineLogger } from '../../../observability/index.js'
 import { MANAGED_KEYS } from '../../../core/aether-config.js'
 import { MAX_FILE_SIZE } from '../../../tools/file/constants.js'
+import { configuredContextWindowBudget, DEFAULT_CONTEXT_WINDOW_BUDGET, parseContextWindowBudget } from '../../../core/context-budget.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
@@ -80,6 +81,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       // return a number that could be mistaken for an active global cap.
       MAX_ITERATIONS:          null,
       TOKEN_BUDGET:            null,
+      CONTEXT_WINDOW_BUDGET:   configuredContextWindowBudget(getStr('CONTEXT_WINDOW_BUDGET', '')),
       HISTORY_MAX_TOKENS:      parseInt(getStr('HISTORY_MAX_TOKENS',      '20000'),   10),
       TOOL_OUTPUT_MAX_CHARS:   parseInt(getStr('TOOL_OUTPUT_MAX_CHARS',   '4000'),    10),
       COMPRESS_THRESHOLD_RATIO: baseCompressRatio,
@@ -150,6 +152,13 @@ export async function settingsRoutes(fastify: FastifyInstance) {
           },
         },
         compression: { configuredRatio: baseCompressRatio, effectiveRatio: effectiveCompressRatio },
+        contextWindow: {
+          defaultBudget: DEFAULT_CONTEXT_WINDOW_BUDGET,
+          configuredBudget: configuredContextWindowBudget(getStr('CONTEXT_WINDOW_BUDGET', '')),
+          effectiveBudget: configuredContextWindowBudget(),
+          boundedByModel: true,
+          appliesTo: ['code', 'work', 'subagent'],
+        },
       },
     }
 
@@ -158,6 +167,14 @@ export async function settingsRoutes(fastify: FastifyInstance) {
 
   fastify.put<{ Body: Record<string, string | number | boolean | WebFetchConfig | null> }>('/settings', { preHandler: requireRoles('admin') }, async (request, reply) => {
     const updates = request.body
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'CONTEXT_WINDOW_BUDGET')) {
+      const budget = updates.CONTEXT_WINDOW_BUDGET
+      const reset = budget === null || (typeof budget === 'string' && budget.trim() === '')
+      if (!reset && parseContextWindowBudget(budget) === undefined) {
+        return reply.code(400).send(fail(400, 'CONTEXT_WINDOW_BUDGET must be a positive safe integer, or null to restore the default'))
+      }
+    }
 
     if (updates.EMBEDDING_DIMENSIONS !== undefined) {
       const dimensions = Number(updates.EMBEDDING_DIMENSIONS)
@@ -213,6 +230,11 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       if (k === 'runtimeLimits' || k === 'managedKeys') continue
       if (MANAGED_KEYS.has(k)) {
         engineLogger.warn({ key: k }, 'Attempted to modify a managed setting, ignoring.')
+        continue
+      }
+      if (k === 'CONTEXT_WINDOW_BUDGET' && (v === null || (typeof v === 'string' && v.trim() === ''))) {
+        await systemConfigStore.delete(k)
+        delete process.env[k]
         continue
       }
       if (v === null && ['MAX_ITERATIONS', 'TOKEN_BUDGET', 'CMD_TIMEOUT_MS'].includes(k)) {

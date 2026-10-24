@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
 import { workspaceManager } from '../../workspace/index.js'
-import { listRecursive } from './utils.js'
+import { createListingBudget, listDirectoryEntries } from './bounded-listing.js'
 import { readOldSnapshot, commitDeleteChange, ChangeRecordingError } from './change-recorder.js'
 import { moveToSystemTrash } from './trash.js'
 import { withFileLocks } from '../../shared/file-version.js'
@@ -13,55 +13,37 @@ import { throwIfAborted } from '../../core/utils/abort.js'
 export const listFilesTool: Tool = {
   name: 'list_files',
   displayName: '列出文件',
-  description: '列出目录文件，默认列出所有绑定工作区',
+  description: '列出目录文件，默认所有绑定工作区。异步遍历，默认最多500项；截断后请指定更具体的子目录，不跟随符号链接。',
   parameters: {
     type: 'object',
     properties: {
       path: { type: 'string' },
       recursive: { type: 'boolean' },
+      maxResults: { type: 'integer', minimum: 1, maximum: 2000, description: '本次所有工作区合计的最大条目数，默认500' },
     },
     required: [],
   },
   async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
-    const { path: dirPath = '.', recursive = false } = rawArgs as { path?: string; recursive?: boolean }
+    const { path: dirPath = '.', recursive = false, maxResults = 500 } = rawArgs as { path?: string; recursive?: boolean; maxResults?: number }
     try {
+      const budget = createListingBudget(maxResults)
       const allPaths = workspaceManager.getPaths(ctx)
       const isListingRoot = dirPath === '.' || dirPath === ''
-
-      if (isListingRoot && allPaths.length > 1) {
-        const sections: string[] = []
-        for (const basePath of allPaths) {
-          if (!fs.existsSync(basePath)) continue
-          const label = basePath === allPaths[0] ? '主工作区' : `自定义工作区 (${basePath})`
-          const entries = recursive
-            ? listRecursive(basePath, basePath)
-            : fs.readdirSync(basePath).map((name) => {
-                const fullPath = path.join(basePath, name)
-                const stat = fs.statSync(fullPath)
-                return stat.isDirectory() ? `${name}/` : name
-              })
-          sections.push(`${label}:\n${entries.length === 0 ? '  (空)' : entries.map(e => `  ${e}`).join('\n')}`)
-        }
-        return { success: true, output: sections.join('\n\n') || 'No workspace directories found' }
+      const roots = isListingRoot && allPaths.length > 1 ? allPaths : [workspaceManager.resolveSafePath(ctx, dirPath)]
+      const sections: string[] = []
+      for (const root of roots) {
+        throwIfAborted(ctx.signal)
+        if (budget.truncated) break
+        // Recheck the workspace boundary before starting each filesystem walk.
+        const safePath = workspaceManager.resolveSafePath(ctx, root)
+        const entries = await listDirectoryEntries(safePath, recursive, budget, ctx.signal)
+        const output = entries.length ? entries.join('\n') : 'Directory is empty'
+        sections.push(roots.length > 1 ? safePath + ':\n' + output : output)
       }
+      if (budget.truncated) sections.push('[Listing truncated: ' + budget.reason + '; returned ' + budget.count + ' entries. Specify a narrower directory.]')
+      return { success: true, output: sections.join('\n\n') || 'No workspace directories found',
+        metadata: { count: budget.count, truncated: budget.truncated, truncationReason: budget.reason } }
 
-      const safePath = workspaceManager.resolveSafePath(ctx, dirPath)
-      if (!fs.existsSync(safePath)) {
-        return { success: false, output: `Directory not found: ${dirPath}` }
-      }
-
-      const entries = recursive
-        ? listRecursive(safePath, safePath)
-        : fs.readdirSync(safePath).map((name) => {
-            const fullPath = path.join(safePath, name)
-            const stat = fs.statSync(fullPath)
-            return stat.isDirectory() ? `${name}/` : name
-          })
-
-      if (entries.length === 0) {
-        return { success: true, output: 'Directory is empty' }
-      }
-      return { success: true, output: entries.join('\n') }
     } catch (err) {
       return { success: false, output: err instanceof Error ? err.message : 'Unknown error' }
     }

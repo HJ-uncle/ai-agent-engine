@@ -29,6 +29,8 @@ export interface AetherAgentConfig {
   maxIterations?: number
   /** 单次请求 Token 预算（→ TOKEN_BUDGET） */
   tokenBudget?: number
+  /** 单次上下文窗口预算，默认 268000（→ CONTEXT_WINDOW_BUDGET）；不修改模型能力 */
+  contextWindowBudget?: number
   /** 历史消息保留 Token 上限（→ HISTORY_MAX_TOKENS） */
   historyMaxTokens?: number
   /** 工具输出截断长度（→ TOOL_OUTPUT_MAX_CHARS） */
@@ -140,6 +142,7 @@ export function applyAetherConfigToEnv(cfg: Partial<AetherConfig>, isManaged = f
   setEnv('SKILLS_ROOT', cfg.skillsPath)
   setEnv('MAX_ITERATIONS', cfg.agent?.maxIterations?.toString())
   setEnv('TOKEN_BUDGET', cfg.agent?.tokenBudget?.toString())
+  setEnv('CONTEXT_WINDOW_BUDGET', cfg.agent?.contextWindowBudget?.toString())
   setEnv('HISTORY_MAX_TOKENS', cfg.agent?.historyMaxTokens?.toString())
   setEnv('TOOL_OUTPUT_MAX_CHARS', cfg.agent?.toolOutputMaxChars?.toString())
 

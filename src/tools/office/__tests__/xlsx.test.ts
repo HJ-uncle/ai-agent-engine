@@ -73,6 +73,66 @@ describe('unified office XLSX', () => {
     expect(inspection.content).toContain('待重算，无有效缓存')
   })
 
+  it('diagnoses the compliance check strings at their exact cells without converting or counting them as formulas', async () => {
+    const match = (row: number) => `=IF(ABS(D${row}-E${row})<0.0001,"一致","不一致")`
+    const bytes = await createXlsx({ sheets: [{ name: '校验表', columns: [
+      { key: 'id', header: '校验项ID' }, { key: 'name', header: '校验项' }, { key: 'method', header: '公式/口径' },
+      { key: 'actual', header: '实测值', type: 'number' }, { key: 'expected', header: '预期值', type: 'number' },
+      { key: 'match', header: '是否一致', type: 'text' },
+    ], rows: [...Array.from({ length: 8 }, (_, i) => ({ id: `V${i + 1}`, actual: 6, expected: 6, match: match(i + 2) })),
+      { id: 'V9', actual: 6, expected: 6, match: { formula: match(10) } }] }] })
+    const before = Buffer.from(bytes), inspection = await inspectXlsx(bytes)
+    const warning = inspection.warnings.find(value => value.includes('文本单元格不是公式'))!
+    expect(warning).toContain('8 个以 = 开头的文本单元格')
+    for (let row = 2; row <= 9; row++) expect(warning).toContain(`"校验表"!F${row}`)
+    expect(warning).not.toContain('"校验表"!F10')
+    expect(warning).toContain('{formula: "..."}')
+    expect(warning).toContain('原文本未更改，未自动执行')
+    expect(inspection.content).toContain(`- F2: 文本（以 = 开头，非公式）：${match(2)}`)
+    expect(inspection.summary).toMatchObject({ formulas: 1, formulaCaches: 0, pendingFormulas: 1 })
+    expect(inspection.warnings.join('\n')).toContain('1 个公式没有有效缓存')
+    expect(bytes).toEqual(before)
+    const sheet = (await reopen(bytes)).getWorksheet('校验表')!
+    expect(sheet.getCell('F2').value).toBe(match(2))
+    expect(sheet.getCell('F2').type).toBe(ExcelJS.ValueType.String)
+    expect(sheet.getCell('F2').numFmt).toBe('@')
+    expect(sheet.getCell('F10').formula).toBe(match(10).slice(1))
+  })
+
+  it('keeps intentional equals text and distinguishes a formula whose saved result starts with equals', async () => {
+    const book = new ExcelJS.Workbook(), sheet = book.addWorksheet("客户 ' 注释")
+    sheet.getCell('A1').value = '=SUM(B2:B3)'
+    sheet.getCell('B1').value = { formula: '"=SUM(B2:B3)"', result: '=SUM(B2:B3)' }
+    sheet.getCell('C1').value = '普通文字'
+    const bytes = Buffer.from(await book.xlsx.writeBuffer()), before = Buffer.from(bytes)
+    const inspection = await inspectXlsx(bytes)
+    const warning = inspection.warnings.find(value => value.includes('文本单元格不是公式'))!
+    expect(warning).toContain('1 个以 = 开头的文本单元格')
+    expect(warning).toContain('"客户 \' 注释"!A1')
+    expect(warning).not.toContain('!B1')
+    expect(inspection.summary).toMatchObject({ formulas: 1, formulaCaches: 1, pendingFormulas: 0 })
+    expect(inspection.content).toContain('文件缓存 =SUM(B2:B3)（未独立验证）')
+    expect(bytes).toEqual(before)
+  })
+
+  it('finds formula-looking text beyond the preview while bounding diagnostic locations', async () => {
+    const bytes = await createXlsx({ sheets: [
+      { name: '前部数据', columns: [{ key: 'n', header: '值' }], rows: Array.from({ length: 2_000 }, (_, n) => ({ n })) },
+      { name: '后部校验', columns: [{ key: 'v', header: '校验' }], rows: Array.from({ length: 30 }, () => ({ v: '=SUM(A1:A2)' })) },
+    ] })
+    const inspection = await inspectXlsx(bytes)
+    expect(inspection.summary).toMatchObject({ formulas: 0, pendingFormulas: 0, previewCells: 2_000, previewTruncated: true })
+    expect(inspection.content).not.toContain('=SUM(A1:A2)')
+    const warnings = inspection.warnings.filter(value => value.includes('文本单元格不是公式'))
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('30 个以 = 开头的文本单元格')
+    expect(warnings[0]).toContain('列出 20/30')
+    expect(warnings[0]).toContain('"后部校验"!A2')
+    expect(warnings[0]).toContain('"后部校验"!A21')
+    expect(warnings[0]).not.toContain('"后部校验"!A22')
+    expect(warnings[0].length).toBeLessThan(2_500)
+  })
+
   it('patches only intended cells while preserving styles, metadata and untouched package parts', async () => {
     const input = basic()
     input.sheets.push({ name: '保留中文', columns: [{ key: 'data', header: '其他数据' }], rows: [{ data: '不应丢失' }] })
@@ -140,6 +200,9 @@ describe('unified office XLSX', () => {
     expect(sheet.getCell('A2').value).toBe('00007')
     expect(sheet.getCell('C2').value).toEqual(new Date('2026-11-01T00:00:00Z'))
     expect(sheet.getCell('B4').value).toEqual({ formula: 'SUM(B2:B3,5)', result: 35 })
+    const inspection = await inspectXlsx(bytes)
+    expect(inspection.warnings.join('\n')).toContain('"季度预算"!E2')
+    expect(inspection.content).toContain('- E2: 文本（以 = 开头，非公式）：=HYPERLINK')
   })
 
   it('refuses edits into merged subordinate cells, array ranges and structured table sheets', async () => {

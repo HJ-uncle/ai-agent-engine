@@ -1,25 +1,13 @@
+import { deduplicateMemories, memoryContexts } from '../../middleware/memory/policy.js'
 import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
 import { SQLiteMemoryManager } from '../../storage/memory/memory-manager.js'
-import type { MemoryContext, MemoryEdgeType, MemoryNodeType, MemoryScope } from '../../storage/memory/types.js'
+import type { MemoryContext, MemoryEdgeType, MemoryNodeType } from '../../storage/memory/types.js'
 
-type MemoryToolContext = AgentContext & {
-  /** Request-level setting; never supplied by model tool arguments. */
-  memoryScope?: 'off' | MemoryScope
-}
-
-function resolveMemoryContext(ctx: MemoryToolContext): { context?: MemoryContext; error?: string } {
-  const configured = ctx.memoryScope ?? (ctx.toolProfile === 'code' ? 'off' : 'global')
-  if (configured === 'off') return { error: '长期记忆已对当前会话关闭。' }
-  if (configured === 'session' && !ctx.sessionId) return { error: '当前会话缺少 sessionId，无法使用会话记忆。' }
-  // Deliberately use only the current context session.  rootSessionId is
-  // metadata for the run and must never let a subagent read the parent memory.
-  return {
-    context: {
-      tenantId: ctx.tenantId,
-      sessionId: configured === 'session' ? ctx.sessionId : '',
-      scope: configured,
-    },
-  }
+function resolveMemoryContext(ctx: AgentContext): { context?: MemoryContext; contexts: MemoryContext[]; error?: string } {
+  // Scope is server policy, never a model argument. Child memory always uses
+  // the executing sessionId; rootSessionId only describes run lineage.
+  const contexts = memoryContexts(ctx)
+  return contexts.length ? { context: contexts[0], contexts } : { contexts, error: '长期记忆已对当前会话关闭。' }
 }
 
 function disabledResult(message: string): ToolResult {
@@ -45,7 +33,7 @@ export function createMemoryTools(): Tool[] {
       required: ['content', 'type', 'tags'],
     },
     async execute(args: unknown, rawCtx: AgentContext): Promise<ToolResult> {
-      const ctx = rawCtx as MemoryToolContext
+      const ctx = rawCtx
       const resolved = resolveMemoryContext(ctx)
       if (!resolved.context) return disabledResult(resolved.error!)
       const { content, type, tags, emotionalValence, emotionalTrigger } = args as any
@@ -72,11 +60,11 @@ export function createMemoryTools(): Tool[] {
       required: ['tags'],
     },
     async execute(args: unknown, rawCtx: AgentContext): Promise<ToolResult> {
-      const ctx = rawCtx as MemoryToolContext
+      const ctx = rawCtx
       const resolved = resolveMemoryContext(ctx)
       if (!resolved.context) return disabledResult(resolved.error!)
       const { tags } = args as { tags: string[] }
-      const nodes = await manager.recallByTags(tags, resolved.context)
+      const nodes = deduplicateMemories((await Promise.all(resolved.contexts.map(context => manager.recallByTags(tags, context)))).flat())
       if (nodes.length === 0) return { success: true, output: `未找到与标签 ${tags.join(', ')} 相关的记忆。` }
       return { success: true, output: `找到 ${nodes.length} 条相关记忆:\n${nodes.map(n => `- [${n.type}] ${n.summary} (相关度: ${n.strength.toFixed(2)})`).join('\n')}` }
     },
@@ -88,11 +76,13 @@ export function createMemoryTools(): Tool[] {
     description: '列出当前记忆范围内最近更新的节点。',
     parameters: { type: 'object', properties: { limit: { type: 'number', description: '返回数量限制，默认10' } }, required: [] },
     async execute(args: unknown, rawCtx: AgentContext): Promise<ToolResult> {
-      const ctx = rawCtx as MemoryToolContext
+      const ctx = rawCtx
       const resolved = resolveMemoryContext(ctx)
       if (!resolved.context) return disabledResult(resolved.error!)
       const { limit = 10 } = args as any
-      const nodes = await manager.recallRecent(Math.min(Math.max(Number(limit) || 10, 1), 100), resolved.context)
+      const count = Math.min(Math.max(Number(limit) || 10, 1), 100)
+      const nodes = deduplicateMemories((await Promise.all(resolved.contexts.map(context => manager.recallRecent(count, context)))).flat())
+        .sort((a, b) => b.timestamp - a.timestamp).slice(0, count)
       if (nodes.length === 0) return { success: true, output: '记忆体为空。' }
       return { success: true, output: `最近的 ${nodes.length} 条记忆:\n${nodes.map(n => `- [${n.id}] [${n.type}] ${n.summary} (标签: ${n.tags?.join(',') ?? ''})`).join('\n')}` }
     },
@@ -104,12 +94,14 @@ export function createMemoryTools(): Tool[] {
     description: '根据记忆 ID 从当前记忆范围中删除节点。',
     parameters: { type: 'object', properties: { id: { type: 'string', description: '要删除的记忆节点 ID' } }, required: ['id'] },
     async execute(args: unknown, rawCtx: AgentContext): Promise<ToolResult> {
-      const ctx = rawCtx as MemoryToolContext
+      const ctx = rawCtx
       const resolved = resolveMemoryContext(ctx)
       if (!resolved.context) return disabledResult(resolved.error!)
       const { id } = args as { id: string }
-      if (!await manager.getNode(id, resolved.context)) return { success: false, output: `记忆 ${id} 不存在于当前记忆范围。`, error: 'MEMORY_NOT_FOUND' }
-      await manager.deleteNode(id, resolved.context)
+      const contexts = await Promise.all(resolved.contexts.map(async context => await manager.getNode(id, context) ? context : undefined))
+      const targetContext = contexts.find(context => context !== undefined)
+      if (!targetContext) return { success: false, output: `记忆 ${id} 不存在于当前记忆范围。`, error: 'MEMORY_NOT_FOUND' }
+      await manager.deleteNode(id, targetContext)
       return { success: true, output: `✅ 记忆 ${id} 已被删除。` }
     },
   }
@@ -130,15 +122,19 @@ export function createMemoryTools(): Tool[] {
       required: ['sourceId', 'targetId', 'type', 'description'],
     },
     async execute(args: unknown, rawCtx: AgentContext): Promise<ToolResult> {
-      const ctx = rawCtx as MemoryToolContext
+      const ctx = rawCtx
       const resolved = resolveMemoryContext(ctx)
       if (!resolved.context) return disabledResult(resolved.error!)
       const { sourceId, targetId, type, description, strength = 0.5 } = args as any
       if (sourceId === targetId) return { success: false, output: '源节点和目标节点不能是同一个' }
-      const [source, target] = await Promise.all([manager.getNode(sourceId, resolved.context), manager.getNode(targetId, resolved.context)])
-      if (!source || !target) return { success: false, output: '建立关联失败：两个节点都必须属于当前记忆范围。', error: 'MEMORY_NOT_FOUND' }
+      const matching = await Promise.all(resolved.contexts.map(async context => {
+        const [source, target] = await Promise.all([manager.getNode(sourceId, context), manager.getNode(targetId, context)])
+        return source && target ? context : undefined
+      }))
+      const targetContext = matching.find(context => context !== undefined)
+      if (!targetContext) return { success: false, output: '建立关联失败：两个节点都必须属于当前记忆范围。', error: 'MEMORY_NOT_FOUND' }
       try {
-        const edge = await manager.createEdge({ sourceNodeId: sourceId, targetNodeId: targetId, type: type as MemoryEdgeType, strength, description }, resolved.context)
+        const edge = await manager.createEdge({ sourceNodeId: sourceId, targetNodeId: targetId, type: type as MemoryEdgeType, strength, description }, targetContext)
         return { success: true, output: `✅ 成功建立关联: [${sourceId}] -(${edge.type})-> [${targetId}]` }
       } catch (e: any) {
         return { success: false, output: `建立关联失败: ${e?.message ?? e}` }

@@ -3,7 +3,9 @@ import { getDb } from '../sqlite/db.js'
 import type { Row } from '@libsql/client'
 import { v4 as uuidv4 } from 'uuid'
 import { estimateTokens } from '../../core/utils/tokens.js'
-import { estimateModelHistoryTokens } from '../../core/utils/model-context.js'
+import { estimateModelHistoryTokens, estimateModelMessageTokens } from '../../core/utils/model-context.js'
+import { toolResultTextLength } from '../../core/utils/multimodal-context.js'
+import { CLEARED_TOOL_RESULT, CLEARED_TOOL_EVIDENCE_KEY, clearedToolEvidence, withoutToolEvidence } from '../../core/utils/tool-evidence.js'
 import { compressionSplitIndex, type CompressionOptions } from './compression.js'
 import { applyOSMMultiplier } from '../../core/osm.js'
 import { serializeMessageMetadata, restoreModelInputContent } from './model-input-content.js'
@@ -424,13 +426,13 @@ export class SQLiteConversationHistory implements ConversationHistory {
   }
 
   /** 获取单条消息 */
-  async getMessageById(messageId: string, tenantId: string): Promise<(Message & { conversationId?: string; dbId: number }) | null> {
+  async getMessageById(messageId: string, tenantId: string, sessionId?: string): Promise<(Message & { conversationId?: string; dbId: number }) | null> {
     const db = getDb()
     const result = await db.execute({
       sql: `SELECT id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, created_at, conversation_id, metadata
             FROM conversations
-            WHERE message_id = ? AND tenant_id = ?`,
-      args: [messageId, tenantId],
+            WHERE message_id = ? AND tenant_id = ?${sessionId === undefined ? '' : ' AND session_id = ?'}`,
+      args: [messageId, tenantId, ...(sessionId === undefined ? [] : [sessionId])],
     })
     if (result.rows.length === 0) return null
     const row = result.rows[0]
@@ -463,7 +465,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
       args: [
         typeof content === 'string' ? content : JSON.stringify(content), 
         tokens, 
-        serializeMessageMetadata({ metadata }),
+        serializeMessageMetadata({ metadata: withoutToolEvidence(metadata) }),
         messageId, 
         tenantId
       ],
@@ -840,8 +842,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
   ): Promise<{ cleared: number; freedTokens: number }> {
     const keepRecent = Number.isFinite(opts.keepRecent) ? Math.max(0, Math.floor(opts.keepRecent!)) : 10
     const maxChars = Number.isFinite(opts.maxChars) && (opts.maxChars ?? 0) > 0 ? Math.floor(opts.maxChars!) : undefined
-    const placeholder = '[tool result cleared]'
-    const placeholderTokens = estimateTokens(placeholder)
+    const placeholder = CLEARED_TOOL_RESULT
     const db = getDb()
     await ensureSQLiteDeliverySchema(db)
 
@@ -849,7 +850,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
 
     // 取该会话全部消息（按写入顺序），排除最近 keepRecent 条消息范围内的
     const all = await db.execute({
-      sql: `SELECT id, role, content, tokens, metadata FROM conversations
+      sql: `SELECT id, role, content, tokens, metadata, message_id, tool_call_id, tool_name FROM conversations
             WHERE tenant_id = ? AND session_id = ?
             ORDER BY created_at ASC, id ASC`,
       args: [ctx.tenantId, ctx.sessionId],
@@ -870,7 +871,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
     try {
       if (maintenance) {
         await maintenance.check(tx)
-        const current = await tx.execute({ sql: `SELECT id,role,content,tokens,metadata FROM conversations WHERE tenant_id=? AND session_id=? ORDER BY created_at ASC,id ASC`, args: [ctx.tenantId, ctx.sessionId] })
+        const current = await tx.execute({ sql: `SELECT id,role,content,tokens,metadata,message_id,tool_call_id,tool_name FROM conversations WHERE tenant_id=? AND session_id=? ORDER BY created_at ASC,id ASC`, args: [ctx.tenantId, ctx.sessionId] })
         if (createHash('sha256').update(JSON.stringify(current.rows)).digest('hex') !== sourceDigest)
           throw new Error('History changed before private micro maintenance')
       }
@@ -879,7 +880,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
         if (row['role'] !== 'tool') continue
         const content = row['content'] as string | null
         if (!content || content === placeholder) continue
-        if (id >= cutoffId && (maxChars === undefined || content.length <= maxChars)) continue
+        if (id >= cutoffId && (maxChars === undefined || toolResultTextLength(content) <= maxChars)) continue
         const oldTokens = Number(row['tokens'] ?? 0) || estimateTokens(content)
         let metadata: Record<string, unknown>
         try {
@@ -892,6 +893,9 @@ export class SQLiteConversationHistory implements ConversationHistory {
         // since a prior pass, its current output supersedes the old archive.
         metadata[MICRO_COMPACT_ARCHIVE_KEY] = { content, tokens: oldTokens }
         metadata.outputPreview = content
+        const originalMessage = rowToMessage(row)
+        metadata[CLEARED_TOOL_EVIDENCE_KEY] = clearedToolEvidence(originalMessage)
+        const placeholderTokens = estimateModelMessageTokens({ ...originalMessage, content: placeholder, metadata })
         if (cleared === 0 && !maintenance) {
           for (const statement of invalidateSQLiteDeliveryStatements(sqliteHistoryScope(ctx.tenantId, ctx.sessionId)))
             await tx.execute(statement)

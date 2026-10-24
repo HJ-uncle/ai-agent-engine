@@ -32,7 +32,7 @@ export const CODE_BUILTIN_TOOLS: ReadonlySet<string> = new Set([
 
 const GENERAL_SERVICE_TOOLS: ReadonlySet<string> = new Set([
   'remember', 'recall', 'search_memory', 'list_memories', 'forget', 'link_memories',
-  'install_package', 'list_packages', 'calculate', 'get_time', 'office_document',
+  'install_package', 'list_packages', 'calculate', 'get_time', 'office_document', 'office_inspect', 'office_environment',
 ])
 
 /** Extension namespaces may add configured tools, but cannot impersonate excluded builtins or old aliases. */

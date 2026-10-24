@@ -87,7 +87,7 @@ describe('memory HTTP scope isolation', () => {
 
   it('exposes and persists the per-session memory mode', async () => {
     const before = await app.inject({ method: 'GET', url: '/memory/settings?sessionId=A' })
-    expect(JSON.parse(before.body).data.memoryScope).toBe('global')
+    expect(JSON.parse(before.body).data.memoryScope).toBe('session')
     const update = await app.inject({ method: 'PUT', url: '/memory/settings', payload: { sessionId: 'A', memoryScope: 'session' } })
     expect(update.statusCode).toBe(200)
     const after = await app.inject({ method: 'GET', url: '/memory/settings?sessionId=A' })
@@ -99,7 +99,7 @@ describe('memory HTTP scope isolation', () => {
     expect(code.statusCode).toBe(200)
     expect(code.json().data).toMatchObject({ memoryScope: 'session', effectiveScope: 'session', enabled: true })
     const general = await app.inject({ method: 'GET', url: '/memory/settings?sessionId=new-general' })
-    expect(general.json().data).toMatchObject({ memoryScope: 'global', effectiveScope: 'global' })
+    expect(general.json().data).toMatchObject({ memoryScope: 'session', effectiveScope: 'session', globalEnabled: false, sessionOverride: null })
   })
 
   it.each(['off', 'global', 'session'] as const)('preserves an explicit %s choice across a memory database reopen', async memoryScope => {
@@ -108,7 +108,7 @@ describe('memory HTTP scope isolation', () => {
     expect(updated.statusCode).toBe(200)
     await closeMemoryDb()
     const saved = await app.inject({ method: 'GET', url: `/memory/settings?sessionId=${sessionId}`, headers: { 'x-aether-tool-profile': 'code' } })
-    expect(saved.json().data).toMatchObject({ memoryScope, effectiveScope: memoryScope })
+    expect(saved.json().data).toMatchObject({ memoryScope, effectiveScope: memoryScope === 'global' ? 'session' : memoryScope, globalEnabled: false })
     const newSession = await app.inject({ method: 'GET', url: '/memory/settings?sessionId=another-code', headers: { 'x-aether-tool-profile': 'code' } })
     expect(newSession.json().data.memoryScope).toBe('session')
   })

@@ -226,9 +226,21 @@ export async function gitRoutes(fastify: FastifyInstance) {
       return reply.send(success(data))
     } catch (error) {
       const metadata=repositoryFailureMetadata(error)
+      // A lease refusal happens before the route admits the Git action.  It
+      // therefore has a replay-safe outcome even for `init` (which is usually
+      // conservatively marked as may-have-effects because the route can
+      // create `.git` before dispatch).  Preserve that distinction so the UI
+      // can inspect the lease and offer a safe retry after a transient
+      // workspace/session contention.
+      const leaseErrorCode = metadata.errorCode ?? ((error as {code?:unknown})?.code==='WORKSPACE_LEASE_BUSY' ? 'git-busy' as const : undefined)
+      const executionDisposition = !admitted && leaseErrorCode === 'git-busy'
+        ? 'not_started' as const
+        : admitted || request.body?.op==='init' || request.body?.op==='recover-lease' || leaseErrorCode==='git-quarantined'
+          ? 'may_have_effects' as const
+          : 'not_started' as const
       const failure={success:false,error:error instanceof Error?error.message:String(error),...metadata,
-        executionDisposition:admitted || request.body?.op==='init' || request.body?.op==='recover-lease' || metadata.errorCode==='git-quarantined'?'may_have_effects':'not_started',
-        ...((error as {code?:unknown})?.code==='WORKSPACE_LEASE_BUSY'?{errorCode:'git-busy'}:{})}
+        executionDisposition,
+        ...(leaseErrorCode ? {errorCode:leaseErrorCode} : {})}
       return reply.code(200).send(fail(50000,failure.error,failure))
     }
   })
@@ -280,6 +292,10 @@ export async function gitRoutes(fastify: FastifyInstance) {
         case 'list-remotes': { const out = await run(cwd, ['remote', '-v']); const remotes: any[] = []; for (const line of out.split(/\r?\n/)) { const m = line.match(/^(\S+)\s+(\S+)\s+\(fetch\)/); if (m) remotes.push({ name: m[1], url: m[2] }) }; return success({ success: true, remotes }) }
         default: return fail(40400, `不支持的 Git 查询: ${op}`)
       }
+      // Read-only status/diff queries may share a repository with Code's
+      // local Git refresh. Queue behind the physical repository lease instead
+      // of failing immediately with a transient git-busy/orphan message;
+      // mutations keep their fail-fast admission below.
       }, 30_000)
       return reply.send(data)
     } catch (error) { return reply.code(200).send(fail(50000, error instanceof Error ? error.message : String(error))) }

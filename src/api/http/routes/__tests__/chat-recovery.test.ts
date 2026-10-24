@@ -102,6 +102,32 @@ async function replay(lastEventId: string, targetTenant = tenantId) {
 }
 
 describe('D4 chat snapshot and replay HTTP contract', () => {
+  it('recovers the durable terminal outcome after an oversized frame freezes the live published prefix', async () => {
+    const run = await seedTurn('running')
+    const bus = attachBus()
+    await bus.publish('\x00__run__' + JSON.stringify(run))
+    await bus.publish('CONFIRMED_PREFIX')
+    const cursor = bus.lastEventId
+    await expect(bus.publish('x'.repeat(1024 * 1024 + 1))).rejects.toMatchObject({ reason: 'oversized_frame' })
+    await vi.waitFor(() => expect(bus.finished).toBe(true))
+    const frozen = bus.snapshot().projection
+    const pending = await snapshot()
+    expect(pending).toMatchObject({ source: 'live', finished: true, eventId: cursor,
+      run: { runId: run.runId, status: 'running' }, executionRun: { runId: run.runId, status: 'running' } })
+    const terminal = (await rootRunStore.update(tenantId, run.runId, { status: 'succeeded', stopReason: 'completed', finishedAt: Date.now() }))!
+    const recovered = await snapshot()
+    // Transport data is still the original prefix; only execution authority
+    // advances. Replacing run/projection would forge the SSE cursor's state.
+    expect(recovered).toMatchObject({ source: 'live', finished: true, eventId: cursor,
+      run: { runId: run.runId, status: 'running', version: run.version },
+      executionRun: { runId: run.runId, status: 'succeeded', version: terminal.version } })
+    expect(recovered.projection).toEqual(frozen)
+    expect(recovered.runs).toEqual([run])
+    expect(bus.abortController.signal.aborted).toBe(false)
+    expect((await snapshot(sessionId, 'foreign-owner')).executionRun).toBeUndefined()
+    expect(await rootRunStore.list(tenantId, sessionId)).toEqual([terminal])
+  })
+
   it('serves lightweight status from the latest indexed run without cloning live history', async () => {
     await seedTurn('succeeded')
     const run = await seedTurn('running')

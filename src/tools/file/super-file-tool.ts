@@ -14,11 +14,11 @@ import { writeConditionalFile } from './conditional-write.js'
 export const readFileTool: Tool = {
   name: 'read_file',
   displayName: '读取文件',
-  description: '读取支持格式的文件（JSON, CSV, XLSX, PDF, DOCX, 代码, 文本），支持分页。默认返回行号及完整字节 expectedHash；行号和格式化展示不是源文件原文。精确编辑前使用 mode="exact"：返回 JSON，其 content 为无行号的原始 UTF-8 文本（保留 CRLF/BOM），expectedHash 始终对应完整文件。',
+  description: '按确切路径读取支持格式的文件（JSON, CSV, XLSX, PDF, DOCX, 代码, 文本），支持分页。路径不存在则失败，不搜索或替换成其他目录/版本的同名文件；路径不确定时先用 list_files 或搜索工具定位。默认返回行号及完整字节 expectedHash；行号和格式化展示不是源文件原文。精确编辑前使用 mode="exact"：返回 JSON，其 content 为无行号的原始 UTF-8 文本（保留 CRLF/BOM），expectedHash 始终对应完整文件。',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: '文件路径' },
+      path: { type: 'string', description: '确切文件路径；相对路径基于当前工作区解析，不按文件名猜测其他目录。' },
       start_line: { type: 'number', description: '起始行号（从 1 开始），默认 1' },
       end_line: { type: 'number', description: '结束行号，默认读取 300 行' },
       mode: { type: 'string', enum: ['auto', 'full', 'summary', 'vision', 'ocr', 'exact'], description: 'auto(默认), full(全文), summary(摘要/签名), vision(图片预览), ocr(文本提取), exact(原始UTF-8 JSON，含完整expectedHash，可按行分页)' },
@@ -30,58 +30,14 @@ export const readFileTool: Tool = {
     const startTime = performance.now()
     
     try {
-      let targetPath: string
-      try {
-        targetPath = workspaceManager.resolveSafePath(ctx, filePath)
-      } catch (e) {
-        if (mode === 'exact') throw e
-        // 如果路径解析失败（可能是非法字符），尝试在工作区搜索
-        targetPath = ''
-      }
-
-      // --- 智能路径纠错逻辑 ---
-      if (!targetPath || !fs.existsSync(targetPath)) {
-        if (mode === 'exact') return { success: false, output: `File not found: ${filePath}. Exact mode requires the specified file and does not guess another path.` }
-        const fileName = path.basename(filePath)
-        const allWorkspacePaths = workspaceManager.getPaths(ctx)
-        let bestMatchPath = ''
-        let bestMatchTime = 0
-
-        for (const basePath of allWorkspacePaths) {
-          if (!fs.existsSync(basePath)) continue
-          
-          // 递归搜索匹配的文件
-          const searchFiles = (dir: string) => {
-            const entries = fs.readdirSync(dir, { withFileTypes: true })
-            for (const entry of entries) {
-              const fullPath = path.join(dir, entry.name)
-              if (entry.isDirectory()) {
-                searchFiles(fullPath)
-              } else {
-                // 匹配逻辑：完全相等，或者不带后缀相等，或者包含文件名
-                const isMatch = entry.name === fileName || 
-                               entry.name.replace(/\.[^/.]+$/, "") === fileName ||
-                               entry.name.includes(fileName)
-                
-                if (isMatch) {
-                  const stat = fs.statSync(fullPath)
-                  if (!bestMatchPath || stat.mtimeMs > bestMatchTime) {
-                    bestMatchPath = fullPath
-                    bestMatchTime = stat.mtimeMs
-                  }
-                }
-              }
-            }
-          }
-          searchFiles(basePath)
-        }
-
-        if (bestMatchPath) {
-          ctx.logger.info(`[read_file] 自动纠错：将 "${filePath}" 映射到最新文件 "${bestMatchPath}"`)
-          targetPath = bestMatchPath
-        } else {
-          return { success: false, output: `File not found: ${filePath}. 请确认文件名是否正确，或者尝试只输入关键词。` }
-        }
+      // A missing revision must not resolve to another task's newest namesake.
+      // Keep path discovery explicit, avoiding cross-task evidence substitution
+      // and an unbounded directory walk on every failed read.
+      const targetPath = workspaceManager.resolveSafePath(ctx, filePath)
+      if (!fs.existsSync(targetPath)) return {
+        success: false, error: 'FILE_NOT_FOUND',
+        output: `File not found: ${filePath}. Reading requires the specified file and does not guess another path. Use list_files or a search tool to locate it, then read its exact path.`,
+        metadata: { code: 'FILE_NOT_FOUND', requestedPath: filePath, fileMutationApplied: false },
       }
       
       return await withFileLocks([targetPath], async ([canonicalPath]) => {
@@ -120,6 +76,12 @@ export const readFileTool: Tool = {
         const compressionRatio = originalBytes > 0 ? ((1 - compressedBytes / originalBytes) * 100).toFixed(2) + '%' : '0%'
         const report = `[读取监控] 耗时: ${timeMs.toFixed(2)}ms | 原始大小: ${originalBytes}B | 压缩后: ${compressedBytes}B | 压缩率: ${compressionRatio}`
         ctx.logger.info(`[read_file] ${canonicalPath} - ${report}`)
+        // The native image contract must remain whole JSON. Prefixing the
+        // display report turns pixels into text and breaks both wire adapters.
+        // A file containing similar JSON cannot opt in: only the handler can.
+        if (result.type === 'image_vision' && result.image) return {
+          success: true, output: JSON.stringify({ ...result.image, fileVersion: version }), metadata: version,
+        }
         return { success: true, output: `${report}\n[文件版本] ${JSON.stringify(version)}\n[精确编辑] 展示行号和格式化内容不是原文；edit_file 前可用 mode="exact" 获取无行号 content。\n\n${outputContent}`, metadata: version }
       })
     } catch (err) {

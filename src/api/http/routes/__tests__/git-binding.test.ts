@@ -85,6 +85,28 @@ it('generation mismatch never releases a newer lease; orphan diagnostics retain 
   expect(()=>held.release()).toThrow(/ownership changed/);expect(JSON.parse(fs.readFileSync(file,'utf8')).generation).toBe(replacement.generation)
   expect(()=>acquireResourceLease(file,'test resource',ctx())).toThrow(new RegExp(replacement.generation));expect(fs.existsSync(file)).toBe(true)
 })
+it('verified Git recovery retains a stale binding lease from another session',()=>{
+  const manager=holder.manager!, expected=manager.getBindingSnapshot(ctx()), external=ctx('other-session')
+  const leaseFile=(manager as unknown as { sessionLeaseFile(context: { tenantId:string; sessionId:string }): string }).sessionLeaseFile.bind(manager)
+  const file=leaseFile(external)
+  const held=acquireResourceLease(file,'workspace session',external)
+  try {
+    const retained=manager.recoverInterruptedGitBinding(ctx(),expected,{file,generation:held.owner.generation,pid:held.owner.pid,root:expected.root,epoch:expected.epoch},held.owner.pid)
+    expect(retained).toBe(false)
+    expect(fs.existsSync(file)).toBe(true)
+    expect(JSON.parse(fs.readFileSync(file,'utf8')).generation).toBe(held.owner.generation)
+  } finally { held.release() }
+})
+it('verified Git recovery retains a newer lease replacing the interrupted generation',()=>{
+  const manager=holder.manager!, expected=manager.getBindingSnapshot(ctx())
+  const leaseFile=(manager as unknown as { sessionLeaseFile(context: { tenantId:string; sessionId:string }): string }).sessionLeaseFile.bind(manager)
+  const file=leaseFile(ctx()), held=acquireResourceLease(file,'workspace session',ctx())
+  try {
+    const retained=manager.recoverInterruptedGitBinding(ctx(),expected,{file,generation:randomUUID(),pid:held.owner.pid,root:expected.root,epoch:expected.epoch},held.owner.pid)
+    expect(retained).toBe(false)
+    expect(fs.existsSync(file)).toBe(true)
+  } finally { held.release() }
+})
 it('parallel status and branch reads queue without losing their binding or leaking a lock',async()=>{
   const snapshot=holder.manager!.getBindingSnapshot(ctx()),query=new URLSearchParams({sessionId:'session',expectedRoot:snapshot.root,bindingEpoch:snapshot.epoch})
   const [status,branch]=await Promise.all(['status','branch-info'].map(op=>app.inject({method:'GET',url:'/git/'+op+'?'+query})))

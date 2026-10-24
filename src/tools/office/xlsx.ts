@@ -21,6 +21,7 @@ type Value = Scalar | Date | { formula: string }
 interface XmlElement { full: string; tag: string; attrs: Record<string, string>; inner: string; index: number }
 interface Sheet { name: string; file: string; xml: string; cells: Map<string, XmlElement> }
 interface Package { entries: Record<string, Uint8Array>; workbook: string; sheets: Sheet[]; strings: string[]; date1904: boolean; dateStyles: Set<number> }
+interface PreparedSheet { name: string; columns: XlsxColumn[]; rows: Value[][] }
 
 function fail(message: string): never { throw new Error(`XLSX: ${message}`) }
 function record(value: unknown): value is Record<string, unknown> {
@@ -233,7 +234,7 @@ function refreshFormulaCaches(pkg: Package): void {
   const properties = { ...(current?.attrs ?? {}), calcMode: 'auto', fullCalcOnLoad: '1', forceFullCalc: '1' }
   const prefix = /^<([\w.-]+:)?workbook\b/m.exec(workbook)?.[1] ?? ''
   const xml = `<${prefix}calcPr${attributeString(properties)}/>`
-  workbook = current ? workbook.replace(current.full, xml) : workbook.replace(new RegExp(`</${NS}workbook\\s*>`), `${xml}$&`)
+  workbook = current ? workbook.replace(current.full, () => xml) : workbook.replace(new RegExp(`</${NS}workbook\\s*>`), closing => xml + closing)
   pkg.entries['xl/workbook.xml'] = Buffer.from(workbook)
   // A previous dependency chain describes old cell values; Excel rebuilds it on opening.
   delete pkg.entries['xl/calcChain.xml']
@@ -251,9 +252,9 @@ function attributeString(value: Record<string, string>): string {
   return Object.entries(value).map(([key, item]) => ` ${key}="${encodeXml(item)}"`).join('')
 }
 
-export async function createXlsx(input: XlsxInput): Promise<Buffer> {
+function prepareSheets(input: XlsxInput): PreparedSheet[] {
   if (!record(input) || !Array.isArray(input.sheets) || input.sheets.length < 1 || input.sheets.length > LIMITS.sheets) fail(`sheets 数量须为 1-${LIMITS.sheets}`)
-  const names = new Set<string>(), prepared: Array<{ name: string; columns: XlsxColumn[]; rows: Value[][] }> = []
+  const names = new Set<string>(), prepared: PreparedSheet[] = []
   let cells = 0
   for (const raw of input.sheets) {
     if (!record(raw) || typeof raw.name !== 'string' || !raw.name.trim() || raw.name.length > 31 || /[\\/*?:\[\]\u0000-\u001f]/.test(raw.name) || /^'|'$/.test(raw.name)) fail('工作表名称无效（1-31 字符且不能包含特殊字符）')
@@ -276,6 +277,11 @@ export async function createXlsx(input: XlsxInput): Promise<Buffer> {
     })
     prepared.push({ name: raw.name, columns: raw.columns, rows })
   }
+  return prepared
+}
+
+export async function createXlsx(input: XlsxInput): Promise<Buffer> {
+  const prepared = prepareSheets(input)
   const workbook = new ExcelJS.Workbook()
   workbook.creator = 'Aether'; workbook.created = new Date(); workbook.calcProperties.fullCalcOnLoad = true
   for (const sheet of prepared) {
@@ -317,12 +323,26 @@ export async function createXlsx(input: XlsxInput): Promise<Buffer> {
 
 export async function inspectXlsx(buffer: Buffer): Promise<{ format: 'xlsx'; content: string; summary: Record<string, number | string | boolean>; warnings: string[] }> {
   const pkg = packageFrom(buffer), warnings: string[] = [], lines: string[] = []
+  const formulaTextLocations: string[] = []
+  let formulaTextCells = 0, formulaTextLocationCharacters = 0
+  const errorLocations: string[] = []
+  let errorCells = 0, formulaErrorCells = 0, errorLocationCharacters = 0
   let cells = 0, formulas = 0, formulaCaches = 0, pendingFormulas = 0, shown = 0, characters = 0, shortenedCells = 0
   for (const sheet of pkg.sheets) {
     lines.push(`## ${sheet.name}`)
     for (const [address, cell] of sheet.cells) {
       cells++
       const formula = elements(cell.inner, 'f')[0], value = cellScalar(cell, pkg)
+      // A local PASS count cannot certify other sheets. Inspect saved error types
+      // during this same bounded traversal, including cells outside the preview.
+      if (cell.attrs.t === 'e') {
+        errorCells++
+        if (formula) formulaErrorCells++
+        const location = `${JSON.stringify(sheet.name)}!${address} (${JSON.stringify(String(value ?? '无错误代码').slice(0, 40))})`
+        if (errorLocations.length < 20 && errorLocationCharacters + location.length <= 2_000) {
+          errorLocations.push(location); errorLocationCharacters += location.length
+        }
+      }
       let display = value === null ? '（空）' : String(value)
       if (!formula && typeof value === 'number' && pkg.dateStyles.has(Number(cell.attrs.s ?? 0))) {
         const date = new Date((value - 25_569 + (pkg.date1904 ? 1_462 : 0)) * 86_400_000)
@@ -333,6 +353,17 @@ export async function inspectXlsx(buffer: Buffer): Promise<{ format: 'xlsx'; con
         const hasCache = value !== null
         if (hasCache) formulaCaches++; else pendingFormulas++
         display = `公式 =${decodeXml(formula.inner) || `[${formula.attrs.t ?? '未知'}公式]`}；${hasCache ? `文件缓存 ${String(value)}（未独立验证）` : '待重算，无有效缓存'}`
+      } else if (typeof value === 'string' && value.startsWith('=')) {
+        // A successful write of literal text is not evidence that a check formula ran.
+        // Count during the existing bounded traversal, even beyond the content preview.
+        formulaTextCells++
+        if (formulaTextLocations.length < 20 && formulaTextLocationCharacters + sheet.name.length + address.length + 3 <= 2_000) {
+          const location = `${JSON.stringify(sheet.name)}!${address}`
+          if (formulaTextLocationCharacters + location.length <= 2_000) {
+            formulaTextLocations.push(location); formulaTextLocationCharacters += location.length
+          }
+        }
+        display = `文本（以 = 开头，非公式）：${value}`
       }
       if (shown < 2_000 && characters < 60_000) {
         if (display.length > 600) shortenedCells++
@@ -343,10 +374,12 @@ export async function inspectXlsx(buffer: Buffer): Promise<{ format: 'xlsx'; con
   }
   if (shown < cells) warnings.push(`内容预览已截断：显示 ${shown}/${cells} 个单元格，实际文件未截断。`)
   if (shortenedCells) warnings.push(`${shortenedCells} 个单元格的长文本仅预览前 600 字符，实际文件未截断。`)
+  if (errorCells) warnings.push(`全工作簿发现 ${errorCells} 个已保存的错误单元格，其中 ${formulaErrorCells} 个为公式错误缓存；位置（列出 ${errorLocations.length}/${errorCells}）：${errorLocations.join('、') || '超出诊断长度上限'}。缓存存在不代表结果有效；局部校验表 PASS 不能替代全表检查。这里只检查文件保存的错误类型，未重新计算，也不保证无业务错误。`)
+  if (formulaTextCells) warnings.push(`${formulaTextCells} 个以 = 开头的文本单元格不是公式，不会计算；位置（列出 ${formulaTextLocations.length}/${formulaTextCells}）：${formulaTextLocations.join('、') || '超出诊断长度上限'}。如需计算，请显式写入 {formula: "..."}；若为文字示例可保持原样。原文本未更改，未自动执行，也不计入 formulas / formulaCaches / pendingFormulas。`)
   if (formulas) warnings.push('公式缓存是文件中保存的值；只有 SUM/AVERAGE/MIN/MAX/COUNT 的同表简单引用在生成/编辑时尝试本地求值，其他公式需要 Excel/WPS 重算。')
   if (pendingFormulas) warnings.push(`${pendingFormulas} 个公式没有有效缓存，当前结果为待重算，不能视为已完成计算。`)
   if (Object.keys(pkg.entries).some(file => /vbaProject\.bin$|pivotTables\/|externalLinks\//i.test(file))) warnings.push('文件含宏、数据透视或外部链接等复杂内容；读取不执行这些内容，编辑只支持明确单元格局部更新。')
-  return { format: 'xlsx', content: lines.join('\n'), summary: { sheets: pkg.sheets.length, cells, formulas, formulaCaches, pendingFormulas, date1904: pkg.date1904, previewCells: shown, previewTruncated: shown < cells || shortenedCells > 0, calculation: elements(pkg.workbook, 'calcPr')[0]?.attrs.calcMode ?? 'unspecified' }, warnings }
+  return { format: 'xlsx', content: lines.join('\n'), summary: { sheets: pkg.sheets.length, cells, formulas, formulaCaches, pendingFormulas, errorCells, formulaErrorCells, date1904: pkg.date1904, previewCells: shown, previewTruncated: shown < cells || shortenedCells > 0, calculation: elements(pkg.workbook, 'calcPr')[0]?.attrs.calcMode ?? 'unspecified' }, warnings }
 }
 
 function encodeCell(address: string, value: Value, existing: XmlElement | undefined, prefix: string, date1904: boolean): string {
@@ -424,13 +457,13 @@ function patchSheet(sheet: Sheet, edits: Array<{ address: string; value: Value }
     row.cells.set(address.column, encodeCell(address.name, edit.value, sheet.cells.get(address.name), prefix, date1904))
   }
   const data = [...rows.entries()].sort(([a], [b]) => a - b).map(([, row]) => `<${prefix}row${attributeString(row.attrs)}>${[...row.cells.entries()].sort(([a], [b]) => a - b).map(([, cell]) => cell).join('')}</${prefix}row>`).join('')
-  sheet.xml = sheet.xml.replace(sheetData.full, `<${sheetData.tag}${attributeString(sheetData.attrs)}>${data}</${sheetData.tag}>`)
+  sheet.xml = sheet.xml.replace(sheetData.full, () => `<${sheetData.tag}${attributeString(sheetData.attrs)}>${data}</${sheetData.tag}>`)
   const all = [...sheet.cells.keys(), ...edits.map(edit => edit.address)].map(cellAddress)
   if (all.length) {
     let minColumn = 16_384, maxColumn = 1, minRow = 1_048_576, maxRow = 1
     for (const item of all) { minColumn = Math.min(minColumn, item.column); maxColumn = Math.max(maxColumn, item.column); minRow = Math.min(minRow, item.row); maxRow = Math.max(maxRow, item.row) }
     const dimension = elements(sheet.xml, 'dimension')[0]
-    if (dimension) sheet.xml = sheet.xml.replace(dimension.full, `<${prefix}dimension ref="${columnName(minColumn)}${minRow}:${columnName(maxColumn)}${maxRow}"/>`)
+    if (dimension) sheet.xml = sheet.xml.replace(dimension.full, () => `<${prefix}dimension ref="${columnName(minColumn)}${minRow}:${columnName(maxColumn)}${maxRow}"/>`)
   }
 }
 
@@ -465,4 +498,170 @@ export async function editXlsx(buffer: Buffer, edits: XlsxEdit[]): Promise<Buffe
   const updated = packageFrom(writeOfficeZip(pkg.entries))
   refreshFormulaCaches(updated)
   return writeOfficeZip(updated.entries)
+}
+
+const MAIN_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+const DOC_REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+const PACKAGE_REL_NS = 'http://schemas.openxmlformats.org/package/2006/relationships'
+const CONTENT_NS = 'http://schemas.openxmlformats.org/package/2006/content-types'
+
+function uniqueElement(xml: string, name: string): XmlElement {
+  const matches = elements(xml, name)
+  if (matches.length !== 1) fail(`追加工作表需要唯一 ${name} 节点，未修改文件`)
+  return matches[0]
+}
+function xmlPrefix(item: XmlElement): string { return item.tag.includes(':') ? item.tag.slice(0, item.tag.indexOf(':') + 1) : '' }
+function checkedRoot(xml: string, name: string, namespace: string): XmlElement {
+  const root = uniqueElement(xml, name), prefix = xmlPrefix(root)
+  if (root.attrs[prefix ? `xmlns:${prefix.slice(0, -1)}` : 'xmlns'] !== namespace) fail(`追加工作表暂不支持 ${name} 的 XML 命名空间`)
+  return root
+}
+function appendChildren(xml: string, name: string, children: string, additions?: number): string {
+  const parent = uniqueElement(xml, name), attributes = { ...parent.attrs }
+  if (additions !== undefined) attributes.count = String(Number(attributes.count) + additions)
+  // OOXML text may contain literal replacement tokens ($&, $$, $', $`). A
+  // callback prevents JavaScript from interpreting names or preserved content.
+  return xml.replace(parent.full, () => `<${parent.tag}${attributeString(attributes)}>${parent.inner}${children}</${parent.tag}>`)
+}
+
+/** Styles are appended without renumbering any source index. New strings use
+ * inlineStr, so adding sheets cannot alter a source sharedStrings reference. */
+function appendSheetStyles(pkg: Package): Record<string, number> {
+  if (!pkg.entries['xl/styles.xml']) fail('追加工作表需要已有 styles.xml；此工作簿样式结构暂不支持')
+  let xml = utf8(pkg.entries['xl/styles.xml'])
+  const root = checkedRoot(xml, 'styleSheet', MAIN_NS), prefix = xmlPrefix(root)
+  const sectionSize = (parent: string, child: string): number => {
+    const section = uniqueElement(xml, parent), size = elements(section.inner, child).length
+    if (!size || size > 10_000 || Number(section.attrs.count) !== size) fail(`样式 ${parent} 索引数量无效或过大`)
+    return size
+  }
+  const font = sectionSize('fonts', 'font'), fill = sectionSize('fills', 'fill'), border = sectionSize('borders', 'border')
+  sectionSize('cellStyleXfs', 'xf')
+  const firstStyle = sectionSize('cellXfs', 'xf')
+  const numFmts = elements(xml, 'numFmts')
+  if (numFmts.length > 1) fail('numFmts 重复')
+  const formats = numFmts.length ? elements(numFmts[0].inner, 'numFmt') : []
+  if (numFmts.length && Number(numFmts[0].attrs.count) !== formats.length) fail('numFmts 数量无效')
+  const ids = formats.map(item => Number(item.attrs.numFmtId))
+  if (ids.some(id => !Number.isInteger(id) || id < 0 || id > 65_533) || new Set(ids).size !== ids.length) fail('numFmtId 无效或重复')
+  const dateFormat = Math.max(163, ...ids) + 1, numberFormat = dateFormat + 1
+  const formatsXml = `<${prefix}numFmt numFmtId="${dateFormat}" formatCode="yyyy-mm-dd"/><${prefix}numFmt numFmtId="${numberFormat}" formatCode="#,##0.00;[Red](#,##0.00)"/>`
+  if (numFmts.length) xml = appendChildren(xml, 'numFmts', formatsXml, 2)
+  else {
+    const opening = new RegExp(`<${root.tag}\\b[^>]*>`)
+    xml = xml.replace(opening, matched => `${matched}<${prefix}numFmts count="2">${formatsXml}</${prefix}numFmts>`)
+  }
+  const makeFont = (bold: boolean) => `<${prefix}font><${prefix}sz val="${bold ? 11 : 10}"/><${prefix}color rgb="FF243247"/><${prefix}name val="Microsoft YaHei"/>${bold ? `<${prefix}b/>` : ''}</${prefix}font>`
+  xml = appendChildren(xml, 'fonts', makeFont(false) + makeFont(true), 2)
+  xml = appendChildren(xml, 'fills', `<${prefix}fill><${prefix}patternFill patternType="none"/></${prefix}fill><${prefix}fill><${prefix}patternFill patternType="solid"><${prefix}fgColor rgb="FFE8EEF5"/><${prefix}bgColor indexed="64"/></${prefix}patternFill></${prefix}fill>`, 2)
+  xml = appendChildren(xml, 'borders', `<${prefix}border><${prefix}left/><${prefix}right/><${prefix}top/><${prefix}bottom style="hair"><${prefix}color rgb="FFDCE3EB"/></${prefix}bottom><${prefix}diagonal/></${prefix}border>`, 1)
+  const kinds = ['header', 'general', 'text', 'number', 'percent', 'date']
+  const formatIds = [0, 0, 49, numberFormat, 10, dateFormat]
+  const xfs = kinds.map((kind, index) => `<${prefix}xf numFmtId="${formatIds[index]}" fontId="${font + (kind === 'header' ? 1 : 0)}" fillId="${fill + (kind === 'header' ? 1 : 0)}" borderId="${border}" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><${prefix}alignment vertical="center" horizontal="${['number', 'percent'].includes(kind) ? 'right' : 'left'}" wrapText="1"/></${prefix}xf>`).join('')
+  xml = appendChildren(xml, 'cellXfs', xfs, kinds.length)
+  pkg.entries['xl/styles.xml'] = Buffer.from(xml)
+  return Object.fromEntries(kinds.map((kind, index) => [kind, firstStyle + index]))
+}
+
+function newWorksheet(sheet: PreparedSheet, styles: Record<string, number>, date1904: boolean): string {
+  const last = `${columnName(sheet.columns.length)}${sheet.rows.length + 1}`
+  const encode = (address: string, value: Value, style: number) => encodeCell(address, value,
+    { attrs: { s: String(style) }, full: '', tag: 'c', inner: '', index: 0 }, '', date1904)
+  const header = sheet.columns.map((column, index) => encode(`${columnName(index + 1)}1`, column.header, styles.header)).join('')
+  const rows = sheet.rows.map((row, index) => `<row r="${index + 2}" ht="23" customHeight="1">${row.map((value, col) => encode(`${columnName(col + 1)}${index + 2}`, value, styles[sheet.columns[col].type ?? (value instanceof Date ? 'date' : 'general')])).join('')}</row>`).join('')
+  const columns = sheet.columns.map((column, index) => `<col min="${index + 1}" max="${index + 1}" width="${column.width ?? Math.min(42, Math.max(12, Array.from(column.header).length * 2 + 3))}" customWidth="1"/>`).join('')
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="${MAIN_NS}"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="A1:${last}"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="23"/><cols>${columns}</cols><sheetData><row r="1" ht="28" customHeight="1">${header}</row>${rows}</sheetData><autoFilter ref="A1:${last}"/><pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/><pageSetup paperSize="9" orientation="${sheet.columns.length > 6 ? 'landscape' : 'portrait'}" fitToWidth="1" fitToHeight="0"/><headerFooter><oddFooter>&amp;L&amp;A&amp;R第 &amp;P 页 / 共 &amp;N 页</oddFooter></headerFooter></worksheet>`
+}
+
+/** Only the relationship-designated calc-chain part is removed. Never strip
+ * other relations or arbitrary similarly named parts when preserving a book. */
+function removeAppendCalcChains(pkg: Package): void {
+  let rels = utf8(pkg.entries['xl/_rels/workbook.xml.rels']), types = utf8(pkg.entries['[Content_Types].xml'])
+  for (const rel of elements(rels, 'Relationship').filter(item => item.attrs.Type === `${DOC_REL_NS}/calcChain`)) {
+    const target = rel.attrs.Target
+    if (!target || target.includes('\\') || rel.attrs.TargetMode === 'External') fail('计算链关系无效')
+    const file = target.startsWith('/') ? target.slice(1) : path.posix.normalize(path.posix.join('xl', target))
+    const overrides = elements(types, 'Override').filter(item => item.attrs.PartName === '/' + file)
+    if (!file.startsWith('xl/') || !pkg.entries[file] || overrides.length !== 1 ||
+      overrides[0].attrs.ContentType !== 'application/vnd.openxmlformats-officedocument.spreadsheetml.calcChain+xml') fail('计算链部件/内容类型不匹配，未修改文件')
+    checkedRoot(utf8(pkg.entries[file]), 'calcChain', MAIN_NS)
+    delete pkg.entries[file]
+    rels = rels.replace(rel.full, ''); types = types.replace(overrides[0].full, '')
+  }
+  pkg.entries['xl/_rels/workbook.xml.rels'] = Buffer.from(rels)
+  pkg.entries['[Content_Types].xml'] = Buffer.from(types)
+}
+
+/** Adds ordinary worksheets without round-tripping an existing workbook
+ * through ExcelJS. Existing worksheets and opaque object parts stay byte-exact
+ * after ZIP extraction; their caches are deliberately not silently rewritten. */
+export async function appendXlsxSheets(buffer: Buffer, input: XlsxInput): Promise<Buffer> {
+  if (!Array.isArray(input?.sheets) || input.sheets.length < 1 || input.sheets.length > 4) fail('每次追加 1-4 张工作表；建议一次一张并复用最新 expectedHash')
+  const prepared = prepareSheets(input), pkg = packageFrom(buffer)
+  const workbookRoot = checkedRoot(pkg.workbook, 'workbook', MAIN_NS)
+  if (workbookRoot.attrs['xmlns:r'] !== DOC_REL_NS) fail('追加工作表需要标准 r 关系命名空间')
+  const protection = elements(pkg.workbook, 'workbookProtection')
+  if (protection.some(item => ['1', 'true', 'on'].includes(item.attrs.lockStructure?.toLowerCase() ?? ''))) fail('工作簿结构已保护，不能添加工作表')
+  if (elements(pkg.workbook, 'fileSharing').length || Object.keys(pkg.entries).some(file => file.startsWith('xl/revisions/'))) fail('共享修订工作簿暂不支持追加工作表')
+  const existingNames = new Set(pkg.sheets.map(sheet => sheet.name.toLowerCase()))
+  if (prepared.some(sheet => existingNames.has(sheet.name.toLowerCase()))) fail('工作表名称已存在；追加不能覆盖原表，请 inspect 后编辑或使用新名称')
+  if (pkg.sheets.length + prepared.length > LIMITS.sheets) fail(`追加后工作表不能超过 ${LIMITS.sheets} 张`)
+  const addedCells = prepared.reduce((sum, sheet) => sum + (sheet.rows.length + 1) * sheet.columns.length, 0)
+  if (pkg.sheets.reduce((sum, sheet) => sum + sheet.cells.size, 0) + addedCells > LIMITS.cells) fail(`追加后工作簿超过 ${LIMITS.cells} 个单元格`)
+  let rels = utf8(pkg.entries['xl/_rels/workbook.xml.rels']), types = utf8(pkg.entries['[Content_Types].xml'] ?? new Uint8Array())
+  const relRoot = checkedRoot(rels, 'Relationships', PACKAGE_REL_NS), typeRoot = checkedRoot(types, 'Types', CONTENT_NS)
+  const allRels = elements(rels, 'Relationship'), relationIds = new Set(allRels.map(item => item.attrs.Id))
+  if (allRels.some(item => !item.attrs.Id) || relationIds.size !== allRels.length) fail('工作簿关系 Id 缺失或重复')
+  const overrides = elements(types, 'Override'), declaredParts = overrides.map(item => item.attrs.PartName?.toLowerCase())
+  if (declaredParts.some(name => !name?.startsWith('/')) || new Set(declaredParts).size !== declaredParts.length) fail('内容类型 PartName 缺失或重复')
+  const styleRelations = allRels.filter(item => item.attrs.Type === `${DOC_REL_NS}/styles`)
+  if (styleRelations.length !== 1 || styleRelations[0].attrs.TargetMode === 'External' || !['styles.xml', '/xl/styles.xml'].includes(styleRelations[0].attrs.Target)) fail('追加工作表需要唯一标准 styles.xml 关系')
+  const ids = elements(pkg.workbook, 'sheet').map(item => Number(item.attrs.sheetId))
+  if (ids.some(id => !Number.isInteger(id) || id <= 0 || id > 4_294_967_295 - prepared.length) || new Set(ids).size !== ids.length) fail('工作表 sheetId 无效或重复')
+  const styles = appendSheetStyles(pkg), prefix = xmlPrefix(workbookRoot), relPrefix = xmlPrefix(relRoot), typePrefix = xmlPrefix(typeRoot)
+  const occupiedParts = new Set([...Object.keys(pkg.entries).map(file => file.toLowerCase()), ...declaredParts.map(name => name.slice(1))])
+  for (const rel of allRels) if (rel.attrs.TargetMode !== 'External' && rel.attrs.Target) {
+    const target = rel.attrs.Target.startsWith('/') ? rel.attrs.Target.slice(1) : path.posix.normalize(path.posix.join('xl', rel.attrs.Target))
+    occupiedParts.add(target.toLowerCase())
+  }
+  let partIndex = 1, relationshipIndex = 1, sheetId = Math.max(...ids)
+  const newSheets: Sheet[] = [], definitions: string[] = []
+  for (const [index, sheet] of prepared.entries()) {
+    while (occupiedParts.has(`xl/worksheets/sheet${partIndex}.xml`.toLowerCase())) partIndex++
+    const file = `xl/worksheets/sheet${partIndex++}.xml`; occupiedParts.add(file.toLowerCase())
+    while (relationIds.has(`aetherSheet${relationshipIndex}`)) relationshipIndex++
+    const relationId = `aetherSheet${relationshipIndex++}`; relationIds.add(relationId)
+    pkg.workbook = appendChildren(pkg.workbook, 'sheets', `<${prefix}sheet name="${encodeXml(sheet.name)}" sheetId="${++sheetId}" r:id="${relationId}"/>`)
+    rels = appendChildren(rels, 'Relationships', `<${relPrefix}Relationship Id="${relationId}" Type="${DOC_REL_NS}/worksheet" Target="${file.slice(3)}"/>`)
+    types = appendChildren(types, 'Types', `<${typePrefix}Override PartName="/${file}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`)
+    const xml = newWorksheet(sheet, styles, pkg.date1904)
+    const cells = new Map(elements(xml, 'c').map(cell => [cell.attrs.r, cell]))
+    newSheets.push({ name: sheet.name, file, xml, cells })
+    const quotedName = `'${sheet.name.replace(/'/g, "''")}'`
+    const localId = pkg.sheets.length + index
+    definitions.push(`<${prefix}definedName name="_xlnm.Print_Titles" localSheetId="${localId}">${encodeXml(quotedName)}!$1:$1</${prefix}definedName>`,
+      `<${prefix}definedName name="_xlnm.Print_Area" localSheetId="${localId}">${encodeXml(quotedName)}!$A$1:$${columnName(sheet.columns.length)}$${sheet.rows.length + 1}</${prefix}definedName>`)
+  }
+  if (elements(pkg.workbook, 'definedNames').length) pkg.workbook = appendChildren(pkg.workbook, 'definedNames', definitions.join(''))
+  else {
+    const afterSheets = uniqueElement(pkg.workbook, 'sheets')
+    // definedNames follows sheets and workbook-level externalReferences. Insert
+    // before calcPr when present; otherwise after externalReferences/sheets.
+    const before = elements(pkg.workbook, 'calcPr')[0]
+    const after = elements(pkg.workbook, 'externalReferences')[0] ?? afterSheets
+    const xml = `<${prefix}definedNames>${definitions.join('')}</${prefix}definedNames>`
+    pkg.workbook = before ? pkg.workbook.replace(before.full, () => xml + before.full) : pkg.workbook.replace(after.full, () => after.full + xml)
+  }
+  pkg.entries['xl/workbook.xml'] = Buffer.from(pkg.workbook)
+  pkg.entries['xl/_rels/workbook.xml.rels'] = Buffer.from(rels)
+  pkg.entries['[Content_Types].xml'] = Buffer.from(types)
+  // Evaluate only new sheets. Running this over the original sheets would
+  // destroy their caches and contradict the preservation contract.
+  const addition: Package = { ...pkg, entries: Object.create(null), sheets: newSheets }
+  refreshFormulaCaches(addition)
+  Object.assign(pkg.entries, addition.entries)
+  removeAppendCalcChains(pkg)
+  const output = writeOfficeZip(pkg.entries)
+  packageFrom(output)
+  return output
 }

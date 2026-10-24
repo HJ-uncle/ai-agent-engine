@@ -33,13 +33,24 @@ beforeEach(async () => {
   })
   await app.register(modelsRoutes)
 })
-afterEach(async () => { await app.close(); vi.restoreAllMocks(); db.close() })
+afterEach(async () => { await app.close(); vi.restoreAllMocks(); vi.unstubAllEnvs(); db.close() })
 
 async function patch(body: unknown) {
   return app.inject({ method: 'PUT', url: `/api/v1/models/${id}`, payload: body as Record<string, unknown> })
 }
 
 describe('D1 model capability updates', () => {
+  it('presents runtime policy separately from the stored 1M capability and applies policy changes on read', async () => {
+    vi.stubEnv('CONTEXT_WINDOW_BUDGET', '')
+    await store.updateModel(id, 'default', { capabilities: { contextWindow: 1_000_000 } })
+    const read = async () => (await app.inject('/api/v1/models')).json().data[0]
+    expect(await read()).toMatchObject({ capabilities: { contextWindow: 1_000_000 }, resolvedCapabilities: { contextWindow: 1_000_000 },
+      capabilityOverrides: { contextWindow: 1_000_000 }, effectiveContextWindow: 268_000 })
+    vi.stubEnv('CONTEXT_WINDOW_BUDGET', '192000')
+    expect((await read()).effectiveContextWindow).toBe(192_000)
+    expect((await store.getModelById(id, 'default'))?.capabilities?.contextWindow).toBe(1_000_000)
+  })
+
   it('renames without writing inferred capabilities or losing persisted overrides', async () => {
     const listed = (await app.inject('/api/v1/models')).json().data[0]
     expect(listed.capabilityOverrides).toEqual(overrides)

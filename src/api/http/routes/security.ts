@@ -6,6 +6,7 @@ import {
   loadNetworkPolicy, saveNetworkPolicy, DEFAULT_NETWORK_POLICY, type NetworkPolicy,
 } from '../../../security/network-policy.js'
 import { requireRoles } from '../../../auth/guards.js'
+import { canUseDesktopSessionFullAccess } from '../middleware.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
@@ -130,7 +131,7 @@ export async function securityRoutes(fastify: FastifyInstance) {
       return reply.code(200).send(fail(40001, `mode must be one of: ${VALID_MODES.join(', ')}`))
     }
     const auth = (request as FastifyRequest & { authContext?: { roles?: string[]; method?: string } }).authContext
-    if (mode === 'full-access' && auth?.method !== 'none' && !auth?.roles?.includes('admin')) {
+    if (mode === 'full-access' && auth?.method !== 'none' && !auth?.roles?.includes('admin') && !canUseDesktopSessionFullAccess(request)) {
       return reply.code(403).send(fail(40300, '完全访问模式需要实例管理员授权'))
     }
     setSecurityMode(tenantId, sessionId, mode)

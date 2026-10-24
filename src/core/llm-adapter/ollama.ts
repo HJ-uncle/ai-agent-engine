@@ -5,6 +5,7 @@ import type { LLMAdapter, LLMResponse, LLMAdapterOptions, LLMStreamChunk } from 
 import type { Message } from '../agent-context/index.js'
 import { estimateTokens } from '../utils/tokens.js'
 import { modelMessageContent } from '../utils/model-context.js'
+import { imageToolPayload, imageVersionDescription } from '../utils/multimodal-context.js'
 
 interface OllamaMessage {
   role: string
@@ -26,10 +27,17 @@ export class OllamaAdapter implements LLMAdapter {
     }
     for (const message of messages) {
       const msg = { ...message, content: modelMessageContent(message) }
+      // This wire adapter has no native `images` support. Retained pictures
+      // from another model must not become megabytes of base64 prompt text.
+      const unavailable = 'Image pixels were not sent: this Ollama adapter does not implement vision input.'
+      const image = msg.role === 'tool' ? imageToolPayload(msg.content) : undefined
+      const content = image ? unavailable + imageVersionDescription(image.fileVersion)
+        : typeof msg.content === 'string' ? msg.content
+        : msg.content.map(part => part?.type === 'image' || part?.type === 'image_url'
+          ? unavailable : part?.type === 'text' ? String(part.text ?? '') : JSON.stringify(part)).join('\n')
       if (msg.role === 'tool') {
-        result.push({ role: 'user', content: `Tool result: ${msg.content}` })
+        result.push({ role: 'user', content: `Tool result: ${content}` })
       } else {
-        const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
         // Keep compacted history as conversation context, separate from the
         // system prompt (some Ollama templates only retain one system message).
         result.push(msg.role === 'system'

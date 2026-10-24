@@ -1,3 +1,4 @@
+import { deduplicateMemories, memoryContexts, memoryWriteScope } from './policy.js'
 import { SQLiteMemoryManager } from '../../storage/memory/memory-manager.js'
 import { createLLMAdapterWithDbConfig, type LLMAdapter, type LLMAdapterOptions } from '../../core/llm-adapter/index.js'
 import type { ExtractedMemory, LLMCredentials } from './types.js'
@@ -145,10 +146,13 @@ export async function extractAndStoreMemories(opts: {
   llm: LLMCredentials
   minImportance?: number
   memoryScope?: MemoryScope
+  memoryScopes?: readonly MemoryScope[]
   sourceTurnId?: string
 }): Promise<{ extracted: number; stored: number; errors: string[] }> {
   const result = { extracted: 0, stored: 0, errors: [] as string[] }
   const minImp = opts.minImportance ?? 0.3
+  const writeScope = memoryWriteScope(opts)
+  if (!writeScope || (writeScope === 'session' && !opts.sessionId)) return result
 
   try {
     const historyText = formatMessages(opts.messages)
@@ -206,7 +210,7 @@ export async function extractAndStoreMemories(opts: {
     if (filtered.length === 0) return result
 
     const manager = new SQLiteMemoryManager()
-    const ctx = { tenantId: opts.tenantId, sessionId: opts.sessionId, scope: opts.memoryScope ?? 'global' as MemoryScope }
+    const ctx = { tenantId: opts.tenantId, sessionId: writeScope === 'session' ? opts.sessionId : '', scope: writeScope }
     const nodeMap = new Map<string, string>()
     const embeddingMap = new Map<string, number[]>()
     let embeddingService: MemoryEmbeddingService | undefined
@@ -381,10 +385,11 @@ export async function buildMemoryRecallBlock(
   tenantId: string,
   query?: string,
   llm?: LLMCredentials,
-  memoryContext?: { sessionId?: string; scope?: MemoryScope },
+  memoryContext?: { sessionId?: string; scope?: MemoryScope; scopes?: readonly MemoryScope[] },
 ): Promise<string> {
   try {
-    if (!query || !llm) return ''
+    const contexts = memoryContexts({ tenantId, sessionId: memoryContext?.sessionId, memoryScope: memoryContext?.scope, memoryScopes: memoryContext?.scopes })
+    if (!query || !llm || !contexts.length) return ''
 
     const manager = new SQLiteMemoryManager()
     let aiQuery = ''
@@ -409,80 +414,46 @@ export async function buildMemoryRecallBlock(
     // ==================================================
     // 三脑协同架构 (Three-Brain Architecture) 检索
     // ==================================================
-    const nodeMap = new Map<string, any>()
-    let anchorIds: string[] = []
-    const ctx = {
-      tenantId,
-      sessionId: memoryContext?.sessionId ?? '',
-      scope: memoryContext?.scope ?? 'global' as MemoryScope,
-    }
-
+    const nodeMap = new Map<string, MemoryNode>()
     let embeddingService: MemoryEmbeddingService | undefined
-    try { embeddingService = await createMemoryEmbeddingService() } catch { /* Invalid service configuration still permits lexical recall. */ }
-
-    // 1. 向量数据库 (海马体) - 语义直觉与模糊联想
+    try { embeddingService = await createMemoryEmbeddingService() } catch { /* Lexical recall remains available. */ }
+    let queryEmbedding: number[] | undefined
     if ((embeddingService || adapter?.embed) && aiQuery) {
       try {
-        if (embeddingService) await backfillMemoryEmbeddings(manager, ctx, embeddingService, { limit: 20 })
-        const embeds = embeddingService ? await embeddingService.embed(aiQuery) : await adapter!.embed!(aiQuery)
-        if (embeds && embeds.length > 0) {
-          const similarNodes = await manager.recallSimilar(embeds[0], 10, ctx, 0.65, embeddingService?.spaceId ?? '')
-          for (const n of similarNodes) {
-            nodeMap.set(n.id, n)
-            anchorIds.push(n.id)
-          }
-        }
-      } catch (err) {
-        // ignore vector failure, proceed to keyword fallback
+        queryEmbedding = (embeddingService ? await embeddingService.embed(aiQuery) : await adapter!.embed!(aiQuery))[0]
+      } catch { /* A vector failure must not disable keyword recall. */ }
+    }
+    // Query each authorized namespace separately. Graph traversal never crosses
+    // tenant/scope boundaries; intent and query embedding are computed once.
+    for (const ctx of contexts) {
+      const scopedNodes = new Map<string, MemoryNode>()
+      const anchorIds: string[] = []
+      if (queryEmbedding?.length) {
+        try {
+          if (embeddingService) await backfillMemoryEmbeddings(manager, ctx, embeddingService, { limit: 20 })
+          const similar = await manager.recallSimilar(queryEmbedding, 10, ctx, 0.65, embeddingService?.spaceId ?? '')
+          for (const node of similar) { scopedNodes.set(node.id, node); anchorIds.push(node.id) }
+        } catch { /* Continue with lexical retrieval in this same namespace. */ }
       }
+      if (anchorIds.length < 5 && aiQuery) {
+        const matches = await manager.listNodes({ keyword: aiQuery, orderBy: 'importance', orderDir: 'DESC', limit: 50 }, ctx)
+        for (const node of matches) {
+          if (!scopedNodes.has(node.id)) { scopedNodes.set(node.id, node); anchorIds.push(node.id) }
+          if (anchorIds.length >= 15) break
+        }
+      }
+      if (anchorIds.length) {
+        try {
+          for (const node of await manager.traversePath(anchorIds[0], 2, undefined, ctx)) scopedNodes.set(node.id, node)
+          if (anchorIds.length > 1) {
+            for (const node of await manager.getRelatedNodes(anchorIds.slice(1), undefined, ctx)) scopedNodes.set(node.id, node)
+          }
+        } catch { /* Graph failures do not discard successful direct matches. */ }
+      }
+      for (const node of scopedNodes.values()) nodeMap.set(node.id, node)
     }
 
-    // 2. 关系型数据库 (皮层) - 兜底与字面量精确匹配
-    if (anchorIds.length < 5 && aiQuery) {
-      const kwNodes = await manager.listNodes(
-        {
-          keyword: aiQuery,
-          orderBy: 'importance',
-          orderDir: 'DESC',
-          limit: 50, // 扩大匹配池，防高权噪音截断
-        },
-        ctx
-      )
-      for (const n of kwNodes) {
-        if (!nodeMap.has(n.id)) {
-          nodeMap.set(n.id, n)
-          anchorIds.push(n.id)
-        }
-        if (anchorIds.length >= 15) break // 控制锚点规模
-      }
-    }
-    
-    // 3. 图数据库模拟 (联络图) - 深度关联与高阶认知
-    if (anchorIds.length > 0) {
-      try {
-        // 扩展联想深度至 2 跳，实现深层记忆激活
-        const relatedNodes = await manager.traversePath(anchorIds[0], 2, undefined, ctx)
-        for (const n of relatedNodes) {
-          if (!nodeMap.has(n.id)) {
-            nodeMap.set(n.id, n)
-          }
-        }
-        
-        // 如果锚点较多，对其他锚点也进行 1 跳补充（平衡深度与广度）
-        if (anchorIds.length > 1) {
-          const secondaryRelated = await manager.getRelatedNodes(anchorIds.slice(1), undefined, ctx)
-          for (const n of secondaryRelated) {
-            if (!nodeMap.has(n.id)) {
-              nodeMap.set(n.id, n)
-            }
-          }
-        }
-      } catch (err) {
-        // ignore graph traversal failure
-      }
-    }
-
-    const contextualNodes = Array.from(nodeMap.values())
+    const contextualNodes = deduplicateMemories(Array.from(nodeMap.values()))
     if (contextualNodes.length === 0) return ''
 
     return renderMemoryRecallBlock(contextualNodes, llm.contextWindow)

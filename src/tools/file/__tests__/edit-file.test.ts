@@ -59,14 +59,14 @@ describe('D6 exact text edits with full byte versions', () => {
     expect(written.success).toBe(true)
     const version = written.output.match(/^expectedHash: (sha256:[a-f0-9]{64})$/m)?.[1]
     expect(version).toBe(hashFileContent(fs.readFileSync(file)))
-    expect(written.metadata).toMatchObject({ path: file, expectedHash: version, fileMutationApplied: true })
+    expect(written.metadata).toMatchObject({ path: fs.realpathSync.native(file), expectedHash: version, fileMutationApplied: true })
 
     const edited = await editFileTool.execute({ path: file, expectedHash: version,
       edits: [{ oldText: '"旧😀"', newText: '"新✨"' }] }, ctx)
     expect(edited.success).toBe(true)
     const nextVersion = edited.output.match(/^expectedHash: (sha256:[a-f0-9]{64})$/m)?.[1]
     expect(nextVersion).toBe(hashFileContent(fs.readFileSync(file)))
-    expect(edited.metadata).toMatchObject({ path: file, expectedHash: nextVersion })
+    expect(edited.metadata).toMatchObject({ path: fs.realpathSync.native(file), expectedHash: nextVersion })
     expect(nextVersion).not.toBe(version)
 
     const second = await editFileTool.execute({ path: file, expectedHash: nextVersion,

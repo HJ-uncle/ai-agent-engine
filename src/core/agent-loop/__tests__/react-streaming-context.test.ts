@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentContext, Message, ToolResult } from '../../agent-context/index.js'
 import type { LLMAdapter, LLMAdapterOptions, LLMStreamChunk } from '../../llm-adapter/types.js'
 import type { RunOutcome } from '../../subagent/types.js'
+import { RequestBudget } from '../../subagent/budget.js'
 import { ReActStrategy, projectModelMessage, type ReActOptions } from '../react.js'
 import { estimateRequestInput } from '../finalization.js'
 import { buildCompactSummarizeFn } from '../compact-prompt.js'
+import { clearedToolEvidence, CLEARED_TOOL_EVIDENCE_KEY, CLEARED_TOOL_RESULT } from '../../utils/tool-evidence.js'
 
 vi.mock('../../../storage/todo/index.js', () => ({ TodoStore: class { async list() { return [] } } }))
 afterEach(() => { vi.unstubAllEnvs() })
@@ -59,6 +61,58 @@ function fixture(seed: Message[] = []) {
 }
 
 const isBody = (frame: string) => !frame.startsWith('\x00__')
+it.each([{ allowed: false, trusted: true, advertised: true }, { allowed: true, trusted: true, advertised: true },
+  { allowed: true, trusted: false, advertised: true }, { allowed: true, trusted: true, advertised: false }])('advertises archive recovery only when the current request exposes the trusted tool (%j)', async ({ allowed, trusted, advertised }) => {
+  const original: Message = { id: 'archive-result', role: 'tool', content: 'private old output', toolCallId: 'old-read', toolName: 'read_file' }
+  const cleared: Message = { ...original, content: CLEARED_TOOL_RESULT, modelInputContent: 'OLD_PIXELS_MUST_NOT_RETURN',
+    metadata: { [CLEARED_TOOL_EVIDENCE_KEY]: clearedToolEvidence(original) } }
+  const f = fixture([{ role: 'user', content: 'old task' }, { role: 'assistant', content: '', toolCall: { id: 'old-read', name: 'read_file', args: {} } }, cleared])
+  f.ctx.tools.has = name => allowed && name === 'search_history'
+  f.ctx.tools.list = () => allowed && advertised ? [{ name: 'search_history', description: 'archive', parameters: { type: 'object' } }] : []
+  f.ctx.tools.executionMode = () => trusted ? 'readonly' : 'serial'
+  await f.run()
+  const [request, options] = vi.mocked(f.llm.stream).mock.calls[0]
+  const sent = request.find(message => message.toolCallId === 'old-read')!
+  expect(sent.content).toContain('archive-result')
+  expect(String(sent.content).includes('"tool":"search_history"')).toBe(allowed && trusted && advertised)
+  expect(JSON.stringify(sent)).not.toContain('OLD_PIXELS_MUST_NOT_RETURN')
+  expect(cleared.modelInputContent).toBe('OLD_PIXELS_MUST_NOT_RETURN')
+  expect(options!.requestInputTokenEstimate).toBe(estimateRequestInput(request, options?.systemPrompt, options?.tools ?? []))
+  const markerOnly = request.map(message => message === sent ? { ...message, content: CLEARED_TOOL_RESULT, metadata: undefined } : message)
+  expect(options!.requestInputTokenEstimate).toBeGreaterThan(estimateRequestInput(markerOnly, options?.systemPrompt, options?.tools ?? []))
+})
+
+it.each(['max_steps', 'budget'] as const)('withdraws archive recovery instructions before %s finalization disables tools', async reason => {
+  const original: Message = { id: 'old-image', role: 'tool', toolCallId: 'old-read', toolName: 'read_file',
+    content: JSON.stringify({ dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=' }) }
+  const cleared: Message = { ...original, content: CLEARED_TOOL_RESULT, modelInputContent: original.content,
+    metadata: { [CLEARED_TOOL_EVIDENCE_KEY]: clearedToolEvidence(original) } }
+  const f = fixture([{ role: 'user', content: 'old task' },
+    { role: 'assistant', content: '', toolCall: { id: 'old-read', name: 'read_file', args: {} } }, cleared])
+  f.ctx.tools.list = () => ['search_history', 'read_file'].map(name => ({ name, description: name, parameters: { type: 'object' } }))
+  f.ctx.tools.executionMode = name => name === 'search_history' ? 'readonly' : 'serial'
+  if (reason === 'budget') f.ctx.requestBudget = new RequestBudget(12_000)
+  let requests = 0
+  f.llm.stream = vi.fn(async function* () {
+    if (reason === 'max_steps' && requests++ === 0) yield { done: true, toolCalls: [{ id: 'fresh-read', name: 'read_file', args: '{}', index: 0 }] }
+    else yield { done: true, content: 'Recorded evidence summarized.' }
+  })
+  await f.run({ maxIterations: 2, finalizeOnLimit: true })
+  const calls = vi.mocked(f.llm.stream).mock.calls
+  expect(calls).toHaveLength(reason === 'max_steps' ? 2 : 1)
+  if (reason === 'max_steps') expect(calls[0][0].find(message => message.id === 'old-image')!.content).toContain('"tool":"search_history"')
+  const [request, options] = calls.at(-1)!
+  expect(options?.tools).toEqual([])
+  const sent = request.find(message => message.id === 'old-image')!
+  expect(sent.content).toContain('old-image')
+  expect(sent.content).toContain('No archive recovery tool is available')
+  expect(String(sent.content)).not.toContain('search_history')
+  expect(String(sent.content)).not.toContain('imageArgs')
+  expect(JSON.stringify(sent)).not.toContain('data:image')
+  expect(options!.requestInputTokenEstimate).toBe(estimateRequestInput(request, options?.systemPrompt, []))
+  expect(cleared.modelInputContent).toBe(original.content)
+})
+
 const body = (frames: string[]) => frames.filter(isBody).join('')
 const usage = (frames: string[]) => frames.filter(frame => frame.startsWith('\x00__usage__'))
   .map(frame => JSON.parse(frame.slice('\x00__usage__'.length)))
@@ -324,13 +378,13 @@ describe('D5 provider streaming and partial evidence', () => {
     expect(f.history.find(item => item.id === 'old-tool')?.metadata.outputPreview).toBe(originalOutput)
   })
 
-  it.each(['', 'private reasoning only'])('keeps empty-output failures diagnosable without claiming success: %s', async reasoning => {
+  it.each(['', 'private reasoning only'])('keeps final-budget empty-output failures diagnosable without claiming success: %s', async reasoning => {
     const f = fixture()
     f.llm.stream = vi.fn(async function* () {
       if (reasoning) yield { done: false, reasoningContent: reasoning }
       yield { done: true, model: 'actual-empty-model', finishReason: 'stop' as const, promptTokens: 17, completionTokens: reasoning ? 5 : 0 }
     })
-    const frames = await f.run({}, 'private user request')
+    const frames = await f.run({ maxIterations: 1 }, 'private user request')
     expect(f.llm.stream).toHaveBeenCalledTimes(1)
     expect(f.ctx.tools.execute).not.toHaveBeenCalled()
     expect(body(frames)).toBe('')
@@ -462,6 +516,34 @@ describe('D5 provider streaming and partial evidence', () => {
 })
 
 describe('D5 complete request context admission', () => {
+  it.each(['code', 'general'] as const)('uses the default 268K window in %s and compacts before a 1M model fills up', async profile => {
+    vi.stubEnv('CONTEXT_WINDOW_BUDGET', '')
+    vi.stubEnv('COMPRESS_THRESHOLD_RATIO', '0.92')
+    vi.stubEnv('OSM_MODE', 'off')
+    vi.stubEnv('TOKEN_BUDGET', '900')
+    const f = fixture([{ id: 'old', role: 'assistant', content: 'old context '.repeat(100_000) }])
+    f.ctx.toolProfile = profile
+    f.ctx.tokenBudget = undefined
+    f.ctx.modelCaps = { contextWindow: 1_000_000 }
+    expect(estimateRequestInput(f.history, undefined, [])).toBeGreaterThan(246_560)
+    expect(estimateRequestInput(f.history, undefined, [])).toBeLessThan(920_000)
+    f.ctx.history.compress = vi.fn(async () => {
+      f.history.splice(0, f.history.length - 1, { id: 'summary', role: 'system', content: 'DECISION=43; verify the retained project.' })
+      return { preTokens: 300_000, postTokens: 100 }
+    })
+    f.llm.stream = vi.fn(async function* () {
+      yield { done: true, content: 'done', contextWindow: 1_000_000, promptTokens: 100, completionTokens: 4 }
+    })
+    const frames = await f.run()
+    expect(f.ctx.history.compress).toHaveBeenCalledTimes(1)
+    const [request, options] = vi.mocked(f.llm.stream).mock.calls[0]
+    expect(options?.contextWindow).toBe(268_000)
+    expect(request.some(message => String(message.content).includes('DECISION=43'))).toBe(true)
+    expect(usage(frames).every(frame => frame.contextWindow === 268_000)).toBe(true)
+    expect(f.ctx.modelCaps.contextWindow).toBe(1_000_000)
+    expect(f.outcomes.at(-1)).toMatchObject({ status: 'succeeded' })
+  })
+
   it('admits a Qwen code request with large replay/diff metadata while preserving the complete stored evidence', async () => {
     const metadata = { change: { oldContent: 'old source '.repeat(30_000), newContent: 'new source '.repeat(30_000) },
       subagent: { events: [{ output: 'child replay '.repeat(20_000) }] }, outputPreview: 'tool preview '.repeat(10_000) }

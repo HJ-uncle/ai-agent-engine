@@ -22,14 +22,18 @@ import { assertCompressionContext, withHistoryLock, withSessionHistoryCompressio
 import { createInterface } from 'node:readline'
 import type { AgentContext, CompactionArchiveEvidence, ConversationArchive, ConversationConditionalAppend, ConversationHistory, ConversationToolCallAnchor, HistorySearchOptions, HistorySearchResult, Message } from '../../core/agent-context/types.js'
 import { estimateTokens } from '../../core/utils/tokens.js'
-import { estimateModelHistoryTokens } from '../../core/utils/model-context.js'
+import { estimateModelHistoryTokens, estimateModelMessageTokens } from '../../core/utils/model-context.js'
+import { toolResultTextLength } from '../../core/utils/multimodal-context.js'
+import { CLEARED_TOOL_RESULT, CLEARED_TOOL_EVIDENCE_KEY, clearedToolEvidence, withoutToolEvidence } from '../../core/utils/tool-evidence.js'
 import { compressionSplitIndex, type CompressionOptions } from './compression.js'
 import { addMessageUsage, emptyBillingUsage } from './usage.js'
-import { getDb } from '../sqlite/db.js'
+import { getDb, getDbEpoch } from '../sqlite/db.js'
 import { advanceProjectionEpoch, commitProjectionReceipt, ensureProjectionReceipts, projectionEpoch, readProjectionReceipt, validateProjection } from './projection-receipts.js'
 import { acknowledgeAdmissionUser, readAdmissionSeed, validateAdmissionUser, type AdmissionMessageAnchor } from '../root-admission/projection.js'
 import { admissionError } from '../root-admission/index.js'
 import { registerJSONLHistory, canonicalJSONLMessage, jsonlHistoryEpoch, type JSONLAppendPlan, type JSONLPhysicalSnapshot } from './jsonl-origin.js'
+import { readJSONLBytes } from './jsonl-byte-reader.js'
+import { cacheJSONLPhysicalSnapshot, getJSONLPhysicalSnapshot, invalidateJSONLPhysicalSnapshot } from './jsonl-physical-cache.js'
 import { invalidateJSONLDeliveries } from '../../core/collaboration/jsonl-delivery-schema.js'
 import { CollaborationError } from '../../core/collaboration/types.js'
 import { currentHistoryMaintenance, maintenancePinnedIds, maintenanceSummaryEvidence, maintenanceDigest, ensureHistoryMaintenanceSchema, reserveHistoryMaintenance,
@@ -37,7 +41,6 @@ import { currentHistoryMaintenance, maintenancePinnedIds, maintenanceSummaryEvid
 
 type Ctx = Pick<AgentContext, 'tenantId' | 'sessionId'>
 
-const CLEARED_TOOL_RESULT = '[tool result cleared]'
 // Instances share write ordering for the same physical archive; root paths
 // isolate tenants with the same ids in different engine data directories.
 const sessionWriteQueues = new Map<string, Promise<void>>()
@@ -131,6 +134,9 @@ function applyUpdate(message: Message, update: JsonlRow, archive = false): void 
   if (update.content !== undefined) message.content = compacted && archive ? originalContent : update.content
   if (typeof update.tokens === 'number') message.tokens = compacted && archive ? originalTokens : update.tokens
   if (update.metadata !== undefined) message.metadata = update.metadata
+  const carriesClearedEvidence = update.metadata && typeof update.metadata === 'object' && Object.hasOwn(update.metadata, CLEARED_TOOL_EVIDENCE_KEY)
+  if (update.content !== undefined && !compacted
+    || update.modelInputContent === null && !carriesClearedEvidence) message.metadata = withoutToolEvidence(message.metadata)
   // User edits invalidate the attachment/provider snapshot. Legacy content
   // updates also reset it; micro-compacting tool output does not change input.
   if (typeof update.modelInputContent === 'string' || Array.isArray(update.modelInputContent)) message.modelInputContent = update.modelInputContent
@@ -232,6 +238,7 @@ export class JSONLConversationHistory implements ConversationHistory {
   private readonly dataPath: string
   private readonly maxTokens?: number
   private readonly states = new Map<string, SessionState>()
+  private readonly physicalCacheOwner = {}
   private readonly usageCache = new Map<string, {
     sessionKey: string; conversationId?: string; revision: string; usage: Record<string, number>
   }>()
@@ -271,28 +278,49 @@ export class JSONLConversationHistory implements ConversationHistory {
 
   private collaborationFileIdentity(stat: fs.Stats): string { return `${stat.dev}:${stat.ino}:${stat.birthtimeMs}` }
 
+  private async assertCollaborationReadRevision(ctx: Ctx, handle: Awaited<ReturnType<typeof fs.promises.open>>, before: fs.Stats): Promise<void> {
+    const after = await handle.stat()
+    if (this.fileRevision(after) !== this.fileRevision(before) || this.collaborationFileIdentity(after) !== this.collaborationFileIdentity(before))
+      throw new CollaborationError('conflict', 'JSONL archive changed while reading')
+    // A still-open handle can point at the retired file after pathname replacement.
+    let current: fs.Stats
+    try { current = await fs.promises.stat(this.filePath(ctx)) }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new CollaborationError('conflict', 'JSONL archive path changed while reading')
+      throw error
+    }
+    if (this.fileRevision(current) !== this.fileRevision(before) || this.collaborationFileIdentity(current) !== this.collaborationFileIdentity(before))
+      throw new CollaborationError('conflict', 'JSONL archive path changed while reading')
+  }
+
   /** Physical offsets authenticate receipt rows; folded messages retain every active tool/system field. */
   private async inspectCollaborationArchive(ctx: Ctx): Promise<JSONLPhysicalSnapshot> {
     const state = await this.loadSession(ctx), file = this.filePath(ctx), handle = await fs.promises.open(file, 'r')
     try {
       const stat = await handle.stat()
       if (!this.matchesFile(state, stat)) throw new CollaborationError('conflict', 'JSONL active projection and archive revisions differ')
-      const data = Buffer.alloc(stat.size)
-      let read = 0
-      while (read < data.length) { const next = await handle.read(data, read, data.length - read, read); if (!next.bytesRead) throw new CollaborationError('conflict', 'JSONL archive was truncated while reading'); read += next.bytesRead }
+      const database = this.projectionDb()
+      const key = { owner: this.physicalCacheOwner, dataPath: this.dataPath, database, databaseEpoch: getDbEpoch(database),
+        tenantId: ctx.tenantId, sessionId: ctx.sessionId,
+        fileIdentity: this.collaborationFileIdentity(stat), revision: this.fileRevision(stat) }
+      const cached = getJSONLPhysicalSnapshot(key)
+      if (cached) {
+        // A hit still opens the file and fences both its handle and pathname;
+        // receipt/controller/epoch authentication remains outside this cache.
+        await this.assertCollaborationReadRevision(ctx, handle, stat)
+        return cached
+      }
       const rows: JSONLPhysicalSnapshot['rows'] = []
-      let offset = 0
-      while (offset < data.length) {
-        const newline = data.indexOf(10, offset)
-        if (newline < 0) break
-        const end = newline + 1, bytes = data.subarray(offset, end), row = scopedJsonlRow(bytes.toString('utf8'), ctx)
+      const contentHash = await readJSONLBytes(handle, stat.size, { onLine: (bytes, offset) => {
+        const row = scopedJsonlRow(bytes.toString('utf8'), ctx)
         if (row?.payload && ['system', 'user', 'assistant', 'tool'].includes(row.type)) rows.push({ id: row.uuid, offset,
           bytes: bytes.length, hash: crypto.createHash('sha256').update(bytes).digest('hex'), sequence: row.dbSeq, message: this.rowToMessage(row) })
-        offset = end
-      }
-      if (this.fileRevision(await handle.stat()) !== this.fileRevision(stat)) throw new CollaborationError('conflict', 'JSONL archive changed while reading')
-      return { fileIdentity: this.collaborationFileIdentity(stat), revision: this.fileRevision(stat), size: stat.size,
-        contentHash: maintenanceDigest(data.toString('base64')), nextSequence: state.nextSeq, lastId: state.lastUuid, rows, active: structuredClone(state.messages) }
+      } })
+      await this.assertCollaborationReadRevision(ctx, handle, stat)
+      const snapshot = { fileIdentity: key.fileIdentity, revision: key.revision, size: stat.size,
+        contentHash, nextSequence: state.nextSeq, lastId: state.lastUuid, rows, active: structuredClone(state.messages) }
+      cacheJSONLPhysicalSnapshot(key, snapshot)
+      return snapshot
     } finally { await handle.close() }
   }
 
@@ -309,10 +337,9 @@ export class JSONLConversationHistory implements ConversationHistory {
         throw new CollaborationError('conflict', 'JSONL reserved archive identity changed')
       const encoded = Buffer.from(plan.encoded), available = Math.min(plan.bytes, stat.size - plan.offset), existing = Buffer.alloc(available)
       if (plan.prefixHash) {
-        const prefix = Buffer.alloc(plan.offset)
-        let copied = 0
-        while (copied < prefix.length) { const next = await handle.read(prefix, copied, prefix.length - copied, copied); if (!next.bytesRead) throw new CollaborationError('conflict', 'JSONL maintenance prefix was truncated'); copied += next.bytesRead }
-        if (maintenanceDigest(prefix.toString('base64')) !== plan.prefixHash) throw new CollaborationError('conflict', 'JSONL maintenance source prefix changed')
+        const prefixHash = await readJSONLBytes(handle, plan.offset, { truncatedMessage: 'JSONL maintenance prefix was truncated' })
+        if (prefixHash !== plan.prefixHash) throw new CollaborationError('conflict', 'JSONL maintenance source prefix changed')
+        await this.assertCollaborationReadRevision(ctx, handle, stat)
       }
       let read = 0
       while (read < available) { const next = await handle.read(existing, read, available - read, plan.offset + read); if (!next.bytesRead) throw new CollaborationError('conflict', 'JSONL reserved suffix was truncated'); read += next.bytesRead }
@@ -1362,7 +1389,7 @@ export class JSONLConversationHistory implements ConversationHistory {
       content,
       modelInputContent: null,
       tokens,
-      metadata,
+      metadata: withoutToolEvidence(metadata),
     })
     this.invalidate(ctx)
   }
@@ -1378,21 +1405,23 @@ export class JSONLConversationHistory implements ConversationHistory {
   ): Promise<{ cleared: number; freedTokens: number }> {
     const keepRecent = Number.isFinite(opts.keepRecent) ? Math.max(0, Math.floor(opts.keepRecent!)) : 10
     const maxChars = Number.isFinite(opts.maxChars) && (opts.maxChars ?? 0) > 0 ? Math.floor(opts.maxChars!) : undefined
-    const placeholder = '[tool result cleared]'
-    const placeholderTokens = estimateTokens(placeholder)
+    const placeholder = CLEARED_TOOL_RESULT
     const state = await this.loadSession(ctx)
     const all = state.messages
     const cutoff = all.length - keepRecent
     let cleared = 0
     let freedTokens = 0
+    const updates: JsonlRow[] = []
     for (let i = 0; i < all.length; i++) {
       const msg = all[i]
       if (msg.role !== 'tool' || !msg.id) continue
       const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
       if (!content || content === placeholder) continue
-      if (i >= cutoff && (maxChars === undefined || content.length <= maxChars)) continue
+      if (i >= cutoff && (maxChars === undefined || toolResultTextLength(content) <= maxChars)) continue
       const oldTokens = msg.tokens ?? estimateTokens(msg.content)
-      await this.appendRow(ctx, {
+      const metadata = { ...msg.metadata, [CLEARED_TOOL_EVIDENCE_KEY]: clearedToolEvidence(msg) }
+      const placeholderTokens = estimateModelMessageTokens({ ...msg, content: placeholder, metadata })
+      updates.push({
         uuid: crypto.randomUUID(),
         parentUuid: null,
         type: 'update',
@@ -1404,7 +1433,7 @@ export class JSONLConversationHistory implements ConversationHistory {
         targetUuid: msg.id,
         content: placeholder,
         tokens: placeholderTokens,
-        metadata: msg.metadata,
+        metadata,
         // Keep the compact content in the update row for model replay.  The
         // archive reader deliberately selects this separate field instead.
         archiveContent: content,
@@ -1414,6 +1443,29 @@ export class JSONLConversationHistory implements ConversationHistory {
       freedTokens += Math.max(0, oldTokens - placeholderTokens)
     }
     if (cleared > 0) {
+      // One authenticated append used to rescan/hash the entire archive several
+      // times per tool. Group updates under the same exact-byte recovery receipt
+      // so large browser histories do not hold the tenant lock for minutes.
+      await this.enqueue(this.sessionKey(ctx), async () => {
+        const file = this.filePath(ctx)
+        const maintenance = fs.existsSync(this.dataPath) ? currentHistoryMaintenance(this.projectionDb(), ctx, 'jsonl') : undefined
+        if (!maintenance && fs.existsSync(this.dataPath)) await invalidateJSONLDeliveries(this.projectionDb(), ctx)
+        let batch: JsonlRow[] = [], bytes = 0
+        const flush = async () => {
+          if (!batch.length) return
+          if (maintenance) await this.appendMaintenanceRows(ctx, batch, maintenance)
+          else await fs.promises.appendFile(file, batch.map(row => JSON.stringify(row) + '\n').join(''))
+          batch = []; bytes = 0
+        }
+        for (const row of updates) {
+          const rowBytes = Buffer.byteLength(JSON.stringify(row)) + 1
+          // A single legacy result may exceed this target. Keep that row intact
+          // in its own receipt rather than truncate the archived evidence.
+          if (batch.length && (batch.length >= 128 || bytes + rowBytes > 8 * 1024 * 1024)) await flush()
+          batch.push(row); bytes += rowBytes
+        }
+        await flush()
+      })
       this.invalidate(ctx)
       console.log(`[jsonl-history] micro-compact: cleared ${cleared} tool results, freed ~${freedTokens} tokens`)
     }
@@ -1423,8 +1475,11 @@ export class JSONLConversationHistory implements ConversationHistory {
   async getMessageById(
     messageId: string,
     tenantId: string,
+    sessionId?: string,
   ): Promise<(Message & { conversationId?: string; dbId: number }) | null> {
-    const ctx = await this.locateMessage(messageId, tenantId)
+    // Admission already knows its owning session. A missing reserved assistant
+    // must not search unrelated archives or borrow another session's same ID.
+    const ctx = sessionId === undefined ? await this.locateMessage(messageId, tenantId) : { tenantId, sessionId }
     if (!ctx) return null
     const state = await this.loadSession(ctx)
     const msg = state.byId.get(messageId)
@@ -1633,7 +1688,7 @@ export class JSONLConversationHistory implements ConversationHistory {
     await fs.promises.mkdir(path.dirname(file), { recursive: true })
     beforeAppend?.()
     const maintenance = fs.existsSync(this.dataPath) ? currentHistoryMaintenance(this.projectionDb(), ctx, 'jsonl') : undefined
-    if (maintenance && (row.type === 'summary' || row.type === 'update')) { await this.appendMaintenanceRow(ctx, row, maintenance); return }
+    if (maintenance && (row.type === 'summary' || row.type === 'update')) { await this.appendMaintenanceRows(ctx, [row], maintenance); return }
     if (fs.existsSync(this.dataPath) && (row.type === 'tombstone' || row.type === 'update' || row.type === 'summary')) await invalidateJSONLDeliveries(this.projectionDb(), ctx)
     await fs.promises.appendFile(file, JSON.stringify(row) + '\n')
   }
@@ -1690,15 +1745,19 @@ export class JSONLConversationHistory implements ConversationHistory {
     }
   }
 
-  private async appendMaintenanceRow(ctx: Ctx, row: JsonlRow, maintenance: HistoryMaintenanceLease): Promise<void> {
+  private async appendMaintenanceRows(ctx: Ctx, rows: JsonlRow[], maintenance: HistoryMaintenanceLease): Promise<void> {
+    if (!rows.length) return
+    if (rows.length > 1 && rows.some(row => row.type !== 'update')) throw new CollaborationError('forbidden', 'Only tool updates may share a maintenance receipt')
     await maintenance.check()
     const snapshot = await this.inspectCollaborationArchive(ctx)
     if (this.maintenanceAnchor(snapshot, maintenance.anchorId) !== maintenance.anchorFingerprint) throw new CollaborationError('conflict', 'Private maintenance changed its seed')
-    if (row.type === 'update' && snapshot.active.find(message => message.id === row.targetUuid)?.role !== 'tool')
-      throw new CollaborationError('forbidden', 'Private micro maintenance may only reduce tool output')
+    const roles = new Map(snapshot.active.map(message => [message.id, message.role]))
+    for (const row of rows) if (row.type === 'update' && roles.get(row.targetUuid) !== 'tool')
+        throw new CollaborationError('forbidden', 'Private micro maintenance may only reduce tool output')
+    const row = rows[0]
     const pins = maintenancePinnedIds(snapshot.active, maintenance.anchorId)
     if (row.type === 'summary' && [...pins].some(id => !row.retainedUuids?.includes(id))) throw new CollaborationError('conflict', 'Summary would remove an admitted input or pending dispatch')
-    const encoded = JSON.stringify(row) + '\n'
+    const encoded = rows.map(item => JSON.stringify(item) + '\n').join('')
     const plan: JSONLAppendPlan = { fileIdentity: snapshot.fileIdentity, offset: snapshot.size, bytes: Buffer.byteLength(encoded),
       hash: maintenanceDigest(encoded), encoded, prefixHash: snapshot.contentHash }
     const retained = new Set(row.retainedUuids ?? [])
@@ -1714,6 +1773,7 @@ export class JSONLConversationHistory implements ConversationHistory {
   }
 
   private invalidate(ctx: Ctx): void {
+    invalidateJSONLPhysicalSnapshot({ owner: this.physicalCacheOwner, dataPath: this.dataPath, tenantId: ctx.tenantId, sessionId: ctx.sessionId })
     const state = this.states.get(this.sessionKey(ctx))
     if (state) state.mtimeMs = 0
   }

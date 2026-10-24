@@ -10,6 +10,14 @@ export type ModelUpdate = Omit<Partial<ModelConfig>, 'capabilities'> & {
   capabilityOverrides?: CapabilityOverridePatch | null
 }
 
+export class ModelIdentityConflictError extends Error {
+  readonly code = 'MODEL_ALREADY_EXISTS'
+  constructor(readonly existingModelId?: string) {
+    super('该提供方下已存在相同模型 ID，请编辑已有模型或使用其他模型 ID。')
+    this.name = 'ModelIdentityConflictError'
+  }
+}
+
 export interface ModelConfig {
   id: string
   tenantId: string
@@ -109,9 +117,19 @@ export class ModelsStore {
     const id = uuidv4()
     const encryptedKey = encrypt(data.apiKey)
 
-    await db.execute({
+    // The identity constraint includes tombstones. Restore only a deleted row
+    // atomically; a live identity must never become an implicit overwrite,
+    // including when two callers create or restore it at the same time.
+    const result = await db.execute({
       sql: `INSERT INTO models (id, tenant_id, provider, model_id, api_key, base_url, display_name, is_enabled, version, capabilities)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(tenant_id, provider, model_id) DO UPDATE SET
+              api_key = excluded.api_key, base_url = excluded.base_url,
+              display_name = excluded.display_name, is_enabled = excluded.is_enabled,
+              version = excluded.version, capabilities = excluded.capabilities,
+              deleted_at = NULL, updated_at = unixepoch()
+            WHERE models.deleted_at IS NOT NULL
+            RETURNING *`,
       args: [
         id, data.tenantId, data.provider, data.modelId, encryptedKey, data.baseUrl,
         data.displayName || null, data.isEnabled ? 1 : 0, data.version || null,
@@ -119,7 +137,14 @@ export class ModelsStore {
       ]
     })
 
-    return this.getModelById(id, data.tenantId) as Promise<ModelConfig>
+    if (result.rows.length) return mapModelRow(result.rows[0])
+    // Only a no-op on this exact conflict target is a business duplicate.
+    // I/O failures and unrelated constraints remain genuine storage errors.
+    const existing = await db.execute({
+      sql: 'SELECT id FROM models WHERE tenant_id = ? AND provider = ? AND model_id = ? AND deleted_at IS NULL',
+      args: [data.tenantId, data.provider, data.modelId],
+    })
+    throw new ModelIdentityConflictError(existing.rows[0]?.id as string | undefined)
   }
 
   async updateModel(id: string, tenantId: string, data: ModelUpdate): Promise<ModelConfig | null> {

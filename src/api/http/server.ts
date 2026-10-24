@@ -41,7 +41,7 @@ import { browserRoutes } from './routes/browser.js'
 import { commandJobs } from '../../core/command-jobs/index.js'
 import { closeKnowledgeDb } from '../../storage/knowledge/db.js'
 import { cronScheduler } from '../../scheduler/cron-scheduler.js'
-import { configureRequestAuthentication, globalRequestMiddleware, loggingMiddleware, authMiddlewareHook, WHITELIST_PATHS } from './middleware.js'
+import { configureRequestAuthentication, globalRequestMiddleware, loggingMiddleware, authMiddlewareHook, WHITELIST_PATHS, type RequestAuthenticationStartup } from './middleware.js'
 import fastifyWebsocket from '@fastify/websocket'
 import fastifyMultipart from '@fastify/multipart'
 import fastifyStatic from '@fastify/static'
@@ -49,11 +49,11 @@ import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 import { fail } from './response.js'
 
-export async function buildServer() {
+export async function buildServer(startup: RequestAuthenticationStartup = {}) {
   // Freeze authentication and instance-token configuration only after the
   // startup configuration chain (env, .aether, managed settings) is complete.
   // Business settings must never mutate this boundary while the server runs.
-  configureRequestAuthentication()
+  configureRequestAuthentication(startup)
   const fastify = Fastify({
     logger: false, // Use pino directly
     genReqId: () => uuidv4(),

@@ -11,10 +11,13 @@ afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(
 
 const summary = '【历史上下文摘要】保留 CRLF；不要改动用户手写文件。'
 const extractedAttachment = 'Retained attachment: DECISION=43; reuse the same idempotency key.'
+const archivedBrowserSemantics = 'ARCHIVED_BROWSER_SNAPSHOT_MUST_NOT_REENTER_ACTIVE_REQUEST'
 const messages: Message[] = [
   { role: 'system', content: summary, metadata: { isCompactSummary: true } },
   { role: 'user', content: 'uploaded-contract-display-only', modelInputContent: extractedAttachment },
   { role: 'user', content: '继续修复' },
+  { role: 'assistant', content: '', toolCall: { id: 'prior-browser', name: 'browser_click', args: { selector: '#confirm' } } },
+  { role: 'tool', content: '[tool result cleared]', toolCallId: 'prior-browser', toolName: 'browser_click', modelInputContent: archivedBrowserSemantics },
 ]
 const systemPrompt = 'You are a coding assistant.'
 
@@ -58,6 +61,8 @@ describe('compacted constraints reach the real provider request', () => {
       expect(text).toContain('继续修复')
       expect(text.split(extractedAttachment)).toHaveLength(2)
       expect(text).not.toContain('uploaded-contract-display-only')
+      expect(text).toContain('[tool result cleared]')
+      expect(text).not.toContain(archivedBrowserSemantics)
       if (provider === 'anthropic') {
         expect(payload.system).toBe(systemPrompt)
         expect(payload.messages[0].role).toBe('user')

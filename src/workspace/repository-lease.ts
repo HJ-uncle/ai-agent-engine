@@ -104,6 +104,14 @@ export function prepareCloneDestinationLock(target:string):string {
 }
 export async function acquireRepositoryLease(file: string, waitMs=0, bindingLease?: RepositoryLeaseOwner['bindingLease']): Promise<RepositoryLease> {
   const deadline=Date.now()+Math.max(0,Math.min(waitMs,30_000))
+  // Read-only callers are allowed to queue behind a live Git operation, but a
+  // lease whose owner and supervisor have already been verified closed is an
+  // actionable recovery state.  Waiting for the full queue timeout here made
+  // Work's status panel appear hung for 30 seconds before it could invoke its
+  // recovery path.  Recheck at a bounded cadence so an operation that dies
+  // while we are waiting is surfaced promptly without spawning the native
+  // audit helper on every 25ms poll.
+  let nextOrphanAudit = 0
   for(;;) {
     if(fs.existsSync(file+'.recovery.lock')) {if(Date.now()>=deadline)throw new Error('Git recovery is in progress; retry after it completes');await new Promise(resolve=>setTimeout(resolve,25));continue}
     const owner: RepositoryLeaseOwner={schema:3,protocol:'windows-job-v1',generation:randomUUID(),acquiredAt:new Date().toISOString(),resource:path.resolve(file),owner:{...repositoryOwnerIdentity()},jobName:'',phase:'reserved',...(bindingLease?{bindingLease}:{})}
@@ -112,6 +120,12 @@ export async function acquireRepositoryLease(file: string, waitMs=0, bindingLeas
     let descriptor: number
     try {descriptor=fs.openSync(file,'wx',0o600)} catch(error) {
       if((error as NodeJS.ErrnoException).code!=='EEXIST') throw error
+      const now = Date.now()
+      if (now >= nextOrphanAudit) {
+        nextOrphanAudit = now + 250
+        const state = repositoryLeaseStatus(file)
+        if (state.recoverable) throw busy(file)
+      }
       if(Date.now()>=deadline) throw busy(file)
       await new Promise(resolve=>setTimeout(resolve,Math.min(25,deadline-Date.now())));continue
     }
@@ -168,7 +182,18 @@ export async function withRepositoryLease<T>(file: string, action: (scope: Repos
     const proof=auditRepositoryJob(lease.owner.jobName,lease.owner.owner,lease.owner.supervisor)
     if(proof.jobExists || proof.supervisorAlive || !proof.empty) throw new Error('Git process scope cleanup is unconfirmed')
     const closure=lease.owner.supervisor?nativeClosure(lease.owner):undefined
-    fs.writeFileSync(file+'.last-audit.json',JSON.stringify({generation:lease.owner.generation,finishedAt:new Date().toISOString(),scopeAudits:scope?.audits??[],proof,closure,failure:failure instanceof Error?failure.message:failure?String(failure):undefined},null,2)+'\n',{mode:0o600})
+    // A repository that has not been initialised yet uses the workspace
+    // fallback lock under `.ae/`.  Persisting the audit beside that lock
+    // makes the audit receipt look like an untracked project file as soon as
+    // `git init` completes (and the next status call reports it to the user).
+    // The live lock/native-close evidence is still verified above; keep the
+    // durable receipt only for a real repository lock under `.git`, where it
+    // remains outside the worktree.  Fallback operations are still covered by
+    // the engine log and their cleanup proof is not silently skipped.
+    const fallbackWorkspaceLock = path.basename(path.dirname(file)).toLowerCase() === '.ae'
+    if (!fallbackWorkspaceLock) {
+      fs.writeFileSync(file+'.last-audit.json',JSON.stringify({generation:lease.owner.generation,finishedAt:new Date().toISOString(),scopeAudits:scope?.audits??[],proof,closure,failure:failure instanceof Error?failure.message:failure?String(failure):undefined},null,2)+'\n',{mode:0o600})
+    }
     lease.release()
     if(closure)try{fs.rmSync(`${file}.native-close-${lease.owner.generation}.json`,{force:true})}catch{/* Completed proof may remain for audit if a filesystem observer briefly holds it. */}
   } catch(error) {

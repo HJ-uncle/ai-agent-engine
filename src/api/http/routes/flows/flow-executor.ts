@@ -17,6 +17,7 @@ import { ReActStrategy } from '../../../../core/agent-loop/react.js'
 import { createToolRegistry } from '../../../../tools/registry-factory.js'
 import { createAgentContext } from '../../../../core/agent-context/factory.js'
 import { createConversationHistory } from '../../../../storage/conversation/factory.js'
+import { getSessionMemorySettings } from '../../../../storage/memory/settings.js'
 import type {
   FlowNodeConfig,
   FlowEdgeConfig,
@@ -89,7 +90,8 @@ async function executeNode(
   runId: string,
   bus: FlowEventBus,
   signal: AbortSignal,
-  toolProfile: ToolProfile
+  toolProfile: ToolProfile,
+  tenantId: string,
 ): Promise<{ output: string; usage?: FlowEvent['usage'] }> {
   const subSessionId = `flow-${runId}-${node.nodeId}`
   const nodeLogger = logger.child({ flowRunId: runId, nodeId: node.nodeId, subSessionId })
@@ -103,7 +105,16 @@ async function executeNode(
   })
 
   try {
-    const { registry: subRegistry, externalSkills } = await createToolRegistry({ toolProfile })
+    // Ephemeral nodes still belong to the authenticated tenant. Resolve the
+    // current durable defaults here instead of enabling legacy general memory.
+    const memory = await getSessionMemorySettings(tenantId, subSessionId, toolProfile)
+    const { registry: subRegistry, externalSkills } = await createToolRegistry({
+      toolProfile,
+      memoryScope: memory.effectiveScope,
+      memoryScopes: memory.effectiveScopes,
+      securityContext: { tenantId, sessionId: subSessionId, toolProfile },
+      signal,
+    })
 
     // 系统提示词：节点 > 默认
     const defaultPrompt = '你是一个专业的子代理，专注于完成特定任务。请清晰思考，分步执行，确保任务完成后提供详细的总结。'
@@ -114,7 +125,9 @@ async function executeNode(
     const subCtx = createAgentContext({
       toolProfile,
       sessionId: subSessionId,
-      tenantId: 'flow-tenant', // ephemeral，不入可见列表
+      tenantId,
+      memoryScope: memory.effectiveScope,
+      memoryScopes: memory.effectiveScopes,
       tools: subRegistry,
       history: createConversationHistory(),
       logger: nodeLogger,
@@ -222,7 +235,8 @@ export class FlowExecutor {
   constructor(
     private bus: FlowEventBus,
     private signal: AbortSignal,
-    private toolProfile: ToolProfile = 'general'
+    private toolProfile: ToolProfile = 'general',
+    private tenantId: string = 'default',
   ) {}
 
   async run(opts: RunFlowOptions): Promise<void> {
@@ -282,7 +296,7 @@ export class FlowExecutor {
             }
 
             try {
-              const { output } = await executeNode(node, prompt, this.bus.runId, this.bus, this.signal, this.toolProfile)
+              const { output } = await executeNode(node, prompt, this.bus.runId, this.bus, this.signal, this.toolProfile, this.tenantId)
               // 仅写各自的 node key（互不覆盖）
               context[node.nodeId] = output
               context['output'] = output

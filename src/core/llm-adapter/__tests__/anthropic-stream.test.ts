@@ -108,6 +108,30 @@ describe('Anthropic streaming block fidelity', () => {
     expect(reasoning(chunks)).toBe('')
     expect(calls(chunks)).toEqual([])
     expect(chunks.at(-1)?.finishReason).toBe('stop')
+    expect(chunks.at(-1)?.streamDiagnostics).toEqual({
+      schemaVersion: 1, protocol: 'anthropic', rawStopReason: 'end_turn',
+      eventTypes: { message_start: 1, message_delta: 1, message_stop: 1 },
+      blockTypes: {}, deltaTypes: {}, finalBlockTypes: {},
+    })
+  })
+
+  it('bounds unknown protocol labels without retaining their text or payloads', async () => {
+    const frames = [start()]
+    for (let index = 0; index < 32; index++) {
+      frames.push(block(index, { type: 'private-provider-label-' + index, text: 'private-provider-body-' + index }), blockStop(index))
+    }
+    const chunks = await consume([...frames, ...stop()])
+    const diagnostic = chunks.at(-1)?.streamDiagnostics
+    expect(diagnostic).toMatchObject({ rawStopReason: 'end_turn', blockTypes: { other: 32 }, finalBlockTypes: { other: 32 } })
+    expect(JSON.stringify(diagnostic)).not.toContain('private-provider')
+    expect(JSON.stringify(diagnostic).length).toBeLessThan(1024)
+  })
+
+  it('preserves refusal and redacted-block shape without exposing private data', async () => {
+    const chunks = await consume([start(), block(0, { type: 'redacted_thinking', data: 'private-hidden-data' }), blockStop(0), ...stop('refusal')])
+    expect(chunks.at(-1)?.streamDiagnostics).toMatchObject({ rawStopReason: 'refusal', blockTypes: { redacted_thinking: 1 } })
+    expect(JSON.stringify(chunks)).not.toContain('private-hidden-data')
+    expect(text(chunks)).toBe('')
   })
 
   it.each(['private_reasoning', 'private_reasoning_delta'])('retains legacy custom thinking field %s separately', async field => {

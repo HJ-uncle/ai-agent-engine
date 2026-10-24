@@ -7,6 +7,7 @@ import { rootRunStore } from '../../../../storage/root-runs/index.js'
 import { resolveModelConfig, type ResolvedModelConfig } from '../../../../core/llm-adapter/resolve-model.js'
 import { estimateRequestInput } from '../../../../core/agent-loop/finalization.js'
 import { autoCompactSession, conversationRoutes } from '../conversation.js'
+import * as compactPrompt from '../../../../core/agent-loop/compact-prompt.js'
 
 // These are synthetic credentials in Vitest's isolated database, never operator settings.
 vi.hoisted(() => { process.env.ENCRYPTION_KEY = 'c7'.repeat(32) })
@@ -85,6 +86,20 @@ async function compress(parent?: ResolvedModelConfig, selectedTenant = tenantId)
 }
 
 describe('compaction uses the selected model connection', () => {
+  it('passes the runtime budget to post-turn summarization while preserving the model capability', async () => {
+    vi.stubEnv('CONTEXT_WINDOW_BUDGET', '')
+    await new ModelsStore().createModel({ tenantId, modelId: 'budget-model', provider: 'custom',
+      baseUrl: 'https://budget-fixture.invalid/v1', apiKey: 'synthetic-budget-key', isEnabled: true,
+      capabilities: { contextWindow: 1_000_000 } })
+    await prepareHistory('budget-model')
+    const parent = await resolveModelConfig({ tenantId, model: 'budget-model' })
+    const summarize = vi.spyOn(compactPrompt, 'buildCompactSummarizeFn')
+    await compress(parent)
+    expect(summarize).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contextWindow: 268_000 }))
+    expect(parent.capabilities.contextWindow).toBe(1_000_000)
+    expect(requests).toHaveLength(1)
+  })
+
   it('decrypts the tenant DeepSeek model and preserves its Anthropic-compatible endpoint and headers without OPENAI_API_KEY', async () => {
     const model = 'deepseek-v4.1-flash'
     await savedModel(model, 'deepseek', 'https://fixture.invalid/apps/anthropic', 'synthetic-deepseek-key')

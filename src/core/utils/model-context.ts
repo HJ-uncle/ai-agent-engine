@@ -3,9 +3,14 @@ import { browserOutputPresentation } from './browser-output.js'
 import { legacyBrowserFailureContent } from './browser-failure.js'
 import { estimateTokens } from './tokens.js'
 import { estimateMultimodalContent, imageToolPayload } from './multimodal-context.js'
+import { clearedToolModelContent, isClearedToolMessage } from './tool-evidence.js'
 
 /** The provider snapshot is independent from editable UI attachment/display content. */
 export function modelMessageContent(message: Message): Message['content'] {
+  // Both stores retain the original provider snapshot for archive recovery.
+  // It must not override an active micro-compaction marker: otherwise browser
+  // semantics keep re-entering every request after their output was cleared.
+  if (isClearedToolMessage(message)) return clearedToolModelContent(message)
   const recovered = legacyBrowserFailureContent(message, message.modelInputContent ?? message.content)
   if (recovered !== undefined) return recovered
   if (message.modelInputContent != null) return message.modelInputContent

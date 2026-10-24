@@ -9,6 +9,7 @@ import { browserBridge } from '../../../tools/browser/browser-bridge.js'
 
 import { v4 as uuidv4 } from 'uuid'
 import { ReActStrategy } from '../../../core/agent-loop/index.js'
+import { effectiveContextWindow } from '../../../core/context-budget.js'
 import { createPipeline, sseStream } from '../../../core/stream-pipeline/index.js'
 import { createAgentContext, Message } from '../../../core/agent-context/index.js'
 import { SQLiteConversationHistory } from '../../../storage/conversation/index.js'
@@ -20,6 +21,7 @@ import { logRequestDispatch } from '../../../core/llm-adapter/dispatch-diagnosti
 import { createRequestLogger, QALogger, type QALogEntry } from '../../../observability/index.js'
 import { buildSkillsSystemPrompt } from '../../../skills/index.js'
 import { buildOfficeExecutionPrompt } from '../../../core/office-prompt.js'
+import { buildWorkspaceDownloadPrompt } from '../../../core/workspace-download-prompt.js'
 import { getRequestToolProfile, getRequestRunLifetime } from '../tool-profile.js'
 import { createToolRegistry } from '../../../tools/registry-factory.js'
 import { resolveOSMMode } from '../../../core/osm.js'
@@ -273,6 +275,7 @@ interface ChatBody {
 }
 
 import { StreamBus, activeStreams, busToIterable } from '../../../core/stream-pipeline/stream-bus.js'
+import { observePublication } from '../../../core/stream-pipeline/observe-publication.js'
 import { getRequestSubagentProtocol, publishedSubagentRuns, subagentProjectionForViewer } from '../chat-subagent-protocol.js'
 import { subagentProtocolStream } from '../../../core/subagent/stream-protocol.js'
 import { validateAutomationAdmission, ensureCronRunSchema } from '../../../storage/cron/runs.js'
@@ -499,18 +502,6 @@ export interface ChatRouteOptions {
   liveChildRecovery?: boolean
   /** Trusted candidate integration only. Public capabilities stay disabled. */
   durableChildRecovery?: boolean
-}
-
-/** A viewer/evidence failure closes observation, never the executor. Callers
- * still await the real publication barrier before advancing their producer. */
-async function observePublication(bus: StreamBus, publish: () => Promise<unknown>, report?: (error: unknown) => void): Promise<void> {
-  try { await publish() }
-  catch (error) {
-    if (bus.disconnectTimeout) { clearTimeout(bus.disconnectTimeout); bus.disconnectTimeout = null }
-    // Diagnostics are another observer and cannot convert preserved execution
-    // into a cancellation or provider failure either.
-    try { report?.(error) } catch { /* observation diagnostics only */ }
-  }
 }
 
 export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOptions = {}) {
@@ -781,18 +772,16 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
     const tenantId = getTenantId(request)
     const reqLogger = createRequestLogger(requestId, tenantId, sessionId)
 
-    // Memory policy is stored per tenant/session so a client that omits the
-    // field on a later turn cannot silently fall back to a different scope.
-    // An explicit request value updates the session policy for subsequent turns.
-    const storedMemorySettings = await getSessionMemorySettings(tenantId, sessionId, toolProfile as 'code' | 'general')
-    const selectedMemoryScope: MemoryMode = requestedMemoryScope ?? storedMemorySettings.memoryScope
-    if (requestedMemoryScope !== undefined && requestedMemoryScope !== storedMemorySettings.memoryScope) {
+    // A fresh legacy request may update the session override. A parked run's
+    // saved selector is historical, so replay must preserve any newer choice.
+    // The tenant's independent global gate always comes from current settings.
+    if (!resumeRecord && requestedMemoryScope !== undefined) {
       await setSessionMemoryScope(tenantId, sessionId, requestedMemoryScope)
     }
-    const effectiveMemoryScope: MemoryMode = process.env.ENABLE_LONG_TERM_MEMORY === 'false'
-      ? 'off'
-      : selectedMemoryScope
-    reqLogger.info({ memoryScope: selectedMemoryScope, effectiveMemoryScope }, 'Conversation memory policy resolved')
+    const storedMemorySettings = await getSessionMemorySettings(tenantId, sessionId, toolProfile as 'code' | 'general')
+    const effectiveMemoryScope = storedMemorySettings.effectiveScope
+    const effectiveMemoryScopes = storedMemorySettings.effectiveScopes
+    reqLogger.info({ effectiveMemoryScopes }, 'Conversation memory policy resolved')
 
     // ── 会话 Agent 锁定校验 ────────────────────────────────────────────────────
     // 会话一旦发送过第一条消息，就锁定绑定的 agentId，后续不允许切换。
@@ -965,6 +954,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
         toolProfile,
         securityContext: { tenantId, sessionId, toolProfile },
         memoryScope: effectiveMemoryScope,
+        memoryScopes: effectiveMemoryScopes,
         allowedSkills,
         allowedTools,
         allowedMcpServers,
@@ -1050,6 +1040,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
       browserPrincipal: browserPrincipalFromAuth((request as FastifyRequest & { authContext?: AuthContext }).authContext),
       toolProfile,
       memoryScope: effectiveMemoryScope,
+      memoryScopes: effectiveMemoryScopes,
       sessionId,
       tenantId,
       workspacePaths,
@@ -1107,7 +1098,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
 
     // ── 客户端透传用户长期记忆（lobster-core buildAllMemoriesXml 直出）──────────
     let inlineMemoriesBlock = ''
-    if (effectiveMemoryScope !== 'off' && typeof requestedInlineMemoriesXml === 'string' && requestedInlineMemoriesXml.trim()) {
+    if (effectiveMemoryScopes.length > 0 && typeof requestedInlineMemoriesXml === 'string' && requestedInlineMemoriesXml.trim()) {
       inlineMemoriesBlock =
         '\n\n## 用户长期记忆（User Memories）\n' +
         '以下记忆由客户端持久化并随每次会话同步，可作为回答的上下文参考：\n' +
@@ -1324,18 +1315,18 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
     }
 
     // 并行执行 RAG 和 记忆检索
-    const enableMemory = effectiveMemoryScope !== 'off'
+    const enableMemory = effectiveMemoryScopes.length > 0
     const [ragChunks, memoryRecallBlock] = await Promise.all([
       (async () => {
         return await searchChunks(tenantId, plainTextQuery, ragTopK, boundKnowledgeBases ?? (toolProfile === 'code' ? [] : undefined))
       })(),
       enableMemory ? buildMemoryRecallBlock(tenantId, plainTextQuery, {
         model: resolvedModel,
-        contextWindow: modelCaps.contextWindow,
+        contextWindow: effectiveContextWindow(modelCaps.contextWindow),
         apiKey: modelApiKey,
         baseUrl: modelBaseUrl,
         provider: modelProvider,
-      }, { sessionId, scope: effectiveMemoryScope === 'session' ? 'session' : 'global' }) : Promise.resolve('')
+      }, { sessionId, scopes: effectiveMemoryScopes }) : Promise.resolve('')
     ])
     
     let ragPrompt = ''
@@ -1363,6 +1354,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
     )
 
     const officeExecutionPrompt = buildOfficeExecutionPrompt(toolProfile, registry, externalSkills)
+    const workspaceDownloadPrompt = buildWorkspaceDownloadPrompt(sessionId)
     const codeExecutionPrompt = toolProfile === 'code' ? `\n\n${CODE_AGENT_EXECUTION_PROMPT}` : ''
     const fullSystemPrompt = baseSystemPrompt + ragPrompt + memoryRecallBlock + `
 ---
@@ -1372,9 +1364,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
 1b. **能自行查证的一律自行查证，禁止用 \`ask_user\` 代替探索。** 只要信息可以通过工具获得（读文件、列目录、grep、看诊断、读代码图），就必须先去查，而不是先问用户。典型反例：不给路径就问「你指哪个文件」、不读代码就问「是哪个组件」、不跑测试就问「是不是这里错了」。只有在**信息确实只存在于用户脑子里**（业务偏好、优先级取舍、无法从仓库推断的需求）时才用 \`ask_user\`。
 2. 用户可见说明使用中文；工具调用必须使用已注册的原始 name，不编造中文别名或不存在的工具。
 3. You are ${currentModelName}.
-4. When providing a downloadable file to the user, ALWAYS present it as an HTTP download link using this exact Markdown format:
-   [文件名](/api/v1/workspace/file/download?sessionId=${sessionId}&path=文件名)
-   Use only the filename (not the full path) in the \`path\` parameter. Never use file:// URLs.
+${workspaceDownloadPrompt}
 5. 多步任务使用内建 \`plan_update\` 静默维护完整任务计划；简单单步请求无需建计划。首次可省略 id，后续复用返回 id，保留仍需展示的已完成步骤。status 使用 pending/in_progress/completed/cancelled；只在步骤真实完成且有依据后标记 completed。计划由引擎持久化并独立展示，不复述创建/更新日志，不通过命令或脚本维护；失败先修正输入，不声称未落盘的状态已保存。
 6. **先给结论，再说理由。** 不要在回答里反复自我怀疑或把同一假设推演多遍；一旦确认了一件事，就把它当既定事实继续推进，不要回头重复论证。
 7. **禁止绕过工具链自造轮子。** 当现有工具做不到某件事时（例如看不到图片），**不要**自己写脚本去实现底层能力（手写 PNG/JPEG 解码器、二进制解析、像素取证、OCR 引擎等）。这类自造轮子几乎必然失败，且会烧掉几十轮工具调用。正确做法：① 换用受支持的路径（如 \`read_file mode:"ocr"\`）；② 确认该路径确实不可用后，直接向用户说明限制并给出替代方案。**同一件事尝试失败一次就换路径，绝不允许用「再换个脚本试试」的方式反复试探。**
@@ -1391,9 +1381,7 @@ ${workspaceInfo}${codegraphBlock}${attachments && attachments.length > 0 ? `\n\n
 1b. **能自行查证的一律自行查证，禁止用 \`ask_user\` 代替探索。** 只要信息可以通过工具获得（读文件、列目录、grep、看诊断、读代码图），就必须先去查，而不是先问用户。典型反例：不给路径就问「你指哪个文件」、不读代码就问「是哪个组件」、不跑测试就问「是不是这里错了」。只有在**信息确实只存在于用户脑子里**（业务偏好、优先级取舍、无法从仓库推断的需求）时才用 \`ask_user\`。
 2. 用户可见说明使用中文；工具调用必须使用已注册的原始 name，不编造中文别名或不存在的工具。
 3. You are ${currentModelName}.
-4. When providing a downloadable file to the user, ALWAYS present it as an HTTP download link using this exact Markdown format:
-   [文件名](/api/v1/workspace/file/download?sessionId=${sessionId}&path=文件名)
-   Use only the filename (not the full path) in the \`path\` parameter. Never use file:// URLs.
+${workspaceDownloadPrompt}
 5. 多步任务使用内建 \`plan_update\` 静默维护完整任务计划；简单单步请求无需建计划。首次可省略 id，后续复用返回 id，保留仍需展示的已完成步骤。status 使用 pending/in_progress/completed/cancelled；只在步骤真实完成且有依据后标记 completed。计划由引擎持久化并独立展示，不复述创建/更新日志，不通过命令或脚本维护；失败先修正输入，不声称未落盘的状态已保存。
 6. **先给结论，再说理由。** 不要在回答里反复自我怀疑或把同一假设推演多遍；一旦确认了一件事，就把它当既定事实继续推进，不要回头重复论证。
 7. **禁止绕过工具链自造轮子。** 当现有工具做不到某件事时（例如看不到图片），**不要**自己写脚本去实现底层能力（手写 PNG/JPEG 解码器、二进制解析、像素取证、OCR 引擎等）。这类自造轮子几乎必然失败，且会烧掉几十轮工具调用。正确做法：① 换用受支持的路径（如 \`read_file mode:"ocr"\`）；② 确认该路径确实不可用后，直接向用户说明限制并给出替代方案。**同一件事尝试失败一次就换路径，绝不允许用「再换个脚本试试」的方式反复试探。**
@@ -1454,12 +1442,12 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}${officeExecutionPrompt}
           resumedPending = accepted.pending
         } else if (keyedAdmission) {
           const accepted = await rootRunStore.createUserAdmission(tenantId, resolvedModel ?? ctx.modelName ?? '', workspacePaths ?? [],
-            { ...request.body, memoryScope: selectedMemoryScope, toolProfile } as unknown as Record<string, unknown>, keyedAdmission, abortController.signal, registerRootPreparation)
+            { ...request.body, toolProfile } as unknown as Record<string, unknown>, keyedAdmission, abortController.signal, registerRootPreparation)
           rootRun = accepted.run
           if (accepted.duplicate) return 'duplicate' as const
         } else {
           rootRun = await rootRunStore.create(tenantId, sessionId, resolvedModel ?? ctx.modelName ?? '', workspacePaths ?? [],
-            { ...request.body, memoryScope: selectedMemoryScope, toolProfile } as unknown as Record<string, unknown>,
+            { ...request.body, toolProfile } as unknown as Record<string, unknown>,
             request.body.automationRunId ? { runId: request.body.automationRunId, dispatchRequest: automationDispatchRequest,
               effectiveAgentId: effectiveAgentId ?? undefined, effectiveAgentName } : undefined, abortController.signal, registerRootPreparation)
         }
@@ -1757,10 +1745,10 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}${officeExecutionPrompt}
               })),
               sessionId,
               tenantId,
-              memoryScope: effectiveMemoryScope === 'session' ? 'session' : 'global',
+              memoryScopes: effectiveMemoryScopes,
               llm: {
                 model: resolvedModel,
-                contextWindow: modelCaps.contextWindow,
+                contextWindow: effectiveContextWindow(modelCaps.contextWindow),
                 apiKey: modelApiKey,
                 baseUrl: modelBaseUrl,
                 provider: modelProvider,
@@ -1782,7 +1770,9 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}${officeExecutionPrompt}
         // Keep the producer open through post-turn maintenance so viewers receive
         // durable start/result states instead of a detached job's log messages.
         const autoCompactRatio = parseFloat(process.env.AUTO_COMPACT_THRESHOLD_RATIO ?? '0.92')
-        const contextWindow = modelCaps?.contextWindow ?? parseInt(process.env.AUTO_COMPACT_TOKEN_LIMIT ?? '500000', 10)
+        const contextWindow = effectiveContextWindow(modelCaps?.contextWindow
+          ?? parseInt(process.env.AUTO_COMPACT_TOKEN_LIMIT ?? '500000', 10),
+          ctx.toolProfile === 'code' ? undefined : ctx.tokenBudget)
         const currentPromptTokens = (finalUsage as any)?.currentPromptTokens ?? 0
         if (!abortController.signal.aborted && currentPromptTokens > Math.floor(contextWindow * autoCompactRatio)) {
           reqLogger.info({ currentPromptTokens, contextWindow }, 'Context usage exceeded, triggering auto-compaction')
@@ -1962,7 +1952,7 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}${officeExecutionPrompt}
             : { sessionUsage: await snapshotHistory.getSessionUsage({ tenantId, sessionId }), turnUsage: await snapshotHistory.getSessionUsage({ tenantId, sessionId }, run.turnId) })
           const publishedUsage = snapshot.projection.find(frame => frame.usage)?.usage as Record<string, unknown> | undefined
           const { subagentWatermarks: _legacyWatermarks, ...header } = snapshot
-          return checkedChildEnvelope(success({ ...header, projection, projectionIndices, source: 'live', sessionId, run,
+          return checkedChildEnvelope(success({ ...header, projection, projectionIndices, source: 'live', sessionId, run, executionRun: rootRunStore.public(owned!),
             runs: [...runs.filter(item => item.runId !== run.runId), run].sort((a, b) => a.seq - b.seq),
             history: publicHistoryMessages(storedHistory), historyCompacted: storedHistory.some(message => message.role === 'system' && message.metadata?.isCompactSummary === true),
             todos, changes, commandJobs: jobs, sessionUsage: sessionUsageAtWatermark(totals.sessionUsage, totals.turnUsage, publishedUsage),
@@ -2002,7 +1992,7 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}${officeExecutionPrompt}
             throw Object.assign(new Error('SUBAGENT_RECOVERY_REQUIRED: Published child checkpoint is unavailable'), { statusCode: 409 })
           const subagentRuns = publishedSubagentRuns(childRuns, publishedChildren, { tenantId, sessionId }, subagentProtocol, run.turnId)
           const projection = subagentProjectionForViewer(snapshot.projection, publishedChildren, subagentProtocol)
-          return reply.send(success({ ...snapshot, projection, source: 'live', sessionId, run, runs: projectedRuns,
+          return reply.send(success({ ...snapshot, projection, source: 'live', sessionId, run, executionRun: runs.find(item => item.runId === run.runId), runs: projectedRuns,
             history: publicHistoryMessages(cache.history), historyCompacted: cache.history.some(message => message.role === 'system' && message.metadata?.isCompactSummary === true),
             todos, changes, commandJobs: jobs, subagentRuns,
             sessionUsage: sessionUsageAtWatermark(cache.totals.sessionUsage, cache.totals.turnUsage, publishedUsage),
@@ -2047,7 +2037,10 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}${officeExecutionPrompt}
             throw Object.assign(new Error('SUBAGENT_RECOVERY_REQUIRED: Published child checkpoint is unavailable'), { statusCode: 409 })
             const subagentRuns = publishedSubagentRuns(childRuns, publishedChildren, { tenantId, sessionId }, subagentProtocol, run.turnId)
             const projection = subagentProjectionForViewer(snapshot.projection, publishedChildren, subagentProtocol)
-            return { ...snapshot, projection, source: 'live', sessionId, run, runs: projectedRuns, history, historyCompacted, todos, changes, commandJobs: jobs,
+            // Publication can stop at a bounded prefix while the owned task
+            // continues. Keep that prefix/cursor exact and expose execution
+            // separately so recovery can observe its eventual terminal state.
+            return { ...snapshot, projection, source: 'live', sessionId, run, executionRun: runs.find(item => item.runId === run.runId), runs: projectedRuns, history, historyCompacted, todos, changes, commandJobs: jobs,
               sessionUsage: sessionUsageAtWatermark(totals.sessionUsage, totals.turnUsage, publishedUsage),
               sessionSubagentUsage: sessionSubagentUsage(subagentRuns, { tenantId, sessionId }), subagentRuns }
           }

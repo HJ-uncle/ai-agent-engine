@@ -133,6 +133,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     }
     const memorySettings = await getSessionMemorySettings(tenantId, sessionId, toolProfile)
     const effectiveMemoryScope = memorySettings.effectiveScope
+    const effectiveMemoryScopes = memorySettings.effectiveScopes
 
     // ── 租户专属默认身份注入 ────────────────────────────────────────────────────
     const tenantIdentity = await tenantConfigStore.get(tenantId, 'default_identity')
@@ -147,6 +148,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     const { registry, externalSkills, toolCategories } = await createToolRegistry({
       toolProfile,
       memoryScope: effectiveMemoryScope,
+      memoryScopes: effectiveMemoryScopes,
       securityContext: { tenantId, sessionId, toolProfile },
     })
 
@@ -155,6 +157,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
       sessionId,
       tenantId,
       memoryScope: effectiveMemoryScope,
+      memoryScopes: effectiveMemoryScopes,
       tools: registry,
       history,
       logger: reqLogger,
@@ -211,13 +214,13 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     // Legacy edit/regenerate requests use the same persisted memory boundary as
     // /chat.  Include the scoped recall block so an edited turn does not lose
     // the session's selected memory context.
-    if (effectiveMemoryScope !== 'off' && newMessageContent) {
+    if (effectiveMemoryScopes.length > 0 && newMessageContent) {
       memoryRecallBlock = await buildMemoryRecallBlock(tenantId, newMessageContent, {
         model: currentModelName,
         apiKey: modelApiKey,
         baseUrl: modelBaseUrl,
         provider: modelProvider,
-      }, { sessionId, scope: effectiveMemoryScope === 'session' ? 'session' : 'global' })
+      }, { sessionId, scopes: effectiveMemoryScopes })
     }
 
     const officeExecutionPrompt = buildOfficeExecutionPrompt(toolProfile, registry, externalSkills)
@@ -263,7 +266,8 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 
     const abortController = new AbortController()
     const streamBus = new StreamBus(abortController, { retainOnDisconnect: true })
-    activeStreams.set(sessionId, streamBus)
+    const streamKey = `${tenantId}:${sessionId}`
+    activeStreams.set(streamKey, streamBus)
 
     // ── 客户端断开检测：断开不应终止后台任务 ────────────────────────────────
     let aborted = false
@@ -322,7 +326,10 @@ export async function messagesRoutes(fastify: FastifyInstance) {
       } catch (err) {
         streamBus.error(err)
       } finally {
-        setTimeout(() => activeStreams.delete(sessionId), 60000)
+        // A completed predecessor must not remove a newer stream for this session.
+        setTimeout(() => {
+          if (activeStreams.get(streamKey) === streamBus) activeStreams.delete(streamKey)
+        }, 60000).unref()
       }
     })()
 
@@ -331,7 +338,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     // Keep the legacy endpoint's automatic extraction semantics aligned with
     // /chat.  Extraction is deliberately detached from the response so an LLM
     // failure here cannot change the already delivered turn result.
-    if (effectiveMemoryScope !== 'off') {
+    if (effectiveMemoryScopes.length > 0) {
       setImmediate(() => {
         void ctx.history.getFullHistory(ctx).then((messages) => extractAndStoreMemories({
           messages: messages.map((m: any) => ({
@@ -340,7 +347,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
           })),
           sessionId,
           tenantId,
-          memoryScope: effectiveMemoryScope === 'session' ? 'session' : 'global',
+          memoryScopes: effectiveMemoryScopes,
           llm: { model: currentModelName, apiKey: modelApiKey, baseUrl: modelBaseUrl, provider: modelProvider },
           minImportance: 0.3,
         })).catch((error) => reqLogger.warn({ err: error }, 'Legacy memory extraction failed silently'))

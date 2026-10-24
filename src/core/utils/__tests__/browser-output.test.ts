@@ -1,6 +1,6 @@
 /** UI browser backgrounds survive output limits but never become implicit model vision. */
 import { describe, expect, it } from 'vitest'
-import { browserOutputPresentation } from '../browser-output.js'
+import { browserOutputFramePayload, browserOutputPresentation } from '../browser-output.js'
 import { modelMessageContent, estimateModelMessageTokens } from '../model-context.js'
 import { multimodalSummaryText, imageToolPayload } from '../multimodal-context.js'
 import { CurrentTurnProjection } from '../../stream-pipeline/stream-projection.js'
@@ -118,6 +118,52 @@ describe('browser screenshot presentation boundary', () => {
     }, 0), 0)
     expect(encoded).toBeLessThanOrEqual(16 * 1024 * 1024)
     expect(projection.truncated).toBe(true)
+  })
+})
+
+describe('browser publication byte budget', () => {
+  it.each([600_000, 1024 * 1024])('keeps complete durable evidence and recoverable structured stream JSON for %i-byte images', bytes => {
+    const page = snapshot(screenshot(bytes))
+    const output = JSON.stringify(page)
+    const frame = { toolCallId: 'click-1', rootRunId: 'root-1', success: true, status: 'succeeded', output }
+    const budget = 1024 * 1024 - Buffer.byteLength('\x00__tool_result__')
+    const payload = browserOutputFramePayload(frame, budget)!
+    expect(Buffer.byteLength(payload)).toBeLessThanOrEqual(budget)
+    const received = JSON.parse(payload)
+    const shown = JSON.parse(received.output)
+    expect(shown.screenshot).toMatchObject({ width: 1, height: 1, retainedInHistory: true, omittedFromStream: true })
+    expect(shown.interaction.x).toBe(page.interaction.x)
+    expect(shown.interaction.navigationId).toBe(page.interaction.navigationId)
+    expect(shown.tab).toEqual(page.tab)
+    expect(shown.elements).toEqual(page.elements)
+    if (bytes === 600_000) expect(shown.interaction.screenshot.dataUrl).toBe(page.interaction.screenshot.dataUrl)
+    else expect(shown.interaction.screenshot).toMatchObject({ retainedInHistory: true, omittedFromStream: true })
+    expect(received.metadata.browserOutputRecovery).toMatchObject({ source: 'durable-history', reason: 'stream-byte-budget' })
+    expect(frame.output).toBe(output)
+    expect(JSON.parse(frame.output).screenshot.dataUrl).toBe(page.screenshot.dataUrl)
+
+    const projection = new CurrentTurnProjection()
+    projection.apply({ toolResult: received })
+    const restored = new CurrentTurnProjection(projection.snapshot()).snapshot()[0].toolResult as Record<string, string>
+    expect(JSON.parse(restored.output).screenshot).toEqual(shown.screenshot)
+  })
+
+  it('measures UTF-8 and escaped JSON with surrounding frame metadata rather than source character count', () => {
+    const output = JSON.stringify({ ...snapshot(), text: '中文\\"\n'.repeat(120_000) })
+    const payload = browserOutputFramePayload({ toolCallId: 'unicode', output, metadata: { message: '诊断'.repeat(20_000) } }, 300_000)!
+    expect(Buffer.byteLength(payload)).toBeLessThanOrEqual(300_000)
+    const received = JSON.parse(payload)
+    const shown = JSON.parse(received.output)
+    expect(shown.truncated).toBe(true)
+    expect(shown.text.length).toBeGreaterThan(0)
+    expect(shown.tab.navigationId).toBe(3)
+    expect(shown.interaction.viewport).toEqual(snapshot().interaction.viewport)
+    expect(received.metadata.message).toBe('诊断'.repeat(20_000))
+  })
+
+  it('does not use a browser-shaped output to truncate arbitrary frame fields or unknown tools', () => {
+    expect(browserOutputFramePayload({ output: JSON.stringify({ screenshot: screenshot(), text: 'not a snapshot' }) }, 128)).toBeUndefined()
+    expect(browserOutputFramePayload({ output: JSON.stringify(snapshot()), args: { untrusted: 'x'.repeat(2000) } }, 1024)).toBeUndefined()
   })
 })
 

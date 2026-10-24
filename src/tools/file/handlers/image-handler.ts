@@ -6,6 +6,7 @@ import { IMAGE_MIME_TYPES } from '../constants.js'
 import { isVisionModelAvailable } from '../utils.js'
 import { extractTextWithOCR } from '../ocr.js'
 import { describeImageWithVisionProxy, isVisionProxyConfigured } from '../vision-proxy.js'
+import { MAX_NATIVE_IMAGE_BYTES } from '../../../core/utils/multimodal-context.js'
 
 export class ImageHandler implements FileHandler {
   extensions = Object.keys(IMAGE_MIME_TYPES)
@@ -16,7 +17,7 @@ export class ImageHandler implements FileHandler {
     const mimeType = IMAGE_MIME_TYPES[ext]
     const visionAvailable = isVisionModelAvailable(ctx)
 
-    let useOcr = false
+    let useOcr = !visionAvailable
     if (mode === 'auto') {
       useOcr = !visionAvailable
     } else if (mode === 'ocr') {
@@ -68,7 +69,9 @@ export class ImageHandler implements FileHandler {
         content: ocrResult.output
       }
     } else {
+      if (fs.statSync(filePath).size > MAX_NATIVE_IMAGE_BYTES) throw new Error(`Image exceeds native vision byte limit (${MAX_NATIVE_IMAGE_BYTES} bytes). Resize the image or use OCR; no pixels were sent.`)
       const buffer = fs.readFileSync(filePath)
+      if (buffer.length > MAX_NATIVE_IMAGE_BYTES) throw new Error('Image grew beyond the native vision byte limit; no pixels were sent.')
       const base64 = buffer.toString('base64')
       const dataUrl = `data:${mimeType};base64,${base64}`
 
@@ -77,12 +80,13 @@ export class ImageHandler implements FileHandler {
         mimeType,
         size: buffer.length,
         dataUrl,
-        hasDataUrl: true
+        hasDataUrl: true as const
       }
 
       return {
         type: 'image_vision',
         data: resultData,
+        image: resultData,
         content: JSON.stringify(resultData)
       }
     }

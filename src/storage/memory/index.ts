@@ -4,8 +4,8 @@ export { SQLiteMemoryManager } from './memory-manager.js'
 export { createMemoryEmbeddingService, backfillMemoryEmbeddings, OpenAIMemoryEmbeddingService } from './embedding.js'
 export type { MemoryEmbeddingConfig, MemoryEmbeddingService, EmbeddingBackfillResult } from './embedding.js'
 export { MemoryConsolidator } from './consolidation.js'
-export { getSessionMemorySettings, setSessionMemoryScope, defaultMemoryMode, isMemoryMode } from './settings.js'
-export type { MemoryMode } from './settings.js'
+export { getSessionMemorySettings, setSessionMemoryScope, setSessionMemoryEnabled, getMemoryPreferences, setMemoryPreferences, defaultMemoryMode, isMemoryMode } from './settings.js'
+export type { MemoryMode, MemoryPreferences, SessionMemorySettings } from './settings.js'
 export type {
   MemoryManager,
   MemoryNode,

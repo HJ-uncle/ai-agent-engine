@@ -20,6 +20,7 @@ import type { Message, Tool } from '../agent-context/index.js'
 import { estimateTokens } from '../utils/tokens.js'
 import { repairJson } from '../utils/json.js'
 import { modelMessageContent } from '../utils/model-context.js'
+import { imageToolPayload, imageVersionDescription } from '../utils/multimodal-context.js'
 import { normalizeWriteFileArgs } from '../../shared/write-file-args.js'
 
 /**
@@ -394,12 +395,12 @@ function messagesToOpenAI(
             size: parsed?.size,
             rawLength: rawToolContent.length,
           })
-          if (parsed?.dataUrl && typeof parsed.dataUrl === 'string' && parsed.dataUrl.startsWith('data:image/')) {
+          if (imageToolPayload(rawToolContent)) {
             // 先正常返回 tool result（不含 base64，太大）
             result.push({
               role: 'tool',
               tool_call_id: tcId,
-              content: `Image "${parsed.filename ?? 'image'}" (${parsed.mimeType ?? ''}, ${parsed.size ?? 0} bytes) loaded successfully.`,
+              content: `Image "${parsed.filename ?? 'image'}" (${parsed.mimeType ?? ''}, ${parsed.size ?? 0} bytes) loaded.${imageVersionDescription(parsed.fileVersion)}${supportsVision ? '' : '\nImage pixels were not sent: vision is disabled for the selected model.'}`,
             })
             // 再注入 user 消息让 AI 真正看到图片（视觉理解）
             // 明确标注文件名，避免多图场景下 LLM 混淆
@@ -423,35 +424,19 @@ function messagesToOpenAI(
               tool_call_id: tcId,
               content: payloadOmitted
                 ? `Image "${parsed.filename ?? 'image'}" (${parsed.mimeType ?? ''}, ${parsed.size ?? 0} bytes) was read, but its image payload was omitted from context. Use OCR or a smaller image if pixel-level inspection is needed.`
-                : `Image "${parsed.filename ?? 'image'}" (${parsed.mimeType ?? ''}, ${parsed.size ?? 0} bytes) was read. The image content was delivered to the model via the vision channel in the previous turn.`,
+                : `Image "${parsed.filename ?? 'image'}" (${parsed.mimeType ?? ''}, ${parsed.size ?? 0} bytes) has no retained image payload. Prior delivery is unverified; read it again for pixel-level inspection.`,
             })
             imageInjected = true
             console.log(`[openai.ts] ℹ️ dataUrl stripped in history for "${parsed.filename}", emitting summary tool result`)
+          } else if (typeof parsed?.dataUrl === 'string') {
+            result.push({ role: 'tool', tool_call_id: tcId, content: 'Image pixels were not sent: the native image payload is invalid or exceeds the byte limit.' })
+            imageInjected = true
           } else {
             console.log(`[openai.ts] ⚠️ tool result is NOT a read_image dataUrl, treating as plain text. keys:`, Object.keys(parsed ?? {}))
           }
-        } catch (e) {
-          // JSON parse failed — likely the raw output was truncated mid-string (legacy path before
-          // stripDataUrl was introduced).  Emit a neutral summary so the LLM doesn't hallucinate
-          // from garbled base64 text.
-          const filenameMatch = rawToolContent.match(/"filename"\s*:\s*"([^"]+)"/)
-          const sizeMatch    = rawToolContent.match(/"size"\s*:\s*(\d+)/)
-          const mimeMatch    = rawToolContent.match(/"mimeType"\s*:\s*"([^"]+)"/)
-          const looksLikeImage = rawToolContent.includes('"dataUrl"') || rawToolContent.includes('data:image/')
-          if (looksLikeImage) {
-            const filename = filenameMatch?.[1] ?? 'image'
-            const size     = sizeMatch?.[1] ?? '?'
-            const mime     = mimeMatch?.[1] ?? 'image/?'
-            result.push({
-              role: 'tool',
-              tool_call_id: tcId,
-              content: `Image "${filename}" (${mime}, ${size} bytes) was read successfully. (Note: raw base64 payload omitted from history to save tokens.)`,
-            })
-            imageInjected = true
-            console.log(`[openai.ts] ⚠️ JSON parse failed but detected image result — emitting summary for "${filename}"`)
-          } else {
-            console.log(`[openai.ts] ⚠️ tool result JSON parse failed:`, (e as Error).message, 'raw prefix:', rawToolContent.slice(0, 100))
-          }
+        } catch {
+          // Ordinary files can contain dataUrl examples. Malformed JSON or a
+          // display prefix is text, never evidence that a picture was viewed.
         }
       }
 

@@ -57,6 +57,22 @@ function context(toolProfile?: 'code' | 'general'): AgentContext {
 }
 
 describe('get_current_context memory isolation', () => {
+  it('reports the same effective context policy used by Code admission without rewriting model capabilities', async () => {
+    const ctx = context('code')
+    ctx.modelCaps = { contextWindow: 1_000_000 }
+    const before = process.env.CONTEXT_WINDOW_BUDGET
+    try {
+      process.env.CONTEXT_WINDOW_BUDGET = '268000'
+      const result = await getCurrentContextTool.execute({}, ctx)
+      expect(result.output).toContain('**有效上下文窗口**: 268000 tokens')
+      expect(result.output).toContain('**模型能力上限**: 1000000 tokens')
+      expect(result.output).not.toContain('Token 剩余')
+    } finally {
+      if (before === undefined) delete process.env.CONTEXT_WINDOW_BUDGET
+      else process.env.CONTEXT_WINDOW_BUDGET = before
+    }
+  })
+
   it('code neither imports nor constructs the memory manager and preserves local context', async () => {
     const ctx = context('code')
     const result = await getCurrentContextTool.execute({ includeTools: true, includeHistory: true }, ctx)
@@ -76,7 +92,7 @@ describe('get_current_context memory isolation', () => {
     expect(result.success).toBe(true)
     expect(result.output).toContain('GENERAL_MEMORY_FIXTURE')
     expect(memory.constructed).toHaveBeenCalledTimes(1)
-    expect(memory.list).toHaveBeenCalledWith({ limit: 5, orderBy: 'timestamp', orderDir: 'DESC' }, { tenantId: 'context-tenant', sessionId: 'context-session' })
+    expect(memory.list).toHaveBeenCalledWith({ limit: 5, orderBy: 'timestamp', orderDir: 'DESC' }, { tenantId: 'context-tenant', sessionId: 'context-session', scope: 'session' })
   })
 
   it('session memory follows the executing subagent session, not rootSessionId', async () => {
@@ -95,4 +111,27 @@ describe('get_current_context memory isolation', () => {
       { tenantId: 'context-tenant', sessionId: 'child-session', scope: 'session' },
     )
   })
+  it('combines enabled global and current child-session memory without duplicates or parent access', async () => {
+    memory.list.mockImplementation(async (_filter: unknown, ctx: { scope: string }) => [
+      { id: ctx.scope + '-duplicate', type: 'fact', summary: 'same fact', timestamp: 1 },
+      { id: ctx.scope + '-unique', type: 'fact', summary: ctx.scope + ' fact', timestamp: 2 },
+    ])
+    const ctx = { ...context('code'), sessionId: 'child-session', rootSessionId: 'parent-session', memoryScope: 'off', memoryScopes: ['global', 'session'] } as AgentContext
+    const result = await getCurrentContextTool.execute({}, ctx)
+    expect(result.output.match(/same fact/g)).toHaveLength(1)
+    expect(result.output).toContain('session fact')
+    expect(result.output).toContain('global fact')
+    expect(memory.list.mock.calls.map(call => call[1])).toEqual([
+      { tenantId: 'context-tenant', scope: 'session', sessionId: 'child-session' },
+      { tenantId: 'context-tenant', scope: 'global', sessionId: '' },
+    ])
+  })
+
+  it('does not construct storage when both switches are disabled despite legacy global mode', async () => {
+    const result = await getCurrentContextTool.execute({}, { ...context('general'), memoryScope: 'global', memoryScopes: [] })
+    expect(result.output).not.toContain('记忆信息')
+    expect(memory.constructed).not.toHaveBeenCalled()
+    expect(memory.list).not.toHaveBeenCalled()
+  })
+
 })

@@ -15,9 +15,17 @@ export function expectedBinding(value: { expectedRoot?: string; bindingEpoch?: s
 }
 
 /** Session selection and physical repository are separate resources: two
- * sessions may share one index and must not execute simultaneous Git actions. */
+ * sessions may share one index and must not execute simultaneous Git actions.
+ *
+ * The workspace lease is a short-lived coordination lock shared with the
+ * Explorer and Work workspace panels.  Those readers can legitimately hold
+ * it while Git is starting, so Git waits for that lease.  The repository lease
+ * remains fail-fast (`waitMs`) for mutations: queuing a second write could
+ * replay a side effect after the first operation has already changed the
+ * index. */
 export async function withGitBinding<T>(context: { tenantId: string; sessionId: string }, cwdRelative: string,
   expected: WorkspaceBindingSnapshot | undefined, action: (workspace: GitWorkspace) => Promise<T>, waitMs = 0, prepareInit = false, cloneOnly = false): Promise<T> {
+  const bindingWaitMs = 30_000
   return workspaceManager.withBindingLease(context, expected, async binding => {
     const cwd=workspaceManager.resolveSafePath(context,cwdRelative||'.')
     const cloning=scopedCloneLease(binding.snapshot.root,cwd);if(cloning)rejectBusyRepositoryLease(cloning)
@@ -37,7 +45,7 @@ export async function withGitBinding<T>(context: { tenantId: string; sessionId: 
       }}
       workspace.assertBinding();return action(workspace)
     },waitMs,{...binding.resource,root:binding.snapshot.root,epoch:binding.snapshot.epoch})
-  }, waitMs)
+  }, bindingWaitMs)
 }
 
 function scopedCloneLease(root:string,cwd:string):string|undefined {
@@ -78,6 +86,10 @@ export async function recoverGitLease(context:{tenantId:string;sessionId:string}
   if(!state.busy) {
     state={busy:true,recoverable:true,generation,owner:recoveredRepositoryOwner(file,generation)}
   } else recoverRepositoryLease(file,generation)
-  if(state.owner?.bindingLease)workspaceManager.recoverInterruptedGitBinding(context,expected,state.owner.bindingLease,state.owner.owner.pid)
+  // Repository recovery is independently fenced by the native audit.  A
+  // binding receipt from an old engine/session is retained when it cannot be
+  // proven to belong to this request; only an exact current-session match is
+  // released by recoverInterruptedGitBinding.
+  if(state.owner?.bindingLease) workspaceManager.recoverInterruptedGitBinding(context,expected,state.owner.bindingLease,state.owner.owner.pid)
   return {busy:false,recoverable:false}
 }

@@ -3,7 +3,8 @@ import { SQLiteMemoryManager } from '../../../storage/memory/memory-manager.js'
 import type { MemoryContext, MemoryEdgeType, MemoryNodeType, MemoryScope } from '../../../storage/memory/types.js'
 import { success, fail, paginateArray } from '../response.js'
 import { getRequestToolProfile } from '../tool-profile.js'
-import { getSessionMemorySettings, setSessionMemoryScope } from '../../../storage/memory/settings.js'
+import { getSessionMemorySettings, setSessionMemoryScope, getMemoryPreferences, setMemoryPreferences, setSessionMemoryEnabled } from '../../../storage/memory/settings.js'
+import { requireRoles } from '../../../auth/guards.js'
 
 const manager = new SQLiteMemoryManager()
 
@@ -66,7 +67,27 @@ async function scopedNode(id: string, ctx: MemoryContext) {
 }
 
 export async function memoryRoutes(fastify: FastifyInstance) {
-  // Per-session setting is a capability switch; CRUD scope remains explicit.
+  fastify.get('/memory/preferences', async (request, reply) => {
+    return reply.code(200).send(success(await getMemoryPreferences(getTenantId(request))))
+  })
+
+  fastify.put<{ Body: { globalEnabled?: boolean; sessionDefaultEnabled?: boolean } }>('/memory/preferences', { preHandler: requireRoles('admin', 'tenant-admin') }, async (request, reply) => {
+    const patch = request.body
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).length === 0 ||
+      Object.keys(patch).some(key => key !== 'globalEnabled' && key !== 'sessionDefaultEnabled') ||
+      (patch.globalEnabled !== undefined && typeof patch.globalEnabled !== 'boolean') ||
+      (patch.sessionDefaultEnabled !== undefined && typeof patch.sessionDefaultEnabled !== 'boolean')) {
+      return badScope(reply, '记忆默认设置必须包含有效的布尔值')
+    }
+    if (process.env.ENABLE_LONG_TERM_MEMORY === 'false' && patch.globalEnabled === true) {
+      return reply.code(409).send(fail(40900, '服务端已关闭长期记忆，请在服务端启用后重试。', {
+        reason: 'MEMORY_DISABLED_BY_SERVER', ...await getMemoryPreferences(getTenantId(request)),
+      }))
+    }
+    return reply.code(200).send(success(await setMemoryPreferences(getTenantId(request), patch)))
+  })
+
+  // Per-session overrides do not control tenant-global memory or chat history.
   fastify.get<{ Querystring: { sessionId?: string } }>('/memory/settings', async (request, reply) => {
     const sessionId = String(request.query.sessionId ?? '').trim()
     if (!sessionId) return badScope(reply, 'sessionId is required')
@@ -74,18 +95,26 @@ export async function memoryRoutes(fastify: FastifyInstance) {
     return reply.code(200).send(success({ sessionId, ...settings }))
   })
 
-  fastify.put<{ Body: { sessionId?: string; memoryScope?: string } }>('/memory/settings', async (request, reply) => {
+  fastify.put<{ Body: { sessionId?: string; memoryScope?: string; sessionEnabled?: boolean | null } }>('/memory/settings', async (request, reply) => {
     const sessionId = String(request.body?.sessionId ?? '').trim()
     const memoryScope = request.body?.memoryScope
+    const hasSessionToggle = Object.prototype.hasOwnProperty.call(request.body ?? {}, 'sessionEnabled')
+    const sessionEnabled = request.body?.sessionEnabled
     if (!sessionId) return badScope(reply, 'sessionId is required')
-    if (memoryScope !== 'off' && memoryScope !== 'global' && memoryScope !== 'session') {
-      return badScope(reply, 'memoryScope must be off, global, or session')
+    if (hasSessionToggle && memoryScope !== undefined) return badScope(reply, '请使用会话记忆开关或旧版范围字段，不能同时提交')
+    if (hasSessionToggle ? sessionEnabled !== null && typeof sessionEnabled !== 'boolean'
+      : memoryScope !== 'off' && memoryScope !== 'global' && memoryScope !== 'session') {
+      return badScope(reply, 'sessionEnabled 必须为布尔值或 null')
     }
-    if (process.env.ENABLE_LONG_TERM_MEMORY === 'false' && memoryScope !== 'off') {
-      return reply.code(409).send(fail(40900, 'Long-term memory is disabled by server configuration; choose memoryScope=off or enable ENABLE_LONG_TERM_MEMORY'))
+    if (process.env.ENABLE_LONG_TERM_MEMORY === 'false' && (hasSessionToggle ? sessionEnabled === true : memoryScope !== 'off')) {
+      const settings = await getSessionMemorySettings(getTenantId(request), sessionId, getRequestToolProfile(request))
+      return reply.code(409).send(fail(40900, '服务端已关闭长期记忆，请在服务端启用后重试。', {
+        reason: 'MEMORY_DISABLED_BY_SERVER', sessionId, ...settings,
+      }))
     }
     try {
-      await setSessionMemoryScope(getTenantId(request), sessionId, memoryScope)
+      if (hasSessionToggle) await setSessionMemoryEnabled(getTenantId(request), sessionId, sessionEnabled!)
+      else await setSessionMemoryScope(getTenantId(request), sessionId, memoryScope as 'off' | 'global' | 'session')
     } catch (err: any) {
       const status = Number(err?.statusCode ?? 40900)
       return reply.code(status >= 400 && status < 600 ? status : 409).send(fail(status, err?.message ?? 'Unable to update memory settings'))

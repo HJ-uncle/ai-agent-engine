@@ -1,3 +1,4 @@
+import { effectiveMemoryScopes } from '../middleware/memory/policy.js'
 /**
  * 统一工具注册工厂
  *
@@ -17,7 +18,8 @@ import {
   writeFileTool,
   editFileTool,
 } from './file/index.js'
-import { officeDocumentTool } from './office/index.js'
+import { officeDocumentTool, officeInspectTool } from './office/index.js'
+import { officeEnvironmentTool } from './office/environment.js'
 import { cmdTool, commandJobTools } from './cmd/index.js'
 import { askUserTool } from './ask-user/index.js'
 import { createMemoryTools } from './memory/index.js'
@@ -62,6 +64,7 @@ export interface RegistryFactoryOptions {
   toolProfile?: ToolProfile
   /** Explicit memory extension for a conversation, independent of the programming profile. */
   memoryScope?: import('../storage/memory/settings.js').MemoryMode
+  memoryScopes?: readonly import('../storage/memory/types.js').MemoryScope[]
   /** 允许的 skill 列表，undefined = 全部，[] = 全部，传入列表则过滤 */
   allowedSkills?: string[] | null
   /** Custom-Agent bindings are exact: [] exposes no external skills, rather than the legacy all-skills default. */
@@ -138,7 +141,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   const profile = opts.toolProfile ?? 'general'
   const explicitAllowedTools = normalizeAllowedTools(opts.allowedTools)
   const memoryTools = createMemoryTools()
-  const memoryEnabled = opts.memoryScope !== 'off' && (profile !== 'code' || opts.memoryScope !== undefined)
+  const memoryEnabled = effectiveMemoryScopes({ ...opts, toolProfile: profile }).length > 0
   const memoryImplementations = new Set(memoryTools)
   const internalPlanTools = new Set(todoTools.filter(tool => tool.name === 'plan_update'))
   const registry = new ToolRegistry(tool => {
@@ -157,7 +160,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
 
   /** Helper: register a tool into the registry and track it as builtin */
   const registerBuiltin = (tool: Tool) => {
-    const readOnly = [readFileTool, listFilesTool, globTool, grepTool, getCurrentContextTool, searchHistoryTool,
+    const readOnly = [readFileTool, listFilesTool, globTool, grepTool, getCurrentContextTool, searchHistoryTool, officeEnvironmentTool, officeInspectTool,
       ...commandJobTools.filter(candidate => candidate.name === 'command_output')].includes(tool)
     const browserReadOnly = browserTools.includes(tool) && BROWSER_READONLY_TOOLS.has(tool.name)
     const mode = tool.name === 'subagent' && subagentTools.includes(tool) ? 'subagent'
@@ -240,6 +243,8 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
 
   // Mixed Office inspect/create/edit stays trusted serial and general-only.
   if (profile === 'general' && shouldRegister(officeDocumentTool.name)) registerBuiltin(officeDocumentTool)
+  if (profile === 'general' && shouldRegister(officeInspectTool.name)) registerBuiltin(officeInspectTool)
+  if (profile === 'general' && shouldRegister(officeEnvironmentTool.name)) registerBuiltin(officeEnvironmentTool)
 
   // 3. 命令行工具
   if (shouldRegister(cmdTool.name)) registerBuiltin(cmdTool)

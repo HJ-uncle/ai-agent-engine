@@ -1,9 +1,10 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify'
-import { ModelsStore, type ModelConfig } from '../../../storage/sqlite/models.js'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { ModelIdentityConflictError, ModelsStore, type ModelConfig } from '../../../storage/sqlite/models.js'
 import { success, fail } from '../response.js'
 import { createLLMAdapter } from '../../../core/llm-adapter/factory.js'
 import { resolveCapabilities, type ModelCapabilities } from '../../../core/model-capabilities/index.js'
 import { capabilityPatchFromInput, mergeCapabilityOverrides, type CapabilityOverridePatch } from '../../../core/model-capabilities/overrides.js'
+import { effectiveContextWindow } from '../../../core/context-budget.js'
 
 function presentModel(model: ModelConfig) {
   const resolvedCapabilities = resolveCapabilities({
@@ -14,6 +15,9 @@ function presentModel(model: ModelConfig) {
     ...model,
     capabilityOverrides: model.capabilities ?? null,
     resolvedCapabilities,
+    // Runtime policy is independent of a provider's true capability and must
+    // never be persisted as a manual capability override by model editors.
+    effectiveContextWindow: effectiveContextWindow(resolvedCapabilities.contextWindow),
     // Read alias for existing chat consumers; never write resolved values back as overrides.
     capabilities: resolvedCapabilities,
     apiKey: model.apiKey ? `...${model.apiKey.slice(-4)}` : '',
@@ -22,6 +26,19 @@ function presentModel(model: ModelConfig) {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
+
+function modelWriteFailure(error: unknown, request: FastifyRequest, reply: FastifyReply) {
+  if (error instanceof ModelIdentityConflictError) {
+    return reply.code(409).send(fail(40901, error.message, {
+      reason: error.code,
+      ...(error.existingModelId ? { existingModelId: error.existingModelId } : {}),
+    }))
+  }
+  // Database errors may embed SQL arguments, including credentials. Keep the
+  // request ID in server logs without returning or logging the raw exception.
+  request.log.error('Model configuration write failed')
+  return reply.code(500).send(fail(50000, '模型配置保存失败，请稍后重试。'))
+}
 
 // Simple check for internal IP to prevent SSRF
 function isPrivateIP(ip: string): boolean {
@@ -120,8 +137,8 @@ export async function modelsRoutes(fastify: FastifyInstance) {
           capabilities: capabilities ?? null,
         })
         return reply.code(200).send(success(presentModel(newModel)))
-      } catch (err: any) {
-        return reply.code(500).send(fail(50000, err.message))
+      } catch (error) {
+        return modelWriteFailure(error, request, reply)
       }
     }
   )
@@ -156,11 +173,15 @@ export async function modelsRoutes(fastify: FastifyInstance) {
         delete updateData.apiKey
       }
 
-      const updated = await store.updateModel(id, tenantId, updateData)
-      if (!updated) {
-        return reply.code(404).send(fail(40400, 'Model not found.'))
+      try {
+        const updated = await store.updateModel(id, tenantId, updateData)
+        if (!updated) {
+          return reply.code(404).send(fail(40400, 'Model not found.'))
+        }
+        return reply.code(200).send(success(presentModel(updated)))
+      } catch (error) {
+        return modelWriteFailure(error, request, reply)
       }
-      return reply.code(200).send(success(presentModel(updated)))
     }
   )
 

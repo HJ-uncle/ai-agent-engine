@@ -43,6 +43,9 @@ import { commandJobs } from './core/command-jobs/index.js'
 import { readEngineListenAddress } from './server-listen.js'
 
 const { port: PORT, host: HOST } = readEngineListenAddress()
+// Only the process launcher can opt into desktop ownership; project/DB settings
+// loaded below must not manufacture this capability or change the actual host.
+const DESKTOP_OWNED = process.env.AETHER_DESKTOP_OWNED === '1'
 
 async function main() {
   try {
@@ -90,7 +93,7 @@ async function main() {
     //    否则 registry 的双层状态（项目层/全局层）会与导入管线的目录解析分裂
     skillsRegistry.start()
 
-    const server = await buildServer()
+    const server = await buildServer({ listenHost: HOST, desktopOwned: DESKTOP_OWNED })
     await server.listen({ port: PORT, host: HOST })
     
     // 获取局域网IP地址

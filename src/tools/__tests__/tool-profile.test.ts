@@ -16,7 +16,7 @@ const context = { tenantId: 'profile-test', sessionId: 'session' } as AgentConte
 const mcpServers = [{ id: 'fixture', name: 'fixture', transportType: 'http' as const, url: 'http://fixture.invalid' }]
 const excluded = [
   'calculate', 'get_time', 'remember', 'recall', 'search_memory', 'list_memories', 'forget', 'link_memories',
-  'install_package', 'list_packages', 'office_document', 'cron_list', 'cron_create', 'cron_update', 'cron_delete',
+  'install_package', 'list_packages', 'office_document', 'office_inspect', 'office_environment', 'cron_list', 'cron_create', 'cron_update', 'cron_delete',
   'agent_list', 'agent_get', 'agent_create', 'agent_do_create', 'agent_update', 'agent_do_update', 'agent_delete', 'agent_do_delete',
   'task_list', 'task_cancel', 'task_status',
 ]
@@ -48,6 +48,18 @@ describe('executable tool profiles', () => {
       await expect(result.registry.execute(name, {}, context)).rejects.toBeInstanceOf(ToolNotFoundError)
     }
     expectExactCategories(result)
+  })
+
+  it('registers only trusted memory tools from the resolved scopes and removes them when both are disabled', async () => {
+    const enabled = await createToolRegistry({ toolProfile: 'code', memoryScopes: ['global', 'session'] })
+    expect(enabled.registry.has('remember')).toBe(true)
+    expect(enabled.registry.has('recall')).toBe(true)
+    const disabled = await createToolRegistry({ toolProfile: 'general', memoryScope: 'global', memoryScopes: [] })
+    expect(disabled.registry.has('remember')).toBe(false)
+    expect(disabled.registry.has('recall')).toBe(false)
+    vi.stubEnv('ENABLE_LONG_TERM_MEMORY', 'false')
+    const serverDisabled = await createToolRegistry({ toolProfile: 'general', memoryScopes: ['global', 'session'] })
+    expect(serverDisabled.registry.has('remember')).toBe(false)
   })
 
   it('defaults to general with existing service tools and executable utility skills', async () => {
@@ -86,6 +98,47 @@ describe('executable tool profiles', () => {
     expect(createSubagentToolRegistry(general.registry, false).has('office_document')).toBe(true)
     const narrowed = await createToolRegistry({ allowedTools: ['read_file'] })
     expect(narrowed.registry.has('office_document')).toBe(false)
+  })
+
+  it('admits the actual readonly office environment helper in Work and children without widening explicit selections', async () => {
+    vi.stubEnv('OSM_MODE', 'off')
+    vi.stubEnv('AETHER_WORKSPACE_RUNTIME', 'restricted-files')
+    const general = await createToolRegistry({ toolProfile: 'general' })
+    expect(general.registry.executionMode('office_environment', {})).toBe('readonly')
+    const child = createSubagentToolRegistry(general.registry, true)
+    expect(child.has('office_environment')).toBe(true)
+    expect(child.executionMode?.('office_environment', {})).toBe('readonly')
+    const observation = await child.execute('office_environment', {}, context)
+    expect(observation).toMatchObject({ success: true, metadata: { readonly: true, fileMutationApplied: false } })
+    expect(JSON.parse(observation.output)).toMatchObject({ runtime: 'restricted-files', status: 'unavailable' })
+    const selected = await createToolRegistry({ allowedTools: ['office_environment'], allowedMcpServers: [] })
+    expect(selected.registry.list().map(candidate => candidate.name).sort()).toEqual(['office_environment', 'plan_update'])
+    const narrowed = await createToolRegistry({ allowedTools: ['read_file'], allowedMcpServers: [] })
+    expect(narrowed.registry.has('office_environment')).toBe(false)
+    expect(createSubagentToolRegistry(narrowed.registry, true).has('office_environment')).toBe(false)
+    general.registry.unregister('office_environment')
+    general.registry.register(tool('office_environment', 'skill'))
+    expect(createSubagentToolRegistry(general.registry, true).has('office_environment')).toBe(false)
+  })
+
+  it('trusts only the builtin office inspector and never expands explicit tool selections', async () => {
+    const selected = await createToolRegistry({ toolProfile: 'general', allowedTools: ['office_inspect'], allowedMcpServers: [] })
+    expect(selected.registry.list().map(candidate => candidate.name).sort()).toEqual(['office_inspect', 'plan_update'])
+    expect(selected.registry.executionMode('office_inspect', {})).toBe('readonly')
+    expect(createSubagentToolRegistry(selected.registry, true).has('office_inspect')).toBe(true)
+    for (const allowedTools of [[], ['read_file'], ['office_document']]) {
+      const narrowed = await createToolRegistry({ toolProfile: 'general', allowedTools, allowedMcpServers: [] })
+      expect(narrowed.registry.has('office_inspect')).toBe(false)
+      expect(createSubagentToolRegistry(narrowed.registry, true).has('office_inspect')).toBe(false)
+    }
+    selected.registry.unregister('office_inspect')
+    const impostor = tool('office_inspect', 'skill')
+    selected.registry.register(impostor)
+    expect(selected.registry.executionMode('office_inspect', {})).toBe('serial')
+    const child = createSubagentToolRegistry(selected.registry, true)
+    expect(child.has('office_inspect')).toBe(false)
+    expect(await child.execute('office_inspect', {}, context)).toMatchObject({ success: false, metadata: { code: 'TOOL_NOT_ALLOWED' } })
+    expect(impostor.execute).not.toHaveBeenCalled()
   })
   it('does not leak tool selections between general, code and subsequent general registries', async () => {
     const first = await createToolRegistry({ toolProfile: 'general' })

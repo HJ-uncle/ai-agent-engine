@@ -38,7 +38,7 @@ export async function registerUserAdmissionRoutes(app: FastifyInstance, roots: R
     const seed = await readAdmissionSeed(db, scope, accepted.run.runId)
     // The reserved ID is not proof of an assistant transcript row. Keep the
     // observed final projection identity separate and tag its root revision.
-    const assistant = await history.getMessageById(accepted.run.assistantMessageId, tenantId)
+    const assistant = await history.getMessageById(accepted.run.assistantMessageId, tenantId, accepted.run.sessionId)
     if (assistant && (assistant.role !== 'assistant' || assistant.conversationId !== accepted.run.turnId)) admissionError('ADMISSION_ASSISTANT_PROJECTION_CONFLICT', 503)
     return success({ protocolVersion: 1, status: 'accepted' as const, receipt: accepted.receipt, run: roots.public(accepted.run),
       projection: { rootVersion: accepted.run.version, rootAttemptId: accepted.attemptId,

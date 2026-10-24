@@ -1,5 +1,7 @@
 # Word 创作与编辑
 
+需要 PDF 导出或视觉渲染时，先用可用的 `office_environment({})` 并读取 `references/environment.md`；原生 DOCX 结构检查不等于渲染完成。转换与 COM 操作必须有有限 `timeoutMs`，只操作本任务持有的文档。
+
 ## 结构和写作
 
 按具体任务选择合适结构，不强制套满章节：

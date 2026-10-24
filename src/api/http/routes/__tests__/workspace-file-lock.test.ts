@@ -6,13 +6,21 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { withFileLocks } from '../../../../shared/file-version.js'
 import { workspaceRoutes } from '../workspace.js'
 
-const { resolveSafePath } = vi.hoisted(() => ({ resolveSafePath: vi.fn() }))
-vi.mock('../../../../workspace/index.js', () => ({ workspaceManager: { resolveSafePath } }))
+const { resolveSafePath, getBoundDirectory, getBindingSnapshot, bindSnapshotAsync } = vi.hoisted(() => ({
+  resolveSafePath: vi.fn(),
+  getBoundDirectory: vi.fn(),
+  getBindingSnapshot: vi.fn(),
+  bindSnapshotAsync: vi.fn()
+}))
+vi.mock('../../../../workspace/index.js', () => ({ workspaceManager: { resolveSafePath, getBoundDirectory, getBindingSnapshot, bindSnapshotAsync } }))
 let app: FastifyInstance
 let fixture: string
 beforeEach(async () => {
   fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-d2-workspace-lock-'))
   resolveSafePath.mockReset().mockImplementation((_context, name: string) => path.join(fixture, name))
+  getBoundDirectory.mockReset()
+  getBindingSnapshot.mockReset()
+  bindSnapshotAsync.mockReset()
   app = Fastify()
   await app.register(workspaceRoutes)
   await app.ready()
@@ -45,6 +53,24 @@ it('manual REST writes wait for the same file lock as tools and rollback', async
   } finally { release(); await holder }
   expect((await pending).json().code).toBe(200)
   expect(fs.readFileSync(target, 'utf8')).toBe('manual edit')
+})
+
+it('reuses an existing binding while Git holds the session lease', async () => {
+  const project = path.join(fixture, 'project')
+  fs.mkdirSync(project)
+  const canonical = fs.realpathSync(project)
+  getBoundDirectory.mockReturnValue(canonical)
+  getBindingSnapshot.mockReturnValue({ root: canonical, epoch: 'existing-epoch' })
+  bindSnapshotAsync.mockRejectedValue(new Error('must not wait behind Git'))
+
+  const response = await app.inject({ method: 'POST', url: '/workspace/bind', payload: {
+    sessionId: 'test', workspaceRoot: project,
+  } })
+
+  expect(response.json()).toMatchObject({ code: 200, data: {
+    workspaceRoot: canonical, bindingEpoch: 'existing-epoch', contractVersion: 2,
+  } })
+  expect(bindSnapshotAsync).not.toHaveBeenCalled()
 })
 
 it('racing manual creates cannot truncate an existing file', async () => {

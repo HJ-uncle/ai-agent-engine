@@ -4,6 +4,37 @@ import { estimateTokens } from './tokens.js'
 
 type ImageIdentity = { url: string; mimeType?: string; lowDetail?: boolean }
 
+// Match the browser screenshot's 12 MiB encoded limit. Image payloads have a
+// separate byte budget; a native image must never bypass every transcript cap.
+export const MAX_NATIVE_IMAGE_BYTES = 9 * 1024 * 1024
+export const MAX_NATIVE_IMAGE_BASE64_CHARS = 12 * 1024 * 1024
+
+export interface ImageFileVersion {
+  path: string
+  expectedHash: string
+  encoding: string
+  lineEnding: string
+  utf8Bom: boolean
+}
+
+/** Only engine-owned version fields survive image text-budget reduction. */
+export function imageFileVersion(value: unknown): ImageFileVersion | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  if (typeof record.path !== 'string' || record.path.length > 4096
+    || typeof record.expectedHash !== 'string' || !/^sha256:[a-f0-9]{64}$/i.test(record.expectedHash)
+    || !['binary-or-non-utf8', 'utf-8'].includes(String(record.encoding))
+    || !['none', 'LF', 'CRLF', 'CR', 'mixed'].includes(String(record.lineEnding))
+    || typeof record.utf8Bom !== 'boolean') return undefined
+  return { path: record.path, expectedHash: record.expectedHash, encoding: String(record.encoding),
+    lineEnding: String(record.lineEnding), utf8Bom: record.utf8Bom }
+}
+
+export function imageVersionDescription(value: unknown): string {
+  const version = imageFileVersion(value)
+  return version ? '\nFile version: ' + JSON.stringify(version) : ''
+}
+
 function nativeImage(part: unknown): ImageIdentity | undefined {
   if (!part || typeof part !== 'object') return undefined
   const block = part as Record<string, any>
@@ -19,12 +50,40 @@ function nativeImage(part: unknown): ImageIdentity | undefined {
 
 /** Only the top-level tool schema is promoted to an image by the provider adapters. */
 export function imageToolPayload(content: unknown): Record<string, any> | undefined {
-  if (typeof content !== 'string' || !content.trimStart().startsWith('{')) return undefined
+  if (typeof content !== 'string' || content.length > MAX_NATIVE_IMAGE_BASE64_CHARS + 64 * 1024 || !content.trimStart().startsWith('{')) return undefined
   try {
     const parsed = JSON.parse(content)
-    return parsed && !Array.isArray(parsed) && typeof parsed.dataUrl === 'string'
-      && /^data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/]+={0,2}$/i.test(parsed.dataUrl) ? parsed : undefined
+    const match = parsed && !Array.isArray(parsed) && typeof parsed.dataUrl === 'string'
+      ? /^data:image\/[a-z0-9.+-]+;base64,([A-Za-z0-9+/]+={0,2})$/i.exec(parsed.dataUrl) : null
+    return match && match[1].length <= MAX_NATIVE_IMAGE_BASE64_CHARS && match[1].length % 4 === 0 ? parsed : undefined
   } catch { return undefined }
+}
+
+/** Recent pixels are governed by their byte budget, not the text-only cap. */
+export function toolResultTextLength(content: string): number {
+  const image = imageToolPayload(content)
+  return image ? JSON.stringify({ ...image, dataUrl: '[native image payload]' }).length : content.length
+}
+
+/** Call only after the original tool result is durable. The UI receipt may
+ * omit pixels to fit publication bytes; provider history keeps the full image. */
+export function imageToolFramePayload(frame: Record<string, unknown>, maxBytes: number): string | undefined {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new RangeError('Invalid image frame budget')
+  const image = imageToolPayload(frame.output)
+  if (!image) return undefined
+  const original = JSON.stringify(frame)
+  const originalFrameBytes = Buffer.byteLength(original, 'utf8')
+  if (originalFrameBytes <= maxBytes) return original
+  const metadata = frame.metadata && typeof frame.metadata === 'object' && !Array.isArray(frame.metadata)
+    ? frame.metadata as Record<string, unknown> : {}
+  const bounded: Record<string, unknown> = { ...frame, output: JSON.stringify({ filename: image.filename, mimeType: image.mimeType, size: image.size,
+    description: image.description, fileVersion: imageFileVersion(image.fileVersion),
+    hasDataUrl: false, dataUrlStripped: true, retainedInHistory: true, omittedFromStream: true }),
+    metadata: { ...metadata, imageOutputRecovery: { source: 'durable-history', reason: 'stream-byte-budget', originalFrameBytes } } }
+  delete bounded.outputPreview
+  const encoded = JSON.stringify(bounded)
+  // An image cannot authorize dropping unrelated args or execution evidence.
+  return Buffer.byteLength(encoded, 'utf8') <= maxBytes ? encoded : undefined
 }
 
 function imageAllowance(image: ImageIdentity): number {

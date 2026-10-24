@@ -19,7 +19,7 @@ describe('settings reflect actual runtime limits', () => {
     vi.stubEnv('DATA_DIR', path.join(directory, 'agent.db'))
     vi.stubEnv('AUTH_ENABLED', 'false')
     vi.stubEnv('OSM_MODE', 'off')
-    for (const key of [...OPTIONAL_LIMITS, 'COMPRESS_THRESHOLD_RATIO']) vi.stubEnv(key, '')
+    for (const key of [...OPTIONAL_LIMITS, 'COMPRESS_THRESHOLD_RATIO', 'CONTEXT_WINDOW_BUDGET']) vi.stubEnv(key, '')
     await initDb()
     app = Fastify()
     await app.register(settingsRoutes)
@@ -117,5 +117,28 @@ describe('settings reflect actual runtime limits', () => {
     expect((await settings()).runtimeLimits.compression).toEqual({ configuredRatio: 2, effectiveRatio: 0.95 })
     vi.stubEnv('COMPRESS_THRESHOLD_RATIO', 'invalid')
     expect((await settings()).runtimeLimits.compression).toEqual({ configuredRatio: 0.92, effectiveRatio: 0.92 })
+  })
+
+  it('persists the independent context policy, applies it immediately and restores 268K on reset', async () => {
+    expect(await settings()).toMatchObject({ CONTEXT_WINDOW_BUDGET: 268_000,
+      runtimeLimits: { contextWindow: { defaultBudget: 268_000, effectiveBudget: 268_000, boundedByModel: true } } })
+    expect((await app.inject({ method: 'PUT', url: '/settings', payload: { CONTEXT_WINDOW_BUDGET: 192_000 } })).statusCode).toBe(200)
+    expect(await systemConfigStore.get('CONTEXT_WINDOW_BUDGET')).toBe('192000')
+    expect(process.env.CONTEXT_WINDOW_BUDGET).toBe('192000')
+    expect(await settings()).toMatchObject({ CONTEXT_WINDOW_BUDGET: 192_000,
+      runtimeLimits: { contextWindow: { configuredBudget: 192_000, effectiveBudget: 192_000 } } })
+    for (const value of [null, '']) {
+      expect((await app.inject({ method: 'PUT', url: '/settings', payload: { CONTEXT_WINDOW_BUDGET: value } })).statusCode).toBe(200)
+      expect(await systemConfigStore.get('CONTEXT_WINDOW_BUDGET')).toBeNull()
+      expect(process.env.CONTEXT_WINDOW_BUDGET).toBeUndefined()
+      expect((await settings()).CONTEXT_WINDOW_BUDGET).toBe(268_000)
+    }
+  })
+
+  it.each([0, -1, 1.2, true, '1e6', 'invalid', Number.MAX_SAFE_INTEGER + 1])('rejects invalid context policy %s before persistence', async value => {
+    const response = await app.inject({ method: 'PUT', url: '/settings', payload: { CONTEXT_WINDOW_BUDGET: value, TOOL_CONCURRENCY_LIMIT: 3 } })
+    expect(response.statusCode).toBe(400)
+    expect(await systemConfigStore.get('CONTEXT_WINDOW_BUDGET')).toBeNull()
+    expect(await systemConfigStore.get('TOOL_CONCURRENCY_LIMIT')).toBeNull()
   })
 })

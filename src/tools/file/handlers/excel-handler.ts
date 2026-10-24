@@ -126,11 +126,24 @@ export class ExcelHandler implements FileHandler {
     const ext = path.extname(filePath).toLowerCase()
     
     if (ext === '.csv') {
+      // CSV text is already serialized. Passing it through an empty ExcelJS
+      // sheet silently loses every row, and reparsing would change quoting,
+      // BOMs or embedded CRLF. Preserve the supplied UTF-8 bytes verbatim.
+      if (typeof data === 'string') {
+        await fs.writeFile(filePath, data, 'utf8')
+        return
+      }
       let rows = data
       if (data && typeof data === 'object' && !Array.isArray(data) && Array.isArray(data.rows)) {
         rows = data.rows
       }
-      if (Array.isArray(rows) && rows.length > 0 && typeof rows[0] === 'object' && !Array.isArray(rows[0])) {
+      const recordRows = Array.isArray(rows) && rows.length > 0 && rows.every(row =>
+        row !== null && typeof row === 'object' && !Array.isArray(row) && Object.keys(row).length > 0)
+      const matrixRows = Array.isArray(rows) && rows.every(Array.isArray)
+      // Validate before either writer opens the destination; the legacy
+      // unconditional path must preserve an existing file on invalid input.
+      if (!recordRows && !matrixRows) throw new Error('CSV data must be text, an array of row arrays or non-empty row objects, or { rows: [...] }.')
+      if (recordRows) {
         await saveAsCsv(rows, filePath)
         return
       }
@@ -143,6 +156,10 @@ export class ExcelHandler implements FileHandler {
       return
     }
 
+    // Unlike CSV, XLSX has no raw-text serialization contract. A primitive
+    // currently builds a blank sheet while claiming success; reject it before
+    // touching disk rather than guessing how text should map to cells.
+    if (data === null || typeof data !== 'object') throw new Error('Excel data must be structured rows or a workbook object; use .csv for raw CSV text.')
     const workbook = new ExcelJS.Workbook()
     
     // 支持多 Sheet 写入

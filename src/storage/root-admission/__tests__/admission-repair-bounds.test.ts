@@ -22,7 +22,11 @@ beforeEach(async () => {
   vi.spyOn(database, 'getDb').mockImplementation(() => db); await database.initDb(); roots = new RootRunStore(() => db)
 })
 afterEach(async () => {
-  await app?.close(); app = undefined; database.closeDb(); expect((await db.closeWithReceipt()).healthy).toBe(true)
+  await app?.close(); app = undefined
+  // initDb owns another native client; await its close before deleting Windows WAL files.
+  const singletonClose = await database.closeDb()
+  if (singletonClose) expect(singletonClose.healthy).toBe(true)
+  expect((await db.closeWithReceipt()).healthy).toBe(true)
   vi.restoreAllMocks(); vi.unstubAllEnvs()
   if (!path.resolve(fixture).startsWith(path.resolve('.e2e-tmp') + path.sep)) throw new Error('Unsafe fixture cleanup')
   fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 })

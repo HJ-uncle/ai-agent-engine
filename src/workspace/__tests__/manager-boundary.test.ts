@@ -82,6 +82,68 @@ describe('WorkspaceManager boundary validation', () => {
     }
   })
 
+  it('allows a desktop-owned embedded engine to bind a user-selected project outside its scratch root', () => {
+    const f = fixture()
+    const selected = path.join(f.outside, 'desktop-selected')
+    fs.mkdirSync(selected, { recursive: true })
+    const oldAuth = process.env.AUTH_ENABLED
+    const oldDesktop = process.env.AETHER_DESKTOP_OWNED
+    const oldAllowed = process.env.AETHER_ALLOWED_WORKSPACE_ROOTS
+    process.env.AUTH_ENABLED = 'false'
+    process.env.AETHER_DESKTOP_OWNED = '1'
+    process.env.AETHER_ALLOWED_WORKSPACE_ROOTS = f.allowed
+    try {
+      const manager = new WorkspaceManager(f.privateRoot)
+      expect(manager.bind({ tenantId: 'tenant', sessionId: 'desktop-session' }, selected)).toBe(fs.realpathSync(selected))
+    } finally {
+      if (oldAuth === undefined) delete process.env.AUTH_ENABLED; else process.env.AUTH_ENABLED = oldAuth
+      if (oldDesktop === undefined) delete process.env.AETHER_DESKTOP_OWNED; else process.env.AETHER_DESKTOP_OWNED = oldDesktop
+      if (oldAllowed === undefined) delete process.env.AETHER_ALLOWED_WORKSPACE_ROOTS; else process.env.AETHER_ALLOWED_WORKSPACE_ROOTS = oldAllowed
+    }
+  })
+
+  it('restores a desktop-owned external project after the binding process is recreated', () => {
+    const f = fixture()
+    const selected = path.join(f.outside, 'desktop-restored')
+    fs.mkdirSync(selected, { recursive: true })
+    const oldAuth = process.env.AUTH_ENABLED
+    const oldDesktop = process.env.AETHER_DESKTOP_OWNED
+    const oldAllowed = process.env.AETHER_ALLOWED_WORKSPACE_ROOTS
+    process.env.AUTH_ENABLED = 'false'
+    process.env.AETHER_DESKTOP_OWNED = '1'
+    process.env.AETHER_ALLOWED_WORKSPACE_ROOTS = f.allowed
+    try {
+      const first = new WorkspaceManager(f.privateRoot)
+      expect(first.bind({ tenantId: 'tenant', sessionId: 'desktop-restored' }, selected)).toBe(fs.realpathSync(selected))
+      const second = new WorkspaceManager(f.privateRoot)
+      expect(second.getWorkingDirectory({ tenantId: 'tenant', sessionId: 'desktop-restored' })).toBe(fs.realpathSync(selected))
+    } finally {
+      if (oldAuth === undefined) delete process.env.AUTH_ENABLED; else process.env.AUTH_ENABLED = oldAuth
+      if (oldDesktop === undefined) delete process.env.AETHER_DESKTOP_OWNED; else process.env.AETHER_DESKTOP_OWNED = oldDesktop
+      if (oldAllowed === undefined) delete process.env.AETHER_ALLOWED_WORKSPACE_ROOTS; else process.env.AETHER_ALLOWED_WORKSPACE_ROOTS = oldAllowed
+    }
+  })
+
+  it('keeps the allow-list requirement for a non-desktop no-auth engine', () => {
+    const f = fixture()
+    const selected = path.join(f.outside, 'untrusted-selected')
+    fs.mkdirSync(selected, { recursive: true })
+    const oldAuth = process.env.AUTH_ENABLED
+    const oldDesktop = process.env.AETHER_DESKTOP_OWNED
+    const oldAllowed = process.env.AETHER_ALLOWED_WORKSPACE_ROOTS
+    process.env.AUTH_ENABLED = 'false'
+    delete process.env.AETHER_DESKTOP_OWNED
+    process.env.AETHER_ALLOWED_WORKSPACE_ROOTS = f.allowed
+    try {
+      const manager = new WorkspaceManager(f.privateRoot)
+      expect(() => manager.bind({ tenantId: 'tenant', sessionId: 'untrusted-session' }, selected)).toThrow(/outside the engine allowed workspace roots/)
+    } finally {
+      if (oldAuth === undefined) delete process.env.AUTH_ENABLED; else process.env.AUTH_ENABLED = oldAuth
+      if (oldDesktop === undefined) delete process.env.AETHER_DESKTOP_OWNED; else process.env.AETHER_DESKTOP_OWNED = oldDesktop
+      if (oldAllowed === undefined) delete process.env.AETHER_ALLOWED_WORKSPACE_ROOTS; else process.env.AETHER_ALLOWED_WORKSPACE_ROOTS = oldAllowed
+    }
+  })
+
   it('does not restore overlapping no-auth bindings after authentication is enabled', () => {
     const f = fixture()
     const project = path.join(f.allowed, 'shared')

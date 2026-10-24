@@ -58,7 +58,7 @@ function createBaseAdapter(provider: string, model: string, options?: CreateAdap
   const eh = options?.extraHeaders
   // Anthropic 协议端点显式声明优先：模型名不参与判断，避免被劫持到 DeepSeek/Qwen 适配器
   if (provider === 'anthropic' || declaresAnthropicProtocol(options?.baseUrl)) {
-    return new AnthropicAdapter(model, options?.apiKey, options?.baseUrl, eh)
+    return new AnthropicAdapter(model, options?.apiKey, options?.baseUrl, eh, options?.capabilities?.vision)
   }
 
   // A local qwen/deepseek model still uses Ollama's native /api/chat protocol.
@@ -82,7 +82,7 @@ function createBaseAdapter(provider: string, model: string, options?: CreateAdap
     case 'openai':
       return new OpenAIAdapter(model, options?.apiKey, options?.baseUrl, options?.capabilities?.vision, eh)
     case 'anthropic':
-      return new AnthropicAdapter(model, options?.apiKey, options?.baseUrl, eh)
+      return new AnthropicAdapter(model, options?.apiKey, options?.baseUrl, eh, options?.capabilities?.vision)
     case 'ollama':
       return new OllamaAdapter(model, options?.baseUrl)
     case 'custom':

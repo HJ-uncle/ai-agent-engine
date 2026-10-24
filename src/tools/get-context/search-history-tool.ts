@@ -1,13 +1,14 @@
 import type { AgentContext, HistorySearchOptions, HistorySearchResult, Tool } from '../../core/agent-context/types.js'
 import { createHash } from 'node:crypto'
-import { imageToolPayload, multimodalSummaryText } from '../../core/utils/multimodal-context.js'
+import { imageFileVersion, imageToolPayload, multimodalSummaryText, type ImageFileVersion } from '../../core/utils/multimodal-context.js'
+import { capturedFileEvidence } from '../../core/utils/tool-evidence.js'
 
-type ArchivedImage = { url: string; mimeType?: string }
+type ArchivedImage = { url: string; mimeType?: string; fileVersion?: ImageFileVersion }
 const embeddedImage = /^data:(image\/[a-z0-9.+-]+);base64,[A-Za-z0-9+/]+={0,2}$/i
 
 function archivedImages(content: unknown): ArchivedImage[] {
   const toolImage = imageToolPayload(content)
-  if (toolImage) return [{ url: toolImage.dataUrl, mimeType: toolImage.mimeType }]
+  if (toolImage) return [{ url: toolImage.dataUrl, mimeType: toolImage.mimeType, fileVersion: imageFileVersion(toolImage.fileVersion) }]
   if (!Array.isArray(content)) return []
   return content.flatMap((block): ArchivedImage[] => {
     if (block?.type === 'image_url' && typeof block.image_url?.url === 'string') return [{ url: block.image_url.url }]
@@ -24,6 +25,7 @@ function archivedImages(content: unknown): ArchivedImage[] {
 const imageIdentity = (image: ArchivedImage, imageIndex: number) => ({ imageIndex,
   mimeType: embeddedImage.exec(image.url)?.[1] ?? image.mimeType,
   sha256: createHash('sha256').update(image.url).digest('hex'),
+  hashDomain: embeddedImage.test(image.url) ? 'data-url' : 'url',
   originalPixelsAvailable: embeddedImage.test(image.url),
   ...(!embeddedImage.test(image.url) ? { reference: image.url } : {}),
 })
@@ -89,9 +91,17 @@ export const searchHistoryTool: Tool = {
         if (!mimeType) return { success: false, output: JSON.stringify({ ...output, error: 'Only the original image reference is archived; use its reference to inspect the image.' }), metadata: { code: 'IMAGE_PIXELS_UNAVAILABLE' } }
         const identity = imageIdentity(image, imageIndex)
         const turnId = (message as any).conversationId ?? message.metadata?.turnId
-        const description = `Retained original image: messageId=${message.id}; turnId=${turnId ?? 'unknown'}; imageIndex=${imageIndex}; sha256=${identity.sha256}. Retrieved only from the current executing session.`
+        // Archive payloads predate trusted builtin receipts and may also come
+        // from extensions. Retaining a declaration must not upgrade its trust.
+        const captured = capturedFileEvidence(message)
+        const fileVersion = captured && image.fileVersion?.path === captured.path && image.fileVersion.expectedHash === captured.expectedHash
+          ? image.fileVersion : undefined
+        const description = `Retained original image: messageId=${message.id}; turnId=${turnId ?? 'unknown'}; imageIndex=${imageIndex}; dataURLSha256=${identity.sha256} (dataURL string, not file bytes). Retrieved only from the current executing session.`
+          + (fileVersion ? ' fileVersion matches the captured builtin read_file receipt; current disk and decoded image bytes were not revalidated during recovery.'
+            : image.fileVersion ? ' archivedFileVersionDeclaration is an unverified historical declaration, not a trusted file receipt.' : '')
         return { success: true, output: JSON.stringify({ ...output, filename: `archive-${String(message.id).replace(/[^\w.-]/g, '_')}-${imageIndex}.${mimeType.split('/')[1]}`,
-          mimeType, size: Buffer.byteLength(image.url.slice(image.url.indexOf(',') + 1), 'base64'), dataUrl: image.url, hasDataUrl: true, description }),
+          mimeType, size: Buffer.byteLength(image.url.slice(image.url.indexOf(',') + 1), 'base64'), dataUrl: image.url, hasDataUrl: true, description,
+          ...(fileVersion ? { fileVersion } : image.fileVersion ? { archivedFileVersionDeclaration: image.fileVersion } : {}) }),
           metadata: { backend: result.backend, totalMatches: result.totalMatches, messageId: message.id, imageIndex, imageSha256: identity.sha256 } }
       }
       return { success: true, output: JSON.stringify(output), metadata: { backend: result.backend, totalMatches: result.totalMatches } }

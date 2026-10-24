@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { AgentContext } from '../../core/agent-context/index.js'
 import { IMAGE_MAGIC_BYTES } from './constants.js'
+import { resolveCapabilities } from '../../core/model-capabilities/index.js'
 
 export function cellValueToString(val: unknown): string {
   if (val === null || val === undefined) return ''
@@ -87,24 +88,9 @@ export function listRecursive(baseDir: string, currentDir: string): string[] {
 }
 
 export function isVisionModelAvailable(ctx: AgentContext): boolean {
-  if (ctx.modelCaps?.vision === true) return true
-  if (ctx.modelCaps?.vision === false) return false
-
-  const modelName = ctx.modelName || (ctx as any).modelName || process.env.MODEL_NAME || ''
-  const lowerModel = modelName.toLowerCase()
-
-  const textOnlyPatterns = [/qwen-long/, /qwen-math/, /qwen-audio/, /qwen-code/]
-  if (textOnlyPatterns.some((re) => re.test(lowerModel))) return false
-
-  if (lowerModel.includes('qwen') || lowerModel.includes('qwq')) return true
-
-  const visionModels = [
-    'gpt-4v', 'gpt-4-vision', 'gpt-4-turbo', 'gpt-4o',
-    'claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku', 'claude-3-5', 'claude-3-7',
-    'gemini-pro-vision', 'gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-2',
-    'llava', 'bakllava',
-  ]
-  return visionModels.some(vm => lowerModel.includes(vm.toLowerCase()))
+  return resolveCapabilities({ model: ctx.modelName ?? ctx.resolvedModel?.model ?? process.env.MODEL_NAME ?? '',
+    provider: ctx.resolvedModel?.provider, baseUrl: ctx.resolvedModel?.baseUrl,
+    overrides: ctx.modelCaps ?? ctx.resolvedModel?.capabilities }).vision === true
 }
 
 export function isValidImageFile(filePath: string): boolean {

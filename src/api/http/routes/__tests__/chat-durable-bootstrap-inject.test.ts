@@ -7,6 +7,8 @@ import Fastify,{type FastifyInstance} from 'fastify'
 import {beforeEach,afterEach,it,expect,vi} from 'vitest'
 import {initDb,getDb,closeDb} from '../../../../storage/sqlite/db.js'
 import {closeMemoryDb} from '../../../../storage/memory/db.js'
+import {getSessionMemorySettings,setSessionMemoryEnabled,setMemoryPreferences,type MemoryMode} from '../../../../storage/memory/settings.js'
+import * as memoryRuntime from '../../../../middleware/memory/index.js'
 import {rootRunStore} from '../../../../storage/root-runs/index.js'
 import {SubagentStore} from '../../../../core/subagent/store.js'
 import {ParentPublicationAuthority} from '../../../../core/subagent/parent-publication.js'
@@ -50,8 +52,8 @@ afterEach(async()=>{
   vi.restoreAllMocks();vi.unstubAllEnvs()
   // Keep contract fixtures and failure evidence; no test deletes another source.
 })
-async function waiting(checkpoint:boolean){
-  const run=await rootRunStore.create(tenantId,sessionId,'synthetic-no-provider',[directory],{toolProfile:'code',memoryScope:'off',skills:[],mcpServers:[],knowledgeBases:[]})
+async function waiting(checkpoint:boolean,memoryScope:MemoryMode='off'){
+  const run=await rootRunStore.create(tenantId,sessionId,'synthetic-no-provider',[directory],{toolProfile:'code',memoryScope,skills:[],mcpServers:[],knowledgeBases:[]})
   const owner=(await rootRunStore.get(tenantId,run.runId))!
   const scope={tenantId,parentSessionId:sessionId,rootSessionId:sessionId,parentTurnId:run.turnId,rootRunId:run.runId,attemptId:owner.attemptId}
   const authority=new ParentPublicationAuthority(getDb(),scope,{enabled:true,checkpointEveryEvents:1}),bus=new StreamBus(new AbortController(),{publication:authority.hooks})
@@ -141,4 +143,29 @@ it('actual POST chat admits the authenticated user controller and its receipt st
   expect(receipt.statusCode,receipt.body).toBe(200);expect(receipt.json().data.receipt.state).toBe('rejected')
   const context=await app.inject({url:`/collaboration/roots/${frozen!.rootRunId}/controller-context?rootSessionId=${sessionId}`})
   expect(context.statusCode).toBe(409)
+},20000)
+
+// Old stored requests can contain a selector inferred before independent settings.
+// An answer resumes execution; it must not replay that historical preference write.
+it.each([
+  {legacy:'session' as const,current:false,global:false,scopes:[]},
+  {legacy:'global' as const,current:false,global:false,scopes:[]},
+  {legacy:'off' as const,current:true,global:false,scopes:['session']},
+  {legacy:'global' as const,current:false,global:true,scopes:['global']},
+])('pending legacy $legacy keeps current session=$current/global=$global settings',async({legacy,current,global,scopes})=>{
+  vi.stubEnv('ENABLE_LONG_TERM_MEMORY','true')
+  const f=await waiting(true,legacy);responseRunId=f.run.runId
+  await setMemoryPreferences(tenantId,{globalEnabled:global,sessionDefaultEnabled:true})
+  await setSessionMemoryEnabled(tenantId,sessionId,current)
+  vi.spyOn(memoryRuntime,'buildMemoryRecallBlock').mockResolvedValue('')
+  vi.spyOn(memoryRuntime,'extractAndStoreMemories').mockResolvedValue({extracted:0,stored:0,errors:[]})
+  const execute=vi.spyOn(ReActStrategy.prototype,'run').mockImplementation(async function*(_prompt,ctx){
+    expect(ctx.memoryScopes).toEqual(scopes)
+    expect(ctx.memoryScope).toBe(scopes[0]??'off')
+    yield 'CURRENT MEMORY POLICY PRESERVED'
+    await ctx.runObserver?.onOutcome?.({status:'succeeded',stopReason:'completed'})
+  })
+  const accepted=await response();expect(accepted.statusCode,accepted.body).toBe(200)
+  expect(accepted.body).toContain('CURRENT MEMORY POLICY PRESERVED');expect(execute).toHaveBeenCalledOnce()
+  expect(await getSessionMemorySettings(tenantId,sessionId)).toMatchObject({sessionOverride:current,globalEnabled:global,effectiveScopes:scopes})
 },20000)
