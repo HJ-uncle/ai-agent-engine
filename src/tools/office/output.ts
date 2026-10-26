@@ -1,7 +1,7 @@
 import type { ToolResult } from '../../core/agent-context/index.js'
 
 export interface OfficeInspection {
-  format: 'docx' | 'xlsx'
+  format: 'docx' | 'xlsx' | 'pptx' | 'pdf'
   content: string
   summary: Record<string, number | string | boolean>
   warnings: string[]

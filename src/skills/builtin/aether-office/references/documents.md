@@ -1,6 +1,6 @@
 # Word 创作与编辑
 
-需要 PDF 导出或视觉渲染时，先用可用的 `office_environment({})` 并读取 `references/environment.md`；原生 DOCX 结构检查不等于渲染完成。转换与 COM 操作必须有有限 `timeoutMs`，只操作本任务持有的文档。
+DOCX直接在Aether资源标签预览，结构检查不等于视觉验证。需要PDF时，可用相同已核实源内容通过office_document创建独立PDF；这不是DOCX原版式转换。不得为补足功能自动调用WPS、Office COM、LibreOffice或其他办公程序。
 
 ## 结构和写作
 

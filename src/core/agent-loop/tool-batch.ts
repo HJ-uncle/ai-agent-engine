@@ -74,7 +74,19 @@ export async function executeToolBatch(items: RegisteredToolCall[], ctx: AgentCo
       continue
     }
     if (item.call._parseError) {
-      results[index] = statusResult('failed', `Tool error: SyntaxError in arguments JSON: ${item.call._parseError}\nRaw args: ${item.call._rawArgs}`, item.call._parseError)
+      // Keep malformed provider output actionable without replaying the full
+      // argument blob into the next model request. Large embedded workbooks,
+      // shell snippets and escaped JSON can turn this receipt into a second
+      // token sink, while the model only needs to know which call to regenerate.
+      const output = JSON.stringify({
+        code: 'TOOL_ARGUMENTS_INVALID',
+        message: '工具参数不是有效 JSON，工具未执行。请重新生成一条完整的工具调用，不要追加到上一条参数片段；大型内容请先写入文件，再传路径或引用。',
+        toolName: item.call.name,
+        retryable: true,
+        parseError: item.call._parseError,
+        rawArgsCharacters: item.call._rawArgs?.length ?? 0,
+      })
+      results[index] = statusResult('failed', output, item.call._parseError)
       continue
     }
     try {

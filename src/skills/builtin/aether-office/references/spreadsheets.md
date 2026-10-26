@@ -1,6 +1,6 @@
 # Excel 创建与保真编辑
 
-复杂公式重算或 PDF 导出先用可用的 `office_environment({})` 并读取 `references/environment.md`；`openpyxl` 不计算公式，Excel/WPS COM 注册也不证明重算成功。转换与 COM 操作必须有有限 `timeoutMs`，不得修改共享 Python 环境或全局终止 Office/WPS。
+公式重算使用Aether内置 `office_document operation="recalculate"`，传入同文件最新 `expectedHash`。不调用WPS、Office COM或外部程序。XLSX在Aether资源预览查看；没有原格式导出证据不能称为已导出PDF。
 
 ## 数据、类型与公式
 
@@ -8,7 +8,9 @@
 
 需随输入变化而重算的结果使用显式对象 `{ "formula": "SUM(B2:B3)" }`。普通字符串 `"=SUM(B2:B3)"` 保持文字，不会自动执行；用户提供的文本不提升为公式。避免外部工作簿引用或自动获取网络数据。
 
-工具仅为受支持的同表基础聚合提供可校验缓存：SUM、AVERAGE、MIN、MAX、COUNT。复杂/跨表/循环等公式可能保留公式但清空旧缓存，并在 `warnings` / `pendingFormulas` 显示待计算状态；工作簿设置为打开时重算。不能把空缓存当 0、不能声称所有公式均已校验。精确结果必需时使用实际可用的计算路径核对，缺能力就明确剩余限制。
+create/edit只为同表基础聚合提供有限缓存；交付前另调用recalculate执行内置跨表引用、四则及常用函数计算。该操作保留公式和其他ZIP部件，更新真实计算缓存；不支持的函数、循环、共享/数组公式或外链会拒绝整次发布并保留原文件。不能把空缓存当0，不能用硬编码数字替代公式假冒重算；重算成功后inspect读取目标值并独立核对业务口径。参数示例：`{"operation":"recalculate","path":"交付/进展统计.xlsx","expectedHash":"同文件最近返回的sha256"}`。
+
+内置重算是有明确边界的公式域：支持跨表数字引用、四则、数字比较，以及 SUM/AVERAGE/MIN/MAX/COUNT/COUNTA、数字条件 IF/IFERROR、ROUND/ABS、数字/布尔条件 AND/OR、SUMIF、DATE、TEXT。SUM/AVERAGE/MIN/MAX/COUNT 的聚合引用按 Excel 规则忽略文本和布尔；COUNTA 计入空字符串但排除真实空白。ROUND 暂拒绝以 JS 科学计数表示的数值、非整数精度、绝对值超过 15 的精度和移位后绝对值达到 1e20 的输入。SUMIF 使用明确同形范围，支持数字条件及不区分大小写的文本条件、`*`/`?`/`~`转义，暂拒绝空 criteria 单元格和隐式扩大 sum_range。DATE 使用工作簿 1900/1904 基准并保留 Excel 1900 闰日规则；TEXT 支持常见数字格式及 `yyyy-mm-dd`/`yyyy/m/d`（可带 `hh:mm:ss`）。普通文本比较、混合类型算术、TRUE/FALSE 字面量、幂、连接运算符、字面量强制类型转换及未列出函数暂明确拒绝，不能把这些拒绝当验收成功。重算只更新普通单元格公式缓存，不刷新图表等对象缓存；必须独立核验业务金额与日期。
 
 ## 创建工作簿
 

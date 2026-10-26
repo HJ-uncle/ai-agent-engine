@@ -16,6 +16,21 @@ const sheet = (name = '新增校验'): XlsxInput => ({ sheets: [{ name, columns:
 const reopen = async (bytes: Buffer) => { const book = new ExcelJS.Workbook(); await book.xlsx.load(Uint8Array.from(bytes).buffer); return book }
 
 describe('bounded XLSX sheet append', () => {
+  it('appends a totals row with an empty date while preserving original worksheet bytes', async () => {
+    const original = await createXlsx(sheet('原表')), before = readOfficeZip(original), addition = sheet()
+    addition.sheets[0].rows[2].date = ''
+    const appended = await appendXlsxSheets(original, addition), after = readOfficeZip(appended)
+    expect(Buffer.from(after['xl/worksheets/sheet1.xml'])).toEqual(Buffer.from(before['xl/worksheets/sheet1.xml']))
+    const added = (await reopen(appended)).getWorksheet('新增校验')!
+    expect(added.getCell('C4').value).toBeNull()
+    expect(added.getCell('C4').numFmt).toBe('yyyy-mm-dd')
+    expect(added.getCell('C2').value).toEqual(new Date('2026-10-24T00:00:00Z'))
+    expect(added.getCell('B4').value).toEqual({ formula: 'SUM(B2:B3)', result: 30 })
+    const invalid = sheet('无效日期')
+    invalid.sheets[0].rows[2].date = '2026-02-30'
+    await expect(appendXlsxSheets(original, invalid)).rejects.toThrow('无效日期')
+  })
+
   it.each(['existing-defined-names', 'before-calc-pr', 'after-sheets'])('preserves dollar replacement tokens as literal XML data (%s)', async layout => {
     const names = ['费用$$收入', '费用$&收入', "费用$'收入", '费用$`收入']
     const literal = "原文 $$ $& $' $`", oldName = "原$&$$$'$`表"

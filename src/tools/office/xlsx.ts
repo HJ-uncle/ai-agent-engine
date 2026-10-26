@@ -82,6 +82,9 @@ function parseDate(value: unknown): Date {
 }
 function valueFor(value: unknown, type?: XlsxColumn['type']): Value {
   if (value === null || value === undefined) return null
+  // CSV imports and totals rows commonly represent an unset date as an empty string.
+  // Keep this scoped to typed dates so literal text cells retain their exact value.
+  if (type === 'date' && value === '') return null
   if (record(value)) {
     if (Object.keys(value).length !== 1 || typeof value.formula !== 'string') fail('对象单元格只支持显式 {formula: "SUM(B2:B3)"}')
     const formula = validText(value.formula.replace(/^=/, '').trim(), '公式', LIMITS.formula)
@@ -376,7 +379,7 @@ export async function inspectXlsx(buffer: Buffer): Promise<{ format: 'xlsx'; con
   if (shortenedCells) warnings.push(`${shortenedCells} 个单元格的长文本仅预览前 600 字符，实际文件未截断。`)
   if (errorCells) warnings.push(`全工作簿发现 ${errorCells} 个已保存的错误单元格，其中 ${formulaErrorCells} 个为公式错误缓存；位置（列出 ${errorLocations.length}/${errorCells}）：${errorLocations.join('、') || '超出诊断长度上限'}。缓存存在不代表结果有效；局部校验表 PASS 不能替代全表检查。这里只检查文件保存的错误类型，未重新计算，也不保证无业务错误。`)
   if (formulaTextCells) warnings.push(`${formulaTextCells} 个以 = 开头的文本单元格不是公式，不会计算；位置（列出 ${formulaTextLocations.length}/${formulaTextCells}）：${formulaTextLocations.join('、') || '超出诊断长度上限'}。如需计算，请显式写入 {formula: "..."}；若为文字示例可保持原样。原文本未更改，未自动执行，也不计入 formulas / formulaCaches / pendingFormulas。`)
-  if (formulas) warnings.push('公式缓存是文件中保存的值；只有 SUM/AVERAGE/MIN/MAX/COUNT 的同表简单引用在生成/编辑时尝试本地求值，其他公式需要 Excel/WPS 重算。')
+  if (formulas) warnings.push('公式缓存是文件中保存的值；只有 SUM/AVERAGE/MIN/MAX/COUNT 的同表简单引用在生成/编辑时尝试本地求值，其他受支持公式请使用 office_document 的 recalculate 操作在 Aether 内重算；不支持的公式会明确拒绝。')
   if (pendingFormulas) warnings.push(`${pendingFormulas} 个公式没有有效缓存，当前结果为待重算，不能视为已完成计算。`)
   if (Object.keys(pkg.entries).some(file => /vbaProject\.bin$|pivotTables\/|externalLinks\//i.test(file))) warnings.push('文件含宏、数据透视或外部链接等复杂内容；读取不执行这些内容，编辑只支持明确单元格局部更新。')
   return { format: 'xlsx', content: lines.join('\n'), summary: { sheets: pkg.sheets.length, cells, formulas, formulaCaches, pendingFormulas, errorCells, formulaErrorCells, date1904: pkg.date1904, previewCells: shown, previewTruncated: shown < cells || shortenedCells > 0, calculation: elements(pkg.workbook, 'calcPr')[0]?.attrs.calcMode ?? 'unspecified' }, warnings }
@@ -405,6 +408,14 @@ function targetRules(sheet: Sheet): TargetRules {
   }
   return { merges: elements(sheet.xml, 'mergeCell'), protectedRanges, protectedCells, validations: elements(sheet.xml, 'dataValidation'),
     structured: elements(sheet.xml, 'tableParts').length > 0 || elements(sheet.xml, 'pivotTableParts').length > 0 }
+}
+function isDateTarget(sheet: Sheet, rules: TargetRules, address: string, dateStyles: Set<number>): boolean {
+  if (rules.validations.some(validation => validation.attrs.type === 'date'
+    && (validation.attrs.sqref ?? '').split(/\s+/).filter(Boolean).some(ref => contains(ref, address)))) return true
+  const existing = sheet.cells.get(address)
+  // Formatting alone must not reinterpret intentional text, such as a header in a date-formatted column.
+  return !!existing && !['s', 'inlineStr', 'str', 'b', 'e'].includes(existing.attrs.t ?? '')
+    && dateStyles.has(Number(existing.attrs.s ?? 0))
 }
 function validateTarget(sheet: Sheet, rules: TargetRules, address: string, value: Value, date1904: boolean): void {
   const existing = sheet.cells.get(address)
@@ -482,11 +493,13 @@ export async function editXlsx(buffer: Buffer, edits: XlsxEdit[]): Promise<Buffe
     const address = cellAddress(edit.cell).name, key = `${sheet.file}:${address}`
     if (seen.has(key)) fail(`同一批次重复编辑 ${edit.sheet}!${address}`)
     seen.add(key)
-    const value = valueFor(edit.value)
     let rules = rulesBySheet.get(sheet)
     if (!rules) { rules = targetRules(sheet); rulesBySheet.set(sheet, rules) }
     validationBudget -= rules.merges.length + rules.protectedRanges.length + rules.validations.length + 1
     if (validationBudget < 0) fail('批量编辑涉及过多区域验证，请拆分批次或简化工作表后重试')
+    // JSON callers cannot send Date objects; only existing date targets may interpret ISO strings.
+    const type = typeof edit.value === 'string' && isDateTarget(sheet, rules, address, pkg.dateStyles) ? 'date' : undefined
+    const value = valueFor(edit.value, type)
     validateTarget(sheet, rules, address, value, pkg.date1904)
     if (!sheet.cells.has(address)) extraCells++
     const group = grouped.get(sheet) ?? []

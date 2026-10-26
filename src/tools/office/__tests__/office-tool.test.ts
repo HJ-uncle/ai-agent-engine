@@ -45,6 +45,59 @@ function deferred() {
 }
 
 describe('native office tool publication and artifact evidence', () => {
+  it('publishes and inspects PDF with the same version and read-only contracts as Word', async () => {
+    const result = await officeDocumentTool.execute({ operation: 'create', path: 'brief.pdf', expectedHash: 'missing',
+      title: 'Office brief', markdown: '## Verified facts\n\nForecast revenue is 50000 CNY.\n\n- Synthetic data only.' }, ctx)
+    expect(result).toMatchObject({ success: true, metadata: { format: 'pdf', fileMutationApplied: true, visualValidation: 'not-performed' } })
+    const bytes = fs.readFileSync(path.join(root, 'brief.pdf'))
+    expect(bytes.subarray(0, 5).toString()).toBe('%PDF-')
+    const inspected = await officeDocumentTool.execute({ operation: 'inspect', path: 'brief.pdf' }, ctx)
+    expect(inspected.success).toBe(true)
+    expect(JSON.parse(inspected.output)).toMatchObject({ format: 'pdf', expectedHash: hashFileContent(bytes), content: expect.stringContaining('50000') })
+    const unsupported = await officeDocumentTool.execute({ operation: 'edit', path: 'brief.pdf', expectedHash: hashFileContent(bytes), edits: [{ oldText: '50000', newText: '45000' }] }, ctx)
+    expect(unsupported.success).toBe(false)
+    expect(fs.readFileSync(path.join(root, 'brief.pdf'))).toEqual(bytes)
+    expect(await store.list(ctx.tenantId, ctx.sessionId)).toHaveLength(1)
+  })
+
+  it('creates editable PPTX and preserves its binary rollback without external office applications', async () => {
+    const result = await officeDocumentTool.execute({ operation: 'create', path: 'review.pptx', expectedHash: 'missing',
+      presentation: { slides: [{ title: 'Monthly review', bullets: ['Revenue 50000 CNY'], notes: 'Synthetic evidence' },
+        { title: 'Action owners', table: { headers: ['Owner', 'Action'], rows: [['Finance', 'Verify forecast']] } }] } }, ctx)
+    expect(result).toMatchObject({ success: true, metadata: { format: 'pptx', rollbackAvailable: true } })
+    const file = path.join(root, 'review.pptx'), original = fs.readFileSync(file)
+    const edited = await officeDocumentTool.execute({ operation: 'edit', path: file, expectedHash: hashFileContent(original),
+      edits: [{ oldText: 'Revenue 50000 CNY', newText: 'Revenue 45000 CNY' }] }, ctx)
+    expect(edited).toMatchObject({ success: true, metadata: { fileMutationApplied: true, rollbackAvailable: true } })
+    const inspected = await officeDocumentTool.execute({ operation: 'inspect', path: file }, ctx)
+    expect(JSON.parse(inspected.output).content).toContain('Revenue 45000 CNY')
+    const stale = await officeDocumentTool.execute({ operation: 'edit', path: file, expectedHash: hashFileContent(original), edits: [{ oldText: 'Revenue 45000 CNY', newText: 'stale' }] }, ctx)
+    expect(stale).toMatchObject({ success: false, error: 'OFFICE_VERSION_CONFLICT' })
+    const rollback = await store.revertBatch(ctx.tenantId, { sessionId: ctx.sessionId, ids: [String(edited.change!.id)] })
+    expect(rollback).toMatchObject({ reverted: 1, failed: 0 })
+    expect(fs.readFileSync(file)).toEqual(original)
+  })
+
+  it('recalculates cross-sheet formulas through versioned publication and refuses unsupported formulas without mutation', async () => {
+    const created = await officeDocumentTool.execute({ operation: 'create', path: 'calc.xlsx', expectedHash: 'missing', workbook: { sheets: [
+      { name: 'Costs', columns: [{ header: 'Amount', key: 'v', type: 'number' }], rows: [{ v: 120000 }, { v: { formula: 'A2*0.12' } }] },
+      { name: 'Summary', columns: [{ header: 'Total', key: 'v' }], rows: [{ v: { formula: 'SUM(Costs!A2:A3)' } }] },
+    ] } }, ctx)
+    expect(created.success).toBe(true)
+    const calculated = await officeDocumentTool.execute({ operation: 'recalculate', path: 'calc.xlsx', expectedHash: created.metadata!.expectedHash }, ctx)
+    expect(calculated).toMatchObject({ success: true, metadata: { fileMutationApplied: true, rollbackAvailable: true } })
+    const book = new ExcelJS.Workbook(); await book.xlsx.readFile(path.join(root, 'calc.xlsx'))
+    expect(book.getWorksheet('Summary')!.getCell('A2').value).toMatchObject({ formula: 'SUM(Costs!A2:A3)', result: 134400 })
+    const bad = await officeDocumentTool.execute({ operation: 'create', path: 'unsupported.xlsx', expectedHash: 'missing', workbook: { sheets: [
+      { name: 'Data', columns: [{ header: 'Value', key: 'v' }], rows: [{ v: { formula: 'UNKNOWN_FUNCTION(1)' } }] },
+    ] } }, ctx)
+    expect(bad.success).toBe(true)
+    const before = fs.readFileSync(path.join(root, 'unsupported.xlsx'))
+    const rejected = await officeDocumentTool.execute({ operation: 'recalculate', path: 'unsupported.xlsx', expectedHash: bad.metadata!.expectedHash }, ctx)
+    expect(rejected).toMatchObject({ success: false, metadata: { fileMutationApplied: false } })
+    expect(fs.readFileSync(path.join(root, 'unsupported.xlsx'))).toEqual(before)
+  })
+
   it('creates a real Word ZIP, returns matching complete-byte versions and records an inspectable artifact', async () => {
     const result = await createWord()
     expect(result).toMatchObject({ success: true, metadata: { format: 'docx', fileMutationApplied: true, rollbackAvailable: true, validation: 'structure-checked', visualValidation: 'not-performed' } })
@@ -182,7 +235,7 @@ describe('native office tool publication and artifact evidence', () => {
     for (const input of [
       { operation: 'create', path: 'bad.docx', expectedHash: 'missing', markdown: '# 标题', hidden: true },
       { operation: 'create', path: 'bad.xlsx', expectedHash: 'missing', markdown: '# 不是Excel' },
-      { operation: 'create', path: 'bad.pdf', expectedHash: 'missing', markdown: '# 不是PDF' },
+      { operation: 'create', path: 'bad.odt', expectedHash: 'missing', markdown: '# 不支持的格式' },
       { operation: 'edit', path: 'bad.docx', expectedHash: 'missing', edits: [{ oldText: 'a', newText: 'b' }] },
     ]) expect((await officeDocumentTool.execute(input, ctx)).success).toBe(false)
     expect(fs.readdirSync(root)).toEqual([])

@@ -295,8 +295,8 @@ export async function gitRoutes(fastify: FastifyInstance) {
       // Read-only status/diff queries may share a repository with Code's
       // local Git refresh. Queue behind the physical repository lease instead
       // of failing immediately with a transient git-busy/orphan message;
-      // mutations keep their fail-fast admission below.
-      }, 30_000)
+      // mutations wait only for known readers and still refuse another writer.
+      }, 30_000, false, false, 'read')
       return reply.send(data)
     } catch (error) { return reply.code(200).send(fail(50000, error instanceof Error ? error.message : String(error))) }
   })

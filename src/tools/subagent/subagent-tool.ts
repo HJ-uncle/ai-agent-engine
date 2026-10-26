@@ -81,7 +81,9 @@ const RESEARCH_TOOLS = new Set([
 const RECURSIVE_TOOLS = new Set(['subagent', 'subagent_start', 'spawn_agent', 'start_agent'])
 
 function readonlyChildTool(parent: IToolRegistry, name: string): boolean {
-  return RESEARCH_TOOLS.has(name) || (name === officeEnvironmentTool.name || name === officeInspectTool.name)
+  // Numerical reviews need the calculator, but a same-named extension must
+  // not inherit the builtin implementation's permission to run read-only.
+  return RESEARCH_TOOLS.has(name) || (name === officeEnvironmentTool.name || name === officeInspectTool.name || name === 'calculate' || name === 'get_time')
     && parent.executionMode?.(name, {}) === 'readonly'
 }
 

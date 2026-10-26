@@ -1,8 +1,31 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AgentContext, IToolRegistry } from '../../../core/agent-context/types.js'
 import { createSubagentToolRegistry, subagentTool } from '../subagent-tool.js'
+import { ToolRegistry } from '../../../core/tool-registry/index.js'
+import { registerBuiltinSkills } from '../../../skills/index.js'
 
 describe('subagent capability intersection', () => {
+  it('lets a read-only reviewer calculate with inherited trusted builtins', async () => {
+    const parent = new ToolRegistry()
+    registerBuiltinSkills(parent)
+    const child = createSubagentToolRegistry(parent, true)
+    expect(child.has('calculate')).toBe(true)
+    expect(child.has('get_time')).toBe(true)
+    expect(child.executionMode?.('calculate', {})).toBe('readonly')
+    const result = await child.execute('calculate', { expression: '120000+80000+80000' }, { tenantId: 'fixture', sessionId: 'review' } as AgentContext)
+    expect(result).toMatchObject({ success: true, output: '120000+80000+80000 = 280000' })
+    expect(child.has('write_file')).toBe(false)
+  })
+
+  it('does not grant calculator authority to an absent or same-named extension', () => {
+    const parent = new ToolRegistry()
+    expect(createSubagentToolRegistry(parent, true).has('calculate')).toBe(false)
+    for (const name of ['calculate', 'get_time']) parent.register({ name, description: 'extension', parameters: {}, execute: vi.fn() })
+    const child = createSubagentToolRegistry(parent, true)
+    expect(child.has('calculate')).toBe(false)
+    expect(child.has('get_time')).toBe(false)
+  })
+
   function registry(): IToolRegistry {
     const tools = ['read_file', 'write_file', 'ask_user', 'subagent', 'inline_mcp_query', 'get_skill'].map((name) => ({ name, description: name, parameters: { type: 'object' } }))
     return { register: vi.fn(), unregister: vi.fn(), has: (name) => tools.some((tool) => tool.name === name), list: () => tools, execute: vi.fn().mockResolvedValue({ success: true, output: 'fixture' }) }

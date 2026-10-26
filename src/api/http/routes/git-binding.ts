@@ -20,11 +20,11 @@ export function expectedBinding(value: { expectedRoot?: string; bindingEpoch?: s
  * The workspace lease is a short-lived coordination lock shared with the
  * Explorer and Work workspace panels.  Those readers can legitimately hold
  * it while Git is starting, so Git waits for that lease.  The repository lease
- * remains fail-fast (`waitMs`) for mutations: queuing a second write could
- * replay a side effect after the first operation has already changed the
- * index. */
+ * waits for a known background reader, but remains fail-fast for another
+ * mutation: queuing a second write could replay a side effect after the
+ * first operation has already changed the index. */
 export async function withGitBinding<T>(context: { tenantId: string; sessionId: string }, cwdRelative: string,
-  expected: WorkspaceBindingSnapshot | undefined, action: (workspace: GitWorkspace) => Promise<T>, waitMs = 0, prepareInit = false, cloneOnly = false): Promise<T> {
+  expected: WorkspaceBindingSnapshot | undefined, action: (workspace: GitWorkspace) => Promise<T>, waitMs = 0, prepareInit = false, cloneOnly = false, access: 'read' | 'write' = 'write'): Promise<T> {
   const bindingWaitMs = 30_000
   return workspaceManager.withBindingLease(context, expected, async binding => {
     const cwd=workspaceManager.resolveSafePath(context,cwdRelative||'.')
@@ -44,7 +44,7 @@ export async function withGitBinding<T>(context: { tenantId: string; sessionId: 
         return scope.run(file,args,{...options,beforeDispatch:()=>{assertBinding();beforeDispatch?.()}})
       }}
       workspace.assertBinding();return action(workspace)
-    },waitMs,{...binding.resource,root:binding.snapshot.root,epoch:binding.snapshot.epoch})
+    },waitMs,{...binding.resource,root:binding.snapshot.root,epoch:binding.snapshot.epoch},access)
   }, bindingWaitMs)
 }
 

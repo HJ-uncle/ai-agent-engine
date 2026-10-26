@@ -1,24 +1,26 @@
 ---
 name: aether-office
-description: 创建和定点编辑真实 Word 与 Excel 文件，用于周报、会议纪要、通知、方案、台账、统计与排期表；包含结构排版、版本保护、产物校验，以及可用办公运行环境与转换候选的统一诊断。普通文字回复或只读附件时无需使用。
+description: 在Aether内创建和检查真实DOCX、XLSX、PPTX、PDF，编辑Word/Excel/演示文本，执行内置公式重算与版本保护。用于报告、方案、台账、演示和经营分析，不依赖WPS或其他办公应用。
 ---
 
 # Aether 办公文档
 
-使用可用的 `office_document` 原生工具创建、检查和编辑 `.docx` / `.xlsx`；只读审查优先使用 `office_inspect`，参数仅为 `path`、可选 `expectedHash/contentOffset/contentLimit`，不传 `operation` 或写入字段。只读子代理可在获授权时使用该工具，不需要开放写入权限。这些原生操作不依赖其他技能、Python、shell、pip 或下载运行时。已有 `read_file` 继续负责 PDF、旧版 Office、CSV 等受支持资料的读取。额外的 Python 写入、公式重算和源格式渲染按真实环境能力选择，不能推断为内置能力。
+使用 `office_document` 原生创建和检查 `.docx` / `.xlsx` / `.pptx` / `.pdf`；Word、Excel及PPTX支持定点编辑，XLSX支持内置 `recalculate`。只读审查优先 `office_inspect`，参数仅为 `path`、可选 `expectedHash/contentOffset/contentLimit`。不传 `operation` 或写入字段；只读子代理也可使用。这些操作使用随引擎发布的库，不需要Python、shell、pip、WPS、Office COM、LibreOffice或外部办公应用。已有 `read_file` 继续读取其他支持的资料。
+
+原格式文件直接在Aether资源标签预览；本地HTML使用内置浏览器打开，不启动本地HTTP服务。遇到缺项明确记录平台能力限制，不能转而驱动用户的办公应用。环境诊断发现已安装软件不构成调用授权。PDF为Aether独立排版生成，不得称为Word/PPT原版式导出；复杂原文档转换尚未提供时如实说明。
 
 ## 按需选择
 
 - **Word**：使用 `get_skill`，参数 `name="aether-office", resource="references/documents.md"`，读取文体、排版与编辑指南。
 - **Excel**：使用 `get_skill`，参数 `name="aether-office", resource="references/spreadsheets.md"`，读取类型、公式与保真编辑指南。
-- **环境、公式重算、PPT/PDF 或源格式渲染**：先用可用的 `office_environment({})`，再用 `get_skill` 读取 `name="aether-office", resource="references/environment.md"`。工具缓存 2 分钟，并发任务共享有界探测；不要循环探测或遍历其他任务目录。工具未被本会话授权时明确说明，不借扩展绕过权限。
-- 只需聊天文字时直接回答，不强行生成文件。PPT、PDF 写入与复杂设计超出 `office_document` 能力；根据环境回执选择确实可用的途径，不能承诺未提供的格式或渲染器。
+- **PPT/PDF**：用 `get_skill` 读取 `name="aether-office", resource="references/presentations-pdf.md"`。PPTX用 `presentation.slides`；PDF用 `markdown`。结构化内容与有限页容量优先，长内容拆页，不缩成无法阅读的小字。
+- **Excel计算**：生成/编辑后用同文件最新hash执行 `office_document operation="recalculate"`，再inspect核对真实缓存和错误。支持常用公式与跨表引用；不支持的公式、循环、外链明确拒绝，不能硬填结果假冒计算。
+- **环境诊断**：`office_environment({})`仅供只读诊断，不是调用外部程序的建议。需要解释回执时读 `references/environment.md`；内置办公路径不需要先探测Python或COM。
+- 只需聊天文字时直接回答，不强行生成文件；不承诺尚未提供的复杂编辑和转换能力。
 
 ## 多任务环境与转换
 
-不要执行全局或 `--user` 安装，不升级或卸载共享 Python 包；并行角色会发生文件锁和版本串扰。缺依赖时仅在本角色工作区创建独立 venv，或报告平台缺项；不能借用其他任务或 Codex 私有运行时。Office/WPS COM 注册、库可导入和文件存在均不证明转换成功。
-
-环境与 COM 命令必须显式设置有限 `timeoutMs`（短探测不超过 15000，单份文档转换通常不超过 60000）；超时即停止重试同一命令并检查已有回执/产物。需要更久的转换必须根据文档规模设置明确有限上限。只能取消当前任务持有的命令或关闭自己创建的文档；禁止 `taskkill /IM`、`Stop-Process -Name` 等全局终止用户 WPS/Office，也不能对无法证明由当前任务独占创建的 COM 应用调用 `Quit`。不得用挂起的 COM 关闭调用阻塞已完成的导出交付。
+各角色只写分配给自己的文件，其他角色与公共输入只读；修订保留旧版本，交接记录来源hash和差异。内置重算在有时间/内存上限的工作线程执行；超过范围时保留原文件并报告限制。禁止为绕过工具限制安装共享依赖、启动外部办公应用或读取其他任务私有运行时。不得终止用户的WPS/Office进程。
 
 ## 文件合同
 

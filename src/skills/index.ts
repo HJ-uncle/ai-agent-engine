@@ -1,6 +1,7 @@
 import type { IToolRegistry } from '../core/agent-context/index.js'
 import { mathSkill } from './math.js'
 import { timeSkill } from './time.js'
+import { trustBuiltinTool } from '../security/tool-policy.js'
 
 export { mathSkill } from './math.js'
 export { timeSkill } from './time.js'
@@ -15,6 +16,6 @@ export { skillsRegistry } from './skills-registry.js'
  * web-search 及其他技能均由外部 SKILLs/ 目录通过 run_skill_script 调用，不在此注册。
  */
 export function registerBuiltinSkills(registry: IToolRegistry): void {
-  registry.register(mathSkill)
-  registry.register(timeSkill)
+  registry.register(trustBuiltinTool(mathSkill, 'readonly'))
+  registry.register(trustBuiltinTool(timeSkill, 'readonly'))
 }

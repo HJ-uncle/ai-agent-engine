@@ -6,6 +6,24 @@ import type { AgentContext } from '../core/agent-context/index.js'
 import { getSecurityMode } from '../security/policy-engine.js'
 import { canonicalFilePathSync } from '../shared/file-version.js'
 
+/** Reject traversal hidden behind an HTTP client's percent-encoding pass. */
+function hasEncodedPathTraversal(value: string): boolean {
+  let current = value
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (current.includes('\u0000')) return true
+    // Keep ordinary names such as `100%done.txt` valid. Once a real escape is
+    // present, malformed escapes are rejected instead of reaching a parser
+    // with a different decoding policy.
+    if (!/%[0-9a-f]{2}/i.test(current)) return false
+    let decoded: string
+    try { decoded = decodeURIComponent(current) } catch { return true }
+    if (decoded === current) return false
+    current = decoded
+    if (current.includes('\u0000') || current.replace(/\\/g, '/').split('/').some(segment => segment === '..')) return true
+  }
+  return true
+}
+
 type CtxLike = Pick<AgentContext, 'tenantId' | 'sessionId' | 'workspacePaths' | 'cwd' | 'projectRoot' | 'scratchDir'>
 type Bindings = Map<string, string> & { epochs: Map<string, string> }
 export interface WorkspaceBindingSnapshot { root: string; epoch: string }
@@ -403,7 +421,7 @@ export class WorkspaceManager {
 
   resolveSafePath(ctx: CtxLike, userPath: string): string {
     this.assertContext(ctx)
-    if (typeof userPath !== 'string' || userPath.includes('\0')) throw new Error('Path is invalid')
+    if (typeof userPath !== 'string' || userPath.includes('\0') || hasEncodedPathTraversal(userPath)) throw new Error('Path is invalid')
     const scratch = this.getScratchDirectory(ctx)
     if (this.hasSymlinkComponent(this.root, scratch)) throw new Error('Workspace session root contains a symbolic link')
     const resolved = path.resolve(this.getWorkingDirectory(ctx), userPath)

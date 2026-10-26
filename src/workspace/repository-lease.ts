@@ -7,6 +7,7 @@ export interface RepositoryLeaseOwner {
   schema: 3; protocol: 'windows-job-v1'; generation: string; acquiredAt: string; resource: string
   owner: ProcessIdentity; supervisor?: ProcessIdentity; jobName: string
   phase: 'reserved' | 'supervising' | 'quarantined'; diagnostic?: string
+  access?: 'read' | 'write'
   bindingLease?: {file:string;generation:string;pid:number;root:string;epoch:string}
 }
 export interface RepositoryLeaseState { busy: boolean; recoverable: boolean; reason?: string; generation?: string; owner?: RepositoryLeaseOwner; native?: NativeAudit }
@@ -102,8 +103,9 @@ export function prepareCloneDestinationLock(target:string):string {
   }
   return file
 }
-export async function acquireRepositoryLease(file: string, waitMs=0, bindingLease?: RepositoryLeaseOwner['bindingLease']): Promise<RepositoryLease> {
+export async function acquireRepositoryLease(file: string, waitMs=0, bindingLease?: RepositoryLeaseOwner['bindingLease'], access: 'read' | 'write' = 'write'): Promise<RepositoryLease> {
   const deadline=Date.now()+Math.max(0,Math.min(waitMs,30_000))
+  const readerDeadline=Date.now()+30_000
   // Read-only callers are allowed to queue behind a live Git operation, but a
   // lease whose owner and supervisor have already been verified closed is an
   // actionable recovery state.  Waiting for the full queue timeout here made
@@ -114,20 +116,27 @@ export async function acquireRepositoryLease(file: string, waitMs=0, bindingLeas
   let nextOrphanAudit = 0
   for(;;) {
     if(fs.existsSync(file+'.recovery.lock')) {if(Date.now()>=deadline)throw new Error('Git recovery is in progress; retry after it completes');await new Promise(resolve=>setTimeout(resolve,25));continue}
-    const owner: RepositoryLeaseOwner={schema:3,protocol:'windows-job-v1',generation:randomUUID(),acquiredAt:new Date().toISOString(),resource:path.resolve(file),owner:{...repositoryOwnerIdentity()},jobName:'',phase:'reserved',...(bindingLease?{bindingLease}:{})}
+    const owner: RepositoryLeaseOwner={schema:3,protocol:'windows-job-v1',generation:randomUUID(),acquiredAt:new Date().toISOString(),resource:path.resolve(file),owner:{...repositoryOwnerIdentity()},jobName:'',phase:'reserved',access,...(bindingLease?{bindingLease}:{})}
     owner.jobName=`Local\\AetherGit-${owner.generation}`
     fs.mkdirSync(path.dirname(file),{recursive:true})
     let descriptor: number
     try {descriptor=fs.openSync(file,'wx',0o600)} catch(error) {
       if((error as NodeJS.ErrnoException).code!=='EEXIST') throw error
+      // Queue an explicit write behind a background reader, but never behind
+      // another write or a legacy lease whose access is unknown. Re-read every
+      // attempt so a replacing writer cannot inherit a reader's wait policy.
+      const holder=readOwner(file)
+      if(!holder)continue
+      const waitingForReader=access==='write' && holder.access==='read' && holder.phase!=='quarantined'
+      const until=waitingForReader?readerDeadline:deadline
       const now = Date.now()
       if (now >= nextOrphanAudit) {
         nextOrphanAudit = now + 250
         const state = repositoryLeaseStatus(file)
         if (state.recoverable) throw busy(file)
       }
-      if(Date.now()>=deadline) throw busy(file)
-      await new Promise(resolve=>setTimeout(resolve,Math.min(25,deadline-Date.now())));continue
+      if(Date.now()>=until) throw busy(file)
+      await new Promise(resolve=>setTimeout(resolve,Math.min(25,until-Date.now())));continue
     }
     try {fs.writeFileSync(descriptor,JSON.stringify(owner)+'\n');fs.fsyncSync(descriptor)} finally {fs.closeSync(descriptor)}
     if(fs.existsSync(file+'.recovery.lock')) {if(readOwner(file)?.generation===owner.generation)fs.unlinkSync(file);if(Date.now()>=deadline)throw new Error('Git recovery is in progress; retry after it completes');continue}
@@ -164,8 +173,8 @@ export function recoverRepositoryLease(file: string, expectedGeneration: string)
   } finally {fs.closeSync(descriptor);fs.unlinkSync(recoveryFile)}
 }
 
-export async function withRepositoryLease<T>(file: string, action: (scope: RepositoryProcessScope, assertOwned:()=>void)=>Promise<T>, waitMs=0, bindingLease?: RepositoryLeaseOwner['bindingLease']): Promise<T> {
-  const lease=await acquireRepositoryLease(file,waitMs,bindingLease)
+export async function withRepositoryLease<T>(file: string, action: (scope: RepositoryProcessScope, assertOwned:()=>void)=>Promise<T>, waitMs=0, bindingLease?: RepositoryLeaseOwner['bindingLease'], access: 'read' | 'write' = 'write'): Promise<T> {
+  const lease=await acquireRepositoryLease(file,waitMs,bindingLease,access)
   let scope: RepositoryProcessScope | undefined, result: T | undefined, failure: unknown
   try {
     scope=await openRepositoryProcessScope(lease.owner.jobName,`${file}.native-close-${lease.owner.generation}.json`,supervisor=>lease.update({phase:'supervising',supervisor}))

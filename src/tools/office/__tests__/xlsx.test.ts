@@ -26,6 +26,26 @@ function basic(): XlsxInput {
 }
 
 describe('unified office XLSX', () => {
+  it('accepts an empty date in a totals row without converting empty text or valid dates', async () => {
+    const input = basic()
+    input.sheets[0].rows[2].date = ''
+    input.sheets[0].rows[2].id = ''
+    const bytes = await createXlsx(input), sheet = (await reopen(bytes)).getWorksheet('季度预算')!
+    expect(sheet.getCell('C4').value).toBeNull()
+    expect(sheet.getCell('C4').numFmt).toBe('yyyy-mm-dd')
+    expect(sheet.getCell('C4').dataValidation).toMatchObject({ type: 'date', allowBlank: true })
+    expect(sheet.getCell('C2').value).toEqual(new Date('2026-10-15T00:00:00Z'))
+    expect(sheet.getCell('A4').value).toBe('')
+    expect(sheet.getCell('B4').value).toEqual({ formula: 'SUM(B2:B3)', result: 30 })
+    expect((await inspectXlsx(bytes)).content).not.toContain('1899-12-30')
+  })
+
+  it.each([' ', '—', '2026-02-30', '2026-11-25T10:00:00'])('still rejects nonempty invalid dates: %j', async value => {
+    const input = basic()
+    input.sheets[0].rows[2].date = value
+    await expect(createXlsx(input)).rejects.toThrow(/日期/)
+  })
+
   it('writes real types, Chinese text, safe literal strings and professional print/table affordances', async () => {
     const bytes = await createXlsx(basic())
     expect(bytes.subarray(0, 2).toString()).toBe('PK')
@@ -203,6 +223,70 @@ describe('unified office XLSX', () => {
     const inspection = await inspectXlsx(bytes)
     expect(inspection.warnings.join('\n')).toContain('"季度预算"!E2')
     expect(inspection.content).toContain('- E2: 文本（以 = 开头，非公式）：=HYPERLINK')
+  })
+
+  it('edits date targets through JSON ISO values and clears them without coercing text targets', async () => {
+    const edits = JSON.parse(JSON.stringify([
+      { sheet: '季度预算', cell: 'C2', value: '2026-11-28' },
+      { sheet: '季度预算', cell: 'C3', value: '' },
+      { sheet: '季度预算', cell: 'C4', value: null },
+      { sheet: '季度预算', cell: 'A2', value: '2026-11-28' },
+      { sheet: '季度预算', cell: 'A3', value: '' },
+    ]))
+    const bytes = await editXlsx(await createXlsx(basic()), edits), sheet = (await reopen(bytes)).getWorksheet('季度预算')!
+    expect(sheet.getCell('C2').value).toEqual(new Date('2026-11-28T00:00:00Z'))
+    expect(sheet.getCell('C3').value).toBeNull()
+    expect(sheet.getCell('C4').value).toBeNull()
+    expect(sheet.getCell('C3').numFmt).toBe('yyyy-mm-dd')
+    expect(sheet.getCell('C3').dataValidation).toMatchObject({ type: 'date', allowBlank: true })
+    expect(sheet.getCell('A2').value).toBe('2026-11-28')
+    expect(sheet.getCell('A2').type).toBe(ExcelJS.ValueType.String)
+    // ExcelJS reads an empty inline string as null; the package must still retain its text type.
+    const emptyText = utf8(readOfficeZip(bytes)['xl/worksheets/sheet1.xml']).match(/<c\b[^>]*\br="A3"[^>]*>[\s\S]*?<\/c>/)?.[0]
+    expect(emptyText).toContain('t="inlineStr"')
+    expect(emptyText).toContain('<t xml:space="preserve"></t>')
+  })
+
+  it('recognizes date validation without date formatting and still enforces required dates', async () => {
+    const book = new ExcelJS.Workbook(), sheet = book.addWorksheet('日期校验')
+    const first = new Date('2026-01-01T00:00:00Z'), last = new Date('2026-12-31T00:00:00Z')
+    sheet.getCell('A1').value = 46023
+    sheet.getCell('A1').dataValidation = { type: 'date', operator: 'between', allowBlank: false, formulae: [first, last] }
+    const original = Buffer.from(await book.xlsx.writeBuffer())
+    const changed = await editXlsx(original, [{ sheet: '日期校验', cell: 'A1', value: '2026-11-28' }])
+    const actual = (await reopen(changed)).getWorksheet('日期校验')!.getCell('A1')
+    expect(actual.value).toBe(new Date('2026-11-28T00:00:00Z').getTime() / 86_400_000 + 25_569)
+    expect(actual.dataValidation).toMatchObject({ type: 'date' })
+    await expect(editXlsx(original, [{ sheet: '日期校验', cell: 'A1', value: '' }])).rejects.toThrow('数据验证')
+    await expect(editXlsx(original, [{ sheet: '日期校验', cell: 'A1', value: '2027-01-01' }])).rejects.toThrow('数据验证范围')
+  })
+
+  it('recognizes existing date formats and the 1904 system while preserving intentionally textual date-like cells', async () => {
+    const book = new ExcelJS.Workbook(), sheet = book.addWorksheet('日期格式')
+    book.properties.date1904 = true
+    sheet.getCell('A1').value = new Date('2026-10-01T00:00:00Z')
+    sheet.getCell('A1').numFmt = 'yyyy-mm-dd'
+    sheet.getCell('A2').value = '日期说明'
+    sheet.getCell('A2').numFmt = 'yyyy-mm-dd'
+    sheet.getCell('A3').numFmt = 'yyyy-mm-dd'
+    const bytes = await editXlsx(Buffer.from(await book.xlsx.writeBuffer()), [
+      { sheet: '日期格式', cell: 'A1', value: '2026-11-28T12:30:00+08:00' },
+      { sheet: '日期格式', cell: 'A2', value: '2026-11-28' },
+      { sheet: '日期格式', cell: 'A3', value: '2026-12-01' },
+    ])
+    const actual = (await reopen(bytes)).getWorksheet('日期格式')!
+    expect(actual.getCell('A1').value).toEqual(new Date('2026-11-28T04:30:00Z'))
+    expect(actual.getCell('A2').value).toBe('2026-11-28')
+    expect(actual.getCell('A3').value).toEqual(new Date('2026-12-01T00:00:00Z'))
+  })
+
+  it.each([' ', '—', '2026-02-30', '2026-11-25T10:00:00'])('rejects invalid JSON date edits atomically: %j', async value => {
+    const original = await createXlsx(basic()), before = Buffer.from(original)
+    await expect(editXlsx(original, [
+      { sheet: '季度预算', cell: 'B2', value: 99 },
+      { sheet: '季度预算', cell: 'C2', value },
+    ])).rejects.toThrow(/日期/)
+    expect(original).toEqual(before)
   })
 
   it('refuses edits into merged subordinate cells, array ranges and structured table sheets', async () => {

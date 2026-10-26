@@ -76,6 +76,22 @@ const SUBAGENT_DISPATCH_PROMPT = [
   '子代理结果必须包含 status、facts、evidence、actions、verification、unverified 和 next；主 Agent 根据结果决定是否继续，不把未核实项当成完成。',
   '子任务因取消、请求预算、上下文容量或无进展保护结束时，使用它返回的部分证据完成总结，并说明未核实范围。不要把本地预算解释为模型服务商欠费，也不要自行制造步数上限或再次派发同一探索。',
 ].join('\n')
+
+/** Keep ordinary Work turns scoped without weakening explicit long-running jobs.
+ * The engine intentionally remains capable of durable runs; this guidance
+ * prevents a one-file change from being expanded into an unsolicited audit. */
+const GENERAL_WORK_EXECUTION_PROMPT = [
+  '## Work 任务执行协议',
+  '',
+  '先判断任务规模：quick=单点/单文件小改，standard=有联动的常规改动，large=跨模块、高风险或用户明确要求全面/高强度。',
+  'quick：只读取与目标和直接依赖相关的代码，优先复用已有组件；完成改动后做一次针对性验证，验收通过立即总结，不自行扩展审计。',
+  'standard：先做有边界的影响面调研，再用 plan_update 列出短计划，按计划落地并验证；不要重复读取未变化的文件。',
+  'large：先完成影响面和复用组件调研，输出简洁计划、风险、验收标准；在需要用户确认时先停在计划阶段，不要先写大范围代码。',
+  '用户明确说“直接开始/直接做/马上执行/无需确认”或同义授权时，视为已授权实施：即使任务属于 large，也直接按计划开工，不再弹出确认；仍需保留必要的风险说明和验收结果。',
+  '只有用户明确要求全面、高强度、长时间或 7×24 测试时，才进入 exhaustive 研究或压力测试；长任务必须说明当前阶段和剩余目标。',
+  '前台服务、开发服务器或 watch 进程必须使用工具支持的后台任务方式并设置合理超时；同一命令/文件已有充分证据时不得反复执行。',
+  '核心验收已满足就结束本轮并报告证据、未验证项和下一步，不要为了“更确定”继续制造无关 token 消耗。',
+].join('\n')
 import { prependBootstrapToSystemPrompt } from '../../../core/osm-bootstrap.js'
 import { getProjectContextBlock } from '../../../core/project-context.js'
 import { SQLiteAgentStore } from '../../../storage/agent/index.js'
@@ -1356,6 +1372,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
     const officeExecutionPrompt = buildOfficeExecutionPrompt(toolProfile, registry, externalSkills)
     const workspaceDownloadPrompt = buildWorkspaceDownloadPrompt(sessionId)
     const codeExecutionPrompt = toolProfile === 'code' ? `\n\n${CODE_AGENT_EXECUTION_PROMPT}` : ''
+    const workExecutionPrompt = toolProfile === 'general' ? `\n\n${GENERAL_WORK_EXECUTION_PROMPT}` : ''
     const fullSystemPrompt = baseSystemPrompt + ragPrompt + memoryRecallBlock + `
 ---
 # Rules
@@ -1368,7 +1385,7 @@ ${workspaceDownloadPrompt}
 5. 多步任务使用内建 \`plan_update\` 静默维护完整任务计划；简单单步请求无需建计划。首次可省略 id，后续复用返回 id，保留仍需展示的已完成步骤。status 使用 pending/in_progress/completed/cancelled；只在步骤真实完成且有依据后标记 completed。计划由引擎持久化并独立展示，不复述创建/更新日志，不通过命令或脚本维护；失败先修正输入，不声称未落盘的状态已保存。
 6. **先给结论，再说理由。** 不要在回答里反复自我怀疑或把同一假设推演多遍；一旦确认了一件事，就把它当既定事实继续推进，不要回头重复论证。
 7. **禁止绕过工具链自造轮子。** 当现有工具做不到某件事时（例如看不到图片），**不要**自己写脚本去实现底层能力（手写 PNG/JPEG 解码器、二进制解析、像素取证、OCR 引擎等）。这类自造轮子几乎必然失败，且会烧掉几十轮工具调用。正确做法：① 换用受支持的路径（如 \`read_file mode:"ocr"\`）；② 确认该路径确实不可用后，直接向用户说明限制并给出替代方案。**同一件事尝试失败一次就换路径，绝不允许用「再换个脚本试试」的方式反复试探。**
-${workspaceInfo}${codegraphBlock}${attachments && attachments.length > 0 ? `\n\n## 本次消息已附带以下文件\n${attachments.map(a => `- ${a.name}`).join('\n')}${visionCapabilityNote}` : ''}${codeExecutionPrompt}${officeExecutionPrompt}
+${workspaceInfo}${codegraphBlock}${attachments && attachments.length > 0 ? `\n\n## 本次消息已附带以下文件\n${attachments.map(a => `- ${a.name}`).join('\n')}${visionCapabilityNote}` : ''}${codeExecutionPrompt}${workExecutionPrompt}${officeExecutionPrompt}
 `
 
     // ── Estimate token counts for each injected prompt section ──────────
@@ -1385,7 +1402,7 @@ ${workspaceDownloadPrompt}
 5. 多步任务使用内建 \`plan_update\` 静默维护完整任务计划；简单单步请求无需建计划。首次可省略 id，后续复用返回 id，保留仍需展示的已完成步骤。status 使用 pending/in_progress/completed/cancelled；只在步骤真实完成且有依据后标记 completed。计划由引擎持久化并独立展示，不复述创建/更新日志，不通过命令或脚本维护；失败先修正输入，不声称未落盘的状态已保存。
 6. **先给结论，再说理由。** 不要在回答里反复自我怀疑或把同一假设推演多遍；一旦确认了一件事，就把它当既定事实继续推进，不要回头重复论证。
 7. **禁止绕过工具链自造轮子。** 当现有工具做不到某件事时（例如看不到图片），**不要**自己写脚本去实现底层能力（手写 PNG/JPEG 解码器、二进制解析、像素取证、OCR 引擎等）。这类自造轮子几乎必然失败，且会烧掉几十轮工具调用。正确做法：① 换用受支持的路径（如 \`read_file mode:"ocr"\`）；② 确认该路径确实不可用后，直接向用户说明限制并给出替代方案。**同一件事尝试失败一次就换路径，绝不允许用「再换个脚本试试」的方式反复试探。**
-${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}${officeExecutionPrompt}
+${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}${workExecutionPrompt}${officeExecutionPrompt}
 `
     const skillTokens = estimateTokens(skillsPrompt)
     // Skills are already embedded in baseSystemPrompt, but have their own

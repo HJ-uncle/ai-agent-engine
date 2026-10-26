@@ -79,4 +79,11 @@ describe('WorkspaceManager.resolveSafePath in safe mode', () => {
       /outside any bound workspace|Path traversal detected/,
     )
   })
+
+  it('rejects percent-encoded traversal and NUL paths before resolution', () => {
+    for (const value of ['%2e%2e/escape.txt', '%252e%252e/escape.txt', 'nested/%00secret.txt']) {
+      expect(() => manager.resolveSafePath(ctx, value), value).toThrow('Path is invalid')
+    }
+    expect(manager.resolveSafePath(ctx, '100%done.txt')).toContain('100%done.txt')
+  })
 })

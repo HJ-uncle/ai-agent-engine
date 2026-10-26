@@ -36,14 +36,15 @@ describe('packaged Office skill discovery and precedence', () => {
     expect(guide).toContain('office_environment({})')
     expect(guide).toContain('office_inspect')
     expect(guide).toContain('不传 `operation`')
-    for (const reference of ['documents.md', 'spreadsheets.md', 'environment.md']) {
+    for (const reference of ['documents.md', 'spreadsheets.md', 'presentations-pdf.md', 'environment.md']) {
       expect(guide).toContain(`references/${reference}`)
       expect(fs.existsSync(path.join(path.dirname(skill!.skillMdPath), 'references', reference))).toBe(true)
     }
     const environmentGuide = fs.readFileSync(path.join(path.dirname(skill!.skillMdPath), 'references', 'environment.md'), 'utf8')
     expect(environmentGuide).toContain('conversionVerified')
-    expect(environmentGuide).toContain('timeoutMs')
-    expect(environmentGuide).toContain('不要执行全局、`--user`')
+    expect(environmentGuide).toContain('3500ms')
+    expect(environmentGuide).toContain('不得安装共享依赖')
+    expect(environmentGuide).toContain('不能因某项能力缺失就改用 WPS')
     const separate = path.join(root, 'other-workspace')
     fs.mkdirSync(separate)
     expect(registry.getSkills(separate).find(candidate => candidate.name === 'aether-office')).toMatchObject({ builtin: true })

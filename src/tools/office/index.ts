@@ -9,13 +9,18 @@ import { workspaceManager } from '../../workspace/index.js'
 import { ChangeRecordingError, commitWriteChange, discardUnpublishedSnapshot, readOldSnapshot, type ChangeSnapshot } from '../file/change-recorder.js'
 import { createDocx, editDocx, inspectDocx } from './docx.js'
 import { createXlsx, editXlsx, inspectXlsx, appendXlsxSheets } from './xlsx.js'
+import { createPdf, inspectPdf } from './pdf.js'
+import { createPptx, editPptx, inspectPptx, type PptxEdit } from './pptx.js'
+import { recalculateXlsx } from './recalculate.js'
 import { MAX_OFFICE_FILE_BYTES } from './office-zip.js'
-import { officeFailure, officeReceipt } from './output.js'
+import { officeFailure, officeReceipt, type OfficeInspection } from './output.js'
 
 const text = z.string().max(32_000)
 const formula = z.object({ formula: z.string().min(1).max(2000) }).strict()
 const cell = z.union([text, z.number().finite(), z.boolean(), z.null(), formula])
-const textEdits = z.array(z.object({ oldText: z.string().min(1).max(32_000), newText: text }).strict()).min(1).max(100)
+const textEdits = z.array(z.object({ oldText: z.string().min(1).max(32_000), newText: text,
+  slide: z.number().int().min(1).max(40).optional(), textRun: z.number().int().min(1).max(100_000).optional(),
+}).strict().refine(edit => (edit.slide === undefined) === (edit.textRun === undefined), 'slide and textRun must be supplied together')).min(1).max(100)
 const cellEdits = z.array(z.object({ sheet: z.string().min(1).max(31), cell: z.string().regex(/^[A-Z]{1,3}[1-9]\d{0,6}$/), value: cell }).strict()).min(1).max(1000)
 const workbook = z.object({ sheets: z.array(z.object({
   name: z.string().min(1).max(31),
@@ -38,6 +43,13 @@ const workbook = z.object({ sheets: z.array(z.object({
   if (count > 100_000) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Workbook supports at most 100000 data cells' })
 })
 const filePath = z.string().min(1).max(4096).refine(value => value.trim().length > 0 && !value.includes('\0'), 'Invalid file path')
+const presentation = z.object({ slides: z.array(z.object({
+  title: z.string().min(1).max(100),
+  bullets: z.array(z.string().min(1).max(160)).max(6).optional(),
+  table: z.object({ headers: z.array(z.string().min(1).max(100)).min(1).max(6),
+    rows: z.array(z.array(z.union([z.string().max(100), z.number().finite()])).min(1).max(6)).max(8) }).strict().optional(),
+  notes: z.string().max(3000).optional(),
+}).strict()).min(1).max(40) }).strict()
 // DOCX allows 2 Mi characters of paragraph text plus separators; the package's
 // 500000-element bound keeps their combined preview below 3 Mi UTF-16 units.
 const maxContentOffset = 3 * 1024 * 1024
@@ -48,14 +60,16 @@ const inspectArguments = z.object({ operation: z.literal('inspect'), path: fileP
 }).strict()
 const readonlyInspectArguments = inspectArguments.omit({ operation: true })
 const createArguments = z.object({ operation: z.literal('create'), path: filePath, expectedHash: z.literal('missing'),
-  markdown: z.string().min(1).max(300_000).optional(), title: z.string().max(256).optional(), author: z.string().max(200).optional(), workbook: workbook.optional() }).strict()
+  markdown: z.string().min(1).max(300_000).optional(), title: z.string().max(256).optional(), author: z.string().max(200).optional(), workbook: workbook.optional(), presentation: presentation.optional() }).strict()
 const editArguments = z.object({ operation: z.literal('edit'), path: filePath, expectedHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   edits: z.union([textEdits, cellEdits]) }).strict()
 const appendSheetsArguments = z.object({ operation: z.literal('append_sheets'), path: filePath,
   expectedHash: z.string().regex(/^sha256:[a-f0-9]{64}$/), workbook: workbook.refine(value => value.sheets.length <= 4, 'Append at most four sheets per call') }).strict()
-const argumentsSchema = z.discriminatedUnion('operation', [inspectArguments, createArguments, editArguments, appendSheetsArguments])
+const recalculateArguments = z.object({ operation: z.literal('recalculate'), path: filePath,
+  expectedHash: z.string().regex(/^sha256:[a-f0-9]{64}$/) }).strict()
+const argumentsSchema = z.discriminatedUnion('operation', [inspectArguments, createArguments, editArguments, appendSheetsArguments, recalculateArguments])
 type Arguments = z.infer<typeof argumentsSchema>
-type Inspection = Awaited<ReturnType<typeof inspectDocx>> | Awaited<ReturnType<typeof inspectXlsx>>
+type Inspection = OfficeInspection
 
 function samePath(left: string, right: string): boolean {
   return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right
@@ -92,23 +106,36 @@ function readBoundedVersion(file: string) {
   if (version.content && version.content.byteLength > MAX_OFFICE_FILE_BYTES) throw new Error('Office document exceeds 32 MiB')
   return version
 }
-function inspect(format: 'docx' | 'xlsx', bytes: Buffer): Promise<Inspection> {
-  return format === 'docx' ? inspectDocx(bytes) : inspectXlsx(bytes)
+function inspect(format: OfficeInspection['format'], bytes: Buffer): Promise<Inspection> {
+  if (format === 'docx') return inspectDocx(bytes)
+  if (format === 'xlsx') return inspectXlsx(bytes)
+  return format === 'pdf' ? inspectPdf(bytes) : inspectPptx(bytes)
 }
 
 export const officeDocumentTool: Tool = {
   name: 'office_document', displayName: '办公文档',
-  description: '创建、检查和定点编辑真实 Word(.docx) 与 Excel(.xlsx) 文件。办公写作/排版优先读取 aether-office skill；已有 read_file 读取能力保留。inspect 返回真实正文/表格预览、完整 warnings 和字节 expectedHash；按 contentPage.nextOffset 继续时传 contentOffset 与同文件 expectedHash。分页仅覆盖已提取预览：Excel最多2000单元格、单格600字符，Word仅主文档文字，不能声称全文/视觉完整。create 必须传 expectedHash="missing"，不覆盖已有文件；edit/append_sheets 必须复用同文件最近一次工具返回的 sha256。Word 新建用 markdown，编辑用唯一 oldText/newText；Excel 新建用 workbook，定点修改已有表用 sheet/cell/value。Excel 分批添加新表用 append_sheets + workbook.sheets（每次1-4张，建议一张），保留旧表与图表/图片部件，禁止为加表删除重建或整包重发；旧公式缓存保留但未重算，不能当最新结果。普通单元格新增行可分批edit，不自动扩展结构化表/图表/公式范围。公式值用 {formula:"SUM(B2:B4)"}。内部结构校验、版本检查后原子发布，记录改动及撤回快照；结构检查不等于视觉排版或公式重算验证。只支持 docx/xlsx，不需要 Python、shell 或 pip。',
+  description: 'Aether内置办公文档：原生创建/检查DOCX、XLSX、PPTX、PDF，无需WPS、Office COM、Python、shell或pip。先读aether-office技能。create必须expectedHash="missing"；其他写入必须复用同文件最近返回sha256。Word/PDF创建用markdown；PPTX用presentation.slides（title、bullets、table、notes）；Excel用workbook。Word/PPTX edit用唯一oldText/newText；PPTX重复文字可成对指定inspect返回的slide/textRun（均从1开始），仍须在目标普通文本节点内唯一。Excel edit用sheet/cell/value。PDF只支持创建和检查，修改请新建版本。append_sheets每次添加1-4张Excel表，保留旧表部件。recalculate仅XLSX：内置有界计算常用公式及跨表引用并更新缓存，不支持/循环/外链会拒绝，原文件保留；不是全Excel计算兼容。公式用{formula:"SUM(B2:B4)"}。inspect返回真实文字/表格预览、warnings及expectedHash；按contentPage.nextOffset+同文件hash分页。Excel最多2000单元格、单格600字符，Word仅主文档文字；分页不代表全文/视觉完整。发布前版本检查、原子写入、记录改动及撤回快照。PDF由Aether独立排版，不等于Word/PPT转换。结构检查不等于视觉或业务验收。',
   parameters: {
     type: 'object', additionalProperties: false,
     properties: {
-      operation: { type: 'string', enum: ['inspect', 'create', 'edit', 'append_sheets'] },
-      path: { type: 'string', minLength: 1, maxLength: 4096, description: '当前工作区中的 .docx 或 .xlsx 目标路径。' },
-      expectedHash: { type: 'string', pattern: '^(missing|sha256:[a-f0-9]{64})$', description: 'create 必须为 missing；edit/append_sheets 必须复用同文件最近一次工具返回的 sha256；inspect 首次可省略，contentOffset>0时必须传同文件上一页的 sha256，防止混读不同版本。' },
+      operation: { type: 'string', enum: ['inspect', 'create', 'edit', 'append_sheets', 'recalculate'] },
+      path: { type: 'string', minLength: 1, maxLength: 4096, description: '当前工作区中的 .docx/.xlsx/.pptx/.pdf 目标路径。PDF支持create/inspect，其他格式也支持定点edit；recalculate只支持xlsx。' },
+      expectedHash: { type: 'string', pattern: '^(missing|sha256:[a-f0-9]{64})$', description: 'create 必须为 missing；edit/append_sheets/recalculate 必须复用同文件最近一次工具返回的 sha256；inspect 首次可省略，contentOffset>0时必须传同文件上一页的 sha256，防止混读不同版本。' },
       contentOffset: { type: 'integer', minimum: 0, maximum: maxContentOffset, description: '仅 inspect：使用上页 contentPage.nextOffset（UTF-16字符位置）；只分页检查预览，不代表完整文档。' },
       contentLimit: { type: 'integer', minimum: 2, maximum: 32000, description: '仅 inspect：本页预览字符上限，实际会按工具输出预算进一步缩短。' },
-      markdown: { type: 'string', minLength: 1, maxLength: 300000, description: '仅 Word create 使用，支持标题、正文、列表、表格。' },
+      markdown: { type: 'string', minLength: 1, maxLength: 300000, description: 'Word/PDF create 使用，支持标题、正文、列表、表格。PDF由Aether直接排版，并非从Word/PPT转换。' },
       title: { type: 'string', maxLength: 256, description: '可选的独立可见标题，同时写入文档属性；避免与 Markdown 首标题重复。' }, author: { type: 'string', maxLength: 200 },
+      presentation: { type: 'object', additionalProperties: false, description: '仅PPTX create：分页的演示内容，过长内容拆成多页，不缩成不可读小字。', properties: {
+        slides: { type: 'array', minItems: 1, maxItems: 40, items: { type: 'object', additionalProperties: false, properties: {
+          title: { type: 'string', minLength: 1, maxLength: 100, description: '单行短标题，最多94个英文字符宽度（中文约47字）。' },
+          bullets: { type: 'array', maxItems: 6, description: '每页最多6条，含表格时最多2条；每条不换行，最多140英文字符宽度（中文约70字）。', items: { type: 'string', minLength: 1, maxLength: 160 } },
+          table: { type: 'object', additionalProperties: false, description: '最多6列、8行；同页有要点时最多5行。单元格不换行，英文字符宽度最多100/列数，中文按2计；长内容拆页。', properties: {
+            headers: { type: 'array', minItems: 1, maxItems: 6, items: { type: 'string', minLength: 1, maxLength: 100 } },
+            rows: { type: 'array', maxItems: 8, items: { type: 'array', minItems: 1, maxItems: 6, items: { anyOf: [{ type: 'string', maxLength: 100 }, { type: 'number' }] } } },
+          }, required: ['headers', 'rows'] },
+          notes: { type: 'string', maxLength: 3000 },
+        }, required: ['title'] } },
+      }, required: ['slides'] },
       workbook: { type: 'object', additionalProperties: false, description: 'Excel create 或 append_sheets 的新增表内容。append_sheets 每次最多4张（建议一张），不重复提交已存在的表。', properties: { sheets: { type: 'array', minItems: 1, maxItems: 12,
         items: { type: 'object', additionalProperties: false, properties: {
           name: { type: 'string', minLength: 1, maxLength: 31 },
@@ -123,6 +150,11 @@ export const officeDocumentTool: Tool = {
         }, required: ['name', 'columns', 'rows'] } } }, required: ['sheets'] },
       edits: { type: 'array', minItems: 1, maxItems: 1000, items: { anyOf: [
         { type: 'object', additionalProperties: false, properties: { oldText: { type: 'string', minLength: 1, maxLength: 32000 }, newText: { type: 'string', maxLength: 32000 } }, required: ['oldText', 'newText'] },
+        { type: 'object', additionalProperties: false, description: '仅 PPTX：复用 inspect 返回的 slide/textRun 定位，oldText 必须在该普通文本节点内唯一；字段不可编辑。省略定位时仍要求全稿唯一。', properties: {
+          oldText: { type: 'string', minLength: 1, maxLength: 10000 }, newText: { type: 'string', maxLength: 10000 },
+          slide: { type: 'integer', minimum: 1, maximum: 40, description: '幻灯片显示顺序，从 1 开始，与 ZIP 文件名顺序无关。' },
+          textRun: { type: 'integer', minimum: 1, maximum: 100000, description: '该页 inspect 标记的文本节点编号，从 1 开始，需 editable=true。' },
+        }, required: ['oldText', 'newText', 'slide', 'textRun'] },
         { type: 'object', additionalProperties: false, properties: { sheet: { type: 'string', minLength: 1, maxLength: 31 }, cell: { type: 'string', pattern: '^[A-Z]{1,3}[1-9][0-9]{0,6}$' }, value: { anyOf: [
           { type: 'string', maxLength: 32000 }, { type: 'number' }, { type: 'boolean' }, { type: 'null' },
           { type: 'object', additionalProperties: false, properties: { formula: { type: 'string', minLength: 1, maxLength: 2000 } }, required: ['formula'] },
@@ -145,11 +177,18 @@ export const officeDocumentTool: Tool = {
     const args: Arguments = parsed.data
     if (args.operation === 'inspect' && (args.contentOffset ?? 0) > 0 && !args.expectedHash) return failure('OFFICE_INSPECT_VERSION_REQUIRED', 'Continue inspection with the previous page expectedHash so pages cannot mix file versions.')
     const extension = path.extname(args.path).toLowerCase()
-    if (extension !== '.docx' && extension !== '.xlsx') return failure('OFFICE_UNSUPPORTED_FORMAT', 'Only real .docx and .xlsx files are supported. Existing read_file still reads other supported office formats.')
-    const format = extension === '.docx' ? 'docx' : 'xlsx'
-    if (args.operation === 'create' && (format === 'docx' ? !args.markdown || args.workbook !== undefined : !args.workbook || args.markdown !== undefined || args.title !== undefined || args.author !== undefined)) return failure('OFFICE_INVALID_ARGUMENTS', 'Word creation requires markdown; Excel creation requires workbook. Do not mix the two inputs.')
-    if (args.operation === 'edit' && !args.edits.every(edit => format === 'docx' ? 'oldText' in edit : 'cell' in edit)) return failure('OFFICE_INVALID_ARGUMENTS', 'Word edits require oldText/newText; Excel edits require sheet/cell/value.')
+    if (!['.docx', '.xlsx', '.pdf', '.pptx'].includes(extension)) return failure('OFFICE_UNSUPPORTED_FORMAT', 'Only real .docx/.xlsx/.pptx/.pdf files are supported.')
+    const format = extension.slice(1) as OfficeInspection['format']
+    if (args.operation === 'create') {
+      const valid = format === 'docx' || format === 'pdf' ? !!args.markdown && !args.workbook && !args.presentation
+        : format === 'pptx' ? !!args.presentation && !args.markdown && !args.workbook
+        : !!args.workbook && !args.markdown && !args.presentation && args.title === undefined && args.author === undefined
+      if (!valid) return failure('OFFICE_INVALID_ARGUMENTS', 'Word/PDF creation requires markdown; Excel requires workbook; PPTX requires presentation. Do not mix format inputs.')
+    }
+    if (args.operation === 'edit' && (format === 'pdf' || !args.edits.every(edit => format === 'xlsx' ? 'cell' in edit : 'oldText' in edit))) return failure('OFFICE_INVALID_ARGUMENTS', 'Word/PPTX edits require unique oldText/newText; Excel edits require sheet/cell/value. PDF text editing is not supported; create a new revision from its source content.')
+    if (args.operation === 'edit' && format !== 'pptx' && args.edits.some(edit => 'slide' in edit || 'textRun' in edit)) return failure('OFFICE_INVALID_ARGUMENTS', 'slide/textRun selectors are only supported for PPTX; Word edits still require globally unique oldText/newText.')
     if (args.operation === 'append_sheets' && format !== 'xlsx') return failure('OFFICE_INVALID_ARGUMENTS', 'append_sheets only adds new worksheets to an existing .xlsx file.')
+    if (args.operation === 'recalculate' && format !== 'xlsx') return failure('OFFICE_INVALID_ARGUMENTS', 'recalculate only supports .xlsx workbooks.')
     let published = false
     try {
       throwIfAborted(ctx.signal)
@@ -173,16 +212,23 @@ export const officeDocumentTool: Tool = {
         if (args.operation !== 'create' && !original.content) return failure('OFFICE_FILE_MISSING', 'The document does not exist; create requires expectedHash="missing".')
         let generated: Buffer
         try {
-          generated = args.operation === 'create'
-            ? format === 'docx' ? await createDocx({ markdown: args.markdown!, title: args.title, author: args.author }) : await createXlsx(args.workbook!)
-            : args.operation === 'append_sheets' ? await appendXlsxSheets(original.content!, args.workbook)
-            : format === 'docx'
-              ? await editDocx(original.content!, args.edits.filter((edit): edit is { oldText: string; newText: string } => 'oldText' in edit))
-              : await editXlsx(original.content!, args.edits.filter((edit): edit is { sheet: string; cell: string; value: z.infer<typeof cell> } => 'cell' in edit))
+          if (args.operation === 'create') {
+            if (format === 'docx') generated = await createDocx({ markdown: args.markdown!, title: args.title, author: args.author })
+            else if (format === 'pdf') generated = await createPdf({ markdown: args.markdown!, title: args.title, author: args.author })
+            else if (format === 'pptx') generated = await createPptx({ ...args.presentation!, title: args.title, author: args.author })
+            else generated = await createXlsx(args.workbook!)
+          } else if (args.operation === 'append_sheets') generated = await appendXlsxSheets(original.content!, args.workbook)
+          else if (args.operation === 'recalculate') generated = await recalculateXlsx(original.content!, ctx.signal)
+          else if (format === 'xlsx') generated = await editXlsx(original.content!, args.edits.filter((edit): edit is { sheet: string; cell: string; value: z.infer<typeof cell> } => 'cell' in edit))
+          else {
+            const edits = args.edits.filter((edit): edit is PptxEdit => 'oldText' in edit)
+            generated = format === 'docx' ? await editDocx(original.content!, edits) : await editPptx(original.content!, edits)
+          }
         } catch (error) { return failure('OFFICE_FORMAT_FAILED', error instanceof Error ? error.message : String(error)) }
         if (!generated.length || generated.length > MAX_OFFICE_FILE_BYTES) return failure('OFFICE_FILE_TOO_LARGE', 'Generated office document is empty or exceeds 32 MiB; original bytes were preserved.')
         const inspection = await inspect(format, generated)
-        if (args.operation === 'append_sheets') inspection.warnings.unshift('已追加新工作表；原有工作表、图表/图片等部件内容保留。旧公式缓存未经重新计算，新增表可能改变依赖，不得把旧缓存当最新结果；已要求打开时完整重算。旧扩展属性/应用统计保留，可能需 Office 刷新。')
+        if (args.operation === 'recalculate') inspection.warnings.unshift('Aether内置公式引擎已重新计算并保存支持公式的缓存；保留原公式及其他包部件。这不代表业务假设或版式已经验收，不支持的公式会拒绝整次发布。')
+        if (args.operation === 'append_sheets') inspection.warnings.unshift('已追加新工作表；原有工作表、图表/图片等部件内容保留。旧公式缓存未经重新计算，新增表可能改变依赖；交付前使用内置recalculate并读回，不得把旧缓存当最新结果。旧扩展属性/应用统计保留，不代表本次实际表数量。')
         throwIfAborted(ctx.signal)
         const noChange = original.content?.equals(generated) === true
         // Refuse before publication if mandatory identity or warning evidence cannot cross
@@ -252,11 +298,11 @@ export const officeDocumentTool: Tool = {
 
 export const officeInspectTool: Tool = {
   name: 'office_inspect', displayName: '检查办公文档',
-  description: '只读检查工作区中的真实 Word(.docx) 与 Excel(.xlsx)，返回正文/各工作表的有界预览、公式与已保存错误诊断、warnings 和 expectedHash；不写文件、不记录改动。Excel预览在整个工作簿中最多2000单元格、单格600字符，已保存错误计数遍历全部工作表（包括预览之外），仅列出有限错误位置；不重算公式、不验证业务正确性或视觉排版，不能声称全文/整本工作簿内容已读完。按 contentPage.nextOffset 继续时传 contentOffset 与同文件 expectedHash；分页仅覆盖提取出的预览，不能绕过预览上限。Word仅主文档文字。只接受 path、expectedHash、contentOffset、contentLimit；编辑请使用获授权的 office_document。',
+  description: '只读检查真实DOCX/XLSX/PPTX/PDF，返回已提取文字/表格的有界预览、warnings及expectedHash；不写文件。Excel最多预览2000单元格、单格600字符，已保存错误计数遍历全部工作表但只列有限位置；不重算公式、不保证业务或视觉正确。Word仅主文档文字。PPTX正文附slide/textRun定位（均从1开始）及editable标记，供office_document定点编辑重复文字。按contentPage.nextOffset+同文件expectedHash分页；只覆盖已提取预览，不能宣称全文。只接受path、expectedHash、contentOffset、contentLimit；写入/重算使用获授权的office_document。',
   parameters: {
     type: 'object', additionalProperties: false,
     properties: {
-      path: { type: 'string', minLength: 1, maxLength: 4096, description: '当前工作区中的 .docx 或 .xlsx 文件路径。' },
+      path: { type: 'string', minLength: 1, maxLength: 4096, description: '当前工作区中的 .docx/.xlsx/.pptx/.pdf 文件路径。' },
       expectedHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$', description: '首次可省略；分页时必须复用同文件上一页返回的 sha256，防止混读不同版本。' },
       contentOffset: { type: 'integer', minimum: 0, maximum: maxContentOffset, description: '上页 contentPage.nextOffset（UTF-16字符位置），仅覆盖已提取预览。' },
       contentLimit: { type: 'integer', minimum: 2, maximum: 32000, description: '本页预览字符上限，仍受工具输出预算限制。' },
