@@ -6,13 +6,15 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { withFileLocks } from '../../../../shared/file-version.js'
 import { workspaceRoutes } from '../workspace.js'
 
-const { resolveSafePath, getBoundDirectory, getBindingSnapshot, bindSnapshotAsync } = vi.hoisted(() => ({
+const { resolveSafePath, resolveSafePathForSnapshot, bindingReadGuard, getBoundDirectory, getBindingSnapshot, bindSnapshotAsync } = vi.hoisted(() => ({
   resolveSafePath: vi.fn(),
+  resolveSafePathForSnapshot: vi.fn(),
+  bindingReadGuard: vi.fn(),
   getBoundDirectory: vi.fn(),
   getBindingSnapshot: vi.fn(),
   bindSnapshotAsync: vi.fn()
 }))
-vi.mock('../../../../workspace/index.js', () => ({ workspaceManager: { resolveSafePath, getBoundDirectory, getBindingSnapshot, bindSnapshotAsync } }))
+vi.mock('../../../../workspace/index.js', () => ({ workspaceManager: { resolveSafePath, resolveSafePathForSnapshot, bindingReadGuard, getBoundDirectory, getBindingSnapshot, bindSnapshotAsync } }))
 let app: FastifyInstance
 let fixture: string
 beforeEach(async () => {
@@ -21,6 +23,8 @@ beforeEach(async () => {
   getBoundDirectory.mockReset()
   getBindingSnapshot.mockReset()
   bindSnapshotAsync.mockReset()
+  bindingReadGuard.mockReset().mockImplementation(() => ({ snapshot: { root: fixture, epoch: 'test-epoch' }, assertCurrent: vi.fn() }))
+  resolveSafePathForSnapshot.mockReset().mockImplementation((_context, _snapshot, name: string) => path.join(fixture, name))
   app = Fastify()
   await app.register(workspaceRoutes)
   await app.ready()
@@ -104,6 +108,34 @@ it('remote content classifies media extensions and NUL samples as binary', async
 
   const opaqueResponse = await app.inject({ method: 'GET', url: '/workspace/file/content?sessionId=test&path=payload.bin' })
   expect(opaqueResponse.json().data).toMatchObject({ isBinary: true })
+})
+
+it('remote content reads leave the event loop responsive', async () => {
+  const small = path.join(fixture, 'responsive-small.txt')
+  const large = path.join(fixture, 'responsive-large.txt')
+  fs.writeFileSync(small, 'small file')
+  fs.writeFileSync(large, 'a'.repeat(16 * 1024 * 1024))
+  const samples: { kind: string; ms: number }[] = []
+  for (const [kind, target] of [['small', small], ['large', large]] as const) {
+    for (let index = 0; index < 4; index++) {
+      const start = performance.now()
+      const response = app.inject({ method: 'GET', url: `/workspace/file/content?sessionId=test&path=${path.basename(target)}` })
+      await new Promise<void>(resolve => setImmediate(resolve))
+      samples.push({ kind, ms: performance.now() - start })
+      expect((await response).json().code).toBe(200)
+    }
+  }
+  console.info('workspace-read-probe', JSON.stringify(samples))
+})
+
+it('remote content preserves small text and bounds large text reads', async () => {
+  fs.writeFileSync(path.join(fixture, 'small.txt'), '完整的小文件\n第二行')
+  fs.writeFileSync(path.join(fixture, 'large.txt'), 'a'.repeat(700 * 1024))
+  const small = await app.inject({ method: 'GET', url: '/workspace/file/content?sessionId=test&path=small.txt' })
+  expect(small.json().data).toMatchObject({ content: '完整的小文件\n第二行', isBinary: false, truncated: false })
+  const large = await app.inject({ method: 'GET', url: '/workspace/file/content?sessionId=test&path=large.txt' })
+  expect(large.json().data).toMatchObject({ isBinary: false, truncated: true, originalLength: 700 * 1024 })
+  expect(large.json().data.content).toHaveLength(500 * 1024 + '\n\n... (截断，完整大小: 716800 字节)'.length)
 })
 
 it('remote content refuses to base64-expand oversized binaries', async () => {

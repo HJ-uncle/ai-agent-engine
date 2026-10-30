@@ -8,6 +8,7 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { withFileLocks } from '../../../shared/file-version.js'
+import { StringDecoder } from 'node:string_decoder'
 
 const execFileAsync = promisify(execFile)
 
@@ -89,20 +90,22 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
     const sessionId = request.query.sessionId || 'default'
     const relative = request.query.path || '.'
     try {
-      return await workspaceManager.withBindingLease({ tenantId, sessionId }, undefined, async binding => {
-      const dir = workspaceManager.resolveSafePath({ tenantId, sessionId }, relative)
+      const binding = workspaceManager.bindingReadGuard({ tenantId, sessionId })
+      const dir = workspaceManager.resolveSafePathForSnapshot({ tenantId, sessionId }, binding.snapshot, relative)
       const stat = await fsp.stat(dir)
       if (!stat.isDirectory()) return reply.code(200).send(fail(40000, 'path is not a directory'))
-      const entries = (await fsp.readdir(dir, { withFileTypes: true })).filter(entry => !entry.isSymbolicLink()).map(entry => ({
-        name: entry.name,
-        path: path.relative(binding.snapshot.root, path.join(dir, entry.name)).replace(/\\/g, '/'),
-        isDirectory: entry.isDirectory(),
-        size: entry.isFile() ? fs.statSync(path.join(dir, entry.name)).size : 0,
-        mtimeMs: fs.statSync(path.join(dir, entry.name)).mtimeMs
+      const entries = await Promise.all((await fsp.readdir(dir, { withFileTypes: true })).filter(entry => !entry.isSymbolicLink()).map(async entry => {
+        const metadata = await fsp.lstat(path.join(dir, entry.name))
+        return {
+          name: entry.name,
+          path: path.relative(binding.snapshot.root, path.join(dir, entry.name)).replace(/\\/g, '/'),
+          isDirectory: entry.isDirectory(),
+          size: metadata.size,
+          mtimeMs: metadata.mtimeMs
+        }
       }))
       binding.assertCurrent()
       return reply.code(200).send(success({ root: binding.snapshot.root, bindingEpoch: binding.snapshot.epoch, contractVersion: 2, entries }))
-      }, 30_000)
     } catch (e: any) {
       return reply.code(200).send(fail(40400, e?.message ?? '无法读取远端目录'))
     }
@@ -201,47 +204,69 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
   })
 
   // GET /workspace/file/content
-  fastify.get<{ Querystring: { sessionId?: string; path: string } }>('/workspace/file/content', async (request, reply) => {
+  fastify.get<{ Querystring: { sessionId?: string; path: string; expectedRoot?: string; bindingEpoch?: string } }>('/workspace/file/content', async (request, reply) => {
     const tenantId = getTenantId(request)
     const sessionId = request.query.sessionId || 'default'
     const reqPath = request.query.path
     if (!reqPath) return reply.code(200).send(fail(40001, 'path is required'))
 
     try {
-      const safePath = workspaceManager.resolveSafePath({ tenantId, sessionId }, reqPath)
+      const expected = request.query.expectedRoot === undefined && request.query.bindingEpoch === undefined ? undefined : {
+        root: request.query.expectedRoot ?? '', epoch: request.query.bindingEpoch ?? ''
+      }
+      if (expected && (!path.isAbsolute(expected.root) || !expected.epoch || expected.epoch.length > 128)) throw new Error('Invalid workspace binding snapshot')
+      const binding = workspaceManager.bindingReadGuard({ tenantId, sessionId }, expected)
+      const safePath = workspaceManager.resolveSafePathForSnapshot({ tenantId, sessionId }, binding.snapshot, reqPath)
       if (!fs.existsSync(safePath)) return reply.code(200).send(fail(40400, 'File not found'))
       
-      const stat = fs.statSync(safePath)
+      const stat = await fsp.stat(safePath)
       const ext = path.extname(safePath).toLowerCase().slice(1)
       // Match the embedded service's NUL-byte probe while recognizing common
       // media formats whose first sample may contain no NUL byte at all.
       const sample = Buffer.alloc(Math.min(BINARY_SAMPLE_BYTES, stat.size))
-      if (sample.length > 0) {
-        const descriptor = fs.openSync(safePath, 'r')
-        try { fs.readSync(descriptor, sample, 0, sample.length, 0) } finally { fs.closeSync(descriptor) }
-      }
+      const sampleHandle = await fsp.open(safePath, 'r')
+      try {
+        if (sample.length > 0) await sampleHandle.read(sample, 0, sample.length, 0)
+      } finally { await sampleHandle.close() }
       const isBinary = sample.includes(0) || KNOWN_BINARY_EXTENSIONS.has(ext)
-      
+      const identity = { root: binding.snapshot.root, bindingEpoch: binding.snapshot.epoch }
+
       if (isBinary) {
         if (stat.size > MAX_BINARY_BYTES) {
-          return reply.code(200).send(success({ content: '', isBinary, totalSize: stat.size, tooLarge: true, truncated: false }))
+          binding.assertCurrent()
+          return reply.code(200).send(success({ content: '', isBinary, totalSize: stat.size, tooLarge: true, truncated: false, ...identity }))
         }
-        const content = fs.readFileSync(safePath, 'base64')
-        return reply.code(200).send(success({ content, isBinary, totalSize: stat.size, tooLarge: false, truncated: false }))
+        const content = await fsp.readFile(safePath, 'base64')
+        binding.assertCurrent()
+        return reply.code(200).send(success({ content, isBinary, totalSize: stat.size, tooLarge: false, truncated: false, ...identity }))
       } else {
         // 文本文件：只限制大小（500KB），不限制行数
-        let content = fs.readFileSync(safePath, 'utf-8')
-        const originalLength = content.length
-        const originalSize = stat.size
         const MAX_TEXT_SIZE = 500 * 1024 // 500KB
+        const originalSize = stat.size
+        let content: string
+        let originalLength: number
+        if (originalSize <= MAX_TEXT_SIZE) {
+          content = await fsp.readFile(safePath, 'utf-8')
+          originalLength = content.length
+        } else {
+          // Keep the historical 500,000 decoded-character contract without
+          // decoding the complete file merely to discard its suffix.
+          const readBytes = Math.min(originalSize, MAX_TEXT_SIZE * 4)
+          const buffer = Buffer.alloc(readBytes)
+          const contentHandle = await fsp.open(safePath, 'r')
+          try { await contentHandle.read(buffer, 0, readBytes, 0) } finally { await contentHandle.close() }
+          const decoded = new StringDecoder('utf8').end(buffer)
+          originalLength = originalSize === readBytes ? decoded.length : decoded.length + originalSize - readBytes
+          content = decoded
+        }
 
-        // 仅在超过 500KB 时截断，避免浏览器/网络传输过大
         const truncated = content.length > MAX_TEXT_SIZE
         if (truncated) {
           content = content.slice(0, MAX_TEXT_SIZE) + '\n\n... (截断，完整大小: ' + originalSize + ' 字节)'
         }
-        
-        return reply.code(200).send(success({ content, isBinary, totalSize: stat.size, tooLarge: false, originalLength, truncated }))
+
+        binding.assertCurrent()
+        return reply.code(200).send(success({ content, isBinary, totalSize: stat.size, tooLarge: false, originalLength, truncated, ...identity }))
       }
     } catch (e: any) {
       return reply.code(200).send(fail(50000, `Failed to read file: ${e.message}`))

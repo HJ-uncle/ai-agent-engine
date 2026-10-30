@@ -24,6 +24,8 @@ beforeEach(async () => {
   setSecurityMode(identity.tenantId, identity.sessionId, 'safe')
   // Replace only singleton ownership; path authorization and filesystem reads remain real.
   vi.spyOn(workspaceManager, 'resolveSafePath').mockImplementation((context, name) => manager.resolveSafePath(context, name))
+  vi.spyOn(workspaceManager, 'resolveSafePathForSnapshot').mockImplementation((context, snapshot, name) => manager.resolveSafePathForSnapshot(context, snapshot, name))
+  vi.spyOn(workspaceManager, 'bindingReadGuard').mockImplementation((context, expected) => manager.bindingReadGuard(context, expected))
   app = Fastify()
   app.decorateRequest('authContext', null)
   app.addHook('onRequest', async request => {

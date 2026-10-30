@@ -45,6 +45,22 @@ describe('WorkspaceManager asynchronous binding', () => {
 
     holder.release()
     await expect(pending).resolves.toMatchObject({ root: fs.realpathSync(project) })
-    expect(settled).toBe(true)
+  })
+
+  it('read guards do not wait for Git, but reject a binding changed during I/O', async () => {
+    const manager = new WorkspaceManager(root)
+    const ctx = { tenantId: 'tenant', sessionId: 'session' }
+    manager.bind(ctx, project)
+    const leaseFile = `${bindingsFile}.session-${createHash('sha256').update('tenant\u0000session').digest('hex')}.lock`
+    const guard = manager.bindingReadGuard(ctx)
+    const holder = acquireResourceLease(leaseFile, 'Git status', ctx)
+    try {
+      expect(guard.snapshot.root).toBe(fs.realpathSync(project))
+      expect(() => guard.assertCurrent()).not.toThrow()
+    } finally { holder.release() }
+    const other = path.join(fixture, 'other')
+    fs.mkdirSync(other)
+    manager.bindSnapshot(ctx, other)
+    expect(() => guard.assertCurrent()).toThrow('Workspace binding changed')
   })
 })

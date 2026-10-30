@@ -1,0 +1,7 @@
+# codemap 忽略规则（语法同 .gitignore）
+node_modules/
+dist/
+build/
+.git/
+.svn/
+__pycache__/

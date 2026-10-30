@@ -27,7 +27,8 @@ function hasEncodedPathTraversal(value: string): boolean {
 type CtxLike = Pick<AgentContext, 'tenantId' | 'sessionId' | 'workspacePaths' | 'cwd' | 'projectRoot' | 'scratchDir'>
 type Bindings = Map<string, string> & { epochs: Map<string, string> }
 export interface WorkspaceBindingSnapshot { root: string; epoch: string }
-export interface WorkspaceBindingLease { snapshot: Readonly<WorkspaceBindingSnapshot>; resource:{file:string;generation:string;pid:number}; assertCurrent(): void }
+export interface WorkspaceBindingGuard { snapshot: Readonly<WorkspaceBindingSnapshot>; assertCurrent(): void }
+export interface WorkspaceBindingLease extends WorkspaceBindingGuard { resource:{file:string;generation:string;pid:number} }
 
 export class WorkspaceManager {
   private readonly root: string
@@ -209,6 +210,44 @@ export class WorkspaceManager {
 
   private sessionLeaseFile(ctx: Pick<CtxLike, 'tenantId' | 'sessionId'>): string {
     return `${this.bindingsFile()}.session-${createHash('sha256').update(this.bindingKey(ctx)).digest('hex')}.lock`
+  }
+
+  /** Read-only listing and preview capture the same binding before and after
+   * their async I/O. They must not wait for a long Git scan of the same session;
+   * a concurrent rebind still invalidates the response instead of mixing roots. */
+  bindingReadGuard(ctx: CtxLike, expected?: WorkspaceBindingSnapshot): WorkspaceBindingGuard {
+    const snapshot = this.getBindingSnapshot(ctx)
+    if (expected && (expected.root !== snapshot.root || expected.epoch !== snapshot.epoch)) throw new Error('Workspace binding changed; refresh the task target before retrying')
+    return {
+      snapshot,
+      assertCurrent: () => {
+        const next = this.getBindingSnapshot(ctx)
+        if (snapshot.root !== next.root || snapshot.epoch !== next.epoch) throw new Error('Workspace binding changed during read; operation rejected')
+      }
+    }
+  }
+
+  /** Use an already captured binding for a read-only path lookup. This avoids
+   * repeatedly synchronously parsing workspace-bindings.json for one request. */
+  resolveSafePathForSnapshot(ctx: CtxLike, snapshot: Readonly<WorkspaceBindingSnapshot>, userPath: string): string {
+    this.assertContext(ctx)
+    if (typeof userPath !== 'string' || userPath.includes('\0') || hasEncodedPathTraversal(userPath)) throw new Error('Path is invalid')
+    const scratch = this.getScratchDirectory(ctx)
+    if (this.hasSymlinkComponent(this.root, scratch)) throw new Error('Workspace session root contains a symbolic link')
+    const resolved = path.resolve(snapshot.root, userPath)
+    if (getSecurityMode(ctx.tenantId, ctx.sessionId) !== 'safe') return resolved
+    const actual = canonicalFilePathSync(resolved)
+    const allowed = [snapshot.root, scratch]
+    if (!this.isAuthenticated()) {
+      if (ctx.projectRoot) allowed.push(path.resolve(ctx.projectRoot))
+      allowed.push(...(ctx.workspacePaths ?? []).map(value => path.resolve(value)))
+    }
+    const contained = [...new Set(allowed)].some(base => {
+      const actualBase = canonicalFilePathSync(base)
+      return this.hasAllowedPathSpelling(base, resolved, actualBase, actual) && this.isContained(actualBase, actual)
+    })
+    if (!contained) throw new Error(`Path "${userPath}" is outside any bound workspace`)
+    return resolved
   }
 
   /** Hold the selection through asynchronous side effects. CAS also guards
@@ -420,23 +459,7 @@ export class WorkspaceManager {
   }
 
   resolveSafePath(ctx: CtxLike, userPath: string): string {
-    this.assertContext(ctx)
-    if (typeof userPath !== 'string' || userPath.includes('\0') || hasEncodedPathTraversal(userPath)) throw new Error('Path is invalid')
-    const scratch = this.getScratchDirectory(ctx)
-    if (this.hasSymlinkComponent(this.root, scratch)) throw new Error('Workspace session root contains a symbolic link')
-    const resolved = path.resolve(this.getWorkingDirectory(ctx), userPath)
-    if (getSecurityMode(ctx.tenantId, ctx.sessionId) !== 'safe') return resolved
-    // Writers recheck the canonical path after locking. Windows 8.3 and long
-    // names can denote the same root despite differing lexical prefixes. Keep
-    // missing suffixes when canonicalizing: their nearest existing ancestor
-    // alone must never grant access to adjacent, not-yet-created directories.
-    const actual = canonicalFilePathSync(resolved)
-    const contained = this.getPaths(ctx).some(base => {
-      const actualBase = canonicalFilePathSync(base)
-      return this.hasAllowedPathSpelling(base, resolved, actualBase, actual) && this.isContained(actualBase, actual)
-    })
-    if (!contained) throw new Error(`Path "${userPath}" is outside any bound workspace`)
-    return resolved
+    return this.resolveSafePathForSnapshot(ctx, this.getBindingSnapshot(ctx), userPath)
   }
 
   private isContained(base: string, target: string): boolean {

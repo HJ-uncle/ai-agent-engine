@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, cpSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createBuildManifest } from '../src/runtime/build-identity.js'
@@ -27,7 +27,13 @@ copyFileSync(path.join(root, 'src/terminal/workspace-shell.mjs'), shellAsset)
 // Git jobs require the build-time packaged supervisor; tsc does not copy assets.
 const supervisorAssets=path.join(root,'dist/workspace/assets')
 mkdirSync(supervisorAssets,{recursive:true})
-for(const name of ['repository-supervisor.exe','repository-supervisor.sha256','repository-supervisor.cs'])copyFileSync(path.join(root,'src/workspace/assets',name),path.join(supervisorAssets,name))
+for(const name of ['repository-supervisor.exe','repository-supervisor.sha256','repository-supervisor.cs']) {
+  const source = path.join(root, 'src/workspace/assets', name)
+  const destination = path.join(supervisorAssets, name)
+  // An existing desktop may hold the audited native helper open. Rebuilding
+  // identical bytes must not replace its inode or require stopping that app.
+  if (!existsSync(destination) || !readFileSync(destination).equals(readFileSync(source))) copyFileSync(source, destination)
+}
 // Skill Markdown and references are runtime assets, included under dist/**.
 cpSync(path.join(root, 'src/skills/builtin'), path.join(root, 'dist/skills/builtin'), { recursive: true })
 const after = createBuildManifest(root)
