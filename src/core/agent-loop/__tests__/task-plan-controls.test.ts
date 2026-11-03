@@ -172,4 +172,35 @@ describe('built-in task-plan transport', () => {
     expect(f.requests[0].options?.systemPrompt).toContain('不要将读取失败当作空计划')
     expect(f.requests[0].options?.systemPrompt).not.toContain('"plan":[]')
   })
+
+  it('an oversized saved plan does not recommend an unavailable todo_list even if has() claims it exists', async () => {
+    const f = fixture([])
+    storage.getPlan.mockResolvedValue({
+      plan: [{ id: 'step-1', step: 'x'.repeat(40_001), status: 'in_progress' }], revision: 1, updatedAt: 2,
+    })
+    await f.run()
+    const prompt = f.requests[0].options?.systemPrompt ?? ''
+    expect(prompt).toContain('当前会话的旧计划超过可恢复范围。不要猜测或覆盖')
+    expect(prompt).toContain('保留已保存的计划')
+    expect(prompt).toContain('仍可继续不依赖改写计划的已授权工作')
+    expect(prompt).not.toContain('先读取 todo_list')
+    expect(prompt).not.toContain('x'.repeat(40_001))
+    expect(f.ctx.tools.execute).not.toHaveBeenCalled()
+  })
+
+  it('an oversized saved plan can direct the model to todo_list when it is actually provided', async () => {
+    const f = fixture([])
+    const existing = f.ctx.tools.list()
+    f.ctx.tools.list = () => [...existing, {
+      name: 'todo_list', description: 'Read the saved plan', parameters: { type: 'object', properties: {} },
+    }]
+    storage.getPlan.mockResolvedValue({
+      plan: [{ id: 'step-1', step: 'x'.repeat(40_001), status: 'in_progress' }], revision: 1, updatedAt: 2,
+    })
+    await f.run()
+    const prompt = f.requests[0].options?.systemPrompt ?? ''
+    expect(prompt).toContain('不要猜测或覆盖；先读取 todo_list 核对完整清单。')
+    expect(prompt).not.toContain('本轮未提供完整计划读取工具')
+    expect(f.ctx.tools.execute).not.toHaveBeenCalled()
+  })
 })

@@ -144,7 +144,7 @@ export class BrowserBridge {
   private registration(client: Client) {
     return { clientId: client.id, clientToken: client.token, sessionId: client.sessionId, protocolVersion: client.protocolVersion,
       pollTimeoutMs: this.pollTimeoutMs, leaseMs: this.leaseMs,
-      capabilities: { requestWatch: true, ...(client.protocolVersion === 2 ? { executionIdentity: 1, resultMetadata: 1 } : {}) } }
+      capabilities: { requestWatch: true, resultMetadata: 1, ...(client.protocolVersion === 2 ? { executionIdentity: 1 } : {}) } }
   }
 
   private registerOwned(authority: BrowserHostAuthority, execution: Readonly<BrowserExecutionIdentity>, hostId: string) {

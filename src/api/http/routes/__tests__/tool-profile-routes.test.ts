@@ -28,17 +28,25 @@ beforeEach(async () => {
 afterEach(async () => { await app.close() })
 
 describe.each(['/tools', '/system-tools'])('%s tool-profile routing', (endpoint) => {
+  it('preserves MCP provenance and output schema instead of labeling it builtin', async () => {
+    const outputSchema = { type: 'object', properties: { rows: { type: 'array', items: { type: 'string' } } } }
+    fixtures.factory.mockResolvedValueOnce({ registry: { list: () => [{ name: 'mcp_docs_read', source: 'mcp', description: 'read rows', parameters: { type: 'object' }, outputSchema }] } })
+    const response = await app.inject({ method: 'GET', url: endpoint })
+    expect(response.statusCode).toBe(200)
+    expect(response.json().data).toEqual([expect.objectContaining({ name: 'mcp_docs_read', source: 'mcp', outputSchema })])
+  })
+
   it('keeps headerless clients in general even when the query asks for code', async () => {
     const response = await app.inject({ method: 'GET', url: `${endpoint}?toolProfile=code` })
     expect(response.statusCode).toBe(200)
-    expect(fixtures.factory).toHaveBeenCalledWith({ toolProfile: 'general', allowedTools: null, allowedSkills: null, allowedMcpServers: null, workspaceRoot: undefined })
+    expect(fixtures.factory).toHaveBeenCalledWith({ toolProfile: 'general', allowedTools: null, allowedSkills: null, allowedMcpServers: null, workspaceRoot: undefined, toolExposure: 'catalogue' })
     expect(response.json().data.map((tool: { name: string }) => tool.name)).toContain('agent_list')
   })
 
   it('passes the code header to the factory and returns its effective list', async () => {
     const response = await app.inject({ method: 'GET', url: endpoint, headers: { 'X-Aether-Tool-Profile': 'code' } })
     expect(response.statusCode).toBe(200)
-    expect(fixtures.factory).toHaveBeenCalledWith({ toolProfile: 'code', allowedTools: null, allowedSkills: null, allowedMcpServers: null, workspaceRoot: undefined })
+    expect(fixtures.factory).toHaveBeenCalledWith({ toolProfile: 'code', allowedTools: null, allowedSkills: null, allowedMcpServers: null, workspaceRoot: undefined, toolExposure: 'catalogue' })
     expect(response.json().data.map((tool: { name: string }) => tool.name)).toEqual(endpoint === '/tools' ? ['read_file', 'list_skills'] : ['read_file'])
   })
 
@@ -46,7 +54,7 @@ describe.each(['/tools', '/system-tools'])('%s tool-profile routing', (endpoint)
     await app.inject({ method: 'GET', url: endpoint, headers: { 'x-aether-tool-profile': 'code' } })
     const response = await app.inject({ method: 'GET', url: endpoint, headers: { 'x-aether-tool-profile': 'general' } })
     expect(response.statusCode).toBe(200)
-    expect(fixtures.factory).toHaveBeenLastCalledWith({ toolProfile: 'general', allowedTools: null, allowedSkills: null, allowedMcpServers: null, workspaceRoot: undefined })
+    expect(fixtures.factory).toHaveBeenLastCalledWith({ toolProfile: 'general', allowedTools: null, allowedSkills: null, allowedMcpServers: null, workspaceRoot: undefined, toolExposure: 'catalogue' })
     expect(response.json().data.map((tool: { name: string }) => tool.name)).toContain('agent_list')
   })
 
@@ -64,6 +72,21 @@ describe.each(['/tools', '/system-tools'])('%s tool-profile routing', (endpoint)
     expect(response.statusCode).toBe(200)
     expect(fixtures.factory).toHaveBeenCalledWith({ toolProfile: 'code', allowedTools: ['agent_list', 'read_file'], allowedSkills: ['fixture-skill'], allowedMcpServers: ['project-mcp'], workspaceRoot: undefined })
     expect(response.json().data.map((tool: { name: string }) => tool.name)).not.toContain('agent_list')
+  })
+
+  it('marks optional entries without removing them from the configuration catalogue', async () => {
+    const response = await app.inject({ method: 'GET', url: endpoint })
+    expect(response.json().data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'read_file', defaultEnabled: true }),
+      expect.objectContaining({ name: 'agent_list', defaultEnabled: false }),
+    ]))
+    expect(fixtures.factory).toHaveBeenLastCalledWith(expect.objectContaining({ toolExposure: 'catalogue' }))
+  })
+
+  it('uses execution selection for a stored Agent even when a query asks for catalogue exposure', async () => {
+    fixtures.getAgent.mockResolvedValue({ allowedTools: ['agent_list'], skills: [], mcpServers: [] })
+    await app.inject({ method: 'GET', url: `${endpoint}?agentId=fixture&toolExposure=catalogue` })
+    expect(fixtures.factory).toHaveBeenLastCalledWith({ toolProfile: 'general', allowedTools: ['agent_list'], allowedSkills: [], allowedMcpServers: [], workspaceRoot: undefined })
   })
   it('authorizes the requested project directory and passes its canonical root without changing profile', async () => {
     fixtures.projectDirectory.mockReturnValue('/canonical/project')

@@ -31,6 +31,8 @@ import { browserOutputFramePayload, browserOutputPresentation } from '../utils/b
 import { DEFAULT_PUBLICATION_MAX_BYTES } from '../stream-pipeline/publication-queue.js'
 import { imageFileVersion, imageToolFramePayload, imageToolPayload, MAX_NATIVE_IMAGE_BASE64_CHARS } from '../utils/multimodal-context.js'
 import { captureFileEvidence, clearedToolModelContent, isClearedToolMessage, TOOL_FILE_EVIDENCE_KEY, CLEARED_TOOL_EVIDENCE_KEY, CLEARED_TOOL_RESULT } from '../utils/tool-evidence.js'
+import { buildRuntimeCapabilitiesPrompt } from '../runtime-capabilities.js'
+import { buildExecutionProtocol } from '../execution-protocol.js'
 
 const OUTPUT_CONTINUATION_PROMPT = 'The previous model response reached its single-response output limit. Continue the same user task from the retained partial response and history, starting exactly where the response stopped. Do not repeat text already emitted, restart completed work, or repeat executed tools. Use tools only for remaining work; finish normally when the original task is complete.'
 
@@ -287,9 +289,13 @@ export class ReActStrategy implements LoopStrategy {
       }
     }
     const output = String(result.output)
+    const fileChanges = [...(result.change ? [{ ...result.change, toolCallId: call.id }] : []),
+      ...(result.changes ?? []).map(change => ({ ...change,
+        toolCallId: typeof change.toolCallId === 'string' ? change.toolCallId : call.id }))]
     const metadata: Record<string, unknown> = { ...result.metadata, ...(internalPlan ? { toolName: call.name } : {}), status: result.status, success: result.success, error: result.error,
       durationMs: result.durationMs, rootRunId: ctx.rootRunId, turnId: ctx.turnId,
-      ...(result.change ? { change: { ...result.change, toolCallId: call.id } } : {}) }
+      ...(result.change ? { change: { ...result.change, toolCallId: call.id } } : {}),
+      ...(fileChanges.length > 1 || result.changes ? { changes: fileChanges } : {}) }
     // Reserved evidence fields are minted here, never accepted from extensions.
     delete metadata[CLEARED_TOOL_EVIDENCE_KEY]
     delete metadata[TOOL_FILE_EVIDENCE_KEY]
@@ -360,7 +366,7 @@ export class ReActStrategy implements LoopStrategy {
     }
     if (planSnapshot) yield `\x00__todo__${JSON.stringify({ todos: planSnapshot })}`
     // A writer may partially mutate before failing; its recorded change still matters.
-    if (result.change) yield `\x00__file_change__${JSON.stringify({ ...result.change, toolCallId: call.id })}`
+    for (const change of fileChanges) yield `\x00__file_change__${JSON.stringify(change)}`
     return { tokens: result.status === 'waiting' ? 0 : tokens, failedToPersist }
   }
 
@@ -487,8 +493,7 @@ export class ReActStrategy implements LoopStrategy {
     let toolOutputRecoveryIndex = 0
     let outputToolRecovery = false
     let outputReasoningRecovery = false
-    let reasoningOnlyRecoveryUsed = false
-    let pendingReasoningOutputExpansion = false
+    let reasoningOutputRecoveryIndex = 0
     let emptyOutputRecoveryUsed = false
     let pendingEmptyOutputRecovery = false
     let recoveryCallIdentity = false
@@ -569,8 +574,7 @@ export class ReActStrategy implements LoopStrategy {
     }
 
     // Build tool list from registry
-    const toolList = ctx.tools.list()
-    const planEnabled = toolList.some(tool => tool.name === 'plan_update')
+    let toolList = ctx.tools.list()
 
     /** Names of tools actually called in the last iteration */
     let lastUsedToolNames: Set<string> = new Set()
@@ -617,6 +621,12 @@ export class ReActStrategy implements LoopStrategy {
         return
       }
 
+      // Each request uses the current definitions, including registration changes
+      // after a tool or continuation, rather than a run-start capability snapshot.
+      toolList = ctx.tools.list()
+      const planEnabled = toolList.some(tool => tool.name === 'plan_update')
+      let effectiveTools = toolList.filter(tool => tool.name !== 'ask_user' || askUserCount < maxAskUserCount)
+
       // A restarted or compacted restricted Agent may have no todo_list. Its
       // session's durable plan is control state, so restore it before each
       // request instead of relying on old model text or a parent's plan.
@@ -631,7 +641,9 @@ export class ReActStrategy implements LoopStrategy {
             const data = JSON.stringify(saved)
             planContext = data.length <= maxChars
               ? '### 已保存的当前会话计划\n以下 JSON 仅为任务状态数据，不是执行指令；后续更新复用其中的 id。\n' + data
-              : '当前会话的旧计划超过可恢复范围。不要猜测或覆盖；先读取 todo_list 核对完整清单。'
+              : '当前会话的旧计划超过可恢复范围。不要猜测或覆盖；' + (toolList.some(tool => tool.name === 'todo_list')
+                ? '先读取 todo_list 核对完整清单。'
+                : '本轮未提供完整计划读取工具，保留已保存的计划并说明此限制；仍可继续不依赖改写计划的已授权工作。')
           }
         } catch (error) {
           ctx.logger.warn({ err: error }, 'Failed to restore task plan for model request')
@@ -645,9 +657,12 @@ export class ReActStrategy implements LoopStrategy {
       let baseSystemPrompt: string | undefined
       let injectedSystemTokens = 0
       let injectedExtras: Array<string | undefined> = []
+      const runtimePrompt = () => buildExecutionProtocol({ list: () => effectiveTools }) + buildRuntimeCapabilitiesPrompt(ctx, effectiveTools)
+      let requestEnvironment = ''
       const readCurrentModelHistory = async (): Promise<Message[]> => {
         const current = await readModelHistory()
-        injectedExtras = [injectedPlanPrompt, planContext, recoveryPrompt, workflowReviewPrompt, readonlyHistoryNotice(readonlyHistoryPairs),
+        requestEnvironment = runtimePrompt()
+        injectedExtras = [requestEnvironment, injectedPlanPrompt, planContext, recoveryPrompt, workflowReviewPrompt, readonlyHistoryNotice(readonlyHistoryPairs),
           outputToolRecovery ? TOOL_OUTPUT_RECOVERY_PROMPT : undefined,
           outputReasoningRecovery ? REASONING_OUTPUT_RECOVERY_PROMPT : undefined,
           pendingEmptyOutputRecovery ? EMPTY_OUTPUT_RECOVERY_PROMPT : undefined,
@@ -666,7 +681,6 @@ export class ReActStrategy implements LoopStrategy {
         ? maintainSQLiteReActHistory(ctx.sqliteDelivery, ctx, action)
         : ctx.jsonlDelivery ? maintainJSONLReActHistory(ctx.jsonlDelivery, ctx, action) : action()
       let messages = await readCurrentModelHistory()
-      let effectiveTools = toolList.filter(tool => tool.name !== 'ask_user' || askUserCount < maxAskUserCount)
       const configuredCompressRatio = getOSMCompressRatio(
         parseFloat(process.env.COMPRESS_THRESHOLD_RATIO ?? '0.92'))
       // A malformed or >100% runtime setting must not disable pre-request
@@ -678,18 +692,17 @@ export class ReActStrategy implements LoopStrategy {
       // not change this policy or the model's capability metadata.
       const effectiveBudget = effectiveContextWindow(ctx.modelCaps?.contextWindow,
         unboundedCode ? undefined : ctx.tokenBudget)
-      // Code mode derives its dispatch cap from the remaining context later,
-      // instead of stopping at the old fixed 8192-token output cap.
-      let maxOutputTokens = unboundedCode
-        ? undefined
-        : this.options.maxOutputTokens ?? Math.min(8192, Math.max(256, Math.floor(effectiveBudget / 4)))
-      // Admission headroom triggers compaction early; the actual Code output
-      // allowance is all context capacity left after the admitted input.
+      // All profiles use the remaining context unless the caller explicitly
+      // limits output. Tool permissions and run budgets are independent of
+      // this per-request allowance; adapters still enforce provider limits.
+      let maxOutputTokens = this.options.maxOutputTokens
+      // This headroom triggers compaction early, not an output ceiling. Do not
+      // reserve the entire remaining context for spend/finalization admission.
       const outputReservation = maxOutputTokens ?? (Number.isFinite(effectiveBudget)
         ? Math.min(8192, Math.max(256, Math.floor(effectiveBudget * 0.05))) : 0)
       const fixedInputTokens = estimateRequestInput(messages.filter(message => message.role === 'system'
         && !(ctx.history.retainsArchive && message.metadata?.isCompactSummary)), baseSystemPrompt, effectiveTools)
-      if ((!unboundedCode && (!Number.isFinite(maxOutputTokens) || maxOutputTokens! <= 0))
+      if ((maxOutputTokens !== undefined && (!Number.isFinite(maxOutputTokens) || maxOutputTokens <= 0))
         || (Number.isFinite(effectiveBudget) && fixedInputTokens + outputReservation > effectiveBudget)) {
         await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'context_limit',
           partialOutput: emittedOutput || undefined,
@@ -742,7 +755,7 @@ export class ReActStrategy implements LoopStrategy {
         }
         try {
           const summarize = buildCompactSummarizeFn(summarizeLlm, { signal: ctx.signal, onRequestAttempt: ctx.onRequestAttempt,
-            contextWindow: Math.min(effectiveBudget, summarizeWindow ?? Infinity), maxOutputTokens: unboundedCode ? undefined : Math.min(4096, maxOutputTokens!),
+            contextWindow: Math.min(effectiveBudget, summarizeWindow ?? Infinity), maxOutputTokens: unboundedCode ? undefined : Math.min(4096, maxOutputTokens ?? 4096),
             archiveAvailable: ctx.history.retainsArchive === true })
           const beforeCompression = rawTokens
           // Retained exchanges must fit alongside system/tool overhead and the
@@ -809,7 +822,7 @@ export class ReActStrategy implements LoopStrategy {
       // One more exploration request must leave enough for a summary, including likely tool-result growth.
       const summaryReserve = unboundedCode ? 0 : estimateRequestInput(messages, systemPrompt, []) + 4096 + 8192
       ctx.finalizationReserveTokens = unboundedCode ? 0 : summaryReserve + 8192
-      if (!unboundedCode && ctx.requestBudget && !ctx.requestBudget.canAfford(requestInputTokenEstimate + maxOutputTokens! + summaryReserve)) {
+      if (!unboundedCode && ctx.requestBudget && !ctx.requestBudget.canAfford(requestInputTokenEstimate + outputReservation + summaryReserve)) {
         finalizationReason = 'budget'
       } else if (this.options.finalizeOnLimit && iteration > 0 && iteration === maxIterations - 1) {
         finalizationReason = 'max_steps'
@@ -822,10 +835,10 @@ export class ReActStrategy implements LoopStrategy {
       if (finalizationReason) {
         effectiveTools = []
         // Evidence-only finalization must not contain an exploration cadence hint.
-        const finalExtras = injectedExtras.filter(extra => extra && extra !== workflowReviewPrompt).join('\n\n')
+        const finalExtras = [runtimePrompt(), ...injectedExtras.filter(extra => extra && extra !== requestEnvironment && extra !== workflowReviewPrompt)].join('\n\n')
         systemPrompt = [this.options.systemPrompt, finalExtras, FINALIZATION_PROMPT].filter(Boolean).join('\n\n')
         injectedSystemTokens = estimateTokens(finalExtras) + estimateTokens(FINALIZATION_PROMPT)
-        if (!unboundedCode) maxOutputTokens = Math.min(maxOutputTokens!, 4096)
+        if (!unboundedCode) maxOutputTokens = Math.min(maxOutputTokens ?? Infinity, 4096)
         requestInputTokenEstimate = estimateRequestInput(messages, systemPrompt, [])
         if (!unboundedCode && ctx.requestBudget && !ctx.requestBudget.canAfford(requestInputTokenEstimate + maxOutputTokens!)) {
           messages = [...messages.filter(message => message.role === 'system'), ...finalizationMessages(messages)]
@@ -841,7 +854,7 @@ export class ReActStrategy implements LoopStrategy {
         yield '\n\n' + finalizationNotice + '\n\n'
       }
 
-      const finalOutputReservation = unboundedCode ? outputReservation : (maxOutputTokens ?? 0)
+      const finalOutputReservation = maxOutputTokens ?? outputReservation
       const exceedsContext = Number.isFinite(effectiveBudget)
         && requestInputTokenEstimate + finalOutputReservation > effectiveBudget
       if (exceedsContext) {
@@ -853,21 +866,18 @@ export class ReActStrategy implements LoopStrategy {
       }
 
       // A configured context window bounds input plus completion (including
-      // reasoning). Code mode gets all remaining capacity instead of a fixed
-      // output cap; omitting this field would let compatible gateways use
+      // reasoning). Every profile gets remaining capacity unless explicitly
+      // capped; omitting this field would let compatible gateways use
       // their 262K/393K protocol maxima despite a configured 100K window.
-      let dispatchMaxOutputTokens = unboundedCode && Number.isFinite(effectiveBudget)
-        ? Math.max(1, Math.floor(effectiveBudget - requestInputTokenEstimate)) : maxOutputTokens
-      // Expand only the existing private-only regeneration after ordinary
-      // admission/finalization. Fit remaining context instead of rejecting a
-      // request that still has room; explicit output/spend limits stay intact.
-      if (pendingReasoningOutputExpansion && !unboundedCode && !finalizationReason
-        && this.options.maxOutputTokens === undefined
-        && (!ctx.requestBudget || ctx.requestBudget.limit === Infinity)) {
-        const recoveryCapacity = Math.min(16_384, Math.max(256, Math.floor(effectiveBudget / 4)))
-        dispatchMaxOutputTokens = Number.isFinite(effectiveBudget)
-          ? Math.min(recoveryCapacity, Math.max(1, Math.floor(effectiveBudget - requestInputTokenEstimate)))
-          : recoveryCapacity
+      let dispatchMaxOutputTokens = maxOutputTokens ?? (Number.isFinite(effectiveBudget)
+        ? Math.max(1, Math.floor(effectiveBudget - requestInputTokenEstimate)) : undefined)
+      if (ctx.requestBudget && Number.isFinite(ctx.requestBudget.limit)) {
+        // Preserve the existing general-profile finalization reserve. Reserving
+        // a physical request must fit the explicitly configured cumulative
+        // budget even when the context window could hold more output.
+        const protectedSummary = !unboundedCode && !finalizationReason ? summaryReserve : 0
+        const spendCapacity = Math.floor(ctx.requestBudget.remaining - requestInputTokenEstimate - protectedSummary)
+        dispatchMaxOutputTokens = Math.min(dispatchMaxOutputTokens ?? Infinity, Math.max(1, spendCapacity))
       }
 
       ctx.logger.debug({ iteration, toolCount: effectiveTools.length, finalizationReason }, 'Preparing model request')
@@ -875,7 +885,7 @@ export class ReActStrategy implements LoopStrategy {
       const llmOptions: LLMAdapterOptions = {
         model: this.llm.model,
         maxTokens: dispatchMaxOutputTokens,
-        unboundedOutput: unboundedCode,
+        unboundedOutput: maxOutputTokens === undefined,
         contextWindow: Number.isFinite(effectiveBudget) ? effectiveBudget : undefined,
         requestInputTokenEstimate,
         onRequestAttempt: ctx.sqliteDelivery || ctx.jsonlDelivery ? async event => {
@@ -1036,7 +1046,6 @@ export class ReActStrategy implements LoopStrategy {
           'Readonly recovery request dispatch')
         }
         toolProgress.markWorkflowReviewDispatched()
-        pendingReasoningOutputExpansion = false
         pendingEmptyOutputRecovery = false
         if (ctx.sqliteDelivery) await assertSQLiteReActDispatch(ctx.sqliteDelivery, ctx)
         else if (ctx.jsonlDelivery) await assertJSONLReActDispatch(ctx.jsonlDelivery, ctx)
@@ -1399,18 +1408,19 @@ export class ReActStrategy implements LoopStrategy {
 
       if (streamCompleted && receivedOutputLimitTerminal && response.finishReason === 'length'
         && response.toolCalls.length === 0 && !String(response.content).trim() && response.reasoningContent?.trim()
-        && !finalizationReason && iteration + 1 < maxIterations && !reasoningOnlyRecoveryUsed) {
-        // One safe regeneration may recover a model that exhausted capacity in
-        // private reasoning. Never turn that reasoning into public continuation.
-        try { await persistPartial('failed', 'output_limit', undefined, 1, 'reasoning') }
+        && !finalizationReason && iteration + 1 < maxIterations) {
+        // Provider output limits can still truncate private reasoning after
+        // context admission. Regenerate through the ordinary loop so every
+        // attempt obeys cancellation, iteration and physical-spend limits.
+        // Private reasoning never becomes a public continuation or model input.
+        reasoningOutputRecoveryIndex++
+        try { await persistPartial('failed', 'output_limit', undefined, reasoningOutputRecoveryIndex, 'reasoning') }
         catch (error) {
           ctx.logger.error({ err: error }, 'Failed to persist reasoning output recovery segment')
           await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'runtime_error', partialOutput: emittedOutput || undefined,
             error: { code: 'PERSISTENCE_ERROR', message: 'Interrupted model reasoning could not be persisted; no recovery request was sent', retryable: false } })
           return
         }
-        reasoningOnlyRecoveryUsed = true
-        pendingReasoningOutputExpansion = true
         outputReasoningRecovery = true
         outputContinuation = undefined
         outputToolRecovery = false
@@ -1597,10 +1607,9 @@ export class ReActStrategy implements LoopStrategy {
           yield '\n\n[Loop detected or tools failed repeatedly. Stopping to prevent token waste.]'
           return
         }
-        // Only a fully persisted executable exchange is progress. Different
-        // private fragments or another length response cannot reopen recovery.
+        // A fully persisted executable exchange clears the request-local hint.
+        // Reasoning recovery itself uses the normal loop constraints.
         if (toolProgress.hasCompletedProgress()) {
-          reasoningOnlyRecoveryUsed = false
           outputReasoningRecovery = false
         }
         continue

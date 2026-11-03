@@ -16,6 +16,7 @@ import { skillsRegistry, buildSkillsSystemPrompt } from '../../skills/index.js'
 import { resolveOSMMode, OSM_MODE_CONFIG } from '../../core/osm.js'
 import { CODE_AGENT_HANDOFF_PROMPT } from '../../core/code-agent-prompt.js'
 import { normalizeAllowedTools } from '../tool-profile.js'
+import { REMOVED_TOOL_NAMES } from '../tool-exposure.js'
 import { throwIfAborted } from '../../core/utils/abort.js'
 import { ToolRegistry } from '../../core/tool-registry/index.js'
 import { trustBuiltinTool } from '../../security/tool-policy.js'
@@ -70,8 +71,8 @@ function loadRoleTemplate(role: SubagentRole): string | null {
 
 /** Only known read operations belong to research roles; arbitrary MCP/script tools may mutate external state. */
 const RESEARCH_TOOLS = new Set([
-  'read_file', 'smart_read', 'list_files', 'glob', 'glob_search', 'grep', 'grep_search',
-  'list_skills', 'get_skill', 'codegraph', 'get_current_context', 'search_history',
+  'read_file', 'smart_read', 'list_files', 'glob', 'grep',
+  'list_skills', 'get_skill', 'codegraph', 'search_history', 'workbench_context',
   'browser_tabs', 'browser_snapshot', 'browser_screenshot', 'browser_console', 'browser_network', 'browser_network_request',
   'todo_list', 'todo_create', 'todo_update', 'todo_delete', 'plan_update',
   'recall', 'search_memory', 'list_memories',
@@ -81,9 +82,8 @@ const RESEARCH_TOOLS = new Set([
 const RECURSIVE_TOOLS = new Set(['subagent', 'subagent_start', 'spawn_agent', 'start_agent'])
 
 function readonlyChildTool(parent: IToolRegistry, name: string): boolean {
-  // Numerical reviews need the calculator, but a same-named extension must
-  // not inherit the builtin implementation's permission to run read-only.
-  return RESEARCH_TOOLS.has(name) || (name === officeEnvironmentTool.name || name === officeInspectTool.name || name === 'calculate' || name === 'get_time')
+  // Office inspection must retain the trusted implementation's readonly policy.
+  return RESEARCH_TOOLS.has(name) || (name === officeEnvironmentTool.name || name === officeInspectTool.name)
     && parent.executionMode?.(name, {}) === 'readonly'
 }
 
@@ -92,7 +92,7 @@ export function createSubagentToolRegistry(parent: IToolRegistry, readOnly: bool
   // builtin. Never delegate its reserved identity to a parent extension.
   const internalPlan = new ToolRegistry()
   for (const tool of todoTools) if (tool.name === 'plan_update') internalPlan.register(trustBuiltinTool(tool))
-  const catalog = () => [...parent.list().filter(tool => tool.name !== 'plan_update'), ...internalPlan.list()]
+  const catalog = () => [...parent.list().filter(tool => tool.name !== 'plan_update' && !REMOVED_TOOL_NAMES.has(tool.name)), ...internalPlan.list()]
   // list() contains public definitions, so implementation identity is unavailable;
   // only the parent's trusted readonly policy admits this diagnostic to research.
   const names = new Set(catalog().filter((tool) => !RECURSIVE_TOOLS.has(tool.name) && tool.name !== 'ask_user'
@@ -129,7 +129,7 @@ export const subagentTool: Tool = {
     type: 'object',
     properties: {
       task: { type: 'string' },
-      agentId: { type: 'string', description: '自定义 Agent 的精确 ID，可通过 agent_list/agent_get 查询。继承该 Agent 的模型、系统提示及资源绑定。' },
+      agentId: { type: 'string', description: '自定义 Agent 的精确 ID；仅使用用户明确选择或当前已注册发现工具返回的 ID。agent_list/agent_get 只在部分模式提供；未获得真实 ID 时省略，不猜测。继承该 Agent 的模型、系统提示及资源绑定。' },
       resumeRunId: { type: 'string', description: '继续已完成子代理的 runId；复用同一 childSession 历史，不能并发续跑或改变原角色/权限。' },
       description: { type: 'string', description: '简短任务标题' },
       systemPrompt: { type: 'string' },
@@ -277,6 +277,7 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
         ? undefined
         : Number.isFinite(subagentWindow) ? subagentWindow : undefined
       const child = createAgentContext({
+        clientCapabilities: ctx.clientCapabilities,
         executionOwner,
         browserAuthority: ctx.browserAuthority,
         browserPrincipal: ctx.browserPrincipal,
@@ -322,7 +323,7 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
           reasoningEffort: resolved.reasoningEffort,
           thinkingConfig: resolved.thinkingConfig,
           responseThinkingField: resolved.responseThinkingField,
-          systemPrompt: [systemPrompt, resourcePrompt, '项目根目录：' + child.projectRoot, '当前工作目录：' + child.cwd, projectContext].filter(Boolean).join('\n\n'),
+          systemPrompt: [systemPrompt, resourcePrompt, projectContext].filter(Boolean).join('\n\n'),
         })
         // run accepts one content value. Status, tools and usage travel through the observer, never text parsing.
         for await (const _chunk of strategy.run(task, child)) { /* parent prose remains separate from child events */ }

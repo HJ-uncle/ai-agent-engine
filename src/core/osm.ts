@@ -23,6 +23,8 @@
 
 import type { Logger } from 'pino'
 import { logger as defaultLogger } from '../observability/index.js'
+import { normalizeToolName } from '../tools/tool-profile.js'
+import { isDefaultTool, OPTIONAL_TOOL_EXPOSURES } from '../tools/tool-exposure.js'
 
 // ── 模式枚举 ─────────────────────────────────────────────────────────────
 export type OSMMode = 'off' | 'balanced' | 'methodology' | 'max'
@@ -46,8 +48,6 @@ export const OSM_CORE_TOOLS: ReadonlySet<string> = new Set([
   'ask_user',
   // 记忆
   'remember', 'recall', 'search_memory',
-  // 获取上下文
-  'get_current_context',
   // 技能管理
   'list_skills', 'get_skill', 'run_skill_script',
   // 搜索
@@ -64,8 +64,6 @@ export const OSM_ONLY_TOOLS: ReadonlySet<string> = new Set([
   'run_command',
   // 网络访问
   'web_fetch', 'http_request',
-  // 包管理（系统修改）
-  'install_package', 'list_packages',
   // 子代理（资源密集）
   'subagent',
   // 定时任务
@@ -318,8 +316,8 @@ export function isOsmSkillVisible(skillName: string, mode?: OSMMode): boolean {
 
 // ── 启动期自检 ────────────────────────────────────────────────────────────
 //   1. CORE ∩ ONLY = ∅（一个工具不能既是"基础"又是"增强"）
-//   2. CORE 集合内的工具名在实际 registry 中必须全部存在，
-//      否则 OFF 模式下 Agent 会静默失去能力。
+//   2. CORE 中默认提供的能力必须存在；兼容别名按规范名称核对，
+//      默认关闭的可选工具缺席不代表能力配置损坏。
 // 失败时只打 warn，不抛错，因为部分工具可能在运行时按需注册（如 inlineSkills）。
 
 export interface ToolRegistryHandle {
@@ -330,7 +328,7 @@ export interface ToolRegistryHandle {
 export interface OSMSelfCheckResult {
   /** 同时出现在 CORE 和 ONLY 中的工具名（配置互斥违规） */
   disjointViolations: string[]
-  /** CORE 声明但 registry 没注册的工具名（OFF 模式会静默失去能力） */
+  /** CORE 中默认提供但 registry 没注册的规范工具名 */
   missingInRegistry: string[]
   /** registry 有 but CORE/ONLY 都没分类的工具名（仅提示） */
   unknownTools: string[]
@@ -344,16 +342,22 @@ export type SuperpowerSelfCheckResult = OSMSelfCheckResult
  * 结果为纯数据，允许调用方决定是 log / throw / 上报监控。
  */
 export function runOSMSelfCheck(registry: ToolRegistryHandle): OSMSelfCheckResult {
+  // Normalize only diagnostics. OSM's actual permission/selection sets retain
+  // their established semantics, including explicit legacy allowlists.
+  const core = new Set([...OSM_CORE_TOOLS].map(normalizeToolName))
+  const enhanced = new Set([...OSM_ONLY_TOOLS].map(normalizeToolName))
   const disjointViolations: string[] = []
-  for (const name of OSM_CORE_TOOLS) {
-    if (OSM_ONLY_TOOLS.has(name)) disjointViolations.push(name)
+  for (const name of core) {
+    if (enhanced.has(name)) disjointViolations.push(name)
   }
 
   const missingInRegistry: string[] = []
   const has = typeof registry.has === 'function' ? registry.has.bind(registry) : null
   if (has) {
-    for (const name of OSM_CORE_TOOLS) {
-      if (!has(name)) missingInRegistry.push(name)
+    for (const name of core) {
+      if (!isDefaultTool(name)) continue
+      const legacyNames = [...OSM_CORE_TOOLS].filter(candidate => normalizeToolName(candidate) === name)
+      if (!has(name) && !legacyNames.some(alias => has(alias))) missingInRegistry.push(name)
     }
   }
 
@@ -362,9 +366,9 @@ export function runOSMSelfCheck(registry: ToolRegistryHandle): OSMSelfCheckResul
   if (list) {
     try {
       for (const tool of list()) {
-        const n = tool?.name
+        const n = tool?.name ? normalizeToolName(tool.name) : undefined
         if (!n) continue
-        if (!OSM_CORE_TOOLS.has(n) && !OSM_ONLY_TOOLS.has(n)) {
+        if (!core.has(n) && !enhanced.has(n) && !Object.hasOwn(OPTIONAL_TOOL_EXPOSURES, n)) {
           unknownTools.push(n)
         }
       }

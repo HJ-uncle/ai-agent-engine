@@ -9,7 +9,8 @@ import { ToolRegistry } from '../core/tool-registry/index.js'
 import type { Tool, AgentContext } from '../core/agent-context/index.js'
 import { trustBuiltinTool } from '../security/tool-policy.js'
 import { isCodeProfileTool, normalizeAllowedTools, normalizeToolName, type ToolProfile } from './tool-profile.js'
-import { registerBuiltinSkills, skillsRegistry } from '../skills/index.js'
+import { isDefaultTool, REMOVED_TOOL_NAMES } from './tool-exposure.js'
+import { skillsRegistry } from '../skills/index.js'
 import {
   listFilesTool,
   deleteFileTool,
@@ -34,14 +35,13 @@ import { taskControlTools } from './task/task-tool.js'
 import { subagentTools, readonlySubagentTools } from './subagent/index.js'
 import { webFetchTool } from './web-fetch/index.js'
 import { httpRequestTool } from './http-request/index.js'
-import { getCurrentContextTool } from './get-context/index.js'
 import { searchHistoryTool } from './get-context/search-history-tool.js'
-import { installPackageTool, listPackagesTool } from './install-package/install-package-tool.js'
 import { createAgentTools } from './agent/index.js'
 import type { InlineAgent } from './agent/index.js'
 import { lspDiagnoseTool } from './lsp/index.js'
 import { codegraphTool } from './codegraph/index.js'
 import { browserTools, BROWSER_READONLY_TOOLS } from './browser/browser-tools.js'
+import { workbenchTools } from './workbench/index.js'
 import type { ExternalSkill } from '../skills/external-loader.js'
 import {
   resolveDefaultAllowedTools,
@@ -62,6 +62,8 @@ export interface RegistryFactoryOptions {
   workspaceRoot?: string
   /** general preserves service capabilities; code selects the IDE's executable programming tools. */
   toolProfile?: ToolProfile
+  /** Configuration screens need selectable tools; execution defaults stay lean. Never accept this from chat input. */
+  toolExposure?: 'runtime' | 'catalogue'
   /** Explicit memory extension for a conversation, independent of the programming profile. */
   memoryScope?: import('../storage/memory/settings.js').MemoryMode
   memoryScopes?: readonly import('../storage/memory/types.js').MemoryScope[]
@@ -69,7 +71,7 @@ export interface RegistryFactoryOptions {
   allowedSkills?: string[] | null
   /** Custom-Agent bindings are exact: [] exposes no external skills, rather than the legacy all-skills default. */
   strictSkillBindings?: boolean
-  /** undefined/null 使用 profile 默认集；[] 禁用业务工具，session 内建计划始终可用；列表只能缩窄。 */
+  /** undefined/null 使用精简默认集；列表显式选择 profile 支持的能力；[] 仅保留 session 内建计划。 */
   allowedTools?: string[] | null
   /** undefined/null discovers all configured MCP servers; [] disables MCP; IDs narrow both local and inline servers. */
   allowedMcpServers?: string[] | null
@@ -140,14 +142,19 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   throwIfAborted(opts.signal)
   const profile = opts.toolProfile ?? 'general'
   const explicitAllowedTools = normalizeAllowedTools(opts.allowedTools)
+  const defaultExposure = opts.toolExposure !== 'catalogue' && explicitAllowedTools === undefined
   const memoryTools = createMemoryTools()
   const memoryEnabled = effectiveMemoryScopes({ ...opts, toolProfile: profile }).length > 0
   const memoryImplementations = new Set(memoryTools)
   const internalPlanTools = new Set(todoTools.filter(tool => tool.name === 'plan_update'))
   const registry = new ToolRegistry(tool => {
+    if (REMOVED_TOOL_NAMES.has(tool.name)) return false
     // Planning changes only the current session's durable state. Trust its builtin
     // implementation, rather than a matching extension name, outside business allowlists.
     if (tool.name === 'plan_update') return internalPlanTools.has(tool)
+    // Apply this at insertion so built-in skills and late registrations cannot
+    // accidentally restore optional legacy/service tools to ordinary runs.
+    if (defaultExposure && !isDefaultTool(tool.name)) return false
     return profile === 'code'
       ? (isCodeProfileTool(tool as Tool & { source?: string }) || (memoryEnabled && memoryImplementations.has(tool))) &&
         (explicitAllowedTools === undefined || explicitAllowedTools.includes(tool.name))
@@ -160,11 +167,12 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
 
   /** Helper: register a tool into the registry and track it as builtin */
   const registerBuiltin = (tool: Tool) => {
-    const readOnly = [readFileTool, listFilesTool, globTool, grepTool, getCurrentContextTool, searchHistoryTool, officeEnvironmentTool, officeInspectTool,
+    const readOnly = [readFileTool, listFilesTool, globTool, grepTool, searchHistoryTool, officeEnvironmentTool, officeInspectTool,
       ...commandJobTools.filter(candidate => candidate.name === 'command_output')].includes(tool)
     const browserReadOnly = browserTools.includes(tool) && BROWSER_READONLY_TOOLS.has(tool.name)
+    const workbenchReadOnly = workbenchTools.includes(tool) && tool.name === 'workbench_context'
     const mode = tool.name === 'subagent' && subagentTools.includes(tool) ? 'subagent'
-      : readOnly || browserReadOnly || readonlySubagentTools.includes(tool) ? 'readonly' : 'serial'
+      : readOnly || browserReadOnly || workbenchReadOnly || readonlySubagentTools.includes(tool) ? 'readonly' : 'serial'
     // Observation keeps its readonly batch semantics, while trusted joins and
     // cancellation never hold the ordinary slot needed by child execution.
     const orchestration = subagentTools.includes(tool) && (tool.name === 'subagent_wait' || tool.name === 'subagent_cancel')
@@ -222,10 +230,6 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
     if (effectiveAllowedTools.length === 0) return false
     return effectiveAllowedTools.includes(normalizeToolName(toolName))
   }
-
-  // 1. General utility skills retain their old behavior; code's registration guard excludes them.
-  registerBuiltinSkills(registry)
-  skillTools.push(...registry.list().map(tool => tool.name))
 
   // 2. 文件工具（read_file / write_file / edit_file / list_files / delete_file / create_dir）
   // 支持格式：JSON, CSV, XLSX, XLS, PDF, DOC, DOCX, 代码, 文本
@@ -302,6 +306,10 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
     )
   }
 
+  // A bundled Office workflow must not advertise APIs excluded by this profile.
+  // External/user skills remain visible: they may have independent implementations.
+  if (!registry.has('office_document')) externalSkills = externalSkills.filter(skill => !(skill.builtin && skill.name === 'aether-office'))
+
   createSkillTools(externalSkills, { osmMode: mode, hiddenSkills: osmHiddenSkills }).forEach((tool) => {
     registry.register(trustBuiltinTool(tool, 'readonly'))
     if (registry.has(tool.name)) skillTools.push(tool.name)
@@ -339,13 +347,8 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   // 13. HTTP 请求工具
   if (shouldRegister('http_request')) registerBuiltin(httpRequestTool)
 
-  // 14. 获取当前上下文工具
-  if (shouldRegister('get_current_context')) registerBuiltin(getCurrentContextTool)
+  // 压缩后的原始历史查询；基础环境由每次模型请求自动注入。
   if (shouldRegister('search_history')) registerBuiltin(searchHistoryTool)
-
-  // 15. 安装包工具
-  if (shouldRegister('install_package')) registerBuiltin(installPackageTool)
-  if (shouldRegister('list_packages')) registerBuiltin(listPackagesTool)
 
   // 16. MCP 工具（动态加载）- 按名称过滤；合并 inlineMcpServers
   const mcpTools = await registerMCPTools(
@@ -374,6 +377,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   // Both modes use the same session-owned transport; the profile and explicit
   // allowlist still determine which actions are executable.
   browserTools.forEach(tool => { if (shouldRegister(tool.name)) registerBuiltin(tool) })
+  workbenchTools.forEach(tool => { if (shouldRegister(tool.name)) registerBuiltin(tool) })
 
   // ── Superpower 自检 ────────────────────────────────────────────────────
   // 验证 CORE 工具名与 registry 实际注册保持一致，避免 OFF 模式下 Agent

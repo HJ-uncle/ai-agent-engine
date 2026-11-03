@@ -109,8 +109,8 @@ export type LLMRequestAttemptEvent = {
 export interface LLMAdapterOptions {
   model: string
   /**
-   * Code mode does not impose a fixed engine-side completion cap. Adapters
-   * still apply the provider's own protocol and model limits.
+   * Requests without an explicit output limit use the remaining context.
+   * Adapters still apply the provider's own protocol and model limits.
    */
   unboundedOutput?: boolean
   /** Known context capacity for adapters whose protocol requires an output field. */

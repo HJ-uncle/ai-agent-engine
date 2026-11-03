@@ -229,7 +229,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 ---
 # 智能交互规则
 1. 当你需要澄清用户的意图、确认关键操作或提供选择时，请调用 \`ask_user\` 工具。调用该工具后，系统将自动暂停执行，并向用户展示交互式选择界面，等待用户回复后再继续。
-2. 在向用户回复的文本中提及工具时，请务必使用工具的中文名称（例如：写入文件、获取时间、读取文件等），不要暴露底层的英文名称（例如：write_file, get_time等）。
+2. 在向用户回复的文本中提及工具时，使用清晰的中文名称，例如写入文件、读取文件。
 3. 当用户询问你的模型身份时，必须如实告知你是 ${currentModelName} 模型，不得声称是其他模型（如Claude或GPT）。
 `
 
@@ -238,7 +238,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 ---
 # 智能交互规则
 1. 当你需要澄清用户的意图、确认关键操作或提供选择时，请调用 \`ask_user\` 工具。调用该工具后，系统将自动暂停执行，并向用户展示交互式选择界面，等待用户回复后再继续。
-2. 在向用户回复的文本中提及工具时，请务必使用工具的中文名称（例如：写入文件、获取时间、读取文件等），不要暴露底层的英文名称（例如：write_file, get_time等）。
+2. 在向用户回复的文本中提及工具时，使用清晰的中文名称，例如写入文件、读取文件。
 3. 当用户询问你的模型身份时，必须如实告知你是 ${currentModelName} 模型，不得声称是其他模型（如Claude或GPT）。
 `
     const systemPromptTokens = estimateTokens(pureSystemPromptForMessages)

@@ -7,7 +7,7 @@ import { throwIfAborted } from '../utils/abort.js'
 import { stopCommandProcessTree } from './process-tree.js'
 import { createCommandLaunchPlan } from './launch-plan.js'
 import { COMMAND_OUTPUT_BYTES, COMMAND_PAGE_BYTES, commandJobIsTerminal,
-  type CommandJobLaunch, type CommandJobOutput, type CommandJobScope, type CommandJobSnapshot, type CommandOutputEntry, type CommandScopeCapture } from './types.js'
+  type CommandJobLaunch, type CommandJobOutput, type CommandJobScope, type CommandJobSnapshot, type CommandOutputEntry, type CommandScopeCapture, type CommandChangeObserver } from './types.js'
 
 const schemas = new WeakMap<Client, Promise<void>>()
 
@@ -35,6 +35,8 @@ interface LiveJob extends StoredJob {
   pendingOutputBytes: number
   outputPaused: boolean
   persistError?: Error
+  changeObserver?: CommandChangeObserver
+  wasSpawned?: boolean
 }
 
 export interface CommandJobManagerOptions {
@@ -113,6 +115,8 @@ export class CommandJobManager {
           job.status = 'interrupted'; job.version++; job.updatedAt = job.finishedAt = Date.now()
           job.exitCode = null; job.signal = null
           job.error = { code: 'ENGINE_RESTARTED', message: 'Engine restarted. This command was not reattached or rerun; its former process state is unknown.' }
+          if (job.changeTracking?.status === 'observing') job.changeTracking = { ...job.changeTracking, status: 'unavailable',
+            note: '引擎已重启，命令前的内存快照已丢失；未推断或自动回退其文件副作用。' }
           await this.save({ tenantId: String(row.tenant_id), job, entries: JSON.parse(String(row.entries)) }, db)
         }
         await this.prune(db)
@@ -298,6 +302,17 @@ export class CommandJobManager {
     admission.live = live
     try {
       await this.persist(live)
+      if (input.observeChanges) {
+        try {
+          live.changeObserver = await input.observeChanges(clone(job))
+          job.changeTracking = clone(live.changeObserver.initial)
+        } catch (error) {
+          job.changeTracking = { status: 'unavailable', root: input.cwd,
+            note: `未能建立命令文件快照：${error instanceof Error ? error.message : String(error)}；不能保证文件变化已纳入回滚。` }
+        }
+        job.version++; job.updatedAt = Date.now()
+        await this.persist(live)
+      }
       throwIfAborted(input.signal)
       if (this.stopping || admission.cancelled) throw new Error('Command service or owner is stopping')
       this.active.set(job.jobId, live)
@@ -323,7 +338,7 @@ export class CommandJobManager {
       input.signal?.addEventListener('abort', abort, { once: true })
       live.cleanupSignal = () => input.signal?.removeEventListener('abort', abort)
       if (input.signal?.aborted) abort()
-      const launched = await new Promise<boolean>(done => { child.once('spawn', () => done(true)); child.once('error', () => done(false)) })
+      const launched = await new Promise<boolean>(done => { child.once('spawn', () => { live.wasSpawned = true; done(true) }); child.once('error', () => done(false)) })
       return launched ? clone(job) : await completion
     } catch (error) {
       if (!live.child) {
@@ -346,6 +361,19 @@ export class CommandJobManager {
     // a terminal persistence retry waits for a database to recover.
     live.child = undefined
     const job = live.job
+    if (live.changeObserver) {
+      try {
+        if (live.wasSpawned) {
+          const observed = await live.changeObserver.finish()
+          job.changes = observed.changes
+          job.changeTracking = observed.tracking
+        } else job.changeTracking = { ...live.changeObserver.initial, status: 'unavailable', recordedCount: 0,
+          note: '进程未启动，未将等待期间的工作区变化归到此命令。' }
+      } catch (error) {
+        job.changeTracking = { ...live.changeObserver.initial, status: 'unavailable',
+          note: `命令已退出，但文件变化记录失败：${error instanceof Error ? error.message : String(error)}。` }
+      } finally { live.changeObserver.dispose(); live.changeObserver = undefined }
+    }
     job.exitCode = code; job.signal = signal
     job.status = live.stopError ? 'failed' : live.stopReason ?? (error || code !== 0 ? 'failed' : 'succeeded')
     if (live.stopError) job.error = { code: 'COMMAND_TERMINATION_FAILED', message: live.stopError.message }

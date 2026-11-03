@@ -50,6 +50,7 @@ export function projectSegment(segment: ChangeSegment, issue?: ProjectionIssue):
     oldContent: first.oldContent, oldHash: first.oldHash, oldSnapshotRef: first.oldSnapshotRef,
     kind: last.newHash === 'missing' ? 'delete' : last.kind,
     truncated,
+    ...(segment.changes.some(change => change.requiresExplicitRevert) ? { requiresExplicitRevert: true, source: 'command-observation' as const } : {}),
     isNew: first.oldHash === 'missing' && last.newHash !== 'missing',
     changeIds: segment.changes.map(change => change.id),
     ...(issue ? { projectionIssue: issue } : {})

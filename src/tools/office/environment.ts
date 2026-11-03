@@ -242,7 +242,7 @@ export class OfficeEnvironmentService {
 const environmentService = new OfficeEnvironmentService()
 export const officeEnvironmentTool: Tool = {
   name: 'office_environment', displayName: '办公运行环境',
-  description: '只读查询办公运行环境：受信任的 Python 路径、可导入办公库及版本、Office/WPS COM 注册与 LibreOffice 候选。结果缓存 2 分钟，多任务共享一次有界探测；不启动 Office 窗口、不安装依赖、不导出文件。已安装/已注册不等于真实转换已验证；PyMuPDF/reportlab 不能替代原 DOCX/PPTX 渲染。仅宿主运行时可探测；不读取其他任务、任意项目目录或 Codex 私有依赖。',
+  description: '只读探测宿主可信Python/办公库版本、Office/WPS COM注册、LibreOffice候选；共享有界探测，缓存2分钟。不启动Office、不安装/导出，不读其他任务/任意项目/Codex私有依赖。安装/注册≠转换验证，PyMuPDF/reportlab不替代DOCX/PPTX原样渲染。',
   parameters: { type: 'object', properties: {}, additionalProperties: false },
   async execute(args: unknown, ctx: AgentContext) {
     if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).length) return {

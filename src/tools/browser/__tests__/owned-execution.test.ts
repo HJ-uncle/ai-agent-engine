@@ -143,11 +143,28 @@ describe('owned broker protocol', () => {
     expect(() => bridge.register(account, 'root-chat', owned, 1)).toThrow('protocol cannot change')
     const legacy = bridge.register(account, 'legacy-chat')
     expect(legacy.protocolVersion).toBe(1)
-    expect(legacy.capabilities).toEqual({ requestWatch: true })
+    expect(legacy.capabilities).toEqual({ requestWatch: true, resultMetadata: 1 })
   })
 })
 
 describe('owned HTTP schema and transport', () => {
+  it('negotiates result metadata for legacy clients and preserves a known non-execution through HTTP', async () => {
+    const registration = await client(1)
+    expect(registration.capabilities).toEqual({ requestWatch: true, resultMetadata: 1 })
+    const action = bridge.execute('click', { tabId: 'legacy-tab' }, context())
+    const polled = await app.inject({ method: 'GET', url: `/api/v1/browser/clients/${registration.clientId}/commands`, headers: headers(registration) })
+    expect(polled.statusCode).toBe(200)
+    const command = polled.json().data.commands[0]
+    expect(command.execution).toBeUndefined()
+    const metadata = { code: 'BROWSER_QUEUE_CANCELLED', operationPerformed: false }
+    const answer = await app.inject({ method: 'POST', url: `/api/v1/browser/clients/${registration.clientId}/results`, headers: headers(registration), payload: { requestId: command.requestId, success: false, output: '', error: 'cancelled before dispatch', status: 'cancelled', metadata } })
+    expect(answer.statusCode).toBe(200)
+    expect(answer.json().data.accepted).toBe(true)
+    const result = await action
+    expect(result).toEqual({ success: false, output: '', error: 'cancelled before dispatch', status: 'cancelled', metadata })
+    expect(normalizeBrowserFailure(result, 'click').metadata).toMatchObject(metadata)
+  })
+
   it('HTTP serializers preserve current root and child identity plus result metadata', async () => {
     const registration = await client()
     expect(registration.capabilities).toMatchObject({ executionIdentity: 1, resultMetadata: 1 })

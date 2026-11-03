@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Message, ToolExecutionMode } from '../../agent-context/types.js'
 import { projectReadonlyHistory, readonlyHistoryNotice } from '../readonly-history.js'
 
-const mode = (call: { name: string }): ToolExecutionMode => ['read_file', 'grep_search', 'command_output', 'task_status'].includes(call.name) ? 'readonly' : 'serial'
+const mode = (call: { name: string }): ToolExecutionMode => ['read_file', 'grep', 'command_output', 'task_status'].includes(call.name) ? 'readonly' : 'serial'
 const pair = (id: string, output = 'same', name = 'read_file', args: Record<string, unknown> = { path: 'module.ts' }): Message[] => [
   { role: 'assistant', content: '', toolCall: { id, name, args } },
   { role: 'tool', content: output, toolCallId: id, toolName: name, metadata: { status: 'succeeded', success: true } },
@@ -21,11 +21,11 @@ describe('request-only redundant read-only history projection', () => {
   it('retains the latest complete pair for alternating identical queries without changing storage objects', () => {
     const original = freeze([
       { role: 'user', content: 'Review this project without changing it.' } as Message,
-      ...pair('a1', 'result A', 'grep_search', { pattern: 'A', path: 'project' }),
-      ...pair('b1', 'result B', 'grep_search', { pattern: 'B', path: 'project' }),
-      ...pair('a2', 'result A', 'grep_search', { path: 'project', pattern: 'A' }),
-      ...pair('b2', 'result B', 'grep_search', { path: 'project', pattern: 'B' }),
-      ...pair('a3', 'result A', 'grep_search', { pattern: 'A', path: 'project' }),
+      ...pair('a1', 'result A', 'grep', { pattern: 'A', path: 'project' }),
+      ...pair('b1', 'result B', 'grep', { pattern: 'B', path: 'project' }),
+      ...pair('a2', 'result A', 'grep', { path: 'project', pattern: 'A' }),
+      ...pair('b2', 'result B', 'grep', { path: 'project', pattern: 'B' }),
+      ...pair('a3', 'result A', 'grep', { pattern: 'A', path: 'project' }),
     ])
     const before = JSON.stringify(original)
     const projected = projectReadonlyHistory(original, mode)
@@ -49,9 +49,9 @@ describe('request-only redundant read-only history projection', () => {
   it('compares complete arguments and complete provider-visible results beyond short prefixes', () => {
     const prefix = 'same prefix '.repeat(100)
     const input = [
-      ...pair('arg-a', prefix + 'a', 'grep_search', { path: 'a', pattern: prefix + 'a' }),
-      ...pair('arg-b', prefix + 'a', 'grep_search', { path: 'a', pattern: prefix + 'b' }),
-      ...pair('changed-output', prefix + 'b', 'grep_search', { path: 'a', pattern: prefix + 'a' }),
+      ...pair('arg-a', prefix + 'a', 'grep', { path: 'a', pattern: prefix + 'a' }),
+      ...pair('arg-b', prefix + 'a', 'grep', { path: 'a', pattern: prefix + 'b' }),
+      ...pair('changed-output', prefix + 'b', 'grep', { path: 'a', pattern: prefix + 'a' }),
     ]
     expect(projectReadonlyHistory(input, mode).collapsedPairs).toBe(0)
   })
@@ -79,7 +79,7 @@ describe('request-only redundant read-only history projection', () => {
   it.each(['failed', 'cancelled', 'waiting', 'interrupted'] as const)('retains an entire mixed batch containing a %s result', status => {
     const prior = pair('before')
     const duplicate = pair('duplicate')
-    const failure = pair('failed-sibling', 'failure', 'grep_search', { pattern: 'B' })
+    const failure = pair('failed-sibling', 'failure', 'grep', { pattern: 'B' })
     failure[1].metadata = { status, success: false }
     const input = [...prior, duplicate[0], failure[0], duplicate[1], failure[1], ...pair('after')]
     expect(projectReadonlyHistory(input, mode)).toEqual({ messages: input, collapsedPairs: 0 })
@@ -139,8 +139,8 @@ describe('request-only redundant read-only history projection', () => {
   })
 
   it('keeps parallel batches paired and retains new sibling evidence', () => {
-    const a1 = pair('a1', 'A', 'grep_search', { pattern: 'A' }), b1 = pair('b1', 'B', 'grep_search', { pattern: 'B' })
-    const a2 = pair('a2', 'A', 'grep_search', { pattern: 'A' }), b2 = pair('b2', 'B changed', 'grep_search', { pattern: 'B' })
+    const a1 = pair('a1', 'A', 'grep', { pattern: 'A' }), b1 = pair('b1', 'B', 'grep', { pattern: 'B' })
+    const a2 = pair('a2', 'A', 'grep', { pattern: 'A' }), b2 = pair('b2', 'B changed', 'grep', { pattern: 'B' })
     const input = [a1[0], b1[0], b1[1], a1[1], a2[0], b2[0], b2[1], a2[1]]
     const projected = projectReadonlyHistory(input, mode)
     expect(projected.collapsedPairs).toBe(0)
@@ -149,8 +149,8 @@ describe('request-only redundant read-only history projection', () => {
   })
 
   it('bounds the recent query index and does not fold an evicted query', () => {
-    const input = Array.from({ length: 65 }, (_, index) => pair(String(index), 'same', 'grep_search', { pattern: String(index) })).flat()
-    input.push(...pair('zero-again', 'same', 'grep_search', { pattern: '0' }))
+    const input = Array.from({ length: 65 }, (_, index) => pair(String(index), 'same', 'grep', { pattern: String(index) })).flat()
+    input.push(...pair('zero-again', 'same', 'grep', { pattern: '0' }))
     expect(projectReadonlyHistory(input, mode).collapsedPairs).toBe(0)
   })
 
@@ -165,10 +165,10 @@ describe('request-only redundant read-only history projection', () => {
 })
 
 it('preserves another query across a changed observation boundary', () => {
-  const input = [...pair('a-before', 'A v1', 'grep_search', { pattern: 'A' }),
-    ...pair('b-before', 'B v1', 'grep_search', { pattern: 'B' }),
-    ...pair('b-changed', 'B v2', 'grep_search', { pattern: 'B' }),
-    ...pair('a-after', 'A v1', 'grep_search', { pattern: 'A' })]
+  const input = [...pair('a-before', 'A v1', 'grep', { pattern: 'A' }),
+    ...pair('b-before', 'B v1', 'grep', { pattern: 'B' }),
+    ...pair('b-changed', 'B v2', 'grep', { pattern: 'B' }),
+    ...pair('a-after', 'A v1', 'grep', { pattern: 'A' })]
   expect(projectReadonlyHistory(input, mode)).toEqual({ messages: input, collapsedPairs: 0 })
 })
 
@@ -205,12 +205,12 @@ it('preserves empty protocol identities and their fallback semantics', () => {
 
 it('retains all siblings when a changed parallel observation appears in either saved order', () => {
   for (const reverse of [false, true]) {
-    const firstA = pair('a-before', 'A same', 'grep_search', { pattern: 'A' })
-    const firstB = pair('b-before', 'B old', 'grep_search', { pattern: 'B' })
-    const nextA = pair('a-parallel', 'A same', 'grep_search', { pattern: 'A' })
-    const nextB = pair('b-parallel', 'B changed', 'grep_search', { pattern: 'B' })
+    const firstA = pair('a-before', 'A same', 'grep', { pattern: 'A' })
+    const firstB = pair('b-before', 'B old', 'grep', { pattern: 'B' })
+    const nextA = pair('a-parallel', 'A same', 'grep', { pattern: 'A' })
+    const nextB = pair('b-parallel', 'B changed', 'grep', { pattern: 'B' })
     const batch = reverse ? [nextB[0], nextA[0], nextA[1], nextB[1]] : [nextA[0], nextB[0], nextB[1], nextA[1]]
-    const input = [...firstA, ...firstB, ...batch, ...pair('a-after', 'A same', 'grep_search', { pattern: 'A' })]
+    const input = [...firstA, ...firstB, ...batch, ...pair('a-after', 'A same', 'grep', { pattern: 'A' })]
     expect(projectReadonlyHistory(input, mode)).toEqual({ messages: input, collapsedPairs: 0 })
   }
 })

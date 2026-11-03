@@ -2,28 +2,39 @@ import { describe, expect, it, vi } from 'vitest'
 import type { AgentContext, IToolRegistry } from '../../../core/agent-context/types.js'
 import { createSubagentToolRegistry, subagentTool } from '../subagent-tool.js'
 import { ToolRegistry } from '../../../core/tool-registry/index.js'
-import { registerBuiltinSkills } from '../../../skills/index.js'
+import { trustBuiltinTool } from '../../../security/tool-policy.js'
 
 describe('subagent capability intersection', () => {
-  it('lets a read-only reviewer calculate with inherited trusted builtins', async () => {
+  it('does not restore retired utility tools or grant shell access to a read-only reviewer', async () => {
     const parent = new ToolRegistry()
-    registerBuiltinSkills(parent)
+    const execute = vi.fn().mockResolvedValue({ success: true, output: 'unexpected legacy execution' })
+    // Even an already-resolved legacy parent cannot reintroduce removed model
+    // capabilities by retaining a previously trusted readonly implementation.
+    const retired = ['calculate', 'get_time', 'install_package', 'list_packages', 'get_current_context', 'get_tool_details']
+    for (const name of retired) parent.register(trustBuiltinTool({ name, description: 'retired fixture', parameters: {}, execute }, 'readonly'))
+    for (const name of ['execute_cmd', 'run_skill_script', 'write_file']) parent.register({ name, description: name, parameters: {}, execute })
+    parent.register(trustBuiltinTool({ name: 'read_file', description: 'read', parameters: {}, execute: vi.fn() }, 'readonly'))
     const child = createSubagentToolRegistry(parent, true)
-    expect(child.has('calculate')).toBe(true)
-    expect(child.has('get_time')).toBe(true)
-    expect(child.executionMode?.('calculate', {})).toBe('readonly')
-    const result = await child.execute('calculate', { expression: '120000+80000+80000' }, { tenantId: 'fixture', sessionId: 'review' } as AgentContext)
-    expect(result).toMatchObject({ success: true, output: '120000+80000+80000 = 280000' })
-    expect(child.has('write_file')).toBe(false)
+    expect(child.list().map(tool => tool.name)).toEqual(['read_file', 'plan_update'])
+    for (const name of [...retired, 'execute_cmd', 'run_skill_script', 'write_file']) {
+      expect(child.has(name)).toBe(false)
+      expect(await child.execute(name, {}, {} as AgentContext)).toMatchObject({ success: false, metadata: { blocked: true, code: 'TOOL_NOT_ALLOWED' } })
+    }
+    expect(execute).not.toHaveBeenCalled()
   })
 
-  it('does not grant calculator authority to an absent or same-named extension', () => {
+  it('does not restore retired utility names from parent extensions in either child mode', async () => {
     const parent = new ToolRegistry()
-    expect(createSubagentToolRegistry(parent, true).has('calculate')).toBe(false)
-    for (const name of ['calculate', 'get_time']) parent.register({ name, description: 'extension', parameters: {}, execute: vi.fn() })
-    const child = createSubagentToolRegistry(parent, true)
-    expect(child.has('calculate')).toBe(false)
-    expect(child.has('get_time')).toBe(false)
+    const execute = vi.fn()
+    const retired = ['calculate', 'get_time', 'install_package', 'list_packages', 'get_current_context', 'get_tool_details']
+    for (const name of retired) parent.register({ name, description: 'extension', parameters: {}, source: 'skill', execute })
+    for (const readOnly of [true, false]) {
+      const child = createSubagentToolRegistry(parent, readOnly)
+      expect(child.list().map(tool => tool.name)).toEqual(['plan_update'])
+      for (const name of retired) expect(await child.preflight?.(name, {}, {} as AgentContext))
+        .toMatchObject({ success: false, metadata: { blocked: true, code: 'TOOL_NOT_ALLOWED' } })
+    }
+    expect(execute).not.toHaveBeenCalled()
   })
 
   function registry(): IToolRegistry {

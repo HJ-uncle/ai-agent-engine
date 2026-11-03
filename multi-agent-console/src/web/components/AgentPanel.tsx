@@ -276,7 +276,7 @@ function AgentFormModal({ open, editing, onClose, onSaved }: AgentFormModalProps
         <Form.Item name="allowedTools" label="允许的系统工具 (System Tools)">
           <Select
             mode="multiple"
-            placeholder="请选择允许的系统工具（留空表示使用全部工具）"
+            placeholder="选择需要的工具；新建未配置时使用默认工具集"
             options={systemToolOptions}
             allowClear
             showSearch

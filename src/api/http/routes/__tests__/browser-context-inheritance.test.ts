@@ -372,18 +372,19 @@ describe('trusted browser context from actual chat and actual child production',
   it('closes the actual producer and owned client when all terminal writes fail while another root completes normally', async () => {
     const { rootRunStore } = await import('../../../../storage/root-runs/index.js')
     const { activeStreams } = await import('../../../../core/stream-pipeline/stream-bus.js')
+    const { serviceForOwner } = await import('../../../../core/collaboration/execution-owner.js')
     vi.stubEnv('AUTH_ENABLED', 'true')
     ;(await import('../../middleware.js')).configureRequestAuthentication()
     const failedSession = 'actual-host-terminal-persistence-failure', healthySession = 'actual-host-independent-root'
-    const update = rootRunStore.update.bind(rootRunStore), failures: Error[] = []
-    const terminalWrite = vi.spyOn(rootRunStore, 'update').mockImplementation(async (...args) => {
-      const run = await rootRunStore.get(args[0], args[1])
-      if (run?.sessionId === failedSession && args[2].status && args[2].status !== 'running' && args[2].status !== 'waiting') {
+    const finishOwned = rootRunStore.finishOwned.bind(rootRunStore), failures: Error[] = []
+    const terminalWrite = vi.spyOn(rootRunStore, 'finishOwned').mockImplementation(async (...args) => {
+      const { binding } = serviceForOwner(args[0]).record(args[0])
+      if (binding.rootSessionId === failedSession && args[1].status && args[1].status !== 'running' && args[1].status !== 'waiting') {
         const error = new Error('FIXTURE_TERMINAL_DISK_FULL_' + failures.length)
         failures.push(error)
         throw error
       }
-      return update(...args)
+      return finishOwned(...args)
     })
     try {
       const failed = await chatViaHost(failedSession, 'account', healthySession), healthy = failed.companionResult!

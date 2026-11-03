@@ -17,7 +17,7 @@ export const commandOutputTool: Tool = {
     }
     try {
       const output = await commandJobs.output(commandJobScope(ctx), args.jobId, { cursor: args.cursor as number | undefined })
-      return output ? { success: true, output: JSON.stringify(output), metadata: { commandJob: output.job } } : missing()
+      return output ? { success: true, output: JSON.stringify(output), changes: output.job.changes, metadata: { commandJob: output.job } } : missing()
     } catch (error) { return { success: false, output: error instanceof Error ? error.message : String(error), error: 'COMMAND_OUTPUT_FAILED' } }
   },
 }
@@ -31,7 +31,7 @@ export const cancelCommandTool: Tool = {
     if (!args || typeof args.jobId !== 'string' || !args.jobId) return { success: false, output: 'Expected a jobId.', error: 'COMMAND_INVALID_ARGUMENTS' }
     try {
       const job = await commandJobs.cancel(commandJobScope(ctx), args.jobId, 'Stopped by cancel_command')
-      return job ? { success: true, output: JSON.stringify(job), metadata: { commandJob: job } } : missing()
+      return job ? { success: true, output: JSON.stringify(job), changes: job.changes, metadata: { commandJob: job } } : missing()
     } catch (error) { return { success: false, output: error instanceof Error ? error.message : String(error), error: 'COMMAND_CANCEL_FAILED' } }
   },
 }

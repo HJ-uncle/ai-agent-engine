@@ -114,16 +114,16 @@ function inspect(format: OfficeInspection['format'], bytes: Buffer): Promise<Ins
 
 export const officeDocumentTool: Tool = {
   name: 'office_document', displayName: '办公文档',
-  description: 'Aether内置办公文档：原生创建/检查DOCX、XLSX、PPTX、PDF，无需WPS、Office COM、Python、shell或pip。先读aether-office技能。create必须expectedHash="missing"；其他写入必须复用同文件最近返回sha256。Word/PDF创建用markdown；PPTX用presentation.slides（title、bullets、table、notes）；Excel用workbook。Word/PPTX edit用唯一oldText/newText；PPTX重复文字可成对指定inspect返回的slide/textRun（均从1开始），仍须在目标普通文本节点内唯一。Excel edit用sheet/cell/value。PDF只支持创建和检查，修改请新建版本。append_sheets每次添加1-4张Excel表，保留旧表部件。recalculate仅XLSX：内置有界计算常用公式及跨表引用并更新缓存，不支持/循环/外链会拒绝，原文件保留；不是全Excel计算兼容。公式用{formula:"SUM(B2:B4)"}。inspect返回真实文字/表格预览、warnings及expectedHash；按contentPage.nextOffset+同文件hash分页。Excel最多2000单元格、单格600字符，Word仅主文档文字；分页不代表全文/视觉完整。发布前版本检查、原子写入、记录改动及撤回快照。PDF由Aether独立排版，不等于Word/PPT转换。结构检查不等于视觉或业务验收。',
+  description: '原生创建/检查DOCX/XLSX/PPTX/PDF，无需WPS/COM/Python/shell/pip；先读aether-office技能。create：Word/PDF用markdown，PPTX用presentation.slides，Excel用workbook。edit：Word/PPTX匹配唯一oldText，Excel用sheet/cell/value；PPTX可按inspect位置缩小匹配范围。PDF改版须新建，独立排版不等于Word/PPT转换。append_sheets保留旧表部件。recalculate仅XLSX，计算支持的常用公式/跨表引用并更新缓存；不支持、循环或外链拒绝且保留原文件，非全Excel兼容。公式例{formula:"SUM(B2:B4)"}。inspect返回文字/表格预览、warnings、expectedHash；Excel限2000格/格600字符，Word仅正文；分页非全文或视觉验收。写入前版本检查、原子发布并记录撤回快照；结构检查不证明业务正确。',
   parameters: {
     type: 'object', additionalProperties: false,
     properties: {
       operation: { type: 'string', enum: ['inspect', 'create', 'edit', 'append_sheets', 'recalculate'] },
-      path: { type: 'string', minLength: 1, maxLength: 4096, description: '当前工作区中的 .docx/.xlsx/.pptx/.pdf 目标路径。PDF支持create/inspect，其他格式也支持定点edit；recalculate只支持xlsx。' },
-      expectedHash: { type: 'string', pattern: '^(missing|sha256:[a-f0-9]{64})$', description: 'create 必须为 missing；edit/append_sheets/recalculate 必须复用同文件最近一次工具返回的 sha256；inspect 首次可省略，contentOffset>0时必须传同文件上一页的 sha256，防止混读不同版本。' },
-      contentOffset: { type: 'integer', minimum: 0, maximum: maxContentOffset, description: '仅 inspect：使用上页 contentPage.nextOffset（UTF-16字符位置）；只分页检查预览，不代表完整文档。' },
-      contentLimit: { type: 'integer', minimum: 2, maximum: 32000, description: '仅 inspect：本页预览字符上限，实际会按工具输出预算进一步缩短。' },
-      markdown: { type: 'string', minLength: 1, maxLength: 300000, description: 'Word/PDF create 使用，支持标题、正文、列表、表格。PDF由Aether直接排版，并非从Word/PPT转换。' },
+      path: { type: 'string', minLength: 1, maxLength: 4096, description: '工作区 .docx/.xlsx/.pptx/.pdf 路径；PDF仅create/inspect，recalculate仅xlsx。' },
+      expectedHash: { type: 'string', pattern: '^(missing|sha256:[a-f0-9]{64})$', description: 'create填missing；其他写入复用同文件最新sha256。inspect首次可省，分页须上一页sha256防混读。' },
+      contentOffset: { type: 'integer', minimum: 0, maximum: maxContentOffset, description: '仅inspect：上页contentPage.nextOffset（UTF-16位置），覆盖提取预览。' },
+      contentLimit: { type: 'integer', minimum: 2, maximum: 32000, description: '仅inspect：本页字符上限，仍受输出预算限制。' },
+      markdown: { type: 'string', minLength: 1, maxLength: 300000, description: 'Word/PDF create正文：支持标题、段落、列表、表格。' },
       title: { type: 'string', maxLength: 256, description: '可选的独立可见标题，同时写入文档属性；避免与 Markdown 首标题重复。' }, author: { type: 'string', maxLength: 200 },
       presentation: { type: 'object', additionalProperties: false, description: '仅PPTX create：分页的演示内容，过长内容拆成多页，不缩成不可读小字。', properties: {
         slides: { type: 'array', minItems: 1, maxItems: 40, items: { type: 'object', additionalProperties: false, properties: {
@@ -298,7 +298,7 @@ export const officeDocumentTool: Tool = {
 
 export const officeInspectTool: Tool = {
   name: 'office_inspect', displayName: '检查办公文档',
-  description: '只读检查真实DOCX/XLSX/PPTX/PDF，返回已提取文字/表格的有界预览、warnings及expectedHash；不写文件。Excel最多预览2000单元格、单格600字符，已保存错误计数遍历全部工作表但只列有限位置；不重算公式、不保证业务或视觉正确。Word仅主文档文字。PPTX正文附slide/textRun定位（均从1开始）及editable标记，供office_document定点编辑重复文字。按contentPage.nextOffset+同文件expectedHash分页；只覆盖已提取预览，不能宣称全文。只接受path、expectedHash、contentOffset、contentLimit；写入/重算使用获授权的office_document。',
+  description: '只读提取DOCX/XLSX/PPTX/PDF文字/表格预览，返回warnings、expectedHash。Excel限2000格/格600字符；保存的错误计数覆盖全表，位置有界；不重算或保证业务/视觉正确。Word仅正文。PPTX附1起始slide/textRun及editable，供office_document定点编辑。分页仅覆盖已提取预览，非全文；写入/重算用获授权的office_document。',
   parameters: {
     type: 'object', additionalProperties: false,
     properties: {

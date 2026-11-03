@@ -81,13 +81,17 @@ describe.each(['jsonl', 'sqlite'])('%s actual async registry with one ordinary t
     setGlobalToolPoolLimit(1)
     try {
       const { registry } = await createToolRegistry({ toolProfile: 'code', allowedTools: ['subagent_wait'], allowedMcpServers: [], allowedSkills: [], strictSkillBindings: true })
-      const { registry: ordinary } = await createToolRegistry({ toolProfile: 'general', allowedTools: ['get_time'], allowedMcpServers: [], allowedSkills: [], strictSkillBindings: true })
-      expect(ordinary.has('get_time')).toBe(true); expect(registry.executionMode('subagent_wait', {})).toBe('readonly')
+      const { registry: ordinary } = await createToolRegistry({ toolProfile: 'general', allowedTools: ['read_file'], allowedMcpServers: [], allowedSkills: [], strictSkillBindings: true })
+      const fixtureFile = path.join(directory, 'ordinary-tool.txt')
+      fs.writeFileSync(fixtureFile, 'Ordinary tool completed inside the single shared pool slot')
+      expect(ordinary.has('read_file')).toBe(true); expect(registry.executionMode('subagent_wait', {})).toBe('readonly')
       start = await runner.start(await input('pool-wait'), parent, async execution => {
         entered.release(); await begin.promise
-        const result = await ordinary.execute('get_time', {}, { ...parent, sessionId: execution.snapshot.childSessionId,
-          rootSessionId: root.sessionId, runId: execution.snapshot.runId, executionOwner: execution.executionOwner })
+        const result = await ordinary.execute('read_file', { path: fixtureFile }, { ...parent, sessionId: execution.snapshot.childSessionId,
+          rootSessionId: root.sessionId, runId: execution.snapshot.runId, executionOwner: execution.executionOwner,
+          workspaceDir: directory, scratchDir: directory, projectRoot: directory, cwd: directory, workspacePaths: [directory] })
         expect(result.success).toBe(true)
+        expect(result.output).toContain('Ordinary tool completed inside the single shared pool slot')
         await execution.observer.onOutcome({ status: 'succeeded', output: 'Child ordinary tool completed' })
       })
       joins.push(start.completion.catch(() => undefined)); await entered.promise

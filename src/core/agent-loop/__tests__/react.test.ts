@@ -3,6 +3,28 @@ import { ReActStrategy, truncateToolOutput } from '../react.js'
 import type { AgentContext, Message } from '../../agent-context/index.js'
 import type { LLMAdapter, LLMResponse } from '../../llm-adapter/index.js'
 
+it('publishes and persists every command file receipt with its original launch identity even on failure', async () => {
+  const changes = [
+    { id: 'change-a', path: 'a.txt', kind: 'write', toolCallId: 'original-launch', source: 'command-observation', requiresExplicitRevert: true },
+    { id: 'change-b', path: 'b.txt', kind: 'delete', toolCallId: 'original-launch', source: 'command-observation', requiresExplicitRevert: true },
+  ]
+  const llm = makeLLMAdapter([
+    { content: '', toolCalls: [{ id: 'inspect-job', name: 'command_output', args: { jobId: 'job' } }], promptTokens: 1, completionTokens: 1, finishReason: 'tool_calls' },
+    { content: 'The failed command left two changes for review.', promptTokens: 1, completionTokens: 1, finishReason: 'stop' },
+  ])
+  const ctx = makeCtx()
+  vi.mocked(ctx.tools.has).mockReturnValue(true)
+  vi.mocked(ctx.tools.list).mockReturnValue([{ name: 'command_output', description: 'Read command output', parameters: { type: 'object' } }])
+  vi.mocked(ctx.tools.execute).mockResolvedValue({ success: false, output: 'command failed after changes', changes })
+  const frames: string[] = []
+  for await (const frame of new ReActStrategy(llm).run('Inspect command progress', ctx)) frames.push(frame)
+  const receipts = frames.filter(frame => frame.startsWith('\x00__file_change__')).map(frame => JSON.parse(frame.slice('\x00__file_change__'.length)))
+  expect(receipts).toEqual(changes)
+  const tool = vi.mocked(ctx.history.append).mock.calls.map(([message]) => message).find(message => message.role === 'tool')
+  expect(tool?.metadata?.changes).toEqual(changes)
+  expect(tool?.toolCallId).toBe('inspect-job')
+})
+
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
 async function collectYields(iterable: AsyncIterable<string>): Promise<string[]> {
@@ -112,7 +134,10 @@ describe('ReActStrategy', () => {
     const results = await collectYields(strategy.run('What is the answer?', ctx))
 
     expect(results.join('')).toBe('The answer is 42.')
-    expect(llm.stream).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({ maxTokens: 8192 }))
+    expect(llm.stream).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({ unboundedOutput: true }))
+    const options = vi.mocked(llm.stream).mock.calls[0][1]!
+    expect(options.maxTokens).toBeGreaterThan(16_384)
+    expect(options.maxTokens! + options.requestInputTokenEstimate!).toBe(100_000)
     expect(llm.stream).toHaveBeenCalledTimes(1)
   })
 

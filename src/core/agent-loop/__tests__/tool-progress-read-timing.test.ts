@@ -94,7 +94,7 @@ describe('builtin read_file timing does not manufacture new evidence', () => {
   })
 
   it('does not interpret another tool output as builtin read instrumentation', () => {
-    const progress = tracker(), call = { ...read, name: 'grep_search' }
+    const progress = tracker(), call = { ...read, name: 'grep' }
     expect(progress.observe([call], [succeeded(monitored('1.00'))])).toBe(0)
     expect(progress.observe([call], [succeeded(monitored('2.00'))])).toBe(0)
   })

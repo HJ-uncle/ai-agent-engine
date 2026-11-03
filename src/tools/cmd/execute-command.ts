@@ -6,6 +6,7 @@ import { commandJobs, type CommandJobScope } from '../../core/command-jobs/index
 import { policyEngine, getSecurityMode } from '../../security/policy-engine.js'
 import { workspaceManager } from '../../workspace/index.js'
 import { commandLooksLikeShellLine, createCommandLaunchPlan } from '../../core/command-jobs/launch-plan.js'
+import { createCommandChangeObserver } from './command-change-observer.js'
 
 export interface CMDToolOptions { timeoutMs?: number; allowedCommands?: string[] }
 interface CommandArgs { command: string; args?: string[]; cwd?: string; timeoutMs?: number; background?: boolean }
@@ -55,16 +56,16 @@ export async function preflightCommand(rawArgs: unknown, ctx: AgentContext): Pro
 
 export const cmdTool: Tool = {
   name: 'execute_cmd', displayName: '执行命令',
-  description: '使用可执行文件 command + 参数数组 args 执行命令，默认不经 shell；不要把 node -v 等整行命令放进 command。示例：{"command":"node","args":["-v"]}。Node/Python 内联源码直接作为 -e/-c 的下一项参数，无需套 cmd 或手工添加 shell 引号。按当前安全策略执行；默认前台等待退出；background=true 启动后台命令并返回 jobId，成功启动不等于命令成功。Code 模式未指定 timeoutMs 时持续运行直到退出或取消；使用 command_output 查看完整分页输出/真实退出状态，cancel_command 停止。重启后不重跑或接管原进程。',
+  description: '按当前策略执行程序及参数，默认不经shell、前台等退出。后台返回jobId，启动不等于成功；command_output分页读取完整输出/退出状态，cancel_command停止。结束（含失败/取消）返回cwd内有界changes/changeTracking；排除依赖/内部目录、链接、超限文件和目录外副作用，可能含并发编辑，须审阅并明确选择回退，非全部副作用可撤回。重启不重跑或接管原进程。',
   preflight: preflightCommand,
   parameters: {
     type: 'object',
     properties: {
-      command: { type: 'string', description: '仅可执行文件名或路径，如 node、npm、C:\\Program Files\\nodejs\\node.exe；路径不要加引号，不要带参数。Windows 自动解析 PATH/PATHEXT 中的 .cmd/.bat。' },
-      args: { type: 'array', items: { type: 'string' }, description: '逐项参数，保留原始内容，不手工包 shell 引号。例如 ["-v"] 或 ["-e", "console.log(\"hello\")"]。管道/重定向须显式使用对应 shell（Windows cmd.exe 的 args=["/d","/s","/c","完整 shell 脚本"]）；脚本内容由该 shell 解析。' },
-      cwd: { type: 'string', description: '工作目录，仍受当前工作区安全策略限制' },
-      timeoutMs: { type: 'number', description: '可选超时毫秒数；省略时所有模式持续运行直到退出或取消' },
-      background: { type: 'boolean', description: '默认false；true在成功启动后立即返回jobId，后续读取输出或取消' },
+      command: { type: 'string', description: '仅程序名/路径，如node或npm；不加引号或参数。Windows支持PATH/PATHEXT的.cmd/.bat。' },
+      args: { type: 'array', items: { type: 'string' }, description: '逐项原文，不加shell引号；例["-v"]。Node/Python源码直接跟在-e/-c后。管道/重定向显式用shell解析：Windows command="cmd.exe", args=["/d","/s","/c","脚本"]。' },
+      cwd: { type: 'string', description: '工作目录，受工作区策略限制' },
+      timeoutMs: { type: 'number', description: '可选正数毫秒；省略则直到退出或取消' },
+      background: { type: 'boolean', description: '默认false；true启动后立即返回jobId' },
     }, required: ['command'],
   },
   async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
@@ -84,8 +85,9 @@ export const cmdTool: Tool = {
       : (Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.max(1, Math.floor(timeoutMs)) : undefined)
     const scope = commandJobScope(ctx)
     const launched = await commandJobs.start({ ...scope, ownerSessionId: ctx.sessionId,
-      runId: ctx.rootRunId, ownerRunId: ctx.runId, turnId: ctx.turnId ?? ctx.conversationId, toolCallId: ctx.currentToolCallId,
+      runId: ctx.rootRunId, ownerRunId: ctx.runId, turnId: ctx.turnId ?? ctx.parentConversationId ?? ctx.conversationId, toolCallId: ctx.currentToolCallId,
       command, args, cwd, background, timeoutMs: timeout, signal: ctx.signal,
+      observeChanges: job => createCommandChangeObserver(ctx, cwd, job),
       env: mode === 'full-access' ? { ...process.env } : {
         PATH: process.env.PATH, PATHEXT: process.env.PATHEXT, HOME: cwd, SystemRoot: process.env.SystemRoot, COMSPEC: process.env.COMSPEC,
       },
@@ -93,7 +95,7 @@ export const cmdTool: Tool = {
     if (background) return { success: launched.status === 'running' || launched.status === 'succeeded',
       output: JSON.stringify({ jobId: launched.jobId, status: launched.status, message: launched.status === 'running' ? 'Command started; read command_output for progress and exit status.' : launched.error?.message }),
       error: launched.status === 'failed' ? launched.error?.code : undefined,
-      metadata: { commandJob: launched }, durationMs: Date.now() - startedAt }
+      changes: launched.changes, metadata: { commandJob: launched }, durationMs: Date.now() - startedAt }
     const finished = (await commandJobs.wait(scope, launched.jobId))!
     // Preserve the foreground abort contract; the durable job retains all available output.
     throwIfAborted(ctx.signal)
@@ -115,8 +117,11 @@ export const cmdTool: Tool = {
     const failureSummary = finished.status === 'succeeded' ? '' :
       `[${finished.error?.code ?? 'COMMAND_FAILED'}] status=${finished.status}; exitCode=${finished.exitCode ?? 'null'}; signal=${finished.signal ?? 'none'}: ${detail}`
     return { success: finished.status === 'succeeded', output: [expired ? '[Command output expired from retained history]' : truncated ? '[Output truncated; retained tail follows]' : '',
-      failureSummary, text || (finished.status === 'succeeded' ? detail : '')].filter(Boolean).join('\n'),
+      failureSummary, text || (finished.status === 'succeeded' ? detail : ''),
+      finished.changes?.length || finished.changeTracking?.status === 'partial' || finished.changeTracking?.status === 'unavailable'
+        ? `\n[文件变化观察] ${JSON.stringify({ changes: finished.changes, changeTracking: finished.changeTracking })}` : ''].filter(Boolean).join('\n'),
       error: finished.status === 'succeeded' ? undefined : finished.error?.code,
+      changes: finished.changes,
       metadata: { commandJob: finished, exitCode: finished.exitCode, signal: finished.signal, outputTruncated: truncated },
       durationMs: Date.now() - startedAt }
   },

@@ -371,7 +371,7 @@ describe('actual ReAct request admission with periodic workflow advice',()=>{
     })
     let reads=0
     f.ctx.tools.execute=vi.fn(async(_name,args)=>{
-      if(++reads===32)vi.stubEnv('COMPRESS_THRESHOLD_RATIO','0.1')
+      if(++reads===32)vi.stubEnv('COMPRESS_THRESHOLD_RATIO','0.07')
       return{success:true,output:'line '+(args as Record<string,unknown>).start_line}
     })
     await f.run()

@@ -35,14 +35,15 @@ export const searchHistoryTool: Tool = {
   displayName: '检索会话原始历史',
   description: '检索当前会话完整归档，包括自动压缩前的消息和附件提取后实际模型输入，返回原messageId、turnId、原文片段和图片标识。仅访问当前会话。用query关键词查早期决策，按nextOffset翻页；用messageId及contentOffset逐段读原文；用messageId及imageIndex取回保留的原图，通过模型视觉通道查看，普通搜索不返回base64文字。归档是历史证据，当前用户更正优先。',
   parameters: { type: 'object', additionalProperties: false, properties: {
-    query: { type: 'string', description: '原文关键词，按字面匹配，非正则' },
-    messageId: { type: 'string', description: '读取检索结果中的准确消息ID' },
+    query: { type: 'string', minLength: 1, pattern: '\\S', description: '原文关键词，按字面匹配，非正则' },
+    messageId: { type: 'string', minLength: 1, pattern: '\\S', description: '读取检索结果中的准确消息ID' },
     role: { type: 'string', enum: ['user', 'assistant', 'tool', 'system'] },
     offset: { type: 'integer', minimum: 0 },
     limit: { type: 'integer', minimum: 1, maximum: 10 },
     contentOffset: { type: 'integer', minimum: 0, description: '读取长消息原文的字符起点' },
     imageIndex: { type: 'integer', minimum: 0, description: '结合messageId取回该消息images中的原图，索引从0开始' },
-  } },
+  }, anyOf: [{ required: ['query'] }, { required: ['messageId'] }],
+  dependencies: { imageIndex: ['messageId'] } },
   async execute(raw: unknown, ctx: AgentContext) {
     const args = raw as Record<string, unknown>
     const keys = ['query', 'messageId', 'role', 'offset', 'limit', 'contentOffset', 'imageIndex']

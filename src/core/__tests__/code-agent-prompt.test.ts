@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { CODE_AGENT_EXECUTION_PROMPT } from '../code-agent-prompt.js'
 import { FINALIZATION_PROMPT } from '../agent-loop/finalization.js'
+import { buildExecutionProtocol } from '../execution-protocol.js'
 
 describe('Code Agent execution prompt', () => {
   it('defines the task loop and preserves user-only planning mode', () => {
@@ -13,10 +14,34 @@ describe('Code Agent execution prompt', () => {
   })
 
   it('keeps exploration, subagent handoff and failure handling explicit', () => {
-    expect(CODE_AGENT_EXECUTION_PROMPT).toContain('同一种方法不要盲目重试')
     expect(CODE_AGENT_EXECUTION_PROMPT).toContain('子 Agent 不继承完整会话')
     expect(CODE_AGENT_EXECUTION_PROMPT).toContain('文件路径、行号、结论、未核实项和下一步')
     expect(CODE_AGENT_EXECUTION_PROMPT).toContain('只读子 Agent')
+  })
+
+  it('retains Code-specific workspace, delegation, browser sharing and verification boundaries', () => {
+    for (const rule of ['.ae/plans/', '.ae/tmp/', '.ae/logs/', '.ae/openspec/changes/', '.ae/brainstorm/',
+      '用户范围同样约束计划、交接、报告和临时工件', '不搬项目自身 uploads/data/docs',
+      'access=read-only', 'spec-reviewer', 'code-quality-reviewer', '同一次回复发多个独立 subagent 调用',
+      '不重派同一探索绕预算', '不重做已验证实现', '新成功 runId',
+      '添加到当前会话', '不要重复打开同一地址代替用户现有页面',
+      '最小复现', '诊断不支持不等于通过', '脚本语法错误不等于产品缺陷']) {
+      expect(CODE_AGENT_EXECUTION_PROMPT).toContain(rule)
+    }
+  })
+
+  it('keeps shared recovery rules in the per-request protocol instead of duplicating them in Code', () => {
+    const common = buildExecutionProtocol({ list: () => ['execute_cmd', 'command_output', 'cancel_command',
+      'edit_file', 'browser_tabs', 'browser_snapshot', 'browser_open', 'search_history']
+      .map(name => ({ name, description: name, parameters: {} })) })
+    for (const marker of ['command_output', 'cancel_command', 'expectedHash', 'operationPerformed', 'snapshotUnavailable', 'search_history']) {
+      expect(CODE_AGENT_EXECUTION_PROMPT).not.toContain(marker)
+      expect(common).toContain(marker)
+    }
+    for (const rule of ['不填整行 shell 命令', '不原样重复失败', '同文件最近真实读写回执',
+      '同 URL 不等于同 tabId', 'unknown 可能执行过，先核对状态', 'null/空结果不证明成功']) {
+      expect(common).toContain(rule)
+    }
   })
 
   it('requires an evidence-based, structured handoff', () => {

@@ -38,6 +38,10 @@ function classify(reason: string, metadata: ToolResult['metadata']): { code: str
     code = 'BROWSER_TAB_NOT_VISIBLE'; knownBeforeDispatch = true
   } else if (reason === '页面已经变化，请重新读取快照后操作') {
     code = 'BROWSER_STALE_NAVIGATION'; knownBeforeDispatch = true
+  } else if (reason.startsWith('浏览器显示区域未准备完成，尚未执行页面操作：')) {
+    code = 'BROWSER_SURFACE_NOT_READY'; knownBeforeDispatch = true
+  } else if (reason.startsWith('浏览器截图表面不可用；') || reason === 'Current display surface not available for capture') {
+    code = 'BROWSER_CAPTURE_UNAVAILABLE'; knownBeforeDispatch = true
   } else if ([
     '这个浏览器标签属于其他会话或引擎，请在当前会话重新打开',
     '这个浏览器标签尚未添加到当前会话，请让用户在标签右键菜单中选择“添加到当前会话”，无需重新打开网页',
@@ -51,7 +55,8 @@ function classify(reason: string, metadata: ToolResult['metadata']): { code: str
 function recoveryFor(code: string, performed: Performed): string {
   if (code === 'BROWSER_NAVIGATION_FAILED') return '页面加载失败时标签可能已经创建。使用返回的 tabId，或先调用 browser_tabs 找到该标签，再用 browser_navigate 修正地址并读取快照；不要反复 browser_open 创建重复标签。'
   if (code === 'BROWSER_TAB_CLOSED') return '先调用 browser_tabs 重新取得当前会话的有效 tabId；目标已关闭时用 browser_open 打开原地址，再读取快照。不要猜 tabId 或复用旧 ref/navigationId。'
-  if (code === 'BROWSER_TAB_NOT_VISIBLE') return '客户端会自动显示操作目标标签；请恢复 Aether 窗口、关闭遮挡弹窗，再用 browser_tabs 确认目标并重新读取快照。不要靠换坐标或修改项目网页解决浏览器可见性失败。'
+  if (code === 'BROWSER_TAB_NOT_VISIBLE' || code === 'BROWSER_SURFACE_NOT_READY') return '客户端已请求显示所属任务的标签并等待显示区域确认。隐藏/最小化窗口、遮挡弹窗或其他任务占用前台时，请用户恢复并切回该任务；不要重复发送相同输入。恢复后用 browser_tabs 检查 availability，再读取新快照。不要靠换坐标或修改项目网页解决可见性失败。'
+  if (code === 'BROWSER_CAPTURE_UNAVAILABLE') return '原生和页面截图均未取得可用图像，不能声称已完成视觉验收。可以继续用 browser_snapshot / browser_console / browser_network 验证结构和行为；需要图像时恢复客户端显示环境后再截图，不修改网页来绕过显示表面故障。'
   if (code === 'BROWSER_TAB_NOT_SHARED') return '请用户在已有浏览器标签的右键菜单选择“添加到当前会话”，随后用 browser_tabs 确认同一 tabId 再读取快照。不得自行转移其他会话的页面，也不要通过 browser_open 复制页面来代替原标签。'
   if (code === 'BROWSER_CLIENT_UNAVAILABLE' || code === 'BROWSER_CLIENT_DISCONNECTED') return '恢复 Aether 客户端连接并启用浏览器 AI 操作；用 browser_tabs 确认连接和有效标签，再读取实际页面状态。已交付的操作可能已生效，不要盲目重复提交。'
   if (code === 'BROWSER_STALE_NAVIGATION' || code === 'BROWSER_INVALID_ARGUMENTS') return '重新读取 browser_snapshot，使用返回的 tabId/navigationId/ref 修正参数；不要修改项目源码来掩盖工具调用失败。'
@@ -59,7 +64,14 @@ function recoveryFor(code: string, performed: Performed): string {
   return '修复上述工具或连接条件后重新读取页面状态，再决定下一步；不要把工具失败当作网页缺陷或已完成的交互。'
 }
 
-function failedTabIdentity(output: string): { tabId?: string; url?: string; navigationId?: number } {
+interface FailureAvailability {
+  window: string
+  surface: string
+  initialization: string
+  interaction: string
+}
+
+function failedTabIdentity(output: string): { tabId?: string; url?: string; navigationId?: number; availability?: FailureAvailability } {
   try {
     const body: unknown = JSON.parse(output)
     if (!body || typeof body !== 'object' || Array.isArray(body)) return {}
@@ -68,7 +80,18 @@ function failedTabIdentity(output: string): { tabId?: string; url?: string; navi
     if (!tabId) return {}
     const navigationId = typeof record.navigationId === 'number' && Number.isSafeInteger(record.navigationId) && record.navigationId >= 0 ? record.navigationId : undefined
     const url = typeof record.url === 'string' && JSON.stringify(record.url).length <= 2048 && /^https?:\/\//i.test(record.url) ? record.url : undefined
-    return { tabId, ...(navigationId !== undefined ? { navigationId } : {}), ...(url ? { url } : {}) }
+    const state = record.availability
+    let availability: FailureAvailability | undefined
+    if (state && typeof state === 'object' && !Array.isArray(state)) {
+      const candidate = state as Record<string, unknown>
+      if (typeof candidate.window === 'string' && ['visible', 'hidden', 'minimized', 'closed'].includes(candidate.window) &&
+          typeof candidate.surface === 'string' && ['visible', 'hidden'].includes(candidate.surface) &&
+          typeof candidate.initialization === 'string' && ['starting', 'ready', 'failed'].includes(candidate.initialization) &&
+          typeof candidate.interaction === 'string' && ['ready', 'needs_reveal', 'needs_user', 'unavailable'].includes(candidate.interaction)) {
+        availability = { window: candidate.window, surface: candidate.surface, initialization: candidate.initialization, interaction: candidate.interaction }
+      }
+    }
+    return { tabId, ...(navigationId !== undefined ? { navigationId } : {}), ...(url ? { url } : {}), ...(availability ? { availability } : {}) }
   } catch { return {} }
 }
 
@@ -81,8 +104,11 @@ export function normalizeBrowserFailure(result: ToolResult, action?: string, tab
   const code = (action === 'open' || action === 'navigate') && classified.code === 'BROWSER_OPERATION_FAILED'
     ? 'BROWSER_NAVIGATION_FAILED' : classified.code
   const identity = failedTabIdentity(result.output)
+  const retry = operationPerformed !== false ? 'observe_before_retry'
+    : identity.availability?.interaction === 'needs_user' || code === 'BROWSER_TAB_NOT_VISIBLE' ? 'after_user_action'
+    : code === 'BROWSER_CAPTURE_UNAVAILABLE' ? 'use_snapshot_or_restore_display' : 'after_recovery'
   const payload = { success: false, error: reason.slice(0, 2800), code, operationPerformed,
-    recovery: recoveryFor(code, operationPerformed), ...identity,
+    recovery: recoveryFor(code, operationPerformed), retry, ...identity,
     ...(action ? { action } : {}), ...(typeof tabId === 'string' ? { tabId: tabId.slice(0, 128) } : {}) }
   // The ordinary 4K tool cap must not cut the failure JSON in half. Escape-heavy
   // exception text can expand when encoded, so bound the encoded representation.

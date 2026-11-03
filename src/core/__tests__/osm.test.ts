@@ -12,6 +12,8 @@ import {
   logOSMSelfCheck,
   __resetOSMWarnFlagsForTests,
 } from '../osm.js'
+import { isDefaultTool, OPTIONAL_TOOL_EXPOSURES } from '../../tools/tool-exposure.js'
+import { normalizeToolName } from '../../tools/tool-profile.js'
 
 /**
  * OSM 核心逻辑单元测试（Layer 2 — 四档模式 + legacy 兼容）
@@ -306,11 +308,13 @@ describe('OSM / runOSMSelfCheck', () => {
     expect(intersection).toEqual([])
   })
 
-  it('空 registry → missingInRegistry 包含全部 CORE', () => {
+  it('空 registry → 只报告规范化去重后默认提供的 CORE', () => {
     const fakeRegistry = { has: (_: string) => false, list: () => [] }
     const result = runOSMSelfCheck(fakeRegistry)
     expect(result.disjointViolations).toEqual([])
-    expect(result.missingInRegistry.length).toBe(OSM_CORE_TOOLS.size)
+    expect(result.missingInRegistry).toEqual([...new Set([...OSM_CORE_TOOLS].map(normalizeToolName))].filter(isDefaultTool))
+    expect(result.missingInRegistry.filter(name => name === 'read_file')).toHaveLength(1)
+    expect(result.missingInRegistry).not.toContain('todo_list')
     expect(result.unknownTools).toEqual([])
   })
 
@@ -343,6 +347,25 @@ describe('OSM / runOSMSelfCheck', () => {
     }
     const result = runOSMSelfCheck(fakeRegistry)
     expect(result.missingInRegistry).toEqual(['grep'])
+  })
+
+  it('真实规范名注册且可选工具全部缺席时不产生缺失或别名误报', () => {
+    const names = new Set([
+      'read_file', 'write_file', 'edit_file', 'office_document', 'office_environment', 'list_files', 'create_dir',
+      'ask_user', 'remember', 'recall', 'search_memory',
+      'list_skills', 'get_skill', 'run_skill_script', 'grep', 'glob', 'execute_cmd',
+    ])
+    const registry = { has: (name: string) => names.has(name), list: () => [...names].map(name => ({ name })) }
+    expect(runOSMSelfCheck(registry)).toEqual({ disjointViolations: [], missingInRegistry: [], unknownTools: [] })
+    names.delete('read_file')
+    expect(runOSMSelfCheck(registry).missingInRegistry).toEqual(['read_file'])
+  })
+
+  it('显式选择的可选工具仍视为已分类能力', () => {
+    const names = new Set([...OSM_CORE_TOOLS, ...Object.keys(OPTIONAL_TOOL_EXPOSURES)])
+    const result = runOSMSelfCheck({ has: name => names.has(name), list: () => [...names].map(name => ({ name })) })
+    expect(result.missingInRegistry).toEqual([])
+    expect(result.unknownTools).toEqual([])
   })
 
   it('registry.list 抛错不影响其它检查', () => {

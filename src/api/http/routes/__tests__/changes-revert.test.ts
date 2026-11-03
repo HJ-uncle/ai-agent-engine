@@ -2,9 +2,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import Fastify, { type FastifyInstance } from 'fastify'
-import { createClient, type Client } from '@libsql/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as database from '../../../../storage/sqlite/db.js'
+import { LocalSqliteProcessClient } from '../../../../storage/sqlite/local-process-client.js'
 import { ChangeStore, type FileChange, type RevertBatchResult } from '../../../../storage/changes/index.js'
 import { canonicalFilePathSync, hashFileContent, readFileVersionSync, withFileLocks } from '../../../../shared/file-version.js'
 import { changeRoutes } from '../changes.js'
@@ -13,7 +13,7 @@ import { commitWriteChange, readOldSnapshot } from '../../../../tools/file/chang
 import type { AgentContext } from '../../../../core/agent-context/index.js'
 
 /** Real filesystem + SQLite + HTTP: verify effects, versions, scopes and concurrency. */
-let db: Client
+let db: LocalSqliteProcessClient
 let app: FastifyInstance
 let store: ChangeStore
 let fixture: string
@@ -22,7 +22,9 @@ const session = 'd2-session'
 
 beforeEach(async () => {
   fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-d2-revert-'))
-  db = createClient({ url: 'file::memory:' })
+  // Exercise the production transaction/connection lifecycle. libsql's raw
+  // :memory: client opens a new empty database after an interactive transaction.
+  db = new LocalSqliteProcessClient({ url: `file:${path.join(fixture, 'changes.db')}` })
   vi.spyOn(database, 'getDb').mockReturnValue(db)
   store = new ChangeStore()
   app = Fastify()
@@ -35,7 +37,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await app.close()
-  db.close()
+  const closed = await db.closeWithReceipt()
+  expect(closed.healthy, closed.errors.join('; ')).toBe(true)
   vi.restoreAllMocks()
   if (path.dirname(fixture) !== os.tmpdir() || !path.basename(fixture).startsWith('aether-d2-revert-')) throw new Error('Unsafe fixture cleanup')
   fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })

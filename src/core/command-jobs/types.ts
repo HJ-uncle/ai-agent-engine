@@ -26,6 +26,28 @@ export interface CommandJobSnapshot {
   cursor: number
   /** Cursor immediately before the first retained entry. Older cursors have a gap. */
   earliestCursor: number
+  /** Lightweight receipts; full before/after content lives in the changes API. */
+  changes?: Record<string, unknown>[]
+  changeTracking?: CommandChangeTracking
+}
+
+export interface CommandChangeTracking {
+  status: 'observing' | 'complete' | 'partial' | 'unavailable'
+  root: string
+  note: string
+  limits?: { maxFiles: number; maxBytes: number; maxFileBytes: number; maxEntries: number; maxDepth: number; maxScanMs: number; maxChanges: number }
+  excludedDirectories?: string[]
+  skippedCount?: number
+  skippedSamples?: string[]
+  skippedReasons?: Record<string, number>
+  concurrentChangesExcluded?: number
+  recordedCount?: number
+}
+
+export interface CommandChangeObserver {
+  initial: CommandChangeTracking
+  finish(): Promise<{ changes: Record<string, unknown>[]; tracking: CommandChangeTracking }>
+  dispose(): void
 }
 
 export interface CommandOutputEntry { seq: number; stream: 'stdout' | 'stderr'; text: string }
@@ -67,6 +89,8 @@ export interface CommandJobLaunch {
   timeoutMs?: number
   env: NodeJS.ProcessEnv
   signal?: AbortSignal
+  /** Prepared after admission, before spawn. Never serialized or accepted over HTTP. */
+  observeChanges?: (job: CommandJobSnapshot) => Promise<CommandChangeObserver>
 }
 
 export const COMMAND_OUTPUT_BYTES = 256 * 1024

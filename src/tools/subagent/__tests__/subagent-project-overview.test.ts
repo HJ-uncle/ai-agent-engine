@@ -69,9 +69,9 @@ describe.skipIf(!rgAvailable)('subagent project overview with real search and hi
         if (calls === 1) {
           expect(messages.find((message) => message.role === 'user')?.content).toBe('Inspect this project: search its purpose, read the source evidence, and summarize it.')
           yield { done: true, finishReason: 'tool_calls', ...usage,
-            toolCalls: [{ id: 'overview-search', name: 'grep_search', args: JSON.stringify({ pattern: 'PROJECT_PURPOSE', maxResults: 3 }), index: 0 }] }
+            toolCalls: [{ id: 'overview-search', name: 'grep', args: JSON.stringify({ pattern: 'PROJECT_PURPOSE', maxResults: 3 }), index: 0 }] }
         } else if (calls === 2) {
-          searchEvidence = String(messages.find((message) => message.role === 'tool' && message.toolName === 'grep_search')?.content ?? '')
+          searchEvidence = String(messages.find((message) => message.role === 'tool' && message.toolName === 'grep')?.content ?? '')
           expect(searchEvidence).toContain('Found 1 match(es) [ripgrep]')
           expect(searchEvidence).toContain('README.md:2:PROJECT_PURPOSE: Electron IDE for project research')
           yield { done: true, finishReason: 'tool_calls', ...usage,
@@ -113,18 +113,18 @@ describe.skipIf(!rgAvailable)('subagent project overview with real search and hi
     expect(run.status).toBe('succeeded')
     expect(run.schemaVersion).toBe(2)
     expect(run.toolCount).toBe(2)
-    expect([...run.toolCalls].sort((a, b) => a.ordinal - b.ordinal).map((tool) => [tool.name, tool.status])).toEqual([['grep_search', 'succeeded'], ['read_file', 'succeeded']])
+    expect([...run.toolCalls].sort((a, b) => a.ordinal - b.ordinal).map((tool) => [tool.name, tool.status])).toEqual([['grep', 'succeeded'], ['read_file', 'succeeded']])
     expect(run.usage.totalTokens).toBe(600_000)
     expect(requestBudget.limit).toBe(Infinity)
     expect(requestBudget.snapshot).toMatchObject({ charged: 600_000, reserved: 0, remaining: Infinity })
     const canonical = await getSubagentStore().getRun(parent.tenantId, run.runId)
     expect(canonical?.schemaVersion).toBe(1)
     expect(canonical?.resultSummary).toBe(run.resultSummary)
-    expect(canonical?.toolCalls.map(tool => [tool.name, tool.status])).toEqual([['grep_search', 'succeeded'], ['read_file', 'succeeded']])
+    expect(canonical?.toolCalls.map(tool => [tool.name, tool.status])).toEqual([['grep', 'succeeded'], ['read_file', 'succeeded']])
     expect(result.output).toContain(`[子任务状态] {"runId":"${run.runId}"`)
     expect(result.output).toContain(run.resultSummary)
     const childHistory = await createConversationHistory().getFullHistory({ tenantId: parent.tenantId, sessionId: run.childSessionId })
-    expect(childHistory.filter((message) => message.role === 'tool').map((message) => message.toolName)).toEqual(['grep_search', 'read_file'])
+    expect(childHistory.filter((message) => message.role === 'tool').map((message) => message.toolName)).toEqual(['grep', 'read_file'])
     expect(childHistory.at(-1)?.content).toBe(run.resultSummary)
     const parentHistory = await history.getFullHistory(parent)
     expect(parentHistory.find((message) => message.id === `subagent-result:${run.runId}`)).toMatchObject({

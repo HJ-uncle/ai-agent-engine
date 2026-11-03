@@ -14,7 +14,7 @@ const fixtureRoot = path.resolve('.e2e-tmp')
 let fixtureDir: string
 let ctx: AgentContext
 
-describe.skipIf(!rgAvailable)('grep_search with real ripgrep', () => {
+describe.skipIf(!rgAvailable)('grep with real ripgrep', () => {
   beforeEach(() => {
     fs.mkdirSync(fixtureRoot, { recursive: true })
     fixtureDir = fs.mkdtempSync(path.join(fixtureRoot, 'grep-search-'))

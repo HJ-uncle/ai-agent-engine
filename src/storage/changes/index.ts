@@ -32,6 +32,10 @@ export interface FileChange {
   truncated: boolean
   status: ChangeStatus
   createdAt: number
+  /** Observation is not proof that the command was the only writer. */
+  source?: 'command-observation'
+  commandJobId?: string
+  requiresExplicitRevert?: boolean
 }
 
 export interface RecordChangeInput {
@@ -47,6 +51,9 @@ export interface RecordChangeInput {
   oldSnapshotRef?: string
   newSnapshotRef?: string
   truncated?: boolean
+  source?: 'command-observation'
+  commandJobId?: string
+  requiresExplicitRevert?: boolean
 }
 
 export interface RevertBatchInput {
@@ -110,7 +117,10 @@ function rowToChange(row: Record<string, unknown>): FileChange {
     newHash: row.new_hash == null ? null : String(row.new_hash),
     oldSnapshotRef: row.old_snapshot_ref == null ? undefined : String(row.old_snapshot_ref),
     newSnapshotRef: row.new_snapshot_ref == null ? undefined : String(row.new_snapshot_ref),
-    truncated: Number(row.truncated) === 1, status: row.status as ChangeStatus, createdAt: Number(row.created_at)
+    truncated: Number(row.truncated) === 1, status: row.status as ChangeStatus, createdAt: Number(row.created_at),
+    ...(row.source === 'command-observation' ? { source: 'command-observation' as const } : {}),
+    ...(row.command_job_id == null ? {} : { commandJobId: String(row.command_job_id) }),
+    ...(Number(row.requires_explicit_revert) === 1 ? { requiresExplicitRevert: true } : {}),
   }
 }
 
@@ -130,7 +140,8 @@ function storedPathIdentity(filePath: string): string {
 }
 
 export class ChangeStore {
-  private get db() { return getDb() }
+  constructor(private readonly boundDb?: Client) {}
+  private get db() { return this.boundDb ?? getDb() }
 
   private async ensureTable(): Promise<void> {
     const db = this.db
@@ -157,6 +168,9 @@ export class ChangeStore {
         if (!columns.has('run_id')) await db.execute('ALTER TABLE file_changes ADD COLUMN run_id TEXT')
         if (!columns.has('old_snapshot_ref')) await db.execute('ALTER TABLE file_changes ADD COLUMN old_snapshot_ref TEXT')
         if (!columns.has('new_snapshot_ref')) await db.execute('ALTER TABLE file_changes ADD COLUMN new_snapshot_ref TEXT')
+        if (!columns.has('source')) await db.execute('ALTER TABLE file_changes ADD COLUMN source TEXT')
+        if (!columns.has('command_job_id')) await db.execute('ALTER TABLE file_changes ADD COLUMN command_job_id TEXT')
+        if (!columns.has('requires_explicit_revert')) await db.execute('ALTER TABLE file_changes ADD COLUMN requires_explicit_revert INTEGER NOT NULL DEFAULT 0')
         await db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_file_changes_seq ON file_changes(seq)')
         await db.execute('CREATE INDEX IF NOT EXISTS idx_file_changes_session ON file_changes(tenant_id, session_id, seq)')
       })()
@@ -177,12 +191,13 @@ export class ChangeStore {
     }
     const result = await this.db.execute({
       // One SQL statement allocates order, including in old development tables.
-      sql: `INSERT INTO file_changes (seq, id, tenant_id, session_id, turn_id, run_id, path, kind, old_content, new_content, old_hash, new_hash, old_snapshot_ref, new_snapshot_ref, truncated, status, created_at)
-        SELECT COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ? FROM file_changes RETURNING *`,
+      sql: `INSERT INTO file_changes (seq, id, tenant_id, session_id, turn_id, run_id, path, kind, old_content, new_content, old_hash, new_hash, old_snapshot_ref, new_snapshot_ref, truncated, status, created_at, source, command_job_id, requires_explicit_revert)
+        SELECT COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ? FROM file_changes RETURNING *`,
       args: [uuidv4(), tenantId, input.sessionId, input.turnId ?? null, input.runId ?? null, canonicalFilePathSync(input.path), input.kind,
         (input.oldContent?.length ?? 0) > MAX_CONTENT_CHARS ? null : input.oldContent,
         (input.newContent?.length ?? 0) > MAX_CONTENT_CHARS ? null : input.newContent,
-        oldHash, newHash, input.oldSnapshotRef ?? null, input.newSnapshotRef ?? null, truncated ? 1 : 0, Date.now()]
+        oldHash, newHash, input.oldSnapshotRef ?? null, input.newSnapshotRef ?? null, truncated ? 1 : 0, Date.now(),
+        input.source ?? null, input.commandJobId ?? null, input.requiresExplicitRevert ? 1 : 0]
     })
     return rowToChange(result.rows[0])
   }
@@ -191,6 +206,20 @@ export class ChangeStore {
     await this.ensureTable()
     const result = await this.db.execute({ sql: 'SELECT * FROM file_changes WHERE id=? AND tenant_id=?', args: [id, tenantId] })
     return result.rows[0] ? rowToChange(result.rows[0]) : null
+  }
+
+  /** A watermark does not disclose another session's changes; it only prevents
+   * a command observation from taking ownership of a cooperating writer's edit. */
+  async latestSequence(): Promise<number> {
+    await this.ensureTable()
+    return Number((await this.db.execute('SELECT COALESCE(MAX(seq),0) AS seq FROM file_changes')).rows[0].seq)
+  }
+
+  async hasPathChangesAfter(filePath: string, sequence: number): Promise<boolean> {
+    await this.ensureTable()
+    const identity = storedPathIdentity(filePath)
+    const rows = await this.db.execute({ sql: 'SELECT DISTINCT path FROM file_changes WHERE seq>?', args: [sequence] })
+    return rows.rows.some(row => storedPathIdentity(String(row.path)) === identity)
   }
 
   /** Complete server-side scope; UI pagination must never define what "all" means. */
@@ -340,6 +369,9 @@ export class ChangeStore {
     selected.forEach((change, index) => {
       if (!change || change.sessionId !== input.sessionId) {
         results.push({ id: ids![index], path: '', status: 'unavailable', message: '改动不存在或不属于当前会话' })
+      } else if (change.requiresExplicitRevert && ids === undefined && change.status !== 'reverted') {
+        results.push({ id: change.id, path: change.path, status: 'unavailable',
+          message: '这是命令运行期间观察到的文件变化，可能包含并发编辑；请在改动面板审阅并明确选择后撤回' })
       } else targets.push(change)
     })
     if (targets.length === 0) return summarize(results)

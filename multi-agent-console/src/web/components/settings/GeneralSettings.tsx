@@ -107,7 +107,7 @@ export default function GeneralSettings() {
             <ul style={{ paddingLeft: 20, marginBottom: 12 }}>
               <li>Token 预算 × 5、迭代次数 × 4、工具输出上限 × 4、历史窗口 × 4</li>
               <li>全量工具可用（含 <code>run_command</code> / <code>delete_file</code> /
-                <code> web_fetch</code> / <code>http_request</code> / <code>install_package</code> /
+                <code> web_fetch</code> / <code>http_request</code> /
                 <code> subagent</code> 等高风险工具）</li>
               <li>压缩阈值放宽到 0.7，长会话 token 消耗显著上升</li>
               <li>自动注入 OpenSpec 方法论 (OSM)，简单任务也会走提案 / 设计 / TDD 流程</li>

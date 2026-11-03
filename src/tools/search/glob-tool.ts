@@ -8,7 +8,7 @@ import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/in
 import { workspaceManager } from '../../workspace/index.js'
 
 export const globTool: Tool = {
-  name: 'glob_search',
+  name: 'glob',
   displayName: 'Glob 文件搜索',
   description: 'Glob 模式搜索文件路径，如 **/*.ts',
   parameters: {
@@ -24,7 +24,7 @@ export const globTool: Tool = {
   async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
     const { pattern, cwd = '.', limit = 100, offset = 0 } = rawArgs as { pattern: string; cwd?: string; limit?: number; offset?: number }
     if (!Number.isSafeInteger(limit) || limit < 1 || !Number.isSafeInteger(offset) || offset < 0) {
-      return { success: false, output: 'glob_search: limit 必须为正整数，offset 必须为非负整数。' }
+      return { success: false, output: 'glob: limit 必须为正整数，offset 必须为非负整数。' }
     }
     try {
       const basePath = workspaceManager.resolveSafePath(ctx, cwd)

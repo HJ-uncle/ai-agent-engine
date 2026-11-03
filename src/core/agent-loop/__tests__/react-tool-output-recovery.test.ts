@@ -722,7 +722,7 @@ describe('safe regeneration after a terminal tool output limit', () => {
     const adapter = new AnthropicAdapter('local-test', 'deepseek-v4.1-flash', 'http://127.0.0.1:1', { 'X-Access-Token': 'local-test-token' })
     await f.run({}, undefined, adapter)
     expect(request).toBe(4)
-    expect(bodies[0].max_tokens).toBe(8192)
+    expect(Number(bodies[0].max_tokens)).toBeGreaterThan(16_384)
     expect(f.ctx.tools.execute).toHaveBeenCalledTimes(1)
     expect(f.ctx.tools.execute).toHaveBeenCalledWith('subagent', { task: 'Review authorized brief.json.' }, expect.anything())
     expect(f.history.find(m => m.toolCall?.id === 'sdk-partial')!.toolCall).toMatchObject({ _rawArgs: unfinished })

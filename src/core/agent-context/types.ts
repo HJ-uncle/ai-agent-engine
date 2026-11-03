@@ -62,6 +62,8 @@ export interface ToolResult {
    */
   metadata?: Record<string, unknown>
   change?: Record<string, unknown>
+  /** Commands can produce several independently reviewable file receipts. */
+  changes?: Record<string, unknown>[]
 }
 
 export interface PendingAction {
@@ -126,6 +128,8 @@ export interface Tool {
   readonly displayName?: string
   readonly description: string
   readonly parameters: JSONSchema
+  readonly source?: string
+  readonly outputSchema?: JSONSchema
   readonly executionMode?: ToolExecutionMode
   preflight?(args: unknown, ctx: AgentContext): Promise<ToolResult | undefined>
   execute(args: unknown, ctx: AgentContext): Promise<ToolResult>
@@ -270,7 +274,7 @@ export interface ConversationArchive {
 export interface IToolRegistry {
   register(tool: Tool): void
   unregister(name: string): void
-  list(): Array<{ name: string; displayName?: string; description: string; parameters: JSONSchema }>
+  list(): Array<{ name: string; displayName?: string; description: string; parameters: JSONSchema; source?: string; outputSchema?: JSONSchema }>
   execute(name: string, args: unknown, ctx: AgentContext): Promise<ToolResult>
   preflight?(name: string, args: unknown, ctx: AgentContext): Promise<ToolResult | undefined>
   executionMode?(name: string, args?: unknown): ToolExecutionMode
@@ -282,6 +286,8 @@ export interface IToolRegistry {
 export type BrowserPrincipal = Pick<AuthContext, 'tenantId' | 'userId' | 'method'>
 
 export interface AgentContext {
+  /** Descriptive UI capabilities; never used to grant execution authority. */
+  clientCapabilities?: import('../client-capabilities.js').ClientCapabilityManifest
   /** Trusted server capability; never copied into model metadata or continuation. */
   executionOwner?: import('../collaboration/execution-owner.js').ExecutionOwner
   /** Private backend capability minted only after canonical production admission. */
@@ -352,6 +358,7 @@ export interface AgentContext {
 // ─── AgentContext Factory Options ─────────────────────────────────────────────
 
 export interface CreateAgentContextOptions {
+  clientCapabilities?: import('../client-capabilities.js').ClientCapabilityManifest
   executionOwner?: import('../collaboration/execution-owner.js').ExecutionOwner
   commitPending?: (pending: Pending) => void | Promise<void>
   browserAuthority?: import('../browser-authority.js').BrowserHostAuthority

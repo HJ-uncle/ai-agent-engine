@@ -152,6 +152,7 @@ describe('independent delivered-request cancellation watch', () => {
     const bridge = create()
     const client = bridge.register(identity, ctx.sessionId)
     expect(client.capabilities.requestWatch).toBe(true)
+    expect(client.capabilities.resultMetadata).toBe(1)
     const controller = new AbortController()
     const action = bridge.execute('click', { tabId: 'A', navigationId: 1, ref: '1:1' }, { ...ctx, signal: controller.signal })
     const [command] = await bridge.poll(identity, client.clientId, client.clientToken)

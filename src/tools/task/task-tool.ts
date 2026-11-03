@@ -17,8 +17,8 @@ async function resolveJob(id: string, tenantId: string): Promise<JobRecord | nul
 export const taskControlTools: Tool[] = [
   {
     name: 'task_list',
-    displayName: '列出后台任务',
-    description: '列出后台任务',
+    displayName: '列出旧版队列任务',
+    description: '兼容旧版：查询持久化 task-queue 任务，不包含 execute_cmd 命令任务、子代理或定时任务。当前服务没有内置队列处理器；不要用它判断当前 AI 任务是否运行。',
     parameters: {
       type: 'object',
       properties: {
@@ -43,8 +43,8 @@ export const taskControlTools: Tool[] = [
   },
   {
     name: 'task_cancel',
-    displayName: '取消后台任务',
-    description: '取消后台任务',
+    displayName: '取消旧版排队任务',
+    description: '兼容旧版：仅取消旧 task-queue 中尚未开始的 pending 任务，不能停止正在运行的任务。AI 命令用 cancel_command，子代理用 subagent_cancel；这里的 id 不与它们互通。',
     parameters: {
       type: 'object',
       properties: {
@@ -64,8 +64,8 @@ export const taskControlTools: Tool[] = [
   },
   {
     name: 'task_status',
-    displayName: '查看任务状态',
-    description: '查看任务状态',
+    displayName: '查看旧版队列任务',
+    description: '兼容旧版：读取 task-queue 记录；id 必须来自 task_list，不是命令 jobId、子代理 runId 或定时任务 id。',
     parameters: {
       type: 'object',
       properties: {

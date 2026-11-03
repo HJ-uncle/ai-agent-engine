@@ -79,6 +79,47 @@ function holdCommandTerminalAck(jobId: string) {
 }
 
 describe('owned server stop HTTP boundary', () => {
+  it('user cancellation settles an aborting producer without a model error in its SSE body', async () => {
+    const sessionId = 'owned-cancel-without-error', entered = hold(), aborted = hold()
+    vi.spyOn(ReActStrategy.prototype, 'run').mockImplementation(async function* (_input, ctx) {
+      const signal = ctx.signal!
+      entered.release(); yield 'synthetic partial answer'
+      if (signal.aborted) aborted.release(); else signal.addEventListener('abort', aborted.release, { once: true })
+      await aborted.promise
+      throw signal.reason
+    })
+    const response = await chat(sessionId), body = response.text()
+    await entered.promise
+    const run = (await rootRunStore.latest('default', sessionId))!
+    const stopped = await fetch(base + '/api/v1/chat/cancel', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId, runId: run.runId }) })
+    expect(stopped.status).toBe(200)
+    expect(await stopped.json()).toMatchObject({ code: 200, data: { sessionId, runId: run.runId, cancelled: true, settled: true } })
+    const stream = await body
+    expect(stream).toContain('synthetic partial answer')
+    expect(stream).not.toContain('[System Error:')
+    expect(stream).not.toContain('CHAT_FAILED')
+    expect(stream).toContain('event: done')
+    const settled = await rootRunStore.get('default', run.runId)
+    expect(settled?.status).toBe('cancelled')
+    expect(settled?.error).toBeUndefined()
+    const snapshot = await fetch(base + '/api/v1/chat/snapshot?sessionId=' + sessionId)
+    expect((await snapshot.json()).data.run).toMatchObject({ runId: run.runId, status: 'cancelled' })
+  }, 20_000)
+
+  it('a producer failure without cancellation still publishes its actual model error', async () => {
+    const sessionId = 'owned-real-producer-error'
+    vi.spyOn(ReActStrategy.prototype, 'run').mockImplementation(async function* () {
+      yield 'synthetic partial answer'
+      throw new Error('synthetic provider failure')
+    })
+    const response = await chat(sessionId), stream = await response.text()
+    expect(stream).toContain('[System Error: synthetic provider failure]')
+    expect(stream).toContain('event: done')
+    const run = (await rootRunStore.latest('default', sessionId))!
+    expect(run).toMatchObject({ status: 'failed', error: { code: 'CHAT_FAILED', message: 'synthetic provider failure', retryable: false } })
+  }, 20_000)
+
   it('server.close aborts a real held SSE producer before waiting for its socket and joins the executor', async () => {
     const entered = hold(), aborted = hold(), executorDone = hold(); let signal!: AbortSignal
     vi.spyOn(ReActStrategy.prototype, 'run').mockImplementation(async function* (_input, ctx) {

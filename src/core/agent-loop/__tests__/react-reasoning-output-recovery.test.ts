@@ -48,7 +48,7 @@ function fixture(profile: 'general' | 'code' = 'general') {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals() })
 
 describe('reasoning-only terminal output recovery', () => {
-  it.each(['general', 'code'] as const)('%s regenerates once without replaying private reasoning or creating an empty assistant', async profile => {
+  it.each(['general', 'code'] as const)('%s regenerates without replaying private reasoning or creating an empty assistant', async profile => {
     const f = fixture(profile)
     let calls = 0
     const caps: Array<number | undefined> = []
@@ -67,8 +67,11 @@ describe('reasoning-only terminal output recovery', () => {
     })
     const frames = await f.run({ thinkingEnabled: true })
     expect(calls).toBe(2)
-    if (profile === 'general') expect(caps).toEqual([8192, 16_384])
-    else expect(caps.every(n => n !== undefined && n > 8192)).toBe(true)
+    expect(caps.every(n => n !== undefined && n > 16_384)).toBe(true)
+    for (const [, options] of vi.mocked(f.llm.stream).mock.calls) {
+      expect(options!.maxTokens! + options!.requestInputTokenEstimate!).toBe(100_000)
+      expect(options!.unboundedOutput).toBe(true)
+    }
     expect(body(frames)).toBe('Public task result verified.')
     expect(f.outcomes).toEqual([{ status: 'succeeded', output: body(frames), stopReason: 'completed' }])
     const segments = f.appended.filter(m => m.role === 'assistant')
@@ -81,11 +84,12 @@ describe('reasoning-only terminal output recovery', () => {
     expect(f.ctx.tools.execute).not.toHaveBeenCalled()
   })
 
-  it('retains an explicit output cap and explicit Off on the one recovery request', async () => {
-    const f = fixture(), caps: Array<number | undefined> = []
+  it.each(['general', 'code'] as const)('%s retains an explicit output cap and explicit Off during recovery', async profile => {
+    const f = fixture(profile), caps: Array<number | undefined> = []
     f.llm.stream = vi.fn(async function* (messages, options) {
       caps.push(options?.maxTokens)
       expect(options?.thinkingEnabled).toBe(false)
+      expect(options?.unboundedOutput).toBe(false)
       expect(JSON.stringify(messages)).not.toContain(PRIVATE)
       if (caps.length === 1) yield { ...reasoning(), completionTokens: 2048 }
       else yield answer()
@@ -100,8 +104,11 @@ describe('reasoning-only terminal output recovery', () => {
     const f = fixture(), budget = new RequestBudget(100_000), caps: Array<number | undefined> = []
     f.ctx.requestBudget = budget
     f.ctx.onRequestAttempt = event => { budget.observe(event) }
-    f.llm.stream = vi.fn(async function* (_messages, options) {
+    f.llm.stream = vi.fn(async function* (messages, options) {
       caps.push(options?.maxTokens)
+      const summaryReserve = estimateRequestInput(messages, options?.systemPrompt, []) + 4096 + 8192
+      expect(options!.maxTokens!).toBe(Math.floor(budget.remaining - options!.requestInputTokenEstimate! - summaryReserve))
+      expect(options?.systemPrompt ?? '').not.toContain('探索已停止')
       const n = caps.length
       const usage = { promptTokens: n === 1 ? 20 : 40, completionTokens: n === 1 ? 8192 : 15 }
       await options?.onRequestAttempt?.({ type: 'start', requestAttemptId: 'finite-' + n,
@@ -111,38 +118,43 @@ describe('reasoning-only terminal output recovery', () => {
       yield n === 1 ? reasoning() : answer()
     })
     await f.run()
-    expect(caps).toEqual([8192, 8192])
+    expect(caps).toHaveLength(2)
+    expect(caps.every(n => n !== undefined && n > 16_384)).toBe(true)
+    expect(caps[1]!).toBeLessThan(caps[0]!)
     expect(budget.snapshot).toMatchObject({ charged: 8267, reserved: 0, remaining: 91733 })
     expect(f.outcomes.at(-1)?.status).toBe('succeeded')
   })
 
-  it.each([{ window: 6000, expected: [1500, 1500] }, { window: 40_000, expected: [8192, 10_000] }])(
-    'keeps the recovery reservation within a $window token context', async ({ window, expected }) => {
+  it.each([6000, 40_000])(
+    'uses remaining capacity within a %s token context on every request', async window => {
       const f = fixture(), caps: Array<number | undefined> = []
       f.ctx.modelCaps = { contextWindow: window }
       f.llm.stream = vi.fn(async function* (messages, options) {
         caps.push(options?.maxTokens)
         expect(options?.requestInputTokenEstimate).toBe(estimateRequestInput(messages, options?.systemPrompt, options?.tools ?? []))
-        expect(options!.requestInputTokenEstimate! + options!.maxTokens!).toBeLessThanOrEqual(window)
-        yield caps.length === 1 ? { ...reasoning(), completionTokens: expected[0] } : answer()
+        expect(options!.requestInputTokenEstimate! + options!.maxTokens!).toBe(window)
+        yield caps.length === 1 ? { ...reasoning(), completionTokens: options!.maxTokens! } : answer()
       })
       await f.run()
-      expect(caps).toEqual(expected)
+      expect(caps).toHaveLength(2)
+      expect(caps.every(n => n !== undefined && n > window / 2)).toBe(true)
       expect(f.outcomes.at(-1)?.status).toBe('succeeded')
     },
   )
 
-  it('expands only the regeneration dispatch even when an unchanged completed read keeps the episode open', async () => {
+  it('keeps remaining-context output capacity after a completed read', async () => {
     const f = fixture(), caps: Array<number | undefined> = []
     f.ctx.tools.executionMode = () => 'readonly'
     f.llm.stream = vi.fn(async function* (_messages, options) {
       caps.push(options?.maxTokens)
+      expect(options!.maxTokens! + options!.requestInputTokenEstimate!).toBe(100_000)
       const n = caps.length
       if (n === 1 || n === 3) yield tool('same-read')
       else yield n === 2 ? reasoning() : answer()
     })
     await f.run()
-    expect(caps).toEqual([8192, 8192, 16_384, 8192])
+    expect(caps).toHaveLength(4)
+    expect(caps.every(n => n !== undefined && n > 16_384)).toBe(true)
     expect(f.ctx.tools.execute).toHaveBeenCalledTimes(2)
     expect(f.outcomes.at(-1)?.status).toBe('succeeded')
   })
@@ -166,7 +178,9 @@ describe('reasoning-only terminal output recovery', () => {
       }
     })
     await f.run({ systemPrompt, maxIterations: 2, finalizeOnLimit: true, thinkingEnabled: false })
-    expect(caps).toEqual([8192, 4096])
+    expect(caps).toHaveLength(2)
+    expect(caps[0]).toBeGreaterThan(8192)
+    expect(caps[1]).toBe(4096)
     expect(f.outcomes.at(-1)).toMatchObject({ status: 'failed', stopReason: 'max_steps' })
     expect(f.appended.filter(message => message.metadata?.outputReasoningRecovery)).toHaveLength(1)
   })
@@ -182,24 +196,48 @@ describe('reasoning-only terminal output recovery', () => {
     })
     await f.run({ systemPrompt })
     expect(requests).toHaveLength(2)
-    expect(requests[0]?.maxTokens).toBe(8192)
+    expect(requests[0]?.maxTokens).toBeGreaterThan(8192)
     expect(requests[1]?.maxTokens).toBeGreaterThan(8192)
     expect(requests[1]?.maxTokens).toBeLessThan(16_384)
     expect(requests[1]!.requestInputTokenEstimate! + requests[1]!.maxTokens!).toBe(100_000)
     expect(f.outcomes.at(-1)?.status).toBe('succeeded')
   })
 
-  it('keeps failure when even a different second private segment exhausts output', async () => {
+  it('uses the configured iteration boundary for repeated private-only truncations', async () => {
     const f = fixture(); let calls = 0
     f.llm.stream = vi.fn(async function* () { yield reasoning(PRIVATE + ++calls) })
-    const frames = await f.run()
-    expect(calls).toBe(2)
+    const frames = await f.run({ maxIterations: 3 })
+    expect(calls).toBe(3)
     expect(body(frames)).toBe('')
     expect(f.outcomes.at(-1)).toMatchObject({ status: 'failed', stopReason: 'output_limit', error: { code: 'OUTPUT_LIMIT' } })
     const segments = f.appended.filter(m => m.role === 'assistant')
-    expect(segments.map(m => m.reasoningContent)).toEqual([PRIVATE + '1', PRIVATE + '2'])
-    expect(new Set(segments.map(m => m.id)).size).toBe(2)
-    expect(f.ctx.runObserver?.onUsage).toHaveBeenCalledTimes(2)
+    expect(segments.map(m => m.reasoningContent)).toEqual([PRIVATE + '1', PRIVATE + '2', PRIVATE + '3'])
+    expect(new Set(segments.map(m => m.id)).size).toBe(3)
+    expect(f.ctx.runObserver?.onUsage).toHaveBeenCalledTimes(3)
+  })
+
+  it('recovers three consecutive provider truncations after a plan update, then executes a complete tool', async () => {
+    const f = fixture(), requests: LLMAdapterOptions[] = []
+    f.ctx.tools.list = () => [{ name: 'plan_update', description: 'Update plan', parameters: { type: 'object' } },
+      { name: 'read_file', description: 'Read evidence', parameters: { type: 'object' } }]
+    f.llm.stream = vi.fn(async function* (messages, options) {
+      requests.push(options!)
+      expect(JSON.stringify(messages)).not.toContain(PRIVATE)
+      expect(options?.thinkingEnabled).toBe(true)
+      expect(options!.maxTokens! + options!.requestInputTokenEstimate!).toBe(100_000)
+      expect(options?.tools?.map((tool: { name: string }) => tool.name)).toEqual(['plan_update', 'read_file'])
+      const n = requests.length
+      if (n === 1 || n === 7) yield tool('read-' + n)
+      else if (n === 3) yield { ...tool('plan'), toolCalls: [{ index: 0, id: 'plan', name: 'plan_update', args: '{}' }] }
+      else if ([2, 4, 5, 6].includes(n)) yield reasoning(PRIVATE + n)
+      else yield answer()
+    })
+    await f.run({ thinkingEnabled: true, maxIterations: 8 })
+    expect(requests).toHaveLength(8)
+    expect(requests.every(options => options.maxTokens! > 16_384)).toBe(true)
+    expect(f.ctx.tools.execute).toHaveBeenCalledTimes(3)
+    expect(f.appended.filter(message => message.metadata?.outputReasoningRecovery).map(message => message.metadata?.recoveryIndex)).toEqual([1, 2, 3, 4])
+    expect(f.outcomes.at(-1)?.status).toBe('succeeded')
   })
 
   it.each([
@@ -228,7 +266,7 @@ describe('reasoning-only terminal output recovery', () => {
     expect(f.outcomes.at(-1)?.status).toBe('succeeded')
   })
 
-  it('reopens one recovery only after a complete tool exchange is durably settled', async () => {
+  it('recovers again after a complete tool exchange is durably settled', async () => {
     const f = fixture(); let calls = 0
     f.llm.stream = vi.fn(async function* (messages: Message[]) {
       const n = ++calls
@@ -247,19 +285,19 @@ describe('reasoning-only terminal output recovery', () => {
     expect(f.outcomes.at(-1)?.status).toBe('succeeded')
   })
 
-  it('does not reopen reasoning recovery after an interrupted tool argument batch', async () => {
+  it('regenerates reasoning after an interrupted tool batch without executing partial arguments', async () => {
     const f = fixture(); let calls = 0
     f.llm.stream = vi.fn(async function* () {
       if (++calls === 2) yield { done: true, finishReason: 'length' as const, toolCalls: [{ index: 0, id: 'partial', name: 'write_file', args: '{"path":"' }] }
-      else yield reasoning(PRIVATE + calls)
+      else yield calls === 4 ? answer() : reasoning(PRIVATE + calls)
     })
     await f.run()
-    expect(calls).toBe(3)
+    expect(calls).toBe(4)
     expect(f.ctx.tools.execute).not.toHaveBeenCalled()
-    expect(f.outcomes.at(-1)).toMatchObject({ status: 'failed', stopReason: 'output_limit' })
+    expect(f.outcomes.at(-1)?.status).toBe('succeeded')
   })
 
-  it.each(['failed', 'repeated-read', 'waiting'] as const)('does not reopen quota after %s tools', async kind => {
+  it.each(['failed', 'repeated-read', 'waiting'] as const)('honors the configured iteration boundary after %s tools', async kind => {
     const f=fixture();let calls=0
     f.ctx.tools.executionMode=()=> 'readonly'
     if(kind==='failed')f.ctx.tools.execute=vi.fn(async()=>({success:false,status:'failed' as const,output:'missing file'}))
@@ -271,15 +309,15 @@ describe('reasoning-only terminal output recovery', () => {
         ? {...tool(),toolCalls:[{index:0,id:'waiting',name:'task_status',args:'{}'}]}:tool()
       else yield reasoning(PRIVATE+n)
     })
-    await f.run()
-    expect(calls).toBe(kind==='repeated-read'?4:3)
+    await f.run({ maxIterations: 5 })
+    expect(calls).toBe(5)
     expect(f.outcomes.at(-1)).toMatchObject({status:'failed',stopReason:'output_limit'})
-    expect(f.appended.filter(m=>m.metadata?.outputReasoningRecovery)).toHaveLength(2)
+    expect(f.appended.filter(m=>m.metadata?.outputReasoningRecovery)).toHaveLength(kind==='repeated-read'?3:4)
   })
 
   it('excludes an exhausted private-only final failure on a later explicit turn', async()=>{
     const f=fixture();f.llm.stream=vi.fn(async function*(){yield reasoning()})
-    await f.run()
+    await f.run({ maxIterations: 2 })
     expect(f.outcomes.at(-1)?.status).toBe('failed')
     f.llm.stream=vi.fn(async function*(messages:Message[]){
       expect(JSON.stringify(messages)).not.toContain(PRIVATE)
@@ -467,9 +505,8 @@ describe('actual SDK provider framing after reasoning recovery',()=>{
     const frames:string[]=[]
     for await(const frame of new ReActStrategy(f.llm,{thinkingEnabled:true}).run('approved task',f.ctx))frames.push(frame)
     expect(requests).toBe(2)
-    expect(bodies[0].max_tokens).toBe(8192)
-    expect(bodies[1].max_tokens).toBe(16_384)
-    expect(attempts.filter(event=>event.type==='start').map(event=>event.maxOutputTokens)).toEqual([8192,16_384])
+    expect(bodies.every(request => Number(request.max_tokens) > 16_384 && Number(request.max_tokens) <= 100_000)).toBe(true)
+    expect(attempts.filter(event=>event.type==='start').map(event=>event.maxOutputTokens)).toEqual(bodies.map(request => request.max_tokens))
     expect(budget.snapshot).toMatchObject({charged:8267,reserved:0,remaining:Infinity})
     expect(body(frames)).toBe('Public task result verified.')
     expect(f.outcomes.at(-1)?.status).toBe('succeeded')

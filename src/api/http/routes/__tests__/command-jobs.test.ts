@@ -233,7 +233,7 @@ describe('D7 command job HTTP and history lifecycle', () => {
     )
     try {
       const failed = await request({ method: 'POST', url: '/chat/cancel', payload: { sessionId } })
-      expect(failed.json()).toMatchObject({ code: 50000, message: 'SQLITE_BUSY: database is locked' })
+      expect(failed.json()).toMatchObject({ code: 50000, message: 'SESSION_CLEANUP_UNKNOWN' })
       expect(controller.signal.aborted).toBe(true)
       expect((await getJob(child.job)).json().data.status).toBe('cancelled')
       await assertStopped(child.marker)
@@ -338,10 +338,12 @@ describe('D7 command job HTTP and history lifecycle', () => {
       }
       return originalBatch(statements, mode)
     })
-    const originalCancel = commandJobs.cancelScope.bind(commandJobs)
-    const cancelSpy = vi.spyOn(commandJobs, 'cancelScope').mockImplementation(async (...args) => {
+    const originalCancel = commandJobs.cancelCaptured.bind(commandJobs)
+    const cancelSpy = vi.spyOn(commandJobs, 'cancelCaptured').mockImplementation(async (...args) => {
       const result = originalCancel(...args)
-      if (args[0].sessionId === sessionId) stopping()
+      // The HTTP stop fences a captured set before waiting for its held
+      // admission. A broad cancelScope lookup is no longer part of that path.
+      stopping()
       return result
     })
     try {

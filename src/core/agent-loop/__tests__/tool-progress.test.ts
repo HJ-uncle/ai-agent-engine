@@ -72,8 +72,8 @@ describe('output-aware progress for long-running tools', () => {
 
 describe('non-terminating read-only cycle recovery', () => {
   const readonlyTracker = () => new ToolProgressTracker(call =>
-    ['read_file', 'grep_search', 'command_output', 'task_status'].includes(call.name) ? 'readonly' : 'serial')
-  const query = (pattern: string): ToolCall => ({ id: pattern, name: 'grep_search', args: { pattern, path: 'src' } })
+    ['read_file', 'grep', 'command_output', 'task_status'].includes(call.name) ? 'readonly' : 'serial')
+  const query = (pattern: string): ToolCall => ({ id: pattern, name: 'grep', args: { pattern, path: 'src' } })
 
   it('recognizes alternating exhausted queries only after two repeated batches', () => {
     const tracker = readonlyTracker()

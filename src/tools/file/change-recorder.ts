@@ -33,6 +33,17 @@ export interface ChangeSnapshot {
   snapshotRef?: string
 }
 
+/** Capture already-read bytes only when a command observation really changed.
+ * This avoids writing durable rollback files for every unchanged workspace file. */
+export function snapshotFromBytes(absPath: string, content: Buffer | null): ChangeSnapshot {
+  if (content === null) return { oldContent: null, oldHash: 'missing', exists: false, truncated: false }
+  const hash = `sha256:${crypto.createHash('sha256').update(content).digest('hex')}`
+  const text = content.byteLength > MAX_CHANGE_CONTENT_BYTES ? null : decodeEditableText(absPath, content)
+  const truncated = text === null
+  return { oldContent: text, oldHash: hash, exists: true, truncated,
+    ...(truncated ? { snapshotRef: writeSnapshot(content, hash) } : {}) }
+}
+
 function snapshotRoot(): string {
   const dataDir = process.env.DATA_DIR
     ? path.dirname(path.resolve(process.env.DATA_DIR))

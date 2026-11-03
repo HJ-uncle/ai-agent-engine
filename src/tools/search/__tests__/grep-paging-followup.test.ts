@@ -172,7 +172,7 @@ it.each([
 ])('rejects malformed arguments before filesystem search: %j', async args => {
   const result = await grepTool.execute(args, ctx)
   expect(result).toMatchObject({ success: false, metadata: { status: 'failed', error: 'INVALID_ARGUMENTS' } })
-  expect(result.output).toContain('grep_search:')
+  expect(result.output).toContain('grep:')
 })
 
 it('returns actionable unknown-field guidance without silently changing a request', async () => {

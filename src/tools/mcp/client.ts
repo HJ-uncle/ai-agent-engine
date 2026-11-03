@@ -6,6 +6,7 @@ import { extensionPolicy } from '../../security/tool-policy.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { validateOperationTimeout } from '../../core/utils/operation-timeout.js'
 import { stopCommandProcessTree } from '../../core/command-jobs/process-tree.js'
+import { renderMcpResult } from './result.js'
 
 let _rpcId = 1
 
@@ -412,12 +413,7 @@ export class HTTPMCPClient implements MCPClient {
       ...this.httpTimeoutOptions(this.config.timeoutMs ?? 0),
     })
     if (!res.ok) throw new Error(`REST /tools/${name} ${res.status}`)
-    const data = (await res.json()) as { result?: string; content?: Array<{type:string;text?:string}> }
-    // 兼容 MCP content 格式
-    if (data.content) {
-      return data.content.map((c) => c.text ?? '').join('\n')
-    }
-    return String(data.result ?? JSON.stringify(data))
+    return renderMcpResult(await res.json())
   }
 
   // ── 公开接口 ──────────────────────────────────────────────────────────────
@@ -549,14 +545,9 @@ export class HTTPMCPClient implements MCPClient {
         content?: Array<{ type: string; text?: string }>
         result?: unknown
         isError?: boolean
+        structuredContent?: unknown
       }>('tools/call', { name, arguments: args }, signal, ctx, this.config.timeoutMs ?? 0)
-      if (result.isError) throw new Error(result.content?.map(c => c.text ?? '').join('\n') || 'MCP tool reported an error')
-
-      // MCP 标准返回 content 数组
-      if (result.content) {
-        return result.content.map((c) => c.text ?? JSON.stringify(c)).join('\n')
-      }
-      return JSON.stringify(result)
+      return renderMcpResult(result)
     }
     return this.restCallTool(name, args, signal, ctx)
   }
@@ -572,6 +563,7 @@ export class HTTPMCPClient implements MCPClient {
     return definitions.map((def): Tool & { source: string } => ({
       name: `mcp_${(this.config.id ?? this.config.name).replace(/[^a-zA-Z0-9_-]/g, '_')}_${def.name.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
       source: 'mcp',
+      ...(def.outputSchema ? { outputSchema: def.outputSchema } : {}),
       preflight: async (_args, ctx) => extensionPolicy(ctx),
       description: `[MCP:${this.config.name}] ${def.description}`,
       parameters: {

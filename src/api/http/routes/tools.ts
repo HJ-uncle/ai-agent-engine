@@ -5,6 +5,8 @@ import { paginateArray } from '../response.js'
 import { skillsRegistry } from '../../../skills/index.js'
 import { SQLiteAgentStore } from '../../../storage/agent/index.js'
 import { workspaceManager } from '../../../workspace/index.js'
+import { toolSource } from '../../../core/runtime-capabilities.js'
+import { isDefaultTool } from '../../../tools/tool-exposure.js'
 
 interface ToolQuery { current?: number; pageSize?: number; agentId?: string; path?: string }
 
@@ -42,13 +44,16 @@ export async function toolRoutes(fastify: FastifyInstance) {
       }
     }
 
-    const { registry } = await createToolRegistry({ toolProfile, allowedTools, allowedSkills, allowedMcpServers, workspaceRoot })
+    const { registry } = await createToolRegistry({ toolProfile, allowedTools, allowedSkills, allowedMcpServers, workspaceRoot,
+      ...(!agentId ? { toolExposure: 'catalogue' as const } : {}) })
     const toolsList = registry.list().map(t => ({
       name: t.name,
-      displayName: (t as any).displayName,
+      displayName: t.displayName,
       description: t.description,
       parameters: t.parameters,
-      source: (t as any).source === 'skill' ? 'skill' : 'builtin'
+      source: toolSource(t),
+      defaultEnabled: isDefaultTool(t.name),
+      ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
     }))
     return reply.code(200).send(paginateArray(toolsList, current, pageSize))
   })
@@ -74,14 +79,18 @@ export async function toolRoutes(fastify: FastifyInstance) {
       }
     }
 
-    const { registry } = await createToolRegistry({ toolProfile, allowedTools, allowedSkills, allowedMcpServers, workspaceRoot })
+    const { registry } = await createToolRegistry({ toolProfile, allowedTools, allowedSkills, allowedMcpServers, workspaceRoot,
+      ...(!agentId ? { toolExposure: 'catalogue' as const } : {}) })
     const toolsList = registry.list()
-      .filter(t => (t as any).source !== 'skill')
+      .filter(t => toolSource(t) !== 'skill')
       .map(t => ({
         name: t.name,
-        displayName: (t as any).displayName,
+        displayName: t.displayName,
         description: t.description,
         parameters: t.parameters,
+        source: toolSource(t),
+        defaultEnabled: isDefaultTool(t.name),
+        ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
       }))
     return reply.code(200).send(paginateArray(toolsList, current, pageSize))
   })

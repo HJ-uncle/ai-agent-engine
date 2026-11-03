@@ -38,6 +38,7 @@ import { TodoStore } from '../../../storage/todo/index.js'
 import { ChangeStore } from '../../../storage/changes/index.js'
 import { commandJobs, type CommandScopeCapture } from '../../../core/command-jobs/index.js'
 import { CODE_AGENT_EXECUTION_PROMPT } from '../../../core/code-agent-prompt.js'
+import { normalizeClientCapabilities, type ClientCapabilityManifest } from '../../../core/client-capabilities.js'
 import { publicHistoryMessages } from '../history-projection.js'
 import { getExecutionOwners, serviceForOwner, type ExecutionOwner } from '../../../core/collaboration/execution-owner.js'
 import { installProductionCollaborationBoundary } from '../../../core/collaboration/production-boundary.js'
@@ -105,6 +106,7 @@ import { extractAndStoreMemories, buildMemoryRecallBlock } from '../../../middle
 import { getSessionMemorySettings, setSessionMemoryScope, type MemoryMode } from '../../../storage/memory/settings.js'
 
 interface ChatBody {
+  clientCapabilities?: ClientCapabilityManifest
   admission?: UserAdmissionSelector
   automationRunId?: string
   cronJobId?: string
@@ -1052,6 +1054,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
 
     // Build agent context
     const ctx = createAgentContext({
+      clientCapabilities: normalizeClientCapabilities(request.body.clientCapabilities),
       browserAuthority: browserAuthorityFromRequest(request),
       browserPrincipal: browserPrincipalFromAuth((request as FastifyRequest & { authContext?: AuthContext }).authContext),
       toolProfile,
@@ -1353,12 +1356,10 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
       ragPrompt = `\n\n---\n# Relevant Knowledge Base Context\n\nUse the following retrieved context to answer the user's question:\n\n${context}\n---`
     }
 
-    // 注入工作区路径信息，让 AI 知道所有绑定的工作区
+    // Codegraph discovery uses current roots; ReAct injects fresh environment
+    // and execution guidance for each model request, including continuations.
     const { workspaceManager } = await import('../../../workspace/index.js')
     const allWorkspacePaths = workspaceManager.getPaths({ tenantId, sessionId, workspacePaths })
-    const workspaceInfo = allWorkspacePaths.length > 1
-      ? `\n\n当前会话绑定了以下工作区路径：\n${allWorkspacePaths.map((p, i) => `  ${i === 0 ? '主工作区' : '自定义工作区'}: ${p}`).join('\n')}\n调用 \`list_files\` 工具（不传参数）可查看所有工作区内容。`
-      : `\n\n当前工作区路径：${allWorkspacePaths[0]}`
 
     // 代码图索引提示：仅在已建索引时注入，引导模型优先用图谱而非逐字搜索
     const { detectCodegraphAvailability, buildCodegraphPromptBlock } = await import(
@@ -1385,7 +1386,7 @@ ${workspaceDownloadPrompt}
 5. 多步任务使用内建 \`plan_update\` 静默维护完整任务计划；简单单步请求无需建计划。首次可省略 id，后续复用返回 id，保留仍需展示的已完成步骤。status 使用 pending/in_progress/completed/cancelled；只在步骤真实完成且有依据后标记 completed。计划由引擎持久化并独立展示，不复述创建/更新日志，不通过命令或脚本维护；失败先修正输入，不声称未落盘的状态已保存。
 6. **先给结论，再说理由。** 不要在回答里反复自我怀疑或把同一假设推演多遍；一旦确认了一件事，就把它当既定事实继续推进，不要回头重复论证。
 7. **禁止绕过工具链自造轮子。** 当现有工具做不到某件事时（例如看不到图片），**不要**自己写脚本去实现底层能力（手写 PNG/JPEG 解码器、二进制解析、像素取证、OCR 引擎等）。这类自造轮子几乎必然失败，且会烧掉几十轮工具调用。正确做法：① 换用受支持的路径（如 \`read_file mode:"ocr"\`）；② 确认该路径确实不可用后，直接向用户说明限制并给出替代方案。**同一件事尝试失败一次就换路径，绝不允许用「再换个脚本试试」的方式反复试探。**
-${workspaceInfo}${codegraphBlock}${attachments && attachments.length > 0 ? `\n\n## 本次消息已附带以下文件\n${attachments.map(a => `- ${a.name}`).join('\n')}${visionCapabilityNote}` : ''}${codeExecutionPrompt}${workExecutionPrompt}${officeExecutionPrompt}
+${codegraphBlock}${attachments && attachments.length > 0 ? `\n\n## 本次消息已附带以下文件\n${attachments.map(a => `- ${a.name}`).join('\n')}${visionCapabilityNote}` : ''}${codeExecutionPrompt}${workExecutionPrompt}${officeExecutionPrompt}
 `
 
     // ── Estimate token counts for each injected prompt section ──────────
@@ -1402,7 +1403,7 @@ ${workspaceDownloadPrompt}
 5. 多步任务使用内建 \`plan_update\` 静默维护完整任务计划；简单单步请求无需建计划。首次可省略 id，后续复用返回 id，保留仍需展示的已完成步骤。status 使用 pending/in_progress/completed/cancelled；只在步骤真实完成且有依据后标记 completed。计划由引擎持久化并独立展示，不复述创建/更新日志，不通过命令或脚本维护；失败先修正输入，不声称未落盘的状态已保存。
 6. **先给结论，再说理由。** 不要在回答里反复自我怀疑或把同一假设推演多遍；一旦确认了一件事，就把它当既定事实继续推进，不要回头重复论证。
 7. **禁止绕过工具链自造轮子。** 当现有工具做不到某件事时（例如看不到图片），**不要**自己写脚本去实现底层能力（手写 PNG/JPEG 解码器、二进制解析、像素取证、OCR 引擎等）。这类自造轮子几乎必然失败，且会烧掉几十轮工具调用。正确做法：① 换用受支持的路径（如 \`read_file mode:"ocr"\`）；② 确认该路径确实不可用后，直接向用户说明限制并给出替代方案。**同一件事尝试失败一次就换路径，绝不允许用「再换个脚本试试」的方式反复试探。**
-${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}${workExecutionPrompt}${officeExecutionPrompt}
+${codegraphBlock}${codeExecutionPrompt}${workExecutionPrompt}${officeExecutionPrompt}
 `
     const skillTokens = estimateTokens(skillsPrompt)
     // Skills are already embedded in baseSystemPrompt, but have their own
@@ -1801,14 +1802,20 @@ ${workspaceInfo}${codegraphBlock}${codeExecutionPrompt}${workExecutionPrompt}${o
           } catch (err) { reqLogger.error({ err }, 'Auto-compaction failed; original history was preserved') }
         }
       } catch (err: any) {
-        reqLogger.error({ err, agentId }, 'Agent execution error')
+        const cancelled = abortController.signal.aborted
+        if (cancelled) reqLogger.info({ agentId, runId: rootRun.runId }, 'Agent execution cancelled')
+        else reqLogger.error({ err, agentId }, 'Agent execution error')
         try {
-          await publishRun(await finishRoot({ status: abortController.signal.aborted ? 'cancelled' : 'failed',
-            error: { code: 'CHAT_FAILED', message: err.message || String(err), retryable: false } }))
+          await publishRun(await finishRoot(cancelled
+            ? { status: 'cancelled', stopReason: abortController.signal.reason instanceof Error ? abortController.signal.reason.message : 'Execution cancelled' }
+            : { status: 'failed', error: { code: 'CHAT_FAILED', message: err.message || String(err), retryable: false } }))
         } catch (persistenceError) {
           reqLogger.error({ err, persistenceError, runId: rootRun.runId }, 'Agent failure could not be persisted')
           throw new AggregateError([err, persistenceError], 'Agent failure could not be persisted')
         }
+        // The durable settlement above, not the requested abort alone, confirms
+        // cancellation. Expected stops must not become assistant error text.
+        if (cancelled) return
         // DeepSeek 特有错误：附加 errorType 以便前端分级处理
         const dsErrorType: string | null =
           err?.constructor?.name?.startsWith('DeepSeek') ? err.constructor.name : null

@@ -1,0 +1,157 @@
+{
+  "date": "2026-11-03",
+  "estimator": "src/core/utils/tokens.ts estimateTokens; local estimate, not provider billing",
+  "runtime": {
+    "measurement": "73 canonical tool definitions, two fixed workspace paths, no declared client, same engine runtime",
+    "estimator": "src/core/utils/tokens.ts: estimateTokens (local estimate, not provider billing)",
+    "before": {
+      "environment": {
+        "characters": 4357,
+        "estimatedTokens": 1287
+      },
+      "executionProtocol": {
+        "characters": 1571,
+        "estimatedTokens": 1622
+      },
+      "total": {
+        "characters": 5928,
+        "estimatedTokens": 2909
+      }
+    },
+    "after": {
+      "environment": {
+        "characters": 662,
+        "estimatedTokens": 302
+      },
+      "executionProtocol": {
+        "characters": 1337,
+        "estimatedTokens": 1226
+      },
+      "total": {
+        "characters": 1999,
+        "estimatedTokens": 1528
+      }
+    },
+    "estimatedTokenReductionPercent": 47.47,
+    "preserved": [
+      "Every model request receives full current tool descriptions and input parameter schemas in options.tools, including after compaction.",
+      "Fresh engine current time, local date, timezone, UTC offset, platform, architecture and Node executable/version.",
+      "Resolved workspace paths, with the first entry explicitly identified as the relative-path and command default directory.",
+      "Current security mode, memory scopes and extension policy; client capability declarations never grant authority or prove execution.",
+      "Authorized task scope, latest user corrections, applicable repository instructions, independent reads and ordered writes.",
+      "Executable/argument separation; existing command job observation and cancellation with terminal receipts.",
+      "Same-file fresh expectedHash, conflict reread, preservation of user changes and editable documents, managed deletion and rollback evidence.",
+      "Browser tab identity, navigation freshness, null/empty result uncertainty, operationPerformed recovery, snapshotUnavailable and visible-surface recovery.",
+      "Office environment validation, workbench execution receipts, subagent current-run evidence and archive history recovery.",
+      "Honest functional/interaction/visual verification; no repetition of already-passed checks without new changes or concerns.",
+      "Finalization request advertises zero available tools."
+    ],
+    "removedRedundancy": [
+      "Repeated tool name/source directory and schemas in the system prompt.",
+      "Unregistered discovery placeholders and repeated primaryWorkspace/cwd paths.",
+      "One-time upper-layer environment snapshots in chat, legacy messages and subagent prompts."
+    ],
+    "verification": {
+      "coreAndReact": "4 files, 88 tests passed",
+      "toolProfileRoutes": "28 tests passed",
+      "subagentCapabilities": "6 tests passed",
+      "browserContextInheritance": "7 tests passed after correcting terminal-failure injection from update to finishOwned"
+    }
+  },
+  "codeBefore": {
+    "phase": "before",
+    "code": {
+      "chars": 4149,
+      "tokens": 4564
+    },
+    "handoff": {
+      "chars": 383,
+      "tokens": 460
+    },
+    "command": {
+      "chars": 1173,
+      "tokens": 742
+    },
+    "commandDescription": {
+      "chars": 440,
+      "tokens": 389
+    }
+  },
+  "codeAfter": {
+    "phase": "after",
+    "code": {
+      "chars": 2357,
+      "tokens": 2482
+    },
+    "handoff": {
+      "chars": 302,
+      "tokens": 346
+    },
+    "command": {
+      "chars": 798,
+      "tokens": 449
+    },
+    "commandDescription": {
+      "chars": 199,
+      "tokens": 195
+    }
+  },
+  "tools": {
+    "generatedAt": "2026-11-03T11:08:06.18Z",
+    "metric": "engine estimateTokens; not provider billing",
+    "measurements": [
+      {
+        "group": "browser",
+        "tools": 15,
+        "behaviorAndSchemaConstraintsUnchanged": true,
+        "before": {
+          "chars": 10311,
+          "estimatedTokens": 4597
+        },
+        "after": {
+          "chars": 9311,
+          "estimatedTokens": 3637
+        }
+      },
+      {
+        "group": "office",
+        "tools": 2,
+        "behaviorAndSchemaConstraintsUnchanged": true,
+        "before": {
+          "chars": 6244,
+          "estimatedTokens": 2571
+        },
+        "after": {
+          "chars": 5720,
+          "estimatedTokens": 2179
+        }
+      },
+      {
+        "group": "office-environment",
+        "tools": 1,
+        "behaviorAndSchemaConstraintsUnchanged": true,
+        "before": {
+          "chars": 334,
+          "estimatedTokens": 224
+        },
+        "after": {
+          "chars": 273,
+          "estimatedTokens": 149
+        }
+      },
+      {
+        "group": "workbench",
+        "tools": 2,
+        "behaviorAndSchemaConstraintsUnchanged": true,
+        "before": {
+          "chars": 851,
+          "estimatedTokens": 502
+        },
+        "after": {
+          "chars": 708,
+          "estimatedTokens": 350
+        }
+      }
+    ]
+  }
+}

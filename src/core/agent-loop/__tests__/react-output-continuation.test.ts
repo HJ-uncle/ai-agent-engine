@@ -138,11 +138,11 @@ describe('single-response output limit continuation', () => {
     expect(f.outcomes.at(-1)).toMatchObject({ status: 'succeeded', output: persisted })
   })
 
-  it('stops a reasoning-only response after one safe regeneration', async () => {
+  it('stops repeated reasoning-only truncations at the explicitly configured iteration boundary', async () => {
     const f = fixture()
     f.llm.stream = vi.fn(async function* () { yield { done: true, reasoningContent: 'unfinished reasoning', finishReason: 'length' as const } })
-    await f.run()
-    expect(f.llm.stream).toHaveBeenCalledTimes(2)
+    await f.run({ maxIterations: 3 })
+    expect(f.llm.stream).toHaveBeenCalledTimes(3)
     expect(f.outcomes.at(-1)).toMatchObject({ status: 'failed', stopReason: 'output_limit' })
   })
 

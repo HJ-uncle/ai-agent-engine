@@ -193,7 +193,7 @@ function searchPage(lines: string[], pattern: string, backend: string, offset: n
 }
 
 export const grepTool: Tool = {
-  name: 'grep_search',
+  name: 'grep',
   displayName: 'Grep 内容搜索',
   description: '在文件中搜索文本或正则，支持 ripgrep',
   parameters: {
@@ -212,7 +212,7 @@ export const grepTool: Tool = {
   },
   async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
     const invalid = validateArguments(rawArgs)
-    if (invalid) return { success: false, output: `grep_search: ${invalid}`, metadata: { status: 'failed', error: 'INVALID_ARGUMENTS' } }
+    if (invalid) return { success: false, output: `grep: ${invalid}`, metadata: { status: 'failed', error: 'INVALID_ARGUMENTS' } }
     const { pattern, path: searchPath = '.', filePattern, caseSensitive = false, maxResults = 50, offset = 0, timeoutMs } =
       rawArgs as GrepArguments
     let backend: string | undefined
@@ -245,7 +245,7 @@ export const grepTool: Tool = {
       const stat = fs.statSync(basePath)
       const results = stat.isDirectory() ? grepDir(basePath, regex, options)
         : stat.isFile() ? grepInFile(basePath, regex, { ...options, strictRead: true })
-        : (() => { throw new Error('grep_search: path must be a file or directory') })()
+        : (() => { throw new Error('grep: path must be a file or directory') })()
       return searchPage(results, pattern, backend, offset, maxResults)
     } catch (err) {
       return { success: false, output: err instanceof Error ? err.message : 'Unknown error', metadata: { status: 'failed', error: 'SEARCH_FAILED', offset, maxResults, backend } }

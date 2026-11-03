@@ -34,7 +34,6 @@ const TOOL_NAME_MAP: Record<string, string> = {
   list_skills: '列出技能',
   get_skill: '获取技能',
   run_skill_script: '运行脚本',
-  get_time: '获取时间',
   search_files: '搜索文件',
   read_url: '读取网页',
   get_weather: '获取天气',

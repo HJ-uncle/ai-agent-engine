@@ -11,8 +11,8 @@ import { AnthropicAdapter } from '../../llm-adapter/anthropic.js'
 vi.mock('../../../storage/todo/index.js', () => ({ TodoStore: class { async list() { return [] } } }))
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
-const readonlyNames = new Set(['grep_search', 'read_file', 'command_output'])
-const query = (pattern: string): ToolCall => ({ id: '', name: 'grep_search', args: { pattern, path: 'private/project' } })
+const readonlyNames = new Set(['grep', 'read_file', 'command_output'])
+const query = (pattern: string): ToolCall => ({ id: '', name: 'grep', args: { pattern, path: 'private/project' } })
 const alternating = ['A', 'B', 'A', 'B'].map(query)
 
 function fixture(calls: ToolCall[], profile: 'general' | 'code' = 'code') {
@@ -36,7 +36,7 @@ function fixture(calls: ToolCall[], profile: 'general' | 'code' = 'code') {
       list: () => [...readonlyNames, 'write_file'].map(name => ({ name, description: name, parameters: { type: 'object' } })),
       has: () => true, executionMode: (name: string) => readonlyNames.has(name) ? 'readonly' : 'serial',
       preflight: vi.fn(async () => undefined as ToolResult | undefined),
-      execute: vi.fn(async (name: string, args: Record<string, unknown>) => ({ success: true, output: name === 'grep_search' ? 'matches ' + args.pattern : 'done' })),
+      execute: vi.fn(async (name: string, args: Record<string, unknown>) => ({ success: true, output: name === 'grep' ? 'matches ' + args.pattern : 'done' })),
     },
     runObserver: { onOutcome: vi.fn(async (outcome: RunOutcome) => { outcomes.push(outcome) }), onToolStart: vi.fn(), onToolEnd: vi.fn() },
   } as unknown as AgentContext

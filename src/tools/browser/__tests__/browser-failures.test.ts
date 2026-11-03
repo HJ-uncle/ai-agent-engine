@@ -14,6 +14,27 @@ const reason = '请先打开并显示这个浏览器标签，再进行页面操�
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('browser failure presentation', () => {
+  it('preserves host availability and directs hidden-window failures to user recovery', () => {
+    const availability = { window: 'minimized', surface: 'hidden', initialization: 'ready', interaction: 'needs_user' }
+    const result = normalizeBrowserFailure({ success: false,
+      output: JSON.stringify({ tabId: 'tab-A', navigationId: 9, availability }),
+      error: '编辑器窗口已最小化，尚未执行页面操作；请恢复窗口后重试',
+      metadata: { code: 'BROWSER_OPERATION_NOT_PERFORMED', operationPerformed: false } }, 'click', 'tab-A')
+    expect(JSON.parse(result.output)).toMatchObject({ availability, navigationId: 9, retry: 'after_user_action', operationPerformed: false })
+    expect(JSON.parse(result.output).recovery).toContain('不要重复发送相同输入')
+  })
+
+  it('classifies capture failures separately and keeps uncertain inputs unsafe to repeat', () => {
+    const error = '浏览器截图表面不可用；可继续读取页面快照，恢复窗口后再截图。Current display surface not available for capture'
+    const result = normalizeBrowserFailure({ success: false, output: '', error,
+      metadata: { code: 'BROWSER_OPERATION_NOT_PERFORMED', operationPerformed: false } }, 'screenshot', 'tab-A')
+    expect(JSON.parse(result.output)).toMatchObject({ code: 'BROWSER_CAPTURE_UNAVAILABLE', operationPerformed: false, retry: 'use_snapshot_or_restore_display' })
+    expect(JSON.parse(result.output).recovery).toContain('不能声称已完成视觉验收')
+    const uncertain = normalizeBrowserFailure({ success: false, output: '', error: reason,
+      metadata: { code: 'BROWSER_MONITOR_INTERRUPTED', operationPerformed: 'unknown' } }, 'click', 'tab-A')
+    expect(JSON.parse(uncertain.output).retry).toBe('observe_before_retry')
+  })
+
   it.each([
     [reason, 'BROWSER_TAB_NOT_VISIBLE'],
     ['目标浏览器标签未能显示，尚未执行页面操作；请关闭遮挡窗口或恢复编辑器后重试', 'BROWSER_TAB_NOT_VISIBLE'],

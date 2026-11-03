@@ -51,7 +51,7 @@ function fixture(seed: Message[] = []) {
   }
   async function run(options: ReActOptions = {}, input: string | null = 'task', onFrame?: (frame: string) => void) {
     const frames: string[] = []
-    for await (const frame of new ReActStrategy(llm, { maxIterations: 3, maxOutputTokens: 100, ...options }).run(input, ctx)) {
+    for await (const frame of new ReActStrategy(llm, { maxIterations: 3, maxOutputTokens: ctx.toolProfile === 'code' ? undefined : 100, ...options }).run(input, ctx)) {
       frames.push(frame)
       onFrame?.(frame)
     }
@@ -584,7 +584,7 @@ describe('D5 complete request context admission', () => {
     f.ctx.toolProfile = 'code'
     f.ctx.tokenBudget = 1
     f.ctx.modelCaps = { contextWindow: 20_000 }
-    await f.run({ maxOutputTokens: 100 }, 'Give a short answer.')
+    await f.run({ maxOutputTokens: undefined }, 'Give a short answer.')
     expect(f.llm.stream).toHaveBeenCalledTimes(1)
     const options = vi.mocked(f.llm.stream).mock.calls[0][1]!
     expect(options.maxTokens! + options.requestInputTokenEstimate!).toBe(20_000)
@@ -677,7 +677,8 @@ describe('D5 complete request context admission', () => {
     for (const [messages, options] of calls) {
       expect(messages.some(message => message.id === 'old-system' || message.id === 'old-user')).toBe(false)
       expect(messages.filter(message => message.role === 'user').map(message => message.content)).toEqual(['Current isolated request.'])
-      expect(options?.systemPrompt).toBe('Follow the explicitly approved current scope.')
+      expect(options?.systemPrompt).toMatch(/^Follow the explicitly approved current scope\./)
+      expect(options?.systemPrompt).toContain('## 本次模型请求环境')
     }
     expect(calls[1][0]).toEqual(expect.arrayContaining([
       expect.objectContaining({ role: 'assistant', toolCallId: 'current-read' }),
