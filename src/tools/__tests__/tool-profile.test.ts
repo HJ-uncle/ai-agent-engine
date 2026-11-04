@@ -1,5 +1,8 @@
 /** Real factory registrations and executions; only external MCP connectivity/configuration is mocked. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import type { AgentContext, Tool } from '../../core/agent-context/types.js'
 import { ToolNotFoundError } from '../../core/agent-context/types.js'
 import { createToolRegistry } from '../registry-factory.js'
@@ -8,6 +11,8 @@ import { isDefaultTool, OPTIONAL_TOOL_EXPOSURES, REMOVED_TOOL_NAMES } from '../t
 import { createSubagentToolRegistry } from '../subagent/subagent-tool.js'
 import { skillsRegistry } from '../../skills/index.js'
 import { clearSecurityMode, setSecurityMode } from '../../security/policy-engine.js'
+import { logger } from '../../observability/index.js'
+import { createPptx } from '../office/pptx.js'
 
 const external = vi.hoisted(() => ({ tools: [] as Array<Tool & { source?: string }> }))
 vi.mock('../../storage/mcp/mcp-config.js', () => ({ listServers: () => [] }))
@@ -17,7 +22,7 @@ const context = { tenantId: 'profile-test', sessionId: 'session' } as AgentConte
 const mcpServers = [{ id: 'fixture', name: 'fixture', transportType: 'http' as const, url: 'http://fixture.invalid' }]
 const excluded = [
   'calculate', 'get_time', 'remember', 'recall', 'search_memory', 'list_memories', 'forget', 'link_memories',
-  'install_package', 'list_packages', 'office_document', 'office_inspect', 'office_environment', 'cron_list', 'cron_create', 'cron_update', 'cron_delete',
+  'install_package', 'list_packages', 'office_document', 'office_environment', 'cron_list', 'cron_create', 'cron_update', 'cron_delete',
   'agent_list', 'agent_get', 'agent_create', 'agent_do_create', 'agent_update', 'agent_do_update', 'agent_delete', 'agent_do_delete',
   'task_list', 'task_cancel', 'task_status',
 ]
@@ -72,6 +77,7 @@ describe('executable tool profiles', () => {
   })
 
   it('registers only trusted memory tools from the resolved scopes and removes them when both are disabled', async () => {
+    const warn = vi.spyOn(logger, 'warn')
     const enabled = await createToolRegistry({ toolProfile: 'code', memoryScopes: ['global', 'session'] })
     expect(enabled.registry.has('remember')).toBe(true)
     expect(enabled.registry.has('recall')).toBe(true)
@@ -81,6 +87,7 @@ describe('executable tool profiles', () => {
     vi.stubEnv('ENABLE_LONG_TERM_MEMORY', 'false')
     const serverDisabled = await createToolRegistry({ toolProfile: 'general', memoryScopes: ['global', 'session'] })
     expect(serverDisabled.registry.has('remember')).toBe(false)
+    expect(warn.mock.calls.filter(args => args.some(value => typeof value === 'string' && value.startsWith('OSM: CORE tools not found')))).toEqual([])
   })
 
   it('defaults to general with core execution, excluding optional services and removed tools', async () => {
@@ -143,13 +150,13 @@ describe('executable tool profiles', () => {
     expect(createSubagentToolRegistry(general.registry, true).has('office_environment')).toBe(false)
   })
 
-  it('trusts only the builtin office inspector and never expands explicit tool selections', async () => {
-    const selected = await createToolRegistry({ toolProfile: 'general', allowedTools: ['office_inspect'], allowedMcpServers: [] })
+  it.each(['general', 'code'] as const)('%s trusts only the builtin office inspector and never expands explicit tool selections', async toolProfile => {
+    const selected = await createToolRegistry({ toolProfile, allowedTools: ['office_inspect'], allowedMcpServers: [] })
     expect(selected.registry.list().map(candidate => candidate.name).sort()).toEqual(['office_inspect', 'plan_update'])
     expect(selected.registry.executionMode('office_inspect', {})).toBe('readonly')
     expect(createSubagentToolRegistry(selected.registry, true).has('office_inspect')).toBe(true)
     for (const allowedTools of [[], ['read_file'], ['office_document']]) {
-      const narrowed = await createToolRegistry({ toolProfile: 'general', allowedTools, allowedMcpServers: [] })
+      const narrowed = await createToolRegistry({ toolProfile, allowedTools, allowedMcpServers: [] })
       expect(narrowed.registry.has('office_inspect')).toBe(false)
       expect(createSubagentToolRegistry(narrowed.registry, true).has('office_inspect')).toBe(false)
     }
@@ -161,6 +168,37 @@ describe('executable tool profiles', () => {
     expect(child.has('office_inspect')).toBe(false)
     expect(await child.execute('office_inspect', {}, context)).toMatchObject({ success: false, metadata: { code: 'TOOL_NOT_ALLOWED' } })
     expect(impostor.execute).not.toHaveBeenCalled()
+  })
+  it('lets Code and its readonly children read real PPTX handoff text and notes without changing the file', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-code-office-read-'))
+    try {
+      vi.stubEnv('AUTH_ENABLED', 'false')
+      const bytes = await createPptx({ slides: [{ title: 'Product handoff', bullets: ['Area scoring'], notes: 'Keep komi 7.5' }] })
+      const file = path.join(root, 'handoff.pptx')
+      fs.writeFileSync(file, bytes)
+      const ctx = { ...context, toolProfile: 'code', workspacePaths: [root], projectRoot: root, cwd: root } as AgentContext
+      const code = await createToolRegistry({ toolProfile: 'code', allowedMcpServers: [] })
+      expect(code.registry.executionMode('office_inspect', {})).toBe('readonly')
+      expect(code.registry.has('office_document')).toBe(false)
+      expect(code.registry.has('office_environment')).toBe(false)
+      const child = createSubagentToolRegistry(code.registry, true)
+      for (const registry of [code.registry, child]) {
+        const result = await registry.execute('office_inspect', { path: file }, ctx)
+        expect(result).toMatchObject({ success: true, metadata: { fileMutationApplied: false } })
+        const observation = JSON.parse(result.output)
+        expect(observation.content).toContain('Area scoring')
+        expect(observation.content).toContain('target=notes')
+        expect(observation.content).toContain('Keep komi 7.5')
+        expect(observation.expectedHash).toMatch(/^sha256:[a-f0-9]{64}$/)
+        expect(observation.visualValidation).toBe('not-performed')
+        expect(await registry.execute('office_inspect', { path: file, operation: 'edit' }, ctx)).toMatchObject({ success: false })
+      }
+      expect(fs.readFileSync(file)).toEqual(bytes)
+    } finally {
+      const resolved = path.resolve(root)
+      if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !path.basename(resolved).startsWith('aether-code-office-read-')) throw new Error('Unsafe Office reader fixture cleanup')
+      fs.rmSync(resolved, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 })
+    }
   })
   it('does not leak tool selections between general, code and subsequent general registries', async () => {
     const first = await createToolRegistry({ toolProfile: 'general' })

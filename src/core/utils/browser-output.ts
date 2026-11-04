@@ -46,13 +46,12 @@ function fields(source: RecordValue | undefined, strings: string[], numbers: str
 }
 
 function snapshotSource(output: unknown): RecordValue | undefined {
-  if (typeof output !== 'string' || output.length > MAX_BROWSER_INPUT || !output.includes('"screenshot"')) return undefined
+  if (typeof output !== 'string' || output.length > MAX_BROWSER_INPUT || !output.includes('"elements"')) return undefined
   try {
     const source = object(JSON.parse(output))
     const tab = object(source?.tab)
     if (!source || !tab || typeof tab.title !== 'string' || typeof tab.url !== 'string' || !tab.url.trim() ||
-        typeof source.text !== 'string' || !Array.isArray(source.elements) ||
-        (!Object.hasOwn(source, 'screenshot') && !Object.hasOwn(object(source.interaction) ?? {}, 'screenshot'))) return undefined
+        typeof source.text !== 'string' || !Array.isArray(source.elements)) return undefined
     if (!source.elements.every(item => {
       const element = object(item)
       return element && typeof element.role === 'string' && !!element.role.trim() && typeof element.name === 'string'
@@ -65,6 +64,12 @@ function cleanSnapshot(source: RecordValue, textLimit: number, labelLimit: numbe
   const originalTab = object(source.tab)!
   const tab = fields(originalTab, ['tabId', 'title', 'url'], ['navigationId', 'zoomFactor'], labelLimit)
   for (const key of ['loading', 'canGoBack', 'canGoForward']) if (typeof originalTab[key] === 'boolean') tab[key] = originalTab[key]
+  if (object(originalTab.availability)) tab.availability = fields(object(originalTab.availability),
+    ['window', 'surface', 'initialization', 'interaction', 'reason'], [], labelLimit)
+  if (object(originalTab.viewport)) {
+    tab.viewport = fields(object(originalTab.viewport), [], ['width', 'height', 'deviceScaleFactor'], 0)
+    if (typeof object(originalTab.viewport)!.mobile === 'boolean') (tab.viewport as RecordValue).mobile = object(originalTab.viewport)!.mobile
+  }
   const originalElements = source.elements as RecordValue[]
   const elements = originalElements.slice(0, 4096).map(element => {
     const clean = fields(element, ['role', 'name', 'value', 'ref'], [], labelLimit)
@@ -105,11 +110,16 @@ function imageMarker(image: Screenshot | undefined, original: unknown): RecordVa
 export function browserOutputPresentation(output: unknown, maxChars = 64 * 1024): BrowserOutputPresentation | undefined {
   const source = snapshotSource(output)
   if (!source) return undefined
+  const hasImageField = Object.hasOwn(source, 'screenshot') || Object.hasOwn(object(source.interaction) ?? {}, 'screenshot')
+  if (!hasImageField && (output as string).length <= maxChars) return undefined
   const image = screenshot(source.screenshot)
   const clickImage = screenshot(object(source.interaction)?.screenshot)
   const limit = Math.max(0, Math.min(MAX_BROWSER_DISPLAY_TEXT, Math.floor(maxChars)))
   const labelLimit = Math.min(1024, Math.max(16, Math.floor(limit / 16)))
   let model = cleanSnapshot(source, limit, labelLimit)
+  // Image-free snapshots reach this path only after exceeding their text cap.
+  // Label trimming or removal of unknown fields also makes the receipt partial.
+  if (!hasImageField) model.truncated = true
   if (Object.hasOwn(source, 'screenshot')) model.screenshot = imageMarker(image, source.screenshot)
   if (Object.hasOwn(object(source.interaction) ?? {}, 'screenshot') && object(model.interaction)) {
     (model.interaction as RecordValue).screenshot = imageMarker(clickImage, object(source.interaction)?.screenshot)
@@ -117,6 +127,14 @@ export function browserOutputPresentation(output: unknown, maxChars = 64 * 1024)
   let modelText = JSON.stringify(model)
   if (modelText.length > limit) {
     model.truncated = true
+    // Text-only keyboard/scroll replies can be just as large as image-bearing
+    // snapshots. Keep their JSON valid and retain useful controls before the
+    // repetitive static text which often precedes them in an accessibility tree.
+    const interactive = new Set(['button', 'link', 'checkbox', 'radio', 'combobox', 'textbox', 'searchbox',
+      'slider', 'spinbutton', 'switch', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option', 'treeitem'])
+    const priority = (element: RecordValue): number => typeof element.ref === 'string' &&
+      interactive.has(String(element.role).toLowerCase()) ? 0 : 1
+    model.elements = (model.elements as RecordValue[]).sort((left, right) => priority(left) - priority(right))
     // Shrink page text and element lists together so one cannot consume the
     // entire allowance and silently leave the other representation empty.
     while (modelText.length > limit && ((model.text as string).length || (model.elements as unknown[]).length)) {
@@ -135,7 +153,9 @@ export function browserOutputPresentation(output: unknown, maxChars = 64 * 1024)
   const display = { ...model }
   if (image) display.screenshot = image
   if (clickImage && object(display.interaction)) display.interaction = { ...object(display.interaction), screenshot: clickImage }
-  return { displayOutput: JSON.stringify(display), modelInputContent: modelText,
+  // Without pixels there is no display-only allowance. In particular, the
+  // tiny-budget fallback must not reserialize its larger intermediate schema.
+  return { displayOutput: hasImageField ? JSON.stringify(display) : modelText, modelInputContent: modelText,
     imageChars: (image?.dataUrl.length ?? 0) + (clickImage && object(display.interaction) ? clickImage.dataUrl.length : 0) }
 }
 
@@ -176,7 +196,9 @@ export function browserOutputFramePayload(frame: RecordValue, maxBytes: number):
   // sanitizer at decreasing text limits and measure the complete UTF-8 payload.
   for (let limit = MAX_BROWSER_DISPLAY_TEXT; Buffer.byteLength(encoded, 'utf8') > maxBytes && limit >= 256; limit = Math.floor(limit / 2)) {
     const presentation = browserOutputPresentation(JSON.stringify(source), limit)
-    if (!presentation) break
+    // A text-only snapshot can fit this character cap while its UTF-8 frame
+    // still exceeds maxBytes. Keep lowering the cap instead of abandoning it.
+    if (!presentation) continue
     const compact = object(JSON.parse(presentation.modelInputContent))
     if (!compact) break
     compact.truncated = true

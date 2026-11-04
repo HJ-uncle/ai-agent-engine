@@ -3,12 +3,15 @@ import type { Message } from '../agent-context/index.js'
 
 import { abortableDelay, isAbortError, throwIfAborted } from '../utils/abort.js'
 import { estimateRequestInput } from '../agent-loop/finalization.js'
+import { APIConnectionError as AnthropicConnectionError } from '@anthropic-ai/sdk'
+import { APIConnectionError as OpenAIConnectionError } from 'openai'
 
 export function isRetryable(error: unknown): boolean {
   if (isAbortError(error)) return false
   if (!error || typeof error !== 'object') return false
   const value = error as { status?: number; statusCode?: number; httpStatus?: number; retryable?: boolean; code?: string; message?: string }
   if (value.retryable === false) return false
+  if (error instanceof AnthropicConnectionError || error instanceof OpenAIConnectionError) return true
   const status = value.status ?? value.statusCode ?? value.httpStatus
   if (status !== undefined) return status === 408 || status === 429 || status >= 500 && status <= 599
   return value.retryable === true || /^(ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE)$/.test(value.code ?? '') || /timeout|network|fetch failed|socket hang up|terminated|rate limit|overload/i.test(value.message ?? '')

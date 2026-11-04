@@ -4,6 +4,7 @@ import type { LLMAdapter, LLMAdapterOptions, LLMStreamChunk } from '../../llm-ad
 import type { RunOutcome } from '../../subagent/types.js'
 import { RequestBudget, type RequestAttempt } from '../../subagent/budget.js'
 import { AnthropicAdapter } from '../../llm-adapter/anthropic.js'
+import { AnthropicStreamError } from '../../llm-adapter/anthropic-stream-error.js'
 import { ReActStrategy, pairToolHistory, type ReActOptions } from '../react.js'
 import { estimateRequestInput } from '../finalization.js'
 import fs from 'node:fs'
@@ -86,6 +87,20 @@ async function withDurableHistory(backend: 'sqlite' | 'jsonl', check: (f: Return
 }
 
 describe('safe regeneration after a terminal tool output limit', () => {
+  it.each(['overloaded_error', 'invalid_request_error', 'unknown'])('preserves %s retry classification for UI without replaying partial output', async type => {
+    const f = fixture()
+    f.llm.stream = vi.fn(async function* (): AsyncGenerator<LLMStreamChunk> {
+      yield { content: 'Retained progress.', done: false }
+      throw new AnthropicStreamError(JSON.stringify({ error: { type, message: 'private-message' } }), false)
+    })
+    const frames = await f.run()
+    expect(f.llm.stream).toHaveBeenCalledTimes(1)
+    expect(f.ctx.tools.execute).not.toHaveBeenCalled()
+    expect(frames.join('')).toContain('Retained progress.')
+    expect(f.history.some(message => message.content.includes('Retained progress.'))).toBe(true)
+    expect(f.outcomes).toContainEqual(expect.objectContaining({ status: 'failed', stopReason: 'provider_error',
+      error: expect.objectContaining({ code: 'PROVIDER_ERROR', retryable: type === 'overloaded_error' }) }))
+  })
   it.each(['code', 'general'] as const)('interrupts the complete mixed batch in %s before admitting new complete calls', async profile => {
     const f = fixture(profile)
     let calls = 0

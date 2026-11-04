@@ -20,7 +20,9 @@ const formula = z.object({ formula: z.string().min(1).max(2000) }).strict()
 const cell = z.union([text, z.number().finite(), z.boolean(), z.null(), formula])
 const textEdits = z.array(z.object({ oldText: z.string().min(1).max(32_000), newText: text,
   slide: z.number().int().min(1).max(40).optional(), textRun: z.number().int().min(1).max(100_000).optional(),
-}).strict().refine(edit => (edit.slide === undefined) === (edit.textRun === undefined), 'slide and textRun must be supplied together')).min(1).max(100)
+  target: z.literal('notes').optional(),
+}).strict().refine(edit => (edit.slide === undefined) === (edit.textRun === undefined), 'slide and textRun must be supplied together')
+  .refine(edit => edit.target !== 'notes' || edit.slide !== undefined, 'notes requires slide and textRun')).min(1).max(100)
 const cellEdits = z.array(z.object({ sheet: z.string().min(1).max(31), cell: z.string().regex(/^[A-Z]{1,3}[1-9]\d{0,6}$/), value: cell }).strict()).min(1).max(1000)
 const workbook = z.object({ sheets: z.array(z.object({
   name: z.string().min(1).max(31),
@@ -114,7 +116,7 @@ function inspect(format: OfficeInspection['format'], bytes: Buffer): Promise<Ins
 
 export const officeDocumentTool: Tool = {
   name: 'office_document', displayName: '办公文档',
-  description: '原生创建/检查DOCX/XLSX/PPTX/PDF，无需WPS/COM/Python/shell/pip；先读aether-office技能。create：Word/PDF用markdown，PPTX用presentation.slides，Excel用workbook。edit：Word/PPTX匹配唯一oldText，Excel用sheet/cell/value；PPTX可按inspect位置缩小匹配范围。PDF改版须新建，独立排版不等于Word/PPT转换。append_sheets保留旧表部件。recalculate仅XLSX，计算支持的常用公式/跨表引用并更新缓存；不支持、循环或外链拒绝且保留原文件，非全Excel兼容。公式例{formula:"SUM(B2:B4)"}。inspect返回文字/表格预览、warnings、expectedHash；Excel限2000格/格600字符，Word仅正文；分页非全文或视觉验收。写入前版本检查、原子发布并记录撤回快照；结构检查不证明业务正确。',
+  description: '原生创建/检查DOCX/XLSX/PPTX/PDF，无需WPS/COM/Python/shell/pip；先读aether-office技能。create：Word/PDF用markdown，PPTX用presentation.slides，Excel用workbook。edit必须用edits数组：Word/PPTX每项唯一oldText/newText，Excel每项sheet/cell/value。DOCX仅替换现有段落文字，不能用换行插段落或表行；结构新增用create新修订文件，保留原稿。PPTX可按inspect位置缩小匹配范围。PDF改版须新建，独立排版不等于Word/PPT转换。append_sheets保留旧表部件。recalculate仅XLSX，计算支持的常用公式/跨表引用并更新缓存；不支持、循环或外链拒绝且保留原文件，非全Excel兼容。公式例{formula:"SUM(B2:B4)"}。inspect返回文字/表格预览、warnings、expectedHash；Excel限2000格/格600字符，Word仅正文；分页非全文或视觉验收。写入前版本检查、原子发布并记录撤回快照；结构检查不证明业务正确。',
   parameters: {
     type: 'object', additionalProperties: false,
     properties: {
@@ -150,10 +152,11 @@ export const officeDocumentTool: Tool = {
         }, required: ['name', 'columns', 'rows'] } } }, required: ['sheets'] },
       edits: { type: 'array', minItems: 1, maxItems: 1000, items: { anyOf: [
         { type: 'object', additionalProperties: false, properties: { oldText: { type: 'string', minLength: 1, maxLength: 32000 }, newText: { type: 'string', maxLength: 32000 } }, required: ['oldText', 'newText'] },
-        { type: 'object', additionalProperties: false, description: '仅 PPTX：复用 inspect 返回的 slide/textRun 定位，oldText 必须在该普通文本节点内唯一；字段不可编辑。省略定位时仍要求全稿唯一。', properties: {
+        { type: 'object', additionalProperties: false, description: '仅PPTX：复用inspect的slide/textRun，oldText在该普通节点内唯一；字段不可编辑。省略target只改正文；备注须target=notes及定位。', properties: {
           oldText: { type: 'string', minLength: 1, maxLength: 10000 }, newText: { type: 'string', maxLength: 10000 },
           slide: { type: 'integer', minimum: 1, maximum: 40, description: '幻灯片显示顺序，从 1 开始，与 ZIP 文件名顺序无关。' },
-          textRun: { type: 'integer', minimum: 1, maximum: 100000, description: '该页 inspect 标记的文本节点编号，从 1 开始，需 editable=true。' },
+          textRun: { type: 'integer', minimum: 1, maximum: 100000, description: '所选正文或备注内的inspect节点编号，各自从1开始，需editable=true。' },
+          target: { type: 'string', enum: ['notes'], description: '编辑已有备注必填notes；仅替换节点文字，不新增备注/段落。' },
         }, required: ['oldText', 'newText', 'slide', 'textRun'] },
         { type: 'object', additionalProperties: false, properties: { sheet: { type: 'string', minLength: 1, maxLength: 31 }, cell: { type: 'string', pattern: '^[A-Z]{1,3}[1-9][0-9]{0,6}$' }, value: { anyOf: [
           { type: 'string', maxLength: 32000 }, { type: 'number' }, { type: 'boolean' }, { type: 'null' },
@@ -186,7 +189,7 @@ export const officeDocumentTool: Tool = {
       if (!valid) return failure('OFFICE_INVALID_ARGUMENTS', 'Word/PDF creation requires markdown; Excel requires workbook; PPTX requires presentation. Do not mix format inputs.')
     }
     if (args.operation === 'edit' && (format === 'pdf' || !args.edits.every(edit => format === 'xlsx' ? 'cell' in edit : 'oldText' in edit))) return failure('OFFICE_INVALID_ARGUMENTS', 'Word/PPTX edits require unique oldText/newText; Excel edits require sheet/cell/value. PDF text editing is not supported; create a new revision from its source content.')
-    if (args.operation === 'edit' && format !== 'pptx' && args.edits.some(edit => 'slide' in edit || 'textRun' in edit)) return failure('OFFICE_INVALID_ARGUMENTS', 'slide/textRun selectors are only supported for PPTX; Word edits still require globally unique oldText/newText.')
+    if (args.operation === 'edit' && format !== 'pptx' && args.edits.some(edit => 'slide' in edit || 'textRun' in edit || 'target' in edit)) return failure('OFFICE_INVALID_ARGUMENTS', 'target/slide/textRun selectors are only supported for PPTX; Word edits still require globally unique oldText/newText.')
     if (args.operation === 'append_sheets' && format !== 'xlsx') return failure('OFFICE_INVALID_ARGUMENTS', 'append_sheets only adds new worksheets to an existing .xlsx file.')
     if (args.operation === 'recalculate' && format !== 'xlsx') return failure('OFFICE_INVALID_ARGUMENTS', 'recalculate only supports .xlsx workbooks.')
     let published = false
@@ -298,7 +301,7 @@ export const officeDocumentTool: Tool = {
 
 export const officeInspectTool: Tool = {
   name: 'office_inspect', displayName: '检查办公文档',
-  description: '只读提取DOCX/XLSX/PPTX/PDF文字/表格预览，返回warnings、expectedHash。Excel限2000格/格600字符；保存的错误计数覆盖全表，位置有界；不重算或保证业务/视觉正确。Word仅正文。PPTX附1起始slide/textRun及editable，供office_document定点编辑。分页仅覆盖已提取预览，非全文；写入/重算用获授权的office_document。',
+  description: '只读提取DOCX/XLSX/PPTX/PDF文字/表格预览，返回warnings、expectedHash。Excel限2000格/格600字符；保存的错误计数覆盖全表，位置有界；不重算公式，不保证业务/视觉正确。Word仅正文。PPTX附1起始slide/textRun及editable；备注额外标target=notes，供定点编辑。分页仅覆盖已提取预览，非全文；写入/重算用获授权的office_document。',
   parameters: {
     type: 'object', additionalProperties: false,
     properties: {

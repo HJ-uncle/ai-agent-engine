@@ -66,6 +66,22 @@ export const readFileTool: Tool = {
           const content = text.slice(lineStarts[startLine - 1], lineStarts[endLine] ?? text.length)
           return { success: true, output: JSON.stringify({ ...version, startLine, endLine, totalLines, content }), metadata: version }
         }
+        // PPTX has no legacy text handler. Returning its ZIP bytes as numbered
+        // UTF-8 lines polluted model context and prompted ad-hoc decompression.
+        // Keep this an explicit diagnostic: line ranges are not Office offsets.
+        if (text === null && path.extname(canonicalPath).toLowerCase() === '.pptx') {
+          const reader = ctx.tools?.has('office_inspect') === true
+          const message = reader
+            ? 'PPTX is a binary Office package. Use office_inspect with this exact path to read slide text and notes. Start without contentOffset; read_file line ranges are not Office preview offsets.'
+            : 'PPTX is a binary Office package and read_file has no PPTX text parser. This tool selection does not expose office_inspect; report the missing reader instead of treating ZIP bytes or empty output as document text.'
+          return { success: false, error: 'FORMAT_READER_REQUIRED', output: JSON.stringify({ ...version, code: 'FORMAT_READER_REQUIRED', message }),
+            metadata: { ...version, code: 'FORMAT_READER_REQUIRED', fileMutationApplied: false, ...(reader ? { suggestedTool: 'office_inspect' } : {}) } }
+        }
+        if (text === null && ['.csv', '.tsv'].includes(path.extname(canonicalPath).toLowerCase())) {
+          return { success: false, error: 'TEXT_ENCODING_UNSUPPORTED',
+            output: JSON.stringify({ ...version, code: 'TEXT_ENCODING_UNSUPPORTED', message: 'CSV/TSV reading requires valid UTF-8 source text. This file is binary or uses another encoding; no spreadsheet conversion or lossy decoding was attempted.' }),
+            metadata: { ...version, code: 'TEXT_ENCODING_UNSUPPORTED', fileMutationApplied: false } }
+        }
         const handler = handlerRegistry.getHandler(canonicalPath)
         const result = await handler.read(canonicalPath, ctx, { mode, startLine: start_line, endLine: end_line })
         if (readFileVersionSync(canonicalPath).hash !== before.hash) return { success: false, output: 'File changed while being read; read it again to obtain a matching content and expectedHash.' }

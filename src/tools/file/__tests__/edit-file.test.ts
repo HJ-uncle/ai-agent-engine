@@ -51,6 +51,30 @@ function deferred() {
   return { promise, resolve }
 }
 
+describe('binary PowerPoint read guidance', () => {
+  it.each([true, false])('keeps ZIP bytes out of text context with inspector availability %s', async available => {
+    const bytes = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04, 0]), Buffer.from('raw ZIP body must not be returned')])
+    const { file, expectedHash } = seed(bytes, 'handoff.pptx')
+    const tools = { has: (name: string) => available && name === 'office_inspect', execute: vi.fn() }
+    const context = { ...ctx, tools } as unknown as AgentContext
+    for (const mode of ['auto', 'summary', 'full', 'ocr']) {
+      const result = await readFileTool.execute({ path: file, mode, start_line: 24, end_line: 160 }, context)
+      expect(result).toMatchObject({ success: false, error: 'FORMAT_READER_REQUIRED', metadata: { expectedHash, fileMutationApplied: false } })
+      const observation = JSON.parse(result.output)
+        expect(observation).toMatchObject({ path: fs.realpathSync.native(file), expectedHash, code: 'FORMAT_READER_REQUIRED' })
+      expect(observation).not.toHaveProperty('contentOffset')
+      expect(observation).not.toHaveProperty('content')
+      expect(result.output).not.toContain('raw ZIP body must not be returned')
+      expect(result.metadata?.suggestedTool).toBe(available ? 'office_inspect' : undefined)
+      expect(result.output.length).toBeLessThan(1200)
+    }
+    expect(tools.execute).not.toHaveBeenCalled()
+    expect(fs.readFileSync(file)).toEqual(bytes)
+    expect(await readFileTool.execute({ path: file, mode: 'exact' }, context)).toMatchObject({ success: false,
+      output: expect.stringContaining('Exact reading requires a valid UTF-8 text file') })
+  })
+})
+
 describe('D6 exact text edits with full byte versions', () => {
   it('chains write and edits using the model-visible versions without a redundant read', async () => {
     const file = path.join(root, '.ae', 'tmp', 'test-gomoku.mjs')

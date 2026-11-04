@@ -4,10 +4,11 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
-const { readCsvAsJson, saveAsCsv } = require('jtcsv')
+const { saveAsCsv } = require('jtcsv')
 import type { AgentContext } from '../../../core/agent-context/index.js'
 import type { FileHandler, ReadOptions, ReadResult } from './interface.js'
 import { cellValueToString } from '../utils.js'
+import { TextHandler } from './text-handler.js'
 
 export class ExcelHandler implements FileHandler {
   extensions = ['.xlsx', '.xls', '.csv']
@@ -15,29 +16,13 @@ export class ExcelHandler implements FileHandler {
   async read(filePath: string, _ctx: AgentContext, options?: ReadOptions): Promise<ReadResult> {
     const mode = options?.mode || 'auto'
     const ext = path.extname(filePath).toLowerCase()
-    const stat = await fs.stat(filePath)
-    
-    // --- 1. CSV 处理 (使用 jtcsv) ---
-    // 对于超大 CSV 文件 (>5MB)，强制走 jtcsv 的高性能流式解析逻辑
-    if (ext === '.csv') {
-      try {
-        const csvData = await readCsvAsJson(filePath, {
-          maxRows: mode === 'full' ? undefined : (options?.endLine || 300),
-          hasHeaders: true
-        })
-        return {
-          type: 'csv',
-          data: csvData,
-          content: `[CSV 文件: ${path.basename(filePath)}]\n${JSON.stringify(csvData)}`
-        }
-      } catch (err: any) {
-        if (stat.size > 5 * 1024 * 1024) throw err // 超大文件解析失败直接报错
-        _ctx.logger.warn(`jtcsv failed to read CSV, falling back to ExcelJS: ${err.message}`)
-      }
-    }
+    // Delimited files are source text. Spreadsheet parsing changes quoting,
+    // number/date literals and, on fallback, UTF-8 Chinese into mojibake.
+    // Keep the structured CSV writer, but read with the same paging as TSV.
+    if (ext === '.csv') return new TextHandler().read(filePath, _ctx, options)
 
     // --- 2. 尝试使用 xlsx (SheetJS) 读取 ---
-    // xlsx 库对 .xls (BIFF8) 兼容性最好，同时也支持 .xlsx 和 .csv
+    // xlsx 库对 .xls (BIFF8) 兼容性最好，同时也支持 .xlsx
     try {
       const fileBuffer = await fs.readFile(filePath)
       const workbook = XLSX.read(fileBuffer, { type: 'buffer' })

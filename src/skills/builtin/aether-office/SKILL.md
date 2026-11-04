@@ -13,7 +13,7 @@ description: 在Aether内创建和检查真实DOCX、XLSX、PPTX、PDF，编辑W
 
 - **Word**：使用 `get_skill`，参数 `name="aether-office", resource="references/documents.md"`，读取文体、排版与编辑指南。
 - **Excel**：使用 `get_skill`，参数 `name="aether-office", resource="references/spreadsheets.md"`，读取类型、公式与保真编辑指南。
-- **PPT/PDF**：用 `get_skill` 读取 `name="aether-office", resource="references/presentations-pdf.md"`。PPTX用 `presentation.slides`；PDF用 `markdown`。结构化内容与有限页容量优先，长内容拆页，不缩成无法阅读的小字。
+- **PPT/PDF**：用 `get_skill` 读取 `name="aether-office", resource="references/presentations-pdf.md"`。PPTX用 `presentation.slides`；已有备注先inspect，再用 `target:"notes"` 与 `slide/textRun` 定点edit。PDF用 `markdown`。结构化内容与有限页容量优先，长内容拆页，不缩成无法阅读的小字。
 - **Excel计算**：生成/编辑后用同文件最新hash执行 `office_document operation="recalculate"`，再inspect核对真实缓存和错误。支持常用公式与跨表引用；不支持的公式、循环、外链明确拒绝，不能硬填结果假冒计算。
 - **环境诊断**：`office_environment({})`仅供只读诊断，不是调用外部程序的建议。需要解释回执时读 `references/environment.md`；内置办公路径不需要先探测Python或COM。
 - 只需聊天文字时直接回答，不强行生成文件；不承诺尚未提供的复杂编辑和转换能力。

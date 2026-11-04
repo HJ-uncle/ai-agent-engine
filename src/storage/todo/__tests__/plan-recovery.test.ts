@@ -242,7 +242,9 @@ describe('durable plan recovery through ReAct and child resume',()=>{
       const child=context(snapshot.childSessionId);child.runObserver=observer;child.signal=signal
       childPlan=await seed(child.sessionId);await runCorrectingLoop(child)
     })
-    expect(first.status).toBe('succeeded');expect(first.toolCalls.map(t=>t.status)).toEqual(['failed','succeeded'])
+    // Resident views are recent-first; ordinal retains execution order.
+    expect(first.status).toBe('succeeded');expect(first.coverage.completeness).toBe('complete')
+    expect([...first.toolCalls].sort((a,b)=>a.ordinal-b.ordinal).map(t=>t.status)).toEqual(['failed','succeeded'])
     const next=await runner.run(input(first.runId),parent,async({snapshot,observer,signal})=>{
       expect(snapshot.childSessionId).toBe(first.childSessionId)
       const child=context(snapshot.childSessionId);child.runObserver=observer;child.signal=signal
@@ -251,7 +253,8 @@ describe('durable plan recovery through ReAct and child resume',()=>{
       expect(result.recoveryPlan?.plan[0].step).not.toBe('Parent private step')
     })
     expect(next.status).toBe('succeeded');expect(next.childSessionId).toBe(first.childSessionId)
-    expect(next.toolCalls.map(t=>t.status)).toEqual(['failed','succeeded'])
+    expect(next.coverage.completeness).toBe('complete')
+    expect([...next.toolCalls].sort((a,b)=>a.ordinal-b.ordinal).map(t=>t.status)).toEqual(['failed','succeeded'])
     expect(await store.getPlan(tenantId,parent.sessionId)).toEqual(parentPlan)
     expect((await store.getPlan(tenantId,first.childSessionId)).plan).toEqual([{...childPlan!.plan[0],status:'completed'}])
   })

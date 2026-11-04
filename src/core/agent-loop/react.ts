@@ -33,6 +33,7 @@ import { imageFileVersion, imageToolFramePayload, imageToolPayload, MAX_NATIVE_I
 import { captureFileEvidence, clearedToolModelContent, isClearedToolMessage, TOOL_FILE_EVIDENCE_KEY, CLEARED_TOOL_EVIDENCE_KEY, CLEARED_TOOL_RESULT } from '../utils/tool-evidence.js'
 import { buildRuntimeCapabilitiesPrompt } from '../runtime-capabilities.js'
 import { buildExecutionProtocol } from '../execution-protocol.js'
+import { isRetryable } from '../llm-adapter/retry.js'
 
 const OUTPUT_CONTINUATION_PROMPT = 'The previous model response reached its single-response output limit. Continue the same user task from the retained partial response and history, starting exactly where the response stopped. Do not repeat text already emitted, restart completed work, or repeat executed tools. Use tools only for remaining work; finish normally when the original task is complete.'
 
@@ -1190,7 +1191,7 @@ export class ReActStrategy implements LoopStrategy {
           } else {
             ctx.logger.error({ err }, 'LLM call failed')
             await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'provider_error', partialOutput,
-              error: { retryable: false, code: 'PROVIDER_ERROR', message: err instanceof Error ? err.message : String(err) } })
+              error: { retryable: isRetryable(err), code: 'PROVIDER_ERROR', message: err instanceof Error ? err.message : String(err) } })
             failureNotice = '\n\n[Error: LLM call failed - ' + (err instanceof Error ? err.message : 'unknown error') + ']'
           }
         }

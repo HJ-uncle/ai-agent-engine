@@ -47,7 +47,7 @@ export const OSM_CORE_TOOLS: ReadonlySet<string> = new Set([
   // 用户交互
   'ask_user',
   // 记忆
-  'remember', 'recall', 'search_memory',
+  'remember', 'recall',
   // 技能管理
   'list_skills', 'get_skill', 'run_skill_script',
   // 搜索
@@ -341,7 +341,7 @@ export type SuperpowerSelfCheckResult = OSMSelfCheckResult
  * 运行 OSM 配置的一致性自检。
  * 结果为纯数据，允许调用方决定是 log / throw / 上报监控。
  */
-export function runOSMSelfCheck(registry: ToolRegistryHandle): OSMSelfCheckResult {
+export function runOSMSelfCheck(registry: ToolRegistryHandle, options: { memoryEnabled?: boolean } = {}): OSMSelfCheckResult {
   // Normalize only diagnostics. OSM's actual permission/selection sets retain
   // their established semantics, including explicit legacy allowlists.
   const core = new Set([...OSM_CORE_TOOLS].map(normalizeToolName))
@@ -356,6 +356,9 @@ export function runOSMSelfCheck(registry: ToolRegistryHandle): OSMSelfCheckResul
   if (has) {
     for (const name of core) {
       if (!isDefaultTool(name)) continue
+      // Memory is conditional on the same resolved policy used by registration.
+      // Keep the legacy full-registry check when no policy is supplied.
+      if (options.memoryEnabled === false && (name === 'remember' || name === 'recall')) continue
       const legacyNames = [...OSM_CORE_TOOLS].filter(candidate => normalizeToolName(candidate) === name)
       if (!has(name) && !legacyNames.some(alias => has(alias))) missingInRegistry.push(name)
     }

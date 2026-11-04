@@ -12,6 +12,8 @@
 
 相同数字或文字出现在多个位置时，先用 `office_inspect` 读取 `[slide=2 textRun=7 editable=true]` 标记，再在同一项 edit 中成对提供 `slide:2,textRun:7`。编号从 1 开始：slide 是实际显示顺序，textRun 是该页所有已提取文本节点的顺序（包含不可编辑字段）。只支持 `editable=true` 的普通文本节点；`oldText` 仍须在指定节点内唯一匹配。示例：`{"operation":"edit","path":"经营评审.pptx","expectedHash":"<该文件 inspect 返回的 sha256>","edits":[{"slide":2,"textRun":7,"oldText":"127200","newText":"128400"}]}`。不得猜测编号；过期 hash、越界编号、缺少配对参数或字段节点都会拒绝且不发布。定位参数仅适用于 PPTX，不能用于 DOCX。inspect 仍是有界分页预览，需要时继续获取 `contentPage.nextOffset`。
 
+备注也由 inspect 提取，标为 `[target=notes slide=2 textRun=1 editable=true]`；正文和备注的 textRun 各自从 1 编号。修改已有备注使用 `edits:[{"target":"notes","slide":2,"textRun":1,"oldText":"旧路径.xlsx","newText":"修订路径.xlsx"}]` 并复用同文件最新 expectedHash。省略 target 只匹配正文，不会改备注；指定 notes 不会回退匹配正文。页码等字段不可编辑，不支持新建备注部件、插入段落或跨文本段替换。不得用 shell 手改 ZIP 绕过定位与版本保护。
+
 ## PDF
 
 用 `create`、`.pdf` 路径、`expectedHash:"missing"` 与 `markdown` 创建，支持中文、标题、段落、列表和简单表格的分页排版。可选title/author必须来自已知信息。中文字体不可用会明确失败，不能交付乱码。

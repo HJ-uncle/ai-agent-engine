@@ -5,7 +5,7 @@ import type { FileHandler, ReadOptions, ReadResult } from './interface.js'
 import { extractCodeSummary } from '../utils.js'
 
 export class TextHandler implements FileHandler {
-  extensions = ['.txt', '.md', '.ts', '.js', '.tsx', '.jsx', '.py', '.go', '.java', '.c', '.cpp', '.h', '.hpp', '.rs', '.css', '.html', '.sh', '.yaml', '.yml', '.toml', '.lock']
+  extensions = ['.txt', '.tsv', '.md', '.ts', '.js', '.tsx', '.jsx', '.py', '.go', '.java', '.c', '.cpp', '.h', '.hpp', '.rs', '.css', '.html', '.sh', '.yaml', '.yml', '.toml', '.lock']
 
   async read(filePath: string, _ctx: AgentContext, options?: ReadOptions): Promise<ReadResult> {
     const fullContent = fs.readFileSync(filePath, 'utf-8')

@@ -38,7 +38,7 @@ function body(value: unknown): ControllerBody {
     || Object.keys(record).some(key => !fields.includes(key))) throw new CollaborationError('invalid', 'Controller body must contain only recipientParticipantId, recipientInvocationRunId, message and requestKey')
   return record as ControllerBody
 }
-/** Capabilities stay gated until the complete producer, consumer and UI contract is independently accepted. */
+/** Advertise root user steering separately from the broader agent communication rollout. */
 export async function collaborationRoutes(app: FastifyInstance): Promise<void> {
   const store = getCollaborationRuntime().store
   const controller = () => new CollaborationController(getExecutionOwners())
@@ -49,6 +49,7 @@ export async function collaborationRoutes(app: FastifyInstance): Promise<void> {
     protocolVersion: 1, durableQueueReceipts: true, receiptPagination: true, backend: 'sqlite',
     mailboxConsumer: false, runtimeCommunication: false, asynchronousAgentTools: false,
     userControllerMutation: false, jsonlDelivery: false,
+    rootUserControllerMutation: true, rootControllerDelivery: 'next-model-iteration',
   })))
   app.get<{ Params: RootParams; Querystring: ScopeQuery }>('/collaboration/roots/:rootRunId/participants', async (request, reply) => {
     try {

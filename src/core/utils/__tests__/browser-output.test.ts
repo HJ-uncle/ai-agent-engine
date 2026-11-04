@@ -22,6 +22,64 @@ function snapshot(image = screenshot()) {
 }
 
 describe('browser screenshot presentation boundary', () => {
+  it('bounds a large keyboard snapshot without images as intact JSON with actionable refs and availability', () => {
+    const input = { tab: { tabId: 'board', title: '围棋', url: 'http://localhost/board', navigationId: 10,
+      availability: { window: 'visible', surface: 'hidden', initialization: 'ready', interaction: 'needs_reveal' } },
+      text: '棋盘'.repeat(10000), truncated: false,
+      elements: [...Array.from({ length: 800 }, (_, i) => ({ role: 'StaticText', name: '棋盘文字'.repeat(20), ref: `10:${i}` })),
+        { role: 'button', name: '确认死子', ref: '10:900', bounds: { x: 20, y: 30, width: 80, height: 32 } }] }
+    const result = browserOutputPresentation(JSON.stringify(input), 8192)!
+    expect(result).toBeDefined()
+    expect(result.imageChars).toBe(0)
+    expect(result.displayOutput.length).toBeLessThanOrEqual(8192)
+    const actual = JSON.parse(result.displayOutput)
+    expect(actual.tab).toEqual(input.tab)
+    expect(actual.truncated).toBe(true)
+    expect(actual.elements).toContainEqual(input.elements.at(-1))
+    expect(actual).not.toHaveProperty('screenshot')
+    expect(actual.text.length).toBeGreaterThan(0)
+    expect(result.modelInputContent).toBe(result.displayOutput)
+  })
+
+  it('does not rewrite a small image-free snapshot or invent fields', () => {
+    const input = JSON.stringify({ tab: { title: '围棋', url: 'http://localhost/' }, text: '空棋盘', elements: [], truncated: false })
+    expect(browserOutputPresentation(input, 8192)).toBeUndefined()
+  })
+
+  it.each([0, 1, 2, 64, 128])('keeps both image-free representations within a %i-character budget', limit => {
+    const input = JSON.stringify({ tab: { title: 'Large', url: 'https://example.test/' + 'x'.repeat(180) },
+      text: 'text'.repeat(1000), elements: [], truncated: false })
+    const result = browserOutputPresentation(input, limit)!
+    expect(result.imageChars).toBe(0)
+    expect(result.modelInputContent.length).toBeLessThanOrEqual(limit)
+    expect(result.displayOutput).toBe(result.modelInputContent)
+    if (limit >= 2) expect(() => JSON.parse(result.displayOutput)).not.toThrow()
+    else expect(result.displayOutput).toBe('')
+  })
+
+  it('rejects malformed snapshot shapes without granting the browser output path', () => {
+    const base = { tab: { title: 'Page', url: 'https://example.test/' }, text: 'x'.repeat(5000), elements: [] }
+    for (const value of [null, [], { ...base, tab: [] }, { ...base, tab: { url: base.tab.url } },
+      { ...base, tab: { title: 'Page', url: ' ' } }, { ...base, text: [] }, { ...base, elements: {} },
+      { ...base, elements: [{ role: ' ', name: 'x' }] }, { ...base, elements: [{ role: 'button', name: 1 }] }]) {
+      expect(browserOutputPresentation(JSON.stringify(value), 1024)).toBeUndefined()
+    }
+    expect(browserOutputPresentation('{"elements":[]', 1024)).toBeUndefined()
+    expect(browserOutputPresentation(base, 1024)).toBeUndefined()
+  })
+
+  it.each(['element-name', 'unknown-field'])('marks an oversized image-free snapshot truncated when only %s is shortened', variant => {
+    const input = { tab: { title: 'Page', url: 'https://example.test/' }, text: 'Ready', truncated: false,
+      elements: [{ role: 'button', ref: '10:1', name: variant === 'element-name' ? 'Label'.repeat(4000) : 'Confirm' }],
+      ...(variant === 'unknown-field' ? { extra: 'x'.repeat(20_000) } : {}) }
+    const result = browserOutputPresentation(JSON.stringify(input), 4000)!
+    const shown = JSON.parse(result.displayOutput)
+    expect(shown.truncated).toBe(true)
+    expect(result.displayOutput.length).toBeLessThanOrEqual(4000)
+    expect(shown.elements[0].ref).toBe('10:1')
+    expect(shown.text).toBe('Ready')
+  })
+
   it('preserves page and pre-click pixels in display with readable metadata in model input', () => {
     const input = snapshot()
     const result = browserOutputPresentation(JSON.stringify(input), 4000)!
@@ -122,6 +180,24 @@ describe('browser screenshot presentation boundary', () => {
 })
 
 describe('browser publication byte budget', () => {
+  it('continues reducing an image-free frame when its UTF-8 size exceeds the byte cap before its character cap', () => {
+    const input = { tab: { title: '棋盘', url: 'https://example.test/', navigationId: 10,
+      availability: { window: 'visible', surface: 'visible', initialization: 'ready', interaction: 'ready' },
+      viewport: { width: 375, height: 667, mobile: true, deviceScaleFactor: 2 } },
+      text: '中文'.repeat(100_000), elements: [{ role: 'button', name: '确认', ref: '10:1' }], truncated: false }
+    const frame = { toolCallId: 'keyboard', output: JSON.stringify(input), metadata: { message: 'unchanged' } }
+    expect(frame.output.length).toBeLessThan(512 * 1024)
+    const payload = browserOutputFramePayload(frame, 300_000)!
+    expect(payload).toBeDefined()
+    expect(Buffer.byteLength(payload)).toBeLessThanOrEqual(300_000)
+    const received = JSON.parse(payload), output = JSON.parse(received.output)
+    expect(output.tab).toEqual(input.tab)
+    expect(output.truncated).toBe(true)
+    expect(output.text.length).toBeGreaterThan(0)
+    expect(received.metadata.message).toBe('unchanged')
+    expect(frame.output).toBe(JSON.stringify(input))
+  })
+
   it.each([600_000, 1024 * 1024])('keeps complete durable evidence and recoverable structured stream JSON for %i-byte images', bytes => {
     const page = snapshot(screenshot(bytes))
     const output = JSON.stringify(page)

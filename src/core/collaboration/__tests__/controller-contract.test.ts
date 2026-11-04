@@ -26,6 +26,10 @@ import type { CollaborationBinding, CollaborationProducer } from '../types.js'
 import type { SQLiteDeliveryConsumer } from '../sqlite-delivery.js'
 import type { JSONLDeliveryConsumer } from '../jsonl-delivery.js'
 import { getSubagentStore } from '../../subagent/store.js'
+import type { AgentContext, Message } from '../../agent-context/types.js'
+import type { LLMAdapter, LLMStreamChunk } from '../../llm-adapter/types.js'
+import { ReActStrategy } from '../../agent-loop/react.js'
+import { installProductionCollaborationBoundary } from '../production-boundary.js'
 
 let directory: string, db: LocalSqliteProcessClient, observer: LocalSqliteProcessClient, app: FastifyInstance
 let runtime: ReturnType<typeof getCollaborationRuntime>, owners: ReturnType<typeof getExecutionOwners>, owner: ExecutionOwner
@@ -41,7 +45,7 @@ const rootScope = () => ({ tenantId: binding.tenantId, rootRunId: binding.rootRu
 const query = () => new URLSearchParams({ rootAttemptId: binding.rootAttemptId, rootSessionId: binding.rootSessionId })
 const base = () => '/collaboration/roots/' + binding.rootRunId
 const headers = () => ({ authorization: 'Bearer ' + jwt, 'x-aether-instance-token': gate })
-const message = (requestKey = randomUUID()) => ({ recipientParticipantId: binding.participantId,
+const message = (requestKey: string = randomUUID()) => ({ recipientParticipantId: binding.participantId,
   recipientInvocationRunId: binding.invocationRunId, message: 'Synthetic follow-up user requirement', requestKey })
 const post = (payload: unknown = message(), extraHeaders = {}) => app.inject({ method: 'POST', url: base() + '/messages?' + query(), headers: { ...headers(), 'content-type': 'application/json', ...extraHeaders }, payload: JSON.stringify(payload) })
 const getReceipt = (key: string, extraHeaders = {}) => app.inject({ method: 'GET', url: base() + '/controller-receipts/' + encodeURIComponent(key) + '?' + query(), headers: { ...headers(), ...extraHeaders } })
@@ -107,6 +111,18 @@ it('returns a server-owned exact live scope and separately resolved current chil
   expect(response.json().data.recipient).toMatchObject({ participantId: c.binding.participantId, invocationRunId: c.binding.invocationRunId })
   expect(await count('subagent_runs')).toBe(before)
 })
+it('discovers the exact current root without a caller-supplied participant and refuses it after finish begins', async () => {
+  const url = base() + '/controller-context?' + new URLSearchParams({ rootSessionId: scope.sessionId })
+  const response = await app.inject({ url, headers: headers() })
+  expect(response.statusCode, response.body).toBe(200)
+  expect(response.json().data.recipient).toMatchObject({ kind: 'root', participantId: binding.participantId,
+    sessionId: scope.sessionId, invocationRunId: binding.invocationRunId })
+  expect(response.json().data.scope).toEqual({ rootRunId: binding.rootRunId, rootAttemptId: binding.rootAttemptId, rootSessionId: scope.sessionId })
+  owners.fence(owner, 'finish')
+  expect((await app.inject({ url, headers: headers() })).statusCode).toBe(409)
+  expect((await post(message())).statusCode).toBe(409)
+  expect(await count('collaboration_messages')).toBe(0)
+})
 it('accepts one authenticated user receipt, never creates a participant or a model sender, and retries exactly', async () => {
   const input = message(), before = await count('collaboration_participants')
   const accepted = await post(input); expect(accepted.statusCode, accepted.body).toBe(200)
@@ -120,9 +136,10 @@ it('accepts one authenticated user receipt, never creates a participant or a mod
   expect(await count('collaboration_messages')).toBe(1); expect(await count('collaboration_controller_origins')).toBe(1)
   expect(await count('collaboration_participants')).toBe(before)
 })
-it('keeps all capability claims gated while contracts are under review', async () => {
+it('advertises root user steering separately while broader communication remains gated', async () => {
   const response = await app.inject({ url: '/collaboration/capabilities', headers: headers() })
-  expect(response.json().data).toMatchObject({ userControllerMutation: false, mailboxConsumer: false, asynchronousAgentTools: false })
+  expect(response.json().data).toMatchObject({ userControllerMutation: false, mailboxConsumer: false, asynchronousAgentTools: false,
+    rootUserControllerMutation: true, rootControllerDelivery: 'next-model-iteration' })
 })
 it.each(['senderParticipantId','senderInvocationRunId','tenantId','authority','producer','metadata'])('rejects caller-supplied %s rather than acquiring a sender', async field => {
   const response = await post({ ...message(), [field]: 'forged' })
@@ -281,6 +298,44 @@ it('cannot bind a user controller merely by supplying readable attempt or genera
 })
 
 describe.each(['sqlite','jsonl'] as const)('%s authenticated controller consumer', backend => {
+  it('delivers an authenticated root follow-up before the next real ReAct iteration without restarting the root', async () => {
+    const raw = backend === 'sqlite' ? new SQLiteConversationHistory() : new JSONLConversationHistory()
+    const seed = (await readAdmissionSeed(db, scope, binding.rootRunId)).message
+    await raw.append(seed, scope)
+    const originalRoots = await count('root_runs')
+    const calls: Message[][] = []
+    const input = message('root-live-iteration')
+    const model: LLMAdapter = { model: 'scripted-only', provider: 'fixture', countTokens: () => 0, complete: vi.fn(),
+      stream: vi.fn(async function* (messages: Message[]): AsyncGenerator<LLMStreamChunk> {
+        calls.push(structuredClone(messages))
+        if (calls.length === 1) {
+          const accepted = await post(input)
+          expect(accepted.statusCode, accepted.body).toBe(200)
+          expect(accepted.json().data.receipt.state).toBe('queued')
+          expect((await post(input)).json().data.receipt).toEqual(accepted.json().data.receipt)
+          yield { done: true, content: 'Continue original task', toolCalls: [{ id: 'step-one', name: 'step', args: '{}', index: 0 }] }
+        } else yield { done: true, content: 'Applied the additional requirement to the original task.' }
+      }) }
+    const ctx = { ...scope, rootRunId: binding.rootRunId, turnId: binding.turnId, userMessageId: seed.id, executionOwner: owner,
+      inheritContext: false, modelCaps: { contextWindow: 100_000 }, tokenBudget: 100_000, history: raw,
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() },
+      tools: { list: () => [], has: () => true, executionMode: () => 'serial', execute: async () => ({ success: true, output: 'Synthetic step completed' }) },
+    } as unknown as AgentContext
+    installProductionCollaborationBoundary(ctx)
+    const frames: string[] = []
+    for await (const frame of new ReActStrategy(model, { maxIterations: 3, maxOutputTokens: 100 }).run(null, ctx)) frames.push(frame)
+    expect(calls, JSON.stringify({ frames, errors: vi.mocked(ctx.logger.error).mock.calls })).toHaveLength(2)
+    expect(calls[0].some(row => String(row.content).includes('[用户追加指令]'))).toBe(false)
+    const followups = calls[1].filter(row => String(row.content).includes('[用户追加指令]'))
+    expect(followups).toHaveLength(1)
+    expect(followups[0]).toMatchObject({ role: 'user' })
+    expect(String(followups[0].content)).toContain(input.message)
+    expect(calls[1].some(row => row.id === seed.id && row.content === task)).toBe(true)
+    expect(await count('root_runs')).toBe(originalRoots)
+    expect(await count('collaboration_messages')).toBe(1)
+    expect(await count(backend === 'sqlite' ? 'collaboration_deliveries' : 'collaboration_jsonl_deliveries')).toBe(1)
+    expect((await getReceipt(input.requestKey)).json().data.receipt.state).toBe('queued')
+  })
   it('integrates real user follow-up independently from peers, preserving original admission and maintenance source roles', async () => {
     const h = await history(backend), accepted = await post(), c = await child()
     expect(accepted.statusCode, accepted.body).toBe(200)

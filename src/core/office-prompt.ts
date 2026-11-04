@@ -2,7 +2,9 @@ import type { ExternalSkill } from '../skills/external-loader.js'
 
 /** Advertise only capabilities admitted by this request's actual registry. */
 export function buildOfficeExecutionPrompt(profile: string, registry: { has(name: string): boolean }, skills: readonly ExternalSkill[]): string {
-  if (profile !== 'general' || !registry.has('office_document')) return ''
+  if (profile !== 'general' || !registry.has('office_document')) return registry.has('office_inspect')
+    ? '\n\n## 办公文件阅读\n读取产品交接或其他 DOCX/XLSX/PPTX/PDF 资料时，优先使用 office_inspect({path}) 提取结构化文字。PPTX 预览包含正文与已有备注，备注标记 target=notes；Excel 预览包含各工作表及保存的公式缓存。按 contentPage.hasMore/nextOffset 分页，续页复用同文件返回的完整 expectedHash；warnings 和 documentComplete 标明提取范围，不能把有限预览当作全文。此路径无需手写 ZIP/XML 解包脚本；read_file 返回二进制或无有效文字时应转用 office_inspect。结构和文本检查不等于视觉验收。'
+    : ''
   const guide = registry.has('get_skill') && skills.some(skill => skill.enabled && skill.name.toLowerCase() === 'aether-office')
     ? '办公原格式创建与编辑先用 get_skill 读取 aether-office；模式细节通过它的 references 资源按需读取。'
     : '按 office_document 的真实参数和校验回执完成办公文件交付。'

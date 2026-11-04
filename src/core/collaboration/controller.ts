@@ -84,15 +84,17 @@ export class CollaborationController {
       this.validate(b, subject); await assertControllerRoot(tx, b, subject)
       const { owner, binding } = this.live(b, recipientParticipantId)
       await this.store.assertProducer(tx, binding)
-      const recipient = recipientParticipantId === undefined ? undefined : await this.recipient(tx, binding, owner, recipientParticipantId)
-      this.owners.controllerBinding(owner, recipientParticipantId)
+      // Omitting a target means this exact live root, never an inferred child
+      // or a later invocation. Return its server-owned identity to the client.
+      const recipient = await this.recipient(tx, binding, owner, recipientParticipantId ?? binding.participantId)
+      this.owners.controllerBinding(owner, recipient.participantId)
       return { b, recipient }
     })
     const participants = await this.store.participants(result.b, { limit: 64 })
-    const current = this.live(result.b, recipientParticipantId)
-    if (result.recipient) this.owners.assertControllerRecipient(current.owner, result.recipient.participantId, result.recipient.invocationRunId)
+    const current = this.live(result.b, result.recipient.participantId)
+    this.owners.assertControllerRecipient(current.owner, result.recipient.participantId, result.recipient.invocationRunId)
     return { outcome: 'ready' as const, scope: { rootRunId, rootAttemptId: result.b.rootAttemptId, rootSessionId },
-      participants, ...(result.recipient ? { recipient: result.recipient } : {}) }
+      participants, recipient: result.recipient }
   }
   async findReceipt(b: CollaborationRootScope, subject: ControllerSubject, requestKey: string): Promise<CollaborationReceipt | null> {
     this.validate(b, subject); id(requestKey, 'requestKey')

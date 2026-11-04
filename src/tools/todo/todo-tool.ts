@@ -76,7 +76,7 @@ async function planFailure(error: unknown, ctx: AgentContext): Promise<ToolResul
 export const planTool: Tool = {
   name: 'plan_update',
   displayName: '更新任务计划',
-  description: '引擎内建的静默任务计划控制入口。多实质步骤任务维护计划，简单单步无需创建；completed 仅用于有真实完成依据的步骤，保留仍需展示的已完成步骤。一次提交当前会话完整计划，省略条目会从本会话计划移除；空数组清空。首次可不传 id，之后复用返回 id（重命名必须传 id）。status 使用 pending/in_progress/completed/cancelled。仅在任务进度或范围变化时更新，不输出创建/更新日志，不调用命令管理计划。执行结果返回持久化 id，可在断线重试时复用；步骤标题必须唯一。',
+  description: '引擎内建的静默任务计划控制入口。多实质步骤任务维护计划，简单单步无需创建；completed 仅用于有真实完成依据的步骤，保留仍需展示的已完成步骤。一次提交当前会话完整计划，省略条目会从本会话计划移除；空数组清空。新增步骤每次都省略 id，由引擎生成；既有步骤复用当前会话返回的完整 id，重命名必须传 id，不得猜测或自行生成。status 使用 pending/in_progress/completed/cancelled。仅在任务进度或范围变化时更新，不输出创建/更新日志，不调用命令管理计划。执行结果返回持久化 id，可在断线重试时复用；步骤标题必须唯一。',
   parameters: {
     type: 'object', additionalProperties: false,
     properties: {
@@ -85,7 +85,7 @@ export const planTool: Tool = {
         items: {
           type: 'object', additionalProperties: false,
           properties: {
-            id: { type: 'string', minLength: 1, maxLength: 128 },
+            id: { type: 'string', minLength: 1, maxLength: 128, description: '既有步骤使用当前会话返回的完整 id；新增步骤省略，由引擎生成，不能猜测或自建。' },
             step: { type: 'string', minLength: 1, maxLength: 240 },
             status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'cancelled'] },
           }, required: ['step', 'status'],

@@ -4,6 +4,7 @@ import { BadRequestError, APIConnectionError, APIUserAbortError } from '@anthrop
 import { createHash } from 'node:crypto'
 import { AnthropicAdapter } from '../anthropic.js'
 import { AnthropicStreamError, preserveAnthropicStreamErrors } from '../anthropic-stream-error.js'
+import { RetryingAdapter } from '../retry.js'
 import type { LLMRequestAttemptEvent, LLMStreamChunk } from '../types.js'
 
 afterEach(() => vi.unstubAllGlobals())
@@ -36,11 +37,11 @@ async function consume(wire: string, chunks: LLMStreamChunk[] = [], fragmentByte
 }
 
 describe('Anthropic SSE gateway errors', () => {
-  it('preserves allowlisted type/message and classification without enabling retries', async () => {
+  it('preserves allowlisted type/message and retry classification without retrying in the raw adapter', async () => {
     const chunks: LLMStreamChunk[] = [], attempts: LLMRequestAttemptEvent[] = []
     await expect(consume(start + failure('overloaded_error', 'Overloaded'), chunks, undefined, attempts)).rejects.toMatchObject({
       name: 'AnthropicStreamError', code: 'PROVIDER_STREAM_ERROR', source: 'anthropic_sse_error',
-      providerErrorType: 'overloaded_error', providerMessage: 'overloaded', classification: 'transient', retryable: false,
+      providerErrorType: 'overloaded_error', providerMessage: 'overloaded', classification: 'transient', retryable: true,
     })
     expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledTimes(1)
     expect(chunks.some(chunk => chunk.done)).toBe(false)
@@ -54,7 +55,7 @@ describe('Anthropic SSE gateway errors', () => {
     ['rate_limit_error', 'transient'], ['invalid_request_error', 'request'],
     ['authentication_error', 'authentication'], ['billing_error', 'quota'],
   ])('classifies %s independently of the SDK connection-error label', async (type, classification) => {
-    await expect(consume(failure(type, 'synthetic payload'))).rejects.toMatchObject({ providerErrorType: type, classification, retryable: false })
+    await expect(consume(failure(type, 'synthetic payload'))).rejects.toMatchObject({ providerErrorType: type, classification, retryable: classification === 'transient' })
     expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledTimes(1)
   })
 
@@ -75,6 +76,74 @@ describe('Anthropic SSE gateway errors', () => {
   it('redacts unknown provider types and malformed payloads conservatively', async () => {
     await expect(consume(failure('secret-value-as-type', 'Overloaded'))).rejects.toMatchObject({ providerErrorType: 'unrecognized_error', classification: 'unknown', retryable: false })
     await expect(consume('event: error\ndata: not-json-secret\n\n')).rejects.toMatchObject({ malformed: true, providerErrorType: 'unrecognized_error', classification: 'unknown' })
+  })
+
+  it('retains only allowlisted codes, numeric status and recognized correlation IDs', async () => {
+    const requestId = 'req_0123456789abcdef', responseId = 'msg_0123456789abcdef'
+    const wire = start.replace('response-1', responseId)
+      + frame('error', { error: { type: 'unknown-secret-type', code: 'rate_limit_exceeded', status: 429, message: 'private-message' },
+        response_id: 'private-secret-response' })
+    const original = new Response(wire, { headers: { 'content-type': 'text/event-stream', 'request-id': requestId,
+      authorization: 'Bearer private-key', 'x-secret': 'private-value' } })
+    let observed: unknown
+    try { await preserveAnthropicStreamErrors(original).text() } catch (error) { observed = error }
+    expect(observed).toMatchObject({ providerErrorType: 'unrecognized_error', providerErrorCode: 'rate_limit_exceeded',
+      classification: 'transient', retryable: true, providerStatus: 429, responseStatus: 200,
+      providerRequestId: requestId, providerResponseId: responseId })
+    for (const value of ['unknown-secret-type', 'private-message', 'private-secret-response', 'private-key', 'private-value']) {
+      expect(JSON.stringify(observed) + (observed as Error).stack).not.toContain(value)
+    }
+    const conflict = new AnthropicStreamError(JSON.stringify({ error: { type: 'authentication_error', code: 'rate_limit_exceeded' } }), false)
+    expect(conflict).toMatchObject({ classification: 'authentication', retryable: false })
+    const unknown = new AnthropicStreamError(JSON.stringify({ error: { type: 'private', code: 'private-code', status: 429,
+      request_id: 'Bearer private', message: 'rate limit' } }), false)
+    expect(unknown).toMatchObject({ classification: 'unknown', retryable: false, providerStatus: 429 })
+    expect(unknown.providerErrorCode).toBeUndefined(); expect(unknown.providerRequestId).toBeUndefined()
+  })
+
+  it.each(['overloaded_error', 'rate_limit_error', 'network'])('retries %s only before delivering a stream chunk', async kind => {
+    const fetchMock = vi.fn().mockImplementationOnce(async () => {
+      if (kind === 'network') throw new TypeError('fetch failed')
+      return response(failure(kind, 'private-message'))
+    }).mockImplementationOnce(async () => response(start + text('recovered once') + terminal))
+    vi.stubGlobal('fetch', fetchMock)
+    const adapter = new RetryingAdapter(new AnthropicAdapter('qwen3.8-flash', 'fixture-key', 'http://fixture.invalid/anthropic'),
+      { maxRetries: 1, baseDelayMs: 1, maxDelayMs: 1 })
+    const chunks: LLMStreamChunk[] = [], attempts: LLMRequestAttemptEvent[] = []
+    for await (const chunk of adapter.stream([{ role: 'user', content: 'test' }], { model: adapter.model, onRequestAttempt: event => { attempts.push(event) } })) chunks.push(chunk)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(chunks.map(chunk => chunk.content ?? '').join('')).toBe('recovered once')
+    expect(attempts.map(event => event.type)).toEqual(['start', 'finish', 'start', 'finish'])
+    expect(attempts[0].requestAttemptId).not.toBe(attempts[2].requestAttemptId)
+  })
+
+  it.each(['usage', 'text', 'tool'])('does not replay transient errors after delivered %s', async kind => {
+    const tool = frame('content_block_start', { type: 'content_block_start', index: 0,
+      content_block: { type: 'tool_use', id: 'tool-1', name: 'write_file', input: {} } })
+      + frame('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"path":"output.txt"}' } })
+      + frame('content_block_stop', { type: 'content_block_stop', index: 0 })
+    const fetchMock = vi.fn(async () => response(start + (kind === 'text' ? text('partial') : kind === 'tool' ? tool : '')
+      + failure('overloaded_error', 'Overloaded')))
+    vi.stubGlobal('fetch', fetchMock)
+    const adapter = new RetryingAdapter(new AnthropicAdapter('qwen3.8-flash', 'fixture-key', 'http://fixture.invalid/anthropic'),
+      { maxRetries: 2, baseDelayMs: 1, maxDelayMs: 1 })
+    const chunks: LLMStreamChunk[] = []
+    const pending = (async () => { for await (const chunk of adapter.stream([{ role: 'user', content: 'test' }])) chunks.push(chunk) })()
+    await expect(pending).rejects.toMatchObject({ retryable: true, classification: 'transient' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(chunks.length).toBeGreaterThan(0)
+    if (kind === 'text') expect(chunks.map(chunk => chunk.content ?? '').join('')).toBe('partial')
+    if (kind === 'tool') expect(chunks.some(chunk => chunk.toolCalls?.length)).toBe(true)
+  })
+
+  it.each(['invalid_request_error', 'authentication_error', 'billing_error', 'unrecognized-secret'])('does not retry %s before output', async kind => {
+    const fetchMock = vi.fn(async () => response(failure(kind, 'private-message')))
+    vi.stubGlobal('fetch', fetchMock)
+    const adapter = new RetryingAdapter(new AnthropicAdapter('qwen3.8-flash', 'fixture-key', 'http://fixture.invalid/anthropic'),
+      { maxRetries: 2, baseDelayMs: 1, maxDelayMs: 1 })
+    const pending = (async () => { for await (const _chunk of adapter.stream([{ role: 'user', content: 'test' }])) { /* consume */ } })()
+    await expect(pending).rejects.toMatchObject({ retryable: false })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it.each([1, 2, 7])('handles CRLF, multiline data and UTF-8 fragmented into %i-byte chunks', async fragmentBytes => {

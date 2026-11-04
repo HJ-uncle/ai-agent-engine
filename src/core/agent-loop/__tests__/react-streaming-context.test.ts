@@ -886,6 +886,37 @@ describe('thinking Off during finalization', () => {
 })
 
 describe('browser screenshot settlement', () => {
+  it('keeps a large image-free keyboard receipt parseable across history, observer, stream and next model input', async () => {
+    vi.stubEnv('CODE_TOOL_OUTPUT_MAX_CHARS', '65536')
+    const f = fixture()
+    f.ctx.toolProfile = 'code'
+    const tab = { title: '围棋', url: 'https://example.test/board', navigationId: 10,
+      availability: { window: 'visible', surface: 'visible', initialization: 'ready', interaction: 'ready' },
+      viewport: { width: 375, height: 667, mobile: true, deviceScaleFactor: 2 } }
+    const output = JSON.stringify({ tab, text: '棋盘内容'.repeat(6000),
+      elements: Array.from({ length: 600 }, (_, index) => ({ role: 'button', name: '棋盘交叉点'.repeat(15), ref: `10:${index}` })), truncated: false })
+    expect(output.length).toBeGreaterThan(65536)
+    vi.mocked(f.ctx.tools.execute).mockResolvedValue({ success: true, output })
+    let requests = 0
+    f.llm.stream = vi.fn(async function* () {
+      if (requests++ === 0) yield { done: true, toolCalls: [{ id: 'keyboard-read', name: 'browser_press_key', args: '{"key":"Enter"}', index: 0 }] }
+      else yield { done: true, content: 'Keyboard result inspected.' }
+    })
+    const frames = await f.run(), stored = f.history.find(message => message.role === 'tool')!
+    expect(stored.content.length).toBeLessThanOrEqual(65536)
+    expect(stored.modelInputContent).toBe(stored.content)
+    expect(stored.metadata?.outputTruncated).toBe(true)
+    const snapshot = JSON.parse(stored.content as string)
+    expect(snapshot.tab).toEqual(tab)
+    expect(snapshot.truncated).toBe(true)
+    expect(snapshot.elements.length).toBeGreaterThan(0)
+    const nextInput = vi.mocked(f.llm.stream).mock.calls[1][0].find(message => message.role === 'tool' && message.toolCallId === 'keyboard-read')!
+    expect(JSON.parse(nextInput.content as string)).toEqual(snapshot)
+    const result = frames.find(value => value.startsWith('\x00__tool_result__'))!
+    expect(JSON.parse(JSON.parse(result.slice('\x00__tool_result__'.length)).output)).toEqual(snapshot)
+    expect(JSON.parse(vi.mocked(f.ctx.runObserver!.onToolEnd!).mock.calls[0][0].output!)).toEqual(snapshot)
+  })
+
   it('persists and streams screenshot pixels but sends only semantic metadata to the next model request', async () => {
     const f = fixture()
     const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDdwAAAAASUVORK5CYII='

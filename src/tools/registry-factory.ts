@@ -245,9 +245,9 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
     if (shouldRegister(t.name)) registerBuiltin(t)
   })
 
-  // Mixed Office inspect/create/edit stays trusted serial and general-only.
+  // Office mutation stays general-only; reading product handoffs is shared by both profiles.
   if (profile === 'general' && shouldRegister(officeDocumentTool.name)) registerBuiltin(officeDocumentTool)
-  if (profile === 'general' && shouldRegister(officeInspectTool.name)) registerBuiltin(officeInspectTool)
+  if (shouldRegister(officeInspectTool.name)) registerBuiltin(officeInspectTool)
   if (profile === 'general' && shouldRegister(officeEnvironmentTool.name)) registerBuiltin(officeEnvironmentTool)
 
   // 3. 命令行工具
@@ -384,7 +384,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   // 因工具名变更而"静默失去能力"。只在注册最多的完整场景（allowedTools
   // 为 undefined，即本次 registry 理论上应包含所有内置工具）触发。
   if (profile === 'general' && effectiveAllowedTools === undefined) {
-    const result = runOSMSelfCheck(registry)
+    const result = runOSMSelfCheck(registry, { memoryEnabled })
     logOSMSelfCheck(logger, result)
   }
 

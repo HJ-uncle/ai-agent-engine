@@ -4,7 +4,7 @@ import { decodeXml, encodeXml, readOfficeZip, writeOfficeZip } from './office-zi
 
 export interface PptxSlide { title: string; bullets?: string[]; table?: { headers: string[]; rows: Array<Array<string | number>> }; notes?: string }
 export interface PptxInput { title?: string; author?: string; slides: PptxSlide[] }
-export interface PptxEdit { oldText: string; newText: string; slide?: number; textRun?: number }
+export interface PptxEdit { oldText: string; newText: string; slide?: number; textRun?: number; target?: 'notes' }
 const MAX_SLIDES = 40
 const DRAWING = 'http://schemas.openxmlformats.org/drawingml/2006/main'
 const PRESENTATION = 'http://schemas.openxmlformats.org/presentationml/2006/main'
@@ -74,7 +74,8 @@ export async function createPptx(input: PptxInput): Promise<Buffer> {
 
 interface XmlNode { name: string; local: string; namespace: string; attributes: Record<string, string>; namespaces: Record<string, string>; start: number; openEnd: number; closeStart: number; end: number; parent?: XmlNode }
 interface TextRun { node: XmlNode; value: string }
-interface SlidePart { name: string; xml: string; runs: TextRun[] }
+interface TextPart { name: string; xml: string; runs: TextRun[] }
+interface SlidePart extends TextPart { notes?: TextPart }
 
 // No DTD/entity expansion and no recovery: preserving a package requires rejecting
 // malformed or namespace-ambiguous source rather than regex-rewriting its markup.
@@ -118,15 +119,44 @@ function scan(xml: string): XmlNode[] {
   return nodes
 }
 
-function readSlide(name: string, xml: string): SlidePart {
+function readTextPart(name: string, xml: string, root: 'sld' | 'notes'): TextPart {
   const nodes = scan(xml)
-  if (nodes[0].local !== 'sld' || nodes[0].namespace !== PRESENTATION) fail('无效幻灯片根节点')
+  if (nodes[0].local !== root || nodes[0].namespace !== PRESENTATION) fail(root === 'notes' ? '无效备注根节点' : '无效幻灯片根节点')
   const runs = nodes.filter(node => node.local === 't' && node.namespace === DRAWING).map(node => {
     const raw = xml.slice(node.openEnd, node.closeStart)
     if (raw.includes('<')) fail('文本节点含不支持的嵌套结构')
     return { node, value: decodeXml(raw) }
   })
   return { name, xml, runs }
+}
+
+function readRelationships(xml: string): XmlNode[] {
+  const nodes = scan(xml), root = nodes[0]
+  if (root.local !== 'Relationships' || root.namespace !== RELATIONSHIPS) fail('无效关系根节点')
+  const ids = new Set<string>()
+  for (const relation of nodes.slice(1)) {
+    const id = relation.attributes.Id
+    if (relation.parent !== root || relation.local !== 'Relationship' || relation.namespace !== RELATIONSHIPS || !id || ids.has(id)) fail('无效或重复部件关系')
+    ids.add(id)
+  }
+  return nodes.slice(1)
+}
+
+function resolveRelationship(source: string, relation: XmlNode, kind: 'slide' | 'notesSlide'): string {
+  const label = kind === 'slide' ? '幻灯片' : '备注'
+  if (relation.attributes.TargetMode !== undefined && relation.attributes.TargetMode !== 'Internal') fail(`外部或未知模式的${label}关系不支持`)
+  const target = relation.attributes.Target || ''
+  if (!target || /[\\\u0000:?#%]/.test(target) || target.startsWith('//')) fail(`不支持的${label}路径`)
+  // Resolve from the referring slide, never infer notesSlideN from slideN. Reject
+  // package-root traversal even if later segments would return to an allowed dir.
+  const segments = target.startsWith('/') ? [] : path.posix.dirname(source).split('/')
+  for (const segment of target.split('/')) {
+    if (segment === '..') { if (!segments.length) fail(`无效${label}路径`); segments.pop() }
+    else if (segment && segment !== '.') segments.push(segment)
+  }
+  const name = segments.join('/'), directory = kind === 'slide' ? 'ppt/slides/' : 'ppt/notesSlides/'
+  if (!name.startsWith(directory) || !name.endsWith('.xml')) fail(`无效${label}路径`)
+  return name
 }
 
 function loadPresentation(buffer: Buffer): { entries: Record<string, Uint8Array>; slides: SlidePart[] } {
@@ -137,26 +167,34 @@ function loadPresentation(buffer: Buffer): { entries: Record<string, Uint8Array>
   }
   const presentation = scan(part('ppt/presentation.xml'))
   if (presentation[0].local !== 'presentation' || presentation[0].namespace !== PRESENTATION) fail('无效演示文稿根节点')
-  const relationships = scan(part('ppt/_rels/presentation.xml.rels'))
+  const relationships = readRelationships(part('ppt/_rels/presentation.xml.rels'))
   const relationshipMap = new Map<string, string>()
-  for (const relation of relationships.filter(node => node.local === 'Relationship' && node.namespace === RELATIONSHIPS)) {
+  for (const relation of relationships) {
     if (relation.attributes.Type !== `${OFFICE_RELATIONSHIPS}/slide`) continue
-    if (relation.attributes.TargetMode === 'External' || relationshipMap.has(relation.attributes.Id)) fail('外部或重复幻灯片关系不支持')
-    const target = relation.attributes.Target || ''
-    if (target.includes('\\') || /[:?#]/.test(target)) fail('不支持的幻灯片路径')
-    const name = target.startsWith('/') ? target.slice(1) : path.posix.normalize(path.posix.join('ppt', target))
-    if (!name.startsWith('ppt/slides/') || !name.endsWith('.xml')) fail('无效幻灯片路径')
+    const name = resolveRelationship('ppt/presentation.xml', relation, 'slide')
     relationshipMap.set(relation.attributes.Id, name)
   }
   const ids = presentation.filter(node => node.local === 'sldId' && node.namespace === PRESENTATION)
   if (!ids.length || ids.length > MAX_SLIDES) fail(`幻灯片页数必须为 1–${MAX_SLIDES}`)
-  const seen = new Set<string>(), slides: SlidePart[] = []
+  const seen = new Set<string>(), seenNotes = new Set<string>(), slides: SlidePart[] = []
   for (const id of ids) {
     const attribute = Object.keys(id.attributes).find(key => key.includes(':') && key.split(':')[1] === 'id' && id.namespaces[key.split(':')[0]] === OFFICE_RELATIONSHIPS)
     const name = attribute && relationshipMap.get(id.attributes[attribute])
     if (!name || seen.has(name)) fail('缺失或重复幻灯片关系')
     seen.add(name)
-    slides.push(readSlide(name, part(name)))
+    const slide: SlidePart = readTextPart(name, part(name), 'sld')
+    const relationsName = path.posix.join(path.posix.dirname(name), '_rels', `${path.posix.basename(name)}.rels`)
+    if (entries[relationsName]) {
+      const notes = readRelationships(part(relationsName)).filter(relation => relation.attributes.Type === `${OFFICE_RELATIONSHIPS}/notesSlide`)
+      if (notes.length > 1) fail('一页不能引用多个备注部件')
+      if (notes.length) {
+        const notesName = resolveRelationship(name, notes[0], 'notesSlide')
+        if (seenNotes.has(notesName)) fail('多页共享同一备注部件不支持')
+        seenNotes.add(notesName)
+        slide.notes = readTextPart(notesName, part(notesName), 'notes')
+      }
+    }
+    slides.push(slide)
   }
   return { entries, slides }
 }
@@ -165,13 +203,15 @@ export async function inspectPptx(buffer: Buffer): Promise<{ format: 'pptx'; con
   const pkg = loadPresentation(buffer)
   // Index every extracted text node, including fields, so an inspect locator and
   // an edit always address the same node. Fields are visible but never writable.
-  const full = pkg.slides.map((slide, index) => `## 第 ${index + 1} 页\n${slide.runs.map((run, runIndex) =>
-    `[slide=${index + 1} textRun=${runIndex + 1} editable=${run.node.parent?.local === 'r' && run.node.parent.namespace === DRAWING}]\n${run.value}`).join('\n')}`).join('\n\n')
+  const marked = (part: TextPart, index: number, notes = false): string => part.runs.map((run, runIndex) =>
+    `[${notes ? 'target=notes ' : ''}slide=${index + 1} textRun=${runIndex + 1} editable=${run.node.parent?.local === 'r' && run.node.parent.namespace === DRAWING}]\n${run.value}`).join('\n')
+  const full = pkg.slides.map((slide, index) => `## 第 ${index + 1} 页\n${marked(slide, index)}${slide.notes ? `\n### 备注\n${marked(slide.notes, index, true)}` : ''}`).join('\n\n')
   const previewTruncated = full.length > 120_000
-  const warnings = ['只提取幻灯片正文和表格文本；图片、图表数据、备注及母版未提取。结构检查不等同于视觉布局验收。']
-  if (previewTruncated) warnings.push('正文预览超过 120000 字符，已截断。')
+  const warnings = ['只提取幻灯片正文、表格和关联备注文本；图片、图表数据及母版未提取。字段可见但不可编辑。结构检查不等同于视觉布局验收。']
+  if (previewTruncated) warnings.push('正文及备注预览超过 120000 字符，已截断。')
   return { format: 'pptx', content: full.slice(0, 120_000), summary: { slides: pkg.slides.length, textRuns: pkg.slides.reduce((sum, slide) => sum + slide.runs.length, 0), previewTruncated,
-    editLocator: 'slide/textRun are 1-based: presentation order / all extracted text nodes on that slide. Only editable=true nodes support edit; use the same expectedHash.' }, warnings }
+    notesSlides: pkg.slides.filter(slide => slide.notes).length, notesTextRuns: pkg.slides.reduce((sum, slide) => sum + (slide.notes?.runs.length ?? 0), 0),
+    editLocator: 'slide/textRun are 1-based: display order / text nodes within body or notes separately. Notes require target="notes" plus both indices; omitted target edits body only. Only editable=true nodes support edit; use the same expectedHash.' }, warnings }
 }
 
 export async function editPptx(buffer: Buffer, edits: PptxEdit[]): Promise<Buffer> {
@@ -179,29 +219,32 @@ export async function editPptx(buffer: Buffer, edits: PptxEdit[]): Promise<Buffe
   const pkg = loadPresentation(buffer)
   for (const edit of edits) {
     if (!edit || typeof edit !== 'object') fail('无效编辑')
-    if (Object.keys(edit).some(key => !['oldText', 'newText', 'slide', 'textRun'].includes(key))) fail('不支持的编辑属性')
+    if (Object.keys(edit).some(key => !['oldText', 'newText', 'slide', 'textRun', 'target'].includes(key))) fail('不支持的编辑属性')
+    if (edit.target !== undefined && edit.target !== 'notes') fail('target 仅支持 notes；省略时只编辑正文')
     const targeted = edit.slide !== undefined || edit.textRun !== undefined
+    if (edit.target === 'notes' && !targeted) fail('备注编辑必须提供 slide 和 textRun 定位')
     if (targeted && (!Number.isSafeInteger(edit.slide) || !Number.isSafeInteger(edit.textRun) || edit.slide! < 1 || edit.textRun! < 1)) fail('slide 和 textRun 必须成对提供从 1 开始的整数')
     const oldText = text(edit.oldText, 'oldText', 10_000), newText = text(edit.newText, 'newText', 10_000, false)
     if (/[\r\n\t]/.test(newText)) fail('定点编辑不支持换行或制表符，请拆成独立文本段')
-    const matches: Array<{ slide: SlidePart; run: TextRun; offset: number }> = []
-    const targetSlide = targeted ? pkg.slides[edit.slide! - 1] : undefined
-    const targetRun = targetSlide?.runs[edit.textRun! - 1]
-    if (targeted && (!targetSlide || !targetRun)) fail('slide 或 textRun 超出当前文稿范围；请重新 inspect 获取定位')
+    const matches: Array<{ part: TextPart; run: TextRun; offset: number }> = []
+    const selectedSlide = targeted ? pkg.slides[edit.slide! - 1] : undefined
+    const targetPart = edit.target === 'notes' ? selectedSlide?.notes : selectedSlide
+    const targetRun = targetPart?.runs[edit.textRun! - 1]
+    if (targeted && (!targetPart || !targetRun)) fail('slide 或 textRun 超出所选正文/备注范围；请重新 inspect 获取定位')
     if (targetRun && (targetRun.node.parent?.local !== 'r' || targetRun.node.parent.namespace !== DRAWING)) fail('字段或非普通文本段不可编辑')
-    for (const slide of targetSlide ? [targetSlide] : pkg.slides) for (const run of targetRun ? [targetRun] : slide.runs) {
+    for (const part of targetPart ? [targetPart] : pkg.slides) for (const run of targetRun ? [targetRun] : part.runs) {
       let start = 0
-      for (;;) { const offset = run.value.indexOf(oldText, start); if (offset < 0) break; matches.push({ slide, run, offset }); start = offset + 1 }
+      for (;;) { const offset = run.value.indexOf(oldText, start); if (offset < 0) break; matches.push({ part, run, offset }); start = offset + 1 }
     }
     if (matches.length !== 1) fail(targeted ? 'oldText 必须在指定 textRun 内唯一匹配；跨格式文本段不支持' : 'oldText 必须在全部幻灯片的单个文本段内唯一匹配；跨格式文本段不支持')
-    const { slide, run, offset } = matches[0]
+    const { part, run, offset } = matches[0]
     if (run.node.parent?.local !== 'r' || run.node.parent.namespace !== DRAWING) fail('字段或非普通文本段不可编辑')
-    // Preserve formatting, shapes, notes and unrelated ZIP parts. Only the matched
+    // Preserve formatting, shapes and unrelated ZIP parts. Only the matched
     // ordinary text node changes; split runs/fields are never guessed or flattened.
     const replacement = run.value.slice(0, offset) + newText + run.value.slice(offset + oldText.length)
-    slide.xml = slide.xml.slice(0, run.node.openEnd) + encodeXml(replacement) + slide.xml.slice(run.node.closeStart)
-    pkg.entries[slide.name] = Buffer.from(slide.xml)
-    pkg.slides[pkg.slides.indexOf(slide)] = readSlide(slide.name, slide.xml)
+    part.xml = part.xml.slice(0, run.node.openEnd) + encodeXml(replacement) + part.xml.slice(run.node.closeStart)
+    pkg.entries[part.name] = Buffer.from(part.xml)
+    part.runs = readTextPart(part.name, part.xml, edit.target === 'notes' ? 'notes' : 'sld').runs
   }
   return writeOfficeZip(pkg.entries)
 }

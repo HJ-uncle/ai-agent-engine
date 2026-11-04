@@ -7,6 +7,7 @@ import { policyEngine, getSecurityMode } from '../../security/policy-engine.js'
 import { workspaceManager } from '../../workspace/index.js'
 import { commandLooksLikeShellLine, createCommandLaunchPlan } from '../../core/command-jobs/launch-plan.js'
 import { createCommandChangeObserver } from './command-change-observer.js'
+import { commandChangeSummary } from './command-change-summary.js'
 
 export interface CMDToolOptions { timeoutMs?: number; allowedCommands?: string[] }
 interface CommandArgs { command: string; args?: string[]; cwd?: string; timeoutMs?: number; background?: boolean }
@@ -118,8 +119,7 @@ export const cmdTool: Tool = {
       `[${finished.error?.code ?? 'COMMAND_FAILED'}] status=${finished.status}; exitCode=${finished.exitCode ?? 'null'}; signal=${finished.signal ?? 'none'}: ${detail}`
     return { success: finished.status === 'succeeded', output: [expired ? '[Command output expired from retained history]' : truncated ? '[Output truncated; retained tail follows]' : '',
       failureSummary, text || (finished.status === 'succeeded' ? detail : ''),
-      finished.changes?.length || finished.changeTracking?.status === 'partial' || finished.changeTracking?.status === 'unavailable'
-        ? `\n[文件变化观察] ${JSON.stringify({ changes: finished.changes, changeTracking: finished.changeTracking })}` : ''].filter(Boolean).join('\n'),
+      commandChangeSummary(finished)].filter(Boolean).join('\n'),
       error: finished.status === 'succeeded' ? undefined : finished.error?.code,
       changes: finished.changes,
       metadata: { commandJob: finished, exitCode: finished.exitCode, signal: finished.signal, outputTruncated: truncated },

@@ -352,7 +352,7 @@ describe('OSM / runOSMSelfCheck', () => {
   it('真实规范名注册且可选工具全部缺席时不产生缺失或别名误报', () => {
     const names = new Set([
       'read_file', 'write_file', 'edit_file', 'office_document', 'office_environment', 'list_files', 'create_dir',
-      'ask_user', 'remember', 'recall', 'search_memory',
+      'ask_user', 'remember', 'recall',
       'list_skills', 'get_skill', 'run_skill_script', 'grep', 'glob', 'execute_cmd',
     ])
     const registry = { has: (name: string) => names.has(name), list: () => [...names].map(name => ({ name })) }
@@ -366,6 +366,16 @@ describe('OSM / runOSMSelfCheck', () => {
     const result = runOSMSelfCheck({ has: name => names.has(name), list: () => [...names].map(name => ({ name })) })
     expect(result.missingInRegistry).toEqual([])
     expect(result.unknownTools).toEqual([])
+  })
+
+  it('记忆策略关闭时不报告缺失，启用时仍准确检查记忆能力', () => {
+    const names = new Set([...OSM_CORE_TOOLS].filter(name => name !== 'remember' && name !== 'recall'))
+    const registry = { has: (name: string) => names.has(name), list: () => [...names].map(name => ({ name })) }
+    expect(runOSMSelfCheck(registry, { memoryEnabled: false }).missingInRegistry).toEqual([])
+    expect(runOSMSelfCheck(registry, { memoryEnabled: true }).missingInRegistry).toEqual(['remember', 'recall'])
+    names.delete('grep')
+    expect(runOSMSelfCheck(registry, { memoryEnabled: false }).missingInRegistry).toEqual(['grep'])
+    expect(OSM_CORE_TOOLS.has('search_memory')).toBe(false)
   })
 
   it('registry.list 抛错不影响其它检查', () => {
