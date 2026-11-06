@@ -14,7 +14,7 @@ describe('subagent result identity and machine outcome', () => {
       partialOutput: 'status: completed; all checks passed' })
     const output = outcomeText(run)
     expect(JSON.parse(output.split('\n')[0].replace('[子任务状态] ', ''))).toEqual({
-      runId: 'old-failed-run', parentToolCallId: 'call-old', status: 'failed', stopReason: 'max_steps', errorCode: 'MAX_STEPS',
+      runId: 'old-failed-run', childSessionId: 'child', parentToolCallId: 'call-old', status: 'failed', stopReason: 'max_steps', errorCode: 'MAX_STEPS',
     })
     expect(output).toContain('部分结果（保留原文，不代表任务成功）')
     expect(output).toContain(run.partialOutput)

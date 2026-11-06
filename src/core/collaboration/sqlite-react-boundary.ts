@@ -93,6 +93,11 @@ export async function consumeSQLiteReActIteration(capability: SQLiteReActBoundar
   // An invalidated consumer is never replaced or used to replay suppressed mail.
   return serviceForOwner(found.owner).collaboration.consumeSQLiteDelivery(found.consumer!)
 }
+export async function sealSQLiteReActInput(capability: SQLiteReActBoundary, ctx: AgentContext): Promise<boolean> {
+  const found = record(capability, ctx)
+  if (!found.consumer) fail('Final input fence requires the original admitted input binding')
+  return serviceForOwner(found.owner).collaboration.sealInputIfEmpty(found.producer)
+}
 export async function maintainSQLiteReActHistory<T>(capability: SQLiteReActBoundary, ctx: AgentContext, action: () => Promise<T>): Promise<T> {
   const found = record(capability, ctx)
   if (!found.consumer) fail('Maintenance requires the original admitted input binding')

@@ -28,6 +28,10 @@ export interface CollaborationParticipant {
   invocationRunId: string
   admittedSeq: number
   admittedAt: number
+  /** Latest invocation state, not the first admission stored on the participant. */
+  status?: string
+  inputClosed?: boolean
+  activity?: 'queued' | 'running' | 'finishing' | 'inactive'
 }
 /** History integration is not provider dispatch or successful execution. */
 export type CollaborationDelivery = { state: 'pending' }

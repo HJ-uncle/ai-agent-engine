@@ -14,6 +14,16 @@ import { hashFileContent } from '../../../shared/file-version.js'
 import { cmdTool, commandJobScope } from '../execute-command.js'
 import { cancelCommandTool, commandOutputTool } from '../job-tools.js'
 import { COMMAND_CHANGE_LIMITS, createCommandChangeObserver } from '../command-change-observer.js'
+import { RootRunStore } from '../../../storage/root-runs/index.js'
+import { CollaborationRuntime } from '../../../core/collaboration/runtime.js'
+import { CollaborationStore } from '../../../core/collaboration/store.js'
+import { ExecutionOwners } from '../../../core/collaboration/execution-owner.js'
+import { SubagentStore } from '../../../core/subagent/store.js'
+import { SubagentRunner } from '../../../core/subagent/runner.js'
+import { JSONLConversationHistory } from '../../../storage/conversation/jsonl-history.js'
+import { createAgentContext } from '../../../core/agent-context/factory.js'
+import { ToolRegistry } from '../../../core/tool-registry/index.js'
+import { LocalSqliteProcessClient } from '../../../storage/sqlite/local-process-client.js'
 
 let db: Client, fixture: string, workspace: string, ctx: AgentContext
 const store = new ChangeStore()
@@ -40,7 +50,12 @@ beforeEach(async () => {
 afterEach(async () => {
   await commandJobs.cancelScope(commandJobScope(ctx), 'test_cleanup')
   clearSecurityMode(ctx.tenantId, ctx.sessionId)
-  db.close(); vi.restoreAllMocks(); vi.unstubAllEnvs()
+  if (db instanceof LocalSqliteProcessClient) expect((await db.closeWithReceipt()).healthy).toBe(true)
+  else db.close()
+  // AuditLogStore retains its original provider and may open this fixture's
+  // real datasource in addition to the mocked client. Join it before removal.
+  await database.closeDb()
+  vi.restoreAllMocks(); vi.unstubAllEnvs()
   if (path.dirname(fixture) !== path.resolve(os.tmpdir()) || !path.basename(fixture).startsWith('aether-command-observation-')) throw new Error('Unsafe cleanup')
   fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 })
 })
@@ -89,9 +104,68 @@ describe('command workspace observation and guarded rollback', () => {
     const result = await cmdTool.execute({ command: process.execPath, args: [file] }, child)
     expect(result.changes).toHaveLength(1)
     expect(result.changes![0]).toMatchObject({ sessionId: rootSessionId, runId: 'root-run', turnId: 'parent-turn', toolCallId: 'launch-tool' })
+    expect(result.changes![0]).not.toHaveProperty('producerChildSessionId')
+    expect(result.changes![0]).not.toHaveProperty('producerRunId')
     expect(jobOf(result)).toMatchObject({ sessionId: rootSessionId, ownerSessionId: child.sessionId, ownerRunId: 'child-run' })
     expect(await store.list(ctx.tenantId, child.sessionId)).toEqual([])
     expect(await store.list(ctx.tenantId, rootSessionId)).toHaveLength(1)
+  })
+
+  it('persists the real child command observer source without claiming exclusive authorship', async () => {
+    db.close()
+    db = new LocalSqliteProcessClient({ url: 'file:' + path.join(fixture, 'owned.sqlite').replaceAll('\\', '/') })
+    vi.mocked(database.getDb).mockReturnValue(db)
+    const roots = new RootRunStore(); await roots.initialize()
+    const root = await roots.create(ctx.tenantId, ctx.sessionId, 'fixture', [workspace], { memoryScope: 'off' })
+    const children = new SubagentStore(db), service = new ExecutionOwners(db, new CollaborationRuntime(new CollaborationStore(db), children))
+    const controller = new AbortController()
+    const owner = await service.admitRoot({ tenantId: ctx.tenantId, rootRunId: root.runId,
+      rootAttemptId: (await roots.get(ctx.tenantId, root.runId))!.attemptId, controller })
+    const history = new JSONLConversationHistory()
+    const parent = createAgentContext({ tenantId: ctx.tenantId, sessionId: ctx.sessionId, scratchDir: workspace,
+      workspacePaths: [workspace], tools: new ToolRegistry(), history, logger: ctx.logger, executionOwner: owner,
+      signal: controller.signal, rootRunId: root.runId, turnId: root.turnId, conversationId: root.turnId })
+    await history.append({ id: 'delegate-message', role: 'assistant', content: '', conversationId: root.turnId,
+      toolCall: { id: 'delegate-call', name: 'subagent_start', args: {} } }, parent)
+    let recordId = '', childSessionId = '', childRunId = '', actionError: unknown
+    try {
+      const run = await new SubagentRunner(children).run({ tenantId: ctx.tenantId, rootSessionId: ctx.sessionId,
+        parentSessionId: ctx.sessionId, parentConversationId: root.turnId, parentMessageId: 'delegate-message', parentToolCallId: 'delegate-call',
+        task: 'Produce a file', description: 'Owned command fixture', modelId: 'fixture' }, parent, async execution => {
+        try {
+          childSessionId = execution.snapshot.childSessionId; childRunId = execution.snapshot.runId
+          const child = createAgentContext({ tenantId: ctx.tenantId, sessionId: childSessionId, parentSessionId: ctx.sessionId,
+            rootSessionId: ctx.sessionId, rootRunId: root.runId, turnId: root.turnId, runId: childRunId,
+            scratchDir: path.join(fixture, 'child'), workspacePaths: [workspace], tools: new ToolRegistry(), history,
+            logger: ctx.logger, executionOwner: execution.executionOwner, signal: execution.signal })
+          const identity = { ...fakeJob(), sessionId: ctx.sessionId, ownerSessionId: childSessionId,
+            runId: root.runId, ownerRunId: childRunId, turnId: root.turnId }
+          await expect(createCommandChangeObserver({ ...child, runId: 'forged-run' }, workspace, identity)).rejects.toThrow('owner mismatch')
+          await expect(createCommandChangeObserver(child, workspace, { ...identity, ownerRunId: 'forged-job' })).rejects.toThrow('owner mismatch')
+          const scope = { tenantId: ctx.tenantId, sessionId: ctx.sessionId, runId: root.runId }
+          const started = await commandJobs.start({ ...scope, ownerSessionId: childSessionId, ownerRunId: childRunId,
+            turnId: root.turnId, toolCallId: 'owned-command', command: process.execPath,
+            args: ['-e', "require('node:fs').writeFileSync('owned-child.txt','child command output')"],
+            cwd: workspace, background: false, env: { ...process.env }, signal: execution.signal,
+            observeChanges: job => createCommandChangeObserver(child, workspace, job) })
+          const finished = await commandJobs.wait(scope, started.jobId)
+          expect(finished).toMatchObject({ status: 'succeeded', changeTracking: { recordedCount: 1 } })
+          expect(finished!.changes![0]).toMatchObject({ producerChildSessionId: childSessionId, producerRunId: childRunId,
+            source: 'command-observation', requiresExplicitRevert: true, sessionId: ctx.sessionId, runId: root.runId })
+          expect(finished!.changeTracking!.note).toContain('外部并发编辑')
+          recordId = String(finished!.changes![0].id)
+          await execution.observer.onOutcome({ status: 'succeeded', output: 'Created the file' })
+        } catch (error) {
+          actionError = error
+          await execution.observer.onOutcome({ status: 'failed', error: { code: 'FIXTURE', message: String(error), retryable: false } })
+        }
+      })
+      if (actionError) throw actionError
+      expect(run.status).toBe('succeeded')
+      expect(await store.getById(recordId, ctx.tenantId)).toMatchObject({ producerChildSessionId: childSessionId,
+        producerRunId: childRunId, source: 'command-observation', requiresExplicitRevert: true })
+      expect(await store.revertBatch(ctx.tenantId, { sessionId: ctx.sessionId })).toMatchObject({ reverted: 0, unavailable: 1 })
+    } finally { await roots.finishOwned(owner, { status: 'cancelled' }) }
   })
 
   it('retains generated files when an explicit command deadline ends the process', async () => {

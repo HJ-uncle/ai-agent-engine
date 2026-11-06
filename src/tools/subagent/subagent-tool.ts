@@ -21,9 +21,10 @@ import { throwIfAborted } from '../../core/utils/abort.js'
 import { ToolRegistry } from '../../core/tool-registry/index.js'
 import { trustBuiltinTool } from '../../security/tool-policy.js'
 import { todoTools } from '../todo/todo-tool.js'
-import { officeEnvironmentTool } from '../office/environment.js'
 import { officeInspectTool } from '../office/index.js'
 import { installProductionCollaborationBoundary } from '../../core/collaboration/production-boundary.js'
+import { BUILTIN_AGENT_ROLES, BUILTIN_AGENT_TEMPLATES, isBuiltinAgentRole } from '../../core/subagent/builtin-roles.js'
+import { workspaceManager } from '../../workspace/index.js'
 
 /**
  * Subagent 工具
@@ -71,19 +72,30 @@ function loadRoleTemplate(role: SubagentRole): string | null {
 
 /** Only known read operations belong to research roles; arbitrary MCP/script tools may mutate external state. */
 const RESEARCH_TOOLS = new Set([
-  'read_file', 'smart_read', 'list_files', 'glob', 'grep',
+  'read_file', 'smart_read', 'list_files', 'glob', 'grep', 'web_fetch',
   'list_skills', 'get_skill', 'codegraph', 'search_history', 'workbench_context',
   'browser_tabs', 'browser_snapshot', 'browser_screenshot', 'browser_console', 'browser_network', 'browser_network_request',
   'todo_list', 'todo_create', 'todo_update', 'todo_delete', 'plan_update',
   'recall', 'search_memory', 'list_memories',
-  'subagent_send', 'subagent_participants', 'subagent_inbox',
+  'subagent_send', 'subagent_participants', 'subagent_inbox', 'subagent_directory', 'subagent_request_input',
 ])
 
-const RECURSIVE_TOOLS = new Set(['subagent', 'subagent_start', 'spawn_agent', 'start_agent'])
+const RECURSIVE_TOOLS = new Set(['subagent', 'subagent_start', 'subagent_followup', 'spawn_agent', 'start_agent'])
+const ROOT_ONLY_TOOLS = new Set(['ask_user', 'deliver_files'])
+const READONLY_CODEGRAPH_ACTIONS = ['status', 'search', 'callers', 'callees', 'impact', 'files'] as const
+
+function readonlyActionDenied(name: string, args: unknown): ToolResult | undefined {
+  if (name !== 'codegraph') return undefined
+  const action = args && typeof args === 'object' && !Array.isArray(args) ? (args as Record<string, unknown>).action : undefined
+  if (typeof action === 'string' && (READONLY_CODEGRAPH_ACTIONS as readonly string[]).includes(action)) return undefined
+  return { success: false, output: '只读调研仅允许查询已有代码图，不能创建或更新索引。请向主 Agent 说明需要的执行工作。',
+    metadata: { blocked: true, code: 'TOOL_ACTION_NOT_ALLOWED' } }
+}
 
 function readonlyChildTool(parent: IToolRegistry, name: string): boolean {
-  // Office inspection must retain the trusted implementation's readonly policy.
-  return RESEARCH_TOOLS.has(name) || (name === officeEnvironmentTool.name || name === officeInspectTool.name)
+  // Environment discovery starts Python/PowerShell probes, so only document
+  // inspection belongs to a research role that promises no command execution.
+  return RESEARCH_TOOLS.has(name) || name === officeInspectTool.name
     && parent.executionMode?.(name, {}) === 'readonly'
 }
 
@@ -95,21 +107,29 @@ export function createSubagentToolRegistry(parent: IToolRegistry, readOnly: bool
   const catalog = () => [...parent.list().filter(tool => tool.name !== 'plan_update' && !REMOVED_TOOL_NAMES.has(tool.name)), ...internalPlan.list()]
   // list() contains public definitions, so implementation identity is unavailable;
   // only the parent's trusted readonly policy admits this diagnostic to research.
-  const names = new Set(catalog().filter((tool) => !RECURSIVE_TOOLS.has(tool.name) && tool.name !== 'ask_user'
+  const names = new Set(catalog().filter((tool) => !RECURSIVE_TOOLS.has(tool.name) && !ROOT_ONLY_TOOLS.has(tool.name)
     && (!readOnly || readonlyChildTool(parent, tool.name))).map((tool) => tool.name))
   const owner = (name: string) => name === 'plan_update' ? internalPlan : parent
   return {
     register: () => { throw new Error('Child tool capability snapshot is immutable') },
     unregister: (name) => { names.delete(name) },
     has: (name) => names.has(name),
-    list: () => catalog().filter((tool) => names.has(tool.name)),
+    list: () => catalog().filter((tool) => names.has(tool.name)).map(tool => readOnly && tool.name === 'codegraph' ? {
+      ...tool, description: '只读查询已有代码图：索引状态、符号、调用关系、影响面和文件。调研子代理不能创建或更新索引。',
+      parameters: { ...tool.parameters, properties: { ...tool.parameters.properties,
+        action: { type: 'string', enum: [...READONLY_CODEGRAPH_ACTIONS], description: '仅查询已有索引。' } } },
+    } : tool),
     preflight: async (name, args, ctx) => {
       if (!names.has(name)) return { success: false, output: `子代理不允许使用工具 ${name}。`, metadata: { blocked: true, code: 'TOOL_NOT_ALLOWED' } }
+      const denied = readOnly ? readonlyActionDenied(name, args) : undefined
+      if (denied) return denied
       return owner(name).preflight?.(name, args, ctx)
     },
     executionMode: (name, args) => names.has(name) ? owner(name).executionMode?.(name, args) ?? 'serial' : 'serial',
     execute: async (name, args, ctx) => {
       if (!names.has(name)) return { success: false, output: `子代理不允许使用工具 ${name}。`, metadata: { blocked: true, code: 'TOOL_NOT_ALLOWED' } }
+      const denied = readOnly ? readonlyActionDenied(name, args) : undefined
+      if (denied) return denied
       // Reuse the resolved parent implementations, including inline skill/MCP resources, without broadening capabilities.
       return owner(name).execute(name, args, ctx)
     },
@@ -124,18 +144,19 @@ export async function cancelSubagent(tenantId: string, sessionId: string, toolCa
 export const subagentTool: Tool = {
   name: 'subagent',
   displayName: '子代理',
-  description: '创建子代理，agentId 可选择已配置的自定义 Agent（角色、模型和绑定资源）；resumeRunId 继续同一子代理上下文。task 必须自包含，写清项目路径、目标、范围与期望输出。未指定 Agent 默认只读；工具权限仍受父任务限制，用户明确委派的同一 Agent 保留其已授权范围。子代理没有提问或审批通道。',
+  description: '创建子代理，builtinRole 选择调研、执行或通用模板，同模板可创建多个独立实例；agentId 选择已配置的自定义 Agent。优先查看已有子代理并用 resumeRunId 继续合适的上下文（包括已完成或中断的子代理）。task 必须写清项目路径、目标、文件分工与验收。未指定角色或 Agent 默认只读；权限受授权范围限制。子代理没有直接提问或审批通道。',
   parameters: {
     type: 'object',
     properties: {
       task: { type: 'string' },
+      builtinRole: { type: 'string', enum: [...BUILTIN_AGENT_ROLES], description: 'research=严格只读调研；executor=实际执行与产物制作；general=综合任务。与 agentId、旧 role 参数互斥；同模板可多次创建独立实例。' },
       agentId: { type: 'string', description: '自定义 Agent 的精确 ID；仅使用用户明确选择或当前已注册发现工具返回的 ID。agent_list/agent_get 只在部分模式提供；未获得真实 ID 时省略，不猜测。继承该 Agent 的模型、系统提示及资源绑定。' },
-      resumeRunId: { type: 'string', description: '继续已完成子代理的 runId；复用同一 childSession 历史，不能并发续跑或改变原角色/权限。' },
+      resumeRunId: { type: 'string', description: '继续已完成、失败或中断子代理的 runId；复用同一 childSession 历史并创建新一轮执行。不能并发续跑或改变原角色/权限；中断后先核对最后动作。' },
       description: { type: 'string', description: '简短任务标题' },
       systemPrompt: { type: 'string' },
       model: { type: 'string' },
       role: { type: 'string', enum: [...ROLE_VALUES] },
-      access: { type: 'string', enum: ['read-only', 'inherit'], description: '默认read-only；implementer默认inherit，始终受父工具权限限制' },
+      access: { type: 'string', enum: ['read-only', 'inherit'], description: '调研和审查角色强制read-only；执行、通用、自定义Agent及implementer默认inherit，其余默认read-only。可主动收窄，始终受父工具权限限制。' },
     },
     required: ['task'],
   },
@@ -156,6 +177,9 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
     // Preserve the existing recovery for providers that put the complete task in systemPrompt.
     const task = taskText || suppliedPrompt?.trim() || ''
     if (!task) return { success: false, output: 'subagent: task 参数为空。请传入完整任务描述。' }
+    if (args.builtinRole !== undefined && !isBuiltinAgentRole(args.builtinRole)) return { success: false, output: `subagent: builtinRole 必须为 ${BUILTIN_AGENT_ROLES.join(' / ')}。` }
+    if (args.builtinRole !== undefined && (args.agentId !== undefined || options.agent || args.role !== undefined)) return { success: false, output: '内置角色不能与自定义 Agent 或旧 role 同时指定。' }
+    if (args.builtinRole === 'research' && args.access === 'inherit') return { success: false, output: '调研角色不能继承写入权限，请使用执行或通用角色创建新的子代理。' }
     if (args.role !== undefined && !ROLE_VALUES.includes(args.role as SubagentRole)) return { success: false, output: `subagent: 未知 role '${String(args.role)}'，可选值为 ${ROLE_VALUES.join(' / ')}` }
     if (args.access !== undefined && args.access !== 'read-only' && args.access !== 'inherit') return { success: false, output: 'subagent: access 必须为 read-only 或 inherit。' }
     const runner = getSubagentRunner()
@@ -165,18 +189,22 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
     if (resumeRunId && (!prior || prior.parentSessionId !== ctx.sessionId || prior.rootSessionId !== (ctx.rootSessionId ?? ctx.sessionId))) return { success: false, output: '子代理不属于当前父任务，不能继续。' }
     if (prior && (!isTerminalRun(prior.status) || !prior.continuation)) return { success: false, output: !isTerminalRun(prior.status) ? '子代理仍在运行，请完成或停止后再继续。' : '旧子代理未保存续跑权限，无法安全恢复。' }
     const saved = prior?.continuation
+    if (saved && args.builtinRole !== undefined && args.builtinRole !== saved.builtinRole) return { success: false, output: '继续子代理不能修改原内置角色；如需新角色请创建新子代理。' }
     const agentId = typeof args.agentId === 'string' ? args.agentId.trim() : undefined
     if (args.agentId !== undefined && !agentId) return { success: false, output: 'subagent: agentId 必须是非空字符串。' }
     if (saved && agentId !== undefined && agentId !== saved.agent?.id) return { success: false, output: '继续子代理不能更换原 Agent。请为新 Agent 创建子代理。' }
     const configuredAgent = saved?.agent ?? options.agent ?? (agentId ? await new SQLiteAgentStore().getById(agentId, ctx.tenantId) : undefined)
     if (agentId && !configuredAgent) return { success: false, output: '指定的 Agent 不存在或不属于当前账户，未执行子代理。' }
     const userDelegated = saved?.userDelegated ?? options.userDelegated === true
-    const allowedRoots = (ctx.workspacePaths ?? []).map(root => path.resolve(root))
-    if (saved?.workspacePaths.some(root => !allowedRoots.includes(path.resolve(root)))) return { success: false, output: '原子代理工作区不在当前父任务授权范围内，请恢复原工作区后继续。' }
+    const normalizeRoot = (root: string) => process.platform === 'win32' ? path.resolve(root).toLowerCase() : path.resolve(root)
+    const allowedRoots = new Set((ctx.workspacePaths ?? []).map(normalizeRoot))
+    if (saved?.workspacePaths.some(root => !allowedRoots.has(normalizeRoot(root)))) return { success: false, output: '原子代理工作区不在当前父任务授权范围内，请恢复原工作区后继续。' }
     if (saved && ((args.role !== undefined && args.role !== saved.role) || args.systemPrompt !== undefined || (args.access !== undefined && (args.access === 'read-only') !== saved.readOnly))) return { success: false, output: '继续子代理不能修改原角色、系统提示或访问权限；如需新角色请创建新子代理。' }
     const role = (saved?.role ?? args.role) as SubagentRole | undefined
+    const builtinRole = saved?.builtinRole ?? (isBuiltinAgentRole(args.builtinRole) ? args.builtinRole : undefined)
+    const builtinTemplate = builtinRole ? BUILTIN_AGENT_TEMPLATES[builtinRole] : undefined
     const reviewer = role === 'spec-reviewer' || role === 'code-quality-reviewer'
-    const readOnly = saved?.readOnly ?? (reviewer || (args.access ? args.access === 'read-only' : !configuredAgent && role !== 'implementer'))
+    const readOnly = saved?.readOnly ?? (reviewer || builtinTemplate?.readOnly === true || (args.access ? args.access === 'read-only' : builtinTemplate ? false : !configuredAgent && role !== 'implementer'))
     // 子代理没有产品层的探索步数天花板。旧客户端可能仍发送 maxSteps；
     // 兼容时故意忽略它，避免模型或旧 UI 把长任务截断成“达到步骤上限”。
     // 循环只由用户取消、模型/上下文能力、明确的请求预算以及无进展保护收口。
@@ -190,27 +218,41 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
     const systemPrompt = saved?.systemPrompt ?? [
       '你是一个独立子代理，保留此前上下文并执行最新用户消息里的任务。工作目录与项目根以执行上下文为准。',
       readOnly ? '这是只读调研任务。仅使用提供的只读与任务管理工具。' : '只能使用本次明确提供的工具目录，遵守继承的工作区、安全模式和授权边界。',
-      '你没有子代理递归、提问或审批通道。需要授权时如实说明，禁止假报完成。',
+      '你没有递归创建子代理或直接向用户提问/审批的通道。只有缺少必须由用户提供的信息才用 subagent_request_input 向主 Agent 提交明确问题，说明已完成工作与无法继续的原因，然后暂停本轮。主 Agent 负责 ask_user，收到答案后通过同一 childSession 的 followup 继续你；deliveryUnavailable 表示问题未能投递，不代表用户已经回答。需要授权时如实说明，禁止假报完成。',
+      '已完成仅表示上一轮结束：新任务可以在同一上下文继续，先核对当前文件和未完成事项。可使用协作目录和消息工具联系主 Agent 或同伴；queued 只表示接纳，不能当作对方已处理。',
+      '共享文件先明确责任范围；不要覆盖用户或同伴的修改。可用 report_artifacts 时，把已完成文件登记为候选成果并向主 Agent 返回 childSessionId/runId/artifactId、用途和验证结果；否则返回真实路径与版本信息。由主 Agent 验收并登记最终交付，不能把创建文件等同于完成交付。',
       '最终结果必须用文本给出结论、证据和文件定位，不要仅写文件或复述过程。',
       '按请求深度收敛：概览只看入口与少量关键文件；优先搜索再按行范围读取，不要批量全文读取。证据足够就回答；同一工具错误不要原样重试。遇到取消、请求预算、上下文容量或无进展保护时如实说明未核实范围；不要自行制造步数上限。',
       configuredAgent ? `你是用户配置的 Agent「${configuredAgent.name}」。${configuredAgent.description ?? ''}` : undefined,
       configuredAgent?.systemPrompt,
+      builtinTemplate?.systemPrompt,
       ctx.toolProfile === 'code' ? CODE_AGENT_HANDOFF_PROMPT : undefined,
       rolePrompt,
       taskText ? suppliedPrompt : undefined,
     ].filter(Boolean).join('\n\n')
     const inheritedTools = createSubagentToolRegistry(ctx.tools, readOnly)
+    // Lifecycle controls require a real execution owner and confer no file,
+    // command or extension access. Freeze them only for newly admitted children.
+    const ownedControlNames = ctx.executionOwner ? (await import('./index.js')).ownedCollaborationTools
+      .map(tool => tool.name).filter(name => !RECURSIVE_TOOLS.has(name) && !ROOT_ONLY_TOOLS.has(name)
+        && (!readOnly || readonlyChildTool(ctx.tools, name))) : []
     const plannedToolNames = configuredAgent
-      ? [...new Set([...(normalizeAllowedTools(configuredAgent.allowedTools) ?? []).filter(name => !RECURSIVE_TOOLS.has(name) && name !== 'ask_user'
-        && (!readOnly || readonlyChildTool(ctx.tools, name)) && (userDelegated || ctx.tools.has(name))), 'plan_update'])]
+      ? [...new Set([...(normalizeAllowedTools(configuredAgent.allowedTools) ?? []).filter(name => !RECURSIVE_TOOLS.has(name) && !ROOT_ONLY_TOOLS.has(name)
+        && (!readOnly || readonlyChildTool(ctx.tools, name)) && (userDelegated || ctx.tools.has(name))), ...ownedControlNames, 'plan_update'])]
       : inheritedTools.list().map(tool => tool.name)
+    // An authenticated session's selected workspace comes from its persisted
+    // binding. Request paths may be absent or stale after reconnect, so freeze
+    // the effective parent directory before constructing a real owned child.
+    const ownedWorkingDirectory = !saved && ctx.executionOwner ? workspaceManager.getWorkingDirectory(ctx) : undefined
     const continuation: SubagentContinuationProfile = saved ?? {
       role, readOnly, systemPrompt, userDelegated,
+      ...(builtinTemplate ? { builtinRole: builtinTemplate.id, builtinRoleVersion: builtinTemplate.version } : {}),
       ...(configuredAgent ? { agent: { id: configuredAgent.id, name: configuredAgent.name, description: configuredAgent.description,
         systemPrompt: configuredAgent.systemPrompt, model: configuredAgent.model, temperature: configuredAgent.temperature,
         skills: [...configuredAgent.skills], mcpServers: [...configuredAgent.mcpServers],
         knowledgeBases: [...configuredAgent.knowledgeBases], allowedTools: [...configuredAgent.allowedTools] } } : {}),
-      toolNames: plannedToolNames, workspacePaths: [...(ctx.workspacePaths ?? [])], projectRoot: ctx.projectRoot, cwd: ctx.cwd,
+      toolNames: plannedToolNames, workspacePaths: [...(ctx.workspacePaths ?? [])],
+      projectRoot: ownedWorkingDirectory ?? ctx.projectRoot, cwd: ownedWorkingDirectory ?? ctx.cwd,
     }
     const result = await (options.asynchronous ? runner.start.bind(runner) : runner.run.bind(runner))({
       tenantId: ctx.tenantId,
@@ -240,6 +282,7 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
           userDelegated || ctx.tools.list().some(tool => tool.name.startsWith(`mcp_${id}_`) && continuation.toolNames.includes(tool.name)))
         const prepared = await createToolRegistry({
           signal,
+          ownedCollaboration: !!executionOwner,
           toolProfile: ctx.toolProfile,
           securityContext: { tenantId: ctx.tenantId, sessionId: snapshot.childSessionId, toolProfile: ctx.toolProfile },
           workspaceRoot: continuation.projectRoot ?? continuation.workspacePaths[0],
@@ -249,11 +292,12 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
           strictSkillBindings: true,
           // MCP stdio initialization may itself execute code. Safe mode must not
           // start an extension merely to discover a tool that would later be denied.
-          allowedMcpServers: safeMode ? [] : selectedMcp,
+          allowedMcpServers: safeMode || readOnly ? [] : selectedMcp,
           allowedTools: continuation.toolNames,
         })
         childTools = createSubagentToolRegistry(prepared.registry, readOnly)
-        if (!userDelegated) for (const tool of childTools.list()) if (tool.name !== 'plan_update' && !ctx.tools.has(tool.name)) childTools.unregister(tool.name)
+        if (!userDelegated) for (const tool of childTools.list()) if (tool.name !== 'plan_update' && !ctx.tools.has(tool.name)
+          && !ownedControlNames.includes(tool.name)) childTools.unregister(tool.name)
         resourcePrompt = buildSkillsSystemPrompt(prepared.externalSkills)
         if (safeMode && configuredAgent.mcpServers.length) resourcePrompt += '\n\n安全模式下未连接绑定的 MCP 扩展；需要这些能力时如实说明限制。'
         if (selectedKnowledge.length) {
@@ -312,6 +356,8 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
         subagentEventVersion: ctx.subagentEventVersion,
         emitSubagentEvent: ctx.emitSubagentEvent,
       })
+      if (executionOwner) workspaceManager.inheritChildWorkspace(child, ctx,
+        [...continuation.workspacePaths, ...(continuation.projectRoot ? [continuation.projectRoot] : [])])
         if (child.executionOwner && (ctx.sqliteDelivery || ctx.jsonlDelivery)) installProductionCollaborationBoundary(child)
         const projectContext = getProjectContextBlock(child.projectRoot)
         const strategy = new ReActStrategy(llm, {

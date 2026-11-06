@@ -77,8 +77,17 @@ beforeAll(async () => {
       async *stream(messages, options) {
         modelCalls.push({ model: config.model, messages: structuredClone(messages), options })
         if (config.model !== 'frontend-fixture') {
-          if (failParentOnce) { failParentOnce = false; throw new Error('PARENT_PROVIDER_FIXTURE_FAILURE') }
-          const results = messages.filter(message => message.role === 'tool' && message.toolName === 'subagent')
+          if (failParentOnce) {
+            failParentOnce = false
+            const admission = messages.find(message => message.role === 'tool' && message.toolName === 'subagent_start')
+            const runId = JSON.parse(String(admission!.content)).runId
+            const { getSubagentStore } = await import('../../../../core/subagent/store.js')
+            // This scenario deliberately fails after the child has succeeded;
+            // ordinary explicit admission no longer blocks parent generation.
+            await vi.waitFor(async () => expect((await getSubagentStore().getRunHeader(tenantId, runId))?.status).toBe('succeeded'))
+            throw new Error('PARENT_PROVIDER_FIXTURE_FAILURE')
+          }
+          const results = messages.filter(message => message.metadata?.subagentNotification)
           yield { done: true, finishReason: 'stop', content: `MAIN_SUMMARY\n${results.map(result => result.content).join('\n')}`, promptTokens: 11, completionTokens: 7 }
           return
         }
@@ -146,7 +155,7 @@ async function chat(sessionId: string, message: string, collaborators: Array<{ a
 }
 
 describe('explicit custom Agent collaboration through real chat', () => {
-  it('runs the selected Agent before the main model, preserves its full configuration and actual effects, then resumes the same context', async () => {
+  it('admits the selected Agent before the main model, preserves its full configuration and actual effects, then resumes the same context', async () => {
     const sessionId = 'configured-collaboration'
     const first = await chat(sessionId, '第一轮：请前端工程师读取设计技能和资料，写出成果。', [{ agentId: frontend.id }, { agentId: frontend.id }])
     expect(first.status).toBe(200)
@@ -164,11 +173,15 @@ describe('explicit custom Agent collaboration through real chat', () => {
     expect(childCalls[0].options?.systemPrompt).toContain('DESIGN_SKILL_INDEX')
     expect(childCalls[0].options?.systemPrompt).not.toContain('UNBOUND_SKILL')
     expect(childCalls[0].options?.tools?.map(tool => tool.name)).toEqual(expect.arrayContaining(['get_skill', 'mcp_docs_lookup', 'write_file']))
+    expect(childCalls[0].options?.tools?.map(tool => tool.name)).toEqual(expect.arrayContaining(['subagent_send', 'subagent_directory', 'subagent_request_input']))
     expect(childCalls[0].options?.tools?.map(tool => tool.name)).not.toContain('subagent')
+    expect(childCalls[0].options?.tools?.map(tool => tool.name)).not.toContain('subagent_followup')
     expect(childCalls[0].options?.tools?.map(tool => tool.name)).not.toContain('ask_user')
     const parentCall = modelCalls.find(call => call.model === 'main-fixture')!
-    expect(parentCall.options?.tools?.map(tool => tool.name)).toEqual(['plan_update'])
-    expect(parentCall.messages.some(message => message.role === 'tool' && String(message.content).includes('CHILD_FIRST_CONTEXT_SENTINEL'))).toBe(true)
+    const { ownedCollaborationTools } = await import('../../../../tools/subagent/index.js')
+    expect(parentCall.options?.tools?.map(tool => tool.name).sort()).toEqual(['plan_update', ...ownedCollaborationTools.map(tool => tool.name)].sort())
+    expect(parentCall.messages.some(message => message.role === 'tool' && message.toolName === 'subagent_start'
+      && JSON.parse(String(message.content)).state === 'admitted')).toBe(true)
     const { getSubagentStore } = await import('../../../../core/subagent/store.js')
     const runsBefore = await getSubagentStore().listRunsForParent(tenantId, sessionId)
     expect(runsBefore).toHaveLength(1)
@@ -189,7 +202,9 @@ describe('explicit custom Agent collaboration through real chat', () => {
     expect((await new SessionStore().getBinding(sessionId, tenantId))?.agentId).toBe(main.id)
     const history = (await import('../../../../storage/conversation/factory.js')).createConversationHistory()
     const replay = await history.getFullHistory({ tenantId, sessionId })
-    const childResults = replay.filter(message => message.role === 'tool' && message.toolName === 'subagent')
+    const admissions = replay.filter(message => message.role === 'tool' && message.toolName === 'subagent_start')
+    expect(admissions).toHaveLength(2)
+    const childResults = replay.filter(message => message.role === 'assistant' && message.metadata?.subagentNotification)
     expect(childResults).toHaveLength(2)
     expect((childResults[1].metadata?.subagent as SubagentRun).childSessionId).toBe(after[0].childSessionId)
     await agentStore.update(frontend.id, tenantId, { name: frontend.name, systemPrompt: frontend.systemPrompt, model: frontend.model, allowedTools: frontend.allowedTools })
@@ -236,11 +251,11 @@ describe('explicit custom Agent collaboration through real chat', () => {
     const { getSubagentStore } = await import('../../../../core/subagent/store.js')
     try { await vi.waitFor(async () => {
       const children = await getSubagentStore().listRunsForParent(tenantId, sessionId)
-      expect(children.find(run => run.agentId === broken.id)).toMatchObject({ agentName: broken.name, status: 'failed', error: { message: 'COLLABORATOR_CATALOG_UNAVAILABLE' } })
+      const failed = children.find(run => run.agentId === broken.id)
+      expect(failed).toMatchObject({ agentName: broken.name, status: 'failed', error: { message: 'COLLABORATOR_CATALOG_UNAVAILABLE' } })
       expect(children.find(run => run.agentId === frontend.id)?.status).toBe('running')
-      const { activeStreams } = await import('../../../../core/stream-pipeline/stream-bus.js')
-      const frames = activeStreams.get(`${tenantId}:${sessionId}`)?.snapshot().projection ?? []
-      expect(frames.some(frame => ((frame.toolResult ?? frame.toolEnd) as { metadata?: { subagent?: SubagentRun } } | undefined)?.metadata?.subagent?.agentId === broken.id)).toBe(true)
+      const snapshot = (await app.inject({ method: 'GET', url: `/chat/snapshot?sessionId=${sessionId}` })).json().data
+      expect(snapshot.subagentRuns.find((run: SubagentRun) => run.runId === failed?.runId)).toMatchObject({ status: 'failed', agentId: broken.id })
     }) } finally {
       releaseSibling()
       expect((await pending).status).toBe(200)
@@ -284,7 +299,7 @@ describe('explicit custom Agent collaboration through real chat', () => {
     expect(snapshot.subagentRuns).toHaveLength(1)
     const child = snapshot.subagentRuns[0] as SubagentRun
     expect(child).toMatchObject({ agentId: frontend.id, status: 'succeeded', resultSummary: 'CHILD_OTHER_RESULT' })
-    expect(snapshot.history.some((message: Message) => message.role === 'tool' && message.metadata?.subagent?.runId === child.runId)).toBe(true)
+    expect(snapshot.history.some((message: Message) => message.role === 'assistant' && message.metadata?.subagentNotification?.runId === child.runId)).toBe(true)
     expect((await chat(sessionId, '断流恢复后继续同一个子代理。', [{ resumeRunId: child.runId }])).status).toBe(200)
     const { getSubagentStore } = await import('../../../../core/subagent/store.js')
     expect((await getSubagentStore().listRunsForParent(tenantId, sessionId)).at(-1)).toMatchObject({ childSessionId: child.childSessionId, resumeFromRunId: child.runId, status: 'succeeded' })

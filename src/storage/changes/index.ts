@@ -20,6 +20,8 @@ export interface FileChange {
   sessionId: string
   turnId?: string
   runId?: string
+  producerChildSessionId?: string
+  producerRunId?: string
   path: string
   kind: ChangeKind
   /** Large/binary contents may be null while their exact bytes live in a snapshotRef. */
@@ -42,6 +44,8 @@ export interface RecordChangeInput {
   sessionId: string
   turnId?: string
   runId?: string
+  producerChildSessionId?: string
+  producerRunId?: string
   path: string
   kind: ChangeKind
   oldContent: string | null
@@ -110,6 +114,8 @@ function rowToChange(row: Record<string, unknown>): FileChange {
   return {
     id: String(row.id), seq: Number(row.seq), tenantId: String(row.tenant_id), sessionId: String(row.session_id),
     turnId: row.turn_id == null ? undefined : String(row.turn_id), runId: row.run_id == null ? undefined : String(row.run_id),
+    ...(row.producer_child_session_id == null ? {} : { producerChildSessionId: String(row.producer_child_session_id) }),
+    ...(row.producer_run_id == null ? {} : { producerRunId: String(row.producer_run_id) }),
     path: String(row.path), kind: row.kind as ChangeKind,
     oldContent: row.old_content == null ? null : String(row.old_content),
     newContent: row.new_content == null ? null : String(row.new_content),
@@ -166,6 +172,8 @@ export class ChangeStore {
         if (!columns.has('new_hash')) await db.execute('ALTER TABLE file_changes ADD COLUMN new_hash TEXT')
         if (!columns.has('turn_id')) await db.execute('ALTER TABLE file_changes ADD COLUMN turn_id TEXT')
         if (!columns.has('run_id')) await db.execute('ALTER TABLE file_changes ADD COLUMN run_id TEXT')
+        if (!columns.has('producer_child_session_id')) await db.execute('ALTER TABLE file_changes ADD COLUMN producer_child_session_id TEXT')
+        if (!columns.has('producer_run_id')) await db.execute('ALTER TABLE file_changes ADD COLUMN producer_run_id TEXT')
         if (!columns.has('old_snapshot_ref')) await db.execute('ALTER TABLE file_changes ADD COLUMN old_snapshot_ref TEXT')
         if (!columns.has('new_snapshot_ref')) await db.execute('ALTER TABLE file_changes ADD COLUMN new_snapshot_ref TEXT')
         if (!columns.has('source')) await db.execute('ALTER TABLE file_changes ADD COLUMN source TEXT')
@@ -191,13 +199,13 @@ export class ChangeStore {
     }
     const result = await this.db.execute({
       // One SQL statement allocates order, including in old development tables.
-      sql: `INSERT INTO file_changes (seq, id, tenant_id, session_id, turn_id, run_id, path, kind, old_content, new_content, old_hash, new_hash, old_snapshot_ref, new_snapshot_ref, truncated, status, created_at, source, command_job_id, requires_explicit_revert)
-        SELECT COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ? FROM file_changes RETURNING *`,
+      sql: `INSERT INTO file_changes (seq, id, tenant_id, session_id, turn_id, run_id, path, kind, old_content, new_content, old_hash, new_hash, old_snapshot_ref, new_snapshot_ref, truncated, status, created_at, source, command_job_id, requires_explicit_revert, producer_child_session_id, producer_run_id)
+        SELECT COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ? FROM file_changes RETURNING *`,
       args: [uuidv4(), tenantId, input.sessionId, input.turnId ?? null, input.runId ?? null, canonicalFilePathSync(input.path), input.kind,
         (input.oldContent?.length ?? 0) > MAX_CONTENT_CHARS ? null : input.oldContent,
         (input.newContent?.length ?? 0) > MAX_CONTENT_CHARS ? null : input.newContent,
         oldHash, newHash, input.oldSnapshotRef ?? null, input.newSnapshotRef ?? null, truncated ? 1 : 0, Date.now(),
-        input.source ?? null, input.commandJobId ?? null, input.requiresExplicitRevert ? 1 : 0]
+        input.source ?? null, input.commandJobId ?? null, input.requiresExplicitRevert ? 1 : 0, input.producerChildSessionId ?? null, input.producerRunId ?? null]
     })
     return rowToChange(result.rows[0])
   }

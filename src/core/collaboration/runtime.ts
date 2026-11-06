@@ -160,7 +160,20 @@ export class CollaborationRuntime {
   }
   receipt(producer: CollaborationProducer, requestKey: string): Promise<CollaborationReceipt | null> {
     const binding = this.binding(producer)
-    return this.serialize(() => this.store.findReceiptByKey(binding, requestKey))
+    return this.serialize(async () => {
+      const receipt = await this.store.findReceiptByKey(binding, requestKey)
+      // A commit may succeed while its acknowledgement fails before send's
+      // notification. Reconciliation can safely repeat this local hint.
+      if (receipt) this.store.notifyInput(binding, receipt.recipientParticipantId)
+      return receipt
+    })
+  }
+  sealInputIfEmpty(producer: CollaborationProducer): Promise<boolean> {
+    const binding = this.binding(producer)
+    return this.serialize(() => this.store.sealInputIfEmpty(binding))
+  }
+  waitForInput(producer: CollaborationProducer, signal: AbortSignal): Promise<void> {
+    return this.store.waitForInput(this.binding(producer), signal)
   }
   beginDrain(producer: CollaborationProducer): Promise<void> {
     const binding = this.binding(producer)

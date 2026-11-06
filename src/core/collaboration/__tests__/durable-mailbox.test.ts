@@ -156,6 +156,9 @@ describe('trusted producer and atomic membership', () => {
     await db.execute({ sql: "UPDATE root_runs SET state=json_set(state,'$.attemptId','attempt-next') WHERE run_id='root-a'", args: [] })
     const nextRoot = await runtime.admitRoot({ ...scope, rootAttemptId: 'attempt-next' })
     expect(nextRoot).not.toBe(root)
+    expect((await store.participants(scope)).entries.find(p => p.kind === 'root')).toMatchObject({ status: 'interrupted', activity: 'inactive' })
+    expect((await store.participants({ ...scope, rootAttemptId: 'attempt-next' })).entries.find(p => p.kind === 'root'))
+      .toMatchObject({ status: 'running', activity: 'running' })
     await expect(runtime.send(root, { recipientParticipantId: c.participantId, message: 'stale', requestKey: 'new' })).rejects.toMatchObject({ code: 'closed' })
     await expect(runtime.admitChild(nextRoot, childInput('prior-attempt'))).rejects.toMatchObject({ code: 'conflict' })
     expect(await store.findReceipt(scope, accepted.messageId)).toEqual({ ...accepted, state: 'interrupted', reason: 'root_attempt_superseded' })
@@ -178,6 +181,39 @@ describe('trusted producer and atomic membership', () => {
 })
 
 describe('durable accepted receipts with no consumer claim', () => {
+  it('seals an empty invocation atomically, rejects late sends, and reopens only a newly admitted continuation', async () => {
+    const c = await child('sealed')
+    expect(await runtime.sealInputIfEmpty(c.producer)).toBe(true)
+    await expect(runtime.send(root, { recipientParticipantId: c.participantId, message: 'too late', requestKey: 'late' }))
+      .rejects.toMatchObject({ code: 'closed' })
+    expect(await rows('collaboration_messages')).toBe(0)
+    const first = (await store.participants(scope)).entries.find(p => p.participantId === c.participantId)!
+    expect(first).toMatchObject({ invocationRunId: c.mutation.header.runId, status: 'queued', inputClosed: true })
+    await agents.appendHeader(scope.tenantId, c.mutation.header.runId, 'finished', { status: 'succeeded', finishedAt: Date.now() })
+    const next = await runtime.admitChild(root, childInput('next', { resumeFromRunId: c.mutation.header.runId }))
+    const current = (await store.participants(scope)).entries.find(p => p.participantId === c.participantId)!
+    expect(current).toMatchObject({ invocationRunId: next.mutation.header.runId, status: 'queued', inputClosed: false, activity: 'queued' })
+    expect(current.admittedSeq).toBe(first.admittedSeq)
+    expect((await runtime.send(root, { recipientParticipantId: c.participantId, message: 'next task', requestKey: 'next-task' })).state).toBe('queued')
+    expect(await runtime.sealInputIfEmpty(next.producer)).toBe(false)
+  })
+  it('serializes a concurrent final seal against message acceptance without a stranded accepted message', async () => {
+    const a = await child('race')
+    // Use the store directly, bypassing the runtime queue, as independent writers do.
+    const [seal, sent] = await Promise.allSettled([
+      store.sealInputIfEmpty(runtime.executionBinding(a.producer)),
+      store.send(runtime.executionBinding(root), a.participantId, 'racing final output', 'race-send'),
+    ])
+    expect(seal.status).toBe('fulfilled')
+    if (seal.status === 'fulfilled' && seal.value) {
+      expect(sent).toMatchObject({ status: 'rejected', reason: { code: 'closed' } })
+      expect(await rows('collaboration_messages')).toBe(0)
+    } else {
+      expect(sent.status).toBe('fulfilled')
+      expect(await rows('collaboration_messages')).toBe(1)
+      expect((await store.participants(scope)).entries.find(p => p.participantId === a.participantId)?.inputClosed).toBe(false)
+    }
+  })
   it('persists root-to-child, child-to-root and same-root sibling messages with truthful queued status', async () => {
     const a = await child('a'), b = await child('b')
     const first = await runtime.send(root, { recipientParticipantId: a.participantId, message: 'root assigns', requestKey: 'assign' })
@@ -349,5 +385,36 @@ describe('prefix paging, admission closure and explicit startup', () => {
     const recovered = await runtime.receipt(root, input.requestKey)
     expect(recovered?.state).toBe('queued')
     expect(await runtime.send(root, input)).toEqual(recovered)
+  })
+  it('receipt reconciliation wakes an already empty inbox observation after a lost commit ACK', async () => {
+    const c = await child('lost-ack-observer'), native = db.transaction.bind(db), aborter = new AbortController()
+    let observedEmpty!: () => void, awakened = false
+    const empty = new Promise<void>(resolve => { observedEmpty = resolve })
+    vi.spyOn(db, 'transaction').mockImplementation(async (mode?: TransactionMode) => {
+      const tx = await native(mode)
+      return new Proxy(tx, { get(target, property) {
+        if (property === 'execute') return async (...args: Parameters<Transaction['execute']>) => {
+          const statement = args[0], sql = typeof statement === 'string' ? statement : statement.sql
+          const result = await target.execute(...args)
+          if (sql.includes('SELECT 1 FROM collaboration_messages m') && !result.rows.length) observedEmpty()
+          return result
+        }
+        if (property === 'commit' && mode === 'write') return async () => { await target.commit(); throw new Error('Lost inbox send ACK') }
+        const value = Reflect.get(target, property)
+        return typeof value === 'function' ? value.bind(target) : value
+      } })
+    })
+    const waiting = runtime.waitForInput(root, aborter.signal).then(() => { awakened = true })
+    try {
+      await empty
+      await expect(runtime.send(c.producer, { recipientParticipantId: 'root:' + scope.rootRunId,
+        message: 'Question committed before its acknowledgement failed', requestKey: 'lost-inbox-ack' })).rejects.toThrow('Lost inbox send ACK')
+      expect(awakened).toBe(false)
+      const receipt = await runtime.receipt(c.producer, 'lost-inbox-ack')
+      expect(receipt?.state).toBe('queued')
+      await waiting
+      expect(awakened).toBe(true)
+      expect(await rows('collaboration_messages')).toBe(1)
+    } finally { aborter.abort(); await waiting.catch(() => undefined) }
   })
 })

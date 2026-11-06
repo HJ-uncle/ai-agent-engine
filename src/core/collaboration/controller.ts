@@ -83,6 +83,7 @@ export class CollaborationController {
       // Omitting a target means this exact live root, never an inferred child
       // or a later invocation. Return its server-owned identity to the client.
       const recipient = await this.recipient(tx, binding, owner, recipientParticipantId ?? binding.participantId)
+      await this.store.assertRecipientInputOpen(tx, b, recipient.participantId, recipient.invocationRunId)
       this.owners.controllerBinding(owner, recipient.participantId)
       return { b, recipient }
     })
@@ -102,6 +103,10 @@ export class CollaborationController {
       if (!row) return null
       await authenticatedControllerOrigin(tx, b, row)
       return (await projectCollaborationReceipts(tx, b, [row]))[0]
+    }).then(receipt => {
+      // Also wake an existing waiter when this read reconciles a lost send ACK.
+      if (receipt) this.store.notifyInput(b, receipt.recipientParticipantId)
+      return receipt
     })
   }
   async send(b: CollaborationRootScope, subject: ControllerSubject, input: { recipientParticipantId: string; recipientInvocationRunId: string; message: string; requestKey: string }): Promise<CollaborationReceipt> {
@@ -127,10 +132,11 @@ export class CollaborationController {
           || origin?.recipient_invocation_id !== input.recipientInvocationRunId) fail('conflict', 'Request key was already accepted differently')
         this.owners.assertControllerRecipient(owner, input.recipientParticipantId, input.recipientInvocationRunId)
         const receipt = (await projectCollaborationReceipts(tx, b, [existing]))[0]
-        await tx.commit(); return receipt
+        await tx.commit(); this.store.notifyInput(b, input.recipientParticipantId); return receipt
       }
       const recipient = await this.recipient(tx, binding, owner, input.recipientParticipantId)
       if (recipient.invocationRunId !== input.recipientInvocationRunId) fail('conflict', 'Recipient invocation changed; refresh the selected child before sending')
+      await this.store.assertRecipientInputOpen(tx, b, recipient.participantId, recipient.invocationRunId)
       const count = (await tx.execute({ sql: `SELECT count(*) AS n FROM collaboration_messages m
         WHERE m.tenant_id=? AND m.root_run_id=? AND m.root_attempt_id=? AND m.recipient_participant_id=? AND m.state='queued'
         AND NOT EXISTS (SELECT 1 FROM collaboration_deliveries d WHERE d.tenant_id=m.tenant_id AND d.root_run_id=m.root_run_id AND d.root_attempt_id=m.root_attempt_id AND d.message_id=m.message_id)
@@ -147,6 +153,7 @@ export class CollaborationController {
           controllerSender(subject), controllerInvocation(b, subject), input.requestKey, input.recipientParticipantId, recipient.invocationRunId, hash, bytes, input.message, now] })
       this.owners.assertControllerRecipient(owner, input.recipientParticipantId, recipient.invocationRunId)
       await tx.commit()
+      this.store.notifyInput(b, recipient.participantId)
       return collaborationReceipt(row)
     } catch (error) { if (!tx.closed) await tx.rollback().catch(() => undefined); throw error }
     finally { tx.close() }

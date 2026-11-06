@@ -38,6 +38,7 @@ const scope = { tenantId: 'sqlite-react-tenant', sessionId: 'parent-session' }
 const logger = () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() })
 function context(history: AgentContext['history'], executionOwner = owner, sessionId = scope.sessionId): AgentContext {
   return { ...scope, sessionId, rootRunId, turnId, userMessageId: userId, executionOwner,
+    ...(sessionId !== scope.sessionId ? { parentSessionId: scope.sessionId, rootSessionId: scope.sessionId } : {}),
     inheritContext: false, modelCaps: { contextWindow: 100_000 }, tokenBudget: 100_000,
     logger: logger(), history, tools: { list: () => [], has: () => true, executionMode: () => 'serial',
       execute: async () => ({ success: true, output: 'owned scripted tool result' }) },
@@ -102,6 +103,26 @@ afterEach(async () => {
   await Promise.all([db.whenClosed(), observer.whenClosed()]); vi.unstubAllEnvs()
   if (path.dirname(directory) !== path.resolve('.e2e-tmp') || !path.basename(directory).startsWith('sqlite-react-')) throw new Error('Unsafe fixture cleanup')
   fs.rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+})
+
+it('continues for mail accepted during the last provider response before sealing its input', async () => {
+  let calls = 0, acceptedId = ''
+  vi.mocked(llm.stream).mockImplementation(async function* (messages) {
+    calls++
+    if (calls === 1) {
+      acceptedId = (await mail('Late requirement must be handled before completion')).messageId
+      yield { done: true, content: 'Initial answer before the late requirement.' }
+    } else {
+      expect(messages.some(m => String(m.content).includes('Late requirement must be handled'))).toBe(true)
+      expect(messages.some(m => m.role === 'assistant' && String(m.content).includes('Initial answer'))).toBe(true)
+      yield { done: true, content: 'Updated answer handles the late requirement.' }
+    }
+  })
+  await run(task)
+  expect(calls).toBe(2)
+  expect(outcomes).toMatchObject([{ status: 'succeeded' }])
+  expect((await runtime.sqliteDeliveryReceipt(producer, acceptedId))?.state).toBe('integrated')
+  await expect(mail('after final fence')).rejects.toMatchObject({ code: 'closed' })
 })
 
 it('preserves the admitted human plus both peers and the actual current tool exchange when inheritance is disabled', async () => {

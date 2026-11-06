@@ -9,12 +9,12 @@ import { ensureDiscoverySchema } from './discovery-schema.js'
 import { ensureChildRecoverySchema } from './child-recovery-schema.js'
 import { ensureParentChildUsage, readChildUsageFence, readDurableChildUsage, recordDurableChildUsage, resetParentChildRecovery, sameChildUsage, type ChildUsageFence, type ChildUsageScalar } from './child-usage-authority.js'
 import { appendDiscoveryLifecycle, ensureParentDiscovery, readDiscoveryPage, resetParentDiscovery, tombstoneDiscoveryRun, type DiscoveryOptions, type DiscoveryPage } from './discovery.js'
-import { projectSubagentRunView, summarizeSubagentTool } from './view.js'
+import { projectSubagentRunView, summarizeSubagentCompaction, summarizeSubagentTool } from './view.js'
 import { isTaskPlanControl } from '../task-plan/control.js'
 import { interruptControllerInvocation } from '../collaboration/controller-origin.js'
 import { isTerminalRun, type CreateSubagentRun, type RunInvocationUsage, type RunStatus, type SubagentEvent, type SubagentRun, type SubagentRunHeader, type SubagentMutation, type SubagentRunView, type SubagentToolCall, type SubagentToolSummary, type SubagentDeltaEvent, type SubagentIdentity, type SubagentWireEvent } from './types.js'
 
-type RunPatch = Partial<Pick<SubagentRun, 'status' | 'startedAt' | 'finishedAt' | 'durationMs' | 'stopReason' | 'error' | 'resultSummary' | 'partialOutput' | 'usage' | 'toolCalls' | 'modelId' | 'externalEffectStatus'>>
+type RunPatch = Partial<Pick<SubagentRun, 'status' | 'startedAt' | 'finishedAt' | 'durationMs' | 'stopReason' | 'error' | 'resultSummary' | 'partialOutput' | 'compaction' | 'usage' | 'toolCalls' | 'modelId' | 'externalEffectStatus'>>
 type PatchSource = RunPatch | ((current: SubagentRun) => RunPatch)
 const writes = new WeakMap<Client, Promise<unknown>>()
 type Query = Pick<Client, 'execute'> | Pick<Transaction, 'execute'>
@@ -37,10 +37,11 @@ function boundHeaderPatch(patch: HeaderPatch): HeaderPatch {
     ...(patch.partialOutput === undefined ? {} : { partialOutput: utf8Prefix(patch.partialOutput, 8192) }),
     ...(patch.resultSummary === undefined ? {} : { resultSummary: utf8Prefix(patch.resultSummary, 8192) }),
     ...(patch.stopReason === undefined ? {} : { stopReason: utf8Prefix(patch.stopReason, 1024) }),
+    ...(patch.compaction === undefined ? {} : { compaction: summarizeSubagentCompaction(patch.compaction) }),
     ...(patch.error ? { error: { ...patch.error, code: utf8Prefix(patch.error.code, 256), message: utf8Prefix(patch.error.message, 1024) } } : {}),
   }
 }
-const stateKeys = ['status', 'lastSeq', 'updatedAt', 'startedAt', 'finishedAt', 'durationMs', 'stopReason', 'error', 'resultSummary', 'partialOutput', 'externalEffectStatus', 'usage', 'modelId', 'toolCount', 'activeToolCount', 'nonPlanToolCount', 'latestActivity'] as const
+const stateKeys = ['status', 'lastSeq', 'updatedAt', 'startedAt', 'finishedAt', 'durationMs', 'stopReason', 'error', 'resultSummary', 'partialOutput', 'compaction', 'externalEffectStatus', 'usage', 'modelId', 'toolCount', 'activeToolCount', 'nonPlanToolCount', 'latestActivity'] as const
 /** latestActivity remains in exact checkpoints for historical reads, while
  * deltas omit it because the toolUpsert already carries the same projection. */
 const stateOf = (run: SubagentRunHeader, includeLatestActivity = true) => Object.fromEntries(stateKeys
@@ -61,10 +62,26 @@ const publicRecord = (column: string) => `json_patch(json_set(json_remove(${colu
 const cleanToolSummary = (value: unknown): SubagentToolSummary => Object.fromEntries(Object.entries(parse<Record<string, unknown>>(value)).filter(([key, item]) => item !== null || key === 'args')) as unknown as SubagentToolSummary
 const cleanHeader = (record: unknown, state?: unknown): SubagentRunHeader => Object.fromEntries(Object.entries({ ...parse<Record<string, unknown>>(record), ...(state === undefined ? {} : parse<Record<string, unknown>>(state)) }).filter(([, value]) => value !== null)) as unknown as SubagentRunHeader
 
+function builtinDisplay(row: Record<string, unknown>) {
+  const role = row.builtin_role
+  return role === 'research' || role === 'executor' || role === 'general'
+    ? { builtinRole: role, ...(Number.isSafeInteger(Number(row.builtin_version)) && Number(row.builtin_version) > 0 ? { builtinRoleVersion: Number(row.builtin_version) } : {}) }
+    : {}
+}
+
 export interface ParentProjection {
   id: string
   tenantId: string
   event: SubagentWireEvent
+}
+
+export interface FollowupAdmission {
+  payloadHash: string
+  childSessionId: string
+  resumeFromRunId: string
+  parentToolCallId: string
+  parentMessageId: string
+  description: string
 }
 
 /** SQLite owns ordering and recovery; immutable local files hold the bulky bodies. */
@@ -78,6 +95,7 @@ export class SubagentStore {
     return this.initialized ??= up(this.db).then(() => ensureSubagentDeltaSchema(this.db)).then(() => ensureDiscoverySchema(this.db)).then(() => ensureChildRecoverySchema(this.db)).then(async () => {
       await this.db.execute(`CREATE TABLE IF NOT EXISTS subagent_execution_receipts (tenant_id TEXT NOT NULL,run_id TEXT NOT NULL,request_key TEXT NOT NULL,payload_hash TEXT NOT NULL,terminal_seq INTEGER NOT NULL,PRIMARY KEY(tenant_id,run_id,request_key))`)
       await this.db.execute(`CREATE TABLE IF NOT EXISTS subagent_projection_receipts (tenant_id TEXT NOT NULL,run_id TEXT NOT NULL,seq INTEGER NOT NULL,message_id TEXT NOT NULL,disposition TEXT NOT NULL,PRIMARY KEY(tenant_id,run_id,seq))`)
+      await this.db.execute(`CREATE TABLE IF NOT EXISTS subagent_followup_admissions (tenant_id TEXT NOT NULL,parent_session_id TEXT NOT NULL,request_key TEXT NOT NULL,payload_hash TEXT NOT NULL,record TEXT NOT NULL,PRIMARY KEY(tenant_id,parent_session_id,request_key))`)
       // Resolve the actual database before opening any write transaction. Never
       // use DATA_DIR to guess the files belonging to an injected/test client.
       // Hot-path summaries are already bounded previews. Externalize only
@@ -127,7 +145,7 @@ export class SubagentStore {
     if (!current) return null
     const target = atSeq ?? Number(current.seq)
     if (target > Number(current.seq)) failRecovery('Requested future subagent watermark')
-    const modern = await q.execute({ sql: `SELECT ${fullRecord ? 'r.record' : publicRecord('r.record')} AS record,c.header,json_extract(r.record,'$.continuation.readOnly') AS read_only,substr(json_extract(r.record,'$.continuation.role'),1,512) AS role FROM subagent_records r JOIN subagent_checkpoints c ON c.tenant_id=r.tenant_id AND c.run_id=r.run_id WHERE r.tenant_id=? AND r.run_id=? AND c.seq=?`, args: [tenantId, runId, target] })
+    const modern = await q.execute({ sql: `SELECT ${fullRecord ? 'r.record' : publicRecord('r.record')} AS record,c.header,json_extract(r.record,'$.continuation.readOnly') AS read_only,substr(json_extract(r.record,'$.continuation.role'),1,512) AS role,json_extract(r.record,'$.continuation.builtinRole') AS builtin_role,json_extract(r.record,'$.continuation.builtinRoleVersion') AS builtin_version FROM subagent_records r JOIN subagent_checkpoints c ON c.tenant_id=r.tenant_id AND c.run_id=r.run_id WHERE r.tenant_id=? AND r.run_id=? AND c.seq=?`, args: [tenantId, runId, target] })
     if (modern.rows[0]) {
       const row = modern.rows[0], header = { ...cleanHeader(row.record,
         JSON.stringify(await this.payloads.decodeState(tenantId, String(row.header)))), schemaVersion: 1 as const }
@@ -135,7 +153,7 @@ export class SubagentStore {
         const latest = await q.execute({ sql: 'SELECT summary FROM subagent_tools WHERE tenant_id=? AND run_id=? AND revision_seq<=? ORDER BY revision_seq DESC,ordinal DESC LIMIT 1', args: [tenantId, runId, target] })
         if (latest.rows[0]) header.latestActivity = await this.toolSummary(tenantId, latest.rows[0].summary)
       }
-      if (!fullRecord && row.read_only !== null && row.read_only !== undefined) header.continuationDisplay = { readOnly: Boolean(row.read_only), ...(row.role ? { role: String(row.role) } : {}) }
+      if (!fullRecord && row.read_only !== null && row.read_only !== undefined) header.continuationDisplay = { readOnly: Boolean(row.read_only), ...(row.role ? { role: String(row.role) } : {}), ...builtinDisplay(row) }
       return header
     }
     // Converted legacy runs still have their earlier exact v1 archive. Missing
@@ -144,13 +162,13 @@ export class SubagentStore {
     const table = source === 'snapshot' ? 'subagent_runs' : 'subagent_events'
     const filter = source === 'snapshot' ? '' : ' AND seq=? AND json_extract(event,\'$.schemaVersion\')=1'
     const base = fullRecord ? `json_remove(${source},'$.toolCalls')` : publicRecord(source)
-    const old = await q.execute({ sql: `SELECT ${base} AS header,json_extract(${source},'$.continuation.readOnly') AS read_only,substr(json_extract(${source},'$.continuation.role'),1,512) AS role,json_array_length(${source},'$.toolCalls') AS tool_count,
+    const old = await q.execute({ sql: `SELECT ${base} AS header,json_extract(${source},'$.continuation.readOnly') AS read_only,substr(json_extract(${source},'$.continuation.role'),1,512) AS role,json_extract(${source},'$.continuation.builtinRole') AS builtin_role,json_extract(${source},'$.continuation.builtinRoleVersion') AS builtin_version,json_array_length(${source},'$.toolCalls') AS tool_count,
       (SELECT count(*) FROM json_each(${source},'$.toolCalls') j WHERE json_extract(j.value,'$.status')='running') AS active_count,
       (SELECT count(*) FROM json_each(${source},'$.toolCalls') j WHERE json_extract(j.value,'$.name') NOT IN ('plan_update','todo_list','todo_create','todo_update','todo_delete')) AS effect_count
       FROM ${table} WHERE tenant_id=? AND run_id=?${filter}`, args: [tenantId, runId, ...(source === 'snapshot' ? [] : [target])] })
     if (!old.rows[0]) failRecovery('Missing exact subagent checkpoint')
     const row = old.rows[0], header = { ...cleanHeader(row.header), toolCount: Number(row.tool_count), activeToolCount: Number(row.active_count), nonPlanToolCount: Number(row.effect_count) }
-    if (!fullRecord && row.read_only !== null && row.read_only !== undefined) header.continuationDisplay = { readOnly: Boolean(row.read_only), ...(row.role ? { role: String(row.role) } : {}) }
+    if (!fullRecord && row.read_only !== null && row.read_only !== undefined) header.continuationDisplay = { readOnly: Boolean(row.read_only), ...(row.role ? { role: String(row.role) } : {}), ...builtinDisplay(row) }
     return header
   }
 
@@ -221,7 +239,7 @@ export class SubagentStore {
     const display = continuation ?? continuationDisplay
     const view: SubagentRunView = {
       ...fields, schemaVersion: 2, view: 'summary', toolCalls: tools,
-      ...(display ? { continuation: { readOnly: display.readOnly, role: display.role } } : {}),
+      ...(display ? { continuation: { readOnly: display.readOnly, role: display.role, builtinRole: display.builtinRole, builtinRoleVersion: display.builtinRoleVersion } } : {}),
       coverage: { asOfSeq: header.lastSeq, toolCount: header.toolCount, activeToolCount: header.activeToolCount,
         includedToolCount: tools.length, includedActiveToolCount: residentActive, ids: tools.map(tool => tool.id),
         hasMore: !complete, truncated: !complete || tools.some(tool => tool.detailTruncated), completeness: complete ? 'complete' : 'partial' },
@@ -276,6 +294,83 @@ export class SubagentStore {
     const last = rows.rows[items.length - 1]
     return { schemaVersion: 2 as const, parentSessionId, runs: items, hasMore, listComplete: !hasMore && !cursor, revision: scopeHash(scope, upperRow, upperAt, upperId),
       ...(hasMore && last ? { nextCursor: cursorEncode({ scope, upperAt, upperId, upperRow, afterAt: Number(last.created_at), afterId: String(last.run_id) }) } : {}) }
+  }
+
+  /** Stable child membership, live latest attempts, and no transcript/tool-body hydration. */
+  async listChildSessionsPage(tenantId: string, parentSessionId: string, options: { cursor?: string; limit?: number } = {}) {
+    await this.ready()
+    const limit = Math.min(pageSize(options.limit ?? 16), 64)
+    const scope = scopeHash('child-sessions', tenantId, parentSessionId)
+    const cursor = decodeCursor(options.cursor, scope)
+    if (cursor && (typeof cursor.after !== 'string' || !Number.isSafeInteger(cursor.upperRow) || Number(cursor.upperRow) < 0)) throw new RangeError('Invalid child cursor')
+    return this.read(async tx => {
+      const upperRow = cursor ? Number(cursor.upperRow) : Number((await tx.execute({ sql: 'SELECT coalesce(max(rowid),0) AS n FROM subagent_runs WHERE tenant_id=? AND parent_session_id=?', args: [tenantId, parentSessionId] })).rows[0].n)
+      const rows = await tx.execute({ sql: `SELECT child_session_id,max(rowid) AS latest FROM subagent_runs
+        WHERE tenant_id=? AND parent_session_id=? AND child_session_id>? GROUP BY child_session_id
+        HAVING min(rowid)<=? ORDER BY child_session_id LIMIT ?`, args: [tenantId, parentSessionId, String(cursor?.after ?? ''), upperRow, limit + 1] })
+      const items = []
+      for (const row of rows.rows.slice(0, limit)) {
+        const latest = await tx.execute({ sql: `SELECT r.run_id,json_type(coalesce(m.record,r.snapshot),'$.continuation') AS profile_type,
+          json_extract(coalesce(m.record,r.snapshot),'$.continuation.workspacePaths') AS roots
+          FROM subagent_runs r LEFT JOIN subagent_records m ON m.tenant_id=r.tenant_id AND m.run_id=r.run_id
+          WHERE r.rowid=? AND r.tenant_id=? AND r.parent_session_id=?`, args: [Number(row.latest), tenantId, parentSessionId] })
+        const entry = latest.rows[0]
+        if (!entry) continue
+        const run = await this.readHeader(tx, tenantId, String(entry.run_id))
+        if (run) items.push({ run, hasContinuation: entry.profile_type === 'object', workspacePaths: entry.roots ? parse<string[]>(entry.roots) : [] })
+      }
+      const hasMore = rows.rows.length > limit
+      return { items, hasMore, ...(hasMore && items.length ? { nextCursor: cursorEncode({ scope, upperRow, after: items.at(-1)!.run.childSessionId }) } : {}) }
+    })
+  }
+
+  async latestChildHeader(tenantId: string, parentSessionId: string, childSessionId: string, fullRecord = false): Promise<SubagentRunHeader | null> {
+    await this.ready()
+    const rows = await this.db.execute({ sql: 'SELECT run_id FROM subagent_runs WHERE tenant_id=? AND parent_session_id=? AND child_session_id=? ORDER BY rowid DESC LIMIT 1', args: [tenantId, parentSessionId, childSessionId] })
+    return rows.rows[0] ? this.getRunHeader(tenantId, String(rows.rows[0].run_id), fullRecord) : null
+  }
+
+  /** Selection needs one immutable profile, never every historical tool body. */
+  async latestAgentHeader(tenantId: string, parentSessionId: string, agentId: string, fullRecord = false): Promise<SubagentRunHeader | null> {
+    await this.ready()
+    return this.read(async tx => {
+      const rows = await tx.execute({ sql: `SELECT r.run_id FROM subagent_runs r
+        LEFT JOIN subagent_records m ON m.tenant_id=r.tenant_id AND m.run_id=r.run_id
+        WHERE r.tenant_id=? AND r.parent_session_id=?
+          AND json_extract(coalesce(m.record,r.snapshot),'$.rootSessionId')=?
+          AND coalesce(json_extract(coalesce(m.record,r.snapshot),'$.agentId'),
+            json_extract(coalesce(m.record,r.snapshot),'$.continuation.agent.id'))=?
+        ORDER BY r.created_at DESC,r.run_id DESC LIMIT 1`, args: [tenantId, parentSessionId, parentSessionId, agentId] })
+      return rows.rows[0] ? this.readHeader(tx, tenantId, String(rows.rows[0].run_id), undefined, fullRecord) : null
+    })
+  }
+
+  async hasActiveChildInvocation(tenantId: string, parentSessionId: string, childSessionId: string): Promise<boolean> {
+    await this.ready()
+    const rows = await this.db.execute({ sql: `SELECT 1 FROM subagent_runs
+      WHERE tenant_id=? AND parent_session_id=? AND child_session_id=?
+        AND status NOT IN ('succeeded','failed','cancelled','blocked','interrupted') LIMIT 1`,
+      args: [tenantId, parentSessionId, childSessionId] })
+    return rows.rows.length > 0
+  }
+
+  async followupAdmission(tenantId: string, parentSessionId: string, requestKey: string): Promise<FollowupAdmission | null> {
+    await this.ready()
+    const result = await this.db.execute({ sql: 'SELECT record FROM subagent_followup_admissions WHERE tenant_id=? AND parent_session_id=? AND request_key=?', args: [tenantId, parentSessionId, requestKey] })
+    return result.rows[0] ? parse<FollowupAdmission>(result.rows[0].record) : null
+  }
+
+  /** Preserve the first real tool anchor across retries; a synthetic ID has no history anchor. */
+  async reserveFollowup(tenantId: string, parentSessionId: string, requestKey: string, input: FollowupAdmission): Promise<FollowupAdmission> {
+    return this.write(async tx => {
+      const result = await tx.execute({ sql: 'SELECT payload_hash,record FROM subagent_followup_admissions WHERE tenant_id=? AND parent_session_id=? AND request_key=?', args: [tenantId, parentSessionId, requestKey] })
+      if (result.rows[0]) {
+        if (result.rows[0].payload_hash !== input.payloadHash) throw new Error('Follow-up requestKey payload conflict')
+        return parse<FollowupAdmission>(result.rows[0].record)
+      }
+      await tx.execute({ sql: 'INSERT INTO subagent_followup_admissions VALUES (?,?,?,?,?)', args: [tenantId, parentSessionId, requestKey, input.payloadHash, JSON.stringify(input)] })
+      return input
+    })
   }
 
   /** Transitional chat recovery still returns the run set; each run view is bounded. */
@@ -517,6 +612,14 @@ export class SubagentStore {
         && update.partialOutput === current.partialOutput) return null
       await this.ensureModern(tx, current)
       const next = { ...current, ...update, lastSeq: current.lastSeq + 1, updatedAt: Date.now() }
+      // A cancelled or restarted executor cannot leave an everlasting spinner.
+      // Absence of the committed-success callback is never proof of reduction.
+      if (isTerminalRun(next.status) && next.compaction?.phase === 'running') next.compaction = {
+        ...next.compaction, phase: 'failed', finishedAt: Math.max(next.updatedAt, next.compaction.startedAt),
+        error: next.stopReason === 'engine_restarted'
+          ? 'Engine restarted before automatic compaction completion could be confirmed'
+          : 'Subagent stopped before automatic compaction completion could be confirmed',
+      }
       if (options.cancelActiveTools || isTerminalRun(next.status) && !isTerminalRun(current.status)) await this.cancelActiveTools(tx, next)
       const mutation = await this.persistDelta(tx, kind, current, next)
       if (options.finishRequestKey) {
@@ -845,6 +948,10 @@ export class SubagentStore {
         await tx.execute({ sql: `DELETE FROM ${table} WHERE tenant_id=? AND run_id IN (SELECT run_id FROM subagent_runs WHERE tenant_id=? AND parent_session_id=?)`, args: [tenantId, tenantId, parentSessionId] })
       }
       await tx.execute({ sql: 'DELETE FROM subagent_runs WHERE tenant_id=? AND parent_session_id=?', args: [tenantId, parentSessionId] })
+      await tx.execute({ sql: 'DELETE FROM subagent_followup_admissions WHERE tenant_id=? AND parent_session_id=?', args: [tenantId, parentSessionId] })
+      if ((await tx.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='child_artifact_manifests'")).rows.length) {
+        await tx.execute({ sql: 'DELETE FROM child_artifact_manifests WHERE tenant_id=? AND parent_session_id=?', args: [tenantId, parentSessionId] })
+      }
       await resetParentDiscovery(tx, tenantId, parentSessionId)
       await resetParentChildRecovery(tx, tenantId, parentSessionId)
       await ensureParentChildUsage(tx, tenantId, parentSessionId)
@@ -855,9 +962,12 @@ export class SubagentStore {
     if (runIds.length === 0) return
     await this.write(async (tx) => {
       const affectedParents = new Set<string>()
+      const hasChildArtifacts = (await tx.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='child_artifact_manifests'")).rows.length > 0
       for (const runId of new Set(runIds)) {
         const owner = (await tx.execute({ sql: 'SELECT parent_session_id FROM subagent_runs WHERE tenant_id=? AND run_id=?', args: [tenantId, runId] })).rows[0]
         if (owner) affectedParents.add(String(owner.parent_session_id))
+        await tx.execute({ sql: "DELETE FROM subagent_followup_admissions WHERE tenant_id=? AND json_extract(record,'$.resumeFromRunId')=?", args: [tenantId, runId] })
+        if (hasChildArtifacts) await tx.execute({ sql: 'DELETE FROM child_artifact_manifests WHERE tenant_id=? AND run_id=?', args: [tenantId, runId] })
         await tombstoneDiscoveryRun(tx, tenantId, runId)
         for (const table of ['subagent_usage_invocations', 'subagent_outbox', 'subagent_events', 'subagent_tool_versions', 'subagent_tools', 'subagent_checkpoints', 'subagent_records', 'subagent_runs']) {
           await tx.execute({ sql: `DELETE FROM ${table} WHERE tenant_id=? AND run_id=?`, args: [tenantId, runId] })

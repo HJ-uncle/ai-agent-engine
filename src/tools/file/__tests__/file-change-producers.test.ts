@@ -50,6 +50,15 @@ function gate() {
 }
 
 describe('file mutation producers', () => {
+  it('retains child producer identity while grouping actual writes and deletes under the parent', async () => {
+    const child = { ...ctx, sessionId: 'child', parentSessionId: 'parent', rootSessionId: 'parent', rootRunId: 'root-run', runId: 'child-run' }
+    const written = await writeFileTool.execute({ path: 'owned.txt', data: 'child output' }, child)
+    expect(written.success).toBe(true)
+    const removed = await deleteFileTool.execute({ path: path.join(root, 'owned.txt') }, child)
+    expect(removed.success).toBe(true)
+    expect(records).toHaveLength(2)
+    for (const change of records) expect(change).toMatchObject({ sessionId: 'parent', runId: 'root-run', producerChildSessionId: 'child', producerRunId: 'child-run' })
+  })
   it('records the actual JSON formatter output and preserves prior UTF-8/CRLF bytes', async () => {
     const file = path.join(root, 'example.json')
     const before = '{"文字":"原值"}\r\n'

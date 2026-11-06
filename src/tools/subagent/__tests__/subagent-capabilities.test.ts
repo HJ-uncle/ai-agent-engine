@@ -66,6 +66,57 @@ describe('subagent capability intersection', () => {
     const properties = (subagentTool.parameters as { properties?: Record<string, unknown> }).properties ?? {}
     expect(properties).not.toHaveProperty('maxSteps')
   })
+
+  it('blocks index creation before either preflight or execution and advertises only read actions', async () => {
+    const parent = new ToolRegistry()
+    const execute = vi.fn().mockResolvedValue({ success: true, output: 'existing symbols' })
+    const preflight = vi.fn()
+    parent.register(trustBuiltinTool({ name: 'codegraph', description: 'query or build index',
+      parameters: { type: 'object', properties: { action: { type: 'string', enum: ['search', 'index'] } } }, execute, preflight }))
+    const child = createSubagentToolRegistry(parent, true)
+    expect(child.list().find(tool => tool.name === 'codegraph')?.parameters.properties?.action.enum)
+      .toEqual(['status', 'search', 'callers', 'callees', 'impact', 'files'])
+    for (const args of [{ action: 'index' }, { action: 'reindex' }, {}, null]) {
+      expect(await child.preflight?.('codegraph', args, {} as AgentContext)).toMatchObject({ success: false, metadata: { code: 'TOOL_ACTION_NOT_ALLOWED' } })
+      expect(await child.execute('codegraph', args, {} as AgentContext)).toMatchObject({ success: false, metadata: { code: 'TOOL_ACTION_NOT_ALLOWED' } })
+    }
+    expect(execute).not.toHaveBeenCalled()
+    expect(preflight).not.toHaveBeenCalled()
+    await child.execute('codegraph', { action: 'search', query: 'worker' }, {} as AgentContext)
+    expect(execute).toHaveBeenCalledOnce()
+    expect(execute).toHaveBeenCalledWith({ action: 'search', query: 'worker' }, {})
+    expect(parent.list().find(tool => tool.name === 'codegraph')?.parameters.properties?.action.enum).toContain('index')
+  })
+
+  it('keeps root publication and wake dispatch out of every child catalog', async () => {
+    const parent = new ToolRegistry()
+    const execute = vi.fn()
+    for (const name of ['deliver_files', 'subagent_followup', 'subagent_directory', 'subagent_send', 'subagent_request_input']) {
+      parent.register({ name, description: name, parameters: {}, execute })
+    }
+    for (const readOnly of [true, false]) {
+      const child = createSubagentToolRegistry(parent, readOnly)
+      expect(child.has('subagent_directory')).toBe(true)
+      expect(child.has('subagent_send')).toBe(true)
+      expect(child.has('subagent_request_input')).toBe(true)
+      for (const name of ['deliver_files', 'subagent_followup']) {
+        expect(child.has(name)).toBe(false)
+        expect(await child.execute(name, {}, {} as AgentContext)).toMatchObject({ success: false, metadata: { code: 'TOOL_NOT_ALLOWED' } })
+      }
+    }
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('does not start environment diagnostic commands in a research child', async () => {
+    const parent = new ToolRegistry()
+    const execute = vi.fn()
+    parent.register(trustBuiltinTool({ name: 'office_environment', description: 'readonly host command probe', parameters: {}, execute }, 'readonly'))
+    const child = createSubagentToolRegistry(parent, true)
+    expect(child.has('office_environment')).toBe(false)
+    expect(await child.execute('office_environment', {}, {} as AgentContext)).toMatchObject({ success: false, metadata: { code: 'TOOL_NOT_ALLOWED' } })
+    expect(execute).not.toHaveBeenCalled()
+    expect(createSubagentToolRegistry(parent, false).has('office_environment')).toBe(true)
+  })
 })
 
 

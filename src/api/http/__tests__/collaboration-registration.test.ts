@@ -51,7 +51,8 @@ it('publishes collaboration capabilities through the real /api/v1 server prefix 
   const result = await request('/api/v1/collaboration/capabilities')
   expect(result.status).toBe(200)
   expect(result.body.data).toMatchObject({ protocolVersion: 1, durableQueueReceipts: true, receiptPagination: true,
-    mailboxConsumer: false, runtimeCommunication: false, asynchronousAgentTools: false, userControllerMutation: false, jsonlDelivery: false })
+    mailboxConsumer: true, runtimeCommunication: true, asynchronousAgentTools: true, userControllerMutation: true, jsonlDelivery: true,
+    finalInputFence: true, waitInterruptibleByInbox: true })
   const rejected = await fetch(endpoint + '/api/v1/collaboration/capabilities')
   expect(rejected.status).toBe(401)
 })

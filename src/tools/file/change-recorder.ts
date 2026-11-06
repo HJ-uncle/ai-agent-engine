@@ -120,6 +120,7 @@ export async function commitWriteChange(
     afterSnapshotRef = after.snapshotRef
     const change = await changeStore.record(ctx.tenantId, {
       sessionId: ctx.rootSessionId ?? ctx.sessionId, path: absPath, kind: 'write',
+      ...(ctx.parentSessionId && ctx.runId ? { producerChildSessionId: ctx.sessionId, producerRunId: ctx.runId } : {}),
       turnId: ctx.turnId ?? ctx.parentConversationId ?? ctx.conversationId, runId: ctx.rootRunId,
       oldContent: snapshot.oldContent, newContent: after.oldContent,
       oldHash: snapshot.oldHash, newHash: after.oldHash,
@@ -148,6 +149,7 @@ export async function commitDeleteChange(
     afterSnapshotRef = after.snapshotRef
     const change = await changeStore.record(ctx.tenantId, {
       sessionId: ctx.rootSessionId ?? ctx.sessionId, path: absPath, kind: 'delete',
+      ...(ctx.parentSessionId && ctx.runId ? { producerChildSessionId: ctx.sessionId, producerRunId: ctx.runId } : {}),
       turnId: ctx.turnId ?? ctx.parentConversationId ?? ctx.conversationId, runId: ctx.rootRunId,
       oldContent: snapshot.oldContent, newContent: after.oldContent,
       oldHash: snapshot.oldHash, newHash: after.oldHash,

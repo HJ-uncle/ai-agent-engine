@@ -1,4 +1,4 @@
-import type { SubagentRun, SubagentRunView, SubagentToolSummary, SubagentDeltaEvent, SubagentCoverage } from './types.js'
+import type { CompactionState, SubagentRun, SubagentRunView, SubagentToolSummary, SubagentDeltaEvent, SubagentCoverage } from './types.js'
 
 export const SUBAGENT_VIEW_MAX_TOOLS = 64
 export const SUBAGENT_VIEW_MAX_ACTIVE_TOOLS = 32
@@ -36,6 +36,19 @@ function textPreview(value: string, maxBytes: number): { value: string; truncate
     end += character.length
   }
   return { value: value.slice(0, end), truncated: end !== value.length }
+}
+
+/** Compaction is scalar progress, never a copy of its summary or source history. */
+export function summarizeSubagentCompaction(state: CompactionState): CompactionState {
+  if (!state || !['running', 'succeeded', 'failed'].includes(state.phase) || !integer(state.startedAt)
+    || state.finishedAt !== undefined && (!integer(state.finishedAt) || state.finishedAt < state.startedAt)
+    || [state.beforeTokens, state.afterTokens].some(value => value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < 0))
+    || state.error !== undefined && typeof state.error !== 'string') throw new Error('Invalid subagent compaction')
+  return { phase: state.phase, startedAt: state.startedAt,
+    ...(state.finishedAt === undefined ? {} : { finishedAt: state.finishedAt }),
+    ...(state.beforeTokens === undefined ? {} : { beforeTokens: state.beforeTokens }),
+    ...(state.afterTokens === undefined ? {} : { afterTokens: state.afterTokens }),
+    ...(state.error === undefined ? {} : { error: textPreview(state.error, 1024).value }) }
 }
 
 /** Produce valid JSON for args; an arbitrary substring is not a JSON document. */
@@ -205,6 +218,8 @@ export function projectSubagentRunView(input: SubagentRun | SubagentRunView, bud
     ...(input.agentId === undefined ? {} : { agentId: input.agentId }),
     ...(input.agentName === undefined ? {} : { agentName: clip(input.agentName, 512) }),
     ...(input.continuation ? { continuation: { readOnly: input.continuation.readOnly,
+      ...(input.continuation.builtinRole === undefined ? {} : { builtinRole: input.continuation.builtinRole }),
+      ...(input.continuation.builtinRoleVersion === undefined ? {} : { builtinRoleVersion: input.continuation.builtinRoleVersion }),
       ...(input.continuation.role === undefined ? {} : { role: clip(input.continuation.role, 512) }) } } : {}),
     task: clip(input.task, 2048) ?? '', description: clip(input.description, 1024) ?? '', modelId: input.modelId,
     status: input.status, lastSeq: input.lastSeq, createdAt: input.createdAt, updatedAt: input.updatedAt,
@@ -215,6 +230,7 @@ export function projectSubagentRunView(input: SubagentRun | SubagentRunView, bud
     ...(input.error ? { error: { code: clip(input.error.code, 256) ?? '', message: clip(input.error.message, 1024) ?? '', retryable: input.error.retryable } } : {}),
     ...(input.resultSummary === undefined ? {} : { resultSummary: clip(input.resultSummary, 8192) }),
     ...(input.partialOutput === undefined ? {} : { partialOutput: clip(input.partialOutput, 8192) }),
+    ...(input.compaction === undefined ? {} : { compaction: summarizeSubagentCompaction(input.compaction) }),
     ...(input.externalEffectStatus === undefined ? {} : { externalEffectStatus: input.externalEffectStatus }),
     ...(input.schemaVersion === 2 && input.recoveryRequired ? { recoveryRequired: true } : {}),
     usage, transcriptRef: input.transcriptRef, toolCount, activeToolCount, toolCalls,

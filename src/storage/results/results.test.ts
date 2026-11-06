@@ -12,6 +12,7 @@ import { createAgentContext } from '../../core/agent-context/factory.js'
 import type { AgentContext } from '../../core/agent-context/types.js'
 import { ToolRegistry } from '../../core/tool-registry/index.js'
 import { SubagentStore } from '../../core/subagent/store.js'
+import { SubagentRunner } from '../../core/subagent/runner.js'
 import { CollaborationRuntime } from '../../core/collaboration/runtime.js'
 import { CollaborationStore } from '../../core/collaboration/store.js'
 import { ExecutionOwners, type ExecutionOwner } from '../../core/collaboration/execution-owner.js'
@@ -23,7 +24,7 @@ import { FinalResultStore, TOOL_RESULT_IMAGE_ASSETS } from './index.js'
 import { resultToolImages } from './tool-images.js'
 
 let dir: string, workspace: string, db: LocalSqliteProcessClient, roots: RootRunStore, root: RootRun
-let service: ExecutionOwners, owner: ExecutionOwner, controller: AbortController, ctx: AgentContext, history: JSONLConversationHistory, store: FinalResultStore
+let service: ExecutionOwners, owner: ExecutionOwner, controller: AbortController, ctx: AgentContext, history: JSONLConversationHistory, store: FinalResultStore, manager: WorkspaceManager
 const tenant = 'final-result-tenant'
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z9Y8AAAAASUVORK5CYII=', 'base64')
 const PNG_URL = `data:image/png;base64,${PNG.toString('base64')}`
@@ -46,7 +47,7 @@ beforeEach(async () => {
   roots = new RootRunStore(); await roots.initialize()
   service = new ExecutionOwners(db, new CollaborationRuntime(new CollaborationStore(db), new SubagentStore(db)))
   history = new JSONLConversationHistory(); store = new FinalResultStore()
-  const manager = new WorkspaceManager(path.join(dir, 'scratch'))
+  manager = new WorkspaceManager(path.join(dir, 'scratch'))
   manager.bind({ tenantId: tenant, sessionId: 'result-session' }, workspace)
   vi.spyOn(workspaceManager, 'resolveSafePath').mockImplementation((context, name) => manager.resolveSafePath(context, name))
   vi.spyOn(workspaceManager, 'getPaths').mockImplementation(context => manager.getPaths(context))
@@ -72,6 +73,184 @@ async function tool(id: string, output: unknown, metadata: Record<string, unknow
   await history.append({ id: `tool-result:${root.runId}:${id}`, role: 'tool', toolCallId: id, toolName: 'browser_screenshot', content: JSON.stringify(output),
     metadata: { rootRunId: root.runId, turnId: root.turnId, success: true, status: 'succeeded', ...metadata } }, ctx)
 }
+
+async function inChild<T>(action: (child: AgentContext) => Promise<T>, readOnly = false): Promise<T> {
+  const parentToolCallId = randomUUID(), parentMessageId = randomUUID()
+  await history.append({ id: parentMessageId, role: 'assistant', content: '', conversationId: root.turnId,
+    toolCall: { id: parentToolCallId, name: 'subagent', args: {} } }, ctx)
+  let result!: T, thrown: unknown
+  const run = await new SubagentRunner(new SubagentStore(db)).run({ tenantId: tenant, rootSessionId: ctx.sessionId,
+    parentSessionId: ctx.sessionId, parentConversationId: root.turnId, parentMessageId, parentToolCallId,
+    task: 'Prepare an artifact', description: 'Fixture producer', modelId: 'synthetic',
+    continuation: { readOnly, systemPrompt: '', toolNames: ['report_artifacts'], workspacePaths: ctx.workspacePaths ?? [], projectRoot: ctx.projectRoot },
+  }, ctx, async execution => {
+    const child = createAgentContext({ tenantId: tenant, sessionId: execution.snapshot.childSessionId,
+      parentSessionId: ctx.sessionId, rootSessionId: ctx.sessionId, rootRunId: root.runId, turnId: root.turnId, runId: execution.snapshot.runId,
+      tools: new ToolRegistry(), history, logger: pino({ level: 'silent' }), workspacePaths: ctx.workspacePaths, projectRoot: ctx.projectRoot,
+      scratchDir: path.join(dir, 'scratch', execution.snapshot.childSessionId),
+      executionOwner: execution.executionOwner, signal: execution.signal })
+    child.currentToolCallId = 'report-call'
+    manager.inheritChildWorkspace(child, ctx, [...(ctx.workspacePaths ?? []), ...(ctx.projectRoot ? [ctx.projectRoot] : [])])
+    try { result = await action(child); await execution.observer.onOutcome({ status: 'succeeded', output: 'Candidate artifacts prepared' }) }
+    catch (error) { thrown = error; await execution.observer.onOutcome({ status: 'failed', error: { code: 'FIXTURE_ACTION', message: String(error), retryable: false } }) }
+  })
+  if (thrown) throw thrown
+  expect(run.status).toBe('succeeded')
+  return result
+}
+
+it('adopts immutable child artifact bytes and truthful producer identity after source changes', async () => {
+  const file = write('child-report.txt', 'verified child version')
+  const report = await inChild(child => store.report(child, [{ path: file }]))
+  const source = report.items[0]
+  fs.writeFileSync(file, 'unverified newer bytes')
+  const [adopted] = await store.stage(ctx, [{ childSessionId: report.childSessionId, runId: report.runId, artifactId: source.assetId }])
+  expect(adopted).toMatchObject({ producerChildSessionId: report.childSessionId, producerRunId: report.runId,
+    producerArtifactId: source.assetId, sha256: source.sha256 })
+  expect(adopted.assetId).not.toBe(source.assetId)
+  await complete()
+  const bytes = await store.readAsset(tenant, ctx.sessionId, root.runId, adopted.assetId, history)
+  expect(Buffer.from(bytes.content, 'base64').toString()).toBe('verified child version')
+})
+
+it('keeps a reported artifact across database reopen and later parent turns without its source file', async () => {
+  const file = write('child-memory.txt', 'retained after restart')
+  const report = await inChild(child => store.report(child, [{ path: file }]))
+  await complete('The file is a candidate, not yet delivered.')
+  fs.unlinkSync(file)
+  expect((await db.closeWithReceipt()).healthy).toBe(true)
+  db = new LocalSqliteProcessClient({ url: 'file:' + path.join(dir, 'agent.db').replaceAll('\\', '/') })
+  roots = new RootRunStore(); await roots.initialize()
+  service = new ExecutionOwners(db, new CollaborationRuntime(new CollaborationStore(db), new SubagentStore(db)))
+  store = new FinalResultStore(); history = new JSONLConversationHistory()
+  await admit()
+  const [adopted] = await store.stage(ctx, [{ childSessionId: report.childSessionId, runId: report.runId, artifactId: report.items[0].assetId }])
+  await complete()
+  const bytes = await store.readAsset(tenant, ctx.sessionId, root.runId, adopted.assetId, history)
+  expect(Buffer.from(bytes.content, 'base64').toString()).toBe('retained after restart')
+})
+
+it.each(['runs', 'parent'] as const)('cleans child report metadata on %s deletion while preserving adopted parent assets', async mode => {
+  const file = write('adopted-child.txt', 'parent adopted bytes')
+  const report = await inChild(child => store.report(child, [{ path: file }]))
+  const [adopted] = await store.stage(ctx, [{ childSessionId: report.childSessionId, runId: report.runId, artifactId: report.items[0].assetId }])
+  await complete()
+  const children = new SubagentStore(db)
+  if (mode === 'runs') await children.deleteRuns(tenant, [report.runId])
+  else await children.deleteRunsForParent(tenant, ctx.sessionId)
+  expect((await db.execute({ sql: 'SELECT 1 FROM child_artifact_manifests WHERE tenant_id=? AND run_id=?', args: [tenant, report.runId] })).rows).toEqual([])
+  expect(await children.getRunHeader(tenant, report.runId)).toBeNull()
+  fs.unlinkSync(file)
+  const retained = await store.readAsset(tenant, ctx.sessionId, root.runId, adopted.assetId, history)
+  expect(Buffer.from(retained.content, 'base64').toString()).toBe('parent adopted bytes')
+})
+
+it('deduplicates the exact child report invocation and rejects conflicting retry contents', async () => {
+  const file = write('child-report.txt', 'one version')
+  await inChild(async child => {
+    const first = await store.report(child, [{ path: file }])
+    fs.writeFileSync(file, 'a newer version')
+    expect(await store.report(child, [{ path: file }])).toEqual(first)
+    await expect(store.report(child, [{ path: file, name: 'changed.txt' }])).rejects.toThrow('different input')
+  })
+})
+
+it('rejects stale versions, root reporting, research reporting and forged child scope', async () => {
+  const file = write('child-report.txt', 'one version')
+  await expect(store.report(ctx, [{ path: file }])).rejects.toThrow('owner mismatch')
+  await inChild(async child => {
+    await expect(store.report(child, [{ path: file, expectedHash: 'sha256:' + '0'.repeat(64) }])).rejects.toThrow('version changed')
+    await expect(store.report({ ...child, sessionId: 'forged' }, [{ path: file }])).rejects.toThrow('owner mismatch')
+    await expect(store.stage(child, [{ path: file }])).rejects.toThrow()
+    const outside = path.join(dir, 'outside-child.txt'); fs.writeFileSync(outside, 'outside')
+    await expect(store.report(child, [{ path: outside }])).rejects.toThrow()
+  })
+  await inChild(async child => {
+    await expect(store.report(child, [{ path: file }])).rejects.toThrow('not allowed')
+  }, true)
+})
+
+it('rejects adopting another child, run, tenant or parent session as artifact provenance', async () => {
+  const report = await inChild(child => store.report(child, [{ path: write('owned-child.txt', 'owned') }]))
+  const input = { childSessionId: report.childSessionId, runId: report.runId, artifactId: report.items[0].assetId }
+  for (const patch of [{ childSessionId: 'foreign' }, { runId: 'foreign' }, { artifactId: 'foreign' }]) {
+    await expect(store.stage(ctx, [{ ...input, ...patch }])).rejects.toThrow()
+  }
+  await expect(store.stage({ ...ctx, tenantId: 'foreign' }, [input])).rejects.toThrow()
+  await complete()
+  await admit('another-parent')
+  await expect(store.stage(ctx, [input])).rejects.toThrow('does not belong')
+})
+
+it('does not adopt old child files outside the current parent binding even in full access mode', async () => {
+  vi.stubEnv('AUTH_ENABLED', 'true')
+  vi.stubEnv('DEFAULT_SECURITY_MODE', 'full-access')
+  const file = write('previous-project.txt', 'reported version')
+  const report = await inChild(child => store.report(child, [{ path: file }]))
+  const replacement = path.join(workspace, 'new-project'); fs.mkdirSync(replacement)
+  manager.bind(ctx, replacement)
+  await expect(store.stage(ctx, [{ childSessionId: report.childSessionId, runId: report.runId,
+    artifactId: report.items[0].assetId }])).rejects.toThrow('outside the current parent workspace')
+})
+
+it('inherits authenticated parent files only through a live child owner and revokes stale workspace access', async () => {
+  vi.stubEnv('AUTH_ENABLED', 'true')
+  write('shared-source.txt', 'parent project')
+  let oldChild: AgentContext | undefined
+  await inChild(async child => {
+    oldChild = child
+    expect(manager.getWorkingDirectory(child)).toBe(fs.realpathSync(workspace))
+    expect(fs.readFileSync(manager.resolveSafePath(child, 'shared-source.txt'), 'utf8')).toBe('parent project')
+    expect(manager.getPaths(child)).toContain(fs.realpathSync(workspace))
+    expect(() => manager.resolveSafePath(child, path.join(dir, 'foreign.txt'))).toThrow('outside')
+    expect(() => manager.getWorkingDirectory({ ...child, parentSessionId: 'forged-parent' })).toThrow('owner mismatch')
+    const unowned = { ...child, executionOwner: undefined }
+    expect(manager.getWorkingDirectory(unowned)).not.toBe(fs.realpathSync(workspace))
+    const replacement = path.join(workspace, 'replacement'); fs.mkdirSync(replacement)
+    manager.bind(ctx, replacement)
+    expect(() => manager.resolveSafePath(child, 'shared-source.txt')).toThrow('binding changed')
+    manager.bind(ctx, workspace)
+  })
+  expect(oldChild).toBeDefined()
+  expect(() => manager.getWorkingDirectory(oldChild!)).toThrow()
+  await expect(store.report(oldChild!, [{ path: path.join(workspace, 'shared-source.txt') }])).rejects.toThrow()
+})
+
+it.each(['true', 'false'])('shares the parent default scratch workspace when auth is %s without making another workspace binding', async auth => {
+  vi.stubEnv('AUTH_ENABLED', auth)
+  await complete()
+  await admit('default-workspace')
+  ctx = createAgentContext({ tenantId: tenant, sessionId: ctx.sessionId,
+    scratchDir: path.join(dir, 'scratch', ctx.sessionId), tools: new ToolRegistry(), history, logger: pino({ level: 'silent' }),
+    executionOwner: owner, signal: controller.signal, rootRunId: root.runId, turnId: root.turnId,
+    conversationId: root.turnId, assistantMessageId: root.assistantMessageId })
+  const parentScratch = manager.getWorkingDirectory(ctx)
+  const bindingsBefore = fs.readFileSync(path.join(dir, 'bindings.json'), 'utf8')
+  fs.writeFileSync(path.join(parentScratch, 'default-output.txt'), 'default workspace output')
+  const report = await inChild(async child => {
+    expect(manager.getWorkingDirectory(child)).toBe(parentScratch)
+    expect(manager.getScratchDirectory(child)).not.toBe(parentScratch)
+    expect(fs.readFileSync(manager.resolveSafePath(child, 'default-output.txt'), 'utf8')).toBe('default workspace output')
+    return store.report(child, [{ path: 'default-output.txt' }])
+  })
+  expect(fs.readFileSync(path.join(dir, 'bindings.json'), 'utf8')).toBe(bindingsBefore)
+  expect(await store.stage(ctx, [{ childSessionId: report.childSessionId, runId: report.runId, artifactId: report.items[0].assetId }]))
+    .toMatchObject([{ name: 'default-output.txt', producerChildSessionId: report.childSessionId }])
+})
+
+it('preserves operator supplied local workspace roots without requiring persistent bindings', async () => {
+  vi.stubEnv('AUTH_ENABLED', 'false')
+  await complete()
+  await admit('local-unbound')
+  const second = path.join(dir, 'second-project'); fs.mkdirSync(second)
+  ctx.workspacePaths = [workspace, second]
+  await inChild(async child => {
+    expect(manager.getWorkingDirectory(child)).toBe(workspace)
+    expect(manager.getPaths(child)).toContain(second)
+    expect(manager.resolveSafePath(child, path.join(second, 'component.ts'))).toBe(path.join(second, 'component.ts'))
+    expect(() => manager.resolveSafePath(child, path.join(dir, 'outside.txt'))).toThrow('outside')
+  })
+})
 
 it('preserves exact image bytes after source deletion and store recreation, but not before final success', async () => {
   const file = write('成品.png'), [item] = await store.stage(ctx, [{ path: file }])

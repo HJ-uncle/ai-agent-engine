@@ -1,3 +1,5 @@
+import type { BuiltinAgentRole } from './builtin-roles.js'
+
 export type RunStatus = 'queued' | 'running' | 'cancelling' | 'succeeded' | 'failed' | 'cancelled' | 'blocked' | 'interrupted'
 
 export interface RunError {
@@ -44,6 +46,9 @@ export interface SubagentContinuationProfile {
   }
   /** Only a server-validated, explicit user delegation may use its Agent's own tool catalog. */
   userDelegated?: boolean
+  /** Frozen builtin template identity; multiple children may use the same template. */
+  builtinRole?: BuiltinAgentRole
+  builtinRoleVersion?: number
   role?: string
   readOnly: boolean
   systemPrompt: string
@@ -83,6 +88,8 @@ export interface SubagentRun {
   error?: RunError
   resultSummary?: string
   partialOutput?: string
+  /** Latest actual automatic reduction in this invocation; never inherited by a resumed run. */
+  compaction?: CompactionState
   externalEffectStatus?: 'unknown'
   usage: RunUsage
   toolCalls: SubagentToolCall[]
@@ -123,7 +130,7 @@ export interface SubagentCoverage {
 export interface SubagentRunView extends Omit<SubagentRun, 'schemaVersion' | 'toolCalls' | 'continuation'> {
   schemaVersion: 2
   view: 'summary'
-  continuation?: Pick<SubagentContinuationProfile, 'role' | 'readOnly'>
+  continuation?: Pick<SubagentContinuationProfile, 'role' | 'readOnly' | 'builtinRole' | 'builtinRoleVersion'>
   toolCalls: SubagentToolSummary[]
   toolCount: number
   activeToolCount: number
@@ -164,7 +171,7 @@ export interface SubagentRunHeader extends Omit<SubagentRun, 'toolCalls'> {
   latestActivity?: SubagentToolSummary
   nonPlanToolCount: number
   /** A display-only read never pretends to contain executable permissions. */
-  continuationDisplay?: Pick<SubagentContinuationProfile, 'role' | 'readOnly'>
+  continuationDisplay?: Pick<SubagentContinuationProfile, 'role' | 'readOnly' | 'builtinRole' | 'builtinRoleVersion'>
 }
 export interface SubagentMutation {
   event: SubagentWireEvent
@@ -242,12 +249,13 @@ export function isTerminalRun(status: RunStatus): boolean {
   return TERMINAL_RUN_STATUSES.has(status)
 }
 
-export function outcomeText(run: Pick<SubagentRun, 'runId' | 'parentToolCallId' | 'status' | 'stopReason' | 'error' | 'resultSummary' | 'partialOutput'>): string {
+export function outcomeText(run: Pick<SubagentRun, 'runId' | 'parentToolCallId' | 'status' | 'stopReason' | 'error' | 'resultSummary' | 'partialOutput'> & Partial<Pick<SubagentRun, 'childSessionId'>>): string {
   // The parent may retain several attempts in history. Bind the evidence to this
   // invocation before model-authored prose (which can claim a conflicting status).
-  const state = `[子任务状态] ${JSON.stringify({ runId: run.runId, parentToolCallId: run.parentToolCallId,
+  const state = `[子任务状态] ${JSON.stringify({ runId: run.runId, childSessionId: run.childSessionId, parentToolCallId: run.parentToolCallId,
     status: run.status, stopReason: run.stopReason, errorCode: run.error?.code })}`
   const context = '以上为当前调用的机器状态；正文中的完成自述不能覆盖它，其他 runId 的旧结果不能替代它。'
+    + (run.childSessionId ? '后续相关工作可用subagent_followup继续此childSessionId；是否可恢复以目录和接纳校验为准。' : '')
   if (run.status === 'succeeded') return `${state}\n${context}\n\n${run.resultSummary ?? ''}`
   const reason = run.error?.message ?? run.stopReason ?? run.status
   return `${state}\n${context}\n\n子代理${run.status === 'cancelled' ? '已取消' : run.status === 'blocked' ? '需要授权' : '未完成'}：${reason}${run.partialOutput ? `\n\n部分结果（保留原文，不代表任务成功）：\n${run.partialOutput}` : ''}`

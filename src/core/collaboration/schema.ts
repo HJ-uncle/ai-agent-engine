@@ -33,6 +33,10 @@ export function ensureCollaborationSchema(db: Client): Promise<void> {
       const columns = await db.execute('PRAGMA table_info(collaboration_invocations)')
       if (!columns.rows.some(row => row.name === 'admission_fingerprint'))
         await db.execute('ALTER TABLE collaboration_invocations ADD COLUMN admission_fingerprint TEXT')
+      if (!columns.rows.some(row => row.name === 'input_closed_at'))
+        await db.execute('ALTER TABLE collaboration_invocations ADD COLUMN input_closed_at INTEGER')
+      await db.execute(`CREATE INDEX IF NOT EXISTS collaboration_invocations_participant
+        ON collaboration_invocations(tenant_id,root_run_id,root_attempt_id,participant_id,seq)`)
       await db.execute(`CREATE TABLE IF NOT EXISTS collaboration_messages (
         seq INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL,
         root_run_id TEXT NOT NULL, root_attempt_id TEXT NOT NULL, message_id TEXT NOT NULL,

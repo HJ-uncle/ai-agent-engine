@@ -6,6 +6,7 @@ import { recoverGitBindingLease } from './binding-git-recovery.js'
 import type { AgentContext } from '../core/agent-context/index.js'
 import { getSecurityMode } from '../security/policy-engine.js'
 import { canonicalFilePathSync } from '../shared/file-version.js'
+import { serviceForOwner, type ExecutionOwner } from '../core/collaboration/execution-owner.js'
 
 /** Reject traversal hidden behind an HTTP client's percent-encoding pass. */
 function hasEncodedPathTraversal(value: string): boolean {
@@ -26,6 +27,13 @@ function hasEncodedPathTraversal(value: string): boolean {
 }
 
 type CtxLike = Pick<AgentContext, 'tenantId' | 'sessionId' | 'workspacePaths' | 'cwd' | 'projectRoot' | 'scratchDir'>
+  & Pick<Partial<AgentContext>, 'executionOwner' | 'runId' | 'rootRunId' | 'turnId' | 'parentSessionId'>
+interface ChildWorkspaceScope {
+  parent: CtxLike
+  snapshot: Readonly<WorkspaceBindingSnapshot>
+  roots: readonly string[]
+  scratch: string
+}
 type Bindings = Map<string, string> & { epochs: Map<string, string> }
 export interface WorkspaceBindingSnapshot { root: string; epoch: string }
 export interface WorkspaceBindingGuard { snapshot: Readonly<WorkspaceBindingSnapshot>; assertCurrent(): void }
@@ -34,6 +42,7 @@ export interface WorkspaceBindingLease extends WorkspaceBindingGuard { resource:
 export class WorkspaceManager {
   private readonly root: string
   private readonly allowedRoots: string[]
+  private readonly childScopes = new WeakMap<ExecutionOwner, ChildWorkspaceScope>()
 
   constructor(root?: string) {
     this.root = path.resolve(root ?? process.env.WORKSPACE_ROOT ?? './workspace')
@@ -187,7 +196,47 @@ export class WorkspaceManager {
 
   getScratchDirectory(ctx: CtxLike): string {
     this.assertContext(ctx)
+    const child = this.childScope(ctx)
+    if (child) return child.scratch
     return path.resolve(ctx.scratchDir ?? this.getPath(ctx))
+  }
+
+  /** Called by trusted child construction, never by an HTTP/model supplied context. */
+  inheritChildWorkspace(child: AgentContext, parent: AgentContext, frozenRoots: readonly string[]): void {
+    if (!child.executionOwner || !parent.executionOwner) throw new Error('Workspace inheritance requires live parent and child owners')
+    const service = serviceForOwner(child.executionOwner)
+    if (service !== serviceForOwner(parent.executionOwner)) throw new Error('Workspace inheritance owner mismatch')
+    service.assertDispatch(child.executionOwner)
+    const b = service.collaboration.executionBinding(service.producerForExecution(child.executionOwner))
+    const p = service.record(parent.executionOwner).binding
+    if (b.kind !== 'child' || p.kind !== 'root' || b.tenantId !== child.tenantId || b.sessionId !== child.sessionId
+      || b.invocationRunId !== child.runId || b.rootRunId !== p.rootRunId || b.rootAttemptId !== p.rootAttemptId
+      || b.rootSessionId !== parent.sessionId || p.sessionId !== parent.sessionId || p.tenantId !== parent.tenantId
+      || child.parentSessionId !== parent.sessionId) throw new Error('Workspace inheritance owner mismatch')
+    const parentContext: CtxLike = { tenantId: parent.tenantId, sessionId: parent.sessionId,
+      workspacePaths: parent.workspacePaths ? [...parent.workspacePaths] : undefined,
+      projectRoot: parent.projectRoot, cwd: parent.cwd, scratchDir: parent.scratchDir }
+    const snapshot = this.getBindingSnapshot(parentContext)
+    const parentRoots = this.getPaths(parentContext).map(root => canonicalFilePathSync(root))
+    const roots = [...new Set(frozenRoots.map(root => canonicalFilePathSync(root)))].filter(root =>
+      parentRoots.some(allowed => this.isContained(allowed, root)))
+    if (!roots.some(root => this.isContained(root, canonicalFilePathSync(snapshot.root)))) throw new Error('Child workspace is outside the current parent binding')
+    const scratch = path.resolve(child.scratchDir ?? this.getPath(child))
+    this.childScopes.set(child.executionOwner, { parent: parentContext, snapshot, roots, scratch })
+  }
+
+  private childScope(ctx: CtxLike): ChildWorkspaceScope | undefined {
+    const scope = ctx.executionOwner ? this.childScopes.get(ctx.executionOwner) : undefined
+    if (!scope || !ctx.executionOwner) return undefined
+    const service = serviceForOwner(ctx.executionOwner)
+    service.assertDispatch(ctx.executionOwner)
+    const binding = service.collaboration.executionBinding(service.producerForExecution(ctx.executionOwner))
+    if (binding.kind !== 'child' || binding.tenantId !== ctx.tenantId || binding.sessionId !== ctx.sessionId
+      || binding.invocationRunId !== ctx.runId || binding.rootRunId !== ctx.rootRunId || binding.turnId !== ctx.turnId
+      || binding.rootSessionId !== ctx.parentSessionId) throw new Error('Child workspace owner mismatch')
+    const current = this.getBindingSnapshot(scope.parent)
+    if (current.root !== scope.snapshot.root || current.epoch !== scope.snapshot.epoch) throw new Error('Parent workspace binding changed during child execution')
+    return scope
   }
 
   getWorkingDirectory(ctx: CtxLike): string {
@@ -196,6 +245,8 @@ export class WorkspaceManager {
 
   getBindingSnapshot(ctx: CtxLike): Readonly<WorkspaceBindingSnapshot> {
     this.assertContext(ctx)
+    const child = this.childScope(ctx)
+    if (child) return child.snapshot
     const bindings = this.readBindings()
     const bound = bindings.get(this.bindingKey(ctx))
     if (bound) return Object.freeze({ root: this.validateBoundDirectory(ctx, bound, bindings), epoch: bindings.epochs.get(this.bindingKey(ctx))! })
@@ -210,7 +261,8 @@ export class WorkspaceManager {
   }
 
   private sessionLeaseFile(ctx: Pick<CtxLike, 'tenantId' | 'sessionId'>): string {
-    return `${this.bindingsFile()}.session-${createHash('sha256').update(this.bindingKey(ctx)).digest('hex')}.lock`
+    const child = this.childScope(ctx as CtxLike)
+    return `${this.bindingsFile()}.session-${createHash('sha256').update(this.bindingKey(child?.parent ?? ctx)).digest('hex')}.lock`
   }
 
   /** Read-only listing and preview capture the same binding before and after
@@ -236,10 +288,12 @@ export class WorkspaceManager {
     const scratch = this.getScratchDirectory(ctx)
     if (this.hasSymlinkComponent(this.root, scratch)) throw new Error('Workspace session root contains a symbolic link')
     const resolved = path.resolve(snapshot.root, userPath)
-    if (getSecurityMode(ctx.tenantId, ctx.sessionId) !== 'safe') return resolved
+    const child = this.childScope(ctx)
+    if (child && (snapshot.root !== child.snapshot.root || snapshot.epoch !== child.snapshot.epoch)) throw new Error('Child workspace snapshot mismatch')
+    if (!child && getSecurityMode(ctx.tenantId, ctx.sessionId) !== 'safe') return resolved
     const actual = canonicalFilePathSync(resolved)
-    const allowed = [snapshot.root, scratch]
-    if (!this.isAuthenticated()) {
+    const allowed = child ? [...child.roots, scratch] : [snapshot.root, scratch]
+    if (!child && !this.isAuthenticated()) {
       if (ctx.projectRoot) allowed.push(path.resolve(ctx.projectRoot))
       allowed.push(...(ctx.workspacePaths ?? []).map(value => path.resolve(value)))
     }
@@ -328,6 +382,8 @@ export class WorkspaceManager {
 
   getPaths(ctx: CtxLike): string[] {
     this.assertContext(ctx)
+    const child = this.childScope(ctx)
+    if (child) return [...new Set([...child.roots, child.scratch])]
     const paths = [this.getWorkingDirectory(ctx), this.getScratchDirectory(ctx)]
     if (!this.isAuthenticated()) {
       paths.push(...(ctx.projectRoot ? [path.resolve(ctx.projectRoot)] : []))

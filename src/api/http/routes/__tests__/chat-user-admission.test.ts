@@ -63,6 +63,7 @@ describe('WQ2 actual admission HTTP reconciliation', () => {
     expect(first.statusCode).toBe(200); expect(first.json().data).toMatchObject({ protocolVersion: 1, namespace, predecessor: null })
     const body = requestBody(), admission = prepareUserAdmission(body, transport)!
     const accepted = await rootRunStore.createUserAdmission(tenant, 'NO_REAL_MODEL', [], body, admission)
+    expect(accepted.run.startedAt).toBeUndefined()
     const current = await app.inject('/chat/admission/context?sessionId=' + session)
     expect(current.json().data.predecessor).toEqual({ runId: accepted.run.runId, attemptId: accepted.receipt.attemptId, version: accepted.run.version })
     expect(JSON.stringify(current.json())).not.toContain('synthetic API user seed')
@@ -89,6 +90,7 @@ describe('WQ2 actual admission HTTP reconciliation', () => {
     expect(response.statusCode, response.body).toBe(200); expect(response.headers['content-type']).toContain('text/event-stream')
     const roots = await rootRunStore.list(tenant, session)
     expect(roots).toHaveLength(1); expect(response.body).toContain(roots[0].runId)
+    expect(roots[0].startedAt).toBeUndefined()
     expect(modelResolver.resolveModelConfig).not.toHaveBeenCalled(); expect(modelResolver.createAdapterFromResolved).not.toHaveBeenCalled()
     const conflict = await app.inject({ method: 'POST', url: '/chat', payload: requestBody('same key changed body'), headers })
     expect(conflict.statusCode).toBe(409); expect((await rootRunStore.list(tenant, session))).toHaveLength(1)
@@ -125,6 +127,12 @@ describe('WQ2 actual admission HTTP reconciliation', () => {
     expect(streamCalls).toBe(1)
     const accepted = (await rootRunStore.findUserAdmission(tenant, session, prepareUserAdmission(body, transport)!))!
     expect(accepted.run.status).toBe('succeeded')
+    expect(accepted.run.startedAt).toEqual(expect.any(Number))
+    expect(accepted.run.startedAt).toBeGreaterThanOrEqual(accepted.run.createdAt)
+    const runningFrame = response.body.split('\n').filter(line => line.startsWith('data: {'))
+      .map(line => JSON.parse(line.slice(6))).find(frame => frame.run?.status === 'running')
+    expect(runningFrame?.run.startedAt).toBe(accepted.run.startedAt)
+    expect((await rootRunStore.get(tenant, accepted.run.runId))?.startedAt).toBe(accepted.run.startedAt)
     const seed = await readAdmissionSeed(database.getDb(), { tenantId: tenant, sessionId: session }, accepted.run.runId)
     expect(seed.projected).toBe(true)
     const rows = await createConversationHistory().getFullHistory({ tenantId: tenant, sessionId: session })
@@ -133,5 +141,35 @@ describe('WQ2 actual admission HTTP reconciliation', () => {
     const replay = await app.inject({ method: 'POST', url: '/chat', payload: body, headers })
     expect(replay.statusCode, replay.body).toBe(200); expect(streamCalls).toBe(1)
     expect((await rootRunStore.list(tenant, session))).toHaveLength(2)
+    expect((await rootRunStore.get(tenant, accepted.run.runId))?.startedAt).toBe(accepted.run.startedAt)
+  })
+  it('does not publish a live start or execute a provider when the durable start receipt fails', async () => {
+    const failedSession = session + '-start-write-failure'
+    const context = (await app.inject('/chat/admission/context?sessionId=' + failedSession)).json().data
+    const body: Record<string, unknown> = { ...requestBody('start receipt must persist'), sessionId: failedSession, workspacePaths: [path.join(fixture, 'scratch')] }
+    const selector = { protocolVersion: 1 as const, namespace, owner: 'work' as const, predecessor: context.predecessor }
+    body.admission = { ...selector, requestKey: 'start-write-failure', bodyDigest: userAdmissionDigest(body, transport, selector) }
+    const update = rootRunStore.update.bind(rootRunStore)
+    const write = vi.spyOn(rootRunStore, 'update').mockImplementation((tenantId, runId, change, attemptId) => {
+      if (change.startedAt !== undefined) {
+        expect(attemptId).toEqual(expect.any(String))
+        expect(activeStreams.has(`${tenant}:${failedSession}`)).toBe(true)
+        return Promise.reject(new Error('SYNTHETIC_START_WRITE_FAILED'))
+      }
+      return update(tenantId, runId, change, attemptId)
+    })
+    vi.mocked(modelResolver.createAdapterFromResolved).mockClear()
+    try {
+      const response = await app.inject({ method: 'POST', url: '/chat', payload: body, headers })
+      expect(response.statusCode, response.body).toBe(500)
+      expect(response.body).toContain('SYNTHETIC_START_WRITE_FAILED')
+      expect(write.mock.calls.some(([, , change]) => change.startedAt !== undefined)).toBe(true)
+      expect(modelResolver.createAdapterFromResolved).not.toHaveBeenCalled()
+      const runs = await rootRunStore.list(tenant, failedSession)
+      expect(runs).toHaveLength(1)
+      expect(runs[0]).toMatchObject({ status: 'failed', error: { code: 'ROOT_ADMISSION_FAILED' } })
+      expect(runs[0].startedAt).toBeUndefined()
+      expect(activeStreams.has(`${tenant}:${failedSession}`)).toBe(false)
+    } finally { write.mockRestore() }
   })
 })

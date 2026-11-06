@@ -63,6 +63,11 @@ export async function consumeJSONLReActIteration(capability: JSONLReActBoundary,
   if (!found.consumer) fail('JSONL input has not been durably bound')
   return serviceForOwner(found.owner).collaboration.consumeJSONLDelivery(found.consumer!)
 }
+export async function sealJSONLReActInput(capability: JSONLReActBoundary, ctx: AgentContext): Promise<boolean> {
+  const found = record(capability, ctx)
+  if (!found.consumer) fail('Final input fence requires the original admitted JSONL input binding')
+  return serviceForOwner(found.owner).collaboration.sealInputIfEmpty(found.producer)
+}
 export async function maintainJSONLReActHistory<T>(capability: JSONLReActBoundary, ctx: AgentContext, action: () => Promise<T>): Promise<T> {
   const found = record(capability, ctx)
   if (!found.consumer) fail('Maintenance requires the original admitted JSONL input binding')

@@ -45,6 +45,7 @@ const scope = { tenantId: 'production-jsonl-tenant', sessionId: 'parent-session'
 const logger = () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() })
 function context(history: AgentContext['history'], executionOwner = owner, sessionId = scope.sessionId): AgentContext {
   return { ...scope, sessionId, rootRunId, turnId, userMessageId: userId, executionOwner,
+    ...(sessionId !== scope.sessionId ? { parentSessionId: scope.sessionId, rootSessionId: scope.sessionId } : {}),
     inheritContext: false, modelCaps: { contextWindow: 100_000 }, tokenBudget: 100_000,
     logger: logger(), history, tools: { list: () => [], has: () => true, executionMode: () => 'serial',
       execute: async () => ({ success: true, output: 'owned scripted tool result' }) },

@@ -59,6 +59,8 @@ export interface RootRun {
   requestConfig?: RootRunRequestConfig
   workspacePaths: string[]
   createdAt: number
+  /** First execution boundary; admission alone does not mean work has started. */
+  startedAt?: number
   updatedAt: number
   finishedAt?: number
   stopReason?: string

@@ -129,12 +129,15 @@ describe('executable tool profiles', () => {
     expect(narrowed.registry.has('office_document')).toBe(false)
   })
 
-  it('admits the actual readonly office environment helper in Work and children without widening explicit selections', async () => {
+  it('admits the office environment helper in Work and execution children while keeping research free of process probes', async () => {
     vi.stubEnv('OSM_MODE', 'off')
     vi.stubEnv('AETHER_WORKSPACE_RUNTIME', 'restricted-files')
     const general = await createToolRegistry({ toolProfile: 'general' })
     expect(general.registry.executionMode('office_environment', {})).toBe('readonly')
-    const child = createSubagentToolRegistry(general.registry, true)
+    const research = createSubagentToolRegistry(general.registry, true)
+    expect(research.has('office_environment')).toBe(false)
+    expect(await research.execute('office_environment', {}, context)).toMatchObject({ success: false, metadata: { code: 'TOOL_NOT_ALLOWED' } })
+    const child = createSubagentToolRegistry(general.registry, false)
     expect(child.has('office_environment')).toBe(true)
     expect(child.executionMode?.('office_environment', {})).toBe('readonly')
     const observation = await child.execute('office_environment', {}, context)
@@ -224,6 +227,24 @@ describe('executable tool profiles', () => {
     const empty = await createToolRegistry({ toolProfile: 'code', allowedTools: [] })
     expect(empty.registry.list().map(item => item.name)).toEqual(['plan_update'])
     expectExactCategories(empty)
+  })
+
+  it.each(['general', 'code'] as const)('%s provides only owned lifecycle controls for verified user delegations with no business tools', async toolProfile => {
+    const result = await createToolRegistry({ toolProfile, allowedTools: [], allowedMcpServers: [], ownedCollaboration: true })
+    expect(result.registry.list().map(candidate => candidate.name).sort()).toEqual([
+      'plan_update', 'subagent_wait', 'subagent_cancel', 'subagent_send', 'subagent_participants', 'subagent_inbox',
+      'subagent_directory', 'subagent_followup', 'subagent_request_input',
+    ].sort())
+    for (const name of ['subagent', 'subagent_start', 'write_file', 'execute_cmd', 'http_request']) expect(result.registry.has(name)).toBe(false)
+    expectExactCategories(result)
+    const impostor = tool('subagent_send', 'skill')
+    result.registry.register(impostor)
+    // Missing actual execution ownership is still rejected by the true builtin.
+    expect(await result.registry.execute('subagent_send', { recipientParticipantId: 'child:fake', message: 'x', requestKey: 'x' }, context))
+      .toMatchObject({ success: false, metadata: { code: 'SUBAGENT_CONTROL_FAILED' } })
+    expect(impostor.execute).not.toHaveBeenCalled()
+    const ordinary = await createToolRegistry({ toolProfile, allowedTools: [], allowedMcpServers: [] })
+    expect(ordinary.registry.list().map(candidate => candidate.name)).toEqual(['plan_update'])
   })
 
   it('normalizes legacy allowlist names into canonical executable tools without registering alias bypasses', async () => {

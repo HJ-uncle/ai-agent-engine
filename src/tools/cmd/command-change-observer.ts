@@ -6,6 +6,7 @@ import { ChangeStore, type FileChange } from '../../storage/changes/index.js'
 import { getDb, getDbEpoch } from '../../storage/sqlite/db.js'
 import { canonicalFilePathSync, hashFileContent, withFileLocks } from '../../shared/file-version.js'
 import { discardUnpublishedSnapshot, snapshotFromBytes, type ChangeSnapshot } from '../file/change-recorder.js'
+import { serviceForOwner } from '../../core/collaboration/execution-owner.js'
 
 export const COMMAND_CHANGE_LIMITS = Object.freeze({ maxFiles: 512, maxBytes: 16 * 1024 * 1024,
   maxFileBytes: 8 * 1024 * 1024, maxEntries: 10_000, maxDepth: 16, maxScanMs: 1500, maxChanges: 128 })
@@ -28,6 +29,24 @@ export async function createCommandChangeObserver(ctx: AgentContext, root: strin
   const canonicalRoot = canonicalFilePathSync(root)
   const tenantId = ctx.tenantId, sessionId = ctx.rootSessionId ?? ctx.sessionId
   const sourceDb = getDb(), sourceEpoch = getDbEpoch(sourceDb)
+  // Capture the real launching invocation while admission is live. Observation
+  // may finish during cancellation, and must still retain its original source;
+  // this identifies the observer, never the exclusive author of all changed bytes.
+  let producer: Pick<FileChange, 'producerChildSessionId' | 'producerRunId'> = {}
+  if (ctx.executionOwner) {
+    const service = serviceForOwner(ctx.executionOwner)
+    service.assertDispatch(ctx.executionOwner)
+    if (service.db !== sourceDb) throw new Error('Command observation owner datasource mismatch')
+    const binding = service.collaboration.executionBinding(service.producerForExecution(ctx.executionOwner))
+    if (binding.kind === 'child') {
+      if (binding.tenantId !== tenantId || binding.sessionId !== ctx.sessionId || binding.invocationRunId !== ctx.runId
+        || binding.rootSessionId !== sessionId || binding.rootSessionId !== ctx.parentSessionId || binding.rootRunId !== ctx.rootRunId
+        || binding.turnId !== (ctx.turnId ?? ctx.parentConversationId ?? ctx.conversationId)
+        || job.sessionId !== binding.rootSessionId || job.ownerSessionId !== binding.sessionId || job.ownerRunId !== binding.invocationRunId
+        || job.runId !== binding.rootRunId || job.turnId !== binding.turnId) throw new Error('Command observation child owner mismatch')
+      producer = Object.freeze({ producerChildSessionId: binding.sessionId, producerRunId: binding.invocationRunId })
+    }
+  }
   const store = new ChangeStore(sourceDb)
   const ensureSource = () => {
     if (getDb() !== sourceDb || sourceDb.closed || getDbEpoch(sourceDb) !== sourceEpoch) throw new Error('Command observation datasource changed')
@@ -194,7 +213,7 @@ export async function createCommandChangeObserver(ctx: AgentContext, root: strin
           ensureSource()
           oldSnapshot = snapshotFromBytes(canonical, oldContent)
           newSnapshot = snapshotFromBytes(canonical, content)
-          const change = await store.record(tenantId, { sessionId,
+          const change = await store.record(tenantId, { sessionId, ...producer,
             turnId: job.turnId, runId: job.runId, path: canonical, kind: content === null ? 'delete' : 'write',
             oldContent: oldSnapshot.oldContent, newContent: newSnapshot.oldContent, oldHash: oldSnapshot.oldHash, newHash: newSnapshot.oldHash,
             oldSnapshotRef: oldSnapshot.snapshotRef, newSnapshotRef: newSnapshot.snapshotRef, truncated: oldSnapshot.truncated || newSnapshot.truncated,
@@ -216,5 +235,6 @@ function receipt(change: FileChange, root: string, toolCallId?: string): Record<
   return { id: change.id, seq: change.seq, sessionId: change.sessionId, path: change.path, displayPath: path.relative(root, change.path),
     kind: change.kind, oldHash: change.oldHash, newHash: change.newHash, status: change.status, truncated: change.truncated,
     createdAt: change.createdAt, turnId: change.turnId, runId: change.runId, toolCallId,
+    ...(change.producerChildSessionId && change.producerRunId ? { producerChildSessionId: change.producerChildSessionId, producerRunId: change.producerRunId } : {}),
     source: change.source, commandJobId: change.commandJobId, requiresExplicitRevert: true, isNew: change.oldHash === 'missing' }
 }

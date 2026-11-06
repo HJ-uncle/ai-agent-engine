@@ -37,12 +37,12 @@ afterEach(async () => {
   fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 })
 
-async function mutate(file: string, content: string | null, sessionId = session, tenantId = tenant): Promise<FileChange> {
+async function mutate(file: string, content: string | null, sessionId = session, tenantId = tenant, producer?: { producerChildSessionId: string; producerRunId: string }): Promise<FileChange> {
   return withFileLocks([file], async ([canonical]) => {
     const before = readFileVersionSync(canonical)
     if (content === null) fs.unlinkSync(canonical)
     else { fs.mkdirSync(path.dirname(canonical), { recursive: true }); fs.writeFileSync(canonical, content) }
-    return store.record(tenantId, { sessionId, path: canonical, kind: content === null ? 'delete' : 'write',
+    return store.record(tenantId, { sessionId, ...producer, path: canonical, kind: content === null ? 'delete' : 'write',
       oldContent: before.content?.toString('utf8') ?? null, newContent: content,
       oldHash: before.hash, newHash: hashFileContent(content) })
   })
@@ -60,6 +60,32 @@ async function keep(ids: string[], sessionId: string | undefined = session) {
 }
 
 describe('pending changes represent final byte differences', () => {
+  it('persists child/run provenance, retaining one writer only when the combined diff has one source', async () => {
+    const file = path.join(fixture, 'team-source.txt')
+    const producer = { producerChildSessionId: 'child-a', producerRunId: 'child-run-a' }
+    const first = await mutate(file, 'A', session, tenant, producer)
+    await mutate(file, 'AB', session, tenant, producer)
+    expect(await net()).toEqual([expect.objectContaining({ ...producer, oldContent: null, newContent: 'AB' })])
+    const raw = (await app.inject(`/changes?sessionId=${session}&status=pending`)).json().data as FileChange[]
+    expect(raw.find(change => change.id === first.id)).toMatchObject(producer)
+    await mutate(file, 'ABC', session, tenant, { producerChildSessionId: 'child-b', producerRunId: 'child-run-b' })
+    const combined = await net()
+    expect(combined).toHaveLength(1)
+    expect(combined[0]).not.toHaveProperty('producerChildSessionId')
+    expect(combined[0]).not.toHaveProperty('producerRunId')
+    expect(combined[0]).toMatchObject({ oldContent: null, newContent: 'ABC' })
+    expect(combined[0].changeIds).toHaveLength(3)
+  })
+
+  it('does not attribute a combined parent and child edit to its final child writer', async () => {
+    const file = path.join(fixture, 'mixed-source.txt')
+    await mutate(file, 'parent')
+    await mutate(file, 'parent and child', session, tenant, { producerChildSessionId: 'child', producerRunId: 'child-run' })
+    const [combined] = await net()
+    expect(combined).not.toHaveProperty('producerChildSessionId')
+    expect(combined.changeIds).toHaveLength(2)
+  })
+
   it('hides create→delete without deleting or accepting the original operation log', async () => {
     const file = path.join(fixture, 'temporary.mjs')
     const created = await mutate(file, 'temporary\n')

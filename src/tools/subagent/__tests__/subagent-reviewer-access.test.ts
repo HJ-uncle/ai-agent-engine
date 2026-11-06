@@ -14,13 +14,14 @@ import { ToolRegistry } from '../../../core/tool-registry/index.js'
 import { trustBuiltinTool } from '../../../security/tool-policy.js'
 import { officeInspectTool } from '../../office/index.js'
 
-const captured = vi.hoisted(() => ({ child: undefined as AgentContext | undefined, prior: null as SubagentRun | null,
+const captured = vi.hoisted(() => ({ child: undefined as AgentContext | undefined, prior: null as SubagentRun | null, input: undefined as CreateSubagentRun | undefined,
   getRunHeader: vi.fn() }))
 
 vi.mock('../../../core/subagent/runner.js', () => ({
   getSubagentRunner: () => ({
     store: { getRunHeader: captured.getRunHeader },
     run: async (input: CreateSubagentRun, _parent: AgentContext, execute: (execution: SubagentExecution) => Promise<void>) => {
+      captured.input = input
       const snapshot: SubagentRunHeader = { ...input, schemaVersion: 1, runId: 'fixture-run', childSessionId: 'fixture-child',
         status: 'running', lastSeq: 1, createdAt: 1, updatedAt: 1, usage: {}, toolCount: 0, activeToolCount: 0,
         nonPlanToolCount: 0, transcriptRef: 'fixture' }
@@ -48,6 +49,7 @@ beforeEach(() => {
   fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-reviewer-access-'))
   vi.stubEnv('WORKSPACE_ROOT', fixtureDir)
   captured.child = undefined
+  captured.input = undefined
   captured.prior = null
   captured.getRunHeader.mockReset().mockImplementation(async (_tenant: string, _run: string, fullRecord: boolean) => {
     expect(fullRecord).toBe(true)
@@ -80,6 +82,54 @@ describe('reviewer role access through subagentTool.execute', () => {
     expect(tools.execute).not.toHaveBeenCalled()
     await child.tools.execute('read_file', { path: 'README.md' }, child)
     expect(tools.execute).toHaveBeenCalledWith('read_file', { path: 'README.md' }, child)
+  })
+})
+
+describe('builtin role identity and permission snapshots', () => {
+  function parentContext() {
+    const definitions = ['read_file', 'write_file', 'execute_cmd', 'deliver_files', 'mcp_mutation'].map(name => ({ name, description: name, parameters: {} }))
+    const tools: IToolRegistry = { register: vi.fn(), unregister: vi.fn(), has: name => definitions.some(tool => tool.name === name),
+      list: () => definitions, execute: vi.fn() }
+    return createAgentContext({ tenantId: 'fixture', sessionId: 'parent', workspacePaths: [fixtureDir], projectRoot: fixtureDir,
+      logger: pino({ level: 'silent' }), tools, history: createConversationHistory(), modelName: 'fixture' })
+  }
+
+  it.each(['research', 'executor', 'general'])('snapshots the %s template independently of a configured Agent', async builtinRole => {
+    const result = await subagentTool.execute({ task: 'Complete the assigned work', builtinRole }, parentContext())
+    expect(result.success).toBe(true)
+    expect(captured.input?.continuation).toMatchObject({ builtinRole, builtinRoleVersion: 1, readOnly: builtinRole === 'research' })
+    expect(captured.input?.agentId).toBeUndefined()
+    expect(captured.child?.tools.has('write_file')).toBe(builtinRole !== 'research')
+    expect(captured.child?.tools.has('execute_cmd')).toBe(builtinRole !== 'research')
+    expect(captured.child?.tools.has('deliver_files')).toBe(false)
+    expect(captured.input?.continuation?.systemPrompt).toContain('主 Agent 验收')
+  })
+
+  it.each([
+    { builtinRole: 'unknown' },
+    { builtinRole: 'research', access: 'inherit' },
+    { builtinRole: 'research', agentId: 'configured' },
+    { builtinRole: 'executor', role: 'implementer' },
+  ])('rejects ambiguous or expanded builtin authority: %j', async args => {
+    expect((await subagentTool.execute({ task: 'work', ...args }, parentContext())).success).toBe(false)
+    expect(captured.child).toBeUndefined()
+  })
+
+  it('keeps the stored template version and prompt when a completed builtin child is resumed', async () => {
+    const parent = parentContext()
+    captured.prior = { schemaVersion: 1, runId: 'previous', tenantId: 'fixture', rootSessionId: 'parent', parentSessionId: 'parent',
+      parentConversationId: 'old-turn', parentMessageId: 'old-message', parentToolCallId: 'old-tool', childSessionId: 'fixture-child',
+      task: 'first task', description: 'research', modelId: 'fixture', status: 'succeeded', lastSeq: 2,
+      createdAt: 1, updatedAt: 1, usage: {}, toolCalls: [], transcriptRef: 'fixture',
+      continuation: { builtinRole: 'research', builtinRoleVersion: 1, readOnly: true, toolNames: ['read_file'],
+        systemPrompt: 'Frozen research prompt', workspacePaths: [fixtureDir], projectRoot: fixtureDir } }
+    expect((await subagentTool.execute({ task: 'Follow up', resumeRunId: 'previous' }, parent)).success).toBe(true)
+    expect(captured.input?.continuation).toEqual(captured.prior.continuation)
+    expect(captured.input?.resumeFromRunId).toBe('previous')
+    expect(captured.child?.tools.has('write_file')).toBe(false)
+    captured.child = undefined
+    expect((await subagentTool.execute({ task: 'Follow up', resumeRunId: 'previous', builtinRole: 'executor' }, parent)).success).toBe(false)
+    expect(captured.child).toBeUndefined()
   })
 })
 
@@ -117,6 +167,15 @@ describe('subagent continuation tool preserves original capabilities', () => {
   it('intersects saved child tools with the current parent and preserves the workspace', async () => {
     const parent = parentAndPrior()
     await subagentTool.execute({ task: 'next', resumeRunId: 'previous' }, parent)
+    expect(captured.child?.tools.list().map(tool => tool.name)).toEqual(['read_file', 'plan_update'])
+    expect(captured.child?.projectRoot).toBe(fixtureDir)
+  })
+  it.skipIf(process.platform !== 'win32')('accepts the same Windows workspace with different casing without adding tools or directories', async () => {
+    const parent = parentAndPrior()
+    parent.workspacePaths = [fixtureDir.toUpperCase()]
+    const result = await subagentTool.execute({ task: 'Continue in the same workspace', resumeRunId: 'previous' }, parent)
+    expect(result.success, result.output).toBe(true)
+    expect(captured.input?.continuation?.workspacePaths).toEqual([fixtureDir])
     expect(captured.child?.tools.list().map(tool => tool.name)).toEqual(['read_file', 'plan_update'])
     expect(captured.child?.projectRoot).toBe(fixtureDir)
   })

@@ -40,6 +40,7 @@ const scope = { tenantId: 'production-jsonl-tenant', sessionId: 'parent-session'
 const logger = () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() })
 function context(history: AgentContext['history'], executionOwner = owner, sessionId = scope.sessionId): AgentContext {
   return { ...scope, sessionId, rootRunId, turnId, userMessageId: userId, executionOwner,
+    ...(sessionId !== scope.sessionId ? { parentSessionId: scope.sessionId, rootSessionId: scope.sessionId } : {}),
     inheritContext: false, modelCaps: { contextWindow: 100_000 }, tokenBudget: 100_000,
     logger: logger(), history, tools: { list: () => [], has: () => true, executionMode: () => 'serial',
       execute: async () => ({ success: true, output: 'owned scripted tool result' }) },
@@ -109,6 +110,26 @@ afterEach(async () => {
 const archive = () => path.join(directory, 'sessions', scope.tenantId, scope.sessionId + '.jsonl')
 const physicalRows = () => fs.readFileSync(archive(), 'utf8').trim().split('\n').map(line => JSON.parse(line) as { uuid: string; payload?: Message; type: string })
 const bindConsumer = () => runtime.bindJSONLDelivery(producer, { origin: jsonlHistoryIdentity(ctx.history)!, ...scope, anchorId: userId, anchorContent: task })
+
+it('continues for mail accepted during the last provider response before sealing its input', async () => {
+  let calls = 0, acceptedId = ''
+  vi.mocked(llm.stream).mockImplementation(async function* (messages) {
+    calls++
+    if (calls === 1) {
+      acceptedId = (await mail('Late requirement must be handled before completion')).messageId
+      yield { done: true, content: 'Initial answer before the late requirement.' }
+    } else {
+      expect(messages.some(m => String(m.content).includes('Late requirement must be handled'))).toBe(true)
+      expect(messages.some(m => m.role === 'assistant' && String(m.content).includes('Initial answer'))).toBe(true)
+      yield { done: true, content: 'Updated answer handles the late requirement.' }
+    }
+  })
+  await run(task)
+  expect(calls).toBe(2)
+  expect(outcomes).toMatchObject([{ status: 'succeeded' }])
+  expect((await runtime.jsonlDeliveryReceipt(producer, acceptedId))?.state).toBe('integrated')
+  await expect(mail('after final fence')).rejects.toMatchObject({ code: 'closed' })
+})
 
 it('the real production creator selects default JSONL through generation/admission wrappers and real ReAct receives peers plus complete current tools', async () => {
   expect(ctx.sqliteDelivery).toBeUndefined(); expect(ctx.jsonlDelivery).toBeDefined()

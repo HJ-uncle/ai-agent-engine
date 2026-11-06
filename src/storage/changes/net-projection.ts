@@ -45,8 +45,12 @@ export function projectSegment(segment: ChangeSegment, issue?: ProjectionIssue):
   const first = segment.changes[0]
   const last = segment.changes.at(-1)!
   const truncated = segment.changes.some(change => change.truncated)
+  const sameProducer = segment.changes.every(change => change.producerChildSessionId === last.producerChildSessionId && change.producerRunId === last.producerRunId)
   return {
     ...last,
+    // A combined diff can include several writers; do not attribute all bytes to its last writer.
+    producerChildSessionId: sameProducer ? last.producerChildSessionId : undefined,
+    producerRunId: sameProducer ? last.producerRunId : undefined,
     oldContent: first.oldContent, oldHash: first.oldHash, oldSnapshotRef: first.oldSnapshotRef,
     kind: last.newHash === 'missing' ? 'delete' : last.kind,
     truncated,

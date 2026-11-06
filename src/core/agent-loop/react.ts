@@ -17,8 +17,8 @@ import type { CompactionState, RunOutcome } from '../subagent/types.js'
 import { FINALIZATION_PROMPT, estimateRequestInput, finalizationMessages, partialEvidence } from './finalization.js'
 import { executeRegisteredTool, executeToolBatch, normalizeToolResult, type RegisteredToolCall, type ParsedToolCall } from './tool-batch.js'
 import { assertOwnedDispatch } from '../collaboration/execution-owner.js'
-import { bindSQLiteReActBoundary, readSQLiteReActHistory, consumeSQLiteReActIteration, assertSQLiteReActDispatch, maintainSQLiteReActHistory } from '../collaboration/sqlite-react-boundary.js'
-import { bindJSONLReActBoundary, readJSONLReActHistory, consumeJSONLReActIteration, assertJSONLReActDispatch, maintainJSONLReActHistory } from '../collaboration/jsonl-react-boundary.js'
+import { bindSQLiteReActBoundary, readSQLiteReActHistory, consumeSQLiteReActIteration, assertSQLiteReActDispatch, maintainSQLiteReActHistory, sealSQLiteReActInput } from '../collaboration/sqlite-react-boundary.js'
+import { bindJSONLReActBoundary, readJSONLReActHistory, consumeJSONLReActIteration, assertJSONLReActDispatch, maintainJSONLReActHistory, sealJSONLReActInput } from '../collaboration/jsonl-react-boundary.js'
 import { readAuthenticatedJSONLHistory } from '../../storage/conversation/jsonl-origin.js'
 import { readAuthenticatedSQLiteHistory } from '../../storage/conversation/sqlite-origin.js'
 import { publicHistoryMessage } from '../../api/http/history-projection.js'
@@ -45,6 +45,15 @@ const REASONING_OUTPUT_RECOVERY_PROMPT = 'The previous model response reached it
 const TOOL_OUTPUT_RECOVERY_PROMPT = 'The previous model response reached its single-response output limit while generating tool calls. None of the tool calls in that response executed, including any complete sibling calls; their interrupted receipts are retained in history. Continue the original user task by generating new complete calls with smaller self-contained arguments. Do not continue or repair the unfinished JSON fragment, repeat already completed work, or assume an interrupted call succeeded. Where the task permits, reference existing authorized workspace files rather than copying large payloads into arguments, and preserve all required information. This guidance does not change the task, tool permissions, workspace boundaries, or budgets.'
 
 const EMPTY_OUTPUT_RECOVERY_PROMPT = 'The previous model response ended normally without a public answer or any tool call. Continue the same user task from the retained history and completed tool evidence. Provide the next necessary complete tool call or a concise public answer. Do not repeat completed work or replay tools that already executed. Task scope, permissions, model configuration and budgets remain unchanged.'
+
+/** Keep the original history object so authenticated collaboration origins remain intact. */
+function appendRunHistory(message: Message, ctx: AgentContext): ReturnType<AgentContext['history']['append']> {
+  const metadata = { ...message.metadata }
+  // This display identity is minted by the runtime, never by tool/provider metadata.
+  delete metadata.subagentRunId
+  if (ctx.runId && ctx.parentSessionId && ctx.sessionId !== ctx.parentSessionId) metadata.subagentRunId = ctx.runId
+  return ctx.history.append({ ...message, metadata }, ctx)
+}
 
 /**
  * Truncate tool output that is too long.
@@ -155,9 +164,10 @@ export interface TokenUsage {
 }
 
 export interface ReActOptions {
-  /** Server-validated user delegations run before model generation; model arguments cannot create these hooks. */
+  /** Server-validated child admissions run before model generation; model arguments cannot create these hooks. */
   delegatedTools?: Array<{
     id: string
+    name?: 'subagent' | 'subagent_start'
     args: Record<string, unknown>
     execute(ctx: AgentContext): Promise<ToolResult>
   }>
@@ -332,7 +342,7 @@ export class ReActStrategy implements LoopStrategy {
           const retainedImages = await finalResults.retainToolImages(ctx, call.id, output)
           if (retainedImages.length) metadata[TOOL_RESULT_IMAGE_ASSETS] = retainedImages
         }
-        await ctx.history.append({
+        await appendRunHistory({
           id: subagent?.runId ? 'subagent-result:' + subagent.runId : `tool-result:${ctx.rootRunId ?? ctx.runId ?? ctx.conversationId ?? ctx.sessionId}:${call.id}`,
           role: 'tool', content: truncated, ...(modelInputContent !== undefined ? { modelInputContent } : {}), toolCallId: call.id, toolName: call.name,
           createdAt: Date.now(), tokens, metadata, conversationId: ctx.conversationId,
@@ -388,7 +398,7 @@ export class ReActStrategy implements LoopStrategy {
     for (const call of calls) {
       const item = { call, messageId: uuidv4() }
       try {
-        await ctx.history.append({ id: item.messageId, role: 'assistant', content: '', toolCall: call,
+        await appendRunHistory({ id: item.messageId, role: 'assistant', content: '', toolCall: call,
           toolCallId: call.id, createdAt: Date.now(), tokens: 0,
           // SQLite stores only normalized args in its tool columns. Metadata
           // preserves the original interrupted wire fragment for durable replay.
@@ -442,7 +452,7 @@ export class ReActStrategy implements LoopStrategy {
       if (ctx.runId && outcome && outcome.status !== 'succeeded') {
         const content = outcome.partialOutput || outcome.error?.message || outcome.stopReason || outcome.status
         try {
-          await ctx.history.append({ id: 'subagent-outcome:' + ctx.runId, role: 'assistant', content,
+          await appendRunHistory({ id: 'subagent-outcome:' + ctx.runId, role: 'assistant', content,
             tokens: estimateTokens(content), createdAt: Date.now(),
             metadata: { runId: ctx.runId, status: outcome.status, stopReason: outcome.stopReason, error: outcome.error, partial: true } }, ctx)
         } catch (error) { ctx.logger.warn({ err: error, runId: ctx.runId }, 'Failed to persist partial child transcript') }
@@ -484,7 +494,7 @@ export class ReActStrategy implements LoopStrategy {
         ...(conversationId ? { conversationId } : {}),
         metadata: { ...this.options.metadata, rootRunId: ctx.rootRunId, turnId: ctx.turnId },
       }
-      const savedUserMsgId = await ctx.history.append(userMessage, ctx) ?? userMessage.id
+      const savedUserMsgId = await appendRunHistory(userMessage, ctx) ?? userMessage.id
       if (ctx.sqliteDelivery) await bindSQLiteReActBoundary(ctx.sqliteDelivery, ctx, savedUserMsgId, userMessage.content)
       else if (ctx.jsonlDelivery) await bindJSONLReActBoundary(ctx.jsonlDelivery, ctx, savedUserMsgId, userMessage.content)
       // ★ 把后端 message_id 回传给前端，前端用它做删除/重发的准确定位
@@ -499,6 +509,7 @@ export class ReActStrategy implements LoopStrategy {
     // attachment content, including after a restart or approval continuation.
     let outputContinuation: { messageId: string; suffix: string } | undefined
     let finalTextPrefix = ''
+    let answeredAfterCollaboration = false
     const continuedResponseFingerprints = new Set<string>()
     let toolOutputRecoveryFingerprint: string | undefined
     let toolOutputRecoveryRepeats = 0
@@ -549,9 +560,9 @@ export class ReActStrategy implements LoopStrategy {
       const launches: Array<RegisteredToolCall & { execute(ctx: AgentContext): Promise<ToolResult> }> = []
       for (const delegation of this.options.delegatedTools) {
         if (ctx.signal?.aborted) break
-        const call = { id: delegation.id, name: 'subagent', args: delegation.args }
+        const call = { id: delegation.id, name: delegation.name ?? 'subagent', args: delegation.args }
         const messageId = uuidv4()
-        await ctx.history.append({ id: messageId, role: 'assistant', content: '', toolCall: call,
+        await appendRunHistory({ id: messageId, role: 'assistant', content: '', toolCall: call,
           toolCallId: call.id, createdAt: Date.now(), tokens: 0, conversationId: ctx.conversationId,
           metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId, userDelegated: true } } as Message, ctx)
         await ctx.runObserver?.onToolStart?.({ toolCallId: call.id, name: call.name, args: call.args })
@@ -573,8 +584,8 @@ export class ReActStrategy implements LoopStrategy {
         return { index, result }
       })()]))
       let failedToPersist = false
-      // Settle each finished child immediately; a failed sibling must not appear
-      // to be running merely because another collaborator is still working.
+      // Settle each admission immediately. Async children retain their real
+      // executor joins; the parent can now coordinate them in its normal loop.
       while (pending.size) {
         const completed = await Promise.race(pending.values())
         pending.delete(completed.index)
@@ -988,7 +999,7 @@ export class ReActStrategy implements LoopStrategy {
         const messageId = recoveryIndex !== undefined ? uuidv4() : ctx.assistantMessageId ?? uuidv4()
         const promptTokens = invocationPromptTokens()
         const completionTokens = invocationCompletionTokens()
-        await ctx.history.append({ id: messageId, role: 'assistant', content: response.content,
+        await appendRunHistory({ id: messageId, role: 'assistant', content: response.content,
           reasoningContent: response.reasoningContent, modelId: response.model, createdAt: Date.now(),
           tokens: completionTokens, conversationId,
           usage: { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens,
@@ -1459,7 +1470,7 @@ export class ReActStrategy implements LoopStrategy {
         if (!continuedResponseFingerprints.has(fingerprint)) {
           continuedResponseFingerprints.add(fingerprint)
           const messageId = uuidv4()
-          await ctx.history.append({ id: messageId, role: 'assistant', content: response.content,
+          await appendRunHistory({ id: messageId, role: 'assistant', content: response.content,
             reasoningContent: response.reasoningContent, createdAt: Date.now(), tokens: completionTokens,
             usage: currentUsage as unknown as Record<string, number>, modelId: response.model, conversationId,
             metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId, outputContinuation: true,
@@ -1544,7 +1555,7 @@ export class ReActStrategy implements LoopStrategy {
           const call = calls[index]
           const messageId = uuidv4()
           registered.push({ call, messageId })
-          await ctx.history.append({
+          await appendRunHistory({
             id: messageId, role: 'assistant', content: index === 0 ? response.content || '' : '',
             reasoningContent: index === 0 ? response.reasoningContent : undefined,
             toolCall: call, toolCallId: call.id, createdAt: Date.now(),
@@ -1623,6 +1634,24 @@ export class ReActStrategy implements LoopStrategy {
             error: { retryable: false, code: pending.kind === 'ask' ? 'NEEDS_USER' : 'PERMISSION_REQUIRED', message: pending.question ?? 'User input required' } })
           return
         }
+        if (ctx.parentSessionId && ctx.runId) {
+          const questionResult = batch.results.find((result, index) => {
+            const question = result.metadata?.subagentQuestion
+            if (!question || typeof question !== 'object' || Array.isArray(question)) return false
+            const details = question as Record<string, unknown>
+            return registered[index].call.name === 'subagent_request_input' && result.success
+              && details.childSessionId === ctx.sessionId && details.runId === ctx.runId
+              && typeof details.question === 'string' && details.question.trim()
+          })
+          if (questionResult) {
+            const question = questionResult.metadata!.subagentQuestion as { question: string; options?: string[] }
+            const options = Array.isArray(question.options) ? question.options.filter(option => typeof option === 'string') : []
+            const evidence = [emittedOutput, question.question, options.length ? options.map((option, index) => `${index + 1}. ${option}`).join('\n') : ''].filter(Boolean).join('\n\n')
+            await ctx.runObserver?.onOutcome?.({ status: 'blocked', stopReason: 'needs_user', partialOutput: evidence,
+              error: { code: 'NEEDS_USER', message: question.question, retryable: false } })
+            return
+          }
+        }
         if (ctx.runId && blocked) {
           await ctx.runObserver?.onOutcome?.({ status: 'blocked', stopReason: 'permission',
             error: { code: 'TOOL_NOT_ALLOWED', message: 'Tool execution was blocked', retryable: false } })
@@ -1692,6 +1721,27 @@ export class ReActStrategy implements LoopStrategy {
           error: { code: 'EMPTY_OUTPUT', message, retryable: false } })
         return
       }
+      // Mail accepted while the provider was streaming must receive another
+      // ordinary iteration. The durable seal and sends share a writer lock:
+      // a sender either wins this iteration or gets an explicit closed result.
+      if (!finalizationReason && !ctx.signal?.aborted) {
+        const sealed = ctx.sqliteDelivery ? await sealSQLiteReActInput(ctx.sqliteDelivery, ctx)
+          : ctx.jsonlDelivery ? await sealJSONLReActInput(ctx.jsonlDelivery, ctx) : true
+        if (!sealed) {
+          await appendRunHistory({ id: uuidv4(), role: 'assistant', content: response.content || '',
+            reasoningContent: response.reasoningContent, createdAt: Date.now(), tokens: completionTokens,
+            usage: currentUsage as unknown as Record<string, number>, modelId: response.model, conversationId,
+            metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId, collaborationContinuation: true,
+              usageEstimated, contextUsageEstimated: !promptUsageReported,
+              contextUsageProvisional: promptUsageReported && !receivedTerminalChunk, requestInputTokenEstimate },
+          } as Message, ctx)
+          finalTextPrefix = ''
+          answeredAfterCollaboration = true
+          yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, ...contextSnapshot() })}`
+          continue
+        }
+      }
+
       // ── 最终回答 ──
       // 注意：response.content 和 response.reasoningContent 已经在上面的流式循环中通过 yield 输出过了
       // 此处只需持久化最终结果并发送 usage 帧即可。
@@ -1715,12 +1765,12 @@ export class ReActStrategy implements LoopStrategy {
         modelId: response.model,
         ...(conversationId ? { conversationId } : {}),
       }
-      await ctx.history.append(finalMsg, ctx)
+      await appendRunHistory(finalMsg, ctx)
       yield `\x00__assistant_msg_id__${messageId}`
       await ctx.runObserver?.onOutcome?.(ctx.signal?.aborted ? { status: 'cancelled', stopReason: 'cancelled' }
         : finalizationReason ? { status: 'failed', stopReason: finalizationReason, partialOutput: emittedOutput,
           error: { code: finalizationReason === 'budget' ? 'TOKEN_BUDGET_EXCEEDED' : 'MAX_STEPS', message: finalizationNotice, retryable: false } }
-        : { status: 'succeeded', output: emittedOutput, stopReason: 'completed' })
+        : { status: 'succeeded', output: answeredAfterCollaboration ? finalTextPrefix + (response.content || '') : emittedOutput, stopReason: 'completed' })
 
       // onOutcome commits the root settlement. A cancellation can win while the
       // final assistant is being persisted, so the candidate alone grants no delivery.

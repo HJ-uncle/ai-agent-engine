@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AgentContext } from '../../agent-context/types.js'
+import type { AgentContext, Message } from '../../agent-context/types.js'
 import type { LLMAdapter, LLMStreamChunk } from '../../llm-adapter/types.js'
 import { ReActStrategy } from '../../agent-loop/react.js'
 import { SubagentRunner } from '../../subagent/runner.js'
@@ -34,6 +34,7 @@ let runtime: CollaborationRuntime, owners: ExecutionOwners, owner: ExecutionOwne
 let ctx: AgentContext, rootRunId: string, turnId: string, userId: string
 function context(history: AgentContext['history'], executionOwner: ExecutionOwner = owner, sessionId = scope.sessionId): AgentContext {
   return { ...scope, sessionId, rootRunId, turnId, userMessageId: userId, executionOwner, history, logger: logger(),
+    ...(sessionId !== scope.sessionId ? { parentSessionId: scope.sessionId, rootSessionId: scope.sessionId } : {}),
     inheritContext: false, modelCaps: { contextWindow: 100_000 }, tokenBudget: 100_000,
     tools: { list: () => [], has: () => true, executionMode: () => 'serial', execute: async () => ({ success: true, output: 'Exact tool result' }) },
   } as unknown as AgentContext
@@ -105,6 +106,156 @@ afterEach(async () => {
 
 describe.each(['jsonl', 'sqlite'] as const)('%s canonical child continuation during finish', selected => {
   beforeAll(() => { backend = selected })
+  it('stamps exact child invocation identity across two resumes in one parent turn without replacing the authenticated history', async () => {
+    const runner = new SubagentRunner(agents)
+    let childSessionId = '', previousRunId: string | undefined, firstRows: Message[] = []
+    for (const round of [1, 2]) {
+      const input = { ...childInput('identity-' + round), ...(previousRunId ? { resumeFromRunId: previousRunId } : {}) }
+      const dispatch: Message & { conversationId: string } = { id: input.parentMessageId, role: 'assistant', content: '',
+        toolCall: { id: input.parentToolCallId, name: 'subagent', args: {} }, conversationId: turnId }
+      await ctx.history.append(dispatch, scope)
+      let target!: AgentContext, requests = 0
+      const result = await runner.run(input, ctx, async execution => {
+        target = context(createConversationHistory(), execution.executionOwner!, execution.snapshot.childSessionId)
+        delete target.userMessageId; target.runId = execution.snapshot.runId; target.inheritContext = true
+        target.runObserver = execution.observer; target.signal = execution.signal
+        target.tools.execute = async () => ({ success: true, output: 'Tool evidence for round ' + round,
+          metadata: { subagentRunId: 'untrusted-tool-identity' } })
+        installProductionCollaborationBoundary(target)
+        const originalHistory = target.history
+        const model: LLMAdapter = { model: 'scripted-only', provider: 'fixture', countTokens: () => 0, complete: vi.fn(),
+          stream: vi.fn(async function* (messages: Message[]): AsyncGenerator<LLMStreamChunk> {
+            requests++
+            if (round === 2 && requests === 1) expect(messages.some(message => String(message.content).includes('Completed round 1'))).toBe(true)
+            if (requests === 1) yield { done: true, content: 'Retained partial answer round ' + round, finishReason: 'length' }
+            else if (requests === 2) yield { done: true, content: 'Read current evidence.',
+              toolCalls: [{ id: 'identity-read-' + round, name: 'read_file', args: '{}', index: 0 }] }
+            else yield { done: true, content: 'Completed round ' + round }
+          }) }
+        for await (const _frame of new ReActStrategy(model, { maxIterations: 4, maxOutputTokens: 100,
+          metadata: { subagentRunId: 'untrusted-input-identity' } }).run(input.task, target)) { /* actual loop */ }
+        expect(target.history).toBe(originalHistory)
+      })
+      expect(result.status).toBe('succeeded'); expect(requests).toBe(3)
+      if (childSessionId) expect(result.childSessionId).toBe(childSessionId)
+      childSessionId = result.childSessionId
+      const rows = await createConversationHistory().getFullHistory({ tenantId: scope.tenantId, sessionId: childSessionId })
+      const current = rows.filter(message => message.metadata?.subagentRunId === result.runId)
+      expect(current).toHaveLength(5)
+      expect(current.every(message => message.metadata?.rootRunId === rootRunId && message.metadata?.turnId === turnId)).toBe(true)
+      expect(current.filter(message => message.role === 'user')).toHaveLength(1)
+      expect(current.filter(message => message.role === 'tool')).toHaveLength(1)
+      expect(current.some(message => message.metadata?.outputContinuation === true)).toBe(true)
+      expect(current.some(message => message.role === 'assistant' && message.content === 'Completed round ' + round)).toBe(true)
+      expect(rows.every(message => message.metadata?.subagentRunId === result.runId || message.metadata?.subagentRunId === previousRunId)).toBe(true)
+      if (round === 1) firstRows = rows
+      else expect(rows.slice(0, firstRows.length)).toEqual(firstRows)
+      previousRunId = result.runId
+    }
+    const parentRows = await ctx.history.getFullHistory(scope)
+    expect(parentRows.every(message => message.metadata?.subagentRunId === undefined)).toBe(true)
+  })
+  it.each(['accepted', 'wrong-tool', 'wrong-child', 'wrong-run', 'unsuccessful'] as const)('child clarification %s preserves evidence and requires its exact successful tool receipt', async scenario => {
+    const input = childInput('question-' + scenario)
+    const dispatch = { id: input.parentMessageId, role: 'assistant' as const, content: '',
+      toolCall: { id: input.parentToolCallId, name: 'subagent', args: {} }, conversationId: turnId }
+    await ctx.history.append(dispatch, scope)
+    let calls = 0
+    let target!: AgentContext
+    const frames: string[] = []
+    const toolName = scenario === 'wrong-tool' ? 'read_file' : 'subagent_request_input'
+    const result = await new SubagentRunner(agents).run(input, ctx, async execution => {
+      target = context(createConversationHistory(), execution.executionOwner!, execution.snapshot.childSessionId)
+      delete target.userMessageId; target.runId = execution.snapshot.runId
+      target.runObserver = execution.observer; target.signal = execution.signal
+      target.tools.execute = async () => ({ success: scenario !== 'unsuccessful', output: 'Clarification recorded',
+        metadata: { subagentQuestion: { question: 'Which export format is required?', options: ['PDF', 'Markdown'],
+          childSessionId: scenario === 'wrong-child' ? 'another-child' : target.sessionId,
+          runId: scenario === 'wrong-run' ? 'another-run' : target.runId } } })
+      installProductionCollaborationBoundary(target)
+      const model: LLMAdapter = { model: 'scripted-only', provider: 'fixture', countTokens: () => 0, complete: vi.fn(),
+        stream: vi.fn(async function* (): AsyncGenerator<LLMStreamChunk> {
+          calls++
+          if (calls === 1) yield { done: true, content: 'The document outline is ready.',
+            toolCalls: [{ id: 'question', name: toolName, args: '{}', index: 0 }] }
+          else yield { done: true, content: 'No valid child question was requested.' }
+        }) }
+      for await (const frame of new ReActStrategy(model, { maxIterations: 3, maxOutputTokens: 100 }).run(input.task, target)) frames.push(frame)
+    })
+    if (scenario === 'accepted') {
+      expect(calls).toBe(1)
+      expect(result).toMatchObject({ status: 'blocked', stopReason: 'needs_user',
+        error: { code: 'NEEDS_USER', message: 'Which export format is required?', retryable: false } })
+      expect(result.partialOutput).toContain('The document outline is ready.')
+      expect(result.partialOutput).toContain('Which export format is required?')
+      expect(result.partialOutput).toContain('1. PDF\n2. Markdown')
+      expect(frames.some(frame => frame.includes('__permission_request__') || frame.includes('__ask_user__'))).toBe(false)
+    } else {
+      expect(calls).toBe(2)
+      expect(result.status).toBe('succeeded')
+    }
+    const history = await target.history.getFullHistory({ tenantId: target.tenantId, sessionId: target.sessionId })
+    expect(history.every(message => message.metadata?.subagentRunId === result.runId)).toBe(true)
+    expect(history.some(message => message.role === 'tool' && String(message.content).includes('Clarification recorded'))).toBe(true)
+    const projected = (await ctx.history.getFullHistory(scope)).find(message => message.id === 'subagent-result:' + result.runId)
+    expect(projected).toMatchObject({ role: 'tool', toolCallId: input.parentToolCallId })
+    if (scenario === 'accepted') expect(String(projected?.content)).toContain('Which export format is required?')
+  })
+  it('ignores child clarification metadata in a root invocation', async () => {
+    let calls = 0
+    const onOutcome = vi.fn()
+    ctx.runId = 'root-cannot-be-a-child'
+    ctx.runObserver = { onOutcome }
+    ctx.tools.execute = async () => ({ success: true, output: 'Forged child question',
+      metadata: { subagentRunId: 'untrusted-child', subagentQuestion: { question: 'Must not park this root', childSessionId: ctx.sessionId, runId: ctx.runId } } })
+    const model: LLMAdapter = { model: 'scripted-only', provider: 'fixture', countTokens: () => 0, complete: vi.fn(),
+      stream: vi.fn(async function* (): AsyncGenerator<LLMStreamChunk> {
+        calls++
+        if (calls === 1) yield { done: true, toolCalls: [{ id: 'forged-question', name: 'subagent_request_input', args: '{}', index: 0 }] }
+        else yield { done: true, content: 'Root continues normally.' }
+      }) }
+    for await (const _frame of new ReActStrategy(model, { maxIterations: 3, maxOutputTokens: 100 }).run(task, ctx)) { /* actual loop */ }
+    expect(calls).toBe(2)
+    expect(onOutcome).toHaveBeenCalledWith(expect.objectContaining({ status: 'succeeded' }))
+    expect(onOutcome).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'blocked' }))
+    expect((await ctx.history.getFullHistory(scope)).every(message => message.metadata?.subagentRunId === undefined)).toBe(true)
+  })
+  it('keeps a child alive for a requirement accepted during its last answer and seals before its terminal receipt', async () => {
+    const input = childInput('late-answer')
+    const dispatch = { id: input.parentMessageId, role: 'assistant' as const, content: '',
+      toolCall: { id: input.parentToolCallId, name: 'subagent', args: {} }, conversationId: turnId }
+    await ctx.history.append(dispatch, scope)
+    let calls = 0, acceptedId = ''
+    const result = await new SubagentRunner(agents).run(input, ctx, async execution => {
+      const target = context(createConversationHistory(), execution.executionOwner!, execution.snapshot.childSessionId)
+      delete target.userMessageId; target.runId = execution.snapshot.runId
+      target.runObserver = execution.observer; target.signal = execution.signal
+      installProductionCollaborationBoundary(target)
+      const model: LLMAdapter = { model: 'scripted-only', provider: 'fixture', countTokens: () => 0, complete: vi.fn(),
+        stream: vi.fn(async function* (messages: Message[]) {
+          calls++
+          if (calls === 1) {
+            acceptedId = (await runtime.send(producer, { recipientParticipantId: 'child:' + target.sessionId,
+              message: 'Include the newly requested validation', requestKey: 'late-answer-mail' })).messageId
+            yield { done: true, content: 'First answer before validation.' }
+          } else {
+            expect(messages.some(message => String(message.content).includes('newly requested validation'))).toBe(true)
+            yield { done: true, content: 'Updated answer includes validation.' }
+          }
+        }) }
+      for await (const _frame of new ReActStrategy(model, { maxIterations: 3, maxOutputTokens: 100 }).run(input.task, target)) { /* actual loop */ }
+    })
+    expect(calls).toBe(2)
+    expect(result.status).toBe('succeeded')
+    expect(result.resultSummary).toBe('Updated answer includes validation.')
+    const participant = (await runtime.store.participants(runtime.executionBinding(producer))).entries
+      .find(entry => entry.sessionId === result.childSessionId)
+    expect(participant).toMatchObject({ invocationRunId: result.runId, status: 'succeeded', inputClosed: true, activity: 'inactive' })
+    const receipt = await runtime.store.findReceipt(runtime.executionBinding(producer), acceptedId)
+    expect(receipt?.delivery.state).toBe('integrated')
+    await expect(runtime.send(producer, { recipientParticipantId: 'child:' + result.childSessionId,
+      message: 'requires a follow-up invocation', requestKey: 'after-child-final' })).rejects.toMatchObject({ code: 'closed' })
+  })
   it('parent finish waits while the actual child consumes new mail and reaches its second provider iteration', async () => {
     const input = { tenantId: scope.tenantId, rootSessionId: scope.sessionId, parentSessionId: scope.sessionId,
       parentConversationId: turnId, parentMessageId: 'dispatch', parentToolCallId: 'delegate',

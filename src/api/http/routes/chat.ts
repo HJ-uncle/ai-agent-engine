@@ -34,7 +34,8 @@ import { continuedTurnUsage, sessionUsageAtWatermark, sessionSubagentUsage } fro
 import { SubagentStore } from '../../../core/subagent/store.js'
 import { ParentPublicationAuthority } from '../../../core/subagent/parent-publication.js'
 import { PublishedTurnBootstraps, type TurnBootstrap } from '../../../core/subagent/turn-bootstrap.js'
-import { CollaboratorError, prepareCollaborators, collaboratorTools, type CollaboratorInput } from '../../../core/subagent/collaborators.js'
+import { COLLABORATOR_LIMITS, CollaboratorError, prepareCollaborators, collaboratorTools, type CollaboratorInput } from '../../../core/subagent/collaborators.js'
+import { buildSubagentTeamContext } from '../../../tools/subagent/team-tools.js'
 import { TodoStore } from '../../../storage/todo/index.js'
 import { ChangeStore } from '../../../storage/changes/index.js'
 import { commandJobs, type CommandScopeCapture } from '../../../core/command-jobs/index.js'
@@ -59,13 +60,15 @@ import { requireChildRecovery } from '../../../core/subagent/child-usage-authori
 const SUBAGENT_DISPATCH_PROMPT = [
   '## 子代理委派（subagent 工具）',
   '',
-  '主对话的上下文很宝贵。遇到下述情形，把探索整体委派给 subagent，不要在主会话里自己趟：',
+  '按任务收益主动协作，主代理负责理解目标、分工、集成验收和最终交付。三类内置模板可按需启动多个独立实例：builtinRole=research只读调研；executor实际完成代码、文档和文件任务；general处理混合或特殊工作。',
+  '创建前先查看subagent_directory中的已有实例；上下文相关且权限适合时优先subagent_followup，运行中补充，已完成也可继续同一子会话。简单任务直接完成，不为凑团队启动全部角色。',
+  '适合委派的情形：',
   '- 广度：要跨多个文件/多个目录的调研、审计、批量定位；',
   '- 噪音：会产生大量一次性中间输出的动作（全仓扫描、长日志、递归统计）；',
   '- 并行：仅在任务确实需要多个独立产出时拆分，避免重复范围。',
   '先遵守用户要求的深度。简单、快速、概览类调研默认只派一个只读子代理；只看目录、入口和少量关键文件，输出简短概览。不要自行升级为深挖或全面审计。',
   '',
-  '反过来，这些留在主会话、不要派：写/改代码、≤2-3 跳的定向小查找、需要与用户持续交互的修改类工作。',
+  '互不干涉的组件、文档素材和验证可以分给多个executor；派发明确责任文件和接口，公共配置、锁文件及同一Office文件指定单一集成者。共享目录不等于隔离checkout，不同时覆盖同一文件。小改动和短查找可由主代理直接完成。',
   '',
   '派发时，task 必须自包含（子代理看不到本会话历史，缺什么就要给什么），写清四项：',
   '1. 目标：一句话说清产出什么；',
@@ -610,6 +613,9 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
           agentId: { type: 'string' },
           collaborators: { type: 'array', maxItems: 8, items: { type: 'object', properties: {
             agentId: { type: 'string', minLength: 1 }, resumeRunId: { type: 'string', minLength: 1 },
+            builtinRole: { type: 'string', enum: ['research', 'executor', 'general'] },
+            instanceKey: { type: 'string', minLength: 1, maxLength: COLLABORATOR_LIMITS.instanceKey },
+            task: { type: 'string', minLength: 1, maxLength: COLLABORATOR_LIMITS.task }, description: { type: 'string', minLength: 1, maxLength: COLLABORATOR_LIMITS.description },
           }, additionalProperties: false } },
           systemPrompt: { type: 'string' },
           maxAskUserCount: { type: 'number' },
@@ -972,6 +978,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
       prepared = await createToolRegistry({
         signal: abortController.signal,
         toolProfile,
+        ownedCollaboration: selectedCollaborators.length > 0,
         securityContext: { tenantId, sessionId, toolProfile },
         memoryScope: effectiveMemoryScope,
         memoryScopes: effectiveMemoryScopes,
@@ -1584,7 +1591,22 @@ ${codegraphBlock}${codeExecutionPrompt}${workExecutionPrompt}${officeExecutionPr
           }
           activeStreams.set(makeAbortKey(tenantId, sessionId), streamBus)
           registerActiveChat(tenantId, sessionId, abortController)
-          await publishRun(rootRun)
+          let startedRun: RootRun | null
+          try {
+            // Persist only after the execution owner and live stream exist.
+            // A replay or pending continuation keeps the original start time.
+            startedRun = current.startedAt === undefined
+              ? await rootRunStore.update(tenantId, rootRun.runId, { startedAt: Date.now() }, attemptId)
+              : rootRunStore.public(current)
+            if (!startedRun) throw new Error('ROOT_START_ATTEMPT_CHANGED')
+          } catch (error) {
+            // No producer will run after a failed start receipt. Do not leave
+            // an unstarted stream looking live to status/recovery readers.
+            unregisterActiveChat(tenantId, sessionId, abortController)
+            if (activeStreams.get(makeAbortKey(tenantId, sessionId)) === streamBus) activeStreams.delete(makeAbortKey(tenantId, sessionId))
+            throw error
+          }
+          await publishRun(startedRun)
           return true
         })
         if (!started && rootRun.status === 'running') await publishRun(await finishRoot({ status: 'cancelled', stopReason: 'Cancelled before execution started' }))
@@ -1655,9 +1677,12 @@ ${codegraphBlock}${codeExecutionPrompt}${workExecutionPrompt}${officeExecutionPr
           thinkingEnabled, reasoningEffort: effectiveReasoningEffort, thinkingConfig: finalThinkingConfig, responseThinkingField: finalResponseThinkingField,
         } })
         const llm = createAdapterFromResolved(ctx.resolvedModel)
+        let teamContext = ''
+        try { teamContext = await buildSubagentTeamContext(ctx) }
+        catch (error) { reqLogger.warn({ err: error }, 'Existing child directory could not be included; explicit discovery remains available') }
         const strategy = new ReActStrategy(llm, {
           delegatedTools: selectedCollaborators.length ? collaboratorTools(selectedCollaborators, prompt, ctx) : undefined,
-          systemPrompt: (fullSystemPrompt + (selectedCollaborators.length ? '\n\n用户本轮明确指定的协作子代理已由系统执行。基于历史中对应 subagent 的真实结果继续完成和汇总当前任务；不能要求用户新建任务来使用这些 Agent，不能把子代理当作更换主 Agent。需要追加工作时使用该结果中的 resumeRunId/runId 继续同一子代理上下文，避免重复创建或重复已完成工作。' : '')) || undefined,
+          systemPrompt: (fullSystemPrompt + teamContext + (selectedCollaborators.length ? '\n\n用户本轮明确指定的协作子代理已由系统发起，历史中的subagent_start回执仅代表接纳。主Agent现在可以继续自己的工作、协调子任务并等待真实结果；最终答复前用subagent_wait收取结果并验收。不能要求用户新建任务来使用这些Agent，不能把子代理当作更换主Agent。需要追加工作时用subagent_followup继续同一子代理上下文，避免重复创建或重复已完成工作。' : '')) || undefined,
           temperature: effectiveTemperature,
           unboundedCode: toolProfile === 'code',
           conversationId,

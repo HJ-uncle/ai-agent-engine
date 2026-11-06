@@ -8,6 +8,10 @@ export interface FinalResultItem {
   sha256: string
   assetId: string
   kind: 'image' | 'file'
+  /** Produced from a stored child receipt, never supplied as a display-only claim. */
+  producerChildSessionId?: string
+  producerRunId?: string
+  producerArtifactId?: string
 }
 
 export interface FinalResult {

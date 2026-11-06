@@ -83,6 +83,15 @@ async function createRoot(subject: ReturnType<typeof actor>) {
     controller: new AbortController(), controllerSubject: subject })
   producer = owners.producer(owner); binding = runtime.executionBinding(producer)
 }
+it('refuses a controller message after the final input fence instead of accepting work without a consumer', async () => {
+  expect(await runtime.sealInputIfEmpty(producer)).toBe(true)
+  const context = await app.inject({ url: base() + '/controller-context?' + new URLSearchParams({ rootSessionId: scope.sessionId }), headers: headers() })
+  expect(context.statusCode).toBe(409)
+  const response = await post(message('after-final-fence'))
+  expect(response.statusCode).toBe(409)
+  expect(response.json().message).toContain('finishing')
+  expect(await count('collaboration_messages')).toBe(0)
+})
 async function child() {
   const ticket = owners.reserveChild(owner)
   const admitted = await runtime.admitChild(producer, { tenantId: scope.tenantId, rootSessionId: scope.sessionId,
@@ -139,10 +148,20 @@ it('accepts one authenticated user receipt, never creates a participant or a mod
   expect(await count('collaboration_messages')).toBe(1); expect(await count('collaboration_controller_origins')).toBe(1)
   expect(await count('collaboration_participants')).toBe(before)
 })
-it('advertises root user steering separately while broader communication remains gated', async () => {
+it('advertises tested root and child steering with the durable final input fence', async () => {
   const response = await app.inject({ url: '/collaboration/capabilities', headers: headers() })
-  expect(response.json().data).toMatchObject({ userControllerMutation: false, mailboxConsumer: false, asynchronousAgentTools: false,
-    rootUserControllerMutation: true, rootControllerDelivery: 'next-model-iteration' })
+  expect(response.json().data).toMatchObject({ userControllerMutation: true, mailboxConsumer: true, asynchronousAgentTools: true,
+    rootUserControllerMutation: true, rootControllerDelivery: 'next-model-iteration', finalInputFence: true, waitInterruptibleByInbox: true })
+})
+it('wakes an existing inbox observation only after controller acceptance is durable', async () => {
+  const aborter = new AbortController()
+  const waiting = runtime.waitForInput(producer, aborter.signal)
+  try {
+    const accepted = await post(message('wake-observer'))
+    expect(accepted.statusCode).toBe(200)
+    await waiting
+    expect((await getReceipt('wake-observer')).json().data.receipt).toMatchObject({ state: 'queued', delivery: { state: 'pending' } })
+  } finally { aborter.abort(); await waiting.catch(() => undefined) }
 })
 it.each(['senderParticipantId','senderInvocationRunId','tenantId','authority','producer','metadata'])('rejects caller-supplied %s rather than acquiring a sender', async field => {
   const response = await post({ ...message(), [field]: 'forged' })
@@ -216,20 +235,36 @@ it('frozen authentication-required state cannot be changed by editing the enviro
 })
 it('reports lost commit ACK as typed unknown and reconciles only the original key, without duplicate acceptance', async () => {
   const native = db.transaction.bind(db); let injected = false
+  const aborter = new AbortController()
+  let observedEmpty!: () => void, awakened = false
+  const empty = new Promise<void>(resolve => { observedEmpty = resolve })
   vi.spyOn(db,'transaction').mockImplementation(async (mode?: TransactionMode) => {
     const tx = await native(mode); let controllerWrite = false
     return new Proxy(tx,{get(target,key) {
-      if (key === 'execute') return async (...args: Parameters<typeof tx.execute>) => { const stmt = args[0]; if (typeof stmt === 'object' && String(stmt.sql).includes('INSERT INTO collaboration_controller_origins')) controllerWrite = true; return target.execute(...args) }
+      if (key === 'execute') return async (...args: Parameters<typeof tx.execute>) => {
+        const stmt = args[0], sql = typeof stmt === 'string' ? stmt : String(stmt.sql)
+        if (sql.includes('INSERT INTO collaboration_controller_origins')) controllerWrite = true
+        const result = await target.execute(...args)
+        if (sql.includes('SELECT 1 FROM collaboration_messages m') && !result.rows.length) observedEmpty()
+        return result
+      }
       if (key === 'commit') return async () => { await target.commit(); if (controllerWrite && !injected) { injected = true; throw new Error('synthetic lost COMMIT ACK') } }
       const value = Reflect.get(target,key); return typeof value === 'function' ? value.bind(target) : value
     }})
   })
-  const input = message(), response = await post(input)
-  expect(response.statusCode, response.body).toBe(503); expect(response.json()).toMatchObject({ code:50301,data:{outcome:'unknown',requestKey:input.requestKey} })
-  vi.restoreAllMocks()
-  const result = await app.inject({ url: response.json().data.queryPath, headers: headers() })
-  expect(result.statusCode, result.body).toBe(200); expect(result.json().data.receipt.requestKey).toBe(input.requestKey)
-  expect(await count('collaboration_messages')).toBe(1); expect(await count('collaboration_controller_origins')).toBe(1)
+  const waiting = runtime.waitForInput(producer, aborter.signal).then(() => { awakened = true })
+  try {
+    await empty
+    const input = message(), response = await post(input)
+    expect(response.statusCode, response.body).toBe(503); expect(response.json()).toMatchObject({ code:50301,data:{outcome:'unknown',requestKey:input.requestKey} })
+    expect(awakened).toBe(false)
+    vi.restoreAllMocks()
+    const result = await app.inject({ url: response.json().data.queryPath, headers: headers() })
+    expect(result.statusCode, result.body).toBe(200); expect(result.json().data.receipt.requestKey).toBe(input.requestKey)
+    await waiting
+    expect(awakened).toBe(true)
+    expect(await count('collaboration_messages')).toBe(1); expect(await count('collaboration_controller_origins')).toBe(1)
+  } finally { aborter.abort(); await waiting.catch(() => undefined) }
 })
 it('keeps message and origin atomic on a real SQL failure, while not pretending a transport proves nonacceptance', async () => {
   await db.execute("CREATE TRIGGER fail_controller BEFORE INSERT ON collaboration_controller_origins BEGIN SELECT RAISE(ABORT,'synthetic origin failure'); END")

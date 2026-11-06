@@ -32,7 +32,7 @@ import { grepTool } from './search/grep-tool.js'
 import { todoTools } from './todo/todo-tool.js'
 import { cronTools } from './cron/cron-tool.js'
 import { taskControlTools } from './task/task-tool.js'
-import { subagentTools, readonlySubagentTools } from './subagent/index.js'
+import { subagentTools, readonlySubagentTools, ownedCollaborationTools } from './subagent/index.js'
 import { webFetchTool } from './web-fetch/index.js'
 import { httpRequestTool } from './http-request/index.js'
 import { searchHistoryTool } from './get-context/search-history-tool.js'
@@ -42,7 +42,7 @@ import { lspDiagnoseTool } from './lsp/index.js'
 import { codegraphTool } from './codegraph/index.js'
 import { browserTools, BROWSER_READONLY_TOOLS } from './browser/browser-tools.js'
 import { workbenchTools } from './workbench/index.js'
-import { deliverFilesTool } from './results/index.js'
+import { deliverFilesTool, reportArtifactsTool } from './results/index.js'
 import type { ExternalSkill } from '../skills/external-loader.js'
 import {
   resolveDefaultAllowedTools,
@@ -65,6 +65,8 @@ export interface RegistryFactoryOptions {
   toolProfile?: ToolProfile
   /** Configuration screens need selectable tools; execution defaults stay lean. Never accept this from chat input. */
   toolExposure?: 'runtime' | 'catalogue'
+  /** Server-only: verified explicit collaborators require controls for their existing owned executions. */
+  ownedCollaboration?: boolean
   /** Explicit memory extension for a conversation, independent of the programming profile. */
   memoryScope?: import('../storage/memory/settings.js').MemoryMode
   memoryScopes?: readonly import('../storage/memory/types.js').MemoryScope[]
@@ -148,11 +150,15 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   const memoryEnabled = effectiveMemoryScopes({ ...opts, toolProfile: profile }).length > 0
   const memoryImplementations = new Set(memoryTools)
   const internalPlanTools = new Set(todoTools.filter(tool => tool.name === 'plan_update'))
+  const ownedControls = new Set(opts.ownedCollaboration ? ownedCollaborationTools : [])
+  const ownedControlNames = new Set([...ownedControls].map(tool => tool.name))
   const registry = new ToolRegistry(tool => {
     if (REMOVED_TOOL_NAMES.has(tool.name)) return false
     // Planning changes only the current session's durable state. Trust its builtin
     // implementation, rather than a matching extension name, outside business allowlists.
     if (tool.name === 'plan_update') return internalPlanTools.has(tool)
+    // Only these exact builtin implementations can cross the business allowlist.
+    if (ownedControlNames.has(tool.name)) return ownedControls.has(tool)
     // Apply this at insertion so built-in skills and late registrations cannot
     // accidentally restore optional legacy/service tools to ordinary runs.
     if (defaultExposure && !isDefaultTool(tool.name)) return false
@@ -225,6 +231,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
 
   const shouldRegister = (toolName: string): boolean => {
     if (toolName === 'plan_update') return true
+    if (ownedControlNames.has(toolName)) return true
     // undefined / null = 未配置，加载全部工具
     if (effectiveAllowedTools === undefined || effectiveAllowedTools === null) return true
     // 空数组 = Agent 明确禁用业务工具；内建计划不属于业务权限
@@ -380,6 +387,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   browserTools.forEach(tool => { if (shouldRegister(tool.name)) registerBuiltin(tool) })
   workbenchTools.forEach(tool => { if (shouldRegister(tool.name)) registerBuiltin(tool) })
   if (shouldRegister(deliverFilesTool.name)) registerBuiltin(deliverFilesTool)
+  if (shouldRegister(reportArtifactsTool.name)) registerBuiltin(reportArtifactsTool)
 
   // ── Superpower 自检 ────────────────────────────────────────────────────
   // 验证 CORE 工具名与 registry 实际注册保持一致，避免 OFF 模式下 Agent

@@ -12,6 +12,9 @@ import { rootRunStore } from '../root-runs/index.js'
 import { withHistoryLock } from '../conversation/serialization.js'
 import { IMAGE_MIME_TYPES } from '../../tools/file/constants.js'
 import { resultImageExtension, resultToolImages } from './tool-images.js'
+import { SubagentStore } from '../../core/subagent/store.js'
+import type { CollaborationBinding } from '../../core/collaboration/types.js'
+import { canonicalFilePathSync } from '../../shared/file-version.js'
 
 const digest = (value: string | Buffer): string => createHash('sha256').update(value).digest('hex')
 const schemas = new WeakMap<Client, Promise<void>>()
@@ -25,7 +28,10 @@ const MIME: Record<string, string> = {
   '.mp4': 'video/mp4', '.webm': 'video/webm', '.mp3': 'audio/mpeg', '.wav': 'audio/wav',
 }
 
-export type ResultFileInput = { path: string; name?: string } | { toolCallId: string; imageIndex?: number; name?: string }
+export type ChildArtifactFileInput = { path: string; name?: string; expectedHash?: string }
+export type ChildArtifactInput = { childSessionId: string; runId: string; artifactId: string; name?: string }
+export type ResultFileInput = { path: string; name?: string } | { toolCallId: string; imageIndex?: number; name?: string } | ChildArtifactInput
+export interface ChildArtifactManifest { childSessionId: string; runId: string; items: FinalResultItem[] }
 export const TOOL_RESULT_IMAGE_ASSETS = '__aetherResultImageAssets'
 interface Scope { tenantId: string; sessionId: string; runId: string; turnId: string; attemptId: string }
 type OwnedContext = Pick<AgentContext, 'tenantId' | 'sessionId' | 'rootRunId' | 'turnId' | 'executionOwner' | 'signal'>
@@ -45,10 +51,15 @@ function ownedScope(ctx: OwnedContext): Scope {
 async function ready(db: Client): Promise<void> {
   let promise = schemas.get(db)
   if (!promise) {
-    promise = db.execute(`CREATE TABLE IF NOT EXISTS final_result_manifests (
+    promise = db.batch([`CREATE TABLE IF NOT EXISTS final_result_manifests (
       tenant_id TEXT NOT NULL, session_id TEXT NOT NULL, run_id TEXT NOT NULL, turn_id TEXT NOT NULL,
       attempt_id TEXT NOT NULL, items TEXT NOT NULL, final_result TEXT,
-      PRIMARY KEY (tenant_id, session_id, run_id))`).then(() => {})
+      PRIMARY KEY (tenant_id, session_id, run_id))`,
+      `CREATE TABLE IF NOT EXISTS child_artifact_manifests (
+        tenant_id TEXT NOT NULL, parent_session_id TEXT NOT NULL, child_session_id TEXT NOT NULL,
+        run_id TEXT NOT NULL, root_run_id TEXT NOT NULL, root_attempt_id TEXT NOT NULL,
+        report_key TEXT NOT NULL, input_hash TEXT NOT NULL, items TEXT NOT NULL, created_at INTEGER NOT NULL,
+        PRIMARY KEY(tenant_id,child_session_id,run_id,report_key))`], 'write').then(() => {})
     schemas.set(db, promise)
     promise.catch(() => { if (schemas.get(db) === promise) schemas.delete(db) })
   }
@@ -120,6 +131,143 @@ export class FinalResultStore {
     return items
   }
 
+  private childScope(ctx: AgentContext): CollaborationBinding {
+    throwIfAborted(ctx.signal)
+    if (!ctx.executionOwner) throw new Error('Artifact reporting requires an active child execution')
+    const service = serviceForOwner(ctx.executionOwner)
+    if (service.db !== this.db) throw new Error('Artifact reporting datasource mismatch')
+    service.assertDispatch(ctx.executionOwner)
+    const binding = service.collaboration.executionBinding(service.producerForExecution(ctx.executionOwner))
+    if (binding.kind !== 'child' || binding.tenantId !== ctx.tenantId || binding.sessionId !== ctx.sessionId
+      || binding.invocationRunId !== ctx.runId || binding.rootRunId !== ctx.rootRunId || binding.turnId !== ctx.turnId
+      || binding.rootSessionId !== ctx.parentSessionId) throw new Error('Artifact reporting owner mismatch')
+    return binding
+  }
+
+  private async captureFile(ctx: AgentContext, input: ChildArtifactFileInput): Promise<{ item: FinalResultItem; bytes: Buffer }> {
+    const canonical = await fs.realpath(workspaceManager.resolveSafePath(ctx, input.path))
+    workspaceManager.resolveSafePath(ctx, canonical)
+    const roots = await Promise.all(workspaceManager.getPaths(ctx).map(root => fs.realpath(root).catch(() => undefined)))
+    if (!roots.some(root => {
+      if (!root) return false
+      const relative = path.relative(root, canonical)
+      return relative === '' || !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep)
+    })) throw new Error('Final delivery file is outside this session workspace')
+    const name = input.name?.trim() || path.basename(canonical)
+    if (!name || name.length > 255 || /[\\/\u0000-\u001f\u007f]/.test(name)) throw new Error('Invalid result file name')
+    const handle = await fs.open(canonical, 'r')
+    let bytes: Buffer
+    try {
+      const before = await handle.stat()
+      if (!before.isFile() || before.size > MAX_RESULT_ASSET_BYTES) throw new Error('Result file must be a regular file no larger than 32 MiB')
+      const bounded = Buffer.alloc(before.size + 1)
+      let length = 0
+      while (length < bounded.length) {
+        const read = await handle.read(bounded, length, bounded.length - length, length)
+        if (!read.bytesRead) break
+        length += read.bytesRead
+      }
+      bytes = bounded.subarray(0, length)
+      const after = await handle.stat()
+      if (bytes.length !== before.size || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw new Error('Result file changed while being captured; retry after writing finishes')
+    } finally { await handle.close() }
+    const hash = digest(bytes)
+    if (input.expectedHash !== undefined && input.expectedHash !== `sha256:${hash}`) throw new Error('Artifact file version changed before reporting')
+    const mimeType = MIME[path.extname(canonical).toLowerCase()] ?? 'application/octet-stream'
+    const assetId = randomUUID()
+    return { bytes, item: { id: assetId, assetId, name, path: canonical, mimeType, size: bytes.length, sha256: hash, kind: mimeType.startsWith('image/') ? 'image' : 'file' } }
+  }
+
+  /** A child records immutable candidate bytes; only a root may later adopt them. */
+  async report(ctx: AgentContext, files: ChildArtifactFileInput[]): Promise<ChildArtifactManifest> {
+    const binding = this.childScope(ctx), db = this.db
+    if (!files.length || files.length > MAX_RESULT_ITEMS) throw new Error(`Report 1..${MAX_RESULT_ITEMS} child artifacts`)
+    const reportKey = ctx.currentToolCallId
+    if (!reportKey || reportKey.length > 512) throw new Error('Artifact reporting requires its actual tool invocation')
+    const service = serviceForOwner(ctx.executionOwner!)
+    const run = await new SubagentStore(db).getRunHeader(binding.tenantId, binding.invocationRunId, true)
+    this.childScope(ctx)
+    if (!run?.continuation || run.continuation.readOnly || run.childSessionId !== binding.sessionId
+      || run.parentSessionId !== binding.rootSessionId) throw new Error('This child is not allowed to report file artifacts')
+    await ready(db)
+    const inputHash = digest(JSON.stringify(files))
+    const prior = await db.execute({ sql: `SELECT input_hash,items FROM child_artifact_manifests
+      WHERE tenant_id=? AND child_session_id=? AND run_id=? AND report_key=?`,
+      args: [binding.tenantId, binding.sessionId, binding.invocationRunId, reportKey] })
+    this.childScope(ctx)
+    if (prior.rows[0]) {
+      if (prior.rows[0].input_hash !== inputHash) throw new Error('Artifact report key already belongs to different input')
+      return { childSessionId: binding.sessionId, runId: binding.invocationRunId, items: JSON.parse(String(prior.rows[0].items)) }
+    }
+    // Use the frozen child roots, never caller-provided paths to broaden a report.
+    const fileContext = { ...ctx, workspacePaths: run.continuation.workspacePaths,
+      projectRoot: run.continuation.projectRoot, cwd: run.continuation.cwd }
+    const frozenRoots = await Promise.all([...new Set([...run.continuation.workspacePaths,
+      ...(run.continuation.projectRoot ? [run.continuation.projectRoot] : [])])].map(root => fs.realpath(root).catch(() => undefined)))
+    const items: FinalResultItem[] = [], seen = new Set<string>()
+    let total = 0
+    for (const file of files) {
+      this.childScope(ctx)
+      const { item, bytes } = await this.captureFile(fileContext, file)
+      if (!frozenRoots.some(root => {
+        if (!root) return false
+        const relative = path.relative(root, item.path)
+        return relative === '' || !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep)
+      })) throw new Error('Artifact file is outside the frozen child workspace')
+      const key = process.platform === 'win32' ? item.path.toLowerCase() : item.path
+      if (seen.has(key)) throw new Error('A child artifact file may only appear once')
+      seen.add(key)
+      total += item.size
+      if (total > MAX_RESULT_TOTAL_BYTES) throw new Error('Result files exceed the 128 MiB total limit')
+      Object.assign(item, { producerChildSessionId: binding.sessionId, producerRunId: binding.invocationRunId, producerArtifactId: item.assetId })
+      this.childScope(ctx)
+      await this.saveBytes(binding.tenantId, bytes, item)
+      items.push(item)
+    }
+    const tx = await db.transaction('write')
+    try {
+      this.childScope(ctx)
+      await service.collaboration.store.assertProducer(tx, binding)
+      await tx.execute({ sql: `INSERT INTO child_artifact_manifests(tenant_id,parent_session_id,child_session_id,run_id,root_run_id,root_attempt_id,report_key,input_hash,items,created_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(tenant_id,child_session_id,run_id,report_key) DO NOTHING`,
+        args: [binding.tenantId, binding.rootSessionId, binding.sessionId, binding.invocationRunId, binding.rootRunId, binding.rootAttemptId,
+          reportKey, inputHash, JSON.stringify(items), Date.now()] })
+      const accepted = (await tx.execute({ sql: `SELECT input_hash,items FROM child_artifact_manifests
+        WHERE tenant_id=? AND child_session_id=? AND run_id=? AND report_key=?`,
+        args: [binding.tenantId, binding.sessionId, binding.invocationRunId, reportKey] })).rows[0]
+      if (!accepted || accepted.input_hash !== inputHash) throw new Error('Artifact report key already belongs to different input')
+      this.childScope(ctx)
+      await tx.commit()
+      return { childSessionId: binding.sessionId, runId: binding.invocationRunId, items: JSON.parse(String(accepted.items)) }
+    } catch (error) { await tx.rollback().catch(() => {}); throw error }
+    finally { tx.close() }
+  }
+
+  private async childArtifact(ctx: AgentContext, scope: Scope, input: ChildArtifactInput): Promise<FinalResultItem> {
+    const child = await new SubagentStore(this.db).getRunHeader(scope.tenantId, input.runId)
+    ownedScope(ctx)
+    if (!child || child.childSessionId !== input.childSessionId || child.parentSessionId !== scope.sessionId
+      || child.rootSessionId !== scope.sessionId) throw new Error('Child artifact does not belong to this parent session')
+    const rows = await this.db.execute({ sql: `SELECT j.value AS item FROM child_artifact_manifests m,json_each(m.items) j
+      WHERE m.tenant_id=? AND m.parent_session_id=? AND m.child_session_id=? AND m.run_id=? AND json_extract(j.value,'$.assetId')=?`,
+      args: [scope.tenantId, scope.sessionId, input.childSessionId, input.runId, input.artifactId] })
+    ownedScope(ctx)
+    if (rows.rows.length !== 1) throw new Error('Child artifact receipt is unavailable')
+    const source: FinalResultItem = JSON.parse(String(rows.rows[0].item))
+    if (source.producerChildSessionId !== input.childSessionId || source.producerRunId !== input.runId
+      || source.producerArtifactId !== input.artifactId) throw new Error('Child artifact receipt identity mismatch')
+    const sourcePath = canonicalFilePathSync(workspaceManager.resolveSafePath(ctx, source.path))
+    if (!workspaceManager.getPaths(ctx).some(root => {
+      const relative = path.relative(canonicalFilePathSync(root), sourcePath)
+      return relative === '' || !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep)
+    })) throw new Error('Child artifact is outside the current parent workspace')
+    await this.readBytes(scope.tenantId, source)
+    const name = input.name?.trim() || source.name
+    if (!name || name.length > 255 || /[\\/\u0000-\u001f\u007f]/.test(name)) throw new Error('Invalid result file name')
+    const assetId = randomUUID()
+    return { ...source, id: assetId, assetId, name }
+  }
+
   async stage(ctx: AgentContext, files: ResultFileInput[]): Promise<FinalResultItem[]> {
     const scope = ownedScope(ctx), db = this.db
     if (files.length > MAX_RESULT_ITEMS) throw new Error(`At most ${MAX_RESULT_ITEMS} result files may be delivered`)
@@ -128,6 +276,16 @@ export class FinalResultStore {
     let total = 0
     for (const input of files) {
       ownedScope(ctx)
+      if ('artifactId' in input) {
+        const key = `child:${input.childSessionId}:${input.runId}:${input.artifactId}`
+        if (seen.has(key)) throw new Error('A child artifact may only appear once')
+        seen.add(key)
+        const item = await this.childArtifact(ctx, scope, input)
+        total += item.size
+        if (total > MAX_RESULT_TOTAL_BYTES) throw new Error('Result files exceed the 128 MiB total limit')
+        items.push(item)
+        continue
+      }
       if ('toolCallId' in input) {
         const index = input.imageIndex ?? 0
         const key = `tool:${input.toolCallId}:${index}`
@@ -154,42 +312,13 @@ export class FinalResultStore {
         items.push(item)
         continue
       }
-      const canonical = await fs.realpath(workspaceManager.resolveSafePath(ctx, input.path))
-      workspaceManager.resolveSafePath(ctx, canonical)
-      const roots = await Promise.all(workspaceManager.getPaths(ctx).map(root => fs.realpath(root).catch(() => undefined)))
-      if (!roots.some(root => {
-        if (!root) return false
-        const relative = path.relative(root, canonical)
-        return relative === '' || !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep)
-      })) throw new Error('Final delivery file is outside this session workspace')
-      const key = process.platform === 'win32' ? canonical.toLowerCase() : canonical
+      const { item, bytes } = await this.captureFile(ctx, input)
+      const key = process.platform === 'win32' ? item.path.toLowerCase() : item.path
       if (seen.has(key)) throw new Error('A result file may only appear once')
       seen.add(key)
-      const name = input.name?.trim() || path.basename(canonical)
-      if (!name || name.length > 255 || /[\\/\u0000-\u001f\u007f]/.test(name)) throw new Error('Invalid result file name')
-      const handle = await fs.open(canonical, 'r')
-      let bytes: Buffer
-      try {
-        const before = await handle.stat()
-        if (!before.isFile() || before.size > MAX_RESULT_ASSET_BYTES) throw new Error('Result file must be a regular file no larger than 32 MiB')
-        total += before.size
-        if (total > MAX_RESULT_TOTAL_BYTES) throw new Error('Result files exceed the 128 MiB total limit')
-        // A file that grows during capture cannot allocate unbounded memory.
-        const bounded = Buffer.alloc(before.size + 1)
-        let length = 0
-        while (length < bounded.length) {
-          const read = await handle.read(bounded, length, bounded.length - length, length)
-          if (!read.bytesRead) break
-          length += read.bytesRead
-        }
-        bytes = bounded.subarray(0, length)
-        const after = await handle.stat()
-        if (bytes.length !== before.size || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw new Error('Result file changed while being captured; retry after writing finishes')
-      } finally { await handle.close() }
+      total += item.size
+      if (total > MAX_RESULT_TOTAL_BYTES) throw new Error('Result files exceed the 128 MiB total limit')
       ownedScope(ctx)
-      const mimeType = MIME[path.extname(canonical).toLowerCase()] ?? 'application/octet-stream'
-      const assetId = randomUUID()
-      const item: FinalResultItem = { id: assetId, assetId, name, path: canonical, mimeType, size: bytes.length, sha256: digest(bytes), kind: mimeType.startsWith('image/') ? 'image' : 'file' }
       await this.saveBytes(scope.tenantId, bytes, item)
       items.push(item)
     }

@@ -13,6 +13,7 @@ import * as modelResolver from '../../../../core/llm-adapter/resolve-model.js'
 import { resolveCapabilities } from '../../../../core/model-capabilities/index.js'
 import { activeStreams } from '../../../../core/stream-pipeline/stream-bus.js'
 import { chatRoutes } from '../chat.js'
+import { COLLABORATOR_LIMITS } from '../../../../core/subagent/collaborators.js'
 
 const headers = { 'x-aether-tool-profile': 'code', 'x-aether-run-lifetime': 'durable', 'x-aether-subagent-protocol': '2' }
 const barrier = () => { let release!: () => void; const promise = new Promise<void>(yes => { release = yes }); return { promise, release } }
@@ -45,7 +46,113 @@ afterEach(async () => {
   fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 })
 })
 
+describe('actual chat collaborator schema', () => {
+  it('preserves builtin role, independent instance key, task and description before dispatch', async () => {
+    // Fastify executes its real route schema before this test-only dispatch gate.
+    // No provider or child is needed to verify which fields reach the handler.
+    const received = vi.fn()
+    app.addHook('preHandler', async (request, reply) => {
+      received(request.body)
+      return reply.send({ collaborators: (request.body as { collaborators?: unknown }).collaborators })
+    })
+    await app.register(chatRoutes)
+    const collaborators = [
+      { builtinRole: 'research', instanceKey: 'research-one', task: 'Read the existing API', description: 'API evidence' },
+      { builtinRole: 'executor', instanceKey: 'executor-one', task: 'Implement the editor', description: 'Editor' },
+      { builtinRole: 'executor', instanceKey: 'executor-two', task: 'Implement the sidebar', description: 'Sidebar' },
+      { builtinRole: 'general', instanceKey: 'general-one', task: 'Integrate the components', description: 'Integration' },
+      { builtinRole: 'research', instanceKey: 'i'.repeat(COLLABORATOR_LIMITS.instanceKey),
+        task: 't'.repeat(COLLABORATOR_LIMITS.task), description: 'd'.repeat(COLLABORATOR_LIMITS.description) },
+    ]
+    const response = await app.inject({ method: 'POST', url: '/chat', headers,
+      payload: { sessionId: 'builtin-schema', message: 'Coordinate the selected collaborators', collaborators } })
+    expect(response.statusCode, response.body).toBe(200)
+    expect(response.json().collaborators).toEqual(collaborators)
+    expect(received).toHaveBeenCalledWith(expect.objectContaining({ collaborators }))
+    expect(contexts).toHaveLength(0)
+    expect((await db.execute('SELECT count(*) AS n FROM root_runs')).rows[0].n).toBe(0)
+  })
+  it.each(['unknown', 'Research', 'admin'])('rejects invalid builtin role %s before dispatch', async builtinRole => {
+    const dispatch = vi.fn()
+    app.addHook('preHandler', async (_request, reply) => { dispatch(); return reply.send({ unexpected: true }) })
+    await app.register(chatRoutes)
+    const response = await app.inject({ method: 'POST', url: '/chat', headers,
+      payload: { sessionId: 'invalid-builtin-schema', message: 'Invalid role must never execute', collaborators: [{ builtinRole, instanceKey: 'invalid' }] } })
+    expect(response.statusCode).toBe(400)
+    expect(response.json().message).toContain('builtinRole')
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(contexts).toHaveLength(0)
+    expect((await db.execute('SELECT count(*) AS n FROM root_runs')).rows[0].n).toBe(0)
+  })
+  it.each(['task', 'description', 'instanceKey'] as const)('rejects oversized collaborator %s before dispatch', async field => {
+    const dispatch = vi.fn()
+    app.addHook('preHandler', async (_request, reply) => { dispatch(); return reply.send({ unexpected: true }) })
+    await app.register(chatRoutes)
+    const response = await app.inject({ method: 'POST', url: '/chat', headers,
+      payload: { sessionId: 'oversize-builtin-schema', message: 'No dispatch for invalid selection',
+        collaborators: [{ builtinRole: 'research', [field]: 'x'.repeat(COLLABORATOR_LIMITS[field] + 1) }] } })
+    expect(response.statusCode).toBe(400)
+    expect(response.json().message).toContain(field)
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+})
+
 describe.each(['jsonl', 'sqlite'])('%s actual async model tools', backend => {
+  it('an explicitly selected collaborator admits before the parent model and receives live parent steering before completion', async () => {
+    vi.stubEnv('HISTORY_BACKEND', backend)
+    const entered = gate(), finish = gate()
+    let parentCalls = 0, childCalls = 0, runId = '', childSessionId = '', dispatchId = ''
+    vi.spyOn(modelResolver, 'createAdapterFromResolved').mockImplementation(config => ({ provider: 'fixture', model: config.model,
+      countTokens: text => Math.ceil(text.length / 4), complete: async () => { throw new Error('UNEXPECTED_COMPLETION') },
+      async *stream(messages) {
+        if (config.model === 'explicit-child') {
+          childCalls++
+          if (childCalls === 1) {
+            entered.release(); await finish.promise
+            yield { done: true, finishReason: 'tool_calls', toolCalls: [{ id: 'explicit-child-peers', name: 'subagent_participants', args: '{}', index: 0 }] }
+          } else {
+            expect(childCalls).toBe(2)
+            expect(messages.some(message => String(message.content).includes('Include keyboard navigation in this component'))).toBe(true)
+            yield { done: true, finishReason: 'stop', content: 'Explicit child included the parent update' }
+          }
+          return
+        }
+        parentCalls++
+        if (parentCalls === 1) {
+          const admissionMessage = messages.find(message => message.role === 'tool' && message.toolName === 'subagent_start')!
+          expect(admissionMessage).toBeDefined()
+          const admission = JSON.parse(String(admissionMessage.content))
+          expect(admission.state).toBe('admitted')
+          runId = admission.runId; childSessionId = admission.childSessionId; dispatchId = admissionMessage.toolCallId!
+          await entered.promise
+          expect((await db.execute({ sql: 'SELECT status FROM subagent_runs WHERE run_id=?', args: [runId] })).rows[0].status).toBe('running')
+          expect(messages.some(message => message.id === 'subagent-result:' + runId)).toBe(false)
+          yield { done: true, finishReason: 'tool_calls', toolCalls: [{ id: 'explicit-parent-steer', name: 'subagent_send', index: 0,
+            args: JSON.stringify({ recipientParticipantId: 'child:' + childSessionId, message: 'Include keyboard navigation in this component' }) }] }
+        } else if (parentCalls === 2) {
+          expect(messages.find(message => message.toolCallId === 'explicit-parent-steer' && message.role === 'tool')?.content).toContain('queued')
+          finish.release()
+          yield { done: true, finishReason: 'tool_calls', toolCalls: [{ id: 'explicit-parent-join', name: 'subagent_wait', index: 0,
+            args: JSON.stringify({ runId, timeoutMs: 30000 }) }] }
+        } else {
+          expect(parentCalls).toBe(3)
+          expect(messages.find(message => message.toolCallId === 'explicit-parent-join' && message.role === 'tool')?.content).toContain('Explicit child included the parent update')
+          yield { done: true, finishReason: 'stop', content: 'Parent verified explicitly selected work' }
+        }
+      },
+    }))
+    await app.register(chatRoutes)
+    const response = await app.inject({ method: 'POST', url: '/chat', headers, payload: { sessionId: 'explicit-async-route', message: 'Build the selected component',
+      collaborators: [{ builtinRole: 'executor', instanceKey: 'component', task: 'Build the component', description: 'Component' }],
+      model: 'explicit-parent', subagentModel: 'explicit-child', workspacePaths: [directory], memoryScope: 'off', thinkingMode: false, skills: [], mcpServers: [], knowledgeBases: [] } })
+    expect(response.statusCode).toBe(200)
+    expect(response.body).toContain('Parent verified explicitly selected work')
+    expect(parentCalls).toBe(3); expect(childCalls).toBe(2)
+    const history = await createConversationHistory().getFullHistory({ tenantId: 'default', sessionId: 'explicit-async-route' })
+    expect(history.filter(message => message.role === 'tool' && message.toolCallId === dispatchId)).toHaveLength(1)
+    expect(history.find(message => message.id === 'subagent-result:' + runId)).toMatchObject({ role: 'assistant', metadata: { subagentNotification: { runId } } })
+    expect((await rootRunStore.list('default', 'explicit-async-route'))[0].status).toBe('succeeded')
+  })
   it('actual cancel tool stays pending until the held child stops and then returns its exact cancelled result', async () => {
     vi.stubEnv('HISTORY_BACKEND', backend)
     const { registry } = await (await import('../../../../tools/registry-factory.js')).createToolRegistry({ toolProfile: 'code', allowedTools: ['subagent_start', 'subagent_cancel'], allowedMcpServers: [] })
@@ -112,19 +219,22 @@ describe.each(['jsonl', 'sqlite'])('%s actual async model tools', backend => {
   })
   it('start returns while child is held, parent/child send with real identities, and wait keeps one result per call plus independent completion', async () => {
     vi.stubEnv('HISTORY_BACKEND', backend)
-    const { registry } = await (await import('../../../../tools/registry-factory.js')).createToolRegistry({ toolProfile: 'code', allowedTools: ['subagent_start', 'subagent_wait', 'subagent_send', 'subagent_participants', 'subagent_inbox'], allowedMcpServers: [] })
+    const { registry } = await (await import('../../../../tools/registry-factory.js')).createToolRegistry({ toolProfile: 'code', allowedTools: ['subagent_start', 'subagent_wait', 'subagent_send', 'subagent_participants', 'subagent_inbox', 'subagent_request_input'], allowedMcpServers: [] })
     expect(registry.has('subagent_start')).toBe(true); expect(registry.has('subagent_wait')).toBe(true)
-    const entered = gate(), finish = gate(); let parentCalls = 0, childCalls = 0, runId = '', childSessionId = ''
+    expect(registry.has('subagent_request_input')).toBe(true)
+    const entered = gate(), finish = gate(), answer = gate(); let parentCalls = 0, childCalls = 0, runId = '', childSessionId = ''
     const providerInputs: Message[][] = []
     vi.spyOn(modelResolver, 'createAdapterFromResolved').mockImplementation(config => ({ provider: 'fixture', model: config.model,
       countTokens: text => Math.ceil(text.length / 4), complete: async () => { throw new Error('UNEXPECTED_COMPLETION') },
       async *stream(messages) {
         providerInputs.push(messages)
         const root = contexts.find(ctx => !ctx.runId)!
+        expect(root.tools.has('subagent_request_input')).toBe(true)
         if (config.model === 'child-scripted') {
           childCalls++
           const child = contexts.find(ctx => !!ctx.runId)!
           expect(child.tools.has('subagent_start')).toBe(false); expect(child.tools.has('subagent')).toBe(false)
+          expect(child.tools.has('subagent_request_input')).toBe(true)
           if (childCalls === 1) {
             entered.release(); await finish.promise
             yield { done: true, finishReason: 'tool_calls', toolCalls: [{ id: 'child-participants', index: 0, name: 'subagent_participants', args: '{}' }] }
@@ -132,7 +242,8 @@ describe.each(['jsonl', 'sqlite'])('%s actual async model tools', backend => {
             expect(messages.some(message => String(message.content).includes('Actual parent to child message'))).toBe(true)
             yield { done: true, finishReason: 'tool_calls', toolCalls: [{ id: 'child-reply', index: 0, name: 'subagent_send', args: JSON.stringify({ recipientParticipantId: 'root:' + root.rootRunId, message: 'Actual child to parent reply' }) }] }
           } else {
-            expect(childCalls).toBe(3); yield { done: true, finishReason: 'stop', content: 'Actual async child final' }
+            expect(childCalls).toBe(3); await answer.promise
+            yield { done: true, finishReason: 'stop', content: 'Actual async child final' }
           }
           return
         }
@@ -158,10 +269,16 @@ describe.each(['jsonl', 'sqlite'])('%s actual async model tools', backend => {
           expect(messages.some(message => message.role === 'tool' && message.toolCallId === 'parent-poll' && JSON.parse(String(message.content)).state === 'pending')).toBe(true)
           finish.release()
           yield { done: true, finishReason: 'tool_calls', toolCalls: [{ id: 'parent-join', index: 0, name: 'subagent_wait', args: JSON.stringify({ runId, timeoutMs: 30000 }) }] }
+        } else if (parentCalls === 6) {
+          const observation = JSON.parse(String(messages.find(message => message.role === 'tool' && message.toolCallId === 'parent-join')!.content))
+          expect(observation).toMatchObject({ state: 'pending', runId, reason: 'message' })
+          expect(messages.some(message => String(message.content).includes('Actual child to parent reply'))).toBe(true)
+          answer.release()
+          yield { done: true, finishReason: 'tool_calls', toolCalls: [{ id: 'parent-final-join', index: 0, name: 'subagent_wait', args: JSON.stringify({ runId, timeoutMs: 30000 }) }] }
         } else {
-          expect(parentCalls).toBe(6)
+          expect(parentCalls).toBe(7)
           expect(messages.filter(message => message.role === 'tool' && message.toolCallId === 'async-start')).toHaveLength(1)
-          expect(messages.some(message => message.role === 'tool' && message.toolCallId === 'parent-join' && String(message.content).includes('Actual async child final'))).toBe(true)
+          expect(messages.some(message => message.role === 'tool' && message.toolCallId === 'parent-final-join' && String(message.content).includes('Actual async child final'))).toBe(true)
           expect(messages.some(message => message.role === 'assistant' && message.metadata?.subagentNotification && String(message.content).includes('Actual async child final'))).toBe(true)
           expect(messages.some(message => String(message.content).includes('Actual child to parent reply'))).toBe(true)
           yield { done: true, finishReason: 'stop', content: 'Actual async parent final' }
@@ -172,7 +289,7 @@ describe.each(['jsonl', 'sqlite'])('%s actual async model tools', backend => {
     const response = await app.inject({ method: 'POST', url: '/chat', headers, payload: { sessionId: 'async-route', message: 'Start and coordinate actual child',
       model: 'root-scripted', workspacePaths: [directory], memoryScope: 'off', thinkingMode: false, skills: [], mcpServers: [], knowledgeBases: [] } })
     expect(response.statusCode, response.body).toBe(200); expect(response.body).toContain('Actual async parent final')
-    expect(parentCalls).toBe(6); expect(childCalls).toBe(3)
+    expect(parentCalls).toBe(7); expect(childCalls).toBe(3)
     const root = (await rootRunStore.list('default', 'async-route'))[0], rows = await createConversationHistory().getFullHistory({ tenantId: 'default', sessionId: 'async-route' })
     expect(root.status).toBe('succeeded')
     expect(rows.filter(message => message.role === 'tool' && message.toolCallId === 'async-start')).toHaveLength(1)

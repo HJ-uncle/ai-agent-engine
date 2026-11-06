@@ -22,7 +22,7 @@ export interface SubagentStart {
   /** The runner and canonical root retain this executor plus projection join. */
   readonly completion: Promise<SubagentRunView>
 }
-export type SubagentWait = { state: 'completed'; run: SubagentRunView } | { state: 'pending'; runId: string }
+export type SubagentWait = { state: 'completed'; run: SubagentRunView } | { state: 'pending'; runId: string; reason?: 'message' }
 export interface SubagentWaitOptions { timeoutMs?: number; signal?: AbortSignal }
 interface OwnedCompletion { runner: SubagentRunner; start: SubagentStart }
 // A second runner instance cannot reinterpret readable durable IDs as a new
@@ -166,13 +166,23 @@ export class SubagentRunner {
     const owned = await this.ownedCompletion(parent, runId)
     const result = await new Promise<SubagentWait>((resolve, reject) => {
       let timer: ReturnType<typeof setTimeout> | undefined, done = false
+      const inputObservation = new AbortController()
       const listeners = signals.map(signal => ({ signal, listener: () => settle(() => reject(signal.reason ?? new Error('Subagent wait aborted'))) }))
-      const cleanup = () => { if (timer) clearTimeout(timer); for (const { signal, listener } of listeners) signal.removeEventListener('abort', listener) }
+      const cleanup = () => {
+        if (timer) clearTimeout(timer)
+        inputObservation.abort(new Error('Subagent wait observation ended'))
+        for (const { signal, listener } of listeners) signal.removeEventListener('abort', listener)
+      }
       const settle = (action: () => void) => { if (!done) { done = true; cleanup(); action() } }
       for (const { signal, listener } of listeners) { if (done) break; signal.addEventListener('abort', listener, { once: true }); if (signal.aborted) listener() }
       if (done) return
       owned.start.completion.then(run => settle(() => resolve({ state: 'completed', run })), error => settle(() => reject(error)))
-      timer = setTimeout(() => settle(() => resolve({ state: 'pending', runId })), timeout)
+      try {
+        const service = serviceForOwner(parent.executionOwner!)
+        service.collaboration.waitForInput(service.producerForExecution(parent.executionOwner!), inputObservation.signal)
+          .then(() => settle(() => resolve({ state: 'pending', runId, reason: 'message' })), error => settle(() => reject(error)))
+        timer = setTimeout(() => settle(() => resolve({ state: 'pending', runId })), timeout)
+      } catch (error) { settle(() => reject(error)) }
     })
     for (const signal of signals) signal.throwIfAborted()
     await this.ownedCompletion(parent, runId)
@@ -245,6 +255,10 @@ export class SubagentRunner {
     this.budgetUsers.set(group, (this.budgetUsers.get(group) ?? 0) + 1)
     const observer: RunObserver = {
       onOutcome: (value) => { outcome = value },
+      onCompaction: async (compaction) => {
+        // Keep the negotiated v2 event vocabulary compatible with older viewers.
+        await emit(await this.store.appendHeader(tenantId, runId, 'output.updated', { compaction }, { allowedStatuses: ['running', 'cancelling'] }))
+      },
       onOutput: async (text) => {
         partialOutput = boundedText(text) ?? ''
         if (Date.now() - lastOutputWrite < 200) return

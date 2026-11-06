@@ -55,11 +55,11 @@ afterEach(async () => {
 })
 
 describe('collaboration HTTP inspection protocol', () => {
-  it('declares queue inspection truthfully while consumer, async tools and JSONL delivery remain unsupported', async () => {
+  it('declares the verified owned runtime consumer, async tools and both delivery backends', async () => {
     const result = await request('/collaboration/capabilities')
     expect(result.status).toBe(200)
-    expect(result.body.data).toMatchObject({ durableQueueReceipts: true, mailboxConsumer: false, runtimeCommunication: false,
-      asynchronousAgentTools: false, userControllerMutation: false, jsonlDelivery: false })
+    expect(result.body.data).toMatchObject({ durableQueueReceipts: true, mailboxConsumer: true, runtimeCommunication: true,
+      asynchronousAgentTools: true, userControllerMutation: true, jsonlDelivery: true, finalInputFence: true, waitInterruptibleByInbox: true })
   })
   it('reads a durable accepted receipt over actual HTTP injection on a separate request', async () => {
     const result = await request(`/collaboration/roots/root-a/receipts/${receipt.messageId}?${query}`)

@@ -7,6 +7,7 @@ import { ensureJSONLDeliverySchema } from './jsonl-delivery-schema.js'
 import { CollaborationError, type CollaborationBinding, type CollaborationPage, type CollaborationParticipant,
   type CollaborationPhase, type CollaborationReceipt, type CollaborationRootScope } from './types.js'
 import { collaborationReceipt, projectCollaborationReceipts } from './receipt-projection.js'
+import { notifyInbox, subscribeInbox } from './inbox-signal.js'
 
 type Query = Pick<Client, 'execute'> | Pick<Transaction, 'execute'>
 const writeTails = new WeakMap<Client, Promise<unknown>>()
@@ -234,6 +235,7 @@ export class CollaborationStore {
       const recipient = await tx.execute({ sql: 'SELECT kind FROM collaboration_participants WHERE tenant_id=? AND root_run_id=? AND root_attempt_id=? AND participant_id=?', args: [...scopeArgs(binding), target] })
       if (!recipient.rows[0]) fail('not_found', 'Recipient is not a participant of this root')
       if (root.phase === 'draining' && recipient.rows[0].kind === 'root') fail('closed', 'Root model has ended; message would not be integrated')
+      await this.assertRecipientInputOpen(tx, binding, target)
       const count = await tx.execute({ sql: `SELECT count(*) AS count FROM collaboration_messages m WHERE tenant_id=? AND root_run_id=? AND root_attempt_id=? AND recipient_participant_id=? AND state='queued'
         AND NOT EXISTS (SELECT 1 FROM collaboration_deliveries d WHERE d.tenant_id=m.tenant_id AND d.root_run_id=m.root_run_id
           AND d.root_attempt_id=m.root_attempt_id AND d.message_id=m.message_id)
@@ -243,6 +245,82 @@ export class CollaborationStore {
       const inserted = await tx.execute({ sql: `INSERT INTO collaboration_messages(tenant_id,root_run_id,root_attempt_id,message_id,sender_participant_id,sender_invocation_run_id,recipient_participant_id,request_key,payload_hash,payload_bytes,body,accepted_at,state)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING *`, args: [...scopeArgs(binding), randomUUID(), binding.participantId, binding.invocationRunId, target, requestKey, payloadHash, bytes, body, Date.now(), 'queued'] })
       return collaborationReceipt(inserted.rows[0])
+    }).then(receipt => { this.notifyInput(binding, target); return receipt })
+  }
+
+  /** Notify only after a successful commit; consumers still verify its durable receipt. */
+  notifyInput(scope: CollaborationRootScope, participantId: string): void { notifyInbox(this.db, scope, participantId) }
+
+  private async hasPendingInput(q: Query, binding: CollaborationBinding): Promise<boolean> {
+    const pending = await q.execute({ sql: `SELECT 1 FROM collaboration_messages m
+      WHERE m.tenant_id=? AND m.root_run_id=? AND m.root_attempt_id=? AND m.recipient_participant_id=? AND m.state='queued'
+        AND NOT EXISTS (SELECT 1 FROM collaboration_deliveries d WHERE d.tenant_id=m.tenant_id
+          AND d.root_run_id=m.root_run_id AND d.root_attempt_id=m.root_attempt_id AND d.message_id=m.message_id)
+        AND NOT EXISTS (SELECT 1 FROM collaboration_jsonl_deliveries d WHERE d.tenant_id=m.tenant_id
+          AND d.root_run_id=m.root_run_id AND d.root_attempt_id=m.root_attempt_id AND d.message_id=m.message_id
+          AND d.state IN ('integrated','suppressed')) LIMIT 1`, args: [...scopeArgs(binding), binding.participantId] })
+    return pending.rows.length > 0
+  }
+
+  async waitForInput(binding: CollaborationBinding, signal: AbortSignal): Promise<void> {
+    await this.prepare()
+    signal.throwIfAborted()
+    return new Promise<void>((resolve, reject) => {
+      let done = false, checking = false, dirty = false
+      const finish = (error?: unknown) => {
+        if (done) return
+        done = true; unsubscribe(); signal.removeEventListener('abort', abort)
+        if (error !== undefined) reject(error); else resolve()
+      }
+      const abort = () => finish(signal.reason ?? new Error('Inbox observation aborted'))
+      const check = async () => {
+        dirty = true
+        if (checking || done) return
+        checking = true
+        try {
+          while (dirty && !done) {
+            dirty = false
+            const pending = await this.read(async tx => {
+              await this.assertProducer(tx, binding)
+              return this.hasPendingInput(tx, binding)
+            })
+            if (pending) finish()
+          }
+        } catch (error) { finish(error) }
+        finally { checking = false }
+      }
+      // Subscribe before the first durable read: a commit cannot fall into the
+      // gap between checking an empty inbox and installing its notification.
+      const unsubscribe = subscribeInbox(this.db, binding, binding.participantId, () => { void check() })
+      signal.addEventListener('abort', abort, { once: true })
+      if (signal.aborted) abort(); else void check()
+    })
+  }
+
+  /** Called in the sender's write transaction, so acceptance cannot race final sealing. */
+  async assertRecipientInputOpen(q: Query, scope: CollaborationRootScope, participantId: string, invocationRunId?: string): Promise<void> {
+    const row = (await q.execute({ sql: `SELECT invocation_run_id,input_closed_at FROM collaboration_invocations
+      WHERE tenant_id=? AND root_run_id=? AND root_attempt_id=? AND participant_id=?
+      ORDER BY seq DESC LIMIT 1`, args: [...scopeArgs(scope), participantId] })).rows[0]
+    if (!row) fail('not_found', 'Recipient invocation is missing')
+    if (invocationRunId !== undefined && row.invocation_run_id !== invocationRunId) fail('conflict', 'Recipient invocation changed')
+    if (row.input_closed_at !== null) fail('closed', 'Recipient is finishing; continue the same child after its current invocation settles')
+  }
+
+  /** A no-mail observation and the final input fence share the queue's SQLite writer lock. */
+  async sealInputIfEmpty(binding: CollaborationBinding): Promise<boolean> {
+    return this.write(async tx => {
+      await this.assertProducer(tx, binding)
+      const invocation = (await tx.execute({ sql: `SELECT input_closed_at FROM collaboration_invocations
+        WHERE tenant_id=? AND root_run_id=? AND root_attempt_id=? AND participant_id=? AND invocation_run_id=?`,
+        args: [...scopeArgs(binding), binding.participantId, binding.invocationRunId] })).rows[0]
+      if (!invocation) fail('forbidden', 'Final input fence has no admitted invocation')
+      if (invocation.input_closed_at !== null) return true
+      if (await this.hasPendingInput(tx, binding)) return false
+      await tx.execute({ sql: `UPDATE collaboration_invocations SET input_closed_at=?
+        WHERE tenant_id=? AND root_run_id=? AND root_attempt_id=? AND participant_id=? AND invocation_run_id=?`,
+        args: [Date.now(), ...scopeArgs(binding), binding.participantId, binding.invocationRunId] })
+      return true
     })
   }
 
@@ -294,10 +372,24 @@ export class CollaborationStore {
       const cursor = this.decode(key, options.cursor, fingerprint)
       const max = await tx.execute({ sql: 'SELECT coalesce(max(seq),0) AS revision FROM collaboration_participants WHERE tenant_id=? AND root_run_id=? AND root_attempt_id=?', args: scopeArgs(scope) })
       const revision = cursor?.revision ?? Number(max.rows[0].revision)
-      const result = await tx.execute({ sql: `SELECT * FROM collaboration_participants WHERE tenant_id=? AND root_run_id=? AND root_attempt_id=? AND seq>? AND seq<=? ORDER BY seq LIMIT ?`, args: [...scopeArgs(scope), cursor?.after ?? 0, revision, size + 1] })
-      const entries = result.rows.slice(0, size).map(row => ({ participantId: String(row.participant_id),
+      const result = await tx.execute({ sql: `SELECT p.*,i.invocation_run_id AS latest_invocation_run_id,i.input_closed_at,cr.phase AS root_phase,
+        CASE WHEN p.kind='root' AND cr.phase='interrupted' THEN 'interrupted'
+          ELSE coalesce(s.status,json_extract(r.state,'$.status')) END AS status
+        FROM collaboration_participants p JOIN collaboration_invocations i ON i.seq=(
+          SELECT max(latest.seq) FROM collaboration_invocations latest WHERE latest.tenant_id=p.tenant_id
+            AND latest.root_run_id=p.root_run_id AND latest.root_attempt_id=p.root_attempt_id AND latest.participant_id=p.participant_id)
+        LEFT JOIN subagent_runs s ON p.kind='child' AND s.tenant_id=i.tenant_id AND s.run_id=i.invocation_run_id
+        LEFT JOIN root_runs r ON p.kind='root' AND r.tenant_id=p.tenant_id AND r.run_id=p.root_run_id
+        JOIN collaboration_roots cr ON cr.tenant_id=p.tenant_id AND cr.root_run_id=p.root_run_id AND cr.root_attempt_id=p.root_attempt_id
+        WHERE p.tenant_id=? AND p.root_run_id=? AND p.root_attempt_id=? AND p.seq>? AND p.seq<=? ORDER BY p.seq LIMIT ?`,
+        args: [...scopeArgs(scope), cursor?.after ?? 0, revision, size + 1] })
+      const entries: CollaborationParticipant[] = result.rows.slice(0, size).map(row => ({ participantId: String(row.participant_id),
         ...(row.parent_participant_id === null ? {} : { parentParticipantId: String(row.parent_participant_id) }),
-        kind: row.kind as CollaborationParticipant['kind'], sessionId: String(row.session_id), invocationRunId: String(row.invocation_run_id), admittedSeq: Number(row.seq), admittedAt: Number(row.admitted_at) }))
+        kind: row.kind as CollaborationParticipant['kind'], sessionId: String(row.session_id), invocationRunId: String(row.latest_invocation_run_id),
+        status: String(row.status ?? 'unknown'), inputClosed: row.input_closed_at !== null,
+        activity: row.status === 'queued' ? 'queued' : row.status === 'running'
+          ? row.input_closed_at !== null || row.kind === 'root' && row.root_phase === 'draining' ? 'finishing' : 'running' : 'inactive',
+        admittedSeq: Number(row.seq), admittedAt: Number(row.admitted_at) }))
       const hasMore = result.rows.length > size
       return { entries, revision, hasMore, ...(hasMore ? { nextCursor: this.cursor(key, { version: 1, scope: fingerprint, revision, after: entries.at(-1)!.admittedSeq }) } : {}) }
     })
