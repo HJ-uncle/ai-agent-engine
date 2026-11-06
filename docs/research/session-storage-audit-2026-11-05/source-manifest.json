@@ -1,0 +1,149 @@
+{
+  "auditDate": "2026-11-05",
+  "timezone": "Asia/Shanghai",
+  "repository": "D:/dev/ai-agent-engine",
+  "head": "d25d93a68ce44b5bc5498584434b40c9ac9b7441",
+  "scope": "Current worktree including pre-existing uncommitted changes",
+  "files": [
+    {
+      "path": "src/storage/conversation/factory.ts",
+      "sha256": "2644609af85a731cd7c2b9139804c85b321f889f477da69ec64203adfb4e5b06"
+    },
+    {
+      "path": "src/storage/conversation/history.ts",
+      "sha256": "2860ed68605694c16a3aa9f8d024e2886b15954741ceed132e0dbd606a1f5697"
+    },
+    {
+      "path": "src/storage/conversation/jsonl-history.ts",
+      "sha256": "aeabb084d5456bc7835792a3c031000a796afab02246f58361bf3efb820745f3"
+    },
+    {
+      "path": "src/storage/conversation/serialization.ts",
+      "sha256": "639615ab8d394ebfcd621ee7a27b3ed6cfad3a63fe4fa93c6195139fc4eaaa88"
+    },
+    {
+      "path": "src/storage/conversation/usage.ts",
+      "sha256": "16e306aa2a9aa661156089a0813def2a0e828ade18f0ee36dc90362100c95443"
+    },
+    {
+      "path": "src/storage/sqlite/db.ts",
+      "sha256": "7b75844d6f137ac32e986ca313a1a490bbbaf035674275de737cd69e2000064a"
+    },
+    {
+      "path": "src/storage/sqlite/local-process-client.ts",
+      "sha256": "4bf6aff00cf324f95e9b34a91d6f7162e0856df86b2de399cab5e7a15a081c73"
+    },
+    {
+      "path": "src/storage/sqlite/local-process-runtime.ts",
+      "sha256": "bf7c0f227fca575086275f10ec796d762fdc01768eab78fbdd86859e0a7bd3eb"
+    },
+    {
+      "path": "src/storage/session/index.ts",
+      "sha256": "36c335046aebcbf811523e4332dafc3994b251fc5311dc344fa11f9930635359"
+    },
+    {
+      "path": "src/storage/root-runs/index.ts",
+      "sha256": "422d58382fcf192a52e7b067f25ccb1e2bcb715243038936a4cbaf5612017b1b"
+    },
+    {
+      "path": "src/storage/root-admission/index.ts",
+      "sha256": "78cd991a79050e9aeb319fa930a2732213c764fde316f5613dce40a5146f95da"
+    },
+    {
+      "path": "src/storage/root-admission/server-seed.ts",
+      "sha256": "3ce851a197817b4ffc4594f6d0d689a8f0664a9a4fa6b71ba37e1745ef49b115"
+    },
+    {
+      "path": "src/core/agent-loop/react.ts",
+      "sha256": "bef33348c28457ca339e61b6d3b29fffe0c80e7e46938b222266911c29860df9"
+    },
+    {
+      "path": "src/core/agent-loop/compact-prompt.ts",
+      "sha256": "520d1563ea26a16c9251c972cb0b53886b7b2dcc446ce70d24402dca9de19267"
+    },
+    {
+      "path": "src/core/subagent/store.ts",
+      "sha256": "a32fdc35a95efd2999737c4ffd55aee7b04d60696efc4f2e6c410215d5c79d51"
+    },
+    {
+      "path": "src/core/subagent/parent-publication.ts",
+      "sha256": "2db0cb256d5347abf780973a3e01a79f29f2923c6da7ac1d790a40107be9b3cb"
+    },
+    {
+      "path": "src/core/collaboration/store.ts",
+      "sha256": "55f2722106e2624688647c5817c005bd8e8b6b2ab0af67f3f9949356820a7a78"
+    },
+    {
+      "path": "src/core/collaboration/controller.ts",
+      "sha256": "40fe938f7672a21c88be131845942d7dfa56af709cd7ee45f80e0c64aedc5389"
+    },
+    {
+      "path": "src/core/stream-pipeline/stream-bus.ts",
+      "sha256": "47c0d89865e119cbf284723e2df25beaab6f94668da1b235a92a4b1eb1092fa7"
+    },
+    {
+      "path": "src/core/stream-pipeline/stream-projection.ts",
+      "sha256": "3ec249885aa7721e8acb1d3c46c31a225953f767cd0f5093154456815a1cfae3"
+    },
+    {
+      "path": "src/api/http/routes/conversation.ts",
+      "sha256": "f5e32c05b62ad897fe34e4cc4ff540ff91f565d01c0e3efdca528f8e51330807"
+    },
+    {
+      "path": "src/api/http/routes/messages.ts",
+      "sha256": "04ffda4ffd313a1ac77f236648076ffecf83423a51c7af7dd0e26d0ac2eec09e"
+    },
+    {
+      "path": "src/api/http/routes/chat.ts",
+      "sha256": "ea43ddec95dd4dbbe33d6417ba05f9600d915255c568e317ba683f82d471c3a3"
+    },
+    {
+      "path": "src/api/http/routes/workspace.ts",
+      "sha256": "df5d27a2deb655ed157dfc29e42ecc287f1f70858da8e8e686b771d2400e6187"
+    },
+    {
+      "path": "src/api/http/server.ts",
+      "sha256": "5d3b874f2a05a54c1ce36fc7b85869a95a4fe69ba80d2533e81d50dd3e39568f"
+    },
+    {
+      "path": "src/api/http/middleware.ts",
+      "sha256": "1dcad5fb6756a8d6be7e50ac3b7918c77e440d80af358e6109955cf7a1a3ea59"
+    },
+    {
+      "path": "src/workspace/manager.ts",
+      "sha256": "072daed9c635eed81bc400dbe01917f1077d751177aad99ed4e4945a47f066d0"
+    },
+    {
+      "path": "src/workspace/binding-lease.ts",
+      "sha256": "8b439eb77c1e0ffb3e91e4166de27d33dc6e65430984ff291c9d057980f9528b"
+    },
+    {
+      "path": "src/storage/memory/db.ts",
+      "sha256": "073c0e0c39ff6d99039d286d9427a38ea470bca2f5be259ad7ce3620f6d14afc"
+    },
+    {
+      "path": "src/core/command-jobs/manager.ts",
+      "sha256": "3af5d37fcb9abc30da4729f85eb7080c166deaaf6f273b03be02fa573f855e12"
+    },
+    {
+      "path": "src/observability/qa-logger.ts",
+      "sha256": "c84d0d0e2477e5116355d5e408ac421169b4aa7b5c1a095af291b1a01a11fb0a"
+    },
+    {
+      "path": "multi-agent-console/src/core/store/session.ts",
+      "sha256": "d89a3b1f3ee8c8d3b6a2ed8170ad12ade949c93cf438ed993a8de1f1b63b0a38"
+    },
+    {
+      "path": "multi-agent-console/src/web/utils/sessionExport.ts",
+      "sha256": "fc32888a361634178ad4128765d737af9ec38d3c74d53643d24f972a94200a42"
+    },
+    {
+      "path": "sdk/client.ts",
+      "sha256": "0c47988b9b825c7b92cea2ab148f22a824cb01599248843cc0e2cea38705a3f9"
+    },
+    {
+      "path": "docker-compose.yml",
+      "sha256": "0f54c9fb0ac5d09164e250d9aa7a01ec82ebfb55c5e5403cf65f7d6c6e954e74"
+    }
+  ]
+}

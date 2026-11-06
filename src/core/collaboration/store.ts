@@ -6,6 +6,7 @@ import { ensureSQLiteDeliverySchema } from './delivery-schema.js'
 import { ensureJSONLDeliverySchema } from './jsonl-delivery-schema.js'
 import { CollaborationError, type CollaborationBinding, type CollaborationPage, type CollaborationParticipant,
   type CollaborationPhase, type CollaborationReceipt, type CollaborationRootScope } from './types.js'
+import { collaborationReceipt, projectCollaborationReceipts } from './receipt-projection.js'
 
 type Query = Pick<Client, 'execute'> | Pick<Transaction, 'execute'>
 const writeTails = new WeakMap<Client, Promise<unknown>>()
@@ -35,13 +36,6 @@ function id(value: string, name: string): string {
 function limit(value = 64): number {
   if (!Number.isSafeInteger(value) || value < 1 || value > 64) fail('invalid', 'Invalid page size')
   return value
-}
-function receipt(row: Record<string, unknown>): CollaborationReceipt {
-  return { messageId: String(row.message_id), rootRunId: String(row.root_run_id), rootAttemptId: String(row.root_attempt_id),
-    senderParticipantId: String(row.sender_participant_id), senderInvocationRunId: String(row.sender_invocation_run_id),
-    recipientParticipantId: String(row.recipient_participant_id), requestKey: String(row.request_key), payloadHash: String(row.payload_hash),
-    payloadBytes: Number(row.payload_bytes), acceptedSeq: Number(row.seq), acceptedAt: Number(row.accepted_at),
-    state: row.state as CollaborationReceipt['state'], ...(row.reason === null || row.reason === undefined ? {} : { reason: String(row.reason) }) }
 }
 interface RootRow { root_session_id: string; turn_id: string; generation: string; phase: CollaborationPhase }
 interface Cursor { version: 1; scope: string; revision: number; after: number }
@@ -234,7 +228,7 @@ export class CollaborationStore {
         AND sender_participant_id=? AND sender_invocation_run_id=? AND request_key=?`, args: [...scopeArgs(binding), binding.participantId, binding.invocationRunId, requestKey] })
       if (prior.rows[0]) {
         if (prior.rows[0].recipient_participant_id !== target || prior.rows[0].payload_hash !== payloadHash || prior.rows[0].body !== body) fail('conflict', 'Request key was already accepted differently')
-        return receipt(prior.rows[0])
+        return (await projectCollaborationReceipts(tx, binding, [prior.rows[0]]))[0]
       }
       await this.assertProducer(tx, binding)
       const recipient = await tx.execute({ sql: 'SELECT kind FROM collaboration_participants WHERE tenant_id=? AND root_run_id=? AND root_attempt_id=? AND participant_id=?', args: [...scopeArgs(binding), target] })
@@ -248,7 +242,7 @@ export class CollaborationStore {
       if (Number(count.rows[0].count) >= backlogLimit) fail('full', 'Recipient queue is full; no message was accepted')
       const inserted = await tx.execute({ sql: `INSERT INTO collaboration_messages(tenant_id,root_run_id,root_attempt_id,message_id,sender_participant_id,sender_invocation_run_id,recipient_participant_id,request_key,payload_hash,payload_bytes,body,accepted_at,state)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING *`, args: [...scopeArgs(binding), randomUUID(), binding.participantId, binding.invocationRunId, target, requestKey, payloadHash, bytes, body, Date.now(), 'queued'] })
-      return receipt(inserted.rows[0])
+      return collaborationReceipt(inserted.rows[0])
     })
   }
 
@@ -257,7 +251,7 @@ export class CollaborationStore {
     return this.read(async tx => {
       await this.root(tx, scope)
       const result = await tx.execute({ sql: 'SELECT * FROM collaboration_messages WHERE tenant_id=? AND root_run_id=? AND root_attempt_id=? AND message_id=?', args: [...scopeArgs(scope), messageId] })
-      return result.rows[0] ? receipt(result.rows[0]) : null
+      return result.rows[0] ? (await projectCollaborationReceipts(tx, scope, result.rows))[0] : null
     })
   }
 
@@ -267,7 +261,7 @@ export class CollaborationStore {
       const root = await this.root(tx, binding)
       if (root.generation !== binding.generation) fail('forbidden', 'Producer generation does not own this root')
       const result = await tx.execute({ sql: `SELECT * FROM collaboration_messages WHERE tenant_id=? AND root_run_id=? AND root_attempt_id=? AND sender_participant_id=? AND sender_invocation_run_id=? AND request_key=?`, args: [...scopeArgs(binding), binding.participantId, binding.invocationRunId, requestKey] })
-      return result.rows[0] ? receipt(result.rows[0]) : null
+      return result.rows[0] ? (await projectCollaborationReceipts(tx, binding, result.rows))[0] : null
     })
   }
 
@@ -328,7 +322,7 @@ export class CollaborationStore {
       // Do not load body columns for public bounded receipt pages.
       const result = await tx.execute({ sql: `SELECT seq,message_id,root_run_id,root_attempt_id,sender_participant_id,sender_invocation_run_id,recipient_participant_id,request_key,payload_hash,payload_bytes,accepted_at,state,reason
         FROM collaboration_messages WHERE tenant_id=? AND root_run_id=? AND root_attempt_id=? AND recipient_participant_id=? AND seq>? AND seq<=? ORDER BY seq LIMIT ?`, args: [...scopeArgs(scope), participantId, cursor?.after ?? 0, revision, size + 1] })
-      const entries = result.rows.slice(0, size).map(receipt), hasMore = result.rows.length > size
+      const entries = await projectCollaborationReceipts(tx, scope, result.rows.slice(0, size)), hasMore = result.rows.length > size
       return { entries, revision, hasMore, ...(hasMore ? { nextCursor: this.cursor(key, { version: 1, scope: fingerprint, revision, after: entries.at(-1)!.acceptedSeq }) } : {}) }
     })
   }

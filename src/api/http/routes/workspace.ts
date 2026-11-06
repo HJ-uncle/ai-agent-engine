@@ -90,9 +90,22 @@ export async function workspaceRoutes(fastify: FastifyInstance) {
     const sessionId = request.query.sessionId || 'default'
     const relative = request.query.path || '.'
     try {
-      const binding = workspaceManager.bindingReadGuard({ tenantId, sessionId })
-      const dir = workspaceManager.resolveSafePathForSnapshot({ tenantId, sessionId }, binding.snapshot, relative)
-      const stat = await fsp.stat(dir)
+      const context = { tenantId, sessionId }
+      const binding = workspaceManager.bindingReadGuard(context)
+      const dir = workspaceManager.resolveSafePathForSnapshot(context, binding.snapshot, relative)
+      let stat: fs.Stats
+      try { stat = await fsp.stat(dir) }
+      catch (error) {
+        // Home can list its private scratch before any task or manual create
+        // initializes it. Reading must not create directories or disguise a
+        // missing selected project/subdirectory as an empty workspace.
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' ||
+          !sameCanonicalPath(dir, binding.snapshot.root) ||
+          !sameCanonicalPath(dir, workspaceManager.getScratchDirectory(context)) ||
+          workspaceManager.getBoundDirectory(context) !== null) throw error
+        binding.assertCurrent()
+        return reply.code(200).send(success({ root: binding.snapshot.root, bindingEpoch: binding.snapshot.epoch, contractVersion: 2, entries: [] }))
+      }
       if (!stat.isDirectory()) return reply.code(200).send(fail(40000, 'path is not a directory'))
       const entries = await Promise.all((await fsp.readdir(dir, { withFileTypes: true })).filter(entry => !entry.isSymbolicLink()).map(async entry => {
         const metadata = await fsp.lstat(path.join(dir, entry.name))

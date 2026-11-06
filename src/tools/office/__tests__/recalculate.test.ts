@@ -94,6 +94,18 @@ describe('internal bounded XLSX recalculation', () => {
     expect(original).toEqual(before)
   })
 
+  it('bounds formula text in syntax diagnostics while retaining the failed sheet and cell', async () => {
+    const formula = `${'1+'.repeat(300)}UNKNOWN_FUNCTION(1)`
+    let caught: unknown
+    try { await recalculateXlsx(await fixture([formula])) } catch (error) { caught = error }
+    expect(caught).toBeInstanceOf(Error)
+    const message = (caught as Error).message
+    expect(message).toContain('unsupported function UNKNOWN_FUNCTION')
+    expect(message).toContain('sheet="汇总", cell="A1"')
+    expect(message).toContain(`formula=${JSON.stringify(`${formula.slice(0, 512)}…`)}`)
+    expect(message.length).toBeLessThan(700)
+  })
+
   it('rejects a cross-sheet cycle before trusting saved caches', async () => {
     const book = new ExcelJS.Workbook(), a = book.addWorksheet('甲'), b = book.addWorksheet('乙')
     a.getCell('A1').value = { formula: '乙!A1+1', result: 999 }

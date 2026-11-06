@@ -4,6 +4,7 @@ import * as database from '../../../storage/sqlite/db.js'
 import { ModelsStore } from '../../../storage/sqlite/models.js'
 import { up as modelSchema } from '../../../storage/sqlite/migrations/007_add_models_management.js'
 import { up as capabilitySchema } from '../../../storage/sqlite/migrations/014_add_model_capabilities.js'
+import { up as apiFormatSchema } from '../../../storage/sqlite/migrations/032_add_model_api_format.js'
 import { ReActStrategy } from '../../agent-loop/react.js'
 import type { AgentContext, Message } from '../../agent-context/index.js'
 import { resolveModelConfig, createAdapterFromResolved } from '../resolve-model.js'
@@ -20,6 +21,7 @@ beforeEach(async () => {
   vi.spyOn(database, 'getDb').mockReturnValue(db)
   await modelSchema(db)
   await capabilitySchema(db)
+  await apiFormatSchema(db)
 })
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); db.close() })
 

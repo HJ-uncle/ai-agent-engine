@@ -18,6 +18,7 @@ import type { CreateSubagentRun } from '../../subagent/types.js'
 import { CollaborationRuntime } from '../runtime.js'
 import { CollaborationStore, admissionFingerprint } from '../store.js'
 import { ExecutionOwners, assertOwnedDispatch, type ExecutionOwner } from '../execution-owner.js'
+import { ExecutionParkError } from '../../utils/abort.js'
 
 let dir: string, db: LocalSqliteProcessClient, agents: SubagentStore, runtime: CollaborationRuntime, service: ExecutionOwners
 let roots: RootRunStore, root: RootRun, owner: ExecutionOwner, controller: AbortController, parent: AgentContext, runner: SubagentRunner
@@ -121,6 +122,7 @@ describe('owned execution lifecycle', () => {
     const pending = { kind: 'ask' as const, requestId: 'held-park', toolCallId: 'held-park', toolName: 'ask_user', args: {} }
     const parking = roots.finishOwned(owner, { status: 'waiting' }, pending)
     await entered.promise
+    expect(controller.signal.reason).toBeInstanceOf(ExecutionParkError)
     expect((await roots.get(tenant, root.runId))?.status).toBe('waiting')
     service.fence(owner, 'cancel', 'User cancelled while park ACK was held')
     let stopped = false

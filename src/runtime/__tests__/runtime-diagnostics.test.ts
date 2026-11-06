@@ -40,4 +40,36 @@ describe('on-demand engine runtime measurements', () => {
     } finally { collector.dispose() }
     expect(() => collector.read()).toThrow('closed')
   })
+
+  it('gets a fresh complete manual sample in one request, including after idle', async () => {
+    const collector = createRuntimeDiagnostics({ minIntervalMs: 15, idleTimeoutMs: 150, sampleWindowMs: 80 })
+    try {
+      const firstRequest = collector.refresh()
+      expect(collector.refresh()).toBe(firstRequest)
+      const first = await firstRequest
+      expect(first.collection.sampleWindowMs).toBe(80)
+      expect(first.eventLoop.state).toBe('available')
+      expect(first.eventLoop.intervalMs).toBeGreaterThanOrEqual(70)
+      expect(first.eventLoop.delay!.p95Ms).toBeGreaterThan(0)
+      expect(first.memory.heapUsedBytes).toBeGreaterThan(0)
+      const immediate = await collector.refresh()
+      expect(immediate.sampledAt).toBeGreaterThan(first.sampledAt)
+      expect(immediate.eventLoop.state).toBe('available')
+      await wait(190)
+      const afterIdle = await collector.refresh()
+      expect(afterIdle.eventLoop.state).toBe('available')
+      expect(afterIdle.sampledAt).toBeGreaterThan(immediate.sampledAt)
+      // The new window excludes the time spent idle between manual clicks.
+      expect(afterIdle.eventLoop.intervalMs).toBeLessThan(afterIdle.sampledAt - immediate.sampledAt)
+    } finally { collector.dispose() }
+  })
+
+  it('cancels an in-flight manual measurement when disposed', async () => {
+    const collector = createRuntimeDiagnostics({ sampleWindowMs: 1000 })
+    const pending = collector.refresh()
+    const rejected = expect(pending).rejects.toThrow('closed')
+    collector.dispose()
+    await rejected
+    await expect(collector.refresh()).rejects.toThrow('closed')
+  })
 })

@@ -47,16 +47,18 @@ export async function createPptx(input: PptxInput): Promise<Buffer> {
       const { headers, rows } = source.table
       if (!Array.isArray(headers) || !headers.length || headers.length > 6 || !Array.isArray(rows) || rows.length > (bullets.length ? 5 : 8)) fail('表格最多 6 列、8 行；含要点时最多 5 行')
       const maxUnits = Math.floor(100 / headers.length)
-      const cell = (value: unknown): string => {
-        if (typeof value === 'number' && !Number.isFinite(value)) fail('表格数值必须有限')
-        const content = typeof value === 'number' ? String(value) : text(value, '单元格', 100, false)
-        if (units(content) > maxUnits || /[\r\n]/.test(content)) fail('表格单元格内容过长，请拆分页面或减少列数')
+      const cell = (value: unknown, row: number, column: number): string => {
+        const location = `第 ${index + 1} 页表格第 ${row + 1} 行第 ${column + 1} 列（表头为第 1 行）`
+        if (typeof value === 'number' && !Number.isFinite(value)) fail(`${location}数值必须有限`)
+        const content = typeof value === 'number' ? String(value) : text(value, location, 100, false)
+        if (units(content) > maxUnits) fail(`${location}内容过长：宽度 ${units(content)}/${maxUnits}（非 Latin-1 字符计 2，其余计 1）；缩短该格、拆页或减少列数`)
+        if (/[\r\n]/.test(content)) fail(`${location}不支持换行；请拆成独立行或页面`)
         return content
       }
-      const tableRows: Parameters<typeof slide.addTable>[0] = [headers.map(value => ({ text: cell(value), options: { bold: true, fill: { color: 'E8EEF5' }, color: '17243B' } }))]
-      for (const row of rows) {
+      const tableRows: Parameters<typeof slide.addTable>[0] = [headers.map((value, column) => ({ text: cell(value, 0, column), options: { bold: true, fill: { color: 'E8EEF5' }, color: '17243B' } }))]
+      for (const [rowIndex, row] of rows.entries()) {
         if (!Array.isArray(row) || row.length !== headers.length) fail('每行单元格数量必须与表头一致')
-        tableRows.push(row.map(value => ({ text: cell(value) })))
+        tableRows.push(row.map((value, column) => ({ text: cell(value, rowIndex + 1, column) })))
       }
       slide.addTable(tableRows, { x: 0.7, y: 1.7 + bullets.length * 0.79, w: 11.95, rowH: 0.48,
         autoPage: false, fontSize: 15, color: '27364B', border: { type: 'solid', pt: 0.5, color: 'CBD5E1' },

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { StringDecoder } from 'node:string_decoder'
 import type { Client } from '@libsql/client'
 import { getDb } from '../../storage/sqlite/db.js'
-import { throwIfAborted } from '../utils/abort.js'
+import { ExecutionParkError, throwIfAborted } from '../utils/abort.js'
 import { stopCommandProcessTree } from './process-tree.js'
 import { createCommandLaunchPlan } from './launch-plan.js'
 import { COMMAND_OUTPUT_BYTES, COMMAND_PAGE_BYTES, commandJobIsTerminal,
@@ -334,7 +334,13 @@ export class CommandJobManager {
         void this.finish(live, code, signal, spawnError)
       })
       if (input.timeoutMs !== undefined) this.armTimeout(live, input.timeoutMs)
-      const abort = () => { void this.stop(live, 'cancelled', 'Command cancelled with its owner').catch(() => undefined) }
+      const abort = () => {
+        // Parking revokes model/tool dispatch while awaiting approval, but a
+        // launched background job retains its own deadline and stop controls.
+        // Explicit root/session cancellation still captures these jobs directly.
+        if (input.background && input.signal?.reason instanceof ExecutionParkError) return
+        void this.stop(live, 'cancelled', 'Command cancelled with its owner').catch(() => undefined)
+      }
       input.signal?.addEventListener('abort', abort, { once: true })
       live.cleanupSignal = () => input.signal?.removeEventListener('abort', abort)
       if (input.signal?.aborted) abort()

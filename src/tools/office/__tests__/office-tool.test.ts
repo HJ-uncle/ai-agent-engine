@@ -98,6 +98,23 @@ describe('native office tool publication and artifact evidence', () => {
     expect(fs.readFileSync(path.join(root, 'unsupported.xlsx'))).toEqual(before)
   })
 
+  it('returns the exact rejected formula location to the agent and preserves the original workbook', async () => {
+    const formula = 'IFERROR(数据!A2/10,0)'
+    const created = await officeDocumentTool.execute({ operation: 'create', path: '诊断.xlsx', expectedHash: 'missing', workbook: { sheets: [
+      { name: '数据', columns: [{ header: '里程碑', key: 'v' }], rows: [{ v: '完成验收' }] },
+      { name: '任务分工', columns: [{ header: '工时占比', key: 'v' }], rows: [{ v: { formula: '1+1' } }, { v: { formula } }] },
+    ] } }, ctx)
+    expect(created.success).toBe(true)
+    const file = path.join(root, '诊断.xlsx'), before = fs.readFileSync(file)
+    const rejected = await officeDocumentTool.execute({ operation: 'recalculate', path: '诊断.xlsx', expectedHash: created.metadata!.expectedHash }, ctx)
+    expect(rejected).toMatchObject({ success: false, error: 'OFFICE_FORMAT_FAILED', metadata: { fileMutationApplied: false } })
+    const message = JSON.parse(rejected.output).message as string
+    expect(message).toContain('text, boolean, blank or mixed-type arithmetic is unsupported')
+    expect(message).toContain('sheet="任务分工", cell="A3", formula="IFERROR(数据!A2/10,0)"')
+    expect(fs.readFileSync(file)).toEqual(before)
+    expect(await store.list(ctx.tenantId, ctx.sessionId)).toHaveLength(1)
+  })
+
   it('creates a real Word ZIP, returns matching complete-byte versions and records an inspectable artifact', async () => {
     const result = await createWord()
     expect(result).toMatchObject({ success: true, metadata: { format: 'docx', fileMutationApplied: true, rollbackAvailable: true, validation: 'structure-checked', visualValidation: 'not-performed' } })

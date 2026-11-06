@@ -18,7 +18,7 @@ function context(definitions: Tool[]): AgentContext {
     history: { getHistory: vi.fn().mockResolvedValue([]) }, logger: { info: vi.fn(), error: vi.fn() },
   } as unknown as AgentContext
 }
-afterEach(() => { clearSecurityMode(base.tenantId, base.sessionId); vi.useRealTimers(); vi.restoreAllMocks() })
+afterEach(() => { clearSecurityMode(base.tenantId, base.sessionId); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllEnvs() })
 
 describe('per-run capabilities', () => {
   it('accepts only bounded manifest enums and never forwards arbitrary instructions', () => {
@@ -96,6 +96,41 @@ describe('per-run capabilities', () => {
     expect(prompt.match(/\/bound-project/g)).toHaveLength(1)
     expect(prompt.length).toBeLessThan(JSON.stringify(buildRuntimeCapabilities(ctx)).length)
     expect(buildExecutionProtocol(ctx.tools)).not.toMatch(/get_current_context|get_tool_details/)
+  })
+
+  it.each(['general', 'code'] as const)('%s describes only the resolved memory scopes, not registered tool names', profile => {
+    vi.stubEnv('ENABLE_LONG_TERM_MEMORY', 'true')
+    const ctx = context([tool('remember'), tool('recall')])
+    ctx.toolProfile = profile
+    ctx.memoryScope = 'global' // A stale compatibility field cannot override resolved scopes.
+    ctx.memoryScopes = ['session']
+    const session = buildRuntimeCapabilitiesPrompt(ctx)
+    expect(session).toContain('"memoryScopes":["session"]')
+    expect(session).toContain('仅在当前会话内保存和参考记忆')
+    expect(session).toContain('全局记忆未启用，不得声称能跨会话记住偏好或决策')
+    expect(session).not.toContain('本次会话记忆与全局记忆均已启用')
+    ctx.memoryScopes = ['global']
+    expect(buildRuntimeCapabilitiesPrompt(ctx)).toContain('新增记忆写入全局；会话记忆未启用')
+    ctx.memoryScopes = ['global', 'session']
+    expect(buildRuntimeCapabilitiesPrompt(ctx)).toContain('新增记忆默认只写入当前会话，不自动提升为跨会话记忆')
+    ctx.memoryScopes = []
+    const disabled = buildRuntimeCapabilitiesPrompt(ctx)
+    expect(disabled).toContain('本次长期记忆未启用')
+    expect(disabled).toContain('记忆开关不删除聊天历史')
+    expect(disabled).toContain('没有成功写入回执，不声称已经记住')
+    expect(disabled).toContain('"memoryScopes":[]')
+    expect(disabled).not.toContain('本次仅启用全局记忆')
+  })
+
+  it('server-disabled memory never advertises enabled scopes, including filtered requests without tools', () => {
+    vi.stubEnv('ENABLE_LONG_TERM_MEMORY', 'false')
+    const ctx = context([tool('remember')])
+    ctx.memoryScopes = ['global', 'session']
+    const prompt = buildRuntimeCapabilitiesPrompt(ctx, [])
+    expect(prompt).toContain('本次长期记忆未启用')
+    expect(prompt).toContain('"toolCount":0')
+    expect(prompt).toContain('"memoryScopes":[]')
+    expect(prompt).not.toContain('本次会话记忆与全局记忆均已启用')
   })
 
   it('can describe exactly the filtered request tools, including a finalization request with none', () => {

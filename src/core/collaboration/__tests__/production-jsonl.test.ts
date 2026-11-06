@@ -146,8 +146,13 @@ it('losing reservation commit ACK keeps a pending receipt without a peer row and
   })
   await expect(runtime.consumeJSONLDelivery(consumer)).rejects.toThrow('lost reservation ACK')
   expect(await count('collaboration_jsonl_deliveries')).toBe(1); expect(physicalRows().filter(row => row.type === 'user')).toHaveLength(1)
+  const reserved = (await observer.execute('SELECT encoded_row,row_hash,row_offset,row_bytes FROM collaboration_jsonl_deliveries')).rows[0]
+  expect(JSON.parse(String(reserved.encoded_row)).payload.createdAt).toBe(accepted.acceptedAt)
   expect((await readAuthenticatedJSONLHistory(ctx.history, scope))!.map(message => message.id)).toEqual([userId])
+  vi.spyOn(Date, 'now').mockReturnValue(accepted.acceptedAt + 10_000)
   expect((await runtime.consumeJSONLDelivery(consumer)).receipts).toHaveLength(1)
+  expect((await observer.execute('SELECT encoded_row,row_hash,row_offset,row_bytes FROM collaboration_jsonl_deliveries')).rows[0]).toEqual(reserved)
+  expect(fs.readFileSync(archive()).subarray(Number(reserved.row_offset), Number(reserved.row_offset) + Number(reserved.row_bytes)).toString()).toBe(reserved.encoded_row)
   const receipt = await runtime.jsonlDeliveryReceipt(producer, accepted.messageId)
   expect(receipt?.state).toBe('integrated'); expect(physicalRows().filter(row => row.uuid === receipt!.historyMessageId)).toHaveLength(1)
 })
@@ -223,11 +228,14 @@ it.each(['clear', 'edit', 'delete-anchor', 'truncate', 'delete-turn', 'micro-com
 })
 
 it('integration remains distinct from final model budget refusal', async () => {
-  ctx.tokenBudget = 100_000; ctx.modelCaps = { contextWindow: 1_000 }
+  // Fit the current fixed system instructions, but not the newly integrated
+  // mail. A smaller window exits before the mailbox boundary under test.
+  ctx.tokenBudget = 100_000; ctx.modelCaps = { contextWindow: 4_096 }
   const accepted = await mail('Large evidence '.repeat(1_600))
-  await run(task); expect(llm.stream).not.toHaveBeenCalled()
-  expect(await runtime.jsonlDeliveryReceipt(producer, accepted.messageId)).toMatchObject({ state: 'integrated' })
+  const frames = await run(task); expect(llm.stream).not.toHaveBeenCalled()
+  expect(await runtime.jsonlDeliveryReceipt(producer, accepted.messageId), JSON.stringify({ frames, outcomes, errors: vi.mocked(ctx.logger.error).mock.calls })).toMatchObject({ state: 'integrated' })
   expect(outcomes.at(-1)?.status).toBe('failed')
+  expect(outcomes.at(-1)?.error?.message).toContain('Request input (')
 })
 
 it('whole row and byte budgets process a backlog without duplicate file rows', async () => {

@@ -6,6 +6,7 @@ import { estimateTokens } from '../utils/tokens.js'
 import { CollaborationError, type CollaborationBinding, type CollaborationProducer } from './types.js'
 import type { CollaborationStore } from './store.js'
 import type { SQLiteDeliveryBatch, SQLiteDeliveryReceipt } from './sqlite-delivery.js'
+import { MAX_DEFAULT_DELIVERY_ENVELOPE_BYTES } from './sqlite-delivery.js'
 import { ensureHistoryMaintenanceSchema, type HistoryMaintenanceLease } from './history-maintenance.js'
 import type { ExecutionOwner } from './execution-owner.js'
 import { assertDeliveryExecution, assertDeliveryProducer } from './delivery-execution.js'
@@ -134,8 +135,13 @@ export class JSONLCollaborationDelivery {
       for (const row of selected.slice(0, maxRows)) {
         if (digest(String(row.body)) !== row.payload_hash || Buffer.byteLength(String(row.body)) !== Number(row.payload_bytes)) fail('conflict', 'JSONL durable message payload changed')
         const userOrigin = await authenticatedControllerOrigin(this.store.db, b, row, b.invocationRunId)
-        const { historyMessageId, content, metadata } = collaborationEnvelope(b, row, userOrigin)
-        const message: Message & { conversationId: string } = { id: historyMessageId, role: 'user', content, tokens: estimateTokens(content), conversationId: b.turnId, metadata }
+        const { historyMessageId, content, modelInputContent, metadata } = collaborationEnvelope(b, row, userOrigin)
+        const createdAt = Number(row.accepted_at)
+        if (!Number.isSafeInteger(createdAt) || createdAt < 0) fail('conflict', 'JSONL durable message acceptance time is invalid')
+        // Acceptance is immutable, so retrying a reserved append reproduces
+        // the same authenticated bytes rather than assigning a fresh time.
+        const message: Message & { conversationId: string } = { id: historyMessageId, role: 'user', content, createdAt,
+          ...(modelInputContent !== undefined ? { modelInputContent } : {}), tokens: estimateTokens(modelInputContent ?? content), conversationId: b.turnId, metadata }
         let plan: JSONLAppendPlan
         if (row.delivery_state === 'pending') {
           if (row.history_message_id !== historyMessageId || row.recipient_invocation_run_id !== b.invocationRunId || Number(row.history_epoch) !== fence.epoch)
@@ -151,8 +157,11 @@ export class JSONLCollaborationDelivery {
           plan = fence.origin.plan(b, snapshot, message)
         }
         const itemBytes = plan.bytes + Buffer.byteLength(JSON.stringify({ messageId: row.message_id, historyMessageId, invocationRunId: b.invocationRunId, state: 'integrated' }))
-        if (itemBytes > maxBytes && !receipts.length) fail('too_large', 'A complete JSONL peer envelope exceeds the batch budget')
-        if (bytes + itemBytes > maxBytes) { hasMore = true; break }
+        if (bytes + itemBytes > maxBytes) {
+          if (receipts.length) { hasMore = true; break }
+          if (itemBytes > (budget.maxBytes === undefined ? MAX_DEFAULT_DELIVERY_ENVELOPE_BYTES : maxBytes))
+            fail('too_large', 'A complete JSONL peer envelope exceeds the batch budget')
+        }
         if (row.delivery_state !== 'pending') await this.sql(async tx => {
           await authenticatedControllerOrigin(tx, b, row, b.invocationRunId)
           await assertDeliveryProducer(this.store, tx, fence.producer, b, fence.executionOwner)

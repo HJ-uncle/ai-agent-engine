@@ -1,0 +1,30 @@
+{
+  "auditDate": "2026-11-05",
+  "scope": "current working tree, synthetic fixtures only",
+  "suites": [
+    {
+      "command": "npx vitest run src/storage/conversation/__tests__ --maxWorkers=1 --minWorkers=1 --reporter=dot",
+      "filesPassed": 14,
+      "filesFailed": 1,
+      "testsPassed": 184,
+      "testsFailed": 2,
+      "durationSeconds": 32.36,
+      "failure": "history-compress-tombstone.test.ts has a stale db.js mock without getDbEpoch; both tests fail during SQLiteConversationHistory construction"
+    },
+    {
+      "command": "npx vitest run src/storage/sqlite/local-process-client.test.ts src/storage/sqlite/db-process-lifecycle.test.ts src/storage/__tests__/startup-migrations.test.ts --maxWorkers=1 --minWorkers=1 --reporter=dot",
+      "filesPassed": 3,
+      "filesFailed": 0,
+      "testsPassed": 24,
+      "testsFailed": 0,
+      "durationSeconds": 5.33
+    }
+  ],
+  "probeCommand": "npx tsx docs/research/session-storage-audit-2026-11-05/storage-probe.ts",
+  "probe": {
+    "partialTail": { "warmIds": ["before", "after"], "coldIds": ["before"] },
+    "compactedOrdinaryAppend": { "archivedMessage0Copies": 2, "totalTokens": 14, "uniqueMessageExpectedTotalTokens": 12 },
+    "jsonl": { "defaultWindowMessages": 4, "inheritFalseRoles": ["user", "assistant"] },
+    "sqlite": { "defaultWindowMessages": 2, "inheritFalseRoles": ["user"] }
+  }
+}

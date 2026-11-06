@@ -5,10 +5,13 @@ import { createLLMAdapter } from '../../../core/llm-adapter/factory.js'
 import { resolveCapabilities, type ModelCapabilities } from '../../../core/model-capabilities/index.js'
 import { capabilityPatchFromInput, mergeCapabilityOverrides, type CapabilityOverridePatch } from '../../../core/model-capabilities/overrides.js'
 import { effectiveContextWindow } from '../../../core/context-budget.js'
+import { normalizeApiFormat, type ApiFormat } from '../../../core/llm-adapter/protocol.js'
+
+type ApiFormatInput = ApiFormat | null | ''
 
 function presentModel(model: ModelConfig) {
   const resolvedCapabilities = resolveCapabilities({
-    model: model.modelId, baseUrl: model.baseUrl, provider: model.provider,
+    model: model.modelId, baseUrl: model.baseUrl, provider: model.provider, apiFormat: model.apiFormat,
     dbOverrides: model.capabilities,
   })
   return {
@@ -99,7 +102,7 @@ export async function modelsRoutes(fastify: FastifyInstance) {
   })
 
   // 3. POST /api/v1/models
-  fastify.post<{ Body: { provider: string; modelId: string; apiKey: string; baseUrl: string; displayName?: string; version?: string; capabilities?: CapabilityOverridePatch | null; capabilityOverrides?: CapabilityOverridePatch | null } }>(
+  fastify.post<{ Body: { provider: string; modelId: string; apiKey: string; baseUrl: string; apiFormat?: ApiFormatInput; displayName?: string; version?: string; capabilities?: CapabilityOverridePatch | null; capabilityOverrides?: CapabilityOverridePatch | null } }>(
     '/api/v1/models',
     async (request, reply) => {
       const authContext = (request as any).authContext
@@ -109,7 +112,9 @@ export async function modelsRoutes(fastify: FastifyInstance) {
       const tenantId = getTenantId(request)
       const { provider, modelId, apiKey, baseUrl, displayName, version } = request.body
       let capabilities: ModelCapabilities | null
+      let apiFormat: ApiFormat
       try {
+        apiFormat = normalizeApiFormat(request.body.apiFormat)
         capabilities = mergeCapabilityOverrides(null, capabilityPatchFromInput(request.body))
       } catch (error) {
         return reply.code(400).send(fail(40001, error instanceof Error ? error.message : 'Invalid capability overrides'))
@@ -131,6 +136,7 @@ export async function modelsRoutes(fastify: FastifyInstance) {
           modelId,
           apiKey,
           baseUrl,
+          apiFormat,
           displayName,
           isEnabled: false,
           version,
@@ -144,7 +150,7 @@ export async function modelsRoutes(fastify: FastifyInstance) {
   )
 
   // 4. PUT /api/v1/models/:id
-  fastify.put<{ Params: { id: string }, Body: { isEnabled?: boolean; apiKey?: string; baseUrl?: string; displayName?: string; version?: string; capabilities?: CapabilityOverridePatch | null; capabilityOverrides?: CapabilityOverridePatch | null } }>(
+  fastify.put<{ Params: { id: string }, Body: { isEnabled?: boolean; apiKey?: string; baseUrl?: string; apiFormat?: ApiFormatInput; displayName?: string; version?: string; capabilities?: CapabilityOverridePatch | null; capabilityOverrides?: CapabilityOverridePatch | null } }>(
     '/api/v1/models/:id',
     async (request, reply) => {
       const authContext = (request as any).authContext
@@ -156,6 +162,7 @@ export async function modelsRoutes(fastify: FastifyInstance) {
       const data = request.body
       try {
         capabilityPatchFromInput(data)
+        normalizeApiFormat(data.apiFormat)
       } catch (error) {
         return reply.code(400).send(fail(40001, error instanceof Error ? error.message : 'Invalid capability overrides'))
       }
@@ -200,7 +207,7 @@ export async function modelsRoutes(fastify: FastifyInstance) {
   })
 
   // 6. POST /api/v1/models/{id}/test
-  fastify.post<{ Params: { id: string }, Body?: { provider?: string, modelId?: string, apiKey?: string, baseUrl?: string } }>('/api/v1/models/:id/test', async (request, reply) => {
+  fastify.post<{ Params: { id: string }, Body?: { provider?: string, modelId?: string, apiKey?: string, baseUrl?: string, apiFormat?: ApiFormatInput } }>('/api/v1/models/:id/test', async (request, reply) => {
     const tenantId = (request as any).authContext?.tenantId ?? 'default'
     const { id } = request.params
     
@@ -214,6 +221,12 @@ export async function modelsRoutes(fastify: FastifyInstance) {
     let baseUrl = request.body?.baseUrl || model?.baseUrl || ''
     let provider = request.body?.provider || model?.provider || 'openai' // default to openai adapter for custom testing
     let modelId = request.body?.modelId || model?.modelId || 'test'
+    let apiFormat: ApiFormat
+    try {
+      apiFormat = normalizeApiFormat(request.body?.apiFormat !== undefined ? request.body.apiFormat : model?.apiFormat)
+    } catch (error) {
+      return reply.code(400).send(fail(40001, error instanceof Error ? error.message : 'Invalid API format'))
+    }
 
     // Temporary test overrides must satisfy the same trust boundary as persisted endpoints.
     if (!isValidChatCompletionsEndpoint(baseUrl)) {
@@ -227,7 +240,8 @@ export async function modelsRoutes(fastify: FastifyInstance) {
         provider,
         model: modelId,
         apiKey,
-        baseUrl
+        baseUrl,
+        apiFormat,
       })
       
       const response = await adapter.complete([
@@ -251,12 +265,18 @@ export async function modelsRoutes(fastify: FastifyInstance) {
 
   // 7. POST /api/v1/models/detect-capabilities
   // 基于内置规则推断模型能力（用于"添加模型"对话框预填）
-  fastify.post<{ Body: { provider?: string; modelId: string; baseUrl?: string } }>(
+  fastify.post<{ Body: { provider?: string; modelId: string; baseUrl?: string; apiFormat?: ApiFormatInput } }>(
     '/api/v1/models/detect-capabilities',
     async (request, reply) => {
       const { provider, modelId, baseUrl } = request.body
       if (!modelId) return reply.code(400).send(fail(40001, 'modelId is required'))
-      const caps = resolveCapabilities({ model: modelId, baseUrl, provider })
+      let apiFormat: ApiFormat
+      try {
+        apiFormat = normalizeApiFormat(request.body.apiFormat)
+      } catch (error) {
+        return reply.code(400).send(fail(40001, error instanceof Error ? error.message : 'Invalid API format'))
+      }
+      const caps = resolveCapabilities({ model: modelId, baseUrl, provider, apiFormat })
       return reply.code(200).send(success(caps))
     }
   )

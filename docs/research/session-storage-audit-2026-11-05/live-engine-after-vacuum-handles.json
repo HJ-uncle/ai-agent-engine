@@ -1,0 +1,20 @@
+[
+  {
+    "pid": 20124,
+    "path": "\\\\?\\C:\\Users\\wb.xielin02\\AppData\\Roaming\\aether-code\\engine\\state\\agent.db",
+    "bytes": 23437312,
+    "fileId": "7F-82-26-48-B4-EB-0A-E2-67-61-07-00-00-00-02-00-00-00-00-00-00-00-00-00"
+  },
+  {
+    "pid": 20124,
+    "path": "\\\\?\\C:\\Users\\wb.xielin02\\AppData\\Roaming\\aether-code\\engine\\state\\agent.db-wal",
+    "bytes": 271952,
+    "fileId": "7F-82-26-48-B4-EB-0A-E2-68-61-07-00-00-00-03-00-00-00-00-00-00-00-00-00"
+  },
+  {
+    "pid": 20124,
+    "path": "\\\\?\\C:\\Users\\wb.xielin02\\AppData\\Roaming\\aether-code\\engine\\state\\agent.db-shm",
+    "bytes": 65536,
+    "fileId": "7F-82-26-48-B4-EB-0A-E2-69-61-07-00-00-00-02-00-00-00-00-00-00-00-00-00"
+  }
+]

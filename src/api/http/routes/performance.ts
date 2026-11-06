@@ -8,9 +8,9 @@ export async function performanceRoutes(fastify: FastifyInstance) {
   const runtime = createRuntimeDiagnostics()
   fastify.addHook('onClose', async () => runtime.dispose())
   // Protected by the same global authentication gate as other business routes.
-  fastify.get('/performance/runtime', async (_request, reply) => {
+  fastify.get<{ Querystring: { refresh?: string } }>('/performance/runtime', async (request, reply) => {
     reply.header('Cache-Control', 'no-store')
-    return reply.send(success(runtime.read()))
+    return reply.send(success(request.query.refresh === 'true' ? await runtime.refresh() : runtime.read()))
   })
 
   fastify.get('/performance/stats', async (_request, reply) => {

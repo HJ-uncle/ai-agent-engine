@@ -1,0 +1,157 @@
+{
+  "files": 158,
+  "physicalBytes": 355134106,
+  "rows": 56498,
+  "invalidRows": 0,
+  "types": {
+    "user": {
+      "rows": 173,
+      "bytes": 191600
+    },
+    "assistant": {
+      "rows": 23884,
+      "bytes": 50957757
+    },
+    "tool": {
+      "rows": 23793,
+      "bytes": 207938654
+    },
+    "update": {
+      "rows": 8644,
+      "bytes": 96028866
+    },
+    "tombstone": {
+      "rows": 2,
+      "bytes": 574
+    },
+    "summary": {
+      "rows": 2,
+      "bytes": 16655
+    }
+  },
+  "decodedFields": {
+    "payloadContent": 164956938,
+    "modelInputContent": 373518,
+    "reasoningContent": 1326808,
+    "toolCall": 18260232,
+    "metadata": 29812791,
+    "updateArchiveContent": 79635102,
+    "updateContent": 181524,
+    "summary": 15201
+  },
+  "topFiles": [
+    {
+      "rank": 1,
+      "physicalBytes": 111107189,
+      "rows": 357,
+      "invalidRows": 0,
+      "types": {
+        "user": {
+          "rows": 5,
+          "bytes": 3107
+        },
+        "assistant": {
+          "rows": 138,
+          "bytes": 445817
+        },
+        "tool": {
+          "rows": 136,
+          "bytes": 68982426
+        },
+        "update": {
+          "rows": 78,
+          "bytes": 41675839
+        }
+      },
+      "decodedFields": {
+        "payloadContent": 68300582,
+        "modelInputContent": 270517,
+        "reasoningContent": 183951,
+        "toolCall": 72119,
+        "metadata": 279754,
+        "updateArchiveContent": 41367545,
+        "updateContent": 1638,
+        "summary": 0
+      },
+      "gzipLevel6Bytes": 82354413
+    },
+    {
+      "rank": 2,
+      "physicalBytes": 21096349,
+      "rows": 172,
+      "invalidRows": 0,
+      "types": {
+        "user": {
+          "rows": 3,
+          "bytes": 1819
+        },
+        "assistant": {
+          "rows": 86,
+          "bytes": 264210
+        },
+        "tool": {
+          "rows": 83,
+          "bytes": 20830320
+        }
+      },
+      "decodedFields": {
+        "payloadContent": 20441048,
+        "modelInputContent": 74335,
+        "reasoningContent": 70130,
+        "toolCall": 75816,
+        "metadata": 262155,
+        "updateArchiveContent": 0,
+        "updateContent": 0,
+        "summary": 0
+      },
+      "gzipLevel6Bytes": 15337303
+    },
+    {
+      "rank": 3,
+      "physicalBytes": 10561529,
+      "rows": 1787,
+      "invalidRows": 0,
+      "types": {
+        "user": {
+          "rows": 1,
+          "bytes": 1076
+        },
+        "assistant": {
+          "rows": 600,
+          "bytes": 960362
+        },
+        "tool": {
+          "rows": 600,
+          "bytes": 4806784
+        },
+        "update": {
+          "rows": 586,
+          "bytes": 4793307
+        }
+      },
+      "decodedFields": {
+        "payloadContent": 3992688,
+        "modelInputContent": 0,
+        "reasoningContent": 0,
+        "toolCall": 192574,
+        "metadata": 472844,
+        "updateArchiveContent": 3900040,
+        "updateContent": 12306,
+        "summary": 0
+      },
+      "gzipLevel6Bytes": 425455
+    }
+  ],
+  "changedDuringScan": 0,
+  "microcompactCopies": {
+    "matchedUpdates": 8644,
+    "matchingDecodedBytes": 79635102,
+    "unmatchedUpdates": 0
+  },
+  "embeddedDataUrls": {
+    "occurrences": 225,
+    "encodedCharacters": 135263636,
+    "uniqueOccurrences": 119,
+    "uniqueEncodedCharacters": 73990557
+  }
+}

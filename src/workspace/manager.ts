@@ -2,6 +2,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { randomUUID, createHash } from 'node:crypto'
 import { acquireResourceLease, acquireResourceLeaseAsync } from './binding-lease.js'
+import { recoverGitBindingLease } from './binding-git-recovery.js'
 import type { AgentContext } from '../core/agent-context/index.js'
 import { getSecurityMode } from '../security/policy-engine.js'
 import { canonicalFilePathSync } from '../shared/file-version.js'
@@ -254,6 +255,10 @@ export class WorkspaceManager {
    * every actual dispatch against direct external state edits while awaiting. */
   async withBindingLease<T>(ctx: CtxLike, expected: WorkspaceBindingSnapshot | undefined, action: (lease: WorkspaceBindingLease) => Promise<T>, waitMs = 0): Promise<T> {
     this.assertContext(ctx)
+    if (fs.existsSync(this.sessionLeaseFile(ctx)) || fs.existsSync(this.sessionLeaseFile(ctx) + '.recovery.lock')) {
+      const current = this.getBindingSnapshot(ctx)
+      await recoverGitBindingLease(this.sessionLeaseFile(ctx), current.root, { tenantId: ctx.tenantId!, sessionId: ctx.sessionId! })
+    }
     const held = await acquireResourceLeaseAsync(this.sessionLeaseFile(ctx), 'workspace session', { tenantId: ctx.tenantId!, sessionId: ctx.sessionId! }, waitMs)
     try {
       const snapshot = this.getBindingSnapshot(ctx)
@@ -280,6 +285,7 @@ export class WorkspaceManager {
   recoverInterruptedGitBinding(ctx: CtxLike, expected: WorkspaceBindingSnapshot, resource:{file:string;generation:string;pid:number;root:string;epoch:string}, originalPid:number): boolean {
     this.assertContext(ctx)
     const file=this.sessionLeaseFile(ctx),snapshot=this.getBindingSnapshot(ctx)
+    if(fs.existsSync(file+'.recovery.lock')) return false
     const samePath=(left:string,right:string):boolean=>{
       if(!path.isAbsolute(left) || !path.isAbsolute(right)) return false
       const a=path.resolve(left),b=path.resolve(right)
@@ -303,6 +309,7 @@ export class WorkspaceManager {
     }
     if(held.pid!==resource.pid || held.generation!==resource.generation) return false
     try {
+      if(fs.existsSync(file+'.recovery.lock')) return false
       fs.renameSync(file,`${file}.recovered-${resource.generation}.json`)
       return true
     } catch(error) {
@@ -375,6 +382,11 @@ export class WorkspaceManager {
    */
   async bindSnapshotAsync(ctx: CtxLike, workspaceRoot: string, waitMs = 30_000): Promise<Readonly<WorkspaceBindingSnapshot>> {
     this.assertContext(ctx)
+    if (fs.existsSync(this.sessionLeaseFile(ctx)) || fs.existsSync(this.sessionLeaseFile(ctx) + '.recovery.lock')) {
+      const allowDesktopSelection = process.env.AETHER_DESKTOP_OWNED === '1' && !this.isAuthenticated()
+      const selected = this.validateSelectedDirectory(ctx.tenantId, workspaceRoot, this.readBindings(), !allowDesktopSelection)
+      await recoverGitBindingLease(this.sessionLeaseFile(ctx), selected, { tenantId: ctx.tenantId!, sessionId: ctx.sessionId! })
+    }
     const session = await acquireResourceLeaseAsync(
       this.sessionLeaseFile(ctx),
       'workspace session',

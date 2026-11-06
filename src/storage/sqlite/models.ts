@@ -4,8 +4,10 @@ import { encrypt, decrypt } from '../../utils/encryption.js'
 import type { Row } from '@libsql/client'
 import type { ModelCapabilities } from '../../core/model-capabilities/index.js'
 import { capabilityPatchFromInput, type CapabilityOverridePatch } from '../../core/model-capabilities/overrides.js'
+import { normalizeApiFormat, type ApiFormat } from '../../core/llm-adapter/protocol.js'
 
-export type ModelUpdate = Omit<Partial<ModelConfig>, 'capabilities'> & {
+export type ModelUpdate = Omit<Partial<ModelConfig>, 'capabilities' | 'apiFormat'> & {
+  apiFormat?: ApiFormat | null | ''
   capabilities?: CapabilityOverridePatch | null
   capabilityOverrides?: CapabilityOverridePatch | null
 }
@@ -25,6 +27,7 @@ export interface ModelConfig {
   modelId: string
   apiKey: string
   baseUrl: string
+  apiFormat?: ApiFormat
   displayName?: string
   isEnabled: boolean
   version?: string
@@ -70,6 +73,7 @@ function mapModelRow(row: Row): ModelConfig {
     modelId: row['model_id'] as string,
     apiKey,
     baseUrl: row['base_url'] as string,
+    apiFormat: normalizeApiFormat(row['api_format']),
     displayName: row['display_name'] as string | undefined,
     isEnabled: Boolean(row['is_enabled']),
     version: row['version'] as string | undefined,
@@ -121,12 +125,12 @@ export class ModelsStore {
     // atomically; a live identity must never become an implicit overwrite,
     // including when two callers create or restore it at the same time.
     const result = await db.execute({
-      sql: `INSERT INTO models (id, tenant_id, provider, model_id, api_key, base_url, display_name, is_enabled, version, capabilities)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      sql: `INSERT INTO models (id, tenant_id, provider, model_id, api_key, base_url, display_name, is_enabled, version, capabilities, api_format)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(tenant_id, provider, model_id) DO UPDATE SET
               api_key = excluded.api_key, base_url = excluded.base_url,
               display_name = excluded.display_name, is_enabled = excluded.is_enabled,
-              version = excluded.version, capabilities = excluded.capabilities,
+              version = excluded.version, capabilities = excluded.capabilities, api_format = excluded.api_format,
               deleted_at = NULL, updated_at = unixepoch()
             WHERE models.deleted_at IS NOT NULL
             RETURNING *`,
@@ -134,6 +138,7 @@ export class ModelsStore {
         id, data.tenantId, data.provider, data.modelId, encryptedKey, data.baseUrl,
         data.displayName || null, data.isEnabled ? 1 : 0, data.version || null,
         data.capabilities ? JSON.stringify(data.capabilities) : null,
+        normalizeApiFormat(data.apiFormat),
       ]
     })
 
@@ -161,6 +166,10 @@ export class ModelsStore {
     if (data.baseUrl) {
       updates.push('base_url = ?')
       args.push(data.baseUrl)
+    }
+    if (data.apiFormat !== undefined) {
+      updates.push('api_format = ?')
+      args.push(normalizeApiFormat(data.apiFormat))
     }
     if (data.displayName !== undefined) {
       updates.push('display_name = ?')

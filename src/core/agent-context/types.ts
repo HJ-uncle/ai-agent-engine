@@ -162,6 +162,8 @@ export interface ConversationHistory {
    * context automatically.
    */
   getArchive?(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>, page?: { offset: number; limit: number }): Promise<ConversationArchive>
+  /** Complete user-turn navigation and selected display bodies, independent of model compaction. */
+  getDisplayHistory?(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>, options?: ConversationDisplayOptions): Promise<ConversationDisplayHistory>
   clear(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'>, options?: { tombstone?: boolean }): Promise<void>
   summarize(ctx: AgentContext): Promise<void>
   /** 物理删除某条消息（及其对应的数据库行） */
@@ -245,6 +247,33 @@ export interface HistorySearchResult {
   totalMatches: number
   nextOffset: number | null
   backend: 'jsonl' | 'sqlite'
+}
+
+export interface ConversationDisplayOptions {
+  anchorMessageId?: string
+  limit?: number
+  /** Display controller followups inside their existing root turn; legacy user-message paging is the default. */
+  groupRootFollowups?: boolean
+}
+
+export interface ConversationDisplayTurn {
+  userMessageId: string
+  conversationId?: string
+  preview: string
+  createdAt?: number
+}
+
+export interface ConversationDisplayHistory {
+  schemaVersion: 1
+  grouping?: 'root'
+  turns: ConversationDisplayTurn[]
+  messages: Message[]
+  loadedTurnIds: string[]
+  revision: string
+  /** Changes for edits/deletions/replacement, but not ordinary append or JSONL summarization. */
+  mutationRevision: string
+  backend: 'jsonl' | 'sqlite'
+  completeness: 'complete' | 'sqlite_compacted'
 }
 
 export interface ConversationArchive {

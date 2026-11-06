@@ -1,6 +1,6 @@
 import { ensureControllerSchema } from './controller-origin.js'
 import type { Client } from '@libsql/client'
-import { ensureHistoryMaintenanceSchema } from './history-maintenance.js'
+import { ensureHistoryMaintenanceSchema, invalidatePendingHistoryMaintenance } from './history-maintenance.js'
 
 const prepared = new WeakMap<Client, Promise<void>>()
 export function ensureJSONLDeliverySchema(db: Client): Promise<void> {
@@ -37,8 +37,7 @@ export async function invalidateJSONLDeliveries(db: Client, scope: { tenantId: s
       ON CONFLICT(tenant_id,session_id) DO UPDATE SET epoch=epoch+1`, args: [scope.tenantId, scope.sessionId] })
     await tx.execute({ sql: `UPDATE collaboration_jsonl_deliveries SET state='suppressed',reason='history_changed'
       WHERE tenant_id=? AND history_session_id=? AND state IN ('pending','integrated')`, args: [scope.tenantId, scope.sessionId] })
-    await tx.execute({ sql: `UPDATE collaboration_history_maintenance SET state='invalidated'
-      WHERE tenant_id=? AND session_id=? AND backend='jsonl' AND state='pending'`, args: [scope.tenantId, scope.sessionId] })
+    await invalidatePendingHistoryMaintenance(tx, scope)
     await tx.commit()
   } catch (error) { if (!tx.closed) await tx.rollback().catch(() => undefined); throw error }
   finally { tx.close() }

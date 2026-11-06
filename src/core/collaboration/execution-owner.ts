@@ -5,6 +5,7 @@ import type { CollaborationProducer, CollaborationBinding } from './types.js'
 import type { SubagentRunView } from '../subagent/types.js'
 import { registerControllerRoot, type ControllerSubject } from './controller-origin.js'
 import { CollaborationError } from './types.js'
+import { ExecutionParkError } from '../utils/abort.js'
 
 declare const authority: unique symbol
 /** These objects are service-owned identities, never serialized request fields. */
@@ -225,8 +226,9 @@ export class ExecutionOwners {
     if (!record.intent || intent === 'cancel') record.intent = intent
     record.phase = record.intent === 'cancel' ? 'cancelling' : record.intent === 'park' ? 'parking' : 'draining'
     if (record.intent !== 'finish') {
-      if (!record.controller.signal.aborted) record.controller.abort(new Error(reason))
-      for (const ticket of record.tickets) if (!ticket.controller.signal.aborted) ticket.controller.abort(new Error(reason))
+      const abortReason = record.intent === 'park' ? new ExecutionParkError(reason) : new Error(reason)
+      if (!record.controller.signal.aborted) record.controller.abort(abortReason)
+      for (const ticket of record.tickets) if (!ticket.controller.signal.aborted) ticket.controller.abort(abortReason)
     }
   }
   drain(cap: ExecutionOwner, intent: DrainIntent): Promise<DrainEvidence> {

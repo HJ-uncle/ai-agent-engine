@@ -15,7 +15,8 @@ export function modelMessageContent(message: Message): Message['content'] {
   if (recovered !== undefined) return recovered
   if (message.modelInputContent != null) return message.modelInputContent
   // Historical browser previews predate the separate model input column.
-  return (message.role === 'tool' ? browserOutputPresentation(message.content)?.modelInputContent : undefined) ?? message.content
+  const browser = message.role === 'tool' ? browserOutputPresentation(message.content, undefined, true) : undefined
+  return browser?.modelVisionContent ?? browser?.modelInputContent ?? message.content
 }
 
 /** Only fields consumed by the provider adapters; replay/UI data stays in storage. */

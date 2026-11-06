@@ -19,9 +19,9 @@ let rows: Row[] = []
 let idCounter = 0
 
 const mockDb = {
-  execute(opts: { sql: string; args?: unknown[] }) {
-    const sql = opts.sql.trim().toUpperCase()
-    const args = opts.args ?? []
+  execute(opts: string | { sql: string; args?: unknown[] }) {
+    const sql = (typeof opts === 'string' ? opts : opts.sql).trim().toUpperCase()
+    const args = typeof opts === 'string' ? [] : opts.args ?? []
 
     if (sql.startsWith('INSERT INTO CONVERSATIONS')) {
       const msgId = args[3] as string | null
@@ -85,12 +85,14 @@ const mockDb = {
       execute: (opts: { sql: string; args?: unknown[] }) => mockDb.execute(opts),
       commit: () => Promise.resolve(),
       rollback: () => Promise.resolve(),
+      close: () => {},
     })
   },
 }
 
 vi.mock('../../../storage/sqlite/db.js', () => ({
   getDb: () => mockDb,
+  getDbEpoch: () => undefined,
 }))
 
 // ── 导入被测类 ────────────────────────────────────────────────────────────────

@@ -917,8 +917,9 @@ describe('browser screenshot settlement', () => {
     expect(JSON.parse(vi.mocked(f.ctx.runObserver!.onToolEnd!).mock.calls[0][0].output!)).toEqual(snapshot)
   })
 
-  it('persists and streams screenshot pixels but sends only semantic metadata to the next model request', async () => {
+  it.each([true, false])('persists display pixels and sends the bounded current image only when vision=%s', async vision => {
     const f = fixture()
+    f.ctx.modelCaps = { vision }
     const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDdwAAAAASUVORK5CYII='
     const dataUrl = 'data:image/png;base64,' + Buffer.concat([Buffer.from(png, 'base64'), Buffer.alloc(100_000)]).toString('base64')
     const output = JSON.stringify({
@@ -935,10 +936,12 @@ describe('browser screenshot settlement', () => {
     const frames = await f.run()
     const stored = f.history.find(message => message.role === 'tool')!
     expect(JSON.parse(stored.content as string).screenshot.dataUrl).toBe(dataUrl)
-    expect(stored.modelInputContent).not.toContain('data:image')
+    expect(String(stored.modelInputContent).includes(dataUrl)).toBe(vision)
+    const model = JSON.parse(String(stored.modelInputContent))
+    expect(vision ? model.browserSnapshot.elements : model.elements).toEqual([{ role: 'button', name: 'Log in', ref: '3:1' }])
     expect(stored.tokens).toBeLessThan(4000)
     const nextInput = vi.mocked(f.llm.stream).mock.calls[1][0]
-    expect(JSON.stringify(nextInput)).not.toContain('data:image')
+    expect(JSON.stringify(nextInput).includes(dataUrl)).toBe(vision)
     expect(JSON.stringify(nextInput)).toContain('retainedForDisplay')
     const frame = frames.find(value => value.startsWith('\x00__tool_result__'))!
     expect(JSON.parse(JSON.parse(frame.slice('\x00__tool_result__'.length)).output).screenshot.dataUrl).toBe(dataUrl)

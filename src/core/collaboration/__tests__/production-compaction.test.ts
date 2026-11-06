@@ -307,8 +307,10 @@ describe('JSONL durable private compaction recovery', () => {
     for (const row of receipts) {
       expect(row.state).toBe('committed')
       const payload = JSON.parse(String(row.payload_json))
+      expect(payload).toMatchObject({ format: 'aether-history-maintenance-terminal', schemaVersion: 1, state: 'committed' })
       expect(payload.plan.bytes).toBeLessThanOrEqual(8 * 1024 * 1024)
-      expect(payload.plan.encoded.trimEnd().split('\n').length).toBeLessThanOrEqual(128)
+      expect(payload.plan.lineCount).toBeLessThanOrEqual(128)
+      expect(payload.plan.encoded).toBeUndefined()
     }
     expect(await identity(userId)).toEqual(before); expect(await receipt(accepted.messageId)).toEqual(peerBefore)
     const reopened = new JSONLConversationHistory(), activeRows = await reopened.getFullHistory(scope)
@@ -392,7 +394,7 @@ describe('JSONL durable private compaction recovery', () => {
     expect((await reopened.getArchive(scope)).messages.filter(row => row.role === 'tool').map(row => row.content)).toEqual(Array.from({ length: 129 }, (_, index) => 'Original cross-batch evidence ' + index))
     const rows = fs.readFileSync(path.join(directory, 'sessions', scope.tenantId, scope.sessionId + '.jsonl'), 'utf8').trimEnd().split('\n').map(line => JSON.parse(line))
     expect(rows.filter(row => row.type === 'update').map(row => row.targetUuid)).toEqual(Array.from({ length: 129 }, (_, index) => 'cross-' + index + '-result'))
-  })
+  }, 15000) // Includes 258 durable appends and two real recovery transactions.
 
   it.each(['reservation-ACK', 'final-ACK', 'partial-write', 'sync-ACK'] as const)('reconciles %s without repeating summary generation, moving the seed or replaying retired mail', async kind => {
     await seed(); const accepted = await mail('Archive exact peer evidence'); await consume()

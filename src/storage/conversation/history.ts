@@ -20,8 +20,16 @@ import { admissionError } from '../root-admission/index.js'
 import { ensureSQLiteDeliverySchema, invalidateSQLiteDeliveryStatements, sqliteHistoryScope } from '../../core/collaboration/delivery-schema.js'
 import { currentHistoryMaintenance, maintenancePinnedIds, maintenanceSummaryEvidence, reserveHistoryMaintenance } from '../../core/collaboration/history-maintenance.js'
 import { registerSQLiteHistory } from './sqlite-origin.js'
+import { displayTurn, displayUserIdentity, displayUserTurnIds, selectDisplayTurnIds } from './display-history.js'
+import { ensureDisplayHistoryRevision } from './sqlite-display-revision.js'
+import type { ConversationDisplayHistory, ConversationDisplayOptions } from '../../core/agent-context/types.js'
 
 type Ctx = { tenantId: string; sessionId: string }
+function messageTimeSeconds(message: Message): number {
+  const createdAt = message.createdAt ?? Date.now()
+  if (!Number.isSafeInteger(createdAt) || createdAt < 0) throw new Error('Message createdAt must be a nonnegative integer timestamp')
+  return createdAt / 1000
+}
 const usageArchiveReady = new WeakMap<Client, Promise<void>>()
 function ensureUsageArchive(db: Client): Promise<void> {
   let pending = usageArchiveReady.get(db)
@@ -112,6 +120,9 @@ function rowToMessage(row: Row): Message & { conversationId?: string } {
     }
   }
   restoreModelInputContent(msg)
+  // Controller bodies are submitted as text, including literal JSON. Their
+  // separate provider snapshot must not turn display text into content blocks.
+  if (role === 'user' && msg.metadata?.collaborationDelivery?.source === 'user-controller') msg.content = row['content'] as string
   if (tool_call_id) {
     msg.toolCallId = tool_call_id
     msg.toolName = tool_name ?? undefined
@@ -221,13 +232,13 @@ export class SQLiteConversationHistory implements ConversationHistory {
     if (isTombstoned(ctx.tenantId, ctx.sessionId)) {
       return message.id ?? uuidv4()
     }
-    const db = getDb()
+    const createdAt = messageTimeSeconds(message), db = getDb()
     await ensureUsageArchive(db)
     const messageId = message.id ?? uuidv4()
     await db.execute({
       sql: `INSERT INTO conversations
-              (tenant_id, session_id, conversation_id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, model_id, metadata)
-            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+              (tenant_id, session_id, conversation_id, message_id, role, content, reasoning_content, tool_call_id, tool_call_name, tool_name, tool_args, tokens, token_usage, model_id, metadata, created_at)
+            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             WHERE NOT EXISTS (SELECT 1 FROM conversations WHERE tenant_id=? AND session_id=? AND message_id=?)
               AND NOT EXISTS (SELECT 1 FROM conversation_usage_archive WHERE tenant_id=? AND session_id=? AND message_id=?)`,
       args: [
@@ -246,6 +257,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
         message.usage ? JSON.stringify(message.usage) : null,
         message.modelId ?? null,
         serializeMessageMetadata(message),
+        createdAt,
         ctx.tenantId, ctx.sessionId, messageId,
         ctx.tenantId, ctx.sessionId, messageId,
       ],
@@ -273,7 +285,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
 
   async appendIfActiveToolCallAnchor(message: Message & { conversationId?: string }, ctx: Ctx,
     anchor: ConversationToolCallAnchor): Promise<ConversationConditionalAppend> {
-    const messageId = validateProjection(message, anchor), db = getDb()
+    const messageId = validateProjection(message, anchor), createdAt = messageTimeSeconds(message), db = getDb()
     await ensureUsageArchive(db)
     await ensureProjectionReceipts(db)
     const tx = await db.transaction('write')
@@ -299,12 +311,13 @@ export class SQLiteConversationHistory implements ConversationHistory {
           // A different connection's delete/compaction cannot interleave them.
           await tx.execute({ sql: `INSERT INTO conversations
             (tenant_id, session_id, conversation_id, message_id, role, content, reasoning_content, tool_call_id,
-              tool_call_name, tool_name, tool_args, tokens, token_usage, model_id, metadata)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+              tool_call_name, tool_name, tool_args, tokens, token_usage, model_id, metadata, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
             args: [ctx.tenantId, ctx.sessionId, message.conversationId ?? null, messageId, message.role,
               typeof message.content === 'string' ? message.content : JSON.stringify(message.content), message.reasoningContent ?? null,
               message.toolCallId ?? null, null, message.toolName ?? null, null, message.tokens ?? 0,
-              message.usage ? JSON.stringify(message.usage) : null, message.modelId ?? null, serializeMessageMetadata(message)] })
+              message.usage ? JSON.stringify(message.usage) : null, message.modelId ?? null, serializeMessageMetadata(message),
+              createdAt] })
           disposition = 'appended'
         }
         await writeProjectionReceipt(tx, ctx, messageId, anchor, { backend: 'sqlite', disposition: disposition === 'duplicate' ? 'appended' : disposition,
@@ -356,6 +369,43 @@ export class SQLiteConversationHistory implements ConversationHistory {
       currentMessageCount: messages.length,
       backend: 'sqlite',
     }
+  }
+
+  async getDisplayHistory(ctx: Ctx, options: ConversationDisplayOptions = {}): Promise<ConversationDisplayHistory> {
+    selectDisplayTurnIds([], { limit: options.limit })
+    const db = getDb()
+    await ensureDisplayHistoryRevision(db)
+    await db.execute({ sql: `INSERT INTO conversation_display_revisions (tenant_id,session_id,identity)
+      VALUES (?,?,lower(hex(randomblob(16)))) ON CONFLICT(tenant_id,session_id) DO NOTHING`, args: [ctx.tenantId, ctx.sessionId] })
+    const tx = await db.transaction('read')
+    try {
+      // Reading rows and mutation counter in the same transaction prevents a stale cache authority.
+      const result = await tx.execute({ sql: `SELECT * FROM conversations WHERE tenant_id=? AND session_id=? ORDER BY created_at ASC,id ASC`,
+        args: [ctx.tenantId, ctx.sessionId] })
+      const marker = (await tx.execute({ sql: `SELECT identity,revision FROM conversation_display_revisions WHERE tenant_id=? AND session_id=?`,
+        args: [ctx.tenantId, ctx.sessionId] })).rows[0]
+      const all = result.rows.map(row => {
+        const message = restoreMicroCompactedTool(rowToMessage(row))
+        return { ...message, id: message.id || `sqlite-row:${row.id}` }
+      })
+      const userMessages = all.filter(message => message.role === 'user')
+      const userTurns = displayUserTurnIds(userMessages.map(displayUserIdentity), options.groupRootFollowups)
+      const turns = userMessages.filter(message => userTurns.get(message.id!) === message.id).map(displayTurn)
+      const loadedTurnIds = selectDisplayTurnIds(turns.map(turn => turn.userMessageId), options)
+      const selected = new Set(loadedTurnIds), messages: Message[] = []
+      let currentUser: string | undefined, completeness: ConversationDisplayHistory['completeness'] = 'complete'
+      for (const message of all) {
+        if (message.role === 'system' && message.metadata?.isCompactSummary) { completeness = 'sqlite_compacted'; continue }
+        if (message.role === 'user') currentUser = userTurns.get(message.id!)
+        if (selected.has(currentUser ?? '')) messages.push(message)
+      }
+      const mutationRevision = `${String(marker.identity)}:${String(marker.revision)}`
+      const revision = createHash('sha256').update(mutationRevision).update(JSON.stringify(all)).digest('hex')
+      await tx.commit()
+      return { schemaVersion: 1, ...(options.groupRootFollowups ? { grouping: 'root' as const } : {}),
+        turns, messages, loadedTurnIds, revision, mutationRevision, backend: 'sqlite', completeness }
+    } catch (error) { if (!tx.closed) await tx.rollback(); throw error }
+    finally { tx.close() }
   }
 
   private async getRawMessages(ctx: Ctx): Promise<Message[]> {

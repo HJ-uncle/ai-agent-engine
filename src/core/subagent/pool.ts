@@ -1,3 +1,5 @@
+import { DEFAULT_SUBAGENT_CONCURRENCY } from './concurrency.js'
+
 interface Waiter {
   start(): void
   signal?: AbortSignal
@@ -13,9 +15,26 @@ function abortError(signal?: AbortSignal): Error {
 /** Separate from the tool pool: waiting child orchestration must never occupy inner-tool slots. */
 export class SubagentPool {
   private readonly groups = new Map<string, { active: number; queue: Waiter[] }>()
+  private capacity: number
 
-  constructor(readonly limit = 3) {
+  constructor(limit = DEFAULT_SUBAGENT_CONCURRENCY) {
     if (!Number.isInteger(limit) || limit < 1) throw new Error('Subagent concurrency limit must be a positive integer')
+    this.capacity = limit
+  }
+
+  get limit(): number { return this.capacity }
+
+  setLimit(limit: number): void {
+    if (!Number.isInteger(limit) || limit < 1) throw new Error('Subagent concurrency limit must be a positive integer')
+    this.capacity = limit
+    // Shrinking never interrupts existing work. Growing wakes queued callers
+    // now rather than waiting for an unrelated running child to finish.
+    for (const [key, group] of this.groups) this.drain(key, group)
+  }
+
+  private drain(key: string, group: { active: number; queue: Waiter[] }): void {
+    while (group.active < this.limit && group.queue.length > 0) group.queue.shift()!.start()
+    if (group.active === 0 && group.queue.length === 0) this.groups.delete(key)
   }
 
   acquire(key: string, signal?: AbortSignal): Promise<() => void> {
@@ -23,10 +42,7 @@ export class SubagentPool {
     const group = this.groups.get(key) ?? { active: 0, queue: [] }
     this.groups.set(key, group)
     return new Promise((resolve, reject) => {
-      const drain = () => {
-        while (group.active < this.limit && group.queue.length > 0) group.queue.shift()!.start()
-        if (group.active === 0 && group.queue.length === 0) this.groups.delete(key)
-      }
+      const drain = () => this.drain(key, group)
       const waiter: Waiter = {
         signal,
         abort: () => {

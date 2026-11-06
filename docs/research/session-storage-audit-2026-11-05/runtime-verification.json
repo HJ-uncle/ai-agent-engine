@@ -1,0 +1,63 @@
+{
+  "auditDate": "2026-11-05",
+  "scope": "Synthetic fixtures; no real model or production data",
+  "initialRun": {
+    "command": "npx vitest run src/core/stream-pipeline/__tests__/stream-bus.test.ts src/core/stream-pipeline/__tests__/ordered-publication.test.ts src/core/stream-pipeline/__tests__/sse-sink.test.ts src/core/agent-loop/__tests__/archived-compaction.test.ts src/core/agent-loop/__tests__/compaction-progress.test.ts src/core/agent-loop/__tests__/readonly-history.test.ts src/core/agent-loop/__tests__/react-streaming-context.test.ts src/api/http/__tests__/history-projection.test.ts --maxWorkers=1 --minWorkers=1",
+    "exitCode": 1,
+    "files": [
+      { "path": "src/core/agent-loop/__tests__/react-streaming-context.test.ts", "tests": 61, "passed": 61, "failed": 0 },
+      { "path": "src/core/stream-pipeline/__tests__/stream-bus.test.ts", "tests": 39, "passed": 39, "failed": 0 },
+      { "path": "src/core/stream-pipeline/__tests__/ordered-publication.test.ts", "tests": 31, "passed": 31, "failed": 0 },
+      { "path": "src/core/agent-loop/__tests__/archived-compaction.test.ts", "tests": 9, "passed": 9, "failed": 0 },
+      { "path": "src/core/stream-pipeline/__tests__/sse-sink.test.ts", "tests": 17, "passed": 17, "failed": 0 },
+      { "path": "src/core/agent-loop/__tests__/readonly-history.test.ts", "tests": 37, "passed": 37, "failed": 0 },
+      { "path": "src/core/agent-loop/__tests__/compaction-progress.test.ts", "tests": 5, "passed": 3, "failed": 2 },
+      { "path": "src/api/http/__tests__/history-projection.test.ts", "tests": 1, "passed": 1, "failed": 0 }
+    ],
+    "totalTests": 200,
+    "passed": 198,
+    "failed": 2
+  },
+  "compactionRecheck": {
+    "command": "npx vitest run src/core/agent-loop/__tests__/compaction-progress.test.ts --maxWorkers=1 --minWorkers=1",
+    "exitCode": 1,
+    "totalTests": 5,
+    "passed": 3,
+    "failed": 2,
+    "log": "compaction-progress-recheck.txt",
+    "failures": [
+      "afterEach fixture cleanup EPERM on Windows",
+      "Light cleanup scenario: expected final status succeeded, received failed; root cause not established in this audit"
+    ]
+  },
+  "archiveSnapshotRun": {
+    "command": "npx vitest run src/tools/get-context/__tests__/search-history-tool.test.ts src/tools/get-context/__tests__/search-history-image.test.ts src/storage/conversation/__tests__/model-input-content.test.ts src/api/http/__tests__/chat-snapshot.test.ts src/api/http/__tests__/chat-usage.test.ts --maxWorkers=1 --minWorkers=1",
+    "exitCode": 0,
+    "files": [
+      { "path": "src/tools/get-context/__tests__/search-history-image.test.ts", "tests": 13, "passed": 13, "failed": 0 },
+      { "path": "src/storage/conversation/__tests__/model-input-content.test.ts", "tests": 7, "passed": 7, "failed": 0 },
+      { "path": "src/tools/get-context/__tests__/search-history-tool.test.ts", "tests": 22, "passed": 22, "failed": 0 },
+      { "path": "src/api/http/__tests__/chat-snapshot.test.ts", "tests": 6, "passed": 6, "failed": 0 },
+      { "path": "src/api/http/__tests__/chat-usage.test.ts", "tests": 6, "passed": 6, "failed": 0 }
+    ],
+    "totalTests": 54,
+    "passed": 54,
+    "failed": 0,
+    "log": "archive-and-snapshot-tests.txt"
+  },
+  "combinedAuditDeduplicated": {
+    "groupTotals": [200, 54, 210, 37, 109],
+    "executionsExcludingRecheck": 610,
+    "duplicateTestsExcluded": 8,
+    "duplicates": [
+      { "path": "src/storage/conversation/__tests__/model-input-content.test.ts", "tests": 7 },
+      { "path": "src/api/http/__tests__/history-projection.test.ts", "tests": 1 }
+    ],
+    "uniqueFiles": 39,
+    "uniqueTests": 602,
+    "passed": 597,
+    "failed": 5,
+    "additionalRecheckExecutions": 5,
+    "faultProbeScripts": 1
+  }
+}

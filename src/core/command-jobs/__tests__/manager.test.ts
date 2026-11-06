@@ -6,6 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CommandJobManager } from '../manager.js'
+import { ExecutionParkError } from '../../utils/abort.js'
 import type { CommandJobLaunch, CommandJobOutput, CommandJobScope, CommandJobSnapshot } from '../types.js'
 
 let fixture: string
@@ -236,6 +237,30 @@ describe('D7 durable command job lifecycle', () => {
     await manager.cancel(exactScope, job.jobId, 'long_deadline_test')
     expect((await manager.wait(scope, job.jobId))?.status).toBe('cancelled')
   })
+
+  it.each(['timeout', 'explicit-cancel'] as const)('a background command survives an internal permission park until %s', async ending => {
+    const controller = new AbortController()
+    const job = await manager.start(launch("require('node:fs').writeFileSync('parked.pid', String(process.pid)); setInterval(() => {}, 1000)",
+      { signal: controller.signal, timeoutMs: ending === 'timeout' ? 1_500 : 10_000 }))
+    const childPid = await capturePid('parked.pid')
+    controller.abort(new ExecutionParkError('park'))
+    expect((await manager.get(exactScope, job.jobId))?.status).toBe('running')
+    expect(alive(childPid)).toBe(true)
+    if (ending === 'explicit-cancel') await manager.cancelCaptured(manager.captureScope(exactScope), 'User stopped while awaiting approval')
+    const finished = await manager.wait(exactScope, job.jobId)
+    expect(finished).toMatchObject(ending === 'timeout'
+      ? { status: 'timed_out', error: { code: 'COMMAND_TIMEOUT' } }
+      : { status: 'cancelled', error: { code: 'COMMAND_CANCELLED', message: 'User stopped while awaiting approval' } })
+    expect(alive(childPid)).toBe(false)
+    expect(await manager.get(exactScope, job.jobId)).toEqual(finished)
+  }, 15_000)
+
+  it.each(['foreground', 'ordinary-abort'] as const)('the park exception does not preserve a %s command', async mode => {
+    const controller = new AbortController()
+    const job = await manager.start(launch('setInterval(() => {}, 1000)', { signal: controller.signal, background: mode !== 'foreground' }))
+    controller.abort(mode === 'foreground' ? new ExecutionParkError('park') : new Error('park'))
+    expect(await manager.wait(exactScope, job.jobId)).toMatchObject({ status: 'cancelled', error: { code: 'COMMAND_CANCELLED' } })
+  }, 15_000)
 
   it('cancels a live descendant after its leader has exited and prevents further marker writes', async () => {
     const descendantCode = `

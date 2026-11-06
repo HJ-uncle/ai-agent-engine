@@ -30,8 +30,12 @@ afterAll(async () => {
   fs.rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
 })
 const inspect = () => origin.withLease(scope, () => origin.inspect(scope))
-const seed = () => history.append({ id: 'input', role: 'user', content: 'source '.repeat(30_000),
-  modelInputContent: [{ type: 'text', text: 'provider original' }], metadata: { nested: { values: [1] } } }, scope)
+// These tests mutate inline legacy bytes. New appends deliberately externalize
+// large content; keep the legacy fixture explicit so the mutations remain real.
+const seed = () => fs.writeFileSync(file, JSON.stringify({ uuid: 'input', parentUuid: null, type: 'user',
+  timestamp: new Date().toISOString(), ...scope, isSidechain: false, dbSeq: 1,
+  payload: { id: 'input', role: 'user', content: 'source '.repeat(30_000), tokens: 0,
+    modelInputContent: [{ type: 'text', text: 'provider original' }], metadata: { nested: { values: [1] } } } }) + '\n')
 
 function observe(afterFirstStat?: (handle: FileHandle) => void, afterRead?: () => void) {
   const open = fs.promises.open.bind(fs.promises), stats = { opens: 0, stats: 0, bytes: 0 }

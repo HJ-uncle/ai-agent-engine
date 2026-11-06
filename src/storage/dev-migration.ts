@@ -12,11 +12,12 @@ import { createClient, type Client, type InValue, type Row } from '@libsql/clien
 import { up as initModels } from './sqlite/migrations/007_add_models_management.js'
 import { up as initSettings } from './sqlite/migrations/010_add_system_config.js'
 import { up as initCapabilities } from './sqlite/migrations/014_add_model_capabilities.js'
+import { up as initApiFormat } from './sqlite/migrations/032_add_model_api_format.js'
 
 const MIGRATION_ID = 'legacy-model-connections-v1'
 const MODEL_COLUMNS = [
   'id', 'tenant_id', 'provider', 'model_id', 'api_key', 'base_url',
-  'display_name', 'is_enabled', 'version', 'capabilities', 'created_at', 'updated_at',
+  'display_name', 'is_enabled', 'version', 'capabilities', 'api_format', 'created_at', 'updated_at',
 ] as const
 const REQUIRED_SOURCE_COLUMNS = ['id', 'tenant_id', 'provider', 'model_id', 'api_key', 'base_url']
 const SETTINGS_KEYS = new Set(['LLM_PROVIDER', 'LLM_PRIMARY_MODEL', 'LLM_MODEL'])
@@ -129,7 +130,7 @@ async function readSource(source: Client, key: Buffer): Promise<{ models: Row[];
       if (REQUIRED_SOURCE_COLUMNS.some(column => !columns.has(column))) {
         throw new DevModelMigrationError('unsupported-source-schema', 'Source model schema is incomplete; source was preserved.')
       }
-      const defaults: Record<string, string> = { is_enabled: '0', created_at: 'unixepoch()', updated_at: 'unixepoch()' }
+      const defaults: Record<string, string> = { is_enabled: '0', api_format: "'auto'", created_at: 'unixepoch()', updated_at: 'unixepoch()' }
       const selected = MODEL_COLUMNS.map(column => columns.has(column) ? column : `${defaults[column] ?? 'NULL'} AS ${column}`)
       const active = columns.has('deleted_at') ? ' WHERE deleted_at IS NULL' : ''
       models = (await source.execute(`SELECT ${selected.join(', ')} FROM models${active}`)).rows
@@ -175,6 +176,7 @@ async function importModels(destination: Client, data: { models: Row[]; settings
   await initModels(destination)
   await initSettings(destination)
   await initCapabilities(destination)
+  await initApiFormat(destination)
   await destination.execute('CREATE TABLE IF NOT EXISTS _aether_dev_migrations (id TEXT PRIMARY KEY, completed_at INTEGER NOT NULL)')
   // No other operation shares this client. Explicit transaction SQL preserves
   // atomic imports without detaching an unclosed native transaction connection.

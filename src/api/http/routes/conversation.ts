@@ -18,6 +18,8 @@ import { publicHistoryMessages } from '../history-projection.js'
 import { createAdapterFromResolved, resolveModelConfig, type ResolvedModelConfig } from '../../../core/llm-adapter/resolve-model.js'
 import type { CreateAdapterOptions } from '../../../core/llm-adapter/factory.js'
 import { compressionSplitIndex } from '../../../storage/conversation/compression.js'
+import { DisplayHistoryAnchorNotFoundError } from '../../../storage/conversation/display-history.js'
+import { finalResults } from '../../../storage/results/index.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
@@ -90,6 +92,12 @@ export async function autoCompactSession(tenantId: string, sessionId: string, lo
 
 export async function conversationRoutes(fastify: FastifyInstance) {
   const history = createConversationHistory()
+  fastify.get<{ Querystring: { sessionId?: string; runId?: string; assetId?: string } }>('/conversation/result-asset', async (request, reply) => {
+    const { sessionId, runId, assetId } = request.query
+    if (!sessionId || !runId || !assetId) return reply.code(200).send(fail(40001, 'sessionId, runId and assetId are required'))
+    try { return reply.code(200).send(success(await finalResults.readAsset(getTenantId(request), sessionId, runId, assetId, history))) }
+    catch { return reply.code(200).send(fail(40400, 'Final result asset is unavailable or no longer belongs to this conversation')) }
+  })
   await subagentRoutes(fastify)
 
   async function removeChildRuns(tenantId: string, sessionId: string, parentMessageIds?: Set<string>): Promise<void> {
@@ -171,6 +179,35 @@ export async function conversationRoutes(fastify: FastifyInstance) {
     response.metadata = { sessionUsage, subagentRuns, runs: await rootRunStore.list(tenantId, sessionId), commandJobs: jobs }
     
     return reply.code(200).send(response)
+  })
+
+  // Display history is independent of the compact model projection, including during a live run.
+  fastify.get<{ Querystring: { sessionId?: string; anchorMessageId?: string; limit?: string; groupRootFollowups?: string } }>('/conversation/display', async (request, reply) => {
+    const { sessionId, anchorMessageId } = request.query
+    const limit = request.query.limit === undefined ? 2 : Number(request.query.limit)
+    if (!sessionId || !Number.isSafeInteger(limit) || limit < 1 || limit > 10 || anchorMessageId === '')
+      return reply.code(400).send(fail(40001, 'sessionId 不能为空，limit 必须是 1 到 10 的整数'))
+    if (request.query.groupRootFollowups !== undefined && !['true', 'false'].includes(request.query.groupRootFollowups))
+      return reply.code(400).send(fail(40001, 'groupRootFollowups 必须是 true 或 false'))
+    if (!history.getDisplayHistory) return reply.code(501).send(fail(50101, '当前历史后端不支持完整对话展示'))
+    const tenantId = getTenantId(request)
+    try {
+      await projectPendingSubagents(history, tenantId)
+      const display = await history.getDisplayHistory({ tenantId, sessionId }, { anchorMessageId, limit,
+        ...(request.query.groupRootFollowups === 'true' ? { groupRootFollowups: true } : {}) })
+      const subagentRuns = await getSubagentStore().listRunsForParent(tenantId, sessionId)
+      const jobs = await commandJobs.list({ tenantId, sessionId })
+      for (const message of display.messages) {
+        const run = subagentRuns.find(item => item.parentToolCallId === message.toolCallId)
+        if (run) message.metadata = { ...message.metadata, subagent: run, success: run.status === 'succeeded', error: run.error?.message }
+        const job = jobs.find(item => item.toolCallId && item.toolCallId === message.toolCallId && item.ownerSessionId === sessionId)
+        if (job) message.metadata = { ...message.metadata, commandJob: job }
+      }
+      return reply.send(success({ ...display, messages: publicHistoryMessages(display.messages) }))
+    } catch (error) {
+      if (error instanceof DisplayHistoryAnchorNotFoundError) return reply.code(404).send(fail(40400, error.message))
+      throw error
+    }
   })
 
   // GET /conversation/archive?sessionId=xxx — 显式读取压缩前的 JSONL 归档。

@@ -1,0 +1,228 @@
+{
+  "measuredAt": "2026-11-05T07:24:21.266Z",
+  "mode": "isolated-backup-only",
+  "fixtureRemoved": true,
+  "source": "C:\\Users\\wb.xielin02\\AppData\\Roaming\\aether-code\\engine\\state\\agent.db",
+  "fixture": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\storage-snapshot-d9f0187e-9cfc-4e83-883d-f4d82b4f194c",
+  "before": {
+    "fileBytes": 91529216,
+    "pageCount": 22346,
+    "freePages": 444,
+    "pageSize": 4096,
+    "tables": [
+      {
+        "name": "collaboration_history_maintenance",
+        "bytes": 56721408
+      },
+      {
+        "name": "security_audit_log",
+        "bytes": 21417984
+      },
+      {
+        "name": "file_changes",
+        "bytes": 4218880
+      },
+      {
+        "name": "command_job_output",
+        "bytes": 2453504
+      },
+      {
+        "name": "command_jobs",
+        "bytes": 1859584
+      },
+      {
+        "name": "root_runs",
+        "bytes": 405504
+      },
+      {
+        "name": "subagent_events",
+        "bytes": 331776
+      },
+      {
+        "name": "server_root_admission_seeds",
+        "bytes": 331776
+      },
+      {
+        "name": "subagent_checkpoints",
+        "bytes": 204800
+      },
+      {
+        "name": "subagent_tool_versions",
+        "bytes": 176128
+      },
+      {
+        "name": "collaboration_participants",
+        "bytes": 122880
+      },
+      {
+        "name": "subagent_tools",
+        "bytes": 102400
+      }
+    ],
+    "maintenance": {
+      "pendingRows": 0,
+      "pendingPayloadBytes": 0,
+      "committedRows": 116,
+      "invalidatedRows": 0,
+      "terminalPayloadBytes": 56380297,
+      "uncompactedTerminalRows": 116,
+      "uncompactedTerminalPayloadBytes": 56380297,
+      "compactedRows": 0,
+      "originalPayloadBytes": 0,
+      "reclaimedPayloadBytes": 0
+    }
+  },
+  "logicalAfter": {
+    "fileBytes": 91529216,
+    "pageCount": 22346,
+    "freePages": 13838,
+    "pageSize": 4096,
+    "tables": [
+      {
+        "name": "security_audit_log",
+        "bytes": 22315008
+      },
+      {
+        "name": "file_changes",
+        "bytes": 4218880
+      },
+      {
+        "name": "command_job_output",
+        "bytes": 2453504
+      },
+      {
+        "name": "command_jobs",
+        "bytes": 1859584
+      },
+      {
+        "name": "collaboration_history_maintenance",
+        "bytes": 520192
+      },
+      {
+        "name": "root_runs",
+        "bytes": 405504
+      },
+      {
+        "name": "security_audit_payloads",
+        "bytes": 389120
+      },
+      {
+        "name": "subagent_events",
+        "bytes": 331776
+      },
+      {
+        "name": "server_root_admission_seeds",
+        "bytes": 331776
+      },
+      {
+        "name": "subagent_checkpoints",
+        "bytes": 204800
+      },
+      {
+        "name": "subagent_tool_versions",
+        "bytes": 176128
+      },
+      {
+        "name": "collaboration_participants",
+        "bytes": 122880
+      }
+    ],
+    "maintenance": {
+      "pendingRows": 0,
+      "pendingPayloadBytes": 0,
+      "committedRows": 116,
+      "invalidatedRows": 0,
+      "terminalPayloadBytes": 89559,
+      "uncompactedTerminalRows": 0,
+      "uncompactedTerminalPayloadBytes": 0,
+      "compactedRows": 116,
+      "originalPayloadBytes": 56380297,
+      "reclaimedPayloadBytes": 56290738
+    }
+  },
+  "afterVacuum": {
+    "fileBytes": 26755072,
+    "pageCount": 6532,
+    "freePages": 0,
+    "pageSize": 4096,
+    "tables": [
+      {
+        "name": "security_audit_log",
+        "bytes": 14479360
+      },
+      {
+        "name": "file_changes",
+        "bytes": 4214784
+      },
+      {
+        "name": "command_job_output",
+        "bytes": 2252800
+      },
+      {
+        "name": "command_jobs",
+        "bytes": 1822720
+      },
+      {
+        "name": "collaboration_history_maintenance",
+        "bytes": 520192
+      },
+      {
+        "name": "root_runs",
+        "bytes": 401408
+      },
+      {
+        "name": "security_audit_payloads",
+        "bytes": 389120
+      },
+      {
+        "name": "subagent_events",
+        "bytes": 331776
+      },
+      {
+        "name": "server_root_admission_seeds",
+        "bytes": 331776
+      },
+      {
+        "name": "subagent_checkpoints",
+        "bytes": 204800
+      },
+      {
+        "name": "subagent_tool_versions",
+        "bytes": 176128
+      },
+      {
+        "name": "collaboration_participants",
+        "bytes": 114688
+      }
+    ],
+    "maintenance": {
+      "pendingRows": 0,
+      "pendingPayloadBytes": 0,
+      "committedRows": 116,
+      "invalidatedRows": 0,
+      "terminalPayloadBytes": 89559,
+      "uncompactedTerminalRows": 0,
+      "uncompactedTerminalPayloadBytes": 0,
+      "compactedRows": 116,
+      "originalPayloadBytes": 56380297,
+      "reclaimedPayloadBytes": 56290738
+    }
+  },
+  "compacted": 116,
+  "skippedCorrupt": 0,
+  "migrated": 31379,
+  "evidenceBefore": {
+    "count": 31379,
+    "sha256": "b78a16c146c70ca4aa09faf0c179656239c391bd4cb0f7669beff051321d0e91"
+  },
+  "evidenceAfter": {
+    "count": 31379,
+    "sha256": "b78a16c146c70ca4aa09faf0c179656239c391bd4cb0f7669beff051321d0e91"
+  },
+  "integrity": [
+    {
+      "integrity_check": "ok"
+    }
+  ],
+  "durationMs": 10462
+}

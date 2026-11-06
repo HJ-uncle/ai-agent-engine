@@ -34,13 +34,15 @@ if (typeof (Promise as any).withResolvers === 'undefined') {
 import { buildServer } from './api/http/index.js'
 import { logger } from './observability/index.js'
 import { skillsRegistry } from './skills/index.js'
-import { initDb, closeDb } from './storage/sqlite/db.js'
+import { initDb, closeDb, getDb } from './storage/sqlite/db.js'
 import { initMemoryDb, closeMemoryDb, MEMORY_SCHEMA, MemoryConsolidator } from './storage/memory/index.js'
 import { systemConfigStore, TRUSTED_STARTUP_KEYS } from './storage/sqlite/system-config.js'
 import { loadAetherConfig, applyAetherConfigToEnv, loadManagedConfig } from './core/aether-config.js'
 import { networkInterfaces } from 'node:os'
 import { commandJobs } from './core/command-jobs/index.js'
 import { readEngineListenAddress } from './server-listen.js'
+import { startAuditMaintenance } from './security/audit-maintenance.js'
+import { startHistoryMaintenance } from './core/collaboration/history-maintenance-lifecycle.js'
 
 const { port: PORT, host: HOST } = readEngineListenAddress()
 // Only the process launcher can opt into desktop ownership; project/DB settings
@@ -95,6 +97,8 @@ async function main() {
 
     const server = await buildServer({ listenHost: HOST, desktopOwned: DESKTOP_OWNED })
     await server.listen({ port: PORT, host: HOST })
+    const auditMaintenance = startAuditMaintenance()
+    const historyMaintenance = startHistoryMaintenance(getDb())
     
     // 获取局域网IP地址
     const lanIps: string[] = []
@@ -131,6 +135,8 @@ async function main() {
       consolidator.stopDaemon()
       skillsRegistry.stop()
       await server.close()
+      await auditMaintenance.stop()
+      await historyMaintenance.stop()
       const receipts = await Promise.all([closeMemoryDb(), closeDb()])
       const unhealthy = receipts.filter(receipt => receipt && !receipt.healthy)
       if (unhealthy.length) throw new Error('Database cleanup unknown: ' + JSON.stringify(unhealthy))

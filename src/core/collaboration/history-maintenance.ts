@@ -7,6 +7,10 @@ import { CollaborationError } from './types.js'
 import { serviceForOwner, type ExecutionOwner } from './execution-owner.js'
 import type { SQLiteDeliveryConsumer } from './sqlite-delivery.js'
 import type { JSONLDeliveryConsumer } from './jsonl-delivery.js'
+import { ensureHistoryMaintenanceStorageSchema, finalizeHistoryMaintenance } from './history-maintenance-storage.js'
+export { finalizeHistoryMaintenance, invalidatePendingHistoryMaintenance, compactTerminalHistoryMaintenance,
+  getHistoryMaintenanceStorageStats, type HistoryMaintenanceTerminalManifest, type HistoryMaintenanceCompactionOptions,
+  type HistoryMaintenanceCompactionResult, type HistoryMaintenanceStorageStats } from './history-maintenance-storage.js'
 
 type Scope = { tenantId: string; sessionId: string }
 export interface HistoryMaintenanceLease {
@@ -21,7 +25,6 @@ export interface HistoryMaintenanceLease {
 }
 interface ActiveMaintenance { lease: HistoryMaintenanceLease; active: boolean }
 const active = new AsyncLocalStorage<ActiveMaintenance>()
-const prepared = new WeakMap<Client, Promise<void>>()
 export const maintenanceDigest = (value: string): string => createHash('sha256').update(value).digest('hex')
 
 /** Only a bound private delivery consumer enters this scope; no readable ID can rebind it. */
@@ -60,25 +63,13 @@ export function maintenanceSummaryEvidence(messages: Message[], lease?: HistoryM
 }
 
 export function ensureHistoryMaintenanceSchema(db: Client): Promise<void> {
-  let promise = prepared.get(db)
-  if (!promise) {
-    promise = db.execute(`CREATE TABLE IF NOT EXISTS collaboration_history_maintenance (
-      maintenance_id TEXT PRIMARY KEY,tenant_id TEXT NOT NULL,session_id TEXT NOT NULL,backend TEXT NOT NULL,
-      root_run_id TEXT NOT NULL,root_attempt_id TEXT NOT NULL,invocation_run_id TEXT NOT NULL,
-      history_epoch INTEGER NOT NULL,anchor_id TEXT NOT NULL,anchor_fingerprint TEXT NOT NULL,
-      payload_json TEXT NOT NULL,payload_hash TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('pending','committed','invalidated')),
-      committed_at INTEGER)`).then(async () => {
-        await db.execute(`CREATE INDEX IF NOT EXISTS collaboration_history_maintenance_pending
-          ON collaboration_history_maintenance(tenant_id,session_id,backend,state)`)
-      }).catch(error => { prepared.delete(db); throw error })
-    prepared.set(db, promise)
-  }
-  return promise
+  return ensureHistoryMaintenanceStorageSchema(db)
 }
 export async function reserveHistoryMaintenance(tx: Transaction, lease: HistoryMaintenanceLease, payload: unknown, committed: boolean): Promise<string> {
   const id = randomUUID(), json = JSON.stringify(payload), b = lease.binding
   await tx.execute({ sql: `INSERT INTO collaboration_history_maintenance VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     args: [id, b.tenantId, b.sessionId, lease.backend, b.rootRunId, b.rootAttemptId, b.invocationRunId,
       lease.epoch, lease.anchorId, lease.anchorFingerprint, json, maintenanceDigest(json), committed ? 'committed' : 'pending', committed ? Date.now() : null] })
+  if (committed) await finalizeHistoryMaintenance(tx, id)
   return id
 }

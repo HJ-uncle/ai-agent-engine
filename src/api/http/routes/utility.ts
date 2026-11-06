@@ -10,6 +10,7 @@
 import type { FastifyInstance } from 'fastify'
 import { success, fail } from '../response.js'
 import { createAdapterFromResolved, resolveModelConfig } from '../../../core/llm-adapter/resolve-model.js'
+import { usesAnthropicProtocol, type ApiFormat } from '../../../core/llm-adapter/protocol.js'
 import { logger } from '../../../observability/index.js'
 
 interface UtilityChatBody {
@@ -43,11 +44,11 @@ function isDeepSeekReasoningModel(model: string, provider: string): boolean {
  * for ordinary OpenAI-compatible models because unknown parameters can cause
  * a 400 response there.
  */
-function utilityThinkingConfig(model: string, provider: string, baseUrl?: string): Record<string, unknown> | null {
+function utilityThinkingConfig(model: string, provider: string, baseUrl?: string, apiFormat?: ApiFormat): Record<string, unknown> | null {
   // Anthropic-compatible endpoints have their own thinking schema.  Do not
   // send OpenAI/AIGW-only fields there even when the model id contains
   // "deepseek" or "qwen".
-  if (/\/anthropic(?:\/|$)/i.test(baseUrl ?? '')) return null
+  if (usesAnthropicProtocol(provider, baseUrl, apiFormat)) return null
   const isQwen = /qwen/i.test(provider) || /(?:^|[/:])qwen(?:\d|[-/]|$)/i.test(model.trim())
   if (!isDeepSeekReasoningModel(model, provider) && !isQwen) return null
   return {
@@ -90,7 +91,7 @@ export async function utilityRoutes(fastify: FastifyInstance) {
         resolvedModel = await resolveModelConfig({ tenantId })
       }
       const adapter = createAdapterFromResolved(resolvedModel)
-      const utilityThinking = utilityThinkingConfig(resolvedModel.model, resolvedModel.provider, resolvedModel.baseUrl)
+      const utilityThinking = utilityThinkingConfig(resolvedModel.model, resolvedModel.provider, resolvedModel.baseUrl, resolvedModel.apiFormat)
       const isReasoningModel = Boolean(resolvedModel.capabilities?.thinking)
         || isDeepSeekReasoningModel(resolvedModel.model, resolvedModel.provider)
         || /(?:^|[/:])qwen(?:3|[-/])|qwq/i.test(resolvedModel.model)

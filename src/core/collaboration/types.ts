@@ -29,7 +29,11 @@ export interface CollaborationParticipant {
   admittedSeq: number
   admittedAt: number
 }
-/** Acceptance is durable queueing. There is deliberately no processed/delivered claim. */
+/** History integration is not provider dispatch or successful execution. */
+export type CollaborationDelivery = { state: 'pending' }
+  | { state: 'integrated'; historyMessageId: string; integratedAt: number }
+  | { state: 'suppressed'; historyMessageId: string; integratedAt?: number; reason?: string }
+/** Acceptance and subsequent history integration are separate durable facts. */
 export interface CollaborationReceipt {
   messageId: string
   rootRunId: string
@@ -43,6 +47,7 @@ export interface CollaborationReceipt {
   acceptedSeq: number
   acceptedAt: number
   state: 'queued' | 'rejected' | 'interrupted'
+  delivery: CollaborationDelivery
   reason?: string
 }
 export interface CollaborationPage<T> {

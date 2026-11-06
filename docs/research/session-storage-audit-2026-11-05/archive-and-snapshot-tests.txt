@@ -1,0 +1,52 @@
+
+ RUN  v2.1.9 D:/dev/ai-agent-engine
+
+stdout | src/tools/get-context/__tests__/search-history-image.test.ts > openai SDK complete and stream send retrieved archive pixels once through the native image channel
+[openai.ts] read_image tool result parse attempt: {
+  hasDataUrl: true,
+  dataUrlStripped: false,
+  dataUrlPrefix: 'data:image/png;base64,iVBORw0K',
+  filename: 'archive-layout-image-1.png',
+  mimeType: 'image/png',
+  size: 262503,
+  rawLength: 351689
+}
+[openai.ts] messagesToOpenAI result (4 messages):
+[0] user: "Inspect the original retained layout."
+[1] assistant: ""
+[2] tool: "Image "archive-layout-image-1.png" (image/png, 262503 bytes)"
+[3] user: [text+image_url] ← IMAGE ✅
+[openai.ts] read_image tool result parse attempt: {
+  hasDataUrl: true,
+  dataUrlStripped: false,
+  dataUrlPrefix: 'data:image/png;base64,iVBORw0K',
+  filename: 'archive-layout-image-1.png',
+  mimeType: 'image/png',
+  size: 262503,
+  rawLength: 351689
+}
+[openai.ts] messagesToOpenAI result (4 messages):
+[0] user: "Inspect the original retained layout."
+[1] assistant: ""
+[2] tool: "Image "archive-layout-image-1.png" (image/png, 262503 bytes)"
+[3] user: [text+image_url] ← IMAGE ✅
+
+ ✓ src/tools/get-context/__tests__/search-history-image.test.ts (13 tests) 412ms
+stdout | src/storage/conversation/__tests__/model-input-content.test.ts > keeps retained SQLite provider input during compression and carries it through lazy JSONL migration
+[history] compress: 41 → 39 tokens (freed 2)
+
+ ✓ src/storage/conversation/__tests__/model-input-content.test.ts (7 tests) 1647ms
+   ✓ recovers actual attachment facts from the real JSONL archive after an omitting summary and restart 306ms
+   ✓ does not reimport populated legacy SQLite history after a searched JSONL session is cleared 307ms
+stdout | src/tools/get-context/__tests__/search-history-tool.test.ts > folds explicit edits and deletions, recovers micro-compacted output, and honors clear
+[jsonl-history] micro-compact: cleared 1 tool results, freed ~0 tokens
+
+ ✓ src/tools/get-context/__tests__/search-history-tool.test.ts (22 tests) 1567ms
+ ✓ src/api/http/__tests__/chat-usage.test.ts (6 tests) 13ms
+ ✓ src/api/http/__tests__/chat-snapshot.test.ts (6 tests) 3ms
+
+ Test Files  5 passed (5)
+      Tests  54 passed (54)
+   Start at  14:01:53
+   Duration  5.55s (transform 461ms, setup 21ms, collect 997ms, tests 3.64s, environment 1ms, prepare 240ms)
+

@@ -1,0 +1,94 @@
+{
+  "at": "2026-11-05T06:30:07.597Z",
+  "maintenance": [
+    {
+      "backend": "jsonl",
+      "state": "committed",
+      "kind": "summary",
+      "rows": 1,
+      "payloadBytes": 39296,
+      "encodedBytes": 10392,
+      "earliestCommit": 1792854131675,
+      "latestCommit": 1792854131675,
+      "minPayloadBytes": 39296,
+      "maxPayloadBytes": 39296
+    },
+    {
+      "backend": "jsonl",
+      "state": "committed",
+      "kind": "update",
+      "rows": 115,
+      "payloadBytes": 56341001,
+      "encodedBytes": 53065866,
+      "earliestCommit": 1792850564026,
+      "latestCommit": 1792858900220,
+      "minPayloadBytes": 5753,
+      "maxPayloadBytes": 880364
+    }
+  ],
+  "audit": [
+    {
+      "category": "cmd",
+      "decision": "allow",
+      "rows": 31349,
+      "targetBytes": 11555325,
+      "maxTargetBytes": 7454,
+      "earliest": 1792830675,
+      "latest": 1792941344
+    },
+    {
+      "category": "cmd",
+      "decision": "ask",
+      "rows": 25,
+      "targetBytes": 4875,
+      "maxTargetBytes": 610,
+      "earliest": 1792830685,
+      "latest": 1792940979
+    },
+    {
+      "category": "cmd",
+      "decision": "deny",
+      "rows": 2,
+      "targetBytes": 280,
+      "maxTargetBytes": 140,
+      "earliest": 1792853271,
+      "latest": 1792855509
+    },
+    {
+      "category": "network",
+      "decision": "allow",
+      "rows": 3,
+      "targetBytes": 95,
+      "maxTargetBytes": 44,
+      "earliest": 1792940931,
+      "latest": 1792940949
+    }
+  ],
+  "auditDuplicateTargets": {
+    "distinctTargets": 2950,
+    "repeatedRows": 28429
+  },
+  "conversations": {
+    "rows": 0
+  },
+  "subagentRuns": [
+    {
+      "status": "cancelled",
+      "rows": 2
+    }
+  ],
+  "subagentFiles": {
+    "knownChild": {
+      "files": 2,
+      "bytes": 120847
+    },
+    "prefixedButUnlinked": {
+      "files": 4,
+      "bytes": 2367802
+    },
+    "other": {
+      "files": 152,
+      "bytes": 352645457
+    }
+  }
+}

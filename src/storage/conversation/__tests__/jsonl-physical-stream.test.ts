@@ -115,7 +115,10 @@ describe('JSONL physical streaming compatibility', () => {
   })
 
   it('persists a plan carrying the exact legacy prefix hash with bounded prefix reads', async () => {
-    await history.append({ id: 'input', role: 'user', content: 'input '.repeat(30_000) }, scope)
+    // Keep a multi-chunk legacy inline prefix; new append stores this body in a blob.
+    fs.writeFileSync(file, JSON.stringify({ uuid: 'input', parentUuid: null, type: 'user', ...scope,
+      timestamp: new Date().toISOString(), isSidechain: false, dbSeq: 1,
+      payload: { id: 'input', role: 'user', content: 'input '.repeat(30_000) } }) + '\n')
     const snapshot = await inspect(), before = fs.readFileSync(file)
     const plan = { ...origin.plan(scope, snapshot, { id: 'result', role: 'assistant', content: 'result' }), prefixHash: digest(before.toString('base64')) }
     const lengths = interceptReads('r+')

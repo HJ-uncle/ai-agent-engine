@@ -1,6 +1,6 @@
 /**
- * Browser position previews are UI evidence, not implicit model vision input.
- * Keep their pixels on the durable/display path and budget semantic text separately.
+ * Keep browser display evidence and bounded semantic text independently usable.
+ * Vision-capable requests can also consume one validated current-page image.
  */
 const PNG_PREFIX = 'data:image/png;base64,'
 const MAX_PNG_BASE64 = Math.ceil(1024 * 1024 / 3) * 4
@@ -12,6 +12,7 @@ type Screenshot = { dataUrl: string; width: number; height: number }
 export interface BrowserOutputPresentation {
   displayOutput: string
   modelInputContent: string
+  modelVisionContent?: string
   imageChars: number
 }
 
@@ -80,10 +81,11 @@ function cleanSnapshot(source: RecordValue, textLimit: number, labelLimit: numbe
   const result: RecordValue = { tab, text: (source.text as string).slice(0, textLimit), elements,
     truncated: source.truncated === true || originalElements.length > elements.length || (source.text as string).length > textLimit }
   if (typeof source.snapshotUnavailable === 'string') result.snapshotUnavailable = source.snapshotUnavailable.slice(0, labelLimit)
+  if (typeof source.screenshotUnavailable === 'string') result.screenshotUnavailable = source.screenshotUnavailable.slice(0, labelLimit)
   if (object(source.viewport)) result.viewport = fields(object(source.viewport), [], ['width', 'height', 'deviceScaleFactor', 'scrollX', 'scrollY'], 0)
   const interaction = object(source.interaction)
   if (interaction?.type === 'click') {
-    const clean = fields(interaction, ['type', 'pageUrl'], ['x', 'y', 'navigationId'], labelLimit)
+    const clean = fields(interaction, ['type', 'pageUrl', 'screenshotUnavailable'], ['x', 'y', 'navigationId'], labelLimit)
     clean.viewport = fields(object(interaction.viewport), [], ['width', 'height', 'deviceScaleFactor', 'scrollX', 'scrollY'], 0)
     const target = object(interaction.target)
     if (target) {
@@ -107,7 +109,7 @@ function imageMarker(image: Screenshot | undefined, original: unknown): RecordVa
 }
 
 /** Undefined leaves ordinary results and explicit browser_screenshot native images unchanged. */
-export function browserOutputPresentation(output: unknown, maxChars = 64 * 1024): BrowserOutputPresentation | undefined {
+export function browserOutputPresentation(output: unknown, maxChars = 64 * 1024, includeVision = false): BrowserOutputPresentation | undefined {
   const source = snapshotSource(output)
   if (!source) return undefined
   const hasImageField = Object.hasOwn(source, 'screenshot') || Object.hasOwn(object(source.interaction) ?? {}, 'screenshot')
@@ -153,10 +155,32 @@ export function browserOutputPresentation(output: unknown, maxChars = 64 * 1024)
   const display = { ...model }
   if (image) display.screenshot = image
   if (clickImage && object(display.interaction)) display.interaction = { ...object(display.interaction), screenshot: clickImage }
+  // Reuse the native screenshot envelope instead of sending base64 as text.
+  // One current-page image is enough; the pre-click image remains UI evidence,
+  // and an absent/invalid current screenshot must not silently become stale vision.
+  const modelVisionContent = includeVision && image && snapshotSource(modelText) ? JSON.stringify({
+    filename: 'browser-snapshot.png', mimeType: 'image/png',
+    size: Buffer.byteLength(image.dataUrl.slice(PNG_PREFIX.length), 'base64'),
+    dataUrl: image.dataUrl, hasDataUrl: true, browserSnapshot: model,
+    description: 'Current browser page screenshot. Browser click coordinates use CSS pixels from browserSnapshot.viewport; screenshot dimensions are in browserSnapshot.screenshot.',
+  }) : undefined
   // Without pixels there is no display-only allowance. In particular, the
   // tiny-budget fallback must not reserialize its larger intermediate schema.
   return { displayOutput: hasImageField ? JSON.stringify(display) : modelText, modelInputContent: modelText,
+    ...(modelVisionContent ? { modelVisionContent } : {}),
     imageChars: (image?.dataUrl.length ?? 0) + (clickImage && object(display.interaction) ? clickImage.dataUrl.length : 0) }
+}
+
+/** Native-image adapters must retain the page's refs/text, even without vision.
+ * Ordinary image descriptions keep their existing, much smaller text allowance. */
+export function browserSnapshotImageText(value: unknown): string | undefined {
+  const snapshot = object(object(value)?.browserSnapshot)
+  if (!snapshot) return undefined
+  try {
+    const raw = JSON.stringify(snapshot)
+    if (raw.length > MAX_BROWSER_DISPLAY_TEXT || !snapshotSource(raw)) return undefined
+    return browserOutputPresentation(raw, MAX_BROWSER_DISPLAY_TEXT)?.modelInputContent ?? raw
+  } catch { return undefined }
 }
 
 /** Budget the serialized receipt, including escaping and surrounding metadata.

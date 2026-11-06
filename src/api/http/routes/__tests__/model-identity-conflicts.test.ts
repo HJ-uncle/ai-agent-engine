@@ -7,6 +7,7 @@ import { ModelsStore } from '../../../../storage/sqlite/models.js'
 import { LocalSqliteProcessClient } from '../../../../storage/sqlite/local-process-client.js'
 import { up as modelSchema } from '../../../../storage/sqlite/migrations/007_add_models_management.js'
 import { up as capabilitySchema } from '../../../../storage/sqlite/migrations/014_add_model_capabilities.js'
+import { up as apiFormatSchema } from '../../../../storage/sqlite/migrations/032_add_model_api_format.js'
 import { modelsRoutes } from '../models.js'
 
 vi.hoisted(() => { process.env.ENCRYPTION_KEY = 'a1'.repeat(32) })
@@ -22,6 +23,7 @@ beforeEach(async () => {
   vi.spyOn(database, 'getDb').mockReturnValue(db)
   await modelSchema(db)
   await capabilitySchema(db)
+  await apiFormatSchema(db)
   store = new ModelsStore()
   app = Fastify()
   app.decorateRequest('authContext', null)
@@ -150,6 +152,7 @@ describe('model identity writes', () => {
     vi.mocked(database.getDb).mockReturnValue(db)
     await modelSchema(db)
     await capabilitySchema(db)
+    await apiFormatSchema(db)
     const first = await create()
     expect(first.statusCode).toBe(200)
     const id = first.json().data.id

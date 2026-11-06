@@ -21,6 +21,28 @@ function frame(name: string, payload: unknown): string {
 }
 
 describe('StreamBus resumable subscriptions', () => {
+  it('retains each user boundary between assistant and tool segments through snapshot recovery', () => {
+    const bus = new StreamBus(new AbortController())
+    const users = Array.from({ length: 6 }, (_, index) => ({ id: `user-${index}`, role: 'user', content: `requirement-${index}`, createdAt: 1_000 + index }))
+    bus.push(frame('user_message', users[0]))
+    for (let index = 1; index < users.length; index++) {
+      bus.push(`assistant-${index}`)
+      bus.push(frame('tool_start', { toolCallId: `tool-${index}`, name: 'read' }))
+      bus.push(frame('tool_result', { toolCallId: `tool-${index}`, output: `result-${index}`, status: 'succeeded' }))
+      bus.push(frame('user_message', users[index]))
+    }
+    bus.push('last-assistant')
+    const expected = bus.snapshot().projection
+    expect(expected.filter(item => item.userMessage).map(item => item.userMessage)).toEqual(users)
+    expect(expected.map(item => Object.keys(item)[0])).toEqual(['userMessage', ...users.slice(1).flatMap(() => ['content', 'toolStart', 'toolResult', 'userMessage']), 'content'])
+    // Repeated publication of the same persisted user ID updates its existing
+    // slot rather than moving the boundary or creating duplicate input.
+    bus.push(frame('user_message', users[2]))
+    expect(bus.snapshot().projection).toEqual(expected)
+    const recovered = new StreamBus(new AbortController())
+    recovered.seedProjection(expected)
+    expect(recovered.snapshot().projection).toEqual(expected)
+  })
   it('reads a stable run identity without cloning a large projection or exposing mutable state', () => {
     const initial = { runId: 'seeded', version: 1, status: 'running', pending: [{ status: 'pending', requestId: 'approval' }] }
     const bus = new StreamBus(new AbortController(), { initialProjection: [{ run: initial }] })

@@ -2,7 +2,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { AgentContext, ToolResult } from '../../core/agent-context/index.js'
 import { IMAGE_MIME_TYPES } from './constants.js'
-import { resolveCapabilities } from '../../core/model-capabilities/index.js'
 
 /**
  * 视觉代理（Vision Proxy）
@@ -84,31 +83,27 @@ export async function describeImageWithVisionProxy(
     return { success: false, output: `视觉代理不支持的文件格式：${ext || '(无扩展名)'}` }
   }
 
-  // 二次确认：子模型本身必须真的具备视觉能力，否则代理形同虚设
-  const subCaps = resolveCapabilities({
-    model: config.model,
-    provider: config.provider,
-  })
-  if (subCaps.vision !== true) {
-    return {
-      success: false,
-      output:
-        `视觉代理配置的模型 "${config.model}" 经能力注册表判定为**不具备视觉能力**（vision !== true）。\n` +
-        `请改用真正支持视觉的模型（如 qwen-vl-max / qwen-vl-plus / gpt-4o），或改用 mode: "ocr"。`,
-    }
-  }
-
   try {
+    // Use the same saved connection and protocol as the selected utility model.
+    const { resolveModelConfig, createAdapterFromResolved } = await import('../../core/llm-adapter/resolve-model.js')
+    const resolved = await resolveModelConfig({
+      tenantId: ctx.tenantId,
+      model: config.model,
+      parent: ctx.resolvedModel,
+      ...(config.provider ? { overrides: { provider: config.provider } } : {}),
+    })
+    if (resolved.capabilities.vision !== true) {
+      return {
+        success: false,
+        output:
+          `视觉代理配置的模型 "${config.model}" 经能力注册表判定为**不具备视觉能力**（vision !== true）。\n` +
+          '请改用真正支持视觉的模型（如 qwen-vl-max / qwen-vl-plus / gpt-4o），或改用 mode: "ocr"。',
+      }
+    }
     const buffer = fs.readFileSync(imagePath)
     const dataUrl = `data:${mime};base64,${buffer.toString('base64')}`
 
-    // 延迟导入，避免与 adapter 工厂形成模块循环依赖
-    const { createLLMAdapterWithDbConfig } = await import('../../core/llm-adapter/index.js')
-    const adapter = await createLLMAdapterWithDbConfig({
-      model: config.model,
-      provider: config.provider,
-      capabilities: { vision: true },
-    })
+    const adapter = createAdapterFromResolved(resolved)
 
     ctx.logger.info(`[vision-proxy] 使用 "${config.model}" 代理识别图片: ${path.basename(imagePath)}`)
 

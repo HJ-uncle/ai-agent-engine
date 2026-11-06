@@ -82,10 +82,27 @@ export async function securityRoutes(fastify: FastifyInstance) {
     })
   })
 
-  fastify.delete<{ Querystring: { days?: number } }>('/security/audit-log', { preHandler: requireRoles('admin') }, async (request, reply) => {
-    const days = Math.max(1, parseInt(String(request.query.days ?? 30), 10))
-    const removed = await auditLogStore.purgeOlderThan(days)
-    return reply.code(200).send(success({ removed, days }))
+  fastify.delete<{ Querystring: { days?: number } }>('/security/audit-log', { preHandler: requireRoles('admin', 'tenant-admin') }, async (request, reply) => {
+    const days = Number(request.query.days ?? 30)
+    if (!Number.isSafeInteger(days) || days < 1 || days > 36500) return reply.code(400).send(fail(40001, 'days 必须为 1–36500 的整数'))
+    const auth = (request as FastifyRequest & { authContext?: { userId?: string; method?: string } }).authContext
+    const removed = await auditLogStore.purgeOlderThan(days, {
+      tenantId: getTenantId(request), actor: auth?.userId ?? `auth:${auth?.method ?? 'none'}`,
+    })
+    return reply.code(200).send(success({ removed, archived: removed, days }))
+  })
+
+  fastify.get<{ Querystring: { current?: number; pageSize?: number } }>('/security/audit-log/archives', async (request, reply) => {
+    const current = Math.max(1, Number(request.query.current) || 1), pageSize = Math.min(500, Math.max(1, Number(request.query.pageSize) || 50))
+    const { list, total } = await auditLogStore.listArchives(getTenantId(request), pageSize, (current - 1) * pageSize)
+    return reply.code(200).send({ ...success(list), pagination: { current, pageSize, total, totalPages: Math.ceil(total / pageSize) } })
+  })
+
+  fastify.get<{ Params: { archiveId: string } }>('/security/audit-log/archives/:archiveId', async (request, reply) => {
+    if (!/^[a-f0-9]{64}$/.test(request.params.archiveId)) return reply.code(404).send(fail(40400, '归档不存在'))
+    const data = await auditLogStore.readArchive(getTenantId(request), request.params.archiveId)
+    if (!data) return reply.code(404).send(fail(40400, '归档不存在'))
+    return reply.type('application/gzip').header('Content-Disposition', `attachment; filename="audit-${request.params.archiveId}.jsonl.gz"`).send(data)
   })
 
   // ── Network policy ──────────────────────────────────────────────────

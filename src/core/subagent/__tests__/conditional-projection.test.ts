@@ -11,7 +11,9 @@ import { projectPendingSubagents } from '../projection.js'
 import { serializeConversationHistory, bindHistoryGeneration, invalidateSessionHistory } from '../../../storage/conversation/serialization.js'
 import { ensureProjectionReceipts } from '../../../storage/conversation/projection-receipts.js'
 const state = vi.hoisted(() => ({ db: null as unknown as LocalSqliteProcessClient, store: null as unknown as SubagentStore }))
-vi.mock('../../../storage/sqlite/db.js', () => ({ getDb: () => state.db }))
+vi.mock('../../../storage/sqlite/db.js', () => ({ getDb: () => state.db,
+  // The isolated native connection is the fixture's only current datasource.
+  getDbEpoch: (db: LocalSqliteProcessClient) => db === state.db ? 1 : undefined }))
 vi.mock('../store.js', async original => ({ ...await original<typeof import('../store.js')>(), getSubagentStore: () => state.store }))
 const ctx = { tenantId: 'tenant', sessionId: 'parent' }
 const anchor: ConversationToolCallAnchor = { messageId: 'dispatch', toolCallId: 'spawn', conversationId: 'turn' }

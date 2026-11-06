@@ -9,6 +9,8 @@ import { logger as engineLogger } from '../../../observability/index.js'
 import { MANAGED_KEYS } from '../../../core/aether-config.js'
 import { MAX_FILE_SIZE } from '../../../tools/file/constants.js'
 import { configuredContextWindowBudget, DEFAULT_CONTEXT_WINDOW_BUDGET, parseContextWindowBudget } from '../../../core/context-budget.js'
+import { configuredSubagentConcurrency, DEFAULT_SUBAGENT_CONCURRENCY, MAX_SUBAGENT_CONCURRENCY, parseSubagentConcurrency } from '../../../core/subagent/concurrency.js'
+import { getSubagentConcurrencyLimit, setSubagentConcurrencyLimit } from '../../../core/subagent/runner.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
@@ -111,6 +113,15 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       EMBEDDING_SEND_DIMENSIONS: getStr('EMBEDDING_SEND_DIMENSIONS', 'false') === 'true',
       // ── Performance ──────────────────────────────────────────────────────
       TOOL_CONCURRENCY_LIMIT: parseInt(getStr('TOOL_CONCURRENCY_LIMIT', '8'),      10),
+      SUBAGENT_CONCURRENCY_LIMIT: configuredSubagentConcurrency(getStr('SUBAGENT_CONCURRENCY_LIMIT', '')),
+      subagentConcurrency: {
+        defaultLimit: DEFAULT_SUBAGENT_CONCURRENCY,
+        min: 1,
+        max: MAX_SUBAGENT_CONCURRENCY,
+        effectiveLimit: getSubagentConcurrencyLimit(),
+        scope: 'parent-session',
+        hotReload: true,
+      },
       SQLITE_CACHE_KB:        parseInt(getStr('SQLITE_CACHE_KB',        '20000'),  10),
       SQLITE_MMAP_BYTES:      parseInt(getStr('SQLITE_MMAP_BYTES',      '268435456'), 10),
       SQLITE_BUSY_TIMEOUT_MS: parseInt(getStr('SQLITE_BUSY_TIMEOUT_MS', '5000'),   10),
@@ -167,6 +178,10 @@ export async function settingsRoutes(fastify: FastifyInstance) {
 
   fastify.put<{ Body: Record<string, string | number | boolean | WebFetchConfig | null> }>('/settings', { preHandler: requireRoles('admin') }, async (request, reply) => {
     const updates = request.body
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'SUBAGENT_CONCURRENCY_LIMIT') && parseSubagentConcurrency(updates.SUBAGENT_CONCURRENCY_LIMIT) === undefined) {
+      return reply.code(400).send(fail(400, `SUBAGENT_CONCURRENCY_LIMIT must be an integer between 1 and ${MAX_SUBAGENT_CONCURRENCY}`))
+    }
 
     if (Object.prototype.hasOwnProperty.call(updates, 'CONTEXT_WINDOW_BUDGET')) {
       const budget = updates.CONTEXT_WINDOW_BUDGET
@@ -227,7 +242,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
 
     // 其余所有字段写入数据库
     for (const [k, v] of Object.entries(updates)) {
-      if (k === 'runtimeLimits' || k === 'managedKeys') continue
+      if (k === 'runtimeLimits' || k === 'managedKeys' || k === 'subagentConcurrency') continue
       if (MANAGED_KEYS.has(k)) {
         engineLogger.warn({ key: k }, 'Attempted to modify a managed setting, ignoring.')
         continue
@@ -273,6 +288,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       }
       // 同步更新 process.env，保证当前进程内立即生效
       process.env[k] = strVal
+      if (k === 'SUBAGENT_CONCURRENCY_LIMIT') setSubagentConcurrencyLimit(Number(strVal))
     }
 
     // 立即应用：工具并发池大小可热更

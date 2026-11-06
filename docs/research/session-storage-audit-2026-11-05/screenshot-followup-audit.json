@@ -1,0 +1,7086 @@
+{
+  "auditedAt": "2026-11-05T07:58:12.502Z",
+  "state": "C:\\Users\\wb.xielin02\\AppData\\Roaming\\aether-code\\engine\\state",
+  "method": "node:sqlite readOnly=true; PRAGMA query_only=ON; read transaction; aggregate sizes/counts only; no checkpoint/VACUUM/schema mutation",
+  "before": {
+    "groups": {
+      "database": {
+        "files": 3,
+        "bytes": 97198176
+      },
+      "snapshots": {
+        "files": 32,
+        "bytes": 2068769
+      },
+      "other": {
+        "files": 6,
+        "bytes": 132557
+      },
+      "memory": {
+        "files": 3,
+        "bytes": 4415160
+      },
+      "sessions_jsonl": {
+        "files": 158,
+        "bytes": 355134106
+      }
+    },
+    "mainFiles": [
+      {
+        "name": "agent.db",
+        "bytes": 91529216
+      },
+      {
+        "name": "agent.db-shm",
+        "bytes": 32768
+      },
+      {
+        "name": "agent.db-wal",
+        "bytes": 5636192
+      },
+      {
+        "name": "memory\\memory.db",
+        "bytes": 225280
+      },
+      {
+        "name": "memory\\memory.db-shm",
+        "bytes": 32768
+      },
+      {
+        "name": "memory\\memory.db-wal",
+        "bytes": 4157112
+      }
+    ],
+    "sessionJsonlSizesDescending": [
+      111107189,
+      21096349,
+      10561529,
+      8662919,
+      7368915,
+      6070304,
+      5994217,
+      5878009,
+      5275122,
+      5150168,
+      5022474,
+      4824898,
+      4675099,
+      4628277,
+      4288280,
+      4249270,
+      3922499,
+      3632958,
+      3412280,
+      3366134,
+      3158417,
+      2993102,
+      2937676,
+      2850067,
+      2832400,
+      2730128,
+      2687598,
+      2606304,
+      2604856,
+      2521046,
+      2428374,
+      2327250,
+      2306681,
+      2305893,
+      2249617,
+      2240840,
+      2109175,
+      2083730,
+      1972216,
+      1936426,
+      1760579,
+      1670882,
+      1631476,
+      1520345,
+      1483421,
+      1479361,
+      1441206,
+      1433561,
+      1426374,
+      1307553,
+      1299394,
+      1270165,
+      1208068,
+      1188770,
+      1183687,
+      1176244,
+      1145544,
+      1085033,
+      1062747,
+      1060484,
+      1048327,
+      1009429,
+      1003045,
+      999793,
+      995451,
+      992630,
+      957558,
+      941671,
+      924353,
+      919739,
+      915513,
+      914369,
+      899145,
+      879130,
+      830797,
+      826210,
+      814533,
+      787374,
+      767102,
+      759128,
+      758131,
+      755243,
+      752949,
+      751781,
+      744720,
+      716411,
+      714166,
+      698402,
+      695349,
+      690920,
+      677139,
+      675906,
+      674994,
+      672002,
+      639936,
+      628919,
+      624416,
+      622323,
+      619965,
+      614986,
+      609741,
+      608963,
+      598470,
+      585113,
+      579820,
+      577653,
+      569448,
+      568480,
+      554224,
+      533615,
+      528261,
+      522777,
+      509870,
+      500394,
+      496593,
+      470223,
+      446918,
+      445488,
+      445344,
+      445220,
+      440914,
+      414432,
+      389338,
+      378133,
+      370804,
+      352466,
+      345903,
+      330137,
+      328139,
+      301405,
+      298059,
+      274648,
+      259045,
+      249628,
+      219626,
+      218018,
+      194975,
+      178497,
+      154373,
+      150382,
+      109734,
+      91289,
+      84252,
+      78598,
+      71709,
+      70951,
+      54432,
+      51893,
+      46664,
+      45247,
+      43916,
+      36595,
+      29638,
+      18820,
+      18276,
+      13650,
+      3082,
+      2288
+    ],
+    "totalBytes": 458948768
+  },
+  "database": {
+    "page_size": 4096,
+    "page_count": 22346,
+    "freelist_count": 444,
+    "journal_mode": "wal",
+    "auto_vacuum": 0,
+    "schema_version": 180,
+    "user_version": 0,
+    "objects": [
+      {
+        "name": "collaboration_history_maintenance",
+        "pages": 13841,
+        "allocatedBytes": 56692736,
+        "payloadBytes": 56540994,
+        "unusedBytes": 94351,
+        "largestCellBytes": 881737,
+        "tbl_name": "collaboration_history_maintenance",
+        "type": "table"
+      },
+      {
+        "name": "security_audit_log",
+        "pages": 4496,
+        "allocatedBytes": 18415616,
+        "payloadBytes": 16680227,
+        "unusedBytes": 1458457,
+        "largestCellBytes": 7620,
+        "tbl_name": "security_audit_log",
+        "type": "table"
+      },
+      {
+        "name": "file_changes",
+        "pages": 1010,
+        "allocatedBytes": 4136960,
+        "payloadBytes": 3818016,
+        "unusedBytes": 307554,
+        "largestCellBytes": 52159,
+        "tbl_name": "file_changes",
+        "type": "table"
+      },
+      {
+        "name": "command_jobs",
+        "pages": 436,
+        "allocatedBytes": 1785856,
+        "payloadBytes": 1531419,
+        "unusedBytes": 246187,
+        "largestCellBytes": 33364,
+        "tbl_name": "command_jobs",
+        "type": "table"
+      },
+      {
+        "name": "command_job_output",
+        "pages": 375,
+        "allocatedBytes": 1536000,
+        "payloadBytes": 1280339,
+        "unusedBytes": 217778,
+        "largestCellBytes": 4213,
+        "tbl_name": "command_job_output",
+        "type": "table"
+      },
+      {
+        "name": "idx_audit_log_tenant",
+        "pages": 305,
+        "allocatedBytes": 1249280,
+        "payloadBytes": 533315,
+        "unusedBytes": 618172,
+        "largestCellBytes": 17,
+        "tbl_name": "security_audit_log",
+        "type": "index"
+      },
+      {
+        "name": "idx_audit_log_cat",
+        "pages": 246,
+        "allocatedBytes": 1007616,
+        "payloadBytes": 407811,
+        "unusedBytes": 502720,
+        "largestCellBytes": 17,
+        "tbl_name": "security_audit_log",
+        "type": "index"
+      },
+      {
+        "name": "idx_audit_log_time",
+        "pages": 182,
+        "allocatedBytes": 745472,
+        "payloadBytes": 282283,
+        "unusedBytes": 366872,
+        "largestCellBytes": 9,
+        "tbl_name": "security_audit_log",
+        "type": "index"
+      },
+      {
+        "name": "command_job_output_lookup",
+        "pages": 157,
+        "allocatedBytes": 643072,
+        "payloadBytes": 494415,
+        "unusedBytes": 133079,
+        "largestCellBytes": 113,
+        "tbl_name": "command_job_output",
+        "type": "index"
+      },
+      {
+        "name": "root_runs",
+        "pages": 92,
+        "allocatedBytes": 376832,
+        "payloadBytes": 312753,
+        "unusedBytes": 61965,
+        "largestCellBytes": 6714,
+        "tbl_name": "root_runs",
+        "type": "table"
+      },
+      {
+        "name": "subagent_events",
+        "pages": 79,
+        "allocatedBytes": 323584,
+        "payloadBytes": 279277,
+        "unusedBytes": 43140,
+        "largestCellBytes": 11107,
+        "tbl_name": "subagent_events",
+        "type": "table"
+      },
+      {
+        "name": "server_root_admission_seeds",
+        "pages": 74,
+        "allocatedBytes": 303104,
+        "payloadBytes": 243149,
+        "unusedBytes": 58091,
+        "largestCellBytes": 1748,
+        "tbl_name": "server_root_admission_seeds",
+        "type": "table"
+      },
+      {
+        "name": "sqlite_autoindex_command_job_output_1",
+        "pages": 67,
+        "allocatedBytes": 274432,
+        "payloadBytes": 200461,
+        "unusedBytes": 59473,
+        "largestCellBytes": 45,
+        "tbl_name": "command_job_output",
+        "type": "index"
+      },
+      {
+        "name": "subagent_checkpoints",
+        "pages": 49,
+        "allocatedBytes": 200704,
+        "payloadBytes": 168433,
+        "unusedBytes": 31388,
+        "largestCellBytes": 5478,
+        "tbl_name": "subagent_checkpoints",
+        "type": "table"
+      },
+      {
+        "name": "subagent_tool_versions",
+        "pages": 41,
+        "allocatedBytes": 167936,
+        "payloadBytes": 150920,
+        "unusedBytes": 16482,
+        "largestCellBytes": 14083,
+        "tbl_name": "subagent_tool_versions",
+        "type": "table"
+      },
+      {
+        "name": "subagent_outbox",
+        "pages": 20,
+        "allocatedBytes": 81920,
+        "payloadBytes": 79751,
+        "unusedBytes": 2065,
+        "largestCellBytes": 49435,
+        "tbl_name": "subagent_outbox",
+        "type": "table"
+      },
+      {
+        "name": "subagent_tools",
+        "pages": 19,
+        "allocatedBytes": 77824,
+        "payloadBytes": 65157,
+        "unusedBytes": 12370,
+        "largestCellBytes": 5185,
+        "tbl_name": "subagent_tools",
+        "type": "table"
+      },
+      {
+        "name": "sqlite_schema",
+        "pages": 16,
+        "allocatedBytes": 65536,
+        "payloadBytes": 51528,
+        "unusedBytes": 12379,
+        "largestCellBytes": 932
+      },
+      {
+        "name": "collaboration_participants",
+        "pages": 12,
+        "allocatedBytes": 49152,
+        "payloadBytes": 41379,
+        "unusedBytes": 6798,
+        "largestCellBytes": 277,
+        "tbl_name": "collaboration_participants",
+        "type": "table"
+      },
+      {
+        "name": "collaboration_controller_roots",
+        "pages": 12,
+        "allocatedBytes": 49152,
+        "payloadBytes": 40372,
+        "unusedBytes": 7817,
+        "largestCellBytes": 274,
+        "tbl_name": "collaboration_controller_roots",
+        "type": "table"
+      },
+      {
+        "name": "idx_file_changes_session",
+        "pages": 11,
+        "allocatedBytes": 45056,
+        "payloadBytes": 32794,
+        "unusedBytes": 10781,
+        "largestCellBytes": 77,
+        "tbl_name": "file_changes",
+        "type": "index"
+      },
+      {
+        "name": "command_jobs_session",
+        "pages": 11,
+        "allocatedBytes": 45056,
+        "payloadBytes": 34433,
+        "unusedBytes": 8995,
+        "largestCellBytes": 73,
+        "tbl_name": "command_jobs",
+        "type": "index"
+      },
+      {
+        "name": "collaboration_roots",
+        "pages": 11,
+        "allocatedBytes": 45056,
+        "payloadBytes": 35781,
+        "unusedBytes": 8327,
+        "largestCellBytes": 247,
+        "tbl_name": "collaboration_roots",
+        "type": "table"
+      },
+      {
+        "name": "collaboration_invocations",
+        "pages": 10,
+        "allocatedBytes": 40960,
+        "payloadBytes": 32316,
+        "unusedBytes": 7699,
+        "largestCellBytes": 246,
+        "tbl_name": "collaboration_invocations",
+        "type": "table"
+      },
+      {
+        "name": "sqlite_autoindex_collaboration_participants_1",
+        "pages": 8,
+        "allocatedBytes": 32768,
+        "payloadBytes": 19732,
+        "unusedBytes": 12451,
+        "largestCellBytes": 138,
+        "tbl_name": "collaboration_participants",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_command_jobs_1",
+        "pages": 7,
+        "allocatedBytes": 28672,
+        "payloadBytes": 20500,
+        "unusedBytes": 6592,
+        "largestCellBytes": 41,
+        "tbl_name": "command_jobs",
+        "type": "index"
+      },
+      {
+        "name": "todos",
+        "pages": 6,
+        "allocatedBytes": 24576,
+        "payloadBytes": 15305,
+        "unusedBytes": 8801,
+        "largestCellBytes": 254,
+        "tbl_name": "todos",
+        "type": "table"
+      },
+      {
+        "name": "sqlite_autoindex_file_changes_1",
+        "pages": 6,
+        "allocatedBytes": 24576,
+        "payloadBytes": 18363,
+        "unusedBytes": 4792,
+        "largestCellBytes": 41,
+        "tbl_name": "file_changes",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_collaboration_roots_1",
+        "pages": 5,
+        "allocatedBytes": 20480,
+        "payloadBytes": 13030,
+        "unusedBytes": 6935,
+        "largestCellBytes": 86,
+        "tbl_name": "collaboration_roots",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_collaboration_participants_2",
+        "pages": 5,
+        "allocatedBytes": 20480,
+        "payloadBytes": 13128,
+        "unusedBytes": 6831,
+        "largestCellBytes": 86,
+        "tbl_name": "collaboration_participants",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_collaboration_invocations_1",
+        "pages": 5,
+        "allocatedBytes": 20480,
+        "payloadBytes": 13128,
+        "unusedBytes": 6831,
+        "largestCellBytes": 86,
+        "tbl_name": "collaboration_invocations",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_collaboration_controller_roots_1",
+        "pages": 5,
+        "allocatedBytes": 20480,
+        "payloadBytes": 13030,
+        "unusedBytes": 6935,
+        "largestCellBytes": 86,
+        "tbl_name": "collaboration_controller_roots",
+        "type": "index"
+      },
+      {
+        "name": "sessions",
+        "pages": 5,
+        "allocatedBytes": 20480,
+        "payloadBytes": 14920,
+        "unusedBytes": 4907,
+        "largestCellBytes": 116,
+        "tbl_name": "sessions",
+        "type": "table"
+      },
+      {
+        "name": "collaboration_participants_root",
+        "pages": 5,
+        "allocatedBytes": 20480,
+        "payloadBytes": 13539,
+        "unusedBytes": 6420,
+        "largestCellBytes": 89,
+        "tbl_name": "collaboration_participants",
+        "type": "index"
+      },
+      {
+        "name": "task_plan_items",
+        "pages": 4,
+        "allocatedBytes": 16384,
+        "payloadBytes": 8090,
+        "unusedBytes": 7932,
+        "largestCellBytes": 111,
+        "tbl_name": "task_plan_items",
+        "type": "table"
+      },
+      {
+        "name": "subagent_runs",
+        "pages": 4,
+        "allocatedBytes": 16384,
+        "payloadBytes": 9669,
+        "unusedBytes": 6662,
+        "largestCellBytes": 5637,
+        "tbl_name": "subagent_runs",
+        "type": "table"
+      },
+      {
+        "name": "sqlite_autoindex_task_plan_items_1",
+        "pages": 4,
+        "allocatedBytes": 16384,
+        "payloadBytes": 8119,
+        "unusedBytes": 7987,
+        "largestCellBytes": 111,
+        "tbl_name": "task_plan_items",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_sessions_1",
+        "pages": 4,
+        "allocatedBytes": 16384,
+        "payloadBytes": 9360,
+        "unusedBytes": 6551,
+        "largestCellBytes": 75,
+        "tbl_name": "sessions",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_collaboration_jsonl_epochs_1",
+        "pages": 4,
+        "allocatedBytes": 16384,
+        "payloadBytes": 9476,
+        "unusedBytes": 6429,
+        "largestCellBytes": 75,
+        "tbl_name": "collaboration_jsonl_epochs",
+        "type": "index"
+      },
+      {
+        "name": "server_root_admission_outbox",
+        "pages": 4,
+        "allocatedBytes": 16384,
+        "payloadBytes": 10625,
+        "unusedBytes": 5274,
+        "largestCellBytes": 82,
+        "tbl_name": "server_root_admission_seeds",
+        "type": "index"
+      },
+      {
+        "name": "root_runs_session",
+        "pages": 4,
+        "allocatedBytes": 16384,
+        "payloadBytes": 9909,
+        "unusedBytes": 5990,
+        "largestCellBytes": 77,
+        "tbl_name": "root_runs",
+        "type": "index"
+      },
+      {
+        "name": "collaboration_jsonl_epochs",
+        "pages": 4,
+        "allocatedBytes": 16384,
+        "payloadBytes": 9314,
+        "unusedBytes": 6422,
+        "largestCellBytes": 74,
+        "tbl_name": "collaboration_jsonl_epochs",
+        "type": "table"
+      },
+      {
+        "name": "collaboration_history_maintenance_pending",
+        "pages": 4,
+        "allocatedBytes": 16384,
+        "payloadBytes": 9586,
+        "unusedBytes": 6406,
+        "largestCellBytes": 90,
+        "tbl_name": "collaboration_history_maintenance",
+        "type": "index"
+      },
+      {
+        "name": "agents",
+        "pages": 4,
+        "allocatedBytes": 16384,
+        "payloadBytes": 9571,
+        "unusedBytes": 6713,
+        "largestCellBytes": 977,
+        "tbl_name": "agents",
+        "type": "table"
+      },
+      {
+        "name": "subagent_records",
+        "pages": 3,
+        "allocatedBytes": 12288,
+        "payloadBytes": 10430,
+        "unusedBytes": 1824,
+        "largestCellBytes": 5255,
+        "tbl_name": "subagent_records",
+        "type": "table"
+      },
+      {
+        "name": "subagent_discovery_versions",
+        "pages": 3,
+        "allocatedBytes": 12288,
+        "payloadBytes": 5849,
+        "unusedBytes": 6364,
+        "largestCellBytes": 734,
+        "tbl_name": "subagent_discovery_versions",
+        "type": "table"
+      },
+      {
+        "name": "sqlite_autoindex_task_plan_items_2",
+        "pages": 3,
+        "allocatedBytes": 12288,
+        "payloadBytes": 5359,
+        "unusedBytes": 6663,
+        "largestCellBytes": 76,
+        "tbl_name": "task_plan_items",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_server_root_admission_seeds_1",
+        "pages": 3,
+        "allocatedBytes": 12288,
+        "payloadBytes": 7075,
+        "unusedBytes": 4740,
+        "largestCellBytes": 49,
+        "tbl_name": "server_root_admission_seeds",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_root_runs_1",
+        "pages": 3,
+        "allocatedBytes": 12288,
+        "payloadBytes": 5899,
+        "unusedBytes": 5916,
+        "largestCellBytes": 41,
+        "tbl_name": "root_runs",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_collaboration_history_maintenance_1",
+        "pages": 3,
+        "allocatedBytes": 12288,
+        "payloadBytes": 4639,
+        "unusedBytes": 7269,
+        "largestCellBytes": 40,
+        "tbl_name": "collaboration_history_maintenance",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_agent_allowed_tools_1",
+        "pages": 3,
+        "allocatedBytes": 12288,
+        "payloadBytes": 5199,
+        "unusedBytes": 6757,
+        "largestCellBytes": 55,
+        "tbl_name": "agent_allowed_tools",
+        "type": "index"
+      },
+      {
+        "name": "idx_todos_session",
+        "pages": 3,
+        "allocatedBytes": 12288,
+        "payloadBytes": 4609,
+        "unusedBytes": 7413,
+        "largestCellBytes": 66,
+        "tbl_name": "todos",
+        "type": "index"
+      },
+      {
+        "name": "idx_file_changes_seq",
+        "pages": 3,
+        "allocatedBytes": 12288,
+        "payloadBytes": 2901,
+        "unusedBytes": 8002,
+        "largestCellBytes": 7,
+        "tbl_name": "file_changes",
+        "type": "index"
+      },
+      {
+        "name": "agent_allowed_tools",
+        "pages": 3,
+        "allocatedBytes": 12288,
+        "payloadBytes": 5000,
+        "unusedBytes": 6853,
+        "largestCellBytes": 53,
+        "tbl_name": "agent_allowed_tools",
+        "type": "table"
+      },
+      {
+        "name": "users",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "users",
+        "type": "table"
+      },
+      {
+        "name": "user_root_admissions",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "user_root_admissions",
+        "type": "table"
+      },
+      {
+        "name": "user_root_admission_seeds",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "user_root_admission_seeds",
+        "type": "table"
+      },
+      {
+        "name": "user_root_admission_outbox",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "user_root_admission_seeds",
+        "type": "index"
+      },
+      {
+        "name": "tool_metrics",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "tool_metrics",
+        "type": "table"
+      },
+      {
+        "name": "tenant_configs",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "tenant_configs",
+        "type": "table"
+      },
+      {
+        "name": "task_plans",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 1115,
+        "unusedBytes": 2913,
+        "largestCellBytes": 81,
+        "tbl_name": "task_plans",
+        "type": "table"
+      },
+      {
+        "name": "system_config",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "system_config",
+        "type": "table"
+      },
+      {
+        "name": "subagent_usage_parent_state",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 97,
+        "unusedBytes": 3987,
+        "largestCellBytes": 97,
+        "tbl_name": "subagent_usage_parent_state",
+        "type": "table"
+      },
+      {
+        "name": "subagent_usage_invocations",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 1328,
+        "unusedBytes": 2696,
+        "largestCellBytes": 83,
+        "tbl_name": "subagent_usage_invocations",
+        "type": "table"
+      },
+      {
+        "name": "subagent_usage_contributions",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 3735,
+        "unusedBytes": 253,
+        "largestCellBytes": 192,
+        "tbl_name": "subagent_usage_contributions",
+        "type": "table"
+      },
+      {
+        "name": "subagent_projection_receipts",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 220,
+        "unusedBytes": 3860,
+        "largestCellBytes": 110,
+        "tbl_name": "subagent_projection_receipts",
+        "type": "table"
+      },
+      {
+        "name": "subagent_execution_receipts",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 302,
+        "unusedBytes": 3776,
+        "largestCellBytes": 151,
+        "tbl_name": "subagent_execution_receipts",
+        "type": "table"
+      },
+      {
+        "name": "subagent_discovery_state",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 2641,
+        "unusedBytes": 1372,
+        "largestCellBytes": 184,
+        "tbl_name": "subagent_discovery_state",
+        "type": "table"
+      },
+      {
+        "name": "sqlite_sequence",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 157,
+        "unusedBytes": 3903,
+        "largestCellBytes": 31,
+        "tbl_name": "sqlite_sequence",
+        "type": "table"
+      },
+      {
+        "name": "sqlite_autoindex_users_2",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "users",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_users_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "users",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_user_root_admissions_2",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "user_root_admissions",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_user_root_admissions_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "user_root_admissions",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_user_root_admission_seeds_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "user_root_admission_seeds",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_todos_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 3119,
+        "unusedBytes": 735,
+        "largestCellBytes": 40,
+        "tbl_name": "todos",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_tenant_configs_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "tenant_configs",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_task_plans_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 1004,
+        "unusedBytes": 3039,
+        "largestCellBytes": 74,
+        "tbl_name": "task_plans",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_system_config_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "system_config",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_subagent_usage_parent_state_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 57,
+        "unusedBytes": 4028,
+        "largestCellBytes": 57,
+        "tbl_name": "subagent_usage_parent_state",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_subagent_usage_invocations_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 1359,
+        "unusedBytes": 2681,
+        "largestCellBytes": 85,
+        "tbl_name": "subagent_usage_invocations",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_subagent_usage_contributions_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 1937,
+        "unusedBytes": 2091,
+        "largestCellBytes": 97,
+        "tbl_name": "subagent_usage_contributions",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_subagent_tools_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 1342,
+        "unusedBytes": 2695,
+        "largestCellBytes": 79,
+        "tbl_name": "subagent_tools",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_subagent_tool_versions_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 2753,
+        "unusedBytes": 1233,
+        "largestCellBytes": 81,
+        "tbl_name": "subagent_tool_versions",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_subagent_runs_2",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 177,
+        "unusedBytes": 3905,
+        "largestCellBytes": 89,
+        "tbl_name": "subagent_runs",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_subagent_runs_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 95,
+        "unusedBytes": 3987,
+        "largestCellBytes": 48,
+        "tbl_name": "subagent_runs",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_subagent_records_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 95,
+        "unusedBytes": 3987,
+        "largestCellBytes": 48,
+        "tbl_name": "subagent_records",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_subagent_projection_receipts_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 99,
+        "unusedBytes": 3983,
+        "largestCellBytes": 50,
+        "tbl_name": "subagent_projection_receipts",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_subagent_outbox_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 101,
+        "unusedBytes": 3981,
+        "largestCellBytes": 51,
+        "tbl_name": "subagent_outbox",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_subagent_execution_receipts_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 169,
+        "unusedBytes": 3913,
+        "largestCellBytes": 85,
+        "tbl_name": "subagent_execution_receipts",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_subagent_events_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 3047,
+        "unusedBytes": 858,
+        "largestCellBytes": 50,
+        "tbl_name": "subagent_events",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_subagent_discovery_versions_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 774,
+        "unusedBytes": 3290,
+        "largestCellBytes": 97,
+        "tbl_name": "subagent_discovery_versions",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_subagent_discovery_state_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 959,
+        "unusedBytes": 3084,
+        "largestCellBytes": 72,
+        "tbl_name": "subagent_discovery_state",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_subagent_checkpoints_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 3047,
+        "unusedBytes": 858,
+        "largestCellBytes": 50,
+        "tbl_name": "subagent_checkpoints",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_skill_imports_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "skill_imports",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_quotas_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "quotas",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_prompt_templates_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "prompt_templates",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_parent_turn_bootstraps_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_turn_bootstraps",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_parent_turn_bootstrap_run_heads_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_turn_bootstrap_run_heads",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_parent_turn_bootstrap_refs_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_turn_bootstrap_refs",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_parent_turn_bootstrap_heads_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_turn_bootstrap_heads",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_parent_turn_bootstrap_handoffs_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_turn_bootstrap_handoffs",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_parent_turn_bootstrap_closures_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_turn_bootstrap_closures",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_parent_turn_bootstrap_body_chunks_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_turn_bootstrap_body_chunks",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_parent_published_child_versions_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_published_child_versions",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_parent_publication_state_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_publication_state",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_parent_publication_marks_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_publication_marks",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_models_2",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 44,
+        "unusedBytes": 4041,
+        "largestCellBytes": 44,
+        "tbl_name": "models",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_models_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 39,
+        "unusedBytes": 4046,
+        "largestCellBytes": 39,
+        "tbl_name": "models",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_model_whitelists_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 119,
+        "unusedBytes": 3954,
+        "largestCellBytes": 37,
+        "tbl_name": "model_whitelists",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_memories_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "memories",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_lsp_diagnostics_cache_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "lsp_diagnostics_cache",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_jobs_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "jobs",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_documents_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "documents",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_document_chunks_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "document_chunks",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_cron_runs_3",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "cron_runs",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_cron_runs_2",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "cron_runs",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_cron_runs_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "cron_runs",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_cron_notifications_2",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "cron_notifications",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_cron_notifications_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "cron_notifications",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_cron_jobs_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "cron_jobs",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_conversation_usage_archive_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "conversation_usage_archive",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_conversation_projection_receipts_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 221,
+        "unusedBytes": 3861,
+        "largestCellBytes": 111,
+        "tbl_name": "conversation_projection_receipts",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_conversation_projection_epochs_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "conversation_projection_epochs",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_collaboration_metadata_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 21,
+        "unusedBytes": 4064,
+        "largestCellBytes": 21,
+        "tbl_name": "collaboration_metadata",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_collaboration_messages_2",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "collaboration_messages",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_collaboration_messages_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "collaboration_messages",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_collaboration_jsonl_deliveries_2",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "collaboration_jsonl_deliveries",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_collaboration_jsonl_deliveries_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "collaboration_jsonl_deliveries",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_collaboration_history_epochs_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "collaboration_history_epochs",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_collaboration_deliveries_2",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "collaboration_deliveries",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_collaboration_deliveries_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "collaboration_deliveries",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_collaboration_controller_origins_2",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "collaboration_controller_origins",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_collaboration_controller_origins_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "collaboration_controller_origins",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_cache_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "cache",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_agents_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 399,
+        "unusedBytes": 3659,
+        "largestCellBytes": 40,
+        "tbl_name": "agents",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_agent_skills_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "agent_skills",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_agent_mcp_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "agent_mcp",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_agent_knowledge_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "agent_knowledge",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_account_sessions_2",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_sessions",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_account_sessions_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_sessions",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_account_refresh_tokens_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_refresh_tokens",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_account_profiles_2",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_profiles",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_account_profiles_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_profiles",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_account_identities_2",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_identities",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_account_identities_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_identities",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_account_external_limits_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_external_limits",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_account_external_flows_2",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_external_flows",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_account_external_flows_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_external_flows",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_account_auth_attempts_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_auth_attempts",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_account_audit_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_audit",
+        "type": "index"
+      },
+      {
+        "name": "sqlite_autoindex_account_access_tokens_1",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_access_tokens",
+        "type": "index"
+      },
+      {
+        "name": "skill_imports",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "skill_imports",
+        "type": "table"
+      },
+      {
+        "name": "security_policies",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 1571,
+        "unusedBytes": 2433,
+        "largestCellBytes": 118,
+        "tbl_name": "security_policies",
+        "type": "table"
+      },
+      {
+        "name": "quotas",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "quotas",
+        "type": "table"
+      },
+      {
+        "name": "prompt_templates",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "prompt_templates",
+        "type": "table"
+      },
+      {
+        "name": "parent_turn_bootstraps",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_turn_bootstraps",
+        "type": "table"
+      },
+      {
+        "name": "parent_turn_bootstrap_run_heads",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_turn_bootstrap_run_heads",
+        "type": "table"
+      },
+      {
+        "name": "parent_turn_bootstrap_refs",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_turn_bootstrap_refs",
+        "type": "table"
+      },
+      {
+        "name": "parent_turn_bootstrap_pin",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_turn_bootstraps",
+        "type": "index"
+      },
+      {
+        "name": "parent_turn_bootstrap_one_attempt",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_turn_bootstrap_handoffs",
+        "type": "index"
+      },
+      {
+        "name": "parent_turn_bootstrap_heads",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_turn_bootstrap_heads",
+        "type": "table"
+      },
+      {
+        "name": "parent_turn_bootstrap_handoffs",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_turn_bootstrap_handoffs",
+        "type": "table"
+      },
+      {
+        "name": "parent_turn_bootstrap_closures",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_turn_bootstrap_closures",
+        "type": "table"
+      },
+      {
+        "name": "parent_turn_bootstrap_body_chunks",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_turn_bootstrap_body_chunks",
+        "type": "table"
+      },
+      {
+        "name": "parent_published_child_versions",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_published_child_versions",
+        "type": "table"
+      },
+      {
+        "name": "parent_publication_state",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_publication_state",
+        "type": "table"
+      },
+      {
+        "name": "parent_publication_marks",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_publication_marks",
+        "type": "table"
+      },
+      {
+        "name": "network_policies",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "network_policies",
+        "type": "table"
+      },
+      {
+        "name": "models",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 853,
+        "unusedBytes": 3230,
+        "largestCellBytes": 853,
+        "tbl_name": "models",
+        "type": "table"
+      },
+      {
+        "name": "model_whitelists",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 299,
+        "unusedBytes": 3769,
+        "largestCellBytes": 104,
+        "tbl_name": "model_whitelists",
+        "type": "table"
+      },
+      {
+        "name": "memories",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "memories",
+        "type": "table"
+      },
+      {
+        "name": "lsp_diagnostics_cache",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "lsp_diagnostics_cache",
+        "type": "table"
+      },
+      {
+        "name": "jobs",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "jobs",
+        "type": "table"
+      },
+      {
+        "name": "idx_usage_archive_turn",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "conversation_usage_archive",
+        "type": "index"
+      },
+      {
+        "name": "idx_tool_metrics_tenant",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "tool_metrics",
+        "type": "index"
+      },
+      {
+        "name": "idx_todos_tenant",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 857,
+        "unusedBytes": 2997,
+        "largestCellBytes": 11,
+        "tbl_name": "todos",
+        "type": "index"
+      },
+      {
+        "name": "idx_subagent_tools_window",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 1408,
+        "unusedBytes": 2629,
+        "largestCellBytes": 83,
+        "tbl_name": "subagent_tools",
+        "type": "index"
+      },
+      {
+        "name": "idx_subagent_tools_recent",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 1376,
+        "unusedBytes": 2661,
+        "largestCellBytes": 81,
+        "tbl_name": "subagent_tools",
+        "type": "index"
+      },
+      {
+        "name": "idx_subagent_tools_ordinal",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 1374,
+        "unusedBytes": 2663,
+        "largestCellBytes": 81,
+        "tbl_name": "subagent_tools",
+        "type": "index"
+      },
+      {
+        "name": "idx_subagent_tools_active_window",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 1578,
+        "unusedBytes": 2459,
+        "largestCellBytes": 93,
+        "tbl_name": "subagent_tools",
+        "type": "index"
+      },
+      {
+        "name": "idx_subagent_tools_active",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 1546,
+        "unusedBytes": 2491,
+        "largestCellBytes": 91,
+        "tbl_name": "subagent_tools",
+        "type": "index"
+      },
+      {
+        "name": "idx_subagent_tool_versions_page",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 2817,
+        "unusedBytes": 1169,
+        "largestCellBytes": 83,
+        "tbl_name": "subagent_tool_versions",
+        "type": "index"
+      },
+      {
+        "name": "idx_subagent_runs_parent",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 129,
+        "unusedBytes": 3953,
+        "largestCellBytes": 65,
+        "tbl_name": "subagent_runs",
+        "type": "index"
+      },
+      {
+        "name": "idx_subagent_runs_child",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 113,
+        "unusedBytes": 3969,
+        "largestCellBytes": 57,
+        "tbl_name": "subagent_runs",
+        "type": "index"
+      },
+      {
+        "name": "idx_subagent_discovery_run",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 1070,
+        "unusedBytes": 2986,
+        "largestCellBytes": 134,
+        "tbl_name": "subagent_discovery_versions",
+        "type": "index"
+      },
+      {
+        "name": "idx_subagent_discovery_creation",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 786,
+        "unusedBytes": 3278,
+        "largestCellBytes": 99,
+        "tbl_name": "subagent_discovery_versions",
+        "type": "index"
+      },
+      {
+        "name": "idx_subagent_delta_tool_revision",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 2754,
+        "unusedBytes": 1232,
+        "largestCellBytes": 81,
+        "tbl_name": "subagent_events",
+        "type": "index"
+      },
+      {
+        "name": "idx_skill_imports_tenant",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "skill_imports",
+        "type": "index"
+      },
+      {
+        "name": "idx_skill_imports_resume",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "skill_imports",
+        "type": "index"
+      },
+      {
+        "name": "idx_sec_policies_cmd",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 190,
+        "unusedBytes": 3835,
+        "largestCellBytes": 13,
+        "tbl_name": "security_policies",
+        "type": "index"
+      },
+      {
+        "name": "idx_published_child_page",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_published_child_versions",
+        "type": "index"
+      },
+      {
+        "name": "idx_published_child_current",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "parent_published_child_versions",
+        "type": "index"
+      },
+      {
+        "name": "idx_models_tenant",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 10,
+        "unusedBytes": 4075,
+        "largestCellBytes": 10,
+        "tbl_name": "models",
+        "type": "index"
+      },
+      {
+        "name": "idx_memories_session",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "memories",
+        "type": "index"
+      },
+      {
+        "name": "idx_lsp_cache_time",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "lsp_diagnostics_cache",
+        "type": "index"
+      },
+      {
+        "name": "idx_jobs_tenant",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "jobs",
+        "type": "index"
+      },
+      {
+        "name": "idx_jobs_status",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "jobs",
+        "type": "index"
+      },
+      {
+        "name": "idx_documents_tenant",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "documents",
+        "type": "index"
+      },
+      {
+        "name": "idx_cron_tenant",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "cron_jobs",
+        "type": "index"
+      },
+      {
+        "name": "idx_cron_enabled",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "cron_jobs",
+        "type": "index"
+      },
+      {
+        "name": "idx_conversations_session",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "conversations",
+        "type": "index"
+      },
+      {
+        "name": "idx_conversations_message_id",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "conversations",
+        "type": "index"
+      },
+      {
+        "name": "idx_conversations_conv_id",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "conversations",
+        "type": "index"
+      },
+      {
+        "name": "idx_conversations_agent_id",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "conversations",
+        "type": "index"
+      },
+      {
+        "name": "idx_chunks_tenant",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "document_chunks",
+        "type": "index"
+      },
+      {
+        "name": "idx_chunks_document",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "document_chunks",
+        "type": "index"
+      },
+      {
+        "name": "idx_child_usage_fence",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 1974,
+        "unusedBytes": 2054,
+        "largestCellBytes": 99,
+        "tbl_name": "subagent_usage_contributions",
+        "type": "index"
+      },
+      {
+        "name": "idx_child_usage_current",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 190,
+        "unusedBytes": 3892,
+        "largestCellBytes": 95,
+        "tbl_name": "subagent_usage_contributions",
+        "type": "index"
+      },
+      {
+        "name": "idx_agents_tenant",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 109,
+        "unusedBytes": 3949,
+        "largestCellBytes": 11,
+        "tbl_name": "agents",
+        "type": "index"
+      },
+      {
+        "name": "idx_account_sessions_user",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_sessions",
+        "type": "index"
+      },
+      {
+        "name": "idx_account_refresh_session",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_refresh_tokens",
+        "type": "index"
+      },
+      {
+        "name": "idx_account_identities_user",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_identities",
+        "type": "index"
+      },
+      {
+        "name": "idx_account_access_session_expiry",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_access_tokens",
+        "type": "index"
+      },
+      {
+        "name": "engine_database_namespace",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 76,
+        "unusedBytes": 4008,
+        "largestCellBytes": 76,
+        "tbl_name": "engine_database_namespace",
+        "type": "table"
+      },
+      {
+        "name": "documents",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "documents",
+        "type": "table"
+      },
+      {
+        "name": "document_chunks",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "document_chunks",
+        "type": "table"
+      },
+      {
+        "name": "cron_runs_job",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "cron_runs",
+        "type": "index"
+      },
+      {
+        "name": "cron_runs_active",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "cron_runs",
+        "type": "index"
+      },
+      {
+        "name": "cron_runs",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "cron_runs",
+        "type": "table"
+      },
+      {
+        "name": "cron_notifications_feed",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "cron_notifications",
+        "type": "index"
+      },
+      {
+        "name": "cron_notifications",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "cron_notifications",
+        "type": "table"
+      },
+      {
+        "name": "cron_jobs",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "cron_jobs",
+        "type": "table"
+      },
+      {
+        "name": "conversations",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "conversations",
+        "type": "table"
+      },
+      {
+        "name": "conversation_usage_archive",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "conversation_usage_archive",
+        "type": "table"
+      },
+      {
+        "name": "conversation_projection_receipts",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 464,
+        "unusedBytes": 3614,
+        "largestCellBytes": 232,
+        "tbl_name": "conversation_projection_receipts",
+        "type": "table"
+      },
+      {
+        "name": "conversation_projection_epochs",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "conversation_projection_epochs",
+        "type": "table"
+      },
+      {
+        "name": "collaboration_metadata",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 86,
+        "unusedBytes": 3998,
+        "largestCellBytes": 86,
+        "tbl_name": "collaboration_metadata",
+        "type": "table"
+      },
+      {
+        "name": "collaboration_messages_recipient",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "collaboration_messages",
+        "type": "index"
+      },
+      {
+        "name": "collaboration_messages",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "collaboration_messages",
+        "type": "table"
+      },
+      {
+        "name": "collaboration_jsonl_deliveries_history",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "collaboration_jsonl_deliveries",
+        "type": "index"
+      },
+      {
+        "name": "collaboration_jsonl_deliveries",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "collaboration_jsonl_deliveries",
+        "type": "table"
+      },
+      {
+        "name": "collaboration_history_epochs",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "collaboration_history_epochs",
+        "type": "table"
+      },
+      {
+        "name": "collaboration_deliveries_recipient",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "collaboration_deliveries",
+        "type": "index"
+      },
+      {
+        "name": "collaboration_deliveries_history",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "collaboration_deliveries",
+        "type": "index"
+      },
+      {
+        "name": "collaboration_deliveries",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "collaboration_deliveries",
+        "type": "table"
+      },
+      {
+        "name": "collaboration_controller_target",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "collaboration_controller_origins",
+        "type": "index"
+      },
+      {
+        "name": "collaboration_controller_origins",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "collaboration_controller_origins",
+        "type": "table"
+      },
+      {
+        "name": "chunks_fts_idx",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "chunks_fts_idx",
+        "type": "table"
+      },
+      {
+        "name": "chunks_fts_docsize",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "chunks_fts_docsize",
+        "type": "table"
+      },
+      {
+        "name": "chunks_fts_data",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 13,
+        "unusedBytes": 4067,
+        "largestCellBytes": 10,
+        "tbl_name": "chunks_fts_data",
+        "type": "table"
+      },
+      {
+        "name": "chunks_fts_content",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "chunks_fts_content",
+        "type": "table"
+      },
+      {
+        "name": "chunks_fts_config",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 11,
+        "unusedBytes": 4074,
+        "largestCellBytes": 11,
+        "tbl_name": "chunks_fts_config",
+        "type": "table"
+      },
+      {
+        "name": "cache",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "cache",
+        "type": "table"
+      },
+      {
+        "name": "agent_skills",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "agent_skills",
+        "type": "table"
+      },
+      {
+        "name": "agent_mcp",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "agent_mcp",
+        "type": "table"
+      },
+      {
+        "name": "agent_knowledge",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "agent_knowledge",
+        "type": "table"
+      },
+      {
+        "name": "account_sessions",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_sessions",
+        "type": "table"
+      },
+      {
+        "name": "account_refresh_tokens",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_refresh_tokens",
+        "type": "table"
+      },
+      {
+        "name": "account_profiles",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_profiles",
+        "type": "table"
+      },
+      {
+        "name": "account_identities",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_identities",
+        "type": "table"
+      },
+      {
+        "name": "account_external_limits_expiry",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_external_limits",
+        "type": "index"
+      },
+      {
+        "name": "account_external_limits",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_external_limits",
+        "type": "table"
+      },
+      {
+        "name": "account_external_flows_expiry",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_external_flows",
+        "type": "index"
+      },
+      {
+        "name": "account_external_flows",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_external_flows",
+        "type": "table"
+      },
+      {
+        "name": "account_auth_attempts",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_auth_attempts",
+        "type": "table"
+      },
+      {
+        "name": "account_audit",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_audit",
+        "type": "table"
+      },
+      {
+        "name": "account_access_tokens",
+        "pages": 1,
+        "allocatedBytes": 4096,
+        "payloadBytes": 0,
+        "unusedBytes": 4088,
+        "largestCellBytes": 0,
+        "tbl_name": "account_access_tokens",
+        "type": "table"
+      }
+    ],
+    "tables": [
+      {
+        "name": "collaboration_history_maintenance",
+        "rows": 116,
+        "valueBytes": 56539571,
+        "columns": [
+          {
+            "name": "maintenance_id",
+            "type": "TEXT",
+            "valueBytes": 4176
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 812
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 6306
+          },
+          {
+            "name": "backend",
+            "type": "TEXT",
+            "valueBytes": 580
+          },
+          {
+            "name": "root_run_id",
+            "type": "TEXT",
+            "valueBytes": 4176
+          },
+          {
+            "name": "root_attempt_id",
+            "type": "TEXT",
+            "valueBytes": 4176
+          },
+          {
+            "name": "invocation_run_id",
+            "type": "TEXT",
+            "valueBytes": 8352
+          },
+          {
+            "name": "history_epoch",
+            "type": "INTEGER",
+            "valueBytes": 116
+          },
+          {
+            "name": "anchor_id",
+            "type": "TEXT",
+            "valueBytes": 4176
+          },
+          {
+            "name": "anchor_fingerprint",
+            "type": "TEXT",
+            "valueBytes": 116428
+          },
+          {
+            "name": "payload_json",
+            "type": "TEXT",
+            "valueBytes": 56380297
+          },
+          {
+            "name": "payload_hash",
+            "type": "TEXT",
+            "valueBytes": 7424
+          },
+          {
+            "name": "state",
+            "type": "TEXT",
+            "valueBytes": 1044
+          },
+          {
+            "name": "committed_at",
+            "type": "INTEGER",
+            "valueBytes": 1508
+          }
+        ]
+      },
+      {
+        "name": "security_audit_log",
+        "rows": 31379,
+        "valueBytes": 16624751,
+        "columns": [
+          {
+            "name": "id",
+            "type": "INTEGER",
+            "valueBytes": 145789
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 219653
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 1741210
+          },
+          {
+            "name": "category",
+            "type": "TEXT",
+            "valueBytes": 94149
+          },
+          {
+            "name": "target",
+            "type": "TEXT",
+            "valueBytes": 11560575
+          },
+          {
+            "name": "details",
+            "type": "TEXT",
+            "valueBytes": 945556
+          },
+          {
+            "name": "decision",
+            "type": "TEXT",
+            "valueBytes": 156843
+          },
+          {
+            "name": "rule_id",
+            "type": "INTEGER",
+            "valueBytes": 304
+          },
+          {
+            "name": "reason",
+            "type": "TEXT",
+            "valueBytes": 1446882
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 313790
+          }
+        ]
+      },
+      {
+        "name": "file_changes",
+        "rows": 451,
+        "valueBytes": 3812484,
+        "columns": [
+          {
+            "name": "seq",
+            "type": "INTEGER",
+            "valueBytes": 1245
+          },
+          {
+            "name": "id",
+            "type": "TEXT",
+            "valueBytes": 16236
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 3157
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 25535
+          },
+          {
+            "name": "turn_id",
+            "type": "TEXT",
+            "valueBytes": 16236
+          },
+          {
+            "name": "run_id",
+            "type": "TEXT",
+            "valueBytes": 16236
+          },
+          {
+            "name": "path",
+            "type": "TEXT",
+            "valueBytes": 51548
+          },
+          {
+            "name": "kind",
+            "type": "TEXT",
+            "valueBytes": 2257
+          },
+          {
+            "name": "old_content",
+            "type": "TEXT",
+            "valueBytes": 1352826
+          },
+          {
+            "name": "new_content",
+            "type": "TEXT",
+            "valueBytes": 2263343
+          },
+          {
+            "name": "old_hash",
+            "type": "TEXT",
+            "valueBytes": 20373
+          },
+          {
+            "name": "new_hash",
+            "type": "TEXT",
+            "valueBytes": 31893
+          },
+          {
+            "name": "old_snapshot_ref",
+            "type": "TEXT",
+            "valueBytes": 672
+          },
+          {
+            "name": "new_snapshot_ref",
+            "type": "TEXT",
+            "valueBytes": 1456
+          },
+          {
+            "name": "truncated",
+            "type": "INTEGER",
+            "valueBytes": 451
+          },
+          {
+            "name": "status",
+            "type": "TEXT",
+            "valueBytes": 3157
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 5863
+          }
+        ]
+      },
+      {
+        "name": "command_jobs",
+        "rows": 500,
+        "valueBytes": 1526387,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 3500
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 27805
+          },
+          {
+            "name": "job_id",
+            "type": "TEXT",
+            "valueBytes": 18000
+          },
+          {
+            "name": "status",
+            "type": "TEXT",
+            "valueBytes": 4425
+          },
+          {
+            "name": "version",
+            "type": "INTEGER",
+            "valueBytes": 593
+          },
+          {
+            "name": "snapshot",
+            "type": "TEXT",
+            "valueBytes": 480526
+          },
+          {
+            "name": "entries",
+            "type": "TEXT",
+            "valueBytes": 991538
+          }
+        ]
+      },
+      {
+        "name": "command_job_output",
+        "rows": 4566,
+        "valueBytes": 1250565,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 31962
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 252258
+          },
+          {
+            "name": "job_id",
+            "type": "TEXT",
+            "valueBytes": 164376
+          },
+          {
+            "name": "seq",
+            "type": "INTEGER",
+            "valueBytes": 7886
+          },
+          {
+            "name": "stream",
+            "type": "TEXT",
+            "valueBytes": 27396
+          },
+          {
+            "name": "text",
+            "type": "TEXT",
+            "valueBytes": 766687
+          }
+        ]
+      },
+      {
+        "name": "root_runs",
+        "rows": 147,
+        "valueBytes": 311872,
+        "columns": [
+          {
+            "name": "seq",
+            "type": "INTEGER",
+            "valueBytes": 333
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 1029
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 7775
+          },
+          {
+            "name": "run_id",
+            "type": "TEXT",
+            "valueBytes": 5292
+          },
+          {
+            "name": "turn_id",
+            "type": "TEXT",
+            "valueBytes": 5292
+          },
+          {
+            "name": "state",
+            "type": "TEXT",
+            "valueBytes": 292151
+          }
+        ]
+      },
+      {
+        "name": "subagent_events",
+        "rows": 61,
+        "valueBytes": 278885,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 427
+          },
+          {
+            "name": "run_id",
+            "type": "TEXT",
+            "valueBytes": 2196
+          },
+          {
+            "name": "seq",
+            "type": "INTEGER",
+            "valueBytes": 104
+          },
+          {
+            "name": "kind",
+            "type": "TEXT",
+            "valueBytes": 756
+          },
+          {
+            "name": "event",
+            "type": "TEXT",
+            "valueBytes": 275402
+          }
+        ]
+      },
+      {
+        "name": "server_root_admission_seeds",
+        "rows": 147,
+        "valueBytes": 242523,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 1029
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 7775
+          },
+          {
+            "name": "root_run_id",
+            "type": "TEXT",
+            "valueBytes": 5292
+          },
+          {
+            "name": "user_message_id",
+            "type": "TEXT",
+            "valueBytes": 5292
+          },
+          {
+            "name": "assistant_message_id",
+            "type": "TEXT",
+            "valueBytes": 5292
+          },
+          {
+            "name": "seed_json",
+            "type": "TEXT",
+            "valueBytes": 112715
+          },
+          {
+            "name": "receipt_json",
+            "type": "TEXT",
+            "valueBytes": 103217
+          },
+          {
+            "name": "projected_at",
+            "type": "INTEGER",
+            "valueBytes": 1911
+          }
+        ]
+      },
+      {
+        "name": "subagent_checkpoints",
+        "rows": 61,
+        "valueBytes": 168112,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 427
+          },
+          {
+            "name": "run_id",
+            "type": "TEXT",
+            "valueBytes": 2196
+          },
+          {
+            "name": "seq",
+            "type": "INTEGER",
+            "valueBytes": 104
+          },
+          {
+            "name": "header",
+            "type": "TEXT",
+            "valueBytes": 165385
+          }
+        ]
+      },
+      {
+        "name": "subagent_tool_versions",
+        "rows": 34,
+        "valueBytes": 150575,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 238
+          },
+          {
+            "name": "run_id",
+            "type": "TEXT",
+            "valueBytes": 1224
+          },
+          {
+            "name": "tool_id",
+            "type": "TEXT",
+            "valueBytes": 1020
+          },
+          {
+            "name": "seq",
+            "type": "INTEGER",
+            "valueBytes": 60
+          },
+          {
+            "name": "ordinal",
+            "type": "INTEGER",
+            "valueBytes": 38
+          },
+          {
+            "name": "status",
+            "type": "TEXT",
+            "valueBytes": 272
+          },
+          {
+            "name": "summary",
+            "type": "TEXT",
+            "valueBytes": 72693
+          },
+          {
+            "name": "detail",
+            "type": "TEXT",
+            "valueBytes": 75030
+          }
+        ]
+      },
+      {
+        "name": "subagent_outbox",
+        "rows": 2,
+        "valueBytes": 79737,
+        "columns": [
+          {
+            "name": "id",
+            "type": "TEXT",
+            "valueBytes": 94
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 14
+          },
+          {
+            "name": "run_id",
+            "type": "TEXT",
+            "valueBytes": 72
+          },
+          {
+            "name": "seq",
+            "type": "INTEGER",
+            "valueBytes": 4
+          },
+          {
+            "name": "event",
+            "type": "TEXT",
+            "valueBytes": 79551
+          },
+          {
+            "name": "acknowledged",
+            "type": "INTEGER",
+            "valueBytes": 2
+          }
+        ]
+      },
+      {
+        "name": "subagent_tools",
+        "rows": 17,
+        "valueBytes": 65022,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 119
+          },
+          {
+            "name": "run_id",
+            "type": "TEXT",
+            "valueBytes": 612
+          },
+          {
+            "name": "tool_id",
+            "type": "TEXT",
+            "valueBytes": 510
+          },
+          {
+            "name": "ordinal",
+            "type": "INTEGER",
+            "valueBytes": 19
+          },
+          {
+            "name": "revision_seq",
+            "type": "INTEGER",
+            "valueBytes": 31
+          },
+          {
+            "name": "status",
+            "type": "TEXT",
+            "valueBytes": 153
+          },
+          {
+            "name": "summary",
+            "type": "TEXT",
+            "valueBytes": 63578
+          }
+        ]
+      },
+      {
+        "name": "collaboration_participants",
+        "rows": 155,
+        "valueBytes": 40925,
+        "columns": [
+          {
+            "name": "seq",
+            "type": "INTEGER",
+            "valueBytes": 357
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 1085
+          },
+          {
+            "name": "root_run_id",
+            "type": "TEXT",
+            "valueBytes": 5580
+          },
+          {
+            "name": "root_attempt_id",
+            "type": "TEXT",
+            "valueBytes": 5580
+          },
+          {
+            "name": "participant_id",
+            "type": "TEXT",
+            "valueBytes": 6375
+          },
+          {
+            "name": "parent_participant_id",
+            "type": "TEXT",
+            "valueBytes": 82
+          },
+          {
+            "name": "kind",
+            "type": "TEXT",
+            "valueBytes": 622
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 8141
+          },
+          {
+            "name": "invocation_run_id",
+            "type": "TEXT",
+            "valueBytes": 11088
+          },
+          {
+            "name": "admitted_at",
+            "type": "INTEGER",
+            "valueBytes": 2015
+          }
+        ]
+      },
+      {
+        "name": "collaboration_controller_roots",
+        "rows": 153,
+        "valueBytes": 38804,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 1071
+          },
+          {
+            "name": "root_run_id",
+            "type": "TEXT",
+            "valueBytes": 5508
+          },
+          {
+            "name": "root_attempt_id",
+            "type": "TEXT",
+            "valueBytes": 5508
+          },
+          {
+            "name": "root_session_id",
+            "type": "TEXT",
+            "valueBytes": 8051
+          },
+          {
+            "name": "generation",
+            "type": "TEXT",
+            "valueBytes": 5508
+          },
+          {
+            "name": "subject_key",
+            "type": "TEXT",
+            "valueBytes": 9792
+          },
+          {
+            "name": "subject_kind",
+            "type": "TEXT",
+            "valueBytes": 1224
+          },
+          {
+            "name": "auth_method",
+            "type": "TEXT",
+            "valueBytes": 2142
+          }
+        ]
+      },
+      {
+        "name": "collaboration_roots",
+        "rows": 153,
+        "valueBytes": 36355,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 1071
+          },
+          {
+            "name": "root_run_id",
+            "type": "TEXT",
+            "valueBytes": 5508
+          },
+          {
+            "name": "root_attempt_id",
+            "type": "TEXT",
+            "valueBytes": 5508
+          },
+          {
+            "name": "root_session_id",
+            "type": "TEXT",
+            "valueBytes": 8051
+          },
+          {
+            "name": "turn_id",
+            "type": "TEXT",
+            "valueBytes": 5508
+          },
+          {
+            "name": "generation",
+            "type": "TEXT",
+            "valueBytes": 5508
+          },
+          {
+            "name": "phase",
+            "type": "TEXT",
+            "valueBytes": 1223
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 1989
+          },
+          {
+            "name": "updated_at",
+            "type": "INTEGER",
+            "valueBytes": 1989
+          }
+        ]
+      },
+      {
+        "name": "collaboration_invocations",
+        "rows": 155,
+        "valueBytes": 32208,
+        "columns": [
+          {
+            "name": "seq",
+            "type": "INTEGER",
+            "valueBytes": 357
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 1085
+          },
+          {
+            "name": "root_run_id",
+            "type": "TEXT",
+            "valueBytes": 5580
+          },
+          {
+            "name": "root_attempt_id",
+            "type": "TEXT",
+            "valueBytes": 5580
+          },
+          {
+            "name": "participant_id",
+            "type": "TEXT",
+            "valueBytes": 6375
+          },
+          {
+            "name": "invocation_run_id",
+            "type": "TEXT",
+            "valueBytes": 11088
+          },
+          {
+            "name": "admitted_at",
+            "type": "INTEGER",
+            "valueBytes": 2015
+          },
+          {
+            "name": "admission_fingerprint",
+            "type": "TEXT",
+            "valueBytes": 128
+          }
+        ]
+      },
+      {
+        "name": "todos",
+        "rows": 78,
+        "valueBytes": 15465,
+        "columns": [
+          {
+            "name": "id",
+            "type": "TEXT",
+            "valueBytes": 2808
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 546
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 4269
+          },
+          {
+            "name": "title",
+            "type": "TEXT",
+            "valueBytes": 4843
+          },
+          {
+            "name": "description",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "status",
+            "type": "TEXT",
+            "valueBytes": 503
+          },
+          {
+            "name": "priority",
+            "type": "TEXT",
+            "valueBytes": 468
+          },
+          {
+            "name": "due_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 1014
+          },
+          {
+            "name": "updated_at",
+            "type": "INTEGER",
+            "valueBytes": 1014
+          }
+        ]
+      },
+      {
+        "name": "sessions",
+        "rows": 143,
+        "valueBytes": 14882,
+        "columns": [
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 7591
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 1001
+          },
+          {
+            "name": "agent_id",
+            "type": "TEXT",
+            "valueBytes": 4860
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 1430
+          },
+          {
+            "name": "metadata",
+            "type": "TEXT",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "subagent_records",
+        "rows": 2,
+        "valueBytes": 10420,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 14
+          },
+          {
+            "name": "run_id",
+            "type": "TEXT",
+            "valueBytes": 72
+          },
+          {
+            "name": "record",
+            "type": "TEXT",
+            "valueBytes": 10334
+          }
+        ]
+      },
+      {
+        "name": "subagent_runs",
+        "rows": 2,
+        "valueBytes": 9675,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 14
+          },
+          {
+            "name": "run_id",
+            "type": "TEXT",
+            "valueBytes": 72
+          },
+          {
+            "name": "parent_session_id",
+            "type": "TEXT",
+            "valueBytes": 92
+          },
+          {
+            "name": "parent_tool_call_id",
+            "type": "TEXT",
+            "valueBytes": 60
+          },
+          {
+            "name": "child_session_id",
+            "type": "TEXT",
+            "valueBytes": 90
+          },
+          {
+            "name": "status",
+            "type": "TEXT",
+            "valueBytes": 18
+          },
+          {
+            "name": "seq",
+            "type": "INTEGER",
+            "valueBytes": 4
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 26
+          },
+          {
+            "name": "updated_at",
+            "type": "INTEGER",
+            "valueBytes": 26
+          },
+          {
+            "name": "snapshot",
+            "type": "TEXT",
+            "valueBytes": 9273
+          }
+        ]
+      },
+      {
+        "name": "agents",
+        "rows": 10,
+        "valueBytes": 9519,
+        "columns": [
+          {
+            "name": "id",
+            "type": "TEXT",
+            "valueBytes": 360
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 70
+          },
+          {
+            "name": "name",
+            "type": "TEXT",
+            "valueBytes": 526
+          },
+          {
+            "name": "description",
+            "type": "TEXT",
+            "valueBytes": 857
+          },
+          {
+            "name": "system_prompt",
+            "type": "TEXT",
+            "valueBytes": 7236
+          },
+          {
+            "name": "model",
+            "type": "TEXT",
+            "valueBytes": 240
+          },
+          {
+            "name": "temperature",
+            "type": "REAL",
+            "valueBytes": 30
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 100
+          },
+          {
+            "name": "updated_at",
+            "type": "INTEGER",
+            "valueBytes": 100
+          }
+        ]
+      },
+      {
+        "name": "collaboration_jsonl_epochs",
+        "rows": 145,
+        "valueBytes": 8841,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 1015
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 7681
+          },
+          {
+            "name": "epoch",
+            "type": "INTEGER",
+            "valueBytes": 145
+          }
+        ]
+      },
+      {
+        "name": "task_plan_items",
+        "rows": 78,
+        "valueBytes": 7701,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 546
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 4269
+          },
+          {
+            "name": "todo_id",
+            "type": "TEXT",
+            "valueBytes": 2808
+          },
+          {
+            "name": "position",
+            "type": "INTEGER",
+            "valueBytes": 78
+          }
+        ]
+      },
+      {
+        "name": "subagent_discovery_versions",
+        "rows": 8,
+        "valueBytes": 5756,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 56
+          },
+          {
+            "name": "parent_session_id",
+            "type": "TEXT",
+            "valueBytes": 368
+          },
+          {
+            "name": "generation",
+            "type": "TEXT",
+            "valueBytes": 288
+          },
+          {
+            "name": "revision",
+            "type": "INTEGER",
+            "valueBytes": 8
+          },
+          {
+            "name": "run_id",
+            "type": "TEXT",
+            "valueBytes": 288
+          },
+          {
+            "name": "created_revision",
+            "type": "INTEGER",
+            "valueBytes": 8
+          },
+          {
+            "name": "run_seq",
+            "type": "INTEGER",
+            "valueBytes": 12
+          },
+          {
+            "name": "status",
+            "type": "TEXT",
+            "valueBytes": 64
+          },
+          {
+            "name": "deleted",
+            "type": "INTEGER",
+            "valueBytes": 8
+          },
+          {
+            "name": "root_session_id",
+            "type": "TEXT",
+            "valueBytes": 368
+          },
+          {
+            "name": "parent_conversation_id",
+            "type": "TEXT",
+            "valueBytes": 288
+          },
+          {
+            "name": "identity",
+            "type": "TEXT",
+            "valueBytes": 4000
+          }
+        ]
+      },
+      {
+        "name": "agent_allowed_tools",
+        "rows": 100,
+        "valueBytes": 4700,
+        "columns": [
+          {
+            "name": "agent_id",
+            "type": "TEXT",
+            "valueBytes": 3600
+          },
+          {
+            "name": "tool_name",
+            "type": "TEXT",
+            "valueBytes": 1100
+          }
+        ]
+      },
+      {
+        "name": "subagent_usage_contributions",
+        "rows": 20,
+        "valueBytes": 3661,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 140
+          },
+          {
+            "name": "parent_session_id",
+            "type": "TEXT",
+            "valueBytes": 920
+          },
+          {
+            "name": "run_id",
+            "type": "TEXT",
+            "valueBytes": 720
+          },
+          {
+            "name": "parent_turn_id",
+            "type": "TEXT",
+            "valueBytes": 720
+          },
+          {
+            "name": "root_session_id",
+            "type": "TEXT",
+            "valueBytes": 920
+          },
+          {
+            "name": "valid_from",
+            "type": "INTEGER",
+            "valueBytes": 30
+          },
+          {
+            "name": "valid_to",
+            "type": "INTEGER",
+            "valueBytes": 28
+          },
+          {
+            "name": "tokens",
+            "type": "REAL",
+            "valueBytes": 133
+          },
+          {
+            "name": "unknown",
+            "type": "INTEGER",
+            "valueBytes": 20
+          },
+          {
+            "name": "finished_at",
+            "type": "REAL",
+            "valueBytes": 30
+          }
+        ]
+      },
+      {
+        "name": "subagent_discovery_state",
+        "rows": 15,
+        "valueBytes": 2548,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 105
+          },
+          {
+            "name": "parent_session_id",
+            "type": "TEXT",
+            "valueBytes": 778
+          },
+          {
+            "name": "generation",
+            "type": "TEXT",
+            "valueBytes": 540
+          },
+          {
+            "name": "secret",
+            "type": "TEXT",
+            "valueBytes": 1080
+          },
+          {
+            "name": "revision",
+            "type": "INTEGER",
+            "valueBytes": 15
+          },
+          {
+            "name": "floor_revision",
+            "type": "INTEGER",
+            "valueBytes": 15
+          },
+          {
+            "name": "bootstrap_complete",
+            "type": "INTEGER",
+            "valueBytes": 15
+          }
+        ]
+      },
+      {
+        "name": "security_policies",
+        "rows": 21,
+        "valueBytes": 1659,
+        "columns": [
+          {
+            "name": "id",
+            "type": "INTEGER",
+            "valueBytes": 33
+          },
+          {
+            "name": "name",
+            "type": "TEXT",
+            "valueBytes": 200
+          },
+          {
+            "name": "command",
+            "type": "TEXT",
+            "valueBytes": 86
+          },
+          {
+            "name": "arg_pattern",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "action",
+            "type": "TEXT",
+            "valueBytes": 80
+          },
+          {
+            "name": "priority",
+            "type": "INTEGER",
+            "valueBytes": 44
+          },
+          {
+            "name": "enabled",
+            "type": "INTEGER",
+            "valueBytes": 21
+          },
+          {
+            "name": "description",
+            "type": "TEXT",
+            "valueBytes": 775
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 210
+          },
+          {
+            "name": "updated_at",
+            "type": "INTEGER",
+            "valueBytes": 210
+          }
+        ]
+      },
+      {
+        "name": "subagent_usage_invocations",
+        "rows": 16,
+        "valueBytes": 1264,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 112
+          },
+          {
+            "name": "run_id",
+            "type": "TEXT",
+            "valueBytes": 576
+          },
+          {
+            "name": "invocation_id",
+            "type": "TEXT",
+            "valueBytes": 576
+          }
+        ]
+      },
+      {
+        "name": "task_plans",
+        "rows": 15,
+        "valueBytes": 1134,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 105
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 819
+          },
+          {
+            "name": "explanation",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "revision",
+            "type": "INTEGER",
+            "valueBytes": 15
+          },
+          {
+            "name": "updated_at",
+            "type": "INTEGER",
+            "valueBytes": 195
+          }
+        ]
+      },
+      {
+        "name": "models",
+        "rows": 1,
+        "valueBytes": 850,
+        "columns": [
+          {
+            "name": "id",
+            "type": "TEXT",
+            "valueBytes": 36
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 7
+          },
+          {
+            "name": "provider",
+            "type": "TEXT",
+            "valueBytes": 8
+          },
+          {
+            "name": "model_id",
+            "type": "TEXT",
+            "valueBytes": 24
+          },
+          {
+            "name": "api_key",
+            "type": "TEXT",
+            "valueBytes": 614
+          },
+          {
+            "name": "base_url",
+            "type": "TEXT",
+            "valueBytes": 62
+          },
+          {
+            "name": "display_name",
+            "type": "TEXT",
+            "valueBytes": 24
+          },
+          {
+            "name": "is_enabled",
+            "type": "INTEGER",
+            "valueBytes": 1
+          },
+          {
+            "name": "version",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 10
+          },
+          {
+            "name": "updated_at",
+            "type": "INTEGER",
+            "valueBytes": 10
+          },
+          {
+            "name": "deleted_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "capabilities",
+            "type": "TEXT",
+            "valueBytes": 54
+          }
+        ]
+      },
+      {
+        "name": "conversation_projection_receipts",
+        "rows": 2,
+        "valueBytes": 446,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 14
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 92
+          },
+          {
+            "name": "message_id",
+            "type": "TEXT",
+            "valueBytes": 104
+          },
+          {
+            "name": "anchor_message_id",
+            "type": "TEXT",
+            "valueBytes": 72
+          },
+          {
+            "name": "anchor_tool_call_id",
+            "type": "TEXT",
+            "valueBytes": 60
+          },
+          {
+            "name": "anchor_conversation_id",
+            "type": "TEXT",
+            "valueBytes": 72
+          },
+          {
+            "name": "backend",
+            "type": "TEXT",
+            "valueBytes": 10
+          },
+          {
+            "name": "disposition",
+            "type": "TEXT",
+            "valueBytes": 16
+          },
+          {
+            "name": "reservation_epoch",
+            "type": "INTEGER",
+            "valueBytes": 2
+          },
+          {
+            "name": "anchor_sequence",
+            "type": "INTEGER",
+            "valueBytes": 4
+          }
+        ]
+      },
+      {
+        "name": "model_whitelists",
+        "rows": 5,
+        "valueBytes": 299,
+        "columns": [
+          {
+            "name": "id",
+            "type": "INTEGER",
+            "valueBytes": 5
+          },
+          {
+            "name": "provider",
+            "type": "TEXT",
+            "valueBytes": 32
+          },
+          {
+            "name": "model_id",
+            "type": "TEXT",
+            "valueBytes": 63
+          },
+          {
+            "name": "thinking_mode",
+            "type": "INTEGER",
+            "valueBytes": 5
+          },
+          {
+            "name": "thinking_config",
+            "type": "TEXT",
+            "valueBytes": 112
+          },
+          {
+            "name": "response_thinking_field",
+            "type": "TEXT",
+            "valueBytes": 32
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 50
+          }
+        ]
+      },
+      {
+        "name": "subagent_execution_receipts",
+        "rows": 2,
+        "valueBytes": 290,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 14
+          },
+          {
+            "name": "run_id",
+            "type": "TEXT",
+            "valueBytes": 72
+          },
+          {
+            "name": "request_key",
+            "type": "TEXT",
+            "valueBytes": 72
+          },
+          {
+            "name": "payload_hash",
+            "type": "TEXT",
+            "valueBytes": 128
+          },
+          {
+            "name": "terminal_seq",
+            "type": "INTEGER",
+            "valueBytes": 4
+          }
+        ]
+      },
+      {
+        "name": "subagent_projection_receipts",
+        "rows": 2,
+        "valueBytes": 210,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 14
+          },
+          {
+            "name": "run_id",
+            "type": "TEXT",
+            "valueBytes": 72
+          },
+          {
+            "name": "seq",
+            "type": "INTEGER",
+            "valueBytes": 4
+          },
+          {
+            "name": "message_id",
+            "type": "TEXT",
+            "valueBytes": 104
+          },
+          {
+            "name": "disposition",
+            "type": "TEXT",
+            "valueBytes": 16
+          }
+        ]
+      },
+      {
+        "name": "sqlite_sequence",
+        "rows": 7,
+        "valueBytes": 145,
+        "columns": [
+          {
+            "name": "name",
+            "type": "",
+            "valueBytes": 123
+          },
+          {
+            "name": "seq",
+            "type": "",
+            "valueBytes": 22
+          }
+        ]
+      },
+      {
+        "name": "subagent_usage_parent_state",
+        "rows": 1,
+        "valueBytes": 93,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 7
+          },
+          {
+            "name": "parent_session_id",
+            "type": "TEXT",
+            "valueBytes": 46
+          },
+          {
+            "name": "generation",
+            "type": "TEXT",
+            "valueBytes": 36
+          },
+          {
+            "name": "revision",
+            "type": "INTEGER",
+            "valueBytes": 2
+          },
+          {
+            "name": "floor_revision",
+            "type": "INTEGER",
+            "valueBytes": 1
+          },
+          {
+            "name": "bootstrap_complete",
+            "type": "INTEGER",
+            "valueBytes": 1
+          }
+        ]
+      },
+      {
+        "name": "collaboration_metadata",
+        "rows": 1,
+        "valueBytes": 82,
+        "columns": [
+          {
+            "name": "key",
+            "type": "TEXT",
+            "valueBytes": 18
+          },
+          {
+            "name": "value",
+            "type": "TEXT",
+            "valueBytes": 64
+          }
+        ]
+      },
+      {
+        "name": "engine_database_namespace",
+        "rows": 1,
+        "valueBytes": 73,
+        "columns": [
+          {
+            "name": "singleton",
+            "type": "INTEGER",
+            "valueBytes": 1
+          },
+          {
+            "name": "namespace_id",
+            "type": "TEXT",
+            "valueBytes": 36
+          },
+          {
+            "name": "generation",
+            "type": "TEXT",
+            "valueBytes": 36
+          }
+        ]
+      },
+      {
+        "name": "chunks_fts_data",
+        "rows": 2,
+        "valueBytes": 10,
+        "columns": [
+          {
+            "name": "id",
+            "type": "INTEGER",
+            "valueBytes": 3
+          },
+          {
+            "name": "block",
+            "type": "BLOB",
+            "valueBytes": 7
+          }
+        ]
+      },
+      {
+        "name": "chunks_fts_config",
+        "rows": 1,
+        "valueBytes": 8,
+        "columns": [
+          {
+            "name": "k",
+            "type": "",
+            "valueBytes": 7
+          },
+          {
+            "name": "v",
+            "type": "",
+            "valueBytes": 1
+          }
+        ]
+      },
+      {
+        "name": "conversations",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "id",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "conversation_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "role",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "content",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "tool_call_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "tool_call_name",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "tool_name",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "tool_args",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "tokens",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "token_usage",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "message_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "agent_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "model_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "metadata",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "reasoning_content",
+            "type": "TEXT",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "memories",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "id",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "key",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "value",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "updated_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "cache",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "key",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "value",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "expires_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "jobs",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "type",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "payload",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "status",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "result",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "error",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "updated_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "started_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "completed_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "quotas",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "date",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "tokens_used",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "requests_count",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "prompt_templates",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "id",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "name",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "content",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "description",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "is_builtin",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "updated_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "documents",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "filename",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "content_type",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "chunk_count",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "document_chunks",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "document_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "chunk_index",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "content",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "token_count",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "chunks_fts",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "content",
+            "type": "",
+            "valueBytes": 0
+          },
+          {
+            "name": "chunk_id",
+            "type": "",
+            "valueBytes": 0
+          },
+          {
+            "name": "document_id",
+            "type": "",
+            "valueBytes": 0
+          },
+          {
+            "name": "tenant_id",
+            "type": "",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "chunks_fts_idx",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "segid",
+            "type": "",
+            "valueBytes": 0
+          },
+          {
+            "name": "term",
+            "type": "",
+            "valueBytes": 0
+          },
+          {
+            "name": "pgno",
+            "type": "",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "chunks_fts_content",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "id",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "c0",
+            "type": "",
+            "valueBytes": 0
+          },
+          {
+            "name": "c1",
+            "type": "",
+            "valueBytes": 0
+          },
+          {
+            "name": "c2",
+            "type": "",
+            "valueBytes": 0
+          },
+          {
+            "name": "c3",
+            "type": "",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "chunks_fts_docsize",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "id",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "sz",
+            "type": "BLOB",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "users",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "api_key_hash",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "email",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "name",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "external_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "tool_metrics",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "id",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "tool_name",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "duration_ms",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "success",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "agent_skills",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "agent_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "skill_name",
+            "type": "TEXT",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "agent_mcp",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "agent_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "mcp_server_name",
+            "type": "TEXT",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "agent_knowledge",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "agent_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "knowledge_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "system_config",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "key",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "value",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "is_secret",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "updated_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "network_policies",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "id",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "config",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "updated_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "lsp_diagnostics_cache",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "file_path",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "content_hash",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "language",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "diagnostics",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "tenant_configs",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "key",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "value",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "updated_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "skill_imports",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "user_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "filename",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "file_size",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "file_sha256",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "status",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "progress",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "stage",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "skill_names",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "conflict_strategy",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "imported_count",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "skipped_count",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "error_code",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "error_message",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "uploaded_chunks",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "updated_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "scope",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "project_root",
+            "type": "TEXT",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "account_profiles",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "user_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "recovery_hash",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "avatar_url",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "bio",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "user_data",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "roles",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "updated_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "account_sessions",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "user_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "access_hash",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "access_expires_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "authenticated_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "expires_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "last_seen_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "revoked_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "account_refresh_tokens",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "token_hash",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "consumed_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "request_hash",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "retry_result",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "retry_expires_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "account_identities",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "user_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "provider_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "issuer",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "subject",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "user_data",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "updated_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "name",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "email",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "avatar_url",
+            "type": "TEXT",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "account_auth_attempts",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "bucket",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "window_start",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "attempts",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "account_audit",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "user_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "event",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "account_external_flows",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "state_hash",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "poll_hash",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "provider_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "payload",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "identity",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "status",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "expires_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "account_external_limits",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "scope",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "count",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "reset_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "account_access_tokens",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "token_hash",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "expires_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "conversation_usage_archive",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "message_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "conversation_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "row_id",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "token_usage",
+            "type": "TEXT",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "cron_jobs",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "name",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "description",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "cron_expr",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "message",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "agent_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "enabled",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "last_run_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "next_run_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "updated_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "thinking_mode",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "timeout_seconds",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "configuration_json",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "revision",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "schedule_revision",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "cron_runs",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "job_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "job_revision",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "schedule_revision",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "scheduled_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "status",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "reason",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "root_run_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "snapshot_json",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "started_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "finished_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "deadline_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "cron_notifications",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "run_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "event_key",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "payload_json",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "read_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "conversation_projection_epochs",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "epoch",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "user_root_admissions",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "request_key",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "namespace_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "generation",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "body_digest",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "root_run_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "receipt_json",
+            "type": "TEXT",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "user_root_admission_seeds",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "root_run_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "user_message_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "assistant_message_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "seed_json",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "projected_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "parent_publication_state",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "parent_session_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "stream_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "generation",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "root_session_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "parent_turn_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "root_run_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "attempt_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "revision",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "floor_revision",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "event_sequence",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "floor_event_sequence",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "parent_published_child_versions",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "parent_session_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "stream_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "run_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "first_ordinal",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "valid_from",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "valid_to",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "at_seq",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "identity",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "tokens",
+            "type": "REAL",
+            "valueBytes": 0
+          },
+          {
+            "name": "unknown",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "finished_at",
+            "type": "REAL",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "parent_publication_marks",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "parent_session_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "stream_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "event_sequence",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "revision",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "run_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "at_seq",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "parent_turn_bootstraps",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "checkpoint_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "parent_session_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "stream_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "generation",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "event_sequence",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "revision",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "usage_revision",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "fence_json",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "snapshot_json",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "archive_digest",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "digest",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "original_count",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "refs_count",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "created_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "parent_turn_bootstrap_refs",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "checkpoint_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "projection_index",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "run_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "at_seq",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "entry_json",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "entry_digest",
+            "type": "TEXT",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "parent_turn_bootstrap_heads",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "parent_session_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "stream_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "generation",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "checkpoint_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "parent_turn_bootstrap_run_heads",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "parent_session_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "root_run_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "attempt_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "stream_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "generation",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "checkpoint_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "parent_turn_bootstrap_closures",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "checkpoint_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "closed_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "error_summary",
+            "type": "TEXT",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "parent_turn_bootstrap_body_chunks",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "checkpoint_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "part_index",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "chunk",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "digest",
+            "type": "TEXT",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "parent_turn_bootstrap_handoffs",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "checkpoint_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "target_stream_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "target_attempt_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "scope_json",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "version_count",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "source_archive_digest",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "version_digest",
+            "type": "TEXT",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "collaboration_controller_origins",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "root_run_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "root_attempt_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "message_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "subject_key",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "subject_kind",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "auth_method",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "root_session_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "generation",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "sender_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "sender_invocation_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "request_key",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "recipient_participant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "recipient_invocation_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "payload_hash",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "payload_bytes",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "payload_body",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "accepted_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "collaboration_messages",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "seq",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "root_run_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "root_attempt_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "message_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "sender_participant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "sender_invocation_run_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "recipient_participant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "request_key",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "payload_hash",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "payload_bytes",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "body",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "accepted_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "state",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "reason",
+            "type": "TEXT",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "collaboration_history_epochs",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "session_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "epoch",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "collaboration_deliveries",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "root_run_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "root_attempt_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "message_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "recipient_participant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "recipient_invocation_run_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "history_session_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "history_message_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "history_epoch",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "history_row_id",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "history_conversation_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "history_model_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "history_identity_version",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "payload_hash",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "history_content",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "history_metadata",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "state",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "reason",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "integrated_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      },
+      {
+        "name": "collaboration_jsonl_deliveries",
+        "rows": 0,
+        "valueBytes": 0,
+        "columns": [
+          {
+            "name": "tenant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "root_run_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "root_attempt_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "message_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "recipient_participant_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "recipient_invocation_run_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "history_session_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "history_message_id",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "history_epoch",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "file_identity",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "row_offset",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "row_bytes",
+            "type": "INTEGER",
+            "valueBytes": 0
+          },
+          {
+            "name": "row_hash",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "encoded_row",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "state",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "reason",
+            "type": "TEXT",
+            "valueBytes": 0
+          },
+          {
+            "name": "integrated_at",
+            "type": "INTEGER",
+            "valueBytes": 0
+          }
+        ]
+      }
+    ]
+  },
+  "after": {
+    "groups": {
+      "database": {
+        "files": 3,
+        "bytes": 97198176
+      },
+      "snapshots": {
+        "files": 32,
+        "bytes": 2068769
+      },
+      "other": {
+        "files": 6,
+        "bytes": 132557
+      },
+      "memory": {
+        "files": 3,
+        "bytes": 4415160
+      },
+      "sessions_jsonl": {
+        "files": 158,
+        "bytes": 355134106
+      }
+    },
+    "mainFiles": [
+      {
+        "name": "agent.db",
+        "bytes": 91529216
+      },
+      {
+        "name": "agent.db-shm",
+        "bytes": 32768
+      },
+      {
+        "name": "agent.db-wal",
+        "bytes": 5636192
+      },
+      {
+        "name": "memory\\memory.db",
+        "bytes": 225280
+      },
+      {
+        "name": "memory\\memory.db-shm",
+        "bytes": 32768
+      },
+      {
+        "name": "memory\\memory.db-wal",
+        "bytes": 4157112
+      }
+    ],
+    "sessionJsonlSizesDescending": [
+      111107189,
+      21096349,
+      10561529,
+      8662919,
+      7368915,
+      6070304,
+      5994217,
+      5878009,
+      5275122,
+      5150168,
+      5022474,
+      4824898,
+      4675099,
+      4628277,
+      4288280,
+      4249270,
+      3922499,
+      3632958,
+      3412280,
+      3366134,
+      3158417,
+      2993102,
+      2937676,
+      2850067,
+      2832400,
+      2730128,
+      2687598,
+      2606304,
+      2604856,
+      2521046,
+      2428374,
+      2327250,
+      2306681,
+      2305893,
+      2249617,
+      2240840,
+      2109175,
+      2083730,
+      1972216,
+      1936426,
+      1760579,
+      1670882,
+      1631476,
+      1520345,
+      1483421,
+      1479361,
+      1441206,
+      1433561,
+      1426374,
+      1307553,
+      1299394,
+      1270165,
+      1208068,
+      1188770,
+      1183687,
+      1176244,
+      1145544,
+      1085033,
+      1062747,
+      1060484,
+      1048327,
+      1009429,
+      1003045,
+      999793,
+      995451,
+      992630,
+      957558,
+      941671,
+      924353,
+      919739,
+      915513,
+      914369,
+      899145,
+      879130,
+      830797,
+      826210,
+      814533,
+      787374,
+      767102,
+      759128,
+      758131,
+      755243,
+      752949,
+      751781,
+      744720,
+      716411,
+      714166,
+      698402,
+      695349,
+      690920,
+      677139,
+      675906,
+      674994,
+      672002,
+      639936,
+      628919,
+      624416,
+      622323,
+      619965,
+      614986,
+      609741,
+      608963,
+      598470,
+      585113,
+      579820,
+      577653,
+      569448,
+      568480,
+      554224,
+      533615,
+      528261,
+      522777,
+      509870,
+      500394,
+      496593,
+      470223,
+      446918,
+      445488,
+      445344,
+      445220,
+      440914,
+      414432,
+      389338,
+      378133,
+      370804,
+      352466,
+      345903,
+      330137,
+      328139,
+      301405,
+      298059,
+      274648,
+      259045,
+      249628,
+      219626,
+      218018,
+      194975,
+      178497,
+      154373,
+      150382,
+      109734,
+      91289,
+      84252,
+      78598,
+      71709,
+      70951,
+      54432,
+      51893,
+      46664,
+      45247,
+      43916,
+      36595,
+      29638,
+      18820,
+      18276,
+      13650,
+      3082,
+      2288
+    ],
+    "totalBytes": 458948768
+  }
+}

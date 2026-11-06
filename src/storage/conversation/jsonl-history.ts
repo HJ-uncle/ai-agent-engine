@@ -33,10 +33,13 @@ import { acknowledgeAdmissionUser, readAdmissionSeed, validateAdmissionUser, typ
 import { admissionError } from '../root-admission/index.js'
 import { registerJSONLHistory, canonicalJSONLMessage, jsonlHistoryEpoch, type JSONLAppendPlan, type JSONLPhysicalSnapshot } from './jsonl-origin.js'
 import { readJSONLBytes } from './jsonl-byte-reader.js'
+import { HistoryBlobStore } from './history-blobs.js'
+import { displayTurn, displayUserIdentity, displayUserTurnIds, selectDisplayTurnIds, type DisplayUserIdentity } from './display-history.js'
+import type { ConversationDisplayHistory, ConversationDisplayOptions } from '../../core/agent-context/types.js'
 import { cacheJSONLPhysicalSnapshot, getJSONLPhysicalSnapshot, invalidateJSONLPhysicalSnapshot } from './jsonl-physical-cache.js'
 import { invalidateJSONLDeliveries } from '../../core/collaboration/jsonl-delivery-schema.js'
 import { CollaborationError } from '../../core/collaboration/types.js'
-import { currentHistoryMaintenance, maintenancePinnedIds, maintenanceSummaryEvidence, maintenanceDigest, ensureHistoryMaintenanceSchema, reserveHistoryMaintenance,
+import { currentHistoryMaintenance, maintenancePinnedIds, maintenanceSummaryEvidence, maintenanceDigest, ensureHistoryMaintenanceSchema, reserveHistoryMaintenance, finalizeHistoryMaintenance,
   type HistoryMaintenanceLease } from '../../core/collaboration/history-maintenance.js'
 
 type Ctx = Pick<AgentContext, 'tenantId' | 'sessionId'>
@@ -80,6 +83,8 @@ interface JsonlRow {
   /** Original tool output retained separately from the compact model content. */
   archiveContent?: Message['content']
   archiveTokens?: number
+  /** v1 points to the original row, or its latest explicit edit; never a copied body. */
+  archiveReference?: { version: 1; messageId: string; contentHash: string }
   // tombstone 行
   scope?: 'message' | 'conversation' | 'truncate' | 'clear'
   afterSeq?: number
@@ -90,6 +95,8 @@ interface SessionState {
   messages: Message[]
   /** messageId → Message（折叠后视图） */
   byId: Map<string, Message>
+  /** Surviving archive identities include messages hidden by a summary. */
+  archiveIds: Set<string>
   /** 最后一条消息 uuid（append 时维护 parentUuid 链） */
   lastUuid: string | null
   /** 下一个 dbSeq */
@@ -131,6 +138,10 @@ function applyUpdate(message: Message, update: JsonlRow, archive = false): void 
   const compacted = message.role === 'tool' && update.content === CLEARED_TOOL_RESULT
   const originalContent = update.archiveContent ?? message.content
   const originalTokens = update.archiveTokens ?? message.tokens
+  if (compacted && update.archiveReference && (update.archiveReference.version !== 1
+    || update.archiveReference.messageId !== message.id
+    || update.archiveReference.contentHash !== crypto.createHash('sha256').update(JSON.stringify(originalContent)).digest('hex')))
+    throw new Error('Compacted tool archive reference does not match its source')
   if (update.content !== undefined) message.content = compacted && archive ? originalContent : update.content
   if (typeof update.tokens === 'number') message.tokens = compacted && archive ? originalTokens : update.tokens
   if (update.metadata !== undefined) message.metadata = update.metadata
@@ -144,7 +155,8 @@ function applyUpdate(message: Message, update: JsonlRow, archive = false): void 
   if (compacted) {
     const metadata = message.metadata && typeof message.metadata === 'object' && !Array.isArray(message.metadata)
       ? message.metadata as Record<string, unknown> : {}
-    message.metadata = { ...metadata, outputPreview: typeof originalContent === 'string' ? originalContent : JSON.stringify(originalContent) }
+    const preview = typeof originalContent === 'string' ? originalContent : JSON.stringify(originalContent)
+    message.metadata = { ...metadata, outputPreview: preview.slice(0, 2048), outputPreviewTruncated: preview.length > 2048 }
   }
 }
 
@@ -236,6 +248,7 @@ export class JSONLConversationHistory implements ConversationHistory {
   readonly retainsArchive = true
   private readonly rootDir: string
   private readonly dataPath: string
+  private readonly blobs: HistoryBlobStore
   private readonly maxTokens?: number
   private readonly states = new Map<string, SessionState>()
   private readonly physicalCacheOwner = {}
@@ -253,6 +266,7 @@ export class JSONLConversationHistory implements ConversationHistory {
     this.maxTokens = maxTokens
     const dataDir = process.env.DATA_DIR ?? './data/agent.db'
     this.dataPath = path.resolve(dataDir)
+    this.blobs = new HistoryBlobStore(this.dataPath)
     this.rootDir = path.join(path.dirname(this.dataPath), 'sessions')
     registerJSONLHistory(this, {
       db: () => this.projectionDb(),
@@ -436,7 +450,7 @@ export class JSONLConversationHistory implements ConversationHistory {
     const previous = this.states.get(key)
     if (previous) { this.cachedBytes -= previous.cacheBytes; this.states.delete(key) }
     state.cacheBytes = bytes ?? state.messages.reduce((sum, message) => sum + Buffer.byteLength(JSON.stringify(message)) + 128, 1024)
-      + [...state.deletedUuids, ...state.deletedConvIds].reduce((sum, id) => sum + Buffer.byteLength(id) + 64, 0)
+      + [...state.deletedUuids, ...state.deletedConvIds, ...state.archiveIds].reduce((sum, id) => sum + Buffer.byteLength(id) + 64, 0)
     this.states.set(key, state); this.cachedBytes += state.cacheBytes
     while (this.states.size > this.maxCachedSessions || this.cachedBytes > this.maxCachedBytes) {
       const oldest = this.states.keys().next().value as string | undefined
@@ -474,6 +488,7 @@ export class JSONLConversationHistory implements ConversationHistory {
     const state: SessionState = {
       messages: [],
       byId: new Map(),
+      archiveIds: new Set(),
       lastUuid: null,
       nextSeq: 1,
       rawTokens: 0,
@@ -515,11 +530,12 @@ export class JSONLConversationHistory implements ConversationHistory {
         console.warn(`[jsonl-history] skip corrupted line in ${file}`)
         continue
       }
+      if (!row || row.tenantId !== ctx.tenantId || row.sessionId !== ctx.sessionId) continue
       const currentOrdinal = rawOrdinal++
       rowOrdinals.set(row, currentOrdinal)
       if (typeof row.dbSeq === 'number' && row.dbSeq > maxSeq) maxSeq = row.dbSeq
       if (row.type === 'tombstone') tombstoneRows.push(row)
-      else if (row.type === 'update' && row.targetUuid) collectUpdate(updates, row)
+      else if (row.type === 'update' && row.targetUuid) collectUpdate(updates, this.blobs.hydrate(row))
       else if (row.type === 'summary') summaries.push(row)
       else if (row.type !== 'usage') rows.push(row)
     }
@@ -575,9 +591,10 @@ export class JSONLConversationHistory implements ConversationHistory {
       if (row.dbSeq <= clearSeq) continue
       if ((rowOrdinals.get(row) ?? -1) <= clearOrdinal) continue
       if (isTruncated(row.dbSeq, rowOrdinals.get(row) ?? -1)) continue
-      if (row.dbSeq <= summaryFloor && !retainedUuids.has(row.uuid)) continue
       if (deletedUuids.has(row.uuid)) continue
       if (row.conversationId && deletedConvIds.has(row.conversationId)) continue
+      state.archiveIds.add(row.uuid)
+      if (row.dbSeq <= summaryFloor && !retainedUuids.has(row.uuid)) continue
       const msg = this.rowToMessage(row)
       const upd = updates.get(row.uuid)
       if (upd) applyUpdate(msg, upd)
@@ -606,6 +623,7 @@ export class JSONLConversationHistory implements ConversationHistory {
   }
 
   private rowToMessage(row: JsonlRow): Message {
+    row = this.blobs.hydrate(row)
     const p = (row.payload ?? {}) as Record<string, unknown>
     const msg: Message = {
       id: (p.id as string) ?? row.uuid,
@@ -716,7 +734,7 @@ export class JSONLConversationHistory implements ConversationHistory {
         payload: this.messageToPayload({ ...msg, id: uuid }),
         ...(typeof convId === 'string' ? { conversationId: convId } : {}),
       }
-      lines.push(JSON.stringify(row))
+      lines.push(await this.blobs.encode(row))
       parentUuid = uuid
     }
     // 原子写入：临时文件 + rename
@@ -735,7 +753,12 @@ export class JSONLConversationHistory implements ConversationHistory {
       const state = await this.loadSession(ctx)
       const precedingRevision = this.fileRevision(state)
       const uuid = message.id || crypto.randomUUID()
-      if (state.messages.some(existing => existing.id === uuid)) return uuid
+      if (state.archiveIds.has(uuid)) {
+        // An earlier write can leave complete JSON without LF, or lose its sync
+        // acknowledgement. Reconcile that tail before acknowledging a retry.
+        if (await this.appendEncoded(this.filePath(ctx), '')) this.invalidate(ctx)
+        return uuid
+      }
       const convId = (message as unknown as Record<string, unknown>).conversationId
       const row: JsonlRow = {
         uuid,
@@ -750,16 +773,17 @@ export class JSONLConversationHistory implements ConversationHistory {
         ...(typeof convId === 'string' ? { conversationId: convId } : {}),
       }
       const file = this.filePath(ctx)
-      const encoded = JSON.stringify(row) + '\n'
+      const encoded = await this.blobs.encode(row) + '\n'
       await fs.promises.mkdir(path.dirname(file), { recursive: true })
       // Append is durable before advancing sequence/cache. A failed write must
       // never make an unpersisted message visible or consume its dbSeq.
-      try { await fs.promises.appendFile(file, encoded) }
+      let appendedBytes: number
+      try { appendedBytes = await this.appendEncoded(file, encoded) }
       catch (error) { state.mtimeMs = 0; throw error }
       const stat = await fs.promises.stat(file)
       // Other instances/processes may append or replace the file. Rebuild on
       // an unexpected tail/identity rather than hiding their records in cache.
-      if (stat.size !== state.size + Buffer.byteLength(encoded)
+      if (stat.size !== state.size + appendedBytes
         || state.size > 0 && (state.ino !== stat.ino || state.dev !== stat.dev)) {
         state.mtimeMs = 0
         return uuid
@@ -775,9 +799,10 @@ export class JSONLConversationHistory implements ConversationHistory {
         // snapshot, as they did when append forced a complete rebuild.
         state.messages = [...state.messages, stored]
         state.byId.set(stored.id!, stored)
+        state.archiveIds.add(stored.id!)
         state.lastUuid = uuid
         state.rawTokens += stored.tokens ?? 0
-        addedBytes = Buffer.byteLength(JSON.stringify(stored)) + 128
+        addedBytes = Buffer.byteLength(JSON.stringify(stored)) + 128 + Buffer.byteLength(uuid) + 64
       }
       state.nextSeq = row.dbSeq + 1
       state.mtimeMs = stat.mtimeMs; state.ctimeMs = stat.ctimeMs
@@ -906,7 +931,7 @@ export class JSONLConversationHistory implements ConversationHistory {
           await handle.read(last, 0, 1, size - 1)
           if (last[0] !== 10) await handle.writeFile('\n')
         }
-        await handle.writeFile(JSON.stringify(row) + '\n')
+        await handle.writeFile(await this.blobs.encode(row) + '\n')
         await handle.sync()
       } finally { this.invalidate(ctx); await handle.close() }
       await commitProjectionReceipt(db, ctx, messageId, anchor, { backend: 'jsonl', disposition: 'appended', epoch, anchorSequence })
@@ -1027,7 +1052,8 @@ export class JSONLConversationHistory implements ConversationHistory {
       const trimmed = line.trim()
       if (!trimmed) continue
       try {
-        entries.push({ row: JSON.parse(trimmed) as JsonlRow, ordinal: ordinal++ })
+        const row = scopedJsonlRow(trimmed, ctx)
+        if (row) entries.push({ row, ordinal: ordinal++ })
       } catch {
         // Match loadSession's crash-tolerant behavior: an incomplete line is
         // not a recoverable message and must not break the archive endpoint.
@@ -1044,7 +1070,7 @@ export class JSONLConversationHistory implements ConversationHistory {
 
     for (const { row, ordinal: rowOrdinal } of entries) {
       if (row.type === 'update' && row.targetUuid) {
-        collectUpdate(updates, row)
+        collectUpdate(updates, this.blobs.hydrate(row))
       } else if (row.type === 'tombstone') {
         if (row.scope === 'clear') {
           // clear() normally renames the file.  The fallback tombstone uses
@@ -1121,8 +1147,8 @@ export class JSONLConversationHistory implements ConversationHistory {
         try {
           for await (const line of lines) {
             if (!line.trim()) continue
-            let row: JsonlRow
-            try { row = JSON.parse(line) as JsonlRow } catch { continue }
+            const row = scopedJsonlRow(line, ctx)
+            if (!row) continue
             yield { row, ordinal: ordinal++ }
           }
         } finally { lines.close() }
@@ -1137,7 +1163,7 @@ export class JSONLConversationHistory implements ConversationHistory {
           originalSequences.set(row.uuid, row.dbSeq)
           previousMessageSeq = Math.max(previousMessageSeq, row.dbSeq)
         }
-        if (row.type === 'update' && row.targetUuid) collectUpdate(updates, row)
+        if (row.type === 'update' && row.targetUuid) collectUpdate(updates, this.blobs.hydrate(row))
         else if (row.type === 'tombstone') {
           previousMessageSeq = Math.max(previousMessageSeq, row.dbSeq ?? -1)
           if (row.scope === 'clear') { clearAfter = Math.max(clearAfter, ordinal); summaries.length = 0 }
@@ -1179,6 +1205,96 @@ export class JSONLConversationHistory implements ConversationHistory {
     } finally { await handle.close() }
   }
 
+  /** One frozen transcript read supplies both navigation and complete selected turns. */
+  async getDisplayHistory(ctx: Ctx, options: ConversationDisplayOptions = {}): Promise<ConversationDisplayHistory> {
+    selectDisplayTurnIds([], { limit: options.limit })
+    const file = this.filePath(ctx)
+    let opened: Awaited<ReturnType<typeof fs.promises.open>> | undefined
+    try { opened = await fs.promises.open(file, 'r') }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    if (!opened) {
+      await this.migrateFromSqlite(ctx)
+      try { opened = await fs.promises.open(file, 'r') }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    }
+    if (!opened) return { schemaVersion: 1, ...(options.groupRootFollowups ? { grouping: 'root' as const } : {}),
+      turns: [], messages: [], loadedTurnIds: selectDisplayTurnIds([], options),
+      revision: 'empty', mutationRevision: 'empty', backend: 'jsonl', completeness: 'complete' }
+    const handle = opened
+    try {
+      const stat = await handle.stat(), size = stat.size
+      const identity = this.collaborationFileIdentity(stat)
+      const revision = crypto.createHash('sha256').update(`${identity}:${this.fileRevision(stat)}`).digest('hex')
+      const mutation = crypto.createHash('sha256').update(identity)
+      const rows = async function* () {
+        if (!size) return
+        const input = fs.createReadStream(file, { fd: handle.fd, autoClose: false, start: 0, end: size - 1, encoding: 'utf8' })
+        const lines = createInterface({ input, crlfDelay: Infinity })
+        let ordinal = 0
+        try {
+          for await (const line of lines) {
+            if (!line.trim()) continue
+            const row = scopedJsonlRow(line, ctx)
+            if (row) yield { row, ordinal: ordinal++ }
+          }
+        } finally { lines.close() }
+      }
+      const updates = new Map<string, JsonlRow>(), deleted = new Set<string>(), deletedTurns = new Set<string>()
+      const truncations: Array<{ ordinal: number; afterSeq: number }> = []
+      const users: Array<{ uuid: string; id: string; dbSeq: number; ordinal: number; conversationId?: string; identity: DisplayUserIdentity }> = []
+      let clearAfter = -1
+      for await (const { row, ordinal } of rows()) {
+        if (row.type === 'user' && row.payload) {
+          const id = typeof row.payload.id === 'string' ? row.payload.id : row.uuid
+          users.push({ uuid: row.uuid, id, dbSeq: row.dbSeq, ordinal, conversationId: row.conversationId,
+            identity: displayUserIdentity({ id, metadata: row.payload.metadata, conversationId: row.payload.conversationId ?? row.conversationId }) })
+        }
+        // Append and model summaries preserve old display bodies; edits and deletion markers do not.
+        if (row.type === 'update' || row.type === 'tombstone') mutation.update(JSON.stringify(row)).update('\n')
+        if (row.type === 'update' && row.targetUuid) collectUpdate(updates, this.blobs.hydrate(row))
+        if (row.type !== 'tombstone') continue
+        if (row.scope === 'clear') clearAfter = Math.max(clearAfter, ordinal)
+        if (row.scope === 'truncate' && typeof row.afterSeq === 'number') truncations.push({ ordinal, afterSeq: row.afterSeq })
+        if (row.scope === 'message' && row.targetUuid) deleted.add(row.targetUuid)
+        if (row.scope === 'conversation' && row.conversationId) deletedTurns.add(row.conversationId)
+      }
+      const isTruncated = truncateFilter(truncations)
+      const visible = (row: { uuid: string; dbSeq: number; conversationId?: string }, ordinal: number) => ordinal > clearAfter
+        && !isTruncated(row.dbSeq, ordinal) && !deleted.has(row.uuid) && !(row.conversationId && deletedTurns.has(row.conversationId))
+      const visibleUsers = users.filter(user => visible(user, user.ordinal))
+      // Apply metadata edits before grouping, matching the hydrated display body's latest identity fields.
+      const userTurns = displayUserTurnIds(visibleUsers.map(user => {
+        const metadata = updates.get(user.uuid)?.metadata
+        return metadata === undefined ? user.identity : displayUserIdentity({ id: user.id, metadata, conversationId: user.identity.conversationId })
+      }), options.groupRootFollowups)
+      const loadedTurnIds = selectDisplayTurnIds(visibleUsers.filter(user => userTurns.get(user.id) === user.id).map(user => user.id), options)
+      const selected = new Set(loadedTurnIds), messages: Message[] = [], turns: ConversationDisplayHistory['turns'] = []
+      let currentUser: string | undefined, completeness: ConversationDisplayHistory['completeness'] = 'complete'
+      for await (const { row, ordinal } of rows()) {
+        if (row.type === 'user' && !visible(row, ordinal)) currentUser = undefined
+        if (!row.payload || !['user', 'assistant', 'tool', 'system'].includes(row.type) || !visible(row, ordinal)) continue
+        // Bodies outside the window stay on disk, including large blob-backed tool output.
+        if (row.type !== 'user' && row.type !== 'system' && !selected.has(currentUser ?? '')) continue
+        const message = this.rowToMessage(row), update = updates.get(row.uuid)
+        if (update) applyUpdate(message, update, true)
+        if (message.role === 'system' && message.metadata?.isCompactSummary) {
+          // A legacy SQLite import can already be missing originals before it reaches JSONL.
+          completeness = 'sqlite_compacted'
+          continue
+        }
+        if (message.role === 'user') {
+          currentUser = userTurns.get(message.id!)
+          if (currentUser === message.id) turns.push(displayTurn(message))
+        }
+        if (selected.has(currentUser ?? '')) messages.push(message)
+      }
+      if (new Set(messages.map(message => message.id)).size !== messages.length || messages.some(message => !message.id))
+        throw new Error('Display history contains invalid message identities')
+      return { schemaVersion: 1, ...(options.groupRootFollowups ? { grouping: 'root' as const } : {}),
+        turns, messages, loadedTurnIds, revision, mutationRevision: mutation.digest('hex'), backend: 'jsonl', completeness }
+    } finally { await handle.close() }
+  }
+
   async getTokenCount(ctx: Ctx): Promise<number> {
     const windowed = await this.getHistory(ctx)
     return windowed.reduce((sum, m) => sum + (m.tokens ?? 0), 0)
@@ -1214,8 +1330,8 @@ export class JSONLConversationHistory implements ConversationHistory {
         try {
           for await (const line of lines) {
             if (!line.trim()) continue
-            let row: JsonlRow
-            try { row = JSON.parse(line) as JsonlRow } catch { continue }
+            const row = scopedJsonlRow(line, ctx)
+            if (!row) continue
             yield { row, ordinal: ordinal++ }
           }
         } finally { lines.close() }
@@ -1224,7 +1340,7 @@ export class JSONLConversationHistory implements ConversationHistory {
       const truncations: Array<{ ordinal: number; afterSeq: number }> = []
       let clearAfter = -1
       for await (const { row, ordinal } of rows()) {
-        if (row.type === 'update' && row.targetUuid) collectUpdate(updates, row)
+        if (row.type === 'update' && row.targetUuid) collectUpdate(updates, this.blobs.hydrate(row))
         if (row.type !== 'tombstone') continue
         if (row.scope === 'clear') clearAfter = Math.max(clearAfter, ordinal)
         if (row.scope === 'truncate' && typeof row.afterSeq === 'number') truncations.push({ ordinal, afterSeq: row.afterSeq })
@@ -1434,9 +1550,9 @@ export class JSONLConversationHistory implements ConversationHistory {
         content: placeholder,
         tokens: placeholderTokens,
         metadata,
-        // Keep the compact content in the update row for model replay.  The
-        // archive reader deliberately selects this separate field instead.
-        archiveContent: content,
+        // The immutable source row/latest edit already contains the evidence.
+        // The digest detects missing or mismatched evidence without copying it.
+        archiveReference: { version: 1, messageId: msg.id!, contentHash: crypto.createHash('sha256').update(JSON.stringify(msg.content)).digest('hex') },
         archiveTokens: oldTokens,
       })
       cleared++
@@ -1454,7 +1570,11 @@ export class JSONLConversationHistory implements ConversationHistory {
         const flush = async () => {
           if (!batch.length) return
           if (maintenance) await this.appendMaintenanceRows(ctx, batch, maintenance)
-          else await fs.promises.appendFile(file, batch.map(row => JSON.stringify(row) + '\n').join(''))
+          else {
+            const encoded: string[] = []
+            for (const row of batch) encoded.push(await this.blobs.encode(row) + '\n')
+            await this.appendEncoded(file, encoded.join(''))
+          }
           batch = []; bytes = 0
         }
         for (const row of updates) {
@@ -1690,7 +1810,24 @@ export class JSONLConversationHistory implements ConversationHistory {
     const maintenance = fs.existsSync(this.dataPath) ? currentHistoryMaintenance(this.projectionDb(), ctx, 'jsonl') : undefined
     if (maintenance && (row.type === 'summary' || row.type === 'update')) { await this.appendMaintenanceRows(ctx, [row], maintenance); return }
     if (fs.existsSync(this.dataPath) && (row.type === 'tombstone' || row.type === 'update' || row.type === 'summary')) await invalidateJSONLDeliveries(this.projectionDb(), ctx)
-    await fs.promises.appendFile(file, JSON.stringify(row) + '\n')
+    await this.appendEncoded(file, await this.blobs.encode(row) + '\n')
+  }
+
+  /** Preserve incomplete evidence but separate it from the next valid row. */
+  private async appendEncoded(file: string, encoded: string): Promise<number> {
+    const handle = await fs.promises.open(file, 'a+')
+    try {
+      const size = (await handle.stat()).size
+      let prefix = ''
+      if (size) {
+        const last = Buffer.alloc(1)
+        await handle.read(last, 0, 1, size - 1)
+        if (last[0] !== 10) prefix = '\n'
+      }
+      if (prefix || encoded) await fs.promises.appendFile(handle, prefix + encoded)
+      await handle.sync()
+      return Buffer.byteLength(prefix + encoded)
+    } finally { await handle.close() }
   }
 
   private maintenanceAnchor(snapshot: JSONLPhysicalSnapshot, anchorId: string): string {
@@ -1738,7 +1875,7 @@ export class JSONLConversationHistory implements ConversationHistory {
         await tx.execute({ sql: `UPDATE collaboration_jsonl_deliveries SET state='suppressed',reason='history_compacted'
           WHERE tenant_id=? AND history_session_id=? AND state='integrated' AND history_message_id IN (SELECT value FROM json_each(?))`,
           args: [ctx.tenantId, ctx.sessionId, JSON.stringify(payload.retired)] })
-        await tx.execute({ sql: `UPDATE collaboration_history_maintenance SET state='committed',committed_at=? WHERE maintenance_id=? AND state='pending'`, args: [Date.now(), receipt.maintenance_id] })
+        await finalizeHistoryMaintenance(tx, String(receipt.maintenance_id))
         await tx.commit()
       } catch (error) { if (!tx.closed) await tx.rollback().catch(() => undefined); throw error }
       finally { tx.close() }
@@ -1757,7 +1894,9 @@ export class JSONLConversationHistory implements ConversationHistory {
     const row = rows[0]
     const pins = maintenancePinnedIds(snapshot.active, maintenance.anchorId)
     if (row.type === 'summary' && [...pins].some(id => !row.retainedUuids?.includes(id))) throw new CollaborationError('conflict', 'Summary would remove an admitted input or pending dispatch')
-    const encoded = rows.map(item => JSON.stringify(item) + '\n').join('')
+    const encodedRows: string[] = []
+    for (const item of rows) encodedRows.push(await this.blobs.encode(item) + '\n')
+    const encoded = encodedRows.join('')
     const plan: JSONLAppendPlan = { fileIdentity: snapshot.fileIdentity, offset: snapshot.size, bytes: Buffer.byteLength(encoded),
       hash: maintenanceDigest(encoded), encoded, prefixHash: snapshot.contentHash }
     const retained = new Set(row.retainedUuids ?? [])

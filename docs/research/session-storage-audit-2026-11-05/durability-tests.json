@@ -1,0 +1,15 @@
+{
+  "date": "2026-11-05",
+  "command": "npx vitest run src/storage/root-runs/root-runs.test.ts src/storage/root-admission/__tests__/admission.test.ts src/workspace/__tests__/manager-persistence.test.ts src/storage/memory/__tests__/session-scope.test.ts src/core/collaboration/__tests__/durable-mailbox.test.ts src/core/subagent/__tests__/recovery-leases.test.ts --maxWorkers=1 --minWorkers=1",
+  "files": [
+    { "path": "src/storage/root-admission/__tests__/admission.test.ts", "total": 25, "passed": 25, "failed": 0 },
+    { "path": "src/core/collaboration/__tests__/durable-mailbox.test.ts", "total": 32, "passed": 32, "failed": 0 },
+    { "path": "src/core/subagent/__tests__/recovery-leases.test.ts", "total": 16, "passed": 16, "failed": 0 },
+    { "path": "src/storage/root-runs/root-runs.test.ts", "total": 14, "passed": 14, "failed": 0 },
+    { "path": "src/workspace/__tests__/manager-persistence.test.ts", "total": 17, "passed": 16, "failed": 1,
+      "failure": "The new-process persistence test imports AETHER_GIT_TEST_COMPILED_ROOT/workspace/manager.js or ../owned-compiled/workspace/manager.js. The default D:/dev/owned-compiled/workspace/manager.js was absent; ERR_MODULE_NOT_FOUND occurred before persistence assertions." },
+    { "path": "src/storage/memory/__tests__/session-scope.test.ts", "total": 5, "passed": 5, "failed": 0 }
+  ],
+  "totals": { "files": 6, "tests": 109, "passed": 108, "failed": 1, "durationSeconds": 23.24 },
+  "scope": "Temporary fixtures only. No production database, credentials, real session content, model execution, or destructive production recovery probes."
+}

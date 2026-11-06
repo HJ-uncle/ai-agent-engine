@@ -1,6 +1,6 @@
-/** UI browser backgrounds survive output limits but never become implicit model vision. */
+/** Browser display evidence and bounded native vision preserve independent text budgets. */
 import { describe, expect, it } from 'vitest'
-import { browserOutputFramePayload, browserOutputPresentation } from '../browser-output.js'
+import { browserOutputFramePayload, browserOutputPresentation, browserSnapshotImageText } from '../browser-output.js'
 import { modelMessageContent, estimateModelMessageTokens } from '../model-context.js'
 import { multimodalSummaryText, imageToolPayload } from '../multimodal-context.js'
 import { CurrentTurnProjection } from '../../stream-pipeline/stream-projection.js'
@@ -82,7 +82,7 @@ describe('browser screenshot presentation boundary', () => {
 
   it('preserves page and pre-click pixels in display with readable metadata in model input', () => {
     const input = snapshot()
-    const result = browserOutputPresentation(JSON.stringify(input), 4000)!
+    const result = browserOutputPresentation(JSON.stringify(input), 4000, true)!
     const display = JSON.parse(result.displayOutput)
     const model = JSON.parse(result.modelInputContent)
     expect(display.screenshot).toEqual(input.screenshot)
@@ -92,6 +92,65 @@ describe('browser screenshot presentation boundary', () => {
     expect(model.elements).toEqual(input.elements)
     expect(result.modelInputContent).not.toContain('data:image')
     expect(result.imageChars).toBe(input.screenshot.dataUrl.length * 2)
+    const vision = imageToolPayload(result.modelVisionContent)!
+    expect(vision.dataUrl).toBe(input.screenshot.dataUrl)
+    expect(vision.browserSnapshot).toEqual(model)
+    expect(browserSnapshotImageText(vision)).toBe(result.modelInputContent)
+    expect(result.modelVisionContent!.split(input.screenshot.dataUrl)).toHaveLength(2)
+  })
+
+  it('sends only the current screenshot, never substituting the pre-click image for an unavailable current page', () => {
+    const previous = screenshot(2000), current = screenshot(3000)
+    const input = { ...snapshot(current), interaction: { ...snapshot().interaction, screenshot: previous } }
+    const result = browserOutputPresentation(JSON.stringify(input), 4000, true)!
+    expect(result.modelVisionContent).toContain(current.dataUrl)
+    expect(result.modelVisionContent).not.toContain(previous.dataUrl)
+    const { screenshot: _current, ...withoutCurrent } = input
+    expect(browserOutputPresentation(JSON.stringify(withoutCurrent), 4000, true)!.modelVisionContent).toBeUndefined()
+    expect(browserOutputPresentation(JSON.stringify(input), 2, true)!.modelVisionContent).toBeUndefined()
+    expect(browserOutputPresentation(JSON.stringify(input), 4000)!.modelVisionContent).toBeUndefined()
+  })
+
+  it('retains bounded capture failure notices without discarding real page or pre-click pixels', () => {
+    const input = { ...snapshot(), screenshotUnavailable: '页面截图暂不可用。'.repeat(1000),
+      interaction: { ...snapshot().interaction, screenshotUnavailable: '点击前截图暂不可用。'.repeat(1000) } }
+    const result = browserOutputPresentation(JSON.stringify(input), 4000)!
+    const display = JSON.parse(result.displayOutput), model = JSON.parse(result.modelInputContent)
+    for (const value of [display, model]) {
+      expect(value.screenshotUnavailable).toBe(input.screenshotUnavailable.slice(0, 250))
+      expect(value.interaction.screenshotUnavailable).toBe(input.interaction.screenshotUnavailable.slice(0, 250))
+      expect(value).not.toHaveProperty('snapshotUnavailable')
+    }
+    expect(display.screenshot).toEqual(input.screenshot)
+    expect(display.interaction.screenshot).toEqual(input.interaction.screenshot)
+    expect(result.imageChars).toBe(input.screenshot.dataUrl.length * 2)
+    expect(result.modelInputContent.length).toBeLessThanOrEqual(4000)
+  })
+
+  it('preserves image-free capture failures through text and publication budgets without inventing screenshots', () => {
+    const { screenshot: _pageImage, interaction, ...page } = snapshot()
+    const { screenshot: _clickImage, ...click } = interaction
+    const input = { ...page, text: '棋盘文字'.repeat(20_000), screenshotUnavailable: '页面截图捕获超时',
+      interaction: { ...click, screenshotUnavailable: '点击前截图表面不可用' } }
+    const result = browserOutputPresentation(JSON.stringify(input), 4000)!
+    expect(result.imageChars).toBe(0)
+    expect(result.modelVisionContent).toBeUndefined()
+    expect(result.displayOutput).toBe(result.modelInputContent)
+    const frame = JSON.parse(browserOutputFramePayload({ toolCallId: 'capture-failure', output: JSON.stringify(input) }, 8000)!)
+    for (const value of [JSON.parse(result.displayOutput), JSON.parse(frame.output)]) {
+      expect(value.screenshotUnavailable).toBe(input.screenshotUnavailable)
+      expect(value.interaction.screenshotUnavailable).toBe(input.interaction.screenshotUnavailable)
+      expect(value).not.toHaveProperty('screenshot')
+      expect(value).not.toHaveProperty('snapshotUnavailable')
+      expect(value.interaction).not.toHaveProperty('screenshot')
+      expect(value.interaction.viewport).toEqual(input.interaction.viewport)
+      expect(value.text.length).toBeGreaterThan(0)
+    }
+    expect(result.modelInputContent.length).toBeLessThanOrEqual(4000)
+    const malformed = browserOutputPresentation(JSON.stringify({ ...snapshot(), screenshotUnavailable: { reason: 'unsupported' },
+      interaction: { ...snapshot().interaction, screenshotUnavailable: 123 } }), 4000)!
+    expect(JSON.parse(malformed.displayOutput)).not.toHaveProperty('screenshotUnavailable')
+    expect(JSON.parse(malformed.displayOutput).interaction).not.toHaveProperty('screenshotUnavailable')
   })
 
   it('keeps structured output under the text cap even when page text and element names are huge', () => {
@@ -115,8 +174,9 @@ describe('browser screenshot presentation boundary', () => {
     ['array', [screenshot()]],
   ])('removes invalid screenshot %s without breaking the page result', (_name, invalid) => {
     const input = { ...snapshot(), screenshot: invalid, interaction: { ...snapshot().interaction, screenshot: invalid } }
-    const result = browserOutputPresentation(JSON.stringify(input), 4000)!
+    const result = browserOutputPresentation(JSON.stringify(input), 4000, true)!
     expect(result.imageChars).toBe(0)
+    expect(result.modelVisionContent).toBeUndefined()
     expect(result.displayOutput).not.toContain('data:')
     expect(result.displayOutput).not.toContain('outside.invalid')
     expect(JSON.parse(result.displayOutput).elements).toEqual(input.elements)
@@ -129,10 +189,10 @@ describe('browser screenshot presentation boundary', () => {
     expect(imageToolPayload(JSON.stringify({ dataUrl: screenshot().dataUrl }))).toBeDefined()
   })
 
-  it('projects legacy history and compaction without base64 while preserving the display message', () => {
+  it('projects legacy current screenshots as native images while compaction remains text-only and history stays intact', () => {
     const input = JSON.stringify(snapshot(screenshot(600_000)))
     const message = { role: 'tool' as const, toolCallId: 'browser-read', content: input }
-    expect(modelMessageContent(message)).not.toContain('data:image')
+    expect(imageToolPayload(modelMessageContent(message))?.dataUrl).toBe(snapshot(screenshot(600_000)).screenshot.dataUrl)
     expect(multimodalSummaryText(input, true)).not.toContain('data:image')
     expect(estimateModelMessageTokens(message)).toBeLessThan(4000)
     expect(message.content).toBe(input)

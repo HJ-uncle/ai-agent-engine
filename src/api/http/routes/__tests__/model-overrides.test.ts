@@ -6,6 +6,7 @@ import * as database from '../../../../storage/sqlite/db.js'
 import { ModelsStore } from '../../../../storage/sqlite/models.js'
 import { up as modelSchema } from '../../../../storage/sqlite/migrations/007_add_models_management.js'
 import { up as capabilitySchema } from '../../../../storage/sqlite/migrations/014_add_model_capabilities.js'
+import { up as apiFormatSchema } from '../../../../storage/sqlite/migrations/032_add_model_api_format.js'
 import { modelsRoutes } from '../models.js'
 
 vi.hoisted(() => { process.env.ENCRYPTION_KEY = 'a1'.repeat(32) })
@@ -21,6 +22,7 @@ beforeEach(async () => {
   vi.spyOn(database, 'getDb').mockReturnValue(db)
   await modelSchema(db)
   await capabilitySchema(db)
+  await apiFormatSchema(db)
   store = new ModelsStore()
   const model = await store.createModel({ tenantId: 'default', provider: 'openai', modelId: 'gpt-4o',
     apiKey: 'synthetic-key-only-1234', baseUrl: 'https://example.com/v1', displayName: 'Before',

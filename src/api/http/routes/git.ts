@@ -6,12 +6,15 @@
  */
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import { withRepositoryLease, prepareCloneDestinationLock, repositoryFailureMetadata } from '../../../workspace/repository-lease.js'
 import { workspaceManager } from '../../../workspace/index.js'
 import { success, fail } from '../response.js'
 import { readDiff, selectedPatch, mergeState, blame, userName, listAuthors } from './git-contracts.js'
 import { expectedBinding, withGitBinding, gitLeaseStatus, recoverGitLease } from './git-binding.js'
 import { resolveGitPath, resolveGitCloneSource, gitArguments, gitEnvironment, type GitWorkspace } from './git-workspace.js'
+import { parseGitRemotes } from './git-remotes.js'
+import { fillStatusStats, type StatusStatFile } from './git-status-stats.js'
 
 
 const tenant = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
@@ -20,7 +23,7 @@ interface ActionBody {
   sessionId?: string; cwd?: string; op?: string; path?: string; paths?: string[]; message?: string;
   branch?: string; oldName?: string; newName?: string; ref?: string; remote?: string; name?: string;
   url?: string; index?: number; indexes?: number[]; includeUntracked?: boolean; force?: boolean;
-  hash?: string; hunkId?: string;
+  hash?: string; hunkId?: string; remember?: boolean;
   expectedRoot?: string; bindingEpoch?: string; generation?: string;
 }
 
@@ -75,6 +78,112 @@ function gitName(value: unknown, label: string, max = 512): string {
   return out
 }
 
+function gitErrorText(error: unknown): string {
+  const detail = error as { stderr?: unknown; message?: unknown }
+  return String(detail?.stderr || detail?.message || error)
+}
+
+async function unstagePaths(cwd: GitWorkspace, files: string[]): Promise<void> {
+  if (!files.length) return
+  let hasHead = true
+  try {
+    await run(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'])
+  } catch (error) {
+    if ((error as { code?: unknown }).code !== 1) throw error
+    hasHead = false
+  }
+  // reset tolerates a stale selection containing an absent path. Falling back
+  // from any pathspec error to rm would incorrectly stage tracked deletions.
+  await run(cwd, hasHead
+    ? ['--literal-pathspecs', 'reset', '-q', '--', ...files]
+    : ['--literal-pathspecs', 'rm', '--cached', '--force', '--ignore-unmatch', '--', ...files])
+}
+
+async function removeUntrackedPath(cwd: GitWorkspace, file: string): Promise<void> {
+  if (!file || file.split(/[\\/]/).includes('.git')) throw new Error('只能放弃工作区内的文件')
+  const target = await resolveGitPath(cwd, file)
+  for (const directory of [cwd.repository?.gitDir, cwd.repository?.commonDir]) {
+    if (!directory) continue
+    const relative = path.relative(directory, target)
+    if (!relative || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep))) {
+      throw new Error('不能删除 Git 仓库元数据')
+    }
+  }
+  cwd.assertBinding?.()
+  // Keep the original lexical path so an allowed symlink is removed, not its
+  // destination. resolveGitPath above still rejects links outside the task.
+  await fs.rm(path.resolve(cwd.cwd, file), { force: true })
+}
+
+async function discardPaths(cwd: GitWorkspace, files: string[], worktreeOnly: boolean): Promise<void> {
+  for (const file of files) {
+    if (!worktreeOnly) await unstagePaths(cwd, [file])
+    try {
+      await run(cwd, ['--literal-pathspecs', 'restore', '--worktree', '--', file])
+    } catch (error) {
+      if (!/pathspec|did not match/i.test(gitErrorText(error))) throw error
+      // A missing index entry is an untracked file (or a staged deletion).
+      // Never substitute HEAD here: that would destroy staged content.
+      const indexed = await run(cwd, ['--literal-pathspecs', 'ls-files', '-z', '--', file])
+      if (indexed) throw error
+      await removeUntrackedPath(cwd, file)
+    }
+  }
+}
+
+async function pullWithStrategy(cwd: GitWorkspace, args: string[], remember?: boolean, rebase = false): Promise<Record<string, unknown>> {
+  try {
+    await run(cwd, args)
+    if (remember) await run(cwd, ['config', 'pull.rebase', String(rebase)])
+    return { success: true }
+  } catch (error) {
+    const message = gitErrorText(error)
+    const divergent = /divergent branches|need to specify how to reconcile|Not possible to fast-forward/i.test(message)
+      && !/CONFLICT|Automatic merge failed|fix conflicts|error: could not apply/i.test(message)
+    return { success: false, error: message, ...repositoryFailureMetadata(error), ...(divergent ? { errorCode: 'divergent' } : {}) }
+  }
+}
+
+async function pushCurrent(cwd: GitWorkspace): Promise<Record<string, unknown>> {
+  try {
+    try { await run(cwd, ['push']) }
+    catch (error) {
+      if (!/no upstream|has no upstream|set-upstream/i.test(gitErrorText(error))) throw error
+      const branch = (await run(cwd, ['branch', '--show-current'])).trim()
+      if (!branch) throw error
+      await run(cwd, ['push', '-u', 'origin', branch])
+    }
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: gitErrorText(error), ...repositoryFailureMetadata(error) }
+  }
+}
+
+async function checkoutBranch(cwd: GitWorkspace, branch: string): Promise<void> {
+  const refs = (await run(cwd, ['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes'])).split(/\r?\n/)
+  if (refs.includes(`refs/remotes/${branch}`)) {
+    const local = branch.slice(branch.indexOf('/') + 1)
+    await run(cwd, refs.includes(`refs/heads/${local}`) ? ['checkout', local] : ['checkout', '--track', '-b', local, branch])
+  } else await run(cwd, ['checkout', branch])
+}
+
+function parseCommitFiles(raw: string): Array<{ code: string; path: string; oldPath?: string }> {
+  const fields = raw.split('\0')
+  const files: Array<{ code: string; path: string; oldPath?: string }> = []
+  for (let index = 0; index < fields.length;) {
+    const code = fields[index++].trim()
+    if (!code) continue
+    const first = fields[index++]
+    if (!first) throw new Error('Git 提交文件列表不完整')
+    if (/^[RC]/.test(code)) {
+      const next = fields[index++]
+      if (!next) throw new Error('Git 重命名路径不完整')
+      files.push({ code, path: next, oldPath: first })
+    } else files.push({ code, path: first })
+  }
+  return files
+}
+
 async function runAction(cwd: GitWorkspace, body: ActionBody): Promise<Record<string, unknown>> {
   const op = argument(body.op, 'op', 64)
   const result = (args: string[]) => run(cwd, args).then(() => ({ success: true })).catch((error: any) => ({ success: false, error: String(error?.stderr || error?.message || error), ...repositoryFailureMetadata(error) }))
@@ -115,13 +224,13 @@ async function runAction(cwd: GitWorkspace, body: ActionBody): Promise<Record<st
     }
     case 'stage': return result(['add', '-f', '--', file()])
     case 'stage-files': { const items = many(); return items.length ? { ...(await result(['--literal-pathspecs', 'add', '-f', '--', ...items])), stagedPaths: items } : { success: true, stagedPaths: [] } }
-    case 'unstage': return result(['restore', '--staged', '--', file()])
-    case 'unstage-files': return result(['reset', '-q', '--', ...many()])
+    case 'unstage': await unstagePaths(cwd, [file()]); return { success: true }
+    case 'unstage-files': await unstagePaths(cwd, many()); return { success: true }
     case 'check-ignored': { const items = many(); const output = await run(cwd, ['check-ignore', '--', ...items]).catch((error: any) => String(error?.stdout || '')); const set = new Set(output.split(/\r?\n/).filter(Boolean).map((item) => item.replace(/\\/g, '/'))); const ignored: Record<string, boolean> = {}; for (const item of items) ignored[item] = set.has(item); return { success: true, ignored } }
-    case 'discard-file': return result(['restore', '--staged', '--worktree', '--', file()])
-    case 'discard-worktree': return result(['restore', '--worktree', '--', file()])
-    case 'discard-files': return result(['restore', '--staged', '--worktree', '--', ...many()])
-    case 'discard-worktree-files': return result(['restore', '--worktree', '--', ...many()])
+    case 'discard-file': await discardPaths(cwd, [file()], false); return { success: true }
+    case 'discard-worktree': await discardPaths(cwd, [file()], true); return { success: true }
+    case 'discard-files': await discardPaths(cwd, many(), false); return { success: true }
+    case 'discard-worktree-files': await discardPaths(cwd, many(), true); return { success: true }
     case 'discard-hunk': case 'stage-hunk': case 'unstage-hunk': {
       const selected = await selectedPatch(run, cwd, file(), argument(body.hunkId, 'hunkId', 128), op === 'unstage-hunk')
       const args = ['apply', '--recount', '--whitespace=nowarn']
@@ -135,20 +244,26 @@ async function runAction(cwd: GitWorkspace, body: ActionBody): Promise<Record<st
     case 'commit-amend': return result(['commit', '--amend', '--no-edit'])
     case 'commit-amend-message': return result(['commit', '--amend', '-m', message()])
     case 'undo-commit': return result(['reset', '--soft', 'HEAD~1'])
-    case 'commit-empty': return result(['commit', '--allow-empty', ...(body.message?.trim() ? ['-m', body.message] : ['--allow-empty-message'])])
+    case 'commit-empty': return result(['commit', '--allow-empty', ...(body.message?.trim() ? ['-m', body.message] : ['--allow-empty-message', '-m', ''])])
     case 'fetch': return result(['fetch', '--all', '--prune'])
-    case 'pull': return result(['pull', '--ff-only'])
-    case 'pull-merge': return result(['pull', '--no-rebase'])
-    case 'pull-rebase': return result(['pull', '--rebase'])
-    case 'push': return result(['push'])
+    case 'pull': return pullWithStrategy(cwd, ['pull', '--no-edit'])
+    case 'pull-merge': return pullWithStrategy(cwd, ['pull', '--no-rebase', '--no-edit'], body.remember, false)
+    case 'pull-rebase': return pullWithStrategy(cwd, ['pull', '--rebase'], body.remember, true)
+    case 'push': return pushCurrent(cwd)
     case 'push-force': return result(['push', '--force-with-lease'])
     case 'push-tags': return result(['push', '--tags'])
-    case 'push-tag': return result(['push', 'origin', name()])
-    case 'pull-from': return result(['pull', remote(), branch()])
-    case 'push-to': return result(['push', remote(), branch()])
-    case 'sync': { const pulled = await result(['pull', '--ff-only']); return pulled.success ? result(['push']) : pulled }
-    case 'checkout': return result(['checkout', branch()])
-    case 'create-branch': return result(['branch', branch(), ...(body.ref ? [ref()] : [])])
+    case 'push-tag': return result(['push', 'origin', `refs/tags/${name()}`])
+    case 'pull-from': return pullWithStrategy(cwd, ['pull', '--no-edit', remote(), branch()])
+    case 'push-to': { const selected = body.branch?.trim() ? branch() : (await run(cwd, ['branch', '--show-current'])).trim(); if (!selected) return { success: false, error: '当前不在任何分支上，无法推送。' }; return result(['push', remote(), selected]) }
+    case 'push-to-branch': return result(['push', remote(), `HEAD:refs/heads/${branch()}`])
+    case 'sync': { const pulled = await pullWithStrategy(cwd, ['pull', '--no-edit']); return pulled.success ? pushCurrent(cwd) : pulled }
+    case 'checkout': await checkoutBranch(cwd, branch()); return { success: true }
+    case 'create-branch': {
+      const start = body.ref ? ref() : undefined
+      const remoteRef = start?.startsWith('refs/remotes/') ? start : `refs/remotes/${start}`
+      const track = start && (await run(cwd, ['for-each-ref', '--format=%(refname)', 'refs/remotes'])).split(/\r?\n/).includes(remoteRef)
+      return result(['checkout', ...(track ? ['--track'] : []), '-b', branch(), ...(start ? [start] : [])])
+    }
     case 'delete-branch': return result(['branch', body.force ? '-D' : '-d', branch()])
     case 'rename-branch': return result(['branch', '-m', gitName(body.oldName, 'oldName'), gitName(body.newName, 'newName')])
     case 'publish-branch': return result(['push', '-u', 'origin', (await run(cwd, ['branch', '--show-current'])).trim()])
@@ -158,7 +273,7 @@ async function runAction(cwd: GitWorkspace, body: ActionBody): Promise<Record<st
     case 'rebase-abort': return result(['rebase', '--abort'])
     case 'cherry-pick': return result(['cherry-pick', hash()])
     case 'cherry-pick-abort': return result(['cherry-pick', '--abort'])
-    case 'revert-commit': return result(['revert', hash()])
+    case 'revert-commit': return result(['revert', '--no-edit', hash()])
     case 'add-remote': return result(['remote', 'add', name(), argument(body.url, 'url', 4096)])
     case 'remove-remote': return result(['remote', 'remove', name()])
     case 'delete-remote-branch': return result(['push', remote(), '--delete', branch()])
@@ -168,7 +283,7 @@ async function runAction(cwd: GitWorkspace, body: ActionBody): Promise<Record<st
     case 'stash-pop': return result(['stash', 'pop', stashRef(body.index)])
     case 'stash-apply': return result(['stash', 'apply', stashRef(body.index)])
     case 'stash-drop': return result(['stash', 'drop', stashRef(body.index)])
-    case 'stash-drop-batch': { for (const index of body.indexes ?? []) { const item = await result(['stash', 'drop', stashRef(index)]); if (!item.success) return item } return { success: true } }
+    case 'stash-drop-batch': { const indexes = body.indexes ?? []; if (!Array.isArray(indexes) || indexes.some(index => !Number.isInteger(index) || index < 0 || index >= 10000)) throw new Error('indexes 无效'); for (const index of [...new Set(indexes)].sort((a, b) => b - a)) { const item = await result(['stash', 'drop', stashRef(index)]); if (!item.success) return item } return { success: true } }
     case 'stash-clear': return result(['stash', 'clear'])
     case 'create-tag': return result(['tag', ...(body.message ? ['-a', name(), '-m', body.message] : [name()])])
     case 'delete-tag': return result(['tag', '-d', name()])
@@ -179,7 +294,7 @@ async function runAction(cwd: GitWorkspace, body: ActionBody): Promise<Record<st
 }
 
 function parseStatus(raw: string) {
-  const files: any[] = []
+  const files: Array<StatusStatFile & { staged: boolean; stagedChange: string | null; unstagedChange: string | null; oldPath?: string; conflict?: boolean }> = []
   const tokens = raw.split('\0')
   const change = (code: string) => code === 'A' ? 'added' : code === 'D' ? 'deleted' : code === 'R' ? 'renamed' : code === 'C' ? 'copied' : code === '?' ? 'untracked' : code === ' ' ? null : 'modified'
   for (let index = 0; index < tokens.length; index++) {
@@ -197,9 +312,9 @@ function parseStatus(raw: string) {
 }
 
 function parseLog(raw: string) {
-  return raw.split('\x1e').filter(Boolean).map((record) => {
+  return raw.split('\x1e').filter((record) => record.trim()).map((record) => {
     const [hash, shortHash, author, date, subject, body, parents, refs] = record.split('\x1f')
-    return { hash, shortHash, author, date, subject, body: body || '', parents: parents ? parents.split(' ').filter(Boolean) : [], refs: refs ? refs.split(',').filter(Boolean).map((name) => ({ name: name.trim(), type: name.trim().startsWith('origin/') ? 'remote' : name.trim().startsWith('tag:') ? 'tag' : 'branch' })) : [], fileChanges: [] }
+    return { hash: hash.trim(), shortHash, author, date, subject, body: body || '', parents: parents ? parents.split(' ').filter(Boolean) : [], refs: refs ? refs.split(',').filter(Boolean).map((name) => ({ name: name.trim(), type: name.trim().startsWith('origin/') ? 'remote' : name.trim().startsWith('tag:') ? 'tag' : 'branch' })) : [], fileChanges: [] }
   })
 }
 
@@ -262,7 +377,20 @@ export async function gitRoutes(fastify: FastifyInstance) {
           const raw = await run(cwd, ['status', '--porcelain=v1', '-z', '--branch', '--untracked-files=all'])
           const header = raw.split('\0').find((line) => line.startsWith('##')) ?? ''
           const branch = header.slice(3).replace(/^No commits yet on /, '').split('...')[0].split(' ')[0] || ''
-          return success({ success: true, isRepo: true, files: parseStatus(raw), branch, ...await mergeState(cwd) })
+          // Porcelain v1 -z always names paths from the repository root, while
+          // task actions and relative numstat use the selected cwd instead.
+          const repositoryRoot = cwd.repository.workTree
+          const relativeToCwd = (filePath: string): string | undefined => {
+            const relative = path.relative(cwd.cwd, path.resolve(repositoryRoot, filePath))
+            if (!relative || path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)) return undefined
+            return relative.split(path.sep).join('/')
+          }
+          const files = parseStatus(raw).flatMap(file => {
+            const relative = relativeToCwd(file.path)
+            return relative ? [{ ...file, path: relative, ...(file.oldPath ? { oldPath: relativeToCwd(file.oldPath) } : {}) }] : []
+          })
+          await fillStatusStats(cwd.cwd, files, args => run(cwd, args))
+          return success({ success: true, isRepo: true, files, branch, ...await mergeState(cwd) })
         }
         case 'branch-info': {
           const branch = (await run(cwd, ['branch', '--show-current'])).trim() || 'HEAD'
@@ -271,7 +399,7 @@ export async function gitRoutes(fastify: FastifyInstance) {
           return success({ success: true, isRepo: true, info: { branch, upstream, ahead, behind } })
         }
         case 'divergence': { const counts = (await run(cwd, ['rev-list', '--left-right', '--count', 'HEAD...@{u}']).catch(() => '0 0')).trim().split(/\s+/).map(Number); return success({ success: true, ahead: counts[0] || 0, behind: counts[1] || 0 }) }
-        case 'incoming': { const limit = Math.min(Math.max(Number(request.query.limit ?? 50), 1), 500); const out = await run(cwd, ['log', `-${limit}`, '--date=iso-strict', '--pretty=format:%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%b%x1f%P%x1f%D%x1e', 'HEAD..@{u}']).catch(() => ''); return success({ success: true, commits: parseLog(out) }) }
+        case 'incoming': { const limit = Math.min(Math.max(Number(request.query.limit ?? 50), 1), 500); const out = await run(cwd, ['log', '--topo-order', `-${limit}`, '--date=iso-strict', '--pretty=format:%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%b%x1f%P%x1f%D%x1e', 'HEAD..@{u}']).catch(() => ''); return success({ success: true, commits: parseLog(out) }) }
         case 'diff': {
           const file = relative(request.query.path, 'path')
           return success(await readDiff(run, cwd, file, request.query.staged === 'true', request.query.base))
@@ -281,15 +409,45 @@ export async function gitRoutes(fastify: FastifyInstance) {
         case 'list-authors': return success(await listAuthors(run, cwd))
         case 'list-branches': { const branches = (await run(cwd, ['for-each-ref', '--format=%(refname:short)', 'refs/heads'])).split(/\r?\n/).filter(Boolean); return success({ success: true, branches, current: (await run(cwd, ['branch', '--show-current'])).trim() }) }
         case 'list-remote-branches': { const branches = (await run(cwd, ['for-each-ref', '--format=%(refname:short)', 'refs/remotes'])).split(/\r?\n/).filter(Boolean); return success({ success: true, branches }) }
-        case 'log': { const limit = Math.min(Math.max(Number(request.query.limit ?? 50), 1), 500); const skip = Math.max(Number(request.query.skip ?? 0), 0); const args = ['log', `-${limit}`, `--skip=${skip}`, '--date=iso-strict', '--pretty=format:%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%b%x1f%P%x1f%D%x1e']; if (request.query.search) args.push(`--grep=${text(request.query.search, 'search', 1024)}`, '-i', '--fixed-strings'); if (request.query.author) args.push(`--author=${text(request.query.author, 'author', 1024)}`, '-i', '--fixed-strings'); if (request.query.refs) args.push(...(request.query.refs === 'all' ? ['--all'] : [gitName(request.query.refs, 'refs', 1024)])); return success({ success: true, commits: parseLog(await run(cwd, args)) }) }
-        case 'commit-show': { const hash = commitHash(request.query.hash); const out = await run(cwd, ['show', '-s', '--date=iso-strict', '--pretty=format:%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%b%x1f%P%x1f%D', hash]); const [full, shortHash, author, date, subject, body, parents, refs] = out.split('\x1f'); const names = await run(cwd, ['show', '--format=', '--name-status', hash]); const fileChanges = names.split(/\r?\n/).filter(Boolean).map((line) => { const [code, file] = line.split(/\s+/, 2); return { code, path: file } }); return success({ success: true, commit: { hash: full, shortHash, author, date, subject, body: body || '', parents: (parents || '').split(' ').filter(Boolean), refs: refs ? refs.split(',').filter(Boolean).map((name) => ({ name: name.trim(), type: 'branch' })) : [], additions: 0, deletions: 0, fileChanges } }) }
+        // The lane graph consumes children before parents; timestamps alone
+        // cannot preserve that contract for merges or machines with clock skew.
+        case 'log': {
+          const limit = Math.min(Math.max(Number(request.query.limit ?? 50), 1), 500)
+          const skip = Math.max(Number(request.query.skip ?? 0), 0)
+          const args = ['log', '--topo-order', `-${limit}`, `--skip=${skip}`, '--date=iso-strict', '--pretty=format:%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%b%x1f%P%x1f%D%x1e']
+          if (request.query.search) args.push(`--grep=${text(request.query.search, 'search', 1024)}`, '-i', '--fixed-strings')
+          if (request.query.author) args.push(`--author=${text(request.query.author, 'author', 1024)}`, '-i', '--fixed-strings')
+          if (request.query.refs) args.push(...(request.query.refs === 'all' ? ['--all'] : [gitName(request.query.refs, 'refs', 1024)]))
+          try {
+            return success({ success: true, commits: parseLog(await run(cwd, args)) })
+          } catch (error) {
+            // A newly initialized repository has no default history yet. Invalid
+            // explicit refs and other Git failures must still reach the caller.
+            if (!request.query.refs && /does not have any commits yet/i.test(error instanceof Error ? error.message : String(error)))
+              return success({ success: true, commits: [] })
+            throw error
+          }
+        }
+        case 'commit-show': {
+          const hash = commitHash(request.query.hash)
+          const out = await run(cwd, ['show', '-s', '--date=iso-strict', '--pretty=format:%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%b%x1f%P%x1f%D', hash])
+          const [full, shortHash, author, date, subject, body, parents, refs] = out.split('\x1f')
+          // The history preview compares the first parent. NUL records preserve
+          // spaces/Unicode and retain both sides of a rename instead of a label.
+          const comparison = (parents || '').split(' ').filter(Boolean)[0]
+          const args = comparison
+            ? ['diff', '--name-status', '-z', '-M', comparison, hash, '--']
+            : ['diff-tree', '--root', '--no-commit-id', '-r', '--name-status', '-z', '-M', hash, '--']
+          const fileChanges = parseCommitFiles(await run(cwd, args))
+          return success({ success: true, commit: { hash: full, shortHash, author, date, subject, body: body || '', parents: (parents || '').split(' ').filter(Boolean), refs: refs ? refs.split(',').filter(Boolean).map((name) => ({ name: name.trim(), type: 'branch' })) : [], additions: 0, deletions: 0, fileChanges } })
+        }
         case 'show-commit-file': { const hash = commitHash(request.query.hash); const file = relative(request.query.path, 'path'); const content = await run(cwd, ['show', `${hash}:${file}`]); return success({ success: true, content }) }
         case 'file-history': { const file = relative(request.query.path, 'path'); const limit = Math.min(Math.max(Number(request.query.limit ?? 50), 1), 500); const out = await run(cwd, ['log', `-${limit}`, '--follow', '--date=iso-strict', '--pretty=format:%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%b%x1f%P%x1e', '--', file]); return success({ success: true, entries: parseLog(out).map((item: any) => ({ ...item, changeCode: 'M', changePath: file })) }) }
         case 'head-file': case 'head-file-content': { const file = relative(request.query.path, 'path'); const content = await run(cwd, ['show', `HEAD:${file}`]).catch(() => ''); return success({ success: true, content }) }
         case 'list-stashes': { const out = await run(cwd, ['stash', 'list', '--format=%gd%x09%H%x09%gs%x09%aI']); const stashes = out.split(/\r?\n/).filter(Boolean).map((line) => { const [ref, hash, message, date] = line.split('\t'); return { index: Number((ref ?? '').match(/\d+/)?.[0] ?? 0), hash, message, date } }); return success({ success: true, stashes }) }
-        case 'stash-show': case 'stash-show-files': { const index = Number(request.query.index ?? 0); const ref = `stash@{${Number.isInteger(index) && index >= 0 ? index : 0}}`; const args = op === 'stash-show-files' ? ['stash', 'show', '--format=', '--name-only', ref] : ['show', `${ref}:`]; const content = await run(cwd, args).catch(() => ''); return success({ success: true, content }) }
+        case 'stash-show': case 'stash-show-files': { const index = Number(request.query.index ?? 0); const ref = `stash@{${Number.isInteger(index) && index >= 0 ? index : 0}}`; const args = op === 'stash-show-files' ? ['-c', 'core.quotePath=false', 'stash', 'show', '--format=', '--name-only', ref] : ['stash', 'show', '-p', ref]; const content = await run(cwd, args); return success({ success: true, content }) }
         case 'list-tags': return success({ success: true, tags: (await run(cwd, ['tag', '--list'])).split(/\r?\n/).filter(Boolean) })
-        case 'list-remotes': { const out = await run(cwd, ['remote', '-v']); const remotes: any[] = []; for (const line of out.split(/\r?\n/)) { const m = line.match(/^(\S+)\s+(\S+)\s+\(fetch\)/); if (m) remotes.push({ name: m[1], url: m[2] }) }; return success({ success: true, remotes }) }
+        case 'list-remotes': { const out = await run(cwd, ['remote', '-v']); return success({ success: true, remotes: parseGitRemotes(out) }) }
         default: return fail(40400, `不支持的 Git 查询: ${op}`)
       }
       // Read-only status/diff queries may share a repository with Code's

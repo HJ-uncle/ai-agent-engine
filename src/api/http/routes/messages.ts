@@ -4,6 +4,7 @@ import { ReActStrategy } from '../../../core/agent-loop/index.js'
 import { createPipeline, sseStream } from '../../../core/stream-pipeline/index.js'
 import { createAgentContext } from '../../../core/agent-context/index.js'
 import { createAdapterFromResolved, resolveModelConfig } from '../../../core/llm-adapter/resolve-model.js'
+import type { ApiFormat } from '../../../core/llm-adapter/protocol.js'
 import { createRequestLogger } from '../../../observability/index.js'
 import { buildSkillsSystemPrompt } from '../../../skills/index.js'
 import { buildOfficeExecutionPrompt } from '../../../core/office-prompt.js'
@@ -192,6 +193,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     let modelApiKey: string | undefined = undefined
     let modelBaseUrl: string | undefined = undefined
     let modelProvider: string | undefined = undefined
+    let modelApiFormat: ApiFormat | undefined
 
     const { ModelsStore } = await import('../../../storage/sqlite/models.js')
     const modelsStore = new ModelsStore()
@@ -204,6 +206,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
       if (modelInfo.apiKey) modelApiKey = modelInfo.apiKey
       if (modelInfo.baseUrl) modelBaseUrl = modelInfo.baseUrl
       if (modelInfo.provider) modelProvider = modelInfo.provider
+      modelApiFormat = modelInfo.apiFormat
     }
 
     if (thinkingMode && whitelistInfo && whitelistInfo.thinkingMode) {
@@ -220,6 +223,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
         apiKey: modelApiKey,
         baseUrl: modelBaseUrl,
         provider: modelProvider,
+        apiFormat: modelApiFormat,
       }, { sessionId, scopes: effectiveMemoryScopes })
     }
 
@@ -284,7 +288,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
       registerActiveChat(tenantId, sessionId, abortController)
       try {
         ctx.resolvedModel = await resolveModelConfig({ tenantId, model: effectiveModel, overrides: {
-          apiKey: modelApiKey, baseUrl: modelBaseUrl, provider: modelProvider,
+          apiKey: modelApiKey, baseUrl: modelBaseUrl, provider: modelProvider, apiFormat: modelApiFormat,
           thinkingEnabled: thinkingMode, thinkingConfig: finalThinkingConfig,
           responseThinkingField: finalResponseThinkingField,
         } })
@@ -348,7 +352,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
           sessionId,
           tenantId,
           memoryScopes: effectiveMemoryScopes,
-          llm: { model: currentModelName, apiKey: modelApiKey, baseUrl: modelBaseUrl, provider: modelProvider },
+          llm: { model: currentModelName, apiKey: modelApiKey, baseUrl: modelBaseUrl, provider: modelProvider, apiFormat: modelApiFormat },
           minImportance: 0.3,
         })).catch((error) => reqLogger.warn({ err: error }, 'Legacy memory extraction failed silently'))
       })

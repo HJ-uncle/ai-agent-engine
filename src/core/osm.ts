@@ -44,6 +44,7 @@ export function isValidMode(v: unknown): v is OSMMode {
 export const OSM_CORE_TOOLS: ReadonlySet<string> = new Set([
   // 文件操作（基础）
   'smart_read', 'read_file', 'write_file', 'edit_file', 'office_document', 'office_environment', 'list_files', 'create_dir',
+  'deliver_files',
   // 用户交互
   'ask_user',
   // 记忆

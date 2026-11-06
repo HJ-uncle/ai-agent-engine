@@ -87,6 +87,30 @@ it('SQLite matches the first-user orphan filter and never selects payload column
   expect(await store.getActiveToolCallAnchor(ctx, key)).toEqual(key)
 })
 
+it('SQLite persists millisecond message and conditional tool-result times without rounding their order', async () => {
+  const store = new SQLiteConversationHistory()
+  await store.append({ id: 'precise-user', role: 'user', content: 'Start', createdAt: 2_000_000_000_101 }, ctx)
+  await store.append({ ...dispatch, createdAt: 2_000_000_000_102 }, ctx)
+  const result = { id: 'precise-result', role: 'tool' as const, toolCallId: key.toolCallId, conversationId: key.conversationId,
+    content: 'Completed', createdAt: 2_000_000_000_103 }
+  expect(await store.appendIfActiveToolCallAnchor(result, ctx, key)).toMatchObject({ disposition: 'appended' })
+  expect(await store.appendIfActiveToolCallAnchor(result, ctx, key)).toMatchObject({ disposition: 'duplicate' })
+  expect((await store.getFullHistory(ctx)).map(message => [message.id, message.createdAt])).toEqual([
+    ['precise-user', 2_000_000_000_101], [key.messageId, 2_000_000_000_102], ['precise-result', 2_000_000_000_103]
+  ])
+})
+
+it.each([NaN, Infinity, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])('SQLite rejects invalid timestamp %s before either insertion path', async createdAt => {
+  const store = new SQLiteConversationHistory()
+  await store.append({ id: 'valid-user', role: 'user', content: 'Start' }, ctx)
+  await store.append(dispatch, ctx)
+  const before = await store.getFullHistory(ctx)
+  await expect(store.append({ id: 'invalid-user', role: 'user', content: 'Invalid time', createdAt }, ctx)).rejects.toThrow('createdAt')
+  await expect(store.appendIfActiveToolCallAnchor({ id: 'invalid-result', role: 'tool', toolCallId: key.toolCallId,
+    conversationId: key.conversationId, content: 'Invalid time', createdAt }, ctx, key)).rejects.toThrow('createdAt')
+  expect(await store.getFullHistory(ctx)).toEqual(before)
+})
+
 it('JSONL streams 10000 rows without populating the session cache or reading the whole file', async () => {
   fs.mkdirSync(path.dirname(file()), { recursive: true })
   const originals = Array.from({ length: 10000 }, (_, index) => row(index + 1, index === 9988 ? dispatch : { id: `record-${index}`, role: index % 2 ? 'assistant' : 'user', content: '正文'.repeat(64) }))

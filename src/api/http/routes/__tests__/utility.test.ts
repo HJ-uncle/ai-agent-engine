@@ -137,6 +137,54 @@ describe('utility chat model resolution', () => {
     expect(options).not.toHaveProperty('responseThinkingField')
   })
 
+  it.each([
+    { provider: 'deepseek', model: 'deepseek-v4.1-flash' },
+    { provider: 'qwen', model: 'qwen3-plus' },
+  ])('keeps explicit Anthropic format free of OpenAI thinking parameters for $provider on arbitrary URLs', async ({ provider, model }) => {
+    vi.mocked(resolveModelConfig).mockResolvedValueOnce({
+      provider, model, baseUrl: 'https://gateway.example/custom-route',
+      apiFormat: 'anthropic', capabilities: { thinking: true },
+    })
+
+    const response = await app.inject({
+      method: 'POST', url: '/utility/chat',
+      payload: { model, userPrompt: 'write a commit title', maxTokens: 200 },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json().data).toEqual({ text: 'generated result' })
+    const options = complete.mock.calls[0][1] as Record<string, unknown>
+    expect(options).toMatchObject({ model, maxTokens: 10000 })
+    expect(options).not.toHaveProperty('thinkingConfig')
+    expect(options).not.toHaveProperty('responseThinkingField')
+  })
+
+  it.each([
+    { provider: 'deepseek', model: 'deepseek-v4.1-flash', effort: 'low' },
+    { provider: 'qwen', model: 'qwen3-plus', effort: 'none' },
+  ])('retains supported OpenAI utility thinking controls for explicit OpenAI $provider even on an Anthropic-looking URL', async ({ provider, model, effort }) => {
+    vi.mocked(resolveModelConfig).mockResolvedValueOnce({
+      provider, model, baseUrl: 'https://gateway.example/anthropic',
+      apiFormat: 'openai', capabilities: { thinking: true },
+    })
+
+    const response = await app.inject({
+      method: 'POST', url: '/utility/chat',
+      payload: { model, userPrompt: 'write a commit title', maxTokens: 200 },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json().data).toEqual({ text: 'generated result' })
+    expect(complete).toHaveBeenCalledWith(
+      [{ role: 'user', content: 'write a commit title' }],
+      expect.objectContaining({
+        model, maxTokens: 10000,
+        thinkingConfig: { enable_thinking: false, reasoning_effort: effort },
+        responseThinkingField: null,
+      }),
+    )
+  })
+
   it('turns an upstream empty content into a utility error envelope', async () => {
     complete.mockResolvedValueOnce({ content: '', reasoningContent: 'hidden reasoning', finishReason: 'length' })
     const response = await app.inject({

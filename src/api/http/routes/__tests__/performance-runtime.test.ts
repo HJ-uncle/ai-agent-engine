@@ -29,6 +29,9 @@ describe('authenticated runtime metrics route', () => {
       expect(response.statusCode).toBe(401)
       expect(response.json().code).toBe(40100)
       expect(response.body).not.toContain('heapUsedBytes')
+      const refresh = await app.inject({ method: 'GET', url: '/api/v1/performance/runtime?refresh=true', headers })
+      expect(refresh.statusCode).toBe(401)
+      expect(refresh.body).not.toContain('heapUsedBytes')
     }
   })
   it('returns real V8 memory with instance identity, no-store and a shared bounded sample', async () => {
@@ -49,5 +52,24 @@ describe('authenticated runtime metrics route', () => {
     expect(response.body).not.toContain(instanceToken)
     expect(response.body).not.toContain(jwtSecret)
     expect(response.body).not.toContain(jwt)
+  })
+  it('explicit refresh bypasses legacy cached samples and measures a complete short window', async () => {
+    const jwt = await new SignJWT({ tenantId: 'p1-fixture' }).setProtectedHeader({ alg: 'HS256' })
+      .setSubject('runtime-inspector').setExpirationTime('5m').sign(new TextEncoder().encode(jwtSecret))
+    const headers = { 'x-aether-instance-token': instanceToken, authorization: `Bearer ${jwt}` }
+    const cached = (await app.inject({ method: 'GET', url: '/api/v1/performance/runtime', headers })).json().data
+    const responses = await Promise.all(Array.from({ length: 5 }, () => app.inject({ method: 'GET', url: '/api/v1/performance/runtime?refresh=true', headers })))
+    const measured = responses[0].json().data
+    expect(measured.collection.sampleWindowMs).toBe(200)
+    expect(measured.eventLoop.state).toBe('available')
+    expect(measured.sampledAt).toBeGreaterThan(cached.sampledAt)
+    for (const response of responses) {
+      expect(response.statusCode).toBe(200)
+      expect(response.headers['cache-control']).toBe('no-store')
+      expect(response.json().data).toEqual(measured)
+    }
+    const again = (await app.inject({ method: 'GET', url: '/api/v1/performance/runtime?refresh=true', headers })).json().data
+    expect(again.sampledAt).toBeGreaterThan(measured.sampledAt)
+    expect(again.eventLoop.state).toBe('available')
   })
 })

@@ -19,7 +19,7 @@ let manager: SQLiteMemoryManager
 const tenantId = 'runtime-memory-tenant', sessionId = 'current-session'
 const session = { tenantId, sessionId, scope: 'session' as const }
 const global = { tenantId, sessionId: '', scope: 'global' as const }
-const credentials = { provider: 'anthropic', model: 'fixture-memory', contextWindow: 8_000 }
+const credentials = { provider: 'anthropic', model: 'fixture-memory', contextWindow: 8_000, apiFormat: 'anthropic' as const }
 
 beforeEach(async () => {
   await closeMemoryDb()
@@ -57,6 +57,9 @@ describe('independent runtime memory scopes', () => {
     expect(both.effectiveScopes).toEqual(['global', 'session'])
     expect(await extracted(both.effectiveScopes)).toMatchObject({ stored: 1, errors: [] })
     expect(complete).toHaveBeenCalledTimes(1)
+    expect(createLLMAdapterWithDbConfig).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'anthropic', model: 'fixture-memory', apiFormat: 'anthropic',
+    }))
     expect(await manager.countNodes({}, session)).toBe(1)
     expect(await manager.countNodes({}, global)).toBe(0)
     expect(await manager.countNodes({}, { ...session, sessionId: 'other-session' })).toBe(0)
@@ -88,6 +91,9 @@ describe('independent runtime memory scopes', () => {
     expect(block).not.toContain('secret')
     expect(complete).toHaveBeenCalledTimes(1)
     expect(createLLMAdapterWithDbConfig).toHaveBeenCalledTimes(1)
+    expect(createLLMAdapterWithDbConfig).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'anthropic', model: 'fixture-memory', apiFormat: 'anthropic',
+    }))
   })
 
   it('legacy global cannot enable the global gate, and both off avoids provider calls and storage writes', async () => {

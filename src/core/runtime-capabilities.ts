@@ -48,6 +48,18 @@ export function buildRuntimeCapabilities(ctx: AgentContext, workspacePaths = wor
 export function buildRuntimeCapabilitiesPrompt(ctx: AgentContext, tools: readonly RegisteredTool[] = ctx.tools.list()): string {
   const snapshot = buildRuntimeCapabilities(ctx, undefined, tools)
   const client = normalizeClientCapabilities(ctx.clientCapabilities)
+  const scopes = snapshot.permissions.memoryScopes
+  const sessionMemory = scopes.includes('session')
+  const globalMemory = scopes.includes('global')
+  // Tool registration alone does not explain the scope to a model describing
+  // its abilities. Use the same resolved policy as reads/writes, even if empty.
+  const memoryPolicy = globalMemory
+    ? sessionMemory
+      ? '本次会话记忆与全局记忆均已启用：可参考当前会话和全局记忆；新增记忆默认只写入当前会话，不自动提升为跨会话记忆。'
+      : '本次仅启用全局记忆：可在不同会话中参考全局记忆，新增记忆写入全局；会话记忆未启用。'
+    : sessionMemory
+      ? '本次仅启用会话记忆：仅在当前会话内保存和参考记忆。全局记忆未启用，不得声称能跨会话记住偏好或决策。'
+      : '本次长期记忆未启用：不得声称会保存、自动记住或跨会话记住偏好或决策。'
   // Schemas already travel in the request's tools field. Keep only facts that
   // schemas cannot provide; first workspace is the actual relative-path root.
   const compact = {
@@ -62,4 +74,6 @@ export function buildRuntimeCapabilitiesPrompt(ctx: AgentContext, tools: readonl
   }
   return '\n\n## 本次模型请求环境\n每请求更新；完整工具说明/参数见本次工具定义，不另行查询。工作区首项是相对路径与命令默认目录。时间、平台、Node 属引擎宿主；不推断客户端、shell、PATH 或办公依赖。client 仅为客户端声明，不授予权限或证明执行；动态状态查本次对应工具，以运行时策略和回执为准。\n'
     + JSON.stringify(compact)
+    + '\n\n### 当前记忆能力（内部执行状态）\n' + memoryPolicy
+    + '\n这段仅用于约束执行和判断能力，不是必答章节；除非用户询问记忆或当前任务确实依赖记忆范围，不主动说明这些设置。不把已注册的记忆工具等同于全局记忆已开启。聊天历史与长期记忆独立；记忆开关不删除聊天历史。没有成功写入回执，不声称已经记住。'
 }

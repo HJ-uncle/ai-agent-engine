@@ -89,7 +89,7 @@ export function listRecursive(baseDir: string, currentDir: string): string[] {
 
 export function isVisionModelAvailable(ctx: AgentContext): boolean {
   return resolveCapabilities({ model: ctx.modelName ?? ctx.resolvedModel?.model ?? process.env.MODEL_NAME ?? '',
-    provider: ctx.resolvedModel?.provider, baseUrl: ctx.resolvedModel?.baseUrl,
+    provider: ctx.resolvedModel?.provider, baseUrl: ctx.resolvedModel?.baseUrl, apiFormat: ctx.resolvedModel?.apiFormat,
     overrides: ctx.modelCaps ?? ctx.resolvedModel?.capabilities }).vision === true
 }
 

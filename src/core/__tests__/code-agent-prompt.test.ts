@@ -4,6 +4,18 @@ import { FINALIZATION_PROMPT } from '../agent-loop/finalization.js'
 import { buildExecutionProtocol } from '../execution-protocol.js'
 
 describe('Code Agent execution prompt', () => {
+  it('limits automatic delivered-image cards to Work and retains Code Markdown images', () => {
+    const tools = { list: () => [{ name: 'deliver_files', description: 'Deliver', parameters: {} }] }
+    const work = buildExecutionProtocol(tools, 'general'), code = buildExecutionProtocol(tools, 'code')
+    expect(work).toContain('Work 界面自动显示本轮已登记图片')
+    expect(work).toContain('最终正文不要再用Markdown重复插图')
+    expect(code).not.toContain('最终正文不要再用Markdown重复插图')
+    expect(code).not.toContain('Work 界面自动显示')
+    expect(code).toContain('Code 最终正文仍用Markdown展示真实成品图片文件')
+    expect(code).toContain('正文引用的图片文件须保留')
+    expect(CODE_AGENT_EXECUTION_PROMPT).toContain('登记不代替正文插图')
+    expect(buildExecutionProtocol({ list: () => [] }, 'general')).not.toContain('界面自动显示')
+  })
   it('defines the task loop and preserves user-only planning mode', () => {
     expect(CODE_AGENT_EXECUTION_PROMPT).toContain('UNDERSTAND → EXPLORE → PLAN → IMPLEMENT → VERIFY → HANDOFF')
     expect(CODE_AGENT_EXECUTION_PROMPT).toContain('用户要求“先给方案”“只读”或“不要改代码”时')

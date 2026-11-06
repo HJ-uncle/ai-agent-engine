@@ -10,6 +10,7 @@ import { migrateDevModels, parseDevMigrationArgs } from '../dev-migration.js'
 import { up as initModels } from '../sqlite/migrations/007_add_models_management.js'
 import { up as initSettings } from '../sqlite/migrations/010_add_system_config.js'
 import { up as initCapabilities } from '../sqlite/migrations/014_add_model_capabilities.js'
+import { up as initApiFormat } from '../sqlite/migrations/032_add_model_api_format.js'
 
 // Synthetic test-only material. Tests never load env.ts, encryption.ts or real app state.
 const KEY = 'a1'.repeat(32)
@@ -49,6 +50,7 @@ async function schema(file: string): Promise<Client> {
   await initModels(db)
   await initSettings(db)
   await initCapabilities(db)
+  await initApiFormat(db)
   return db
 }
 
@@ -82,8 +84,8 @@ describe('D0 minimal model-state migration', () => {
   it('copies encrypted model connections and only related non-secret settings into a fresh state DB', async () => {
     const input = fixture()
     const source = await schema(input.sourceDbPath)
-    const ciphertext = await model(source)
-    await model(source, { id: 'disabled', model_id: 'second', is_enabled: 0 })
+    const ciphertext = await model(source, { api_format: 'anthropic' })
+    await model(source, { id: 'disabled', model_id: 'second', is_enabled: 0, api_format: 'openai' })
     await model(source, { id: 'deleted', model_id: 'removed', deleted_at: 789 })
     for (const [key, value, secret] of [
       ['LLM_PROVIDER', 'custom', 0], ['LLM_PRIMARY_MODEL', 'first', 0],
@@ -103,9 +105,9 @@ describe('D0 minimal model-state migration', () => {
     const migrated = rows.find(row => row.id === 'model-one')!
     expect(migrated.api_key).toBe(ciphertext)
     expect(decrypt(String(migrated.api_key))).toBe(SECRET)
-    expect(migrated).toMatchObject({ provider: 'custom', model_id: 'first', base_url: 'https://synthetic.example/v1', is_enabled: 1, created_at: 123, updated_at: 456 })
+    expect(migrated).toMatchObject({ provider: 'custom', model_id: 'first', base_url: 'https://synthetic.example/v1', api_format: 'anthropic', is_enabled: 1, created_at: 123, updated_at: 456 })
     expect(JSON.parse(String(migrated.capabilities))).toEqual({ vision: true, contextWindow: 123456, parallelTools: false })
-    expect(rows.find(row => row.id === 'disabled')?.is_enabled).toBe(0)
+    expect(rows.find(row => row.id === 'disabled')).toMatchObject({ is_enabled: 0, api_format: 'openai' })
     expect((await destination.execute('SELECT key FROM system_config ORDER BY key')).rows.map(row => row.key)).toEqual(['LLM_PRIMARY_MODEL', 'LLM_PROVIDER', 'MODEL_CAPABILITIES_FIRST'])
     const tables = (await destination.execute("SELECT name FROM sqlite_master WHERE type='table'")).rows.map(row => row.name)
     for (const name of ['conversations', 'file_changes', 'memories', 'users']) expect(tables).not.toContain(name)
@@ -122,11 +124,11 @@ describe('D0 minimal model-state migration', () => {
     const source = await schema(input.sourceDbPath)
     await model(source)
     const destination = await schema(input.destinationDbPath)
-    const originalKey = await model(destination, { id: 'target-id', display_name: 'Keep current settings', capabilities: '{"audio":true}' })
+    const originalKey = await model(destination, { id: 'target-id', display_name: 'Keep current settings', capabilities: '{"audio":true}', api_format: 'openai' })
     await destination.execute("INSERT INTO system_config(key,value) VALUES ('LLM_PROVIDER','existing-provider')")
     await source.execute("INSERT INTO system_config(key,value) VALUES ('LLM_PROVIDER','custom')")
     expect(await migrateDevModels(input)).toEqual({ status: 'migrated', importedModels: 0, skippedModels: 1, importedSettings: 0 })
-    expect((await destination.execute('SELECT * FROM models')).rows[0]).toMatchObject({ id: 'target-id', api_key: originalKey, display_name: 'Keep current settings', capabilities: '{"audio":true}' })
+    expect((await destination.execute('SELECT * FROM models')).rows[0]).toMatchObject({ id: 'target-id', api_key: originalKey, display_name: 'Keep current settings', capabilities: '{"audio":true}', api_format: 'openai' })
     await model(source, { id: 'later', model_id: 'later' })
     expect((await migrateDevModels(input)).status).toBe('already-migrated')
     expect((await destination.execute('SELECT * FROM models')).rows).toHaveLength(1)
@@ -176,7 +178,7 @@ describe('D0 minimal model-state migration', () => {
     await source.execute('CREATE TABLE models(id TEXT, tenant_id TEXT, provider TEXT, model_id TEXT, api_key TEXT, base_url TEXT)')
     await source.execute({ sql: 'INSERT INTO models VALUES (?,?,?,?,?,?)', args: ['old', 'default', 'custom', 'old-model', encrypt(), 'https://synthetic.example/v1'] })
     expect((await migrateDevModels(input)).importedModels).toBe(1)
-    expect((await connect(input.destinationDbPath).execute('SELECT * FROM models')).rows[0]).toMatchObject({ id: 'old', is_enabled: 0, capabilities: null })
+    expect((await connect(input.destinationDbPath).execute('SELECT * FROM models')).rows[0]).toMatchObject({ id: 'old', is_enabled: 0, capabilities: null, api_format: 'auto' })
   })
 
   it('requires absolute distinct databases and an explicit key; missing sources create nothing', async () => {

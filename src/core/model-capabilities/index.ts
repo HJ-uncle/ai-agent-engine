@@ -22,7 +22,7 @@
  *   })
  */
 
-import { usesNativeOllama } from '../llm-adapter/protocol.js'
+import { usesNativeOllama, type ApiFormat } from '../llm-adapter/protocol.js'
 
 /** 模型能力清单（全部为可选 boolean，未声明视为未知/false） */
 export interface ModelCapabilities {
@@ -77,6 +77,7 @@ export interface ResolveInput {
   model?: string
   baseUrl?: string
   provider?: string
+  apiFormat?: ApiFormat
   /** request 级别 override，最高优先级 */
   overrides?: Partial<ModelCapabilities> | null
   /** db 级别 override（可在 chat.ts 中传入） */
@@ -325,7 +326,7 @@ export const capabilityRegistry = new ModelCapabilityRegistry(DEFAULT_RULES)
 /** Effective capabilities cannot exceed what the selected wire adapter implements. */
 export function resolveCapabilities(input: ResolveInput): ModelCapabilities {
   const capabilities = capabilityRegistry.resolve(input)
-  if (usesNativeOllama(input.provider, input.baseUrl)) {
+  if (usesNativeOllama(input.provider, input.baseUrl, input.apiFormat)) {
     // Native Ollama currently serializes text and usage only. Model rules and
     // manual overrides must not advertise tools/images that this adapter drops.
     return {

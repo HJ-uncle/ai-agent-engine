@@ -16,6 +16,7 @@ import { SQLiteConversationHistory } from '../../../storage/conversation/index.j
 import { createConversationHistory } from '../../../storage/conversation/factory.js'
 import { createLLMAdapterWithDbConfig } from '../../../core/llm-adapter/index.js'
 import { resolveModelConfig, createAdapterFromResolved } from '../../../core/llm-adapter/resolve-model.js'
+import type { ApiFormat } from '../../../core/llm-adapter/protocol.js'
 import { RequestBudget } from '../../../core/subagent/budget.js'
 import { logRequestDispatch } from '../../../core/llm-adapter/dispatch-diagnostics.js'
 import { createRequestLogger, QALogger, type QALogEntry } from '../../../observability/index.js'
@@ -84,6 +85,7 @@ const SUBAGENT_DISPATCH_PROMPT = [
 const GENERAL_WORK_EXECUTION_PROMPT = [
   '## Work 任务执行协议',
   '',
+  '普通问答、能力介绍和仅解释已给材料时直接回答，不套用下面的实施流程或交付模板；不为自我介绍读取工作区。只有用户要求实际调查、生成或修改时，才按任务规模执行。',
   '先判断任务规模：quick=单点/单文件小改，standard=有联动的常规改动，large=跨模块、高风险或用户明确要求全面/高强度。',
   'quick：只读取与目标和直接依赖相关的代码，优先复用已有组件；完成改动后做一次针对性验证，验收通过立即总结，不自行扩展审计。',
   'standard：先做有边界的影响面调研，再用 plan_update 列出短计划，按计划落地并验证；不要重复读取未变化的文件。',
@@ -91,7 +93,7 @@ const GENERAL_WORK_EXECUTION_PROMPT = [
   '用户明确说“直接开始/直接做/马上执行/无需确认”或同义授权时，视为已授权实施：即使任务属于 large，也直接按计划开工，不再弹出确认；仍需保留必要的风险说明和验收结果。',
   '只有用户明确要求全面、高强度、长时间或 7×24 测试时，才进入 exhaustive 研究或压力测试；长任务必须说明当前阶段和剩余目标。',
   '前台服务、开发服务器或 watch 进程必须使用工具支持的后台任务方式并设置合理超时；同一命令/文件已有充分证据时不得反复执行。',
-  '核心验收已满足就结束本轮并报告证据、未验证项和下一步，不要为了“更确定”继续制造无关 token 消耗。',
+  '实施任务的核心验收已满足就结束本轮，简洁报告结果及相关证据；有实际影响的未验证项或必要下一步才说明，不添加无关边界清单，不要为了“更确定”继续制造无关 token 消耗。',
 ].join('\n')
 import { prependBootstrapToSystemPrompt } from '../../../core/osm-bootstrap.js'
 import { getProjectContextBlock } from '../../../core/project-context.js'
@@ -1164,6 +1166,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
     let modelApiKey: string | undefined = undefined
     let modelBaseUrl: string | undefined = undefined
     let modelProvider: string | undefined = undefined
+    let modelApiFormat: ApiFormat | undefined
     // 实际传给 LLM adapter 的 model 名（当 DB 配置不可用时，回退到 env 的 primaryModel）
     let resolvedModel: string | undefined = effectiveModel
 
@@ -1179,6 +1182,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
         modelApiKey = modelInfo.apiKey
         if (modelInfo.baseUrl) modelBaseUrl = modelInfo.baseUrl
         if (modelInfo.provider) modelProvider = modelInfo.provider
+        modelApiFormat = modelInfo.apiFormat
         reqLogger.info({ model: currentModelName, provider: modelInfo.provider, hasApiKey: true, baseUrl: modelInfo.baseUrl }, 'Using model config from DB (agent model takes priority)')
       } else {
         // apiKey 解密失败 → DB 配置不可用，model 名也一起回退到 env primaryModel
@@ -1259,6 +1263,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
       model: currentModelName,
       baseUrl: effectiveBaseUrl,
       provider: modelProvider,
+      apiFormat: modelApiFormat,
       overrides: requestedCapabilities ?? null,
       dbOverrides: dbCapOverrides,
     })
@@ -1345,6 +1350,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
         apiKey: modelApiKey,
         baseUrl: modelBaseUrl,
         provider: modelProvider,
+        apiFormat: modelApiFormat,
       }, { sessionId, scopes: effectiveMemoryScopes }) : Promise.resolve('')
     ])
     
@@ -1644,7 +1650,7 @@ ${codegraphBlock}${codeExecutionPrompt}${workExecutionPrompt}${officeExecutionPr
         }
 
         ctx.resolvedModel = await resolveModelConfig({ tenantId, model: resolvedModel, overrides: {
-          apiKey: modelApiKey, baseUrl: modelBaseUrl, provider: modelProvider,
+          apiKey: modelApiKey, baseUrl: modelBaseUrl, provider: modelProvider, apiFormat: modelApiFormat,
           capabilities: modelCaps, extraHeaders: requestedExtraHeaders,
           thinkingEnabled, reasoningEffort: effectiveReasoningEffort, thinkingConfig: finalThinkingConfig, responseThinkingField: finalResponseThinkingField,
         } })
@@ -1770,6 +1776,7 @@ ${codegraphBlock}${codeExecutionPrompt}${workExecutionPrompt}${officeExecutionPr
                 apiKey: modelApiKey,
                 baseUrl: modelBaseUrl,
                 provider: modelProvider,
+                apiFormat: modelApiFormat,
               },
               minImportance: 0.3,
             }).then((res) => {

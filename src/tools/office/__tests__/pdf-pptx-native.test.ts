@@ -104,6 +104,13 @@ describe('native PPTX office delivery', () => {
     await expect(editPptx(writeOfficeZip(pkg), [{ oldText: '经营评审第一版', newText: '修订' }])).rejects.toThrow('字段')
   })
 
+  it('locates an overflowing table cell and distinguishes forbidden line breaks', async () => {
+    await expect(createPptx({ slides: [{ title: '正常页' }, { title: '预算',
+      table: { headers: ['项目', '说明'], rows: [['物料', '长'.repeat(26)]] } }] })).rejects.toThrow('第 2 页表格第 2 行第 2 列（表头为第 1 行）内容过长：宽度 52/50')
+    await expect(createPptx({ slides: [{ title: '预算',
+      table: { headers: ['项目\n名称', '说明'], rows: [['物料', '短']] } }] })).rejects.toThrow('第 1 页表格第 1 行第 1 列（表头为第 1 行）不支持换行')
+  })
+
   it('rejects layout overloads, malformed rows and corrupted slide relationships', async () => {
     await expect(createPptx({ slides: [{ title: 'Too much', bullets: Array(7).fill('item') }] })).rejects.toThrow('最多 6')
     await expect(createPptx({ slides: [{ title: 'Invalid', table: { headers: ['一', '二'], rows: [[1]] } }] })).rejects.toThrow('数量')

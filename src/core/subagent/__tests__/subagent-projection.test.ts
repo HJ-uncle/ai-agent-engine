@@ -12,7 +12,9 @@ import { LocalSqliteProcessClient } from '../../../storage/sqlite/local-process-
 import type { CreateSubagentRun } from '../types.js'
 
 const state = vi.hoisted(() => ({ db: null as unknown as LocalSqliteProcessClient, store: null as unknown as SubagentStore }))
-vi.mock('../../../storage/sqlite/db.js', () => ({ getDb: () => state.db }))
+vi.mock('../../../storage/sqlite/db.js', () => ({ getDb: () => state.db,
+  // The isolated native connection is the fixture's only current datasource.
+  getDbEpoch: (db: LocalSqliteProcessClient) => db === state.db ? 1 : undefined }))
 vi.mock('../store.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('../store.js')>()
   return { ...original, getSubagentStore: () => state.store }

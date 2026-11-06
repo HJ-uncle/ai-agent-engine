@@ -165,6 +165,7 @@ export async function extractAndStoreMemories(opts: {
         apiKey: opts.llm.apiKey,
         baseUrl: opts.llm.baseUrl,
         provider: opts.llm.provider,
+        apiFormat: opts.llm.apiFormat,
       })
     } catch (err) {
       result.errors.push(`Failed to create LLM adapter: ${(err as Error)?.message}`)
@@ -401,6 +402,7 @@ export async function buildMemoryRecallBlock(
         apiKey: llm.apiKey,
         baseUrl: llm.baseUrl,
         provider: llm.provider,
+        apiFormat: llm.apiFormat,
       })
       aiQuery = await analyzeQueryIntent(query, adapter)
     } catch (err) {

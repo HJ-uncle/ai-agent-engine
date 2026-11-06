@@ -21,6 +21,7 @@ import { estimateTokens } from '../utils/tokens.js'
 import { repairJson } from '../utils/json.js'
 import { modelMessageContent } from '../utils/model-context.js'
 import { imageToolPayload, imageVersionDescription } from '../utils/multimodal-context.js'
+import { browserSnapshotImageText } from '../utils/browser-output.js'
 import { normalizeWriteFileArgs } from '../../shared/write-file-args.js'
 
 /**
@@ -396,11 +397,12 @@ function messagesToOpenAI(
             rawLength: rawToolContent.length,
           })
           if (imageToolPayload(rawToolContent)) {
+            const browserText = browserSnapshotImageText(parsed)
             // 先正常返回 tool result（不含 base64，太大）
             result.push({
               role: 'tool',
               tool_call_id: tcId,
-              content: `Image "${parsed.filename ?? 'image'}" (${parsed.mimeType ?? ''}, ${parsed.size ?? 0} bytes) loaded.${imageVersionDescription(parsed.fileVersion)}${supportsVision ? '' : '\nImage pixels were not sent: vision is disabled for the selected model.'}`,
+              content: `Image "${parsed.filename ?? 'image'}" (${parsed.mimeType ?? ''}, ${parsed.size ?? 0} bytes) loaded.${imageVersionDescription(parsed.fileVersion)}${browserText ? '\n' + browserText : ''}${supportsVision ? '' : '\nImage pixels were not sent: vision is disabled for the selected model.'}`,
             })
             // 再注入 user 消息让 AI 真正看到图片（视觉理解）
             // 明确标注文件名，避免多图场景下 LLM 混淆

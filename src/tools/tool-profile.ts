@@ -22,6 +22,7 @@ export const CODE_BUILTIN_TOOLS: ReadonlySet<string> = new Set([
   'glob', 'grep', 'execute_cmd', 'code_diagnose', 'codegraph',
   'command_output', 'cancel_command',
   'workbench_context', 'workbench_open',
+  'deliver_files',
   'office_inspect',
   'subagent', 'subagent_start', 'subagent_send', 'subagent_wait', 'subagent_cancel', 'subagent_participants', 'subagent_inbox',
   'plan_update', 'todo_list', 'todo_create', 'todo_update', 'todo_delete',

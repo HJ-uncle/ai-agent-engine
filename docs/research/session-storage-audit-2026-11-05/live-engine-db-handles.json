@@ -1,0 +1,38 @@
+[
+  {
+    "pid": 64876,
+    "path": "\\\\?\\C:\\Users\\wb.xielin02\\AppData\\Roaming\\aether-code\\engine\\state\\agent.db",
+    "bytes": 69091328,
+    "fileId": "7F-82-26-48-B4-EB-0A-E2-67-61-07-00-00-00-02-00-00-00-00-00-00-00-00-00"
+  },
+  {
+    "pid": 64876,
+    "path": "\\\\?\\C:\\Users\\wb.xielin02\\AppData\\Roaming\\aether-code\\engine\\state\\agent.db-wal",
+    "bytes": 8619072,
+    "fileId": "7F-82-26-48-B4-EB-0A-E2-68-61-07-00-00-00-03-00-00-00-00-00-00-00-00-00"
+  },
+  {
+    "pid": 64876,
+    "path": "\\\\?\\C:\\Users\\wb.xielin02\\AppData\\Roaming\\aether-code\\engine\\state\\agent.db-shm",
+    "bytes": 32768,
+    "fileId": "7F-82-26-48-B4-EB-0A-E2-69-61-07-00-00-00-02-00-00-00-00-00-00-00-00-00"
+  },
+  {
+    "pid": 19836,
+    "path": "\\\\?\\C:\\Users\\wb.xielin02\\AppData\\Roaming\\aether-code\\engine\\state\\memory\\memory.db",
+    "bytes": 208896,
+    "fileId": "7F-82-26-48-B4-EB-0A-E2-6A-61-07-00-00-00-02-00-00-00-00-00-00-00-00-00"
+  },
+  {
+    "pid": 19836,
+    "path": "\\\\?\\C:\\Users\\wb.xielin02\\AppData\\Roaming\\aether-code\\engine\\state\\memory\\memory.db-wal",
+    "bytes": 4144752,
+    "fileId": "7F-82-26-48-B4-EB-0A-E2-6B-61-07-00-00-00-03-00-00-00-00-00-00-00-00-00"
+  },
+  {
+    "pid": 19836,
+    "path": "\\\\?\\C:\\Users\\wb.xielin02\\AppData\\Roaming\\aether-code\\engine\\state\\memory\\memory.db-shm",
+    "bytes": 32768,
+    "fileId": "7F-82-26-48-B4-EB-0A-E2-6C-61-07-00-00-00-02-00-00-00-00-00-00-00-00-00"
+  }
+]

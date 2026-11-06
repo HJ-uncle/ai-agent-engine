@@ -34,13 +34,15 @@ export async function resolveModelConfig({tenantId, model, parent, overrides}: R
   const records = await store.getModels(tenantId)
   const record = requested ? records.find(value => value.isEnabled && (value.modelId === requested || value.id === requested)) : undefined
   const resolved = await resolveAdapterOptionsWithDbConfig({
-    ...(record ? {model: record.modelId, provider: record.provider, apiKey: record.apiKey || undefined, baseUrl: record.baseUrl || undefined} : {model: requested}),
+    ...(record ? {model: record.modelId, provider: record.provider, apiKey: record.apiKey || undefined, baseUrl: record.baseUrl || undefined, apiFormat: record.apiFormat} : {model: requested}),
     ...overrides,
+    // Callers assembling optional connection fields must not erase a saved format.
+    apiFormat: overrides?.apiFormat ?? record?.apiFormat,
   })
   const resolvedModel = resolved.model ?? requested ?? 'gpt-4o-mini'
   const provider = resolved.provider ?? 'openai'
   const capabilities = resolveCapabilities({
-    model: resolvedModel, provider, baseUrl: resolved.baseUrl,
+    model: resolvedModel, provider, baseUrl: resolved.baseUrl, apiFormat: resolved.apiFormat,
     dbOverrides: record?.capabilities ?? await loadDbCapabilityOverrides(resolvedModel),
     overrides: overrides?.capabilities,
   })

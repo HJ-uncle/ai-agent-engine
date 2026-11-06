@@ -1,5 +1,7 @@
 import { up as up29 } from './migrations/029_cron_automation.js'
 import { up as up30 } from './migrations/030_conversation_projection_receipts.js'
+import { up as up31 } from './migrations/031_security_audit_payloads.js'
+import { up as up32 } from './migrations/032_add_model_api_format.js'
 import { up as up28 } from './migrations/028_task_plans.js'
 import { up as up27 } from './migrations/027_cron_timeout.js'
 import type { Client } from '@libsql/client'
@@ -138,6 +140,8 @@ async function initializeSchema(db: Client): Promise<void> {
   await up28(db)
   await up29(db)
   await up30(db)
+  await up31(db)
+  await up32(db)
   // 兼容旧数据库：补充新列
   // 必须串行执行并单独捕获异常。SQLite 不支持 ALTER TABLE ADD COLUMN IF NOT EXISTS，
   // 若使用 batch 批量执行，当遇到已存在的列时会抛出异常，导致事务回滚并中断后续的列补充，引发严重的数据不一致隐患。

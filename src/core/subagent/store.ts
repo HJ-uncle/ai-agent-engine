@@ -474,6 +474,15 @@ export class SubagentStore {
       const update = boundHeaderPatch(typeof patch === 'function' ? patch(current) : patch)
       if (isTerminalRun(current.status) && update.status !== undefined) return null
       if (current.status === 'cancelling' && (update.status === 'running' || update.status === 'succeeded')) return null
+      // Output callbacks carry a cumulative, bounded preview. Once that prefix
+      // stops changing, another event would duplicate both its checkpoint and
+      // delta. Compare after normalization inside the write transaction so
+      // concurrent/restarted writers agree; never suppress other state changes.
+      // updatedAt belongs to an exact state version, not a liveness heartbeat.
+      // Runner deadlines use their own timer and do not depend on this field.
+      if (kind === 'output.updated' && !options.cancelActiveTools
+        && Object.keys(update).length === 1 && typeof update.partialOutput === 'string'
+        && update.partialOutput === current.partialOutput) return null
       await this.ensureModern(tx, current)
       const next = { ...current, ...update, lastSeq: current.lastSeq + 1, updatedAt: Date.now() }
       if (options.cancelActiveTools || isTerminalRun(next.status) && !isTerminalRun(current.status)) await this.cancelActiveTools(tx, next)

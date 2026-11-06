@@ -5,6 +5,7 @@ import { projectOwnedSubagent } from './projection.js'
 import { BudgetExceededError, RequestBudget, type RequestAttempt } from './budget.js'
 import { logRequestDispatch } from '../llm-adapter/dispatch-diagnostics.js'
 import { SubagentPool } from './pool.js'
+import { configuredSubagentConcurrency } from './concurrency.js'
 import { getSubagentStore, SubagentStore } from './store.js'
 import { isTerminalRun, type CreateSubagentRun, type RunError, type RunObserver, type RunOutcome,
   type SubagentMutation, type SubagentRunHeader, type SubagentRunView } from './types.js'
@@ -48,11 +49,6 @@ function boundedText(text: string | undefined, limit = 8000): string | undefined
   return `${text.slice(0, limit)}\n[内容已截断；子任务转录保留已落盘内容]`
 }
 
-function concurrencyLimit(): number {
-  const value = Number(process.env.SUBAGENT_CONCURRENCY_LIMIT)
-  return Number.isInteger(value) && value > 0 ? Math.min(value, 16) : 3
-}
-
 /** Owns lifecycle and persistence; a model's text is never interpreted as an execution status. */
 export class SubagentRunner {
   private readonly active = new Map<string, ActiveRun>()
@@ -60,7 +56,10 @@ export class SubagentRunner {
   private readonly fallbackBudgets = new Map<string, RequestBudget>()
   private readonly budgetUsers = new Map<string, number>()
 
-  constructor(readonly store: SubagentStore = getSubagentStore(), private readonly pool = new SubagentPool(concurrencyLimit())) {}
+  constructor(readonly store: SubagentStore = getSubagentStore(), private readonly pool = new SubagentPool(configuredSubagentConcurrency())) {}
+
+  get concurrencyLimit(): number { return this.pool.limit }
+  setConcurrencyLimit(limit: number): void { this.pool.setLimit(limit) }
 
   private key(tenantId: string, runId: string): string { return `${tenantId}:${runId}` }
 
@@ -407,6 +406,8 @@ export class SubagentRunner {
 }
 
 let singleton: SubagentRunner | undefined
+export function setSubagentConcurrencyLimit(limit: number): void { singleton?.setConcurrencyLimit(limit) }
+export function getSubagentConcurrencyLimit(): number { return singleton?.concurrencyLimit ?? configuredSubagentConcurrency() }
 export function getSubagentRunner(): SubagentRunner {
   const store = getSubagentStore()
   if (!singleton || singleton.store !== store) singleton = new SubagentRunner(store)

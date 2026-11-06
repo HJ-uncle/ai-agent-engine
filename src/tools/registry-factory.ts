@@ -42,6 +42,7 @@ import { lspDiagnoseTool } from './lsp/index.js'
 import { codegraphTool } from './codegraph/index.js'
 import { browserTools, BROWSER_READONLY_TOOLS } from './browser/browser-tools.js'
 import { workbenchTools } from './workbench/index.js'
+import { deliverFilesTool } from './results/index.js'
 import type { ExternalSkill } from '../skills/external-loader.js'
 import {
   resolveDefaultAllowedTools,
@@ -378,6 +379,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   // allowlist still determine which actions are executable.
   browserTools.forEach(tool => { if (shouldRegister(tool.name)) registerBuiltin(tool) })
   workbenchTools.forEach(tool => { if (shouldRegister(tool.name)) registerBuiltin(tool) })
+  if (shouldRegister(deliverFilesTool.name)) registerBuiltin(deliverFilesTool)
 
   // ── Superpower 自检 ────────────────────────────────────────────────────
   // 验证 CORE 工具名与 registry 实际注册保持一致，避免 OFF 模式下 Agent

@@ -1,4 +1,5 @@
 import type { MemoryNodeType, MemoryScope } from '../../storage/memory/types.js'
+import type { ApiFormat } from '../../core/llm-adapter/protocol.js'
 
 export interface MemoryExtractorOptions {
   enabled: boolean
@@ -27,6 +28,7 @@ export interface LLMCredentials {
   apiKey?: string
   baseUrl?: string
   provider?: string
+  apiFormat?: ApiFormat
   /** Effective request/model capability override, shared with the chat request. */
   contextWindow?: number
 }

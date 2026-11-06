@@ -1,0 +1,13 @@
+{
+  "method": "fs.statSync only; no database content opened",
+  "pid": 41156,
+  "executable": "C:\\Program Files\\nodejs\\node.exe",
+  "target": "C:/Users/wb.xielin02/AppData/Roaming/aether-code/engine/state/agent.db",
+  "sampledAt": "2026-11-05T08:41:55.486Z",
+  "bytes": "69091328",
+  "inode": "562949953904999",
+  "inodeHex": "0x2000000076167",
+  "device": "1210483327",
+  "modifiedNs": "1793794966888338900",
+  "createdNs": "1792899880925061600"
+}

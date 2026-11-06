@@ -6,6 +6,7 @@ import { ensureSQLiteDeliverySchema } from './delivery-schema.js'
 import { CollaborationError, type CollaborationBinding, type CollaborationProducer } from './types.js'
 import type { CollaborationStore } from './store.js'
 import { authenticatedSQLiteRows } from '../../storage/conversation/sqlite-origin.js'
+import { serializeMessageMetadata } from '../../storage/conversation/model-input-content.js'
 import { ensureHistoryMaintenanceSchema, type HistoryMaintenanceLease } from './history-maintenance.js'
 import type { ExecutionOwner } from './execution-owner.js'
 import { assertDeliveryExecution, assertDeliveryProducer } from './delivery-execution.js'
@@ -24,6 +25,10 @@ export interface SQLiteDeliveryBatch {
   bytes: number
   hasMore: boolean
 }
+// A 32 KiB accepted body can expand to >128 KiB through JSON escaping and the
+// separate display/provider snapshots. Default batches allow one whole bounded
+// envelope to make progress; explicit caller byte budgets remain hard limits.
+export const MAX_DEFAULT_DELIVERY_ENVELOPE_BYTES = 512 * 1024
 interface Fence {
   producer: CollaborationProducer
   executionOwner?: ExecutionOwner
@@ -188,18 +193,24 @@ export class SQLiteCollaborationDelivery {
         const userOrigin = await authenticatedControllerOrigin(tx, b, row, b.invocationRunId)
         const envelope = collaborationEnvelope(b, row, userOrigin)
         const { historyMessageId, content } = envelope
-        const metadata = JSON.stringify(envelope.metadata)
+        const metadata = serializeMessageMetadata(envelope)!
         const receipt: SQLiteDeliveryReceipt = { messageId: String(row.message_id), historyMessageId,
           invocationRunId: b.invocationRunId, state: 'integrated' }
         const itemBytes = Buffer.byteLength(JSON.stringify({ content, metadata, receipt }), 'utf8')
-        if (itemBytes > maxBytes && !receipts.length) fail('too_large', 'A complete peer message exceeds this delivery batch budget')
-        if (bytes + itemBytes > maxBytes) { hasMore = true; break }
+        if (bytes + itemBytes > maxBytes) {
+          if (receipts.length) { hasMore = true; break }
+          if (itemBytes > (budget.maxBytes === undefined ? MAX_DEFAULT_DELIVERY_ENVELOPE_BYTES : maxBytes))
+            fail('too_large', 'A complete peer message exceeds this delivery batch budget')
+        }
         const collision = await tx.execute({ sql: 'SELECT 1 FROM conversations WHERE tenant_id=? AND session_id=? AND message_id=? LIMIT 1',
           args: [b.tenantId, b.sessionId, historyMessageId] })
         if (collision.rows.length) fail('conflict', 'Peer history identity exists without its delivery receipt')
+        // History sorts by timestamp, then physical row. Keep millisecond
+        // integration order instead of the table's whole-second default.
+        const integratedAt = Date.now()
         const inserted = await tx.execute({ sql: `INSERT INTO conversations
-          (tenant_id,session_id,conversation_id,message_id,role,content,tokens,metadata)
-          VALUES (?,?,?,?,?,?,?,?)`, args: [b.tenantId, b.sessionId, b.turnId, historyMessageId, 'user', content, estimateTokens(content), metadata] })
+          (tenant_id,session_id,conversation_id,message_id,role,content,tokens,metadata,created_at)
+          VALUES (?,?,?,?,?,?,?,?,?)`, args: [b.tenantId, b.sessionId, b.turnId, historyMessageId, 'user', content, estimateTokens(envelope.modelInputContent ?? content), metadata, integratedAt / 1000] })
         const actual = (await tx.execute({ sql: `SELECT CAST(id AS TEXT) AS row_id,conversation_id,model_id,role,content,metadata
           FROM conversations WHERE tenant_id=? AND session_id=? AND message_id=? AND id=?`,
           args: [b.tenantId, b.sessionId, historyMessageId, inserted.lastInsertRowid ?? null] })).rows
@@ -212,7 +223,7 @@ export class SQLiteCollaborationDelivery {
             history_identity_version,payload_hash,history_content,history_metadata,state,integrated_at)
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, args: [...scope(b), row.message_id, b.participantId, b.invocationRunId,
             b.sessionId, historyMessageId, fence!.epoch, actual[0].row_id, b.turnId, null, 1,
-            row.payload_hash, content, metadata, 'integrated', Date.now()] })
+            row.payload_hash, content, metadata, 'integrated', integratedAt] })
         bytes += itemBytes; receipts.push(receipt)
       }
       assertDeliveryExecution(this.store, fence!.producer, b, fence!.executionOwner)

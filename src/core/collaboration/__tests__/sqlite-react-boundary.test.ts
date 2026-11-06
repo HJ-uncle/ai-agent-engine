@@ -105,7 +105,8 @@ afterEach(async () => {
 })
 
 it('preserves the admitted human plus both peers and the actual current tool exchange when inheritance is disabled', async () => {
-  await raw.append({ id: 'prior-human', role: 'user', content: 'Prior turn', conversationId: 'old-turn' }, scope)
+  const admittedAt = (await readAdmissionSeed(db, scope, rootRunId)).message.createdAt!
+  await raw.append({ id: 'prior-human', role: 'user', content: 'Prior turn', conversationId: 'old-turn', createdAt: admittedAt - 1_000 }, scope)
   await seed()
   const first = await mail('First peer evidence')
   const consumer = await runtime.bindSQLiteDelivery(producer, { db, ...scope, anchorId: userId })
@@ -137,7 +138,8 @@ it('refuses an independently edited root input before first binding rather than 
   expect(outcomes.at(-1)).toMatchObject({ status: 'failed', stopReason: 'runtime_error' })
 })
 it.each(['compress', 'micro-compact'] as const)('atomically invalidates %s, suppresses retained peer origin and rejects rebind or replay', async kind => {
-  for (let n = 0; n < 5; n++) await raw.append({ id: 'old-' + n, role: 'assistant', content: 'Old evidence', conversationId: 'old-turn' }, scope)
+  const admittedAt = (await readAdmissionSeed(db, scope, rootRunId)).message.createdAt!
+  for (let n = 0; n < 5; n++) await raw.append({ id: 'old-' + n, role: 'assistant', content: 'Old evidence', conversationId: 'old-turn', createdAt: admittedAt - 1_000 + n }, scope)
   await seed(); const accepted = await mail()
   const consumer = await runtime.bindSQLiteDelivery(producer, { db, ...scope, anchorId: userId }); await runtime.consumeSQLiteDelivery(consumer)
   await raw.append({ id: 'compact-tool', role: 'tool', content: 'large evidence '.repeat(500), toolCallId: 'old-call', conversationId: turnId }, scope)
@@ -188,12 +190,16 @@ it('refuses a WAL edit after final budgeting before the scripted provider is cal
   expect(edited).toBe(true); expect(llm.stream).not.toHaveBeenCalled(); expect(await count('collaboration_deliveries')).toBe(1)
 })
 it('rejects mail that exceeds the final model window while preserving its queryable integration receipt', async () => {
-  ctx.modelCaps = { contextWindow: 1_000 }; ctx.tokenBudget = 100_000
+  // Reach delivery with today's fixed runtime instructions, then reject the
+  // complete request containing the newly integrated oversized peer evidence.
+  ctx.modelCaps = { contextWindow: 4_096 }; ctx.tokenBudget = 100_000
   const accepted = await mail('Large evidence '.repeat(1_600))
-  await run(task)
+  const frames = await run(task)
   expect(llm.stream).not.toHaveBeenCalled(); expect(llm.complete).not.toHaveBeenCalled()
-  expect((await runtime.sqliteDeliveryReceipt(producer, accepted.messageId))?.state).toBe('integrated')
+  expect((await runtime.sqliteDeliveryReceipt(producer, accepted.messageId))?.state, JSON.stringify({ frames, outcomes,
+    errors: vi.mocked(ctx.logger.error).mock.calls })).toBe('integrated')
   expect(outcomes.at(-1)).toMatchObject({ status: 'failed', stopReason: 'context_limit' })
+  expect(outcomes.at(-1)?.error?.message).toContain('Request input (')
 })
 it('consumes a bounded backlog over real ReAct iterations without duplicate history or receipts', async () => {
   for (let n = 0; n < 35; n++) await mail('Evidence ' + n, 'mail-' + n)

@@ -22,6 +22,7 @@ const jsonFrames: Record<string, string> = {
   __tool_end__: 'toolEnd', __ask_user__: 'ask_user', __tool_call__: 'toolCall',
   __tool_result__: 'toolResult', __permission_request__: 'permissionRequest',
   __message_block__: 'messageBlock', __flow__: 'flow', __todo__: 'todo', __file_change__: 'fileChange',
+  __final_result__: 'finalResult',
 }
 const textFrames: Record<string, string> = {
   __thinking__: 'thinking', __assistant_msg_id__: 'assistantMsgId',
@@ -191,6 +192,7 @@ export class CurrentTurnProjection {
     const discriminator = field === 'fileChange' ? identity(data, 'id', 'changeId')
       : field === 'subagentEvent' ? identity(data, 'runId') ?? identity(record(data?.snapshot), 'runId')
         : field === 'messageBlock' ? identity(data, 'messageId', 'id')
+          : field === 'userMessage' ? identity(data, 'id')
           : field === 'flow' ? identity(data, 'nodeId', 'runId') : undefined
     const key = `${field}:${discriminator ?? ''}`
     const previous = this.slots.get(key)

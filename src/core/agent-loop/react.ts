@@ -21,6 +21,7 @@ import { bindSQLiteReActBoundary, readSQLiteReActHistory, consumeSQLiteReActIter
 import { bindJSONLReActBoundary, readJSONLReActHistory, consumeJSONLReActIteration, assertJSONLReActDispatch, maintainJSONLReActHistory } from '../collaboration/jsonl-react-boundary.js'
 import { readAuthenticatedJSONLHistory } from '../../storage/conversation/jsonl-origin.js'
 import { readAuthenticatedSQLiteHistory } from '../../storage/conversation/sqlite-origin.js'
+import { publicHistoryMessage } from '../../api/http/history-projection.js'
 import { consumeEmptyOutputRecovery } from '../../storage/conversation/empty-output-recovery.js'
 import { resolveCapabilities } from '../model-capabilities/index.js'
 import { ToolProgressTracker, toolFailureLimit } from './tool-progress.js'
@@ -34,6 +35,8 @@ import { captureFileEvidence, clearedToolModelContent, isClearedToolMessage, TOO
 import { buildRuntimeCapabilitiesPrompt } from '../runtime-capabilities.js'
 import { buildExecutionProtocol } from '../execution-protocol.js'
 import { isRetryable } from '../llm-adapter/retry.js'
+import { finalResults, TOOL_RESULT_IMAGE_ASSETS } from '../../storage/results/index.js'
+import { rootRunStore } from '../../storage/root-runs/index.js'
 
 const OUTPUT_CONTINUATION_PROMPT = 'The previous model response reached its single-response output limit. Continue the same user task from the retained partial response and history, starting exactly where the response stopped. Do not repeat text already emitted, restart completed work, or repeat executed tools. Use tools only for remaining work; finish normally when the original task is complete.'
 
@@ -300,6 +303,7 @@ export class ReActStrategy implements LoopStrategy {
     // Reserved evidence fields are minted here, never accepted from extensions.
     delete metadata[CLEARED_TOOL_EVIDENCE_KEY]
     delete metadata[TOOL_FILE_EVIDENCE_KEY]
+    delete metadata[TOOL_RESULT_IMAGE_ASSETS]
     if (call.name === 'read_file' && result.success && ctx.tools.executionMode?.(call.name, call.args) === 'readonly') {
       const evidence = captureFileEvidence(result.metadata)
       if (evidence) metadata[TOOL_FILE_EVIDENCE_KEY] = evidence
@@ -311,17 +315,23 @@ export class ReActStrategy implements LoopStrategy {
     // character estimate; persisting it verbatim makes the next request fail
     // before the loop has a chance to compact the history.
     const outputLimit = ctx.toolProfile === 'code' ? getCodeToolOutputMaxChars() : getToolOutputMaxChars()
-    const presentation = browserOutputPresentation(stripSubagentMeta(output), outputLimit)
+    const vision = resolveCapabilities({ model: ctx.modelName, overrides: ctx.modelCaps ?? ctx.resolvedModel?.capabilities }).vision === true
+    const presentation = browserOutputPresentation(stripSubagentMeta(output), outputLimit, vision)
     const truncated = presentation?.displayOutput ?? truncateToolOutput(stripSubagentMeta(output), outputLimit)
-    const modelInputContent = presentation?.modelInputContent
+    const modelInputContent = (vision ? presentation?.modelVisionContent : undefined) ?? presentation?.modelInputContent
     const outputWasTruncated = truncated.length < output.length
     if (outputWasTruncated) (metadata as Record<string, unknown>).outputTruncated = true
     const nativeImage = imageToolPayload(truncated)
-    const tokens = nativeImage ? estimateModelMessageTokens({ role: 'tool', content: truncated, toolCallId: call.id })
+    const modelImage = imageToolPayload(modelInputContent ?? truncated)
+    const tokens = modelImage ? estimateModelMessageTokens({ role: 'tool', content: modelInputContent ?? truncated, toolCallId: call.id })
       : estimateTokens(modelInputContent ?? truncated)
     if (result.status !== 'waiting') {
       const subagent = result.metadata?.subagent as { runId?: string } | undefined
       try {
+        if (result.success && outputWasTruncated) {
+          const retainedImages = await finalResults.retainToolImages(ctx, call.id, output)
+          if (retainedImages.length) metadata[TOOL_RESULT_IMAGE_ASSETS] = retainedImages
+        }
         await ctx.history.append({
           id: subagent?.runId ? 'subagent-result:' + subagent.runId : `tool-result:${ctx.rootRunId ?? ctx.runId ?? ctx.conversationId ?? ctx.sessionId}:${call.id}`,
           role: 'tool', content: truncated, ...(modelInputContent !== undefined ? { modelInputContent } : {}), toolCallId: call.id, toolName: call.name,
@@ -488,6 +498,7 @@ export class ReActStrategy implements LoopStrategy {
     // Persisted snapshots make every replay/compaction use the same actual
     // attachment content, including after a restart or approval continuation.
     let outputContinuation: { messageId: string; suffix: string } | undefined
+    let finalTextPrefix = ''
     const continuedResponseFingerprints = new Set<string>()
     let toolOutputRecoveryFingerprint: string | undefined
     let toolOutputRecoveryRepeats = 0
@@ -658,7 +669,7 @@ export class ReActStrategy implements LoopStrategy {
       let baseSystemPrompt: string | undefined
       let injectedSystemTokens = 0
       let injectedExtras: Array<string | undefined> = []
-      const runtimePrompt = () => buildExecutionProtocol({ list: () => effectiveTools }) + buildRuntimeCapabilitiesPrompt(ctx, effectiveTools)
+      const runtimePrompt = () => buildExecutionProtocol({ list: () => effectiveTools }, ctx.toolProfile) + buildRuntimeCapabilitiesPrompt(ctx, effectiveTools)
       let requestEnvironment = ''
       const readCurrentModelHistory = async (): Promise<Message[]> => {
         const current = await readModelHistory()
@@ -800,8 +811,19 @@ export class ReActStrategy implements LoopStrategy {
       // New mail enters the final exact budget check, never a fresh summary request.
       // Private maintenance preserves the exact seed and retained origins;
       // unrelated history mutations still revoke this invocation's epoch.
-      if (ctx.sqliteDelivery) await consumeSQLiteReActIteration(ctx.sqliteDelivery, ctx)
-      else if (ctx.jsonlDelivery) await consumeJSONLReActIteration(ctx.jsonlDelivery, ctx)
+      const integrated = ctx.sqliteDelivery ? await consumeSQLiteReActIteration(ctx.sqliteDelivery, ctx)
+        : ctx.jsonlDelivery ? await consumeJSONLReActIteration(ctx.jsonlDelivery, ctx) : undefined
+      if (integrated?.receipts.length) {
+        // Publish only newly committed, authenticated controller rows. Their
+        // boundary keeps the next assistant segment after the user's words.
+        const history = ctx.sqliteDelivery ? await readSQLiteReActHistory(ctx.sqliteDelivery, ctx)
+          : await readJSONLReActHistory(ctx.jsonlDelivery!, ctx)
+        const delivered = new Set(integrated.receipts.map(receipt => receipt.historyMessageId))
+        for (const message of history) if (message.id && delivered.has(message.id)
+          && message.role === 'user' && message.metadata?.collaborationDelivery?.source === 'user-controller') {
+          yield '\x00__user_message__' + JSON.stringify(publicHistoryMessage(message))
+        }
+      }
       messages = await readCurrentModelHistory()
 
       // 3. 计算 windowed token count，检查是否超 budget。
@@ -1423,6 +1445,7 @@ export class ReActStrategy implements LoopStrategy {
           return
         }
         outputReasoningRecovery = true
+        finalTextPrefix = ''
         outputContinuation = undefined
         outputToolRecovery = false
         recoveryCallIdentity = true
@@ -1445,6 +1468,7 @@ export class ReActStrategy implements LoopStrategy {
               continuationIndex: continuedResponseFingerprints.size, stopReason: 'output_limit' },
           } as Message, ctx)
           outputContinuation = { messageId, suffix: String(response.content).slice(-2048) }
+          finalTextPrefix += String(response.content)
           outputToolRecovery = false
           outputReasoningRecovery = false
           yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, ...contextSnapshot() })}`
@@ -1484,6 +1508,7 @@ export class ReActStrategy implements LoopStrategy {
         yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, ...contextSnapshot() })}`
         outputContinuation = undefined
         outputToolRecovery = true
+        finalTextPrefix = ''
         outputReasoningRecovery = false
         ctx.logger.info({ iteration, recoveryIndex: toolOutputRecoveryIndex, repeatedSegmentCount: toolOutputRecoveryRepeats, toolCount: response.toolCalls.length },
           'Regenerating tool calls after model output limit')
@@ -1510,6 +1535,7 @@ export class ReActStrategy implements LoopStrategy {
       toolOutputRecoveryRepeats = 0
       // Register the complete batch before any invocation can start.
       if (response.toolCalls && response.toolCalls.length > 0) {
+        finalTextPrefix = ''
         const calls = response.toolCalls as ParsedToolCall[]
         lastUsedToolNames = new Set(calls.map(call => call.name))
         const registered: RegisteredToolCall[] = []
@@ -1672,13 +1698,16 @@ export class ReActStrategy implements LoopStrategy {
 
       // Yield token usage breakdown as a special __usage__ frame (includes conversationId)
       const messageId = ctx.assistantMessageId ?? uuidv4()
+      const finalResult = !finalizationReason && !ctx.signal?.aborted
+        ? await finalResults.prepare(ctx, finalTextPrefix + (response.content || ''), messageId) : undefined
       const finalMsg: Message & { conversationId?: string } = {
         id: messageId,
         role: 'assistant',
         content: finalizationReason ? finalizationNotice + '\n\n' + response.content : response.content || '',
         metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId, usageEstimated, contextUsageEstimated: !promptUsageReported,
           contextUsageProvisional: promptUsageReported && !receivedTerminalChunk, requestInputTokenEstimate,
-          ...(finalizationReason ? { partial: true, stopReason: finalizationReason } : {}) },
+          ...(finalizationReason ? { partial: true, stopReason: finalizationReason } : {}),
+          ...(finalResult ? { finalResult } : {}) },
         reasoningContent: response.reasoningContent,
         createdAt: Date.now(),
         tokens: completionTokens, // 使用本轮增量生成数
@@ -1692,6 +1721,15 @@ export class ReActStrategy implements LoopStrategy {
         : finalizationReason ? { status: 'failed', stopReason: finalizationReason, partialOutput: emittedOutput,
           error: { code: finalizationReason === 'budget' ? 'TOKEN_BUDGET_EXCEEDED' : 'MAX_STEPS', message: finalizationNotice, retryable: false } }
         : { status: 'succeeded', output: emittedOutput, stopReason: 'completed' })
+
+      // onOutcome commits the root settlement. A cancellation can win while the
+      // final assistant is being persisted, so the candidate alone grants no delivery.
+      if (finalResult) {
+        const completed = await rootRunStore.get(ctx.tenantId, finalResult.runId)
+        if (completed?.status === 'succeeded' && completed.sessionId === finalResult.sessionId && completed.turnId === finalResult.turnId) {
+          yield `\x00__final_result__${JSON.stringify(finalResult)}`
+        }
+      }
 
       yield `\x00__usage__${JSON.stringify({
         ...cumulativeUsage,

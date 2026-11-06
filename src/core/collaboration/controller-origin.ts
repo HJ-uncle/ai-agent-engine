@@ -163,13 +163,15 @@ export async function interruptControllerInvocation(q: Query, child: { tenantId:
 }
 
 export function collaborationEnvelope(b: CollaborationBinding, row: Row, origin?: Row): {
-  historyMessageId: string; content: string; metadata: { collaborationDelivery: {
+  historyMessageId: string; content: string; modelInputContent?: string; metadata: { rootRunId: string; turnId: string; collaborationDelivery: {
     version: number; messageId: string; rootRunId: string; recipientInvocationRunId: string; source?: 'user-controller' } }
 } {
   const historyMessageId = (origin ? 'controller:' : 'peer:') + controllerDigest(JSON.stringify([...scope(b), row.message_id]))
-  const content = origin ? '[用户追加指令]\n' + JSON.stringify({ source: 'authenticated-user-controller', messageId: String(row.message_id) }) + '\n\n' + String(row.body)
+  const envelope = origin ? '[用户追加指令]\n' + JSON.stringify({ source: 'authenticated-user-controller', messageId: String(row.message_id) }) + '\n\n' + String(row.body)
     : '[对等 Agent 消息]\n' + JSON.stringify({ sender: String(row.sender_participant_id), invocation: String(row.sender_invocation_run_id), messageId: String(row.message_id) }) + '\n\n' + String(row.body)
-  return { historyMessageId, content, metadata: { collaborationDelivery: { version: 1, messageId: String(row.message_id),
+  // Public replay shows the user's exact words; only the provider receives the
+  // authenticated source envelope. Both remain covered by physical receipts.
+  return { historyMessageId, content: origin ? String(row.body) : envelope, ...(origin ? { modelInputContent: envelope } : {}), metadata: { rootRunId: b.rootRunId, turnId: b.turnId, collaborationDelivery: { version: 1, messageId: String(row.message_id),
     rootRunId: b.rootRunId, recipientInvocationRunId: b.invocationRunId, ...(origin ? { source: 'user-controller' as const } : {}) } } }
 }
 

@@ -5,17 +5,13 @@ import { CollaborationError, type CollaborationBinding, type CollaborationPartic
   type CollaborationRootScope } from './types.js'
 import { assertControllerRoot, authenticatedControllerOrigin, controllerDigest, controllerInvocation, controllerSender,
   type ControllerSubject } from './controller-origin.js'
+import { collaborationReceipt, projectCollaborationReceipts } from './receipt-projection.js'
 
 const scope = (b: CollaborationRootScope) => [b.tenantId, b.rootRunId, b.rootAttemptId]
 const fail = (code: ConstructorParameters<typeof CollaborationError>[0], message: string): never => { throw new CollaborationError(code, message) }
 function id(value: unknown, name: string): asserts value is string {
   if (typeof value !== 'string' || !value || Buffer.byteLength(value) > 256 || /[\x00-\x1f\x7f]/.test(value)) fail('invalid', 'Invalid ' + name)
 }
-const receipt = (row: Row): CollaborationReceipt => ({ messageId: String(row.message_id), rootRunId: String(row.root_run_id),
-  rootAttemptId: String(row.root_attempt_id), senderParticipantId: String(row.sender_participant_id), senderInvocationRunId: String(row.sender_invocation_run_id),
-  recipientParticipantId: String(row.recipient_participant_id), requestKey: String(row.request_key), payloadHash: String(row.payload_hash),
-  payloadBytes: Number(row.payload_bytes), acceptedSeq: Number(row.seq), acceptedAt: Number(row.accepted_at),
-  state: row.state as CollaborationReceipt['state'], ...(row.reason == null ? {} : { reason: String(row.reason) }) })
 const participant = (row: Row): CollaborationParticipant => ({ participantId: String(row.participant_id),
   ...(row.parent_participant_id == null ? {} : { parentParticipantId: String(row.parent_participant_id) }),
   kind: row.kind as CollaborationParticipant['kind'], sessionId: String(row.session_id), invocationRunId: String(row.invocation_run_id),
@@ -105,7 +101,7 @@ export class CollaborationController {
         args: [...scope(b), controllerSender(subject), controllerInvocation(b, subject), requestKey] })).rows[0]
       if (!row) return null
       await authenticatedControllerOrigin(tx, b, row)
-      return receipt(row)
+      return (await projectCollaborationReceipts(tx, b, [row]))[0]
     })
   }
   async send(b: CollaborationRootScope, subject: ControllerSubject, input: { recipientParticipantId: string; recipientInvocationRunId: string; message: string; requestKey: string }): Promise<CollaborationReceipt> {
@@ -130,7 +126,8 @@ export class CollaborationController {
         if (existing.recipient_participant_id !== input.recipientParticipantId || existing.body !== input.message
           || origin?.recipient_invocation_id !== input.recipientInvocationRunId) fail('conflict', 'Request key was already accepted differently')
         this.owners.assertControllerRecipient(owner, input.recipientParticipantId, input.recipientInvocationRunId)
-        await tx.commit(); return receipt(existing)
+        const receipt = (await projectCollaborationReceipts(tx, b, [existing]))[0]
+        await tx.commit(); return receipt
       }
       const recipient = await this.recipient(tx, binding, owner, input.recipientParticipantId)
       if (recipient.invocationRunId !== input.recipientInvocationRunId) fail('conflict', 'Recipient invocation changed; refresh the selected child before sending')
@@ -150,7 +147,7 @@ export class CollaborationController {
           controllerSender(subject), controllerInvocation(b, subject), input.requestKey, input.recipientParticipantId, recipient.invocationRunId, hash, bytes, input.message, now] })
       this.owners.assertControllerRecipient(owner, input.recipientParticipantId, recipient.invocationRunId)
       await tx.commit()
-      return receipt(row)
+      return collaborationReceipt(row)
     } catch (error) { if (!tx.closed) await tx.rollback().catch(() => undefined); throw error }
     finally { tx.close() }
   }

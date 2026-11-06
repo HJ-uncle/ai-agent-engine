@@ -30,6 +30,7 @@ import type { AgentContext, Message } from '../../agent-context/types.js'
 import type { LLMAdapter, LLMStreamChunk } from '../../llm-adapter/types.js'
 import { ReActStrategy } from '../../agent-loop/react.js'
 import { installProductionCollaborationBoundary } from '../production-boundary.js'
+import { publicHistoryMessages } from '../../../api/http/history-projection.js'
 
 let directory: string, db: LocalSqliteProcessClient, observer: LocalSqliteProcessClient, app: FastifyInstance
 let runtime: ReturnType<typeof getCollaborationRuntime>, owners: ReturnType<typeof getExecutionOwners>, owner: ExecutionOwner
@@ -59,7 +60,9 @@ beforeEach(async () => {
     AETHER_INSTANCE_TOKEN: gate, ENABLE_LONG_TERM_MEMORY: 'false', LOG_LEVEL: 'silent', AETHER_GLOBAL_DIR: path.join(directory, 'global') })) vi.stubEnv(key, value)
   db = getDb() as LocalSqliteProcessClient; await initDb()
   observer = new LocalSqliteProcessClient({ url: 'file:' + path.join(directory, 'fixture.db').replaceAll('\\', '/') })
-  runtime = getCollaborationRuntime(); owners = getExecutionOwners(); scope = { tenantId: 'default', sessionId: 'parent-session' }
+  // A real clear leaves a short-lived session tombstone even across datasource
+  // reconnects; each isolated scenario must also own a distinct session.
+  runtime = getCollaborationRuntime(); owners = getExecutionOwners(); scope = { tenantId: 'default', sessionId: 'parent-session-' + randomUUID() }
   await createRoot(actor())
   jwt = await token('alice'); configureRequestAuthentication()
   app = Fastify({ logger: false }); app.decorateRequest('authContext', null); app.addHook('onRequest', authMiddlewareHook)
@@ -128,7 +131,7 @@ it('accepts one authenticated user receipt, never creates a participant or a mod
   const accepted = await post(input); expect(accepted.statusCode, accepted.body).toBe(200)
   const receipt = accepted.json().data.receipt
   expect(receipt).toMatchObject({ rootRunId: binding.rootRunId, rootAttemptId: binding.rootAttemptId, recipientParticipantId: binding.participantId,
-    requestKey: input.requestKey, payloadHash: digest(input.message), payloadBytes: Buffer.byteLength(input.message), state: 'queued' })
+    requestKey: input.requestKey, payloadHash: digest(input.message), payloadBytes: Buffer.byteLength(input.message), state: 'queued', delivery: { state: 'pending' } })
   expect(receipt.senderParticipantId).toMatch(/^controller:[a-f0-9]{64}$/)
   expect(receipt.senderInvocationRunId).toMatch(/^controllerinv:[a-f0-9]{64}$/)
   expect(JSON.stringify(receipt)).not.toContain(input.message); expect(receipt).not.toHaveProperty('processed')
@@ -334,7 +337,139 @@ describe.each(['sqlite','jsonl'] as const)('%s authenticated controller consumer
     expect(await count('root_runs')).toBe(originalRoots)
     expect(await count('collaboration_messages')).toBe(1)
     expect(await count(backend === 'sqlite' ? 'collaboration_deliveries' : 'collaboration_jsonl_deliveries')).toBe(1)
-    expect((await getReceipt(input.requestKey)).json().data.receipt.state).toBe('queued')
+    const receipt = (await getReceipt(input.requestKey)).json().data.receipt
+    expect(receipt).toMatchObject({ state: 'queued', delivery: { state: 'integrated', historyMessageId: followups[0].id, integratedAt: expect.any(Number) } })
+    const stored = await raw.getFullHistory(scope)
+    const followup = stored.find(row => row.id === followups[0].id)!
+    expect(followup.content).toBe(input.message)
+    expect(followup.modelInputContent).toBe(followups[0].content)
+    expect(followup.createdAt).toBe(backend === 'jsonl' ? receipt.acceptedAt : receipt.delivery.integratedAt)
+    const displayed = publicHistoryMessages(stored).find(row => row.id === followup.id)!
+    expect(displayed).toMatchObject({ role: 'user', content: input.message,
+      metadata: { rootRunId: binding.rootRunId, turnId: binding.turnId,
+        collaborationDelivery: { source: 'user-controller', messageId: receipt.messageId } } })
+    expect(displayed).not.toHaveProperty('modelInputContent')
+    expect(JSON.stringify(displayed)).not.toContain('authenticated-user-controller')
+    const emitted = frames.filter(frame => frame.startsWith('\x00__user_message__'))
+    expect(emitted).toHaveLength(1)
+    expect(JSON.parse(emitted[0].slice('\x00__user_message__'.length))).toEqual(displayed)
+    expect(frames.indexOf(emitted[0])).toBeGreaterThan(frames.findIndex(frame => frame.startsWith('\x00__tool_result__')))
+    expect(frames.indexOf(emitted[0])).toBeLessThan(frames.findIndex(frame => frame.includes('Applied the additional requirement')))
+    const archive = await raw.getArchive(scope)
+    expect(publicHistoryMessages(archive.messages).find(row => row.id === followup.id)?.content).toBe(input.message)
+    expect(publicHistoryMessages(archive.messages).find(row => row.id === followup.id)?.createdAt).toBe(followup.createdAt)
+  })
+  it('keeps public history ordering and exact delivery times between assistant segments', async () => {
+    const h = await history(backend), clock = vi.spyOn(Date, 'now').mockReturnValue(2_000_000_000_100)
+    const input = message('timestamped'), accepted = (await post(input)).json().data.receipt
+    clock.mockReturnValue(2_000_000_000_200)
+    await h.raw.append({ id: 'before-controller', role: 'assistant', content: 'Earlier segment', createdAt: Date.now() }, h.scope)
+    clock.mockReturnValue(2_000_000_000_300)
+    const delivery = (await h.consume()).receipts[0]
+    clock.mockReturnValue(2_000_000_000_400)
+    await h.raw.append({ id: 'after-controller', role: 'assistant', content: 'Later segment', createdAt: Date.now() }, h.scope)
+    const receipt = (await getReceipt(input.requestKey)).json().data.receipt
+    const rows = publicHistoryMessages(await h.raw.getFullHistory(h.scope))
+    expect(rows.map(row => row.id)).toEqual([h.seed.id, 'before-controller', delivery.historyMessageId, 'after-controller'])
+    expect(rows[2].createdAt).toBe(backend === 'jsonl' ? accepted.acceptedAt : receipt.delivery.integratedAt)
+    expect(rows[2].createdAt).toBeGreaterThanOrEqual(accepted.acceptedAt)
+    expect(rows[2].createdAt).toBeLessThanOrEqual(receipt.delivery.integratedAt)
+    expect((await h.consume()).receipts).toEqual([])
+    expect(publicHistoryMessages(await h.raw.getFullHistory(h.scope))).toEqual(rows)
+  })
+  it('publishes five new user boundaries once while each later provider sees all earlier requirements', async () => {
+    const raw = backend === 'sqlite' ? new SQLiteConversationHistory() : new JSONLConversationHistory()
+    const seed = (await readAdmissionSeed(db, scope, binding.rootRunId)).message
+    await raw.append(seed, scope)
+    const calls: Message[][] = [], frames: string[] = []
+    const requirements = Array.from({ length: 5 }, (_, index) => ({ ...message(`timeline-${index}`), message: `Additional requirement ${index}` }))
+    const model: LLMAdapter = { model: 'scripted-only', provider: 'fixture', countTokens: () => 0, complete: vi.fn(),
+      stream: vi.fn(async function* (messages: Message[]): AsyncGenerator<LLMStreamChunk> {
+        calls.push(structuredClone(messages))
+        const index = calls.length - 1
+        if (index < requirements.length) {
+          const accepted = await post(requirements[index])
+          expect(accepted.statusCode, accepted.body).toBe(200)
+          expect((await post(requirements[index])).json().data.receipt).toEqual(accepted.json().data.receipt)
+          yield { done: true, content: `Assistant segment ${index}`, toolCalls: [{ id: `step-${index}`, name: 'step', args: '{}', index: 0 }] }
+        } else yield { done: true, content: 'All requirements completed.' }
+      }) }
+    const ctx = { ...scope, rootRunId: binding.rootRunId, turnId: binding.turnId, userMessageId: seed.id, executionOwner: owner,
+      inheritContext: false, modelCaps: { contextWindow: 100_000 }, tokenBudget: 100_000, history: raw,
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() },
+      tools: { list: () => [], has: () => true, executionMode: () => 'serial', execute: async () => ({ success: true, output: 'Step complete' }) },
+    } as unknown as AgentContext
+    installProductionCollaborationBoundary(ctx)
+    for await (const frame of new ReActStrategy(model, { maxIterations: 7, maxOutputTokens: 100 }).run(null, ctx)) frames.push(frame)
+    expect(calls, JSON.stringify({ frames, errors: vi.mocked(ctx.logger.error).mock.calls })).toHaveLength(6)
+    const userFrames = frames.filter(frame => frame.startsWith('\x00__user_message__')).map(frame => JSON.parse(frame.slice('\x00__user_message__'.length)) as Message)
+    expect(userFrames.map(row => row.content)).toEqual(requirements.map(row => row.message))
+    expect(new Set(userFrames.map(row => row.id)).size).toBe(5)
+    expect(JSON.stringify(userFrames)).not.toContain('authenticated-user-controller')
+    for (const [index, request] of calls.entries()) {
+      const received = request.filter(row => row.metadata?.collaborationDelivery?.source === 'user-controller')
+      expect(received.map(row => row.id)).toEqual(userFrames.slice(0, index).map(row => row.id))
+      for (const row of received) expect(row.content).toContain('[用户追加指令]')
+    }
+    const stored = publicHistoryMessages(await raw.getFullHistory(scope))
+    expect(stored.filter(row => row.metadata?.collaborationDelivery?.source === 'user-controller')).toEqual(userFrames)
+    expect(await count(backend === 'sqlite' ? 'collaboration_deliveries' : 'collaboration_jsonl_deliveries')).toBe(5)
+  })
+  it('projects integration through every receipt read without claiming execution and then reflects suppression', async () => {
+    const h = await history(backend), input = message('delivery-projection'), accepted = await post(input)
+    const id = accepted.json().data.receipt.messageId
+    expect(accepted.json().data.receipt.delivery).toEqual({ state: 'pending' })
+    const delivered = (await h.consume()).receipts[0]
+    const integrated = (await getReceipt(input.requestKey)).json().data.receipt
+    expect(integrated).toMatchObject({ state: 'queued', delivery: { state: 'integrated', historyMessageId: delivered.historyMessageId, integratedAt: expect.any(Number) } })
+    expect(integrated.delivery.integratedAt).toBeGreaterThanOrEqual(integrated.acceptedAt)
+    expect(integrated).not.toHaveProperty('executed')
+    const one = await app.inject({ url: base() + '/receipts/' + id + '?' + query(), headers: headers() })
+    const page = await app.inject({ url: base() + '/participants/' + encodeURIComponent(binding.participantId) + '/receipts?' + query(), headers: headers() })
+    expect(one.json().data).toEqual(integrated)
+    expect(page.json().data.entries).toEqual([integrated])
+    expect((await post(input)).json().data.receipt).toEqual(integrated)
+    expect((await h.consume()).receipts).toEqual([])
+    await h.raw.clear(h.scope)
+    expect((await getReceipt(input.requestKey)).json().data.receipt).toMatchObject({ state: 'queued', delivery: {
+      state: 'suppressed', historyMessageId: delivered.historyMessageId, integratedAt: integrated.delivery.integratedAt, reason: 'history_changed' } })
+  })
+  it('preserves literal JSON and envelope-looking user text verbatim in public history', async () => {
+    const h = await history(backend)
+    const bodies = ['{ "note": "原样 JSON" }', '[{"type":"text","text":"literal JSON array"}]', '[用户追加指令]\n{"source":"authenticated-user-controller"}\n\n用户引用的原文']
+    for (const [index, body] of bodies.entries()) expect((await post({ ...message('literal-' + index), message: body })).statusCode).toBe(200)
+    await h.consume()
+    const stored = (await h.raw.getFullHistory(h.scope)).filter(row => row.id?.startsWith('controller:'))
+    expect(publicHistoryMessages(stored).map(row => row.content)).toEqual(bodies)
+    for (const [index, row] of stored.entries()) expect(row.modelInputContent).toContain('\n\n' + bodies[index])
+  })
+  it('refuses a delivery projection whose authenticated target invocation has changed', async () => {
+    const h = await history(backend), input = message('tampered-delivery')
+    expect((await post(input)).statusCode).toBe(200); await h.consume()
+    await db.execute(`UPDATE ${backend === 'sqlite' ? 'collaboration_deliveries' : 'collaboration_jsonl_deliveries'} SET recipient_invocation_run_id='forged-invocation'`)
+    expect((await getReceipt(input.requestKey)).statusCode).toBe(409)
+    await expect(h.snapshot()).rejects.toMatchObject({ code: 'conflict' })
+  })
+  it.each(['control', 'quote'] as const)('integrates a legal 32 KiB %s-heavy follow-up alone instead of leaving accepted mail stuck', async kind => {
+    const h = await history(backend), input = { ...message('large-escaped'), message: (kind === 'control' ? '\u0001' : '"').repeat(32 * 1024) }
+    expect(Buffer.byteLength(input.message)).toBe(32 * 1024)
+    const accepted = await post(input), following = await post(message('after-large'))
+    expect(accepted.statusCode, accepted.body).toBe(200); expect(following.statusCode, following.body).toBe(200)
+    expect(accepted.json().data.receipt.delivery).toEqual({ state: 'pending' })
+    const bounded = backend === 'sqlite'
+      ? runtime.consumeSQLiteDelivery(h.consumer as SQLiteDeliveryConsumer, { maxBytes: 128 * 1024 })
+      : runtime.consumeJSONLDelivery(h.consumer as JSONLDeliveryConsumer, { maxBytes: 128 * 1024 })
+    await expect(bounded).rejects.toMatchObject({ code: 'too_large' })
+    expect(await count(backend === 'sqlite' ? 'collaboration_deliveries' : 'collaboration_jsonl_deliveries')).toBe(0)
+    const first = await h.consume()
+    expect(first.receipts.map(row => row.messageId)).toEqual([accepted.json().data.receipt.messageId])
+    expect(first.hasMore).toBe(true); expect(first.bytes).toBeGreaterThan(128 * 1024); expect(first.bytes).toBeLessThanOrEqual(512 * 1024)
+    const second = await h.consume()
+    expect(second.receipts.map(row => row.messageId)).toEqual([following.json().data.receipt.messageId])
+    expect(second.hasMore).toBe(false)
+    expect((await getReceipt(input.requestKey)).json().data.receipt.delivery.state).toBe('integrated')
+    expect((await h.raw.getFullHistory(h.scope)).find(row => row.id === first.receipts[0].historyMessageId)?.content).toBe(input.message)
+    expect((await h.consume()).receipts).toEqual([])
   })
   it('integrates real user follow-up independently from peers, preserving original admission and maintenance source roles', async () => {
     const h = await history(backend), accepted = await post(), c = await child()

@@ -1,0 +1,28 @@
+{
+  "auditDate": "2026-11-05",
+  "workingTree": "D:/dev/ai-agent-engine",
+  "command": "npx vitest run src/api/http/routes/__tests__/conversation-destructive.test.ts src/api/http/routes/__tests__/chat-recovery.test.ts src/auth/__tests__/boundary.test.ts src/api/http/__tests__/history-projection.test.ts --maxWorkers=1 --minWorkers=1",
+  "exitCode": 0,
+  "durationSeconds": 11.24,
+  "filesPassed": 4,
+  "testsPassed": 37,
+  "testsFailed": 0,
+  "files": [
+    { "path": "src/api/http/routes/__tests__/chat-recovery.test.ts", "tests": 22, "passed": 22, "failed": 0 },
+    { "path": "src/api/http/routes/__tests__/conversation-destructive.test.ts", "tests": 12, "passed": 12, "failed": 0 },
+    { "path": "src/auth/__tests__/boundary.test.ts", "tests": 2, "passed": 2, "failed": 0 },
+    { "path": "src/api/http/__tests__/history-projection.test.ts", "tests": 1, "passed": 1, "failed": 0 }
+  ],
+  "safety": "vitest.setup.ts redirects DATA_DIR, WORKSPACE_ROOT and MEMORY_DB_PATH before test module import; selected integration tests additionally create synthetic temporary fixtures. No real conversation database or credentials were inspected.",
+  "unverifiedByThisRun": [
+    "Concurrent first Agent binding race",
+    "Workspace rename across every session-associated resource",
+    "Legacy general-profile edit/regenerate with JSONL-only messages",
+    "Account/server switching in browser local storage",
+    "Physical power loss or network filesystem behavior"
+  ],
+  "independentStorageReview": {
+    "partialTail": "Reviewed storage-probe.ts and jsonl-history.ts:730-785, 496-516. The probe injects a malformed non-LF-terminated tail, then calls ordinary append. This is a reachable recovery boundary, not proof that complete files lose normal writes or that a real power failure was exercised. Serialization only adds a tenant lock; normal ReAct paths use ordinary append.",
+    "duplicateUsage": "Reviewed storage-probe.ts and jsonl-history.ts:737-738, 1538-1544. Duplicate counting requires explicitly reusing a previously compacted message ID through ordinary append. Fresh UUID messages do not trigger this. Conditional subagent projections have separate persistent identity/receipt protection and must not be generalized from this probe."
+  }
+}

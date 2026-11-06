@@ -1,4 +1,11 @@
 /** Abort reasons are preserved so deadlines and user stops retain distinct outcomes. */
+export class ExecutionParkError extends Error {
+  constructor(message = 'Execution parked for pending input') {
+    super(message)
+    this.name = 'AbortError'
+  }
+}
+
 export function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw signal.reason ?? new DOMException('Operation cancelled', 'AbortError')
 }

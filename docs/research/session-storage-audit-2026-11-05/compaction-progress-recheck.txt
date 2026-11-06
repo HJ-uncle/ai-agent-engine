@@ -1,0 +1,50 @@
+
+ RUN  v2.1.9 D:/dev/ai-agent-engine
+
+stderr | src/core/agent-loop/__tests__/compaction-progress.test.ts
+⚠️  WARNING: ENCRYPTION_KEY is not set in .env! Using a default insecure key for development.
+   This will cause your API keys to be unstable if you change this key later.
+   Please set a 64-character hex string as ENCRYPTION_KEY in your .env file for production.
+
+
+ ❯ src/core/agent-loop/__tests__/compaction-progress.test.ts (5 tests | 2 failed) 392ms
+   × observable automatic compaction lifecycle > publishes running while the summary is blocked and succeeds only after history is durably committed 185ms
+     → EPERM, Permission denied: \\?\C:\Users\WB7355~1.XIE\AppData\Local\Temp\aether-compaction-progress-fbF1mV '\\?\C:\Users\WB7355~1.XIE\AppData\Local\Temp\aether-compaction-progress-fbF1mV'
+   × observable automatic compaction lifecycle > does not show compaction when storage has nothing reducible or when light cleanup is enough 53ms
+     → expected 'failed' to be 'succeeded' // Object.is equality
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/core/agent-loop/__tests__/compaction-progress.test.ts > observable automatic compaction lifecycle > publishes running while the summary is blocked and succeeds only after history is durably committed
+Error: EPERM, Permission denied: \\?\C:\Users\WB7355~1.XIE\AppData\Local\Temp\aether-compaction-progress-fbF1mV '\\?\C:\Users\WB7355~1.XIE\AppData\Local\Temp\aether-compaction-progress-fbF1mV'
+ ❯ src/core/agent-loop/__tests__/compaction-progress.test.ts:25:6
+     23|   if (path.dirname(fixtureDirectory) !== path.resolve(os.tmpdir())
+     24|     || !path.basename(fixtureDirectory).startsWith('aether-compaction-…
+     25|   fs.rmSync(fixtureDirectory, { recursive: true, force: true })
+       |      ^
+     26| })
+     27| 
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/core/agent-loop/__tests__/compaction-progress.test.ts > observable automatic compaction lifecycle > does not show compaction when storage has nothing reducible or when light cleanup is enough
+AssertionError: expected 'failed' to be 'succeeded' // Object.is equality
+
+Expected: "succeeded"
+Received: "failed"
+
+ ❯ src/core/agent-loop/__tests__/compaction-progress.test.ts:147:39
+    145|     expect(g.states).toEqual([])
+    146|     expect(g.llm.complete).not.toHaveBeenCalled()
+    147|     expect(g.outcomes.at(-1)?.status).toBe('succeeded')
+       |                                       ^
+    148|   })
+    149| 
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 3 passed (5)
+   Start at  13:59:18
+   Duration  1.48s (transform 546ms, setup 11ms, collect 887ms, tests 392ms, environment 0ms, prepare 49ms)
+

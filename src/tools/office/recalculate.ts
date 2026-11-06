@@ -13,6 +13,15 @@ const localRequire = createRequire(import.meta.url)
 const ns = '(?:[A-Za-z_][\\w.-]*:)?'
 const text = (value: Uint8Array): string => Buffer.from(value).toString('utf8')
 function fail(message: string): never { throw new Error(`XLSX recalculate: ${message}`) }
+/** Keep the failing formula's identity across the worker/tool error boundary without repeating the workbook. */
+function atFormula<T>(sheet: string, cell: string, source: string, validate: () => T): T {
+  try { return validate() }
+  catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    const formula = source.length > 512 ? `${source.slice(0, 512)}…` : source
+    throw new Error(`${message}; sheet=${JSON.stringify(sheet)}, cell=${JSON.stringify(cell)}, formula=${JSON.stringify(formula)}`)
+  }
+}
 interface Element { full: string; tag: string; rawAttrs: string; attrs: Record<string, string>; inner: string }
 interface Ref { sheet: string; start: string; end: string }
 type Expression = { kind: 'number' } | { kind: 'text' } | { kind: 'reference'; ref: Ref }
@@ -391,7 +400,9 @@ async function calculateInWorker(bytes: Buffer): Promise<Buffer> {
         || cell.attrs.cm || cell.attrs.vm || elements(cell.inner, 'extLst').length || elements(cell.inner, 'is').length) fail(`shared, array, data-table or rich formula unsupported at ${item.attrs.name}!${address}`)
       if (formulas.length >= XLSX_RECALCULATION_LIMITS.maxFormulas) fail('formula count exceeds 10000')
       const formula = found[0]
-      formulas.push({ sheet: item.attrs.name, file, address, cell, formula, ...validateFormula(decodeXml(formula.inner), item.attrs.name, names, budget) })
+      const source = decodeXml(formula.inner)
+      const validated = atFormula(item.attrs.name, address, source, () => validateFormula(source, item.attrs.name, names, budget))
+      formulas.push({ sheet: item.attrs.name, file, address, cell, formula, ...validated })
     }
   }
   if (!formulas.length) return Buffer.from(bytes)
@@ -414,7 +425,7 @@ async function calculateInWorker(bytes: Buffer): Promise<Buffer> {
     delete cell.v; delete cell.w
   }
   calculate(book, { continue_after_error: false, log_error: false })
-  for (const formula of formulas) validateSemantics(formula.expression, book)
+  for (const formula of formulas) atFormula(formula.sheet, formula.address, decodeXml(formula.formula.inner), () => validateSemantics(formula.expression, book))
   for (const name of book.SheetNames) for (const [address, cell] of Object.entries(book.Sheets[name])) {
     if (address.startsWith('!')) continue
     const key = `${name}!${address}`
