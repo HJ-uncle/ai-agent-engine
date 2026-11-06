@@ -324,6 +324,43 @@ describe('D7 durable command job lifecycle', () => {
     expect(interrupted).not.toHaveProperty('env')
   })
 
+  it('restarts terminal background history with a fresh top-level identity and deletes both durable tables', async () => {
+    const original = await manager.start(launch("process.stdout.write('first')"))
+    expect(await manager.wait(scope, original.jobId)).toMatchObject({ status: 'succeeded' })
+    for (const foreign of [{ tenantId: 'other-tenant', sessionId: scope.sessionId }, { tenantId: scope.tenantId, sessionId: 'other-session' }]) {
+      expect(await manager.restart(foreign, original.jobId, { cwd: fixture, env: {} })).toBeNull()
+      expect(await manager.delete(foreign, original.jobId)).toBe(false)
+    }
+    const restarted = await manager.restart(scope, original.jobId, { cwd: fixture, env: { ...process.env, RESTART_CURRENT_ENV: 'current' } })
+    expect(restarted).not.toBeNull()
+    if (!restarted) throw new Error('Restarted job missing')
+    expect(restarted).toMatchObject({ sessionId: scope.sessionId, ownerSessionId: scope.sessionId,
+      command: original.command, args: original.args, cwd: original.cwd, background: true })
+    expect(restarted.jobId).not.toBe(original.jobId)
+    for (const field of ['runId', 'ownerRunId', 'turnId', 'toolCallId'] as const) expect(restarted[field]).toBeUndefined()
+    expect((await manager.wait(scope, restarted.jobId))?.status).toBe('succeeded')
+    expect(await manager.get(scope, original.jobId)).toMatchObject({ jobId: original.jobId, status: 'succeeded' })
+    expect(outputText(await output(original.jobId))).toBe('first')
+
+    expect(await manager.delete(scope, original.jobId)).toBe(true)
+    expect(await manager.get(scope, original.jobId)).toBeNull()
+    for (const table of ['command_jobs', 'command_job_output']) {
+      const rows = await db.execute({ sql: `SELECT COUNT(*) AS count FROM ${table} WHERE tenant_id=? AND session_id=? AND job_id=?`,
+        args: [scope.tenantId, scope.sessionId, original.jobId] })
+      expect(Number(rows.rows[0]?.count), table).toBe(0)
+    }
+    expect(await manager.get(scope, restarted.jobId)).not.toBeNull()
+  })
+
+  it('rejects restart and deletion while the real child is still active', async () => {
+    const job = await manager.start(launch("require('node:fs').writeFileSync('active-restart.pid', String(process.pid)); setInterval(() => {}, 1000)"))
+    await capturePid('active-restart.pid')
+    await expect(manager.restart(scope, job.jobId, { cwd: fixture, env: {} })).rejects.toMatchObject({ statusCode: 409 })
+    await expect(manager.delete(scope, job.jobId)).rejects.toMatchObject({ statusCode: 409 })
+    expect((await manager.get(scope, job.jobId))?.status).toBe('running')
+    await manager.cancel(exactScope, job.jobId, 'restart_test_cleanup')
+  })
+
   it('bounds terminal history per session and globally while retaining active work and isolating other sessions', async () => {
     manager = makeManager({ maxSessionJobs: 2, maxRetainedJobs: 3, retentionMs: 60_000 })
     await manager.initialize()

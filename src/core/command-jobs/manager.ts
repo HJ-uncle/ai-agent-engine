@@ -505,6 +505,30 @@ export class CommandJobManager {
     return live ? live.completion : clone(stored.job)
   }
 
+  async restart(scope: CommandJobScope, jobId: string, launch: Pick<CommandJobLaunch, 'cwd' | 'env'>): Promise<CommandJobSnapshot | null> {
+    const stored = await this.lookup(scope, jobId)
+    if (!stored) return null
+    if (!stored.job.background || !commandJobIsTerminal(stored.job.status)) {
+      throw Object.assign(new Error('Only a terminal background command job can be restarted'), { statusCode: 409, code: 'COMMAND_JOB_NOT_TERMINAL' })
+    }
+    // A restart is a new top-level user action, never a continuation of the old run/tool ownership.
+    return this.start({ tenantId: scope.tenantId, sessionId: scope.sessionId, ownerSessionId: scope.sessionId,
+      command: stored.job.command, args: [...stored.job.args], cwd: launch.cwd, background: stored.job.background, env: { ...launch.env } })
+  }
+
+  async delete(scope: CommandJobScope, jobId: string): Promise<boolean> {
+    const stored = await this.lookup(scope, jobId)
+    if (!stored) return false
+    if (!stored.job.background || !commandJobIsTerminal(stored.job.status)) {
+      throw Object.assign(new Error('Only a terminal background command job can be deleted'), { statusCode: 409, code: 'COMMAND_JOB_NOT_TERMINAL' })
+    }
+    await this.db.batch([
+      { sql: 'DELETE FROM command_job_output WHERE tenant_id=? AND session_id=? AND job_id=?', args: [scope.tenantId, scope.sessionId, jobId] },
+      { sql: "DELETE FROM command_jobs WHERE tenant_id=? AND session_id=? AND job_id=? AND status NOT IN ('running','cancelling')", args: [scope.tenantId, scope.sessionId, jobId] },
+    ], 'write')
+    return true
+  }
+
   async cancel(scope: CommandJobScope, jobId: string, reason = 'Stopped by user'): Promise<CommandJobSnapshot | null> {
     const stored = await this.lookup(scope, jobId)
     if (!stored) return null

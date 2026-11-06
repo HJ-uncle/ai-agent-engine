@@ -9,6 +9,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { withFileLocks } from '../../../shared/file-version.js'
 import { StringDecoder } from 'node:string_decoder'
+import { registerWorkspaceSearchRoutes } from '../../../workspace/search/routes.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -49,6 +50,7 @@ const sameCanonicalPath = (left: string, right: string) => {
 }
 
 export async function workspaceRoutes(fastify: FastifyInstance) {
+  registerWorkspaceSearchRoutes(fastify)
   // The client may select a server directory only when it is inside the
   // engine's operator-declared AETHER_ALLOWED_WORKSPACE_ROOTS.
   fastify.post<{ Body: { sessionId: string; workspaceRoot: string } }>('/workspace/bind', async (request, reply) => {

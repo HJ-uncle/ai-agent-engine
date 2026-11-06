@@ -111,6 +111,8 @@ describe('D7 command job HTTP and history lifecycle', () => {
       ['GET', '/command-jobs/missing?sessionId=auth', undefined],
       ['GET', '/command-jobs/missing/output?sessionId=auth', undefined],
       ['POST', '/command-jobs/missing/cancel', { sessionId: 'auth' }],
+      ['POST', '/command-jobs/missing/restart', { sessionId: 'auth' }],
+      ['DELETE', '/command-jobs/missing?sessionId=auth', undefined],
     ] as const) {
       for (const supplied of ['', 'wrong-fixture-token']) {
         const result = await request({ method, url, payload, headers: { 'X-Aether-Instance-Token': supplied } })
@@ -192,6 +194,64 @@ describe('D7 command job HTTP and history lifecycle', () => {
       expect(fs.readFileSync(started, 'utf8')).toBe('start\n')
       expect(launchSpy).not.toHaveBeenCalled()
     } finally { launchSpy.mockRestore() }
+  })
+
+  it('restarts terminal background history with a new identity and deletes output and snapshot atomically', async () => {
+    const sessionId = 'restart-delete-history'
+    const original = await start(sessionId, `
+      process.stdout.write('historical-output');
+      console.log(JSON.stringify({ cwd: process.cwd(), restartMarker: process.env.RESTART_MARKER ?? null }));
+    `, { runId: 'old-run', ownerRunId: 'old-owner-run', turnId: 'old-turn', toolCallId: 'old-tool' })
+    await commandJobs.wait({ tenantId, sessionId }, original.jobId)
+    const ignored = { command: path.join(fixture, 'client-command'), args: ['--client'], cwd: path.dirname(fixture), env: { CLIENT_SECRET: 'ignored' } }
+    const restartedResponse = await request({ method: 'POST', url: `/command-jobs/${original.jobId}/restart`, payload: { sessionId, ...ignored } })
+    expect(restartedResponse.statusCode, restartedResponse.body).toBe(200)
+    const restarted = restartedResponse.json().data as CommandJobSnapshot
+    expect(restarted).toMatchObject({ sessionId, ownerSessionId: sessionId, command: original.command, args: original.args,
+      cwd: original.cwd, background: true })
+    for (const field of ['runId', 'ownerRunId', 'turnId', 'toolCallId']) expect(restarted).not.toHaveProperty(field)
+    expect(restarted.jobId).not.toBe(original.jobId)
+    const finished = await commandJobs.wait({ tenantId, sessionId }, restarted.jobId)
+    expect(finished?.status, JSON.stringify(finished)).toBe('succeeded')
+    const restartedOutput = await commandJobs.output({ tenantId, sessionId }, restarted.jobId)
+    expect(restartedOutput?.entries.map(entry => entry.text).join('')).toContain(JSON.stringify({ cwd: original.cwd, restartMarker: null }))
+    expect((await getJob(original)).json().data).toMatchObject({ jobId: original.jobId, status: 'succeeded' })
+
+    const deleted = await request({ method: 'DELETE', url: `/command-jobs/${original.jobId}?sessionId=${sessionId}` })
+    expect(deleted.statusCode, deleted.body).toBe(200)
+    expect(deleted.json()).toMatchObject({ code: 200, data: { deleted: true } })
+    expect((await getJob(original)).statusCode).toBe(404)
+    expect((await getJob(original)).json().code).toBe(40400)
+    for (const table of ['command_jobs', 'command_job_output']) {
+      const rows = await db.execute({ sql: `SELECT COUNT(*) AS count FROM ${table} WHERE tenant_id=? AND session_id=? AND job_id=?`, args: [tenantId, sessionId, original.jobId] })
+      expect(Number(rows.rows[0]?.count), table).toBe(0)
+    }
+    const replacementRows = await db.execute({ sql: 'SELECT COUNT(*) AS count FROM command_jobs WHERE job_id=?', args: [restarted.jobId] })
+    expect(Number(replacementRows.rows[0]?.count)).toBe(1)
+  })
+
+  it('conceals restart and deletion across tenant and session scopes and rejects active background jobs', async () => {
+    const { job, marker } = await writingJob('restart-delete-scopes')
+    for (const [selectedTenant, selectedSession] of [['foreign-tenant', job.sessionId], [tenantId, 'foreign-session']]) {
+      const tenantHeaders = { 'X-Test-Tenant': selectedTenant }
+      for (const result of [
+        await request({ method: 'POST', url: `/command-jobs/${job.jobId}/restart`, payload: { sessionId: selectedSession }, headers: tenantHeaders }),
+        await request({ method: 'DELETE', url: `/command-jobs/${job.jobId}?sessionId=${selectedSession}`, headers: tenantHeaders }),
+      ]) {
+        expect(result.statusCode, result.body).toBe(404)
+        expect(result.json()).toMatchObject({ code: 40400, data: null })
+      }
+    }
+    await assertStillWriting(marker)
+    for (const result of [
+      await request({ method: 'POST', url: `/command-jobs/${job.jobId}/restart`, payload: { sessionId: job.sessionId } }),
+      await request({ method: 'DELETE', url: `/command-jobs/${job.jobId}?sessionId=${job.sessionId}` }),
+    ]) {
+      expect(result.statusCode, result.body).toBe(409)
+      expect(result.json()).toMatchObject({ code: 40900, data: null })
+    }
+    expect((await getJob(job)).json().data.status).toBe('running')
+    await commandJobs.cancel({ tenantId, sessionId: job.sessionId }, job.jobId, 'fixture completed')
   })
 
   it('awaits real process cancellation and returns the same terminal result on duplicate stop', async () => {

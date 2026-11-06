@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { Client, Transaction } from '@libsql/client'
 import { getDb } from '../../storage/sqlite/db.js'
+import { getSubagentPayloadFiles } from './payload-files.js'
+import { SubagentPayloadCodec } from './payload-codec.js'
 import { up } from '../../storage/sqlite/migrations/019_subagent_runs.js'
 import { ensureSubagentDeltaSchema } from './durable-schema.js'
 import { ensureDiscoverySchema } from './discovery-schema.js'
@@ -39,7 +41,11 @@ function boundHeaderPatch(patch: HeaderPatch): HeaderPatch {
   }
 }
 const stateKeys = ['status', 'lastSeq', 'updatedAt', 'startedAt', 'finishedAt', 'durationMs', 'stopReason', 'error', 'resultSummary', 'partialOutput', 'externalEffectStatus', 'usage', 'modelId', 'toolCount', 'activeToolCount', 'nonPlanToolCount', 'latestActivity'] as const
-const stateOf = (run: SubagentRunHeader) => Object.fromEntries(stateKeys.filter(key => run[key] !== undefined).map(key => [key, run[key]]))
+/** latestActivity remains in exact checkpoints for historical reads, while
+ * deltas omit it because the toolUpsert already carries the same projection. */
+const stateOf = (run: SubagentRunHeader, includeLatestActivity = true) => Object.fromEntries(stateKeys
+  .filter(key => key !== 'latestActivity' || includeLatestActivity)
+  .filter(key => run[key] !== undefined).map(key => [key, run[key]]))
 const identityOf = (run: SubagentRunHeader): SubagentIdentity => ({ tenantId: run.tenantId, rootSessionId: run.rootSessionId, parentSessionId: run.parentSessionId, parentConversationId: run.parentConversationId, parentMessageId: run.parentMessageId, parentToolCallId: run.parentToolCallId, childSessionId: run.childSessionId })
 function pageSize(value = 64): number { if (!Number.isSafeInteger(value) || value < 1 || value > 200) throw new RangeError('Invalid subagent page size'); return value }
 function sequence(value: number): number { if (!Number.isSafeInteger(value) || value < 1) throw new RangeError('Invalid subagent watermark'); return value }
@@ -61,9 +67,10 @@ export interface ParentProjection {
   event: SubagentWireEvent
 }
 
-/** SQLite is authoritative; the outbox lets parent JSONL projection recover independently after a crash. */
+/** SQLite owns ordering and recovery; immutable local files hold the bulky bodies. */
 export class SubagentStore {
   private initialized?: Promise<void>
+  private payloads!: SubagentPayloadCodec
 
   constructor(readonly db: Client = getDb()) {}
 
@@ -71,9 +78,20 @@ export class SubagentStore {
     return this.initialized ??= up(this.db).then(() => ensureSubagentDeltaSchema(this.db)).then(() => ensureDiscoverySchema(this.db)).then(() => ensureChildRecoverySchema(this.db)).then(async () => {
       await this.db.execute(`CREATE TABLE IF NOT EXISTS subagent_execution_receipts (tenant_id TEXT NOT NULL,run_id TEXT NOT NULL,request_key TEXT NOT NULL,payload_hash TEXT NOT NULL,terminal_seq INTEGER NOT NULL,PRIMARY KEY(tenant_id,run_id,request_key))`)
       await this.db.execute(`CREATE TABLE IF NOT EXISTS subagent_projection_receipts (tenant_id TEXT NOT NULL,run_id TEXT NOT NULL,seq INTEGER NOT NULL,message_id TEXT NOT NULL,disposition TEXT NOT NULL,PRIMARY KEY(tenant_id,run_id,seq))`)
+      // Resolve the actual database before opening any write transaction. Never
+      // use DATA_DIR to guess the files belonging to an injected/test client.
+      // Hot-path summaries are already bounded previews. Externalize only
+      // genuinely large tool bodies here; offline migration uses the tighter
+      // codec default to reclaim older duplicated rows without slowing every
+      // tool event with a small sidecar write.
+      this.payloads = new SubagentPayloadCodec(await getSubagentPayloadFiles(this.db), { thresholdBytes: 16 * 1024 })
     })
   }
   initialize(): Promise<void> { return this.ready() }
+
+  private async toolSummary(tenantId: string, value: unknown): Promise<SubagentToolSummary> {
+    return cleanToolSummary(JSON.stringify(await this.payloads.decodeSummary(tenantId, String(value))))
+  }
 
   private async read<T>(fn: (tx: Transaction) => Promise<T>): Promise<T> {
     // A latest-index probe and its tool rows must share one SQLite snapshot;
@@ -111,7 +129,12 @@ export class SubagentStore {
     if (target > Number(current.seq)) failRecovery('Requested future subagent watermark')
     const modern = await q.execute({ sql: `SELECT ${fullRecord ? 'r.record' : publicRecord('r.record')} AS record,c.header,json_extract(r.record,'$.continuation.readOnly') AS read_only,substr(json_extract(r.record,'$.continuation.role'),1,512) AS role FROM subagent_records r JOIN subagent_checkpoints c ON c.tenant_id=r.tenant_id AND c.run_id=r.run_id WHERE r.tenant_id=? AND r.run_id=? AND c.seq=?`, args: [tenantId, runId, target] })
     if (modern.rows[0]) {
-      const row = modern.rows[0], header = { ...cleanHeader(row.record, row.header), schemaVersion: 1 as const }
+      const row = modern.rows[0], header = { ...cleanHeader(row.record,
+        JSON.stringify(await this.payloads.decodeState(tenantId, String(row.header)))), schemaVersion: 1 as const }
+      if (!header.latestActivity) {
+        const latest = await q.execute({ sql: 'SELECT summary FROM subagent_tools WHERE tenant_id=? AND run_id=? AND revision_seq<=? ORDER BY revision_seq DESC,ordinal DESC LIMIT 1', args: [tenantId, runId, target] })
+        if (latest.rows[0]) header.latestActivity = await this.toolSummary(tenantId, latest.rows[0].summary)
+      }
       if (!fullRecord && row.read_only !== null && row.read_only !== undefined) header.continuationDisplay = { readOnly: Boolean(row.read_only), ...(row.role ? { role: String(row.role) } : {}) }
       return header
     }
@@ -164,7 +187,7 @@ export class SubagentStore {
       if (Number(latest.rows[0]?.seq) === lastSeq) {
         const result = await q.execute({ sql: `SELECT t.summary,EXISTS(SELECT 1 FROM subagent_tool_versions v WHERE v.tenant_id=t.tenant_id AND v.run_id=t.run_id AND v.tool_id=t.tool_id AND v.seq=t.revision_seq) AS archived FROM subagent_tools t WHERE tenant_id=? AND run_id=? ${options.active ? "AND status='running'" : ''} ${options.afterOrdinal === undefined ? '' : 'AND ordinal>?'} ORDER BY ${options.recent ? 'revision_seq DESC,ordinal DESC' : 'ordinal,tool_id'} LIMIT ?`, args: [tenantId, runId, ...(options.afterOrdinal === undefined ? [] : [options.afterOrdinal]), options.limit] })
         if (result.rows.some(row => !row.archived)) failRecovery('Missing latest tool detail version')
-        return result.rows.map(row => cleanToolSummary(row.summary))
+        return Promise.all(result.rows.map(row => this.toolSummary(tenantId, row.summary)))
       }
       // SQLite can prefer the run/seq index for this correlated query and then
       // scan every event JSON for each tool. Pin the matching expression index.
@@ -177,7 +200,7 @@ export class SubagentStore {
         args: [lastSeq, tenantId, runId, lastSeq, lastSeq, ...(options.afterOrdinal === undefined ? [] : [options.afterOrdinal]), options.limit] })
       if (result.rows.some(row => row.expected_seq !== null && Number(row.expected_seq) > Number(row.seq))) failRecovery('Missing historical tool revision')
       if (isTerminalRun(header.status) && header.activeToolCount === 0 && result.rows.some(row => cleanToolSummary(row.summary).status === 'running')) failRecovery('Missing terminal tool revision')
-      return result.rows.map(row => cleanToolSummary(row.summary))
+      return Promise.all(result.rows.map(row => this.toolSummary(tenantId, row.summary)))
     }
     const result = await q.execute({ sql: `SELECT ${this.legacyToolSummary('j.value', runId, lastSeq)} AS summary FROM subagent_events e,json_each(e.event,'$.snapshot.toolCalls') j
       WHERE e.tenant_id=? AND e.run_id=? AND e.seq=? AND json_extract(e.event,'$.schemaVersion')=1
@@ -305,8 +328,9 @@ export class SubagentStore {
     const source = modern.rows[0]
       ? { sql: 'SELECT seq,summary,detail FROM subagent_tool_versions WHERE tenant_id=? AND run_id=? AND tool_id=? AND seq<=? ORDER BY seq DESC LIMIT 1', args: [tenantId, runId, toolId, atSeq] }
       : { sql: `SELECT ${atSeq} AS seq,${this.legacyToolSummary('j.value', runId, atSeq)} AS summary,j.value AS detail FROM subagent_events e,json_each(e.event,'$.snapshot.toolCalls') j WHERE e.tenant_id=? AND e.run_id=? AND e.seq=? AND json_extract(e.event,'$.schemaVersion')=1 AND json_extract(j.value,'$.id')=? LIMIT 1`, args: [tenantId, runId, atSeq, toolId] }
-    // Slice the BLOB in SQLite, not after loading an oversized JSON body in JS.
-    const rows = await this.db.execute({ sql: `SELECT seq,summary,length(CAST(detail AS BLOB)) AS total_bytes,substr(CAST(detail AS BLOB),?,?) AS chunk FROM (${source.sql})`, args: [offset + 1, limitBytes + 4, ...source.args] })
+    // Inline legacy bytes are sliced in SQLite. Externalized details contain a
+    // small manifest; their JSON fragments are streamed from local files.
+    const rows = await this.db.execute({ sql: `SELECT seq,summary,CASE WHEN json_type(detail,'$.__aetherSubagentPayloads')='object' THEN detail END AS stored_detail,length(CAST(detail AS BLOB)) AS total_bytes,substr(CAST(detail AS BLOB),?,?) AS chunk FROM (${source.sql})`, args: [offset + 1, limitBytes + 4, ...source.args] })
     if (!rows.rows[0]) {
       if (modern.rows[0]) {
         const indexed = await this.db.execute({ sql: 'SELECT 1 FROM subagent_tools WHERE tenant_id=? AND run_id=? AND tool_id=? AND ordinal<=?', args: [tenantId, runId, toolId, header.toolCount] })
@@ -320,6 +344,10 @@ export class SubagentStore {
         COALESCE((SELECT max(seq) FROM subagent_events INDEXED BY idx_subagent_delta_tool_revision WHERE tenant_id=? AND run_id=? AND json_extract(event,'$.schemaVersion')=2 AND kind IN ('tool.started','tool.completed') AND json_extract(event,'$.toolUpsert.id')=? AND seq<=?),0)) AS seq`, args: [tenantId, runId, toolId, atSeq, tenantId, runId, toolId, atSeq] })
       if (Number(expected.rows[0].seq) > Number(row.seq) || isTerminalRun(header.status) && header.activeToolCount === 0 && cleanToolSummary(row.summary).status === 'running') failRecovery('Missing exact tool detail revision')
     }
+    if (row.stored_detail !== null && row.stored_detail !== undefined) {
+      return { schemaVersion: 2 as const, runId, asOfSeq: atSeq, tool: await this.toolSummary(tenantId, row.summary),
+        detail: await this.payloads.getDetailChunk(tenantId, String(row.stored_detail), offset, limitBytes) }
+    }
     if (offset > totalBytes) throw new RangeError('Detail offset exceeds length')
     const rawValue: unknown = row.chunk
     if (!(rawValue instanceof ArrayBuffer) && !(rawValue instanceof Uint8Array)) failRecovery('Invalid stored detail encoding')
@@ -331,7 +359,7 @@ export class SubagentStore {
     try { text = new TextDecoder('utf-8', { fatal: true }).decode(raw.subarray(0, end)) }
     catch { failRecovery('Invalid stored UTF-8 tool detail') }
     const nextOffset = offset + end
-    return { schemaVersion: 2 as const, runId, asOfSeq: atSeq, tool: cleanToolSummary(row.summary),
+    return { schemaVersion: 2 as const, runId, asOfSeq: atSeq, tool: await this.toolSummary(tenantId, row.summary),
       detail: { encoding: 'json-utf8' as const, text, offset, totalBytes, hasMore: nextOffset < totalBytes,
         ...(nextOffset < totalBytes ? { nextOffset } : {}) } }
   }
@@ -348,7 +376,7 @@ export class SubagentStore {
     let bytes = 0, checkpointRequired = false
     for (const row of rows.rows.slice(0, limit)) {
       if (Number(row.seq) !== afterSeq + events.length + 1 || Number(row.version) !== 2) { checkpointRequired = true; break }
-      const event = parse<SubagentDeltaEvent>(row.event), size = sizeOf(event)
+      const event = await this.payloads.decodeEvent<SubagentDeltaEvent>(tenantId, String(row.event)), size = sizeOf(event)
       if (events.length && bytes + size > PAGE_BYTES) break
       events.push(event); bytes += size
     }
@@ -363,7 +391,8 @@ export class SubagentStore {
     const rows = await q.execute({ sql: `SELECT v.detail,v.seq,(SELECT max(e.seq) FROM subagent_events e INDEXED BY idx_subagent_delta_tool_revision WHERE e.tenant_id=v.tenant_id AND e.run_id=v.run_id AND json_extract(e.event,'$.schemaVersion')=2 AND e.kind IN ('tool.started','tool.completed') AND json_extract(e.event,'$.toolUpsert.id')=+v.tool_id AND e.seq<=?) AS expected_seq FROM subagent_tool_versions v WHERE v.tenant_id=? AND v.run_id=? AND v.seq<=? AND v.seq=(SELECT max(n.seq) FROM subagent_tool_versions n WHERE n.tenant_id=v.tenant_id AND n.run_id=v.run_id AND n.tool_id=v.tool_id AND n.seq<=?) ORDER BY v.ordinal,v.tool_id`, args: [header.lastSeq, header.tenantId, header.runId, header.lastSeq, header.lastSeq] })
     if (rows.rows.length !== header.toolCount) failRecovery('Incomplete canonical tool archive')
     if (rows.rows.some(row => row.expected_seq !== null && Number(row.expected_seq) > Number(row.seq))) failRecovery('Missing canonical tool revision')
-    const tools = rows.rows.map(row => parse<SubagentToolCall>(row.detail))
+    const tools: SubagentToolCall[] = []
+    for (const row of rows.rows) tools.push(await this.payloads.decodeDetail<SubagentToolCall>(header.tenantId, String(row.detail)))
     if (tools.filter(tool => tool.status === 'running').length !== header.activeToolCount) failRecovery('Canonical active tool count mismatch')
     const { toolCount: _count, activeToolCount: _active, nonPlanToolCount: _effects, latestActivity: _latest, continuationDisplay: _display, ...fields } = header
     return { ...fields, schemaVersion: 1, toolCalls: tools }
@@ -378,13 +407,16 @@ export class SubagentStore {
       SELECT r.tenant_id,r.run_id,json_extract(j.value,'$.id'),?,CAST(j.key AS INTEGER)+1,json_extract(j.value,'$.status'),${this.legacyToolSummary('j.value', current.runId, current.lastSeq)},j.value
       FROM subagent_runs r,json_each(r.snapshot,'$.toolCalls') j WHERE r.tenant_id=? AND r.run_id=?`, args: [current.lastSeq, current.tenantId, current.runId] })
     await tx.execute({ sql: 'INSERT INTO subagent_tools(tenant_id,run_id,tool_id,ordinal,revision_seq,status,summary) SELECT tenant_id,run_id,tool_id,ordinal,seq,status,summary FROM subagent_tool_versions WHERE tenant_id=? AND run_id=? AND seq=?', args: [current.tenantId, current.runId, current.lastSeq] })
-    await tx.execute({ sql: 'INSERT INTO subagent_checkpoints(tenant_id,run_id,seq,header) VALUES (?,?,?,?)', args: [current.tenantId, current.runId, current.lastSeq, JSON.stringify(stateOf(current))] })
+    await tx.execute({ sql: 'INSERT INTO subagent_checkpoints(tenant_id,run_id,seq,header) VALUES (?,?,?,?)', args: [current.tenantId, current.runId, current.lastSeq, JSON.stringify(await this.payloads.encodeState(current.tenantId, stateOf(current)))] })
   }
 
   private async persistDelta(tx: Transaction, kind: SubagentEvent['kind'], prior: SubagentRunHeader | null, next: SubagentRunHeader, toolUpsert?: SubagentToolSummary): Promise<SubagentMutation> {
-    const state = JSON.stringify(stateOf(next))
+    // Files are synced before committing their references. A failed SQLite
+    // transaction may leave an orphan file, never a committed missing body.
+    const storedState = await this.payloads.encodeState(next.tenantId, stateOf(next))
+    const state = JSON.stringify(storedState)
     await tx.execute({ sql: 'INSERT INTO subagent_checkpoints(tenant_id,run_id,seq,header) VALUES (?,?,?,?)', args: [next.tenantId, next.runId, next.lastSeq, state] })
-    await tx.execute({ sql: 'UPDATE subagent_runs SET status=?,seq=?,updated_at=?,snapshot=? WHERE tenant_id=? AND run_id=?', args: [next.status, next.lastSeq, next.updatedAt, JSON.stringify({ schemaVersion: 2, runId: next.runId, ...stateOf(next) }), next.tenantId, next.runId] })
+    await tx.execute({ sql: 'UPDATE subagent_runs SET status=?,seq=?,updated_at=?,snapshot=? WHERE tenant_id=? AND run_id=?', args: [next.status, next.lastSeq, next.updatedAt, JSON.stringify({ schemaVersion: 2, runId: next.runId, ...storedState }), next.tenantId, next.runId] })
     await appendDiscoveryLifecycle(tx, next)
     if (isTerminalRun(next.status) && (!prior || !isTerminalRun(prior.status))) await interruptControllerInvocation(tx, next)
     // Tool/output progress has no billing effect. Avoid two ledger probes per
@@ -395,13 +427,13 @@ export class SubagentStore {
     const event: SubagentDeltaEvent = {
       schemaVersion: 2, kind, runId: next.runId, seq: next.lastSeq, baseSeq: prior?.lastSeq ?? 0,
       identity: identityOf(next), ...(prior ? {} : { header }),
-      headerPatch: Object.fromEntries(stateKeys.filter(key => key !== 'nonPlanToolCount' && key in header).map(key => [key, header[key as keyof typeof header]])),
+      headerPatch: Object.fromEntries(stateKeys.filter(key => key !== 'nonPlanToolCount' && key !== 'latestActivity' && key in header).map(key => [key, header[key as keyof typeof header]])),
       ...(toolUpsert ? { toolUpsert } : {}),
     }
-    await tx.execute({ sql: 'INSERT INTO subagent_events(tenant_id,run_id,seq,kind,event) VALUES (?,?,?,?,?)', args: [next.tenantId, next.runId, next.lastSeq, kind, JSON.stringify(event)] })
+    await tx.execute({ sql: 'INSERT INTO subagent_events(tenant_id,run_id,seq,kind,event) VALUES (?,?,?,?,?)', args: [next.tenantId, next.runId, next.lastSeq, kind, JSON.stringify(await this.payloads.encodeEvent(next.tenantId, event))] })
     if (kind === 'finished' && isTerminalRun(next.status)) {
       const checkpoint: SubagentWireEvent = { schemaVersion: 2, kind: 'snapshot', runId: next.runId, seq: next.lastSeq, view }
-      await tx.execute({ sql: 'INSERT INTO subagent_outbox(id,tenant_id,run_id,seq,event) VALUES (?,?,?,?,?)', args: [`${next.tenantId}:${next.runId}:${next.lastSeq}`, next.tenantId, next.runId, next.lastSeq, JSON.stringify(checkpoint)] })
+      await tx.execute({ sql: 'INSERT INTO subagent_outbox(id,tenant_id,run_id,seq,event) VALUES (?,?,?,?,?)', args: [`${next.tenantId}:${next.runId}:${next.lastSeq}`, next.tenantId, next.runId, next.lastSeq, JSON.stringify(await this.payloads.encodeEvent(next.tenantId, checkpoint))] })
     }
     return { event, header: next, view }
   }
@@ -453,7 +485,7 @@ export class SubagentStore {
     await tx.execute({ sql: `UPDATE subagent_tools SET status='cancelled',revision_seq=?,summary=(SELECT v.summary FROM subagent_tool_versions v WHERE v.tenant_id=subagent_tools.tenant_id AND v.run_id=subagent_tools.run_id AND v.tool_id=subagent_tools.tool_id AND v.seq=?) WHERE tenant_id=? AND run_id=? AND status='running'`, args: [header.lastSeq, header.lastSeq, header.tenantId, header.runId] })
     header.activeToolCount = 0
     const latest = await tx.execute({ sql: 'SELECT summary FROM subagent_tools WHERE tenant_id=? AND run_id=? ORDER BY revision_seq DESC,ordinal DESC LIMIT 1', args: [header.tenantId, header.runId] })
-    if (latest.rows[0]) header.latestActivity = cleanToolSummary(latest.rows[0].summary)
+    if (latest.rows[0]) header.latestActivity = await this.toolSummary(header.tenantId, latest.rows[0].summary)
   }
 
   async appendHeader(tenantId: string, runId: string, kind: SubagentEvent['kind'], patch: HeaderPatch | ((current: SubagentRunHeader) => HeaderPatch), options: { allowedStatuses?: readonly RunStatus[]; cancelActiveTools?: boolean; finishRequestKey?: string; finishPayloadHash?: string } = {}): Promise<SubagentMutation | null> {
@@ -505,21 +537,23 @@ export class SubagentStore {
       const old = previous.rows[0]
       if (kind === 'tool.started' && old && old.status !== 'running' || kind === 'tool.completed' && !old) return null
       const seq = current.lastSeq + 1, ordinal = old ? Number(old.ordinal) : current.toolCount + 1
-      const prior = old ? cleanToolSummary(old.summary) : undefined
+      const prior = old ? await this.toolSummary(tenantId, old.summary) : undefined
       if (prior && prior.name !== utf8Prefix(tool.name, 512)) throw new RangeError('Subagent tool identity changed')
       const status = prior && prior.status !== 'running' ? prior.status : tool.status
       const patch = { ...tool, status, ...(prior?.startedAt !== undefined ? { startedAt: prior.startedAt } : {}) }
       const full: SubagentToolCall = { args: tool.args ?? null, ...patch }
       const summary = summarizeSubagentTool({ ...prior, ...full, args: tool.args === undefined ? prior?.args ?? null : tool.args, revisionSeq: seq, ordinal, detailRef: `/subagent/runs/${encodeURIComponent(runId)}/tools/${encodeURIComponent(tool.id)}?atSeq=${seq}` }, runId, seq, ordinal)
+      const storedSummary = JSON.stringify(await this.payloads.encodeSummary(tenantId, summary))
       // Completion retains original args by SQL patching the archived detail,
       // while JS only holds the old bounded summary and this call's new output.
       if (old) {
-        const { args: _args, ...metadataPatch } = patch
-        await tx.execute({ sql: `INSERT INTO subagent_tool_versions(tenant_id,run_id,tool_id,seq,ordinal,status,summary,detail) SELECT tenant_id,run_id,tool_id,?,ordinal,?,?,${tool.args === undefined ? 'json_patch(detail,?)' : "json_set(json_patch(detail,?),'$.args',json(?))"} FROM subagent_tool_versions WHERE tenant_id=? AND run_id=? AND tool_id=? AND seq=?`, args: [seq, status, JSON.stringify(summary), JSON.stringify(metadataPatch), ...(tool.args === undefined ? [] : [JSON.stringify(tool.args)]), tenantId, runId, tool.id, Number(old.revision_seq)] })
+        const storedPatch = await this.payloads.encodeDetailPatch(tenantId, patch)
+        const { args: storedArgs, ...metadataPatch } = storedPatch
+        await tx.execute({ sql: `INSERT INTO subagent_tool_versions(tenant_id,run_id,tool_id,seq,ordinal,status,summary,detail) SELECT tenant_id,run_id,tool_id,?,ordinal,?,?,${tool.args === undefined ? 'json_patch(detail,?)' : "json_set(json_patch(detail,?),'$.args',json(?))"} FROM subagent_tool_versions WHERE tenant_id=? AND run_id=? AND tool_id=? AND seq=?`, args: [seq, status, storedSummary, JSON.stringify(metadataPatch), ...(tool.args === undefined ? [] : [JSON.stringify(storedArgs)]), tenantId, runId, tool.id, Number(old.revision_seq)] })
       } else {
-        await tx.execute({ sql: 'INSERT INTO subagent_tool_versions(tenant_id,run_id,tool_id,seq,ordinal,status,summary,detail) VALUES (?,?,?,?,?,?,?,?)', args: [tenantId, runId, tool.id, seq, ordinal, status, JSON.stringify(summary), JSON.stringify(full)] })
+        await tx.execute({ sql: 'INSERT INTO subagent_tool_versions(tenant_id,run_id,tool_id,seq,ordinal,status,summary,detail) VALUES (?,?,?,?,?,?,?,?)', args: [tenantId, runId, tool.id, seq, ordinal, status, storedSummary, JSON.stringify(await this.payloads.encodeDetail(tenantId, full))] })
       }
-      await tx.execute({ sql: 'INSERT INTO subagent_tools(tenant_id,run_id,tool_id,ordinal,revision_seq,status,summary) VALUES (?,?,?,?,?,?,?) ON CONFLICT(tenant_id,run_id,tool_id) DO UPDATE SET revision_seq=excluded.revision_seq,status=excluded.status,summary=excluded.summary', args: [tenantId, runId, tool.id, ordinal, seq, status, JSON.stringify(summary)] })
+      await tx.execute({ sql: 'INSERT INTO subagent_tools(tenant_id,run_id,tool_id,ordinal,revision_seq,status,summary) VALUES (?,?,?,?,?,?,?) ON CONFLICT(tenant_id,run_id,tool_id) DO UPDATE SET revision_seq=excluded.revision_seq,status=excluded.status,summary=excluded.summary', args: [tenantId, runId, tool.id, ordinal, seq, status, storedSummary] })
       const next: SubagentRunHeader = { ...current, lastSeq: seq, updatedAt: Date.now(), toolCount: current.toolCount + (old ? 0 : 1),
         activeToolCount: current.activeToolCount + (status === 'running' ? 1 : 0) - (old?.status === 'running' ? 1 : 0),
         nonPlanToolCount: current.nonPlanToolCount + (!old && !isTaskPlanControl(tool.name) ? 1 : 0), latestActivity: summary }

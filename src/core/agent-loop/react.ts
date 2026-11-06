@@ -200,7 +200,7 @@ const todoStore = new TodoStore()
 async function* yieldTodoFrame(ctx: AgentContext): AsyncGenerator<string> {
   try {
     const todos = await todoStore.list(ctx.tenantId, ctx.sessionId)
-    yield `\x00__todo__${JSON.stringify({ todos })}`
+    yield `\x00__todo__${JSON.stringify({ todos, runId: ctx.rootRunId, turnId: ctx.turnId })}`
   } catch {
     // 清单推送失败不影响主流程
   }
@@ -375,7 +375,7 @@ export class ReActStrategy implements LoopStrategy {
       yield `\x00__tool_end__${payload}`
       yield `\x00__tool_result__${payload}`
     }
-    if (planSnapshot) yield `\x00__todo__${JSON.stringify({ todos: planSnapshot })}`
+    if (planSnapshot) yield `\x00__todo__${JSON.stringify({ todos: planSnapshot, runId: ctx.rootRunId, turnId: ctx.turnId })}`
     // A writer may partially mutate before failing; its recorded change still matters.
     for (const change of fileChanges) yield `\x00__file_change__${JSON.stringify(change)}`
     return { tokens: result.status === 'waiting' ? 0 : tokens, failedToPersist }

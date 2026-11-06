@@ -1,5 +1,8 @@
+import fs from 'node:fs'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { commandJobs } from '../../../core/command-jobs/index.js'
+import { getSecurityMode } from '../../../security/policy-engine.js'
+import { workspaceManager } from '../../../workspace/index.js'
 import { success, fail } from '../response.js'
 
 const scopeFor = (request: FastifyRequest, sessionId: string) => ({
@@ -39,6 +42,49 @@ export async function commandJobRoutes(fastify: FastifyInstance) {
     } catch (error) {
       if (error instanceof Error && 'statusCode' in error && error.statusCode === 400) {
         return reply.code(400).send(fail(40001, error.message))
+      }
+      throw error
+    }
+  })
+
+  fastify.post<{ Params: { jobId: string }; Body: { sessionId: string } }>('/command-jobs/:jobId/restart', async (request, reply) => {
+    if (!validSession(request.body?.sessionId)) return reply.code(400).send(fail(40001, 'sessionId is required'))
+    const scope = scopeFor(request, request.body.sessionId)
+    const original = await commandJobs.get(scope, request.params.jobId)
+    if (!original) return reply.code(404).send(fail(40400, 'Command job not found'))
+    if (!original.background || original.status === 'running' || original.status === 'cancelling') {
+      return reply.code(409).send(fail(40900, 'Only a terminal background command job can be restarted'))
+    }
+    let cwd: string
+    try {
+      cwd = fs.realpathSync(workspaceManager.resolveSafePath(scope, original.cwd))
+      workspaceManager.resolveSafePath(scope, cwd)
+    } catch (error) {
+      return reply.code(400).send(fail(40001, error instanceof Error ? error.message : 'Invalid command working directory'))
+    }
+    const mode = getSecurityMode(scope.tenantId, scope.sessionId)
+    try {
+      const job = await commandJobs.restart(scope, request.params.jobId, { cwd,
+        env: mode === 'full-access' ? { ...process.env } : {
+          PATH: process.env.PATH, PATHEXT: process.env.PATHEXT, HOME: cwd, SystemRoot: process.env.SystemRoot, COMSPEC: process.env.COMSPEC,
+        } })
+      return job ? reply.send(success(job)) : reply.code(404).send(fail(40400, 'Command job not found'))
+    } catch (error) {
+      if (error instanceof Error && 'statusCode' in error && error.statusCode === 409) {
+        return reply.code(409).send(fail(40900, error.message))
+      }
+      throw error
+    }
+  })
+
+  fastify.delete<{ Params: { jobId: string }; Querystring: { sessionId: string } }>('/command-jobs/:jobId', async (request, reply) => {
+    if (!validSession(request.query.sessionId)) return reply.code(400).send(fail(40001, 'sessionId is required'))
+    try {
+      const deleted = await commandJobs.delete(scopeFor(request, request.query.sessionId), request.params.jobId)
+      return deleted ? reply.send(success({ deleted: true })) : reply.code(404).send(fail(40400, 'Command job not found'))
+    } catch (error) {
+      if (error instanceof Error && 'statusCode' in error && error.statusCode === 409) {
+        return reply.code(409).send(fail(40900, error.message))
       }
       throw error
     }
