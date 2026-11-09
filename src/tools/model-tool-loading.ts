@@ -20,7 +20,7 @@ const groups: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['Skills', ['list_skills', 'get_skill', 'run_skill_script']],
   ['Memory', ['remember', 'recall', 'list_memories', 'forget', 'link_memories', 'search_memory']],
   ['Automation', ['cron_list', 'cron_preview', 'cron_create', 'cron_update', 'cron_delete']],
-  ['Subagents', ['subagent', 'subagent_start', 'subagent_directory', 'subagent_followup', 'subagent_send', 'subagent_wait', 'subagent_cancel', 'subagent_participants', 'subagent_inbox', 'subagent_request_input']],
+  ['Subagents', ['subagent', 'subagent_start', 'subagent_directory', 'subagent_followup', 'subagent_send', 'subagent_wait', 'subagent_cancel', 'subagent_participants', 'subagent_inbox', 'subagent_request_input', 'subagent_read_result']],
   ['Web/history', ['web_fetch', 'http_request', 'search_history']],
   ['Code', ['code_diagnose', 'codegraph']],
   ['Browser', ['browser_tabs', 'browser_open', 'browser_navigate', 'browser_snapshot', 'browser_screenshot', 'browser_click', 'browser_fill', 'browser_scroll', 'browser_press_key', 'browser_wait', 'browser_console', 'browser_network', 'browser_network_request', 'browser_set_viewport', 'browser_close']],
@@ -43,6 +43,7 @@ function catalogue(definitions: readonly Definition[]): string {
 function restoreSelection(history: readonly Message[], available: ReadonlySet<string>, loaded: Set<string>): void {
   const dispatches = new Map<string, Message['toolCall']>()
   for (const message of history) {
+    if (message.id?.startsWith('subagent-result:') && available.has('subagent_read_result')) loaded.add('subagent_read_result')
     if (message.role === 'assistant' && message.toolCall) {
       dispatches.set(message.toolCall.id, message.toolCall)
     }
@@ -54,8 +55,8 @@ function restoreSelection(history: readonly Message[], available: ReadonlySet<st
     if (available.has(call.name)) loaded.add(call.name)
     // A real directory observation is already the delegation decision. Offer
     // the authorized controls next, avoiding a separate load-only model turn.
-    if (['subagent_directory', 'subagent_start', 'subagent_followup'].includes(call.name)) {
-      for (const name of ['subagent_start', 'subagent_followup', 'subagent_wait']) if (available.has(name)) loaded.add(name)
+    if (['subagent', 'subagent_directory', 'subagent_start', 'subagent_followup'].includes(call.name)) {
+      for (const name of ['subagent_start', 'subagent_followup', 'subagent_wait', 'subagent_read_result']) if (available.has(name)) loaded.add(name)
     }
     if (call?.name !== 'load_tools') continue
     if (typeof message.content !== 'string') continue

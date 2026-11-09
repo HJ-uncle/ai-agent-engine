@@ -119,6 +119,22 @@ describe('Work text pages keep every source line inside the runtime output cap',
     expect(next.startLine).toBe(full.endLine + 1)
   })
 
+  it('pages a plain rules document requested as summary without an outer truncation or missing source', async () => {
+    const lines = Array.from({ length: 85 }, (_, i) => `rule-${i}: ${'中文规则🙂'.repeat(12)}`)
+    const file = seed(lines.join('\n'), 'rules.md')
+    const received: string[] = []
+    let mode = 'summary', startLine = 1, pages = 0
+    do {
+      const page = await readPage(file, { mode, start_line: startLine })
+      received.push(...page.numberedContent.split('\n').map((line: string) => line.replace(/^\d+ \| /, '')))
+      expect(++pages).toBeLessThan(100)
+      if (!page.hasMore) break
+      mode = 'auto'; startLine = page.nextStartLine
+    } while (true)
+    expect(pages).toBeGreaterThan(1)
+    expect(received).toEqual(lines)
+  })
+
   it('keeps exact bytes and Code behavior, rejecting unsupported column paging explicitly', async () => {
     const raw = '\uFEFFa\r\nb\r\n', file = seed(raw)
     const exact = await readFileTool.execute({ path: file, mode: 'exact' }, ctx)

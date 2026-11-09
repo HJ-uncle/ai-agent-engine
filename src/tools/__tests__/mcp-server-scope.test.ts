@@ -58,7 +58,9 @@ describe('Agent MCP server scope', () => {
     expect(result.registry.has('mcp_beta_query')).toBe(false)
     await expect(result.registry.execute('mcp_beta_query', {}, context)).rejects.toBeInstanceOf(ToolNotFoundError)
     await expect(result.registry.execute('mcp_alpha_query', {}, context)).resolves.toEqual({ success: true, output: 'mcp_alpha_query' })
-    expect(result.registry.has('agent_list')).toBe(toolProfile === 'general')
+    // Agent management is optional in both profiles; selecting an MCP server
+    // must not re-enable a management tool excluded by the default exposure.
+    expect(result.registry.has('agent_list')).toBe(false)
   })
 
   it.each([undefined, null])('preserves the full configured server catalogue when the whitelist is %s', async allowedMcpServers => {

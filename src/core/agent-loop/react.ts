@@ -1899,7 +1899,8 @@ export class ReActStrategy implements LoopStrategy {
       await ctx.runObserver?.onOutcome?.(ctx.signal?.aborted ? { status: 'cancelled', stopReason: 'cancelled' }
         : finalizationReason ? { status: 'failed', stopReason: finalizationReason, partialOutput: emittedOutput,
           error: { code: finalizationReason === 'budget' ? 'TOKEN_BUDGET_EXCEEDED' : 'MAX_STEPS', message: finalizationNotice, retryable: false } }
-        : { status: 'succeeded', output: answeredAfterCollaboration ? finalTextPrefix + (response.content || '') : emittedOutput, stopReason: 'completed' })
+        : { status: 'succeeded', output: answeredAfterCollaboration ? finalTextPrefix + (response.content || '') : emittedOutput,
+          finalOutput: finalTextPrefix + (response.content || ''), stopReason: 'completed' })
 
       // onOutcome commits the root settlement. A cancellation can win while the
       // final assistant is being persisted, so the candidate alone grants no delivery.

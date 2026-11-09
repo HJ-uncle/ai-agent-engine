@@ -71,7 +71,7 @@ describe('single-response output limit continuation', () => {
     })
     const frames = await f.run()
     expect(body(frames)).toBe('First part; remaining work complete.')
-    expect(f.outcomes).toEqual([{ status: 'succeeded', output: body(frames), stopReason: 'completed' }])
+    expect(f.outcomes).toEqual([{ status: 'succeeded', output: body(frames), finalOutput: body(frames), stopReason: 'completed' }])
     expect(f.ctx.runObserver!.onOutput).toHaveBeenLastCalledWith(body(frames))
     const assistants = f.history.filter(message => message.role === 'assistant')
     expect(assistants).toHaveLength(2)

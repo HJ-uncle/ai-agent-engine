@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify'
-import { createClient, type Client } from '@libsql/client'
+import { LocalSqliteProcessClient } from '../../../../storage/sqlite/local-process-client.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AuthContext } from '../../../../auth/types.js'
 import type { SubagentEvent } from '../../../../core/subagent/types.js'
@@ -12,7 +12,7 @@ import * as runners from '../../../../core/subagent/runner.js'
 import { subagentRoutes } from '../subagent.js'
 
 let app: FastifyInstance
-let db: Client
+let db: LocalSqliteProcessClient
 let store: stores.SubagentStore
 let fixtureDir: string
 const actorA = { 'x-fixture-actor': 'alice' }
@@ -20,7 +20,7 @@ const actorB = { 'x-fixture-actor': 'bob' }
 
 beforeEach(async () => {
   fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-subagent-routes-'))
-  db = createClient({ url: `file:${path.join(fixtureDir, 'runs.db').replace(/\\/g, '/')}` })
+  db = new LocalSqliteProcessClient({ url: `file:${path.join(fixtureDir, 'runs.db').replace(/\\/g, '/')}` })
   store = new stores.SubagentStore(db)
   vi.spyOn(stores, 'getSubagentStore').mockReturnValue(store)
   vi.spyOn(runners, 'getSubagentRunner').mockReturnValue(new runners.SubagentRunner(store))
@@ -49,7 +49,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await app?.close()
   vi.restoreAllMocks()
-  db.close()
+  await db.closeWithReceipt()
   if (path.dirname(fixtureDir) !== path.resolve(os.tmpdir()) || !path.basename(fixtureDir).startsWith('aether-subagent-routes-')) throw new Error('Unsafe fixture cleanup path')
   try { fs.rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 2, retryDelay: 20 }) }
   catch (error) {
@@ -59,6 +59,40 @@ afterEach(async () => {
 })
 
 describe('Subagent HTTP tenant isolation', () => {
+  it('pages verified complete results with required parent ownership and authenticated tenant identity', async () => {
+    const body = '\ufeff结论🙂证据\n'.repeat(1200) + 'FINAL_RESULT_TAIL'
+    const { summary, ...metadata } = await store.prepareResult('tenant-a', body, 'final')
+    await store.appendHeader('tenant-a', 'run-a1', 'finished', { status: 'succeeded', resultSummary: summary, ...metadata })
+    let offset = 0, actual = ''
+    while (true) {
+      const response = await app.inject({ url: `/subagent/runs/run-a1/result?parentSessionId=shared-parent&offset=${offset}&limitBytes=1021`, headers: actorA })
+      expect(response.statusCode).toBe(200)
+      const page = response.json().data
+      expect(page).toMatchObject({ encoding: 'utf8', resultHash: metadata.resultHash, totalBytes: Buffer.byteLength(body), offset })
+      expect(Buffer.byteLength(page.text)).toBeLessThanOrEqual(1021); expect(page.text).not.toContain('\ufffd')
+      actual += page.text
+      if (!page.hasMore) { expect(page.nextOffset).toBeUndefined(); break }
+      expect(page.nextOffset).toBeGreaterThan(offset); offset = page.nextOffset
+    }
+    expect(actual).toBe(body)
+    for (const [url, headers] of [
+      ['/subagent/runs/run-a1/result?parentSessionId=shared-parent&tenantId=tenant-a', actorB],
+      ['/subagent/runs/run-a1/result?parentSessionId=other-parent', actorA],
+      ['/subagent/runs/run-a1/result?parentSessionId=shared-parent&rootSessionId=other-parent', actorA],
+    ] as const) expect((await app.inject({ url, headers })).statusCode).toBe(404)
+    for (const query of ['', '?parentSessionId=shared-parent&limitBytes=65537', '?parentSessionId=shared-parent&offset=1', '?parentSessionId=shared-parent&offset=-1']) {
+      expect((await app.inject({ url: '/subagent/runs/run-a1/result' + query, headers: actorA })).statusCode).toBe(400)
+    }
+  })
+
+  it('marks historical previews unavailable for complete-result reads instead of returning them as full evidence', async () => {
+    await store.appendHeader('tenant-a', 'run-a1', 'finished', { status: 'succeeded', resultSummary: 'Old preview' })
+    const response = await app.inject({ url: '/subagent/runs/run-a1/result?parentSessionId=shared-parent', headers: actorA })
+    expect(response.statusCode).toBe(409)
+    expect(response.json()).toMatchObject({ code: 40902, data: { resultUnavailable: true } })
+    expect(response.body).not.toContain('Old preview')
+  })
+
   it('lists only the authenticated tenant and requested parent, ignoring identity in the query', async () => {
     const resultA = await app.inject({ method: 'GET', url: '/subagent/runs?parentSessionId=shared-parent&tenantId=tenant-b', headers: actorA })
     expect(resultA.statusCode).toBe(200)

@@ -3,6 +3,8 @@ import type { AgentContext, Tool, ToolResult } from '../../core/agent-context/ty
 import { serviceForOwner } from '../../core/collaboration/execution-owner.js'
 import { getSubagentRunner, type SubagentWait } from '../../core/subagent/runner.js'
 import { outcomeText } from '../../core/subagent/types.js'
+import { getToolOutputLimit } from '../../core/agent-loop/tool-output-limit.js'
+import { fitResultPage, SUBAGENT_RESULT_PAGE_BYTES } from '../../core/subagent/result.js'
 
 function argsOnly(raw: unknown, allowed: string[]): Record<string, unknown> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Arguments must be an object')
@@ -43,6 +45,11 @@ function guarded(execute: (args: unknown, ctx: AgentContext) => Promise<ToolResu
 }
 const pageParameters = { type: 'object', properties: { cursor: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 64 } }, additionalProperties: false }
 const waitParameters = { type: 'object', properties: { runId: { type: 'string' }, timeoutMs: { type: 'integer', minimum: 0, maximum: 60000 } }, required: ['runId'], additionalProperties: false }
+const batchWaitParameters = { type: 'object', properties: {
+  runId: { type: 'string', description: 'Single target; mutually exclusive with runIds.' },
+  runIds: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 8, uniqueItems: true, description: 'Wait for all targets together; prefer this for multiple tasks.' },
+  timeoutMs: { type: 'integer', minimum: 0, maximum: 60000, description: 'One shared deadline; batch default 60000.' },
+}, additionalProperties: false }
 function waited(result: SubagentWait): ToolResult {
   return { success: true, output: result.state === 'pending' ? JSON.stringify(result) : outcomeText(result.run),
     metadata: { subagentObservation: result } }
@@ -72,8 +79,43 @@ export const subagentSendTool: Tool = {
 }
 export const subagentWaitTool: Tool = {
   name: 'subagent_wait', displayName: '等待子代理',
-  description: '有界等待本次父任务实际启动的 runId。completed 需要真实执行、最终结果持久投影和任务票据均已完成；pending 不代表取消。超时只结束本次观察。', parameters: waitParameters,
-  execute: guarded(async (raw, ctx) => { const args = argsOnly(raw, ['runId', 'timeoutMs']); return waited(await getSubagentRunner().waitOwned(ctx, text(args.runId, 'runId'), { timeoutMs: timeout(args.timeoutMs) })) }),
+  description: '有界等待本次父任务实际启动的任务。多个目标用runIds（1–8个，不与runId同传），共用截止时间，收齐后一次回传；超时或新消息提前返回已完成和待完成项。completed需真实执行、结果持久投影和任务票据均完成，不等于任务成功；pending不取消任务。批量回执引用父会话结果通知，不重复正文。', parameters: batchWaitParameters,
+  execute: guarded(async (raw, ctx) => {
+    const args = argsOnly(raw, ['runId', 'runIds', 'timeoutMs']), runner = getSubagentRunner()
+    const timeoutMs = timeout(args.timeoutMs)
+    if ((args.runId !== undefined) === (args.runIds !== undefined)) throw new Error('Provide exactly one of runId or runIds')
+    const single = args.runId !== undefined
+    if (!single && (!Array.isArray(args.runIds) || args.runIds.length < 1 || args.runIds.length > 8)) throw new Error('runIds must contain 1..8 unique nonempty IDs')
+    const runIds = single ? [text(args.runId, 'runId')] : (args.runIds as unknown[]).map(value => text(value, 'runIds item'))
+    if (new Set(runIds).size !== runIds.length) throw new Error('runIds must contain unique IDs')
+    const result = single ? await runner.waitOwned(ctx, runIds[0], { timeoutMs }).then(item => ({
+      state: item.state, runs: [item], reason: item.state === 'pending' ? item.reason : undefined,
+    })) : await runner.waitManyOwned(ctx, runIds, { timeoutMs })
+    if (single && result.runs[0].state === 'pending') return waited(result.runs[0])
+    const runs = await Promise.all(result.runs.map(async item => {
+      if (item.state === 'pending') return item
+      const run = item.run
+      const projection = await runner.store.ownedParentProjection(ctx.tenantId, run.runId, run.lastSeq)
+      if (!projection.acknowledged || !projection.disposition) throw new Error('SUBAGENT_RESULT_PROJECTION_UNKNOWN')
+      return { state: item.state, runId: run.runId, childSessionId: run.childSessionId, status: run.status,
+        stopReason: run.stopReason, errorCode: run.error?.code, projection: projection.disposition,
+        ...(projection.disposition === 'suppressed' ? {} : { resultMessageId: 'subagent-result:' + run.runId }) }
+    }))
+    // Completed bodies already have canonical parent-history notifications. Repeating
+    // them here multiplies context and can cut a multi-result JSON receipt in half.
+    await canonical(ctx)
+    const note = 'completed为等待完成，成败看status。结果正文见resultMessageId对应父会话通知；suppressed表示通知未写入，不能据此验收。'
+    const receipt = (items: Array<Record<string, unknown>>) => single ? { ...items[0], note }
+      : { state: result.state, ...(result.reason ? { reason: result.reason } : {}), runs: items, note }
+    const limit = getToolOutputLimit(ctx.toolProfile, ctx)
+    let output = JSON.stringify(receipt(runs))
+    if (output.length > limit) output = JSON.stringify(receipt(runs.map(item => item.state === 'pending' ? item
+      : { ...item, childSessionId: undefined, stopReason: undefined, errorCode: undefined })))
+    if (output.length > limit) throw new Error('Tool output allowance is too small for the batch wait receipt; wait for fewer targets together')
+    return { success: true, output, metadata: { subagentObservation: single
+      ? { state: result.state, run: runs[0] }
+      : { state: result.state, reason: result.reason, runs } } }
+  }),
 }
 export const subagentCancelTool: Tool = {
   name: 'subagent_cancel', displayName: '取消子代理',
@@ -101,5 +143,32 @@ export const subagentInboxTool: Tool = {
   }),
 }
 
-export const asyncSubagentTools = [subagentSendTool, subagentWaitTool, subagentCancelTool, subagentParticipantsTool, subagentInboxTool]
-export const readonlySubagentTools = [subagentWaitTool, subagentParticipantsTool, subagentInboxTool]
+export const subagentReadResultTool: Tool = {
+  name: 'subagent_read_result', displayName: '读取子代理完整结果',
+  description: '按 UTF-8 字节分页读取子代理已落盘且经过哈希校验的完整最终回答或部分结果。只读当前父会话所属 runId；子代理仅可读当前协作根任务中的同伴结果。先 offset=0，随后严格使用 nextOffset，直到 hasMore=false。结果引用不能代表执行成功，终态仍以机器状态为准。旧记录无完整引用时明确报错，不把摘要当全文。',
+  parameters: { type: 'object', properties: { runId: { type: 'string' }, offset: { type: 'integer', minimum: 0 },
+    limitBytes: { type: 'integer', minimum: 4, maximum: SUBAGENT_RESULT_PAGE_BYTES } }, required: ['runId'], additionalProperties: false },
+  execute: guarded(async (raw, ctx) => {
+    const args = argsOnly(raw, ['runId', 'offset', 'limitBytes']), runId = text(args.runId, 'runId')
+    if (args.offset !== undefined && (!Number.isSafeInteger(args.offset) || Number(args.offset) < 0)
+      || args.limitBytes !== undefined && (!Number.isSafeInteger(args.limitBytes) || Number(args.limitBytes) < 4 || Number(args.limitBytes) > SUBAGENT_RESULT_PAGE_BYTES))
+      throw new RangeError('Invalid result page range')
+    const { service, runtime, binding } = await canonical(ctx), store = getSubagentRunner().store
+    if (store.db !== service.db) throw new Error('Subagent result datasource mismatch')
+    if (binding.kind === 'child' && !(await runtime.store.executionInvocations(binding)).some(run => run.runId === runId))
+      throw new Error('Subagent result does not belong to the current collaboration')
+    const allowance = getToolOutputLimit(ctx.toolProfile, ctx)
+    const page = await store.getResultPage(binding.tenantId, binding.kind === 'root' ? binding.sessionId : binding.rootSessionId, runId,
+      { rootSessionId: binding.rootSessionId, offset: args.offset as number | undefined,
+        limitBytes: Math.min(Number(args.limitBytes ?? 16 * 1024), Math.max(4, allowance)) })
+    if (!page) throw new Error('Owned subagent result not found')
+    const fitted = fitResultPage(page, allowance)
+    await runtime.store.assertProducer(service.db, binding); service.producerForExecution(ctx.executionOwner!); ctx.signal?.throwIfAborted()
+    return { success: true, output: JSON.stringify(fitted), metadata: { subagentResultPage: {
+      runId, resultRef: fitted.resultRef, resultHash: fitted.resultHash, resultKind: fitted.resultKind, offset: fitted.offset,
+      totalBytes: fitted.totalBytes, hasMore: fitted.hasMore, nextOffset: fitted.nextOffset } } }
+  }),
+}
+
+export const asyncSubagentTools = [subagentSendTool, subagentWaitTool, subagentCancelTool, subagentParticipantsTool, subagentInboxTool, subagentReadResultTool]
+export const readonlySubagentTools = [subagentWaitTool, subagentParticipantsTool, subagentInboxTool, subagentReadResultTool]

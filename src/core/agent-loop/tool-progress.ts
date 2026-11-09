@@ -49,6 +49,10 @@ function outcomeFingerprint(call: Pick<ToolCall, 'name' | 'args'>, result: ToolR
 }
 
 export function waitingOnActiveWork(call: Pick<ToolCall, 'name'>, result: ToolResult): boolean {
+  if (call.name === 'subagent_wait' && result.success && result.status !== 'failed') {
+    const observation = result.metadata?.subagentObservation as { state?: string } | undefined
+    return observation?.state === 'pending'
+  }
   if (call.name === 'command_output') {
     const job = result.metadata?.commandJob as { status?: string } | undefined
     return ['pending', 'queued', 'starting', 'running'].includes(job?.status ?? '')

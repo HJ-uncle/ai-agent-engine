@@ -142,7 +142,7 @@ describe('safe regeneration after a terminal tool output limit', () => {
     expect(f.attempts.filter(x => x.type === 'finish')).toHaveLength(3)
     expect(f.budget.snapshot).toMatchObject({ charged: 150, reserved: 0 })
     expect(usageFrames(frames).at(-1)).toMatchObject({ promptTokens: 120, completionTokens: 30, totalTokens: 150 })
-    expect(f.outcomes).toEqual([{ status: 'succeeded', output: 'verified', stopReason: 'completed' }])
+    expect(f.outcomes).toEqual([{ status: 'succeeded', output: 'verified', finalOutput: 'verified', stopReason: 'completed' }])
     pairIds(f.history)
   })
 
@@ -167,7 +167,7 @@ describe('safe regeneration after a terminal tool output limit', () => {
     expect(f.history.filter(m => m.role === 'user')).toHaveLength(1)
     expect(f.ctx.runObserver!.onUsage).toHaveBeenCalledTimes(3)
     expect(usageFrames(frames).at(-1)).toMatchObject({ promptTokens: 60, completionTokens: 18, totalTokens: 78 })
-    expect(f.outcomes).toEqual([{ status: 'succeeded', output: 'checkpoint-1checkpoint-2final', stopReason: 'completed' }])
+    expect(f.outcomes).toEqual([{ status: 'succeeded', output: 'checkpoint-1checkpoint-2final', finalOutput: 'final', stopReason: 'completed' }])
     pairIds(f.history)
   })
 

@@ -62,6 +62,7 @@ describe('Subagent HTTP protocol negotiation', () => {
       schemaVersion: 2, eventVersions: [1, 2], views: ['legacy', 'summary'],
       toolPagination: true, eventPagination: true, detailChunks: true, exactWatermarks: true,
       activeDiscovery: true, lifecycleChanges: true, discoveryProtocol: 1,
+      resultPagination: true, resultProtocol: 1,
     })
     for (const url of [
       '/subagent/runs?parentSessionId=parent&view=summary&limit=100000',

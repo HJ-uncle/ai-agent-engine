@@ -26,7 +26,7 @@ export const CODE_BUILTIN_TOOLS: ReadonlySet<string> = new Set([
   'report_artifacts',
   'office_inspect',
   'subagent', 'subagent_start', 'subagent_send', 'subagent_wait', 'subagent_cancel', 'subagent_participants', 'subagent_inbox',
-  'subagent_directory', 'subagent_followup', 'subagent_request_input',
+  'subagent_directory', 'subagent_followup', 'subagent_request_input', 'subagent_read_result',
   'plan_update', 'todo_list', 'todo_create', 'todo_update', 'todo_delete',
   'list_skills', 'get_skill', 'run_skill_script',
   'web_fetch', 'http_request', 'ask_user', 'search_history',

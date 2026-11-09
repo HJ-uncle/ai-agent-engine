@@ -84,7 +84,7 @@ const RESEARCH_TOOLS = new Set([
   'browser_tabs', 'browser_snapshot', 'browser_screenshot', 'browser_console', 'browser_network', 'browser_network_request',
   'todo_list', 'todo_create', 'todo_update', 'todo_delete', 'plan_update',
   'recall', 'search_memory', 'list_memories',
-  'subagent_send', 'subagent_participants', 'subagent_inbox', 'subagent_directory', 'subagent_request_input',
+  'subagent_send', 'subagent_participants', 'subagent_inbox', 'subagent_directory', 'subagent_request_input', 'subagent_read_result',
 ])
 
 const RECURSIVE_TOOLS = new Set(['subagent', 'subagent_start', 'subagent_followup', 'spawn_agent', 'start_agent'])

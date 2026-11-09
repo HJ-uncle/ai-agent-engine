@@ -29,7 +29,7 @@ const singleReadFileTool: Tool = {
       start_line: { type: 'number', description: '起始行号（从 1 开始），默认 1' },
       end_line: { type: 'number', description: '结束源行号。Work文本、批量文本/JSON/CSV按预算分页，参考hasMore/nextStartLine/nextStartColumn。单读JSON/CSV显式范围也按源文分页；未指定范围保留格式化展示。full从头、exact按原文合同。' },
       start_column: { type: 'integer', minimum: 1, description: 'auto源文分页的1起UTF-16列偏移，不拆代理对；支持Work文本、批量文本/JSON/CSV及JSON/CSV单读续页。使用回执nextStartLine/nextStartColumn，片段不保证是完整JSON。' },
-      mode: { type: 'string', enum: ['auto', 'full', 'summary', 'vision', 'ocr', 'exact'], description: 'auto(默认), full(全文), summary(摘要/签名), vision(图片预览), ocr(文本提取), exact(原始UTF-8 JSON，含完整expectedHash，可按行分页)' },
+      mode: { type: 'string', enum: ['auto', 'full', 'summary', 'vision', 'ocr', 'exact'], description: 'auto(默认), full(全文), summary(支持代码签名；普通文档保留原文并按预算分页，续页用auto及返回游标), vision(图片预览), ocr(文本提取), exact(原始UTF-8 JSON，含完整expectedHash，可按行分页)' },
     },
     required: ['path'],
   },
@@ -108,9 +108,14 @@ const singleReadFileTool: Tool = {
             output: JSON.stringify({ ...version, code: 'TEXT_ENCODING_UNSUPPORTED', message: 'CSV/TSV reading requires valid UTF-8 source text. This file is binary or uses another encoding; no spreadsheet conversion or lossy decoding was attempted.' }),
             metadata: { ...version, code: 'TEXT_ENCODING_UNSUPPORTED', fileMutationApplied: false } }
         }
-        if (sourcePaging && text !== null && (mode === 'auto' || mode === 'full')) {
+        // The text handler has no summary extractor for Markdown/rules files.
+        // Its old 300-line fallback bypassed the page budget and was truncated
+        // again by ReAct (or rejected in a batch), losing continuation offsets.
+        const plainSourceSummary = mode === 'summary' && handler instanceof TextHandler
+          && !['.ts', '.js', '.tsx', '.jsx', '.py', '.go', '.java'].includes(path.extname(canonicalPath).toLowerCase())
+        if (sourcePaging && text !== null && (mode === 'auto' || mode === 'full' || plainSourceSummary)) {
           const page = readTextPage({ text, version: { ...version, byteLength: before.content.byteLength },
-            maxChars: getToolOutputLimit(ctx.toolProfile, ctx), mode, startLine: start_line, endLine: end_line, startColumn: start_column })
+            maxChars: getToolOutputLimit(ctx.toolProfile, ctx), mode: plainSourceSummary ? 'auto' : mode, startLine: start_line, endLine: end_line, startColumn: start_column })
           if (readFileVersionSync(canonicalPath).hash !== before.hash) return { success: false, output: 'File changed while being read; read it again to obtain a matching content and expectedHash.' }
           ctx.logger.info(`[read_file] ${canonicalPath} - ${before.content.byteLength}B, ${page.output.length} output chars, ${(performance.now() - startTime).toFixed(2)}ms`)
           return page

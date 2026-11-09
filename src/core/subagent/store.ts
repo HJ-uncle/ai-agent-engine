@@ -3,6 +3,7 @@ import type { Client, Transaction } from '@libsql/client'
 import { getDb } from '../../storage/sqlite/db.js'
 import { getSubagentPayloadFiles } from './payload-files.js'
 import { SubagentPayloadCodec } from './payload-codec.js'
+import { checkedResultMetadata, resultMetadata, resultPreview, resultStorageReference, SUBAGENT_RESULT_PAGE_BYTES, utf8Prefix, type SubagentResultMetadata, type SubagentResultPage } from './result.js'
 import { up } from '../../storage/sqlite/migrations/019_subagent_runs.js'
 import { ensureSubagentDeltaSchema } from './durable-schema.js'
 import { ensureDiscoverySchema } from './discovery-schema.js'
@@ -14,7 +15,7 @@ import { isTaskPlanControl } from '../task-plan/control.js'
 import { interruptControllerInvocation } from '../collaboration/controller-origin.js'
 import { isTerminalRun, type CreateSubagentRun, type RunInvocationUsage, type RunStatus, type SubagentEvent, type SubagentRun, type SubagentRunHeader, type SubagentMutation, type SubagentRunView, type SubagentToolCall, type SubagentToolSummary, type SubagentDeltaEvent, type SubagentIdentity, type SubagentWireEvent } from './types.js'
 
-type RunPatch = Partial<Pick<SubagentRun, 'status' | 'startedAt' | 'finishedAt' | 'durationMs' | 'stopReason' | 'error' | 'resultSummary' | 'partialOutput' | 'compaction' | 'usage' | 'toolCalls' | 'modelId' | 'externalEffectStatus'>>
+type RunPatch = Partial<Pick<SubagentRun, 'status' | 'startedAt' | 'finishedAt' | 'durationMs' | 'stopReason' | 'error' | 'resultSummary' | 'partialOutput' | 'compaction' | 'usage' | 'toolCalls' | 'modelId' | 'externalEffectStatus' | keyof SubagentResultMetadata>>
 type PatchSource = RunPatch | ((current: SubagentRun) => RunPatch)
 const writes = new WeakMap<Client, Promise<unknown>>()
 type Query = Pick<Client, 'execute'> | Pick<Transaction, 'execute'>
@@ -27,21 +28,17 @@ const sizeOf = (value: unknown): number => Buffer.byteLength(JSON.stringify(valu
 const scopeHash = (...values: unknown[]) => createHash('sha256').update(JSON.stringify(values)).digest('hex')
 const cursorEncode = (value: Record<string, unknown>) => Buffer.from(JSON.stringify(value)).toString('base64url')
 function failRecovery(message: string): never { throw new Error('SUBAGENT_RECOVERY_REQUIRED: ' + message) }
-function utf8Prefix(text: string, limit: number): string {
-  let bytes = 0, length = 0
-  for (const character of text) { const size = Buffer.byteLength(character); if (bytes + size > limit) break; bytes += size; length += character.length }
-  return text.slice(0, length)
-}
 function boundHeaderPatch(patch: HeaderPatch): HeaderPatch {
+  checkedResultMetadata(patch)
   return { ...patch,
-    ...(patch.partialOutput === undefined ? {} : { partialOutput: utf8Prefix(patch.partialOutput, 8192) }),
-    ...(patch.resultSummary === undefined ? {} : { resultSummary: utf8Prefix(patch.resultSummary, 8192) }),
+    ...(patch.partialOutput === undefined ? {} : { partialOutput: resultPreview(patch.partialOutput, '\n[内容已截断；这里只保留预览]') }),
+    ...(patch.resultSummary === undefined ? {} : { resultSummary: resultPreview(patch.resultSummary, '\n[内容已截断；这里只保留预览]') }),
     ...(patch.stopReason === undefined ? {} : { stopReason: utf8Prefix(patch.stopReason, 1024) }),
     ...(patch.compaction === undefined ? {} : { compaction: summarizeSubagentCompaction(patch.compaction) }),
     ...(patch.error ? { error: { ...patch.error, code: utf8Prefix(patch.error.code, 256), message: utf8Prefix(patch.error.message, 1024) } } : {}),
   }
 }
-const stateKeys = ['status', 'lastSeq', 'updatedAt', 'startedAt', 'finishedAt', 'durationMs', 'stopReason', 'error', 'resultSummary', 'partialOutput', 'compaction', 'externalEffectStatus', 'usage', 'modelId', 'toolCount', 'activeToolCount', 'nonPlanToolCount', 'latestActivity'] as const
+const stateKeys = ['status', 'lastSeq', 'updatedAt', 'startedAt', 'finishedAt', 'durationMs', 'stopReason', 'error', 'resultSummary', 'partialOutput', 'resultRef', 'resultHash', 'resultBytes', 'resultTruncated', 'resultKind', 'compaction', 'externalEffectStatus', 'usage', 'modelId', 'toolCount', 'activeToolCount', 'nonPlanToolCount', 'latestActivity'] as const
 /** latestActivity remains in exact checkpoints for historical reads, while
  * deltas omit it because the toolUpsert already carries the same projection. */
 const stateOf = (run: SubagentRunHeader, includeLatestActivity = true) => Object.fromEntries(stateKeys
@@ -175,6 +172,38 @@ export class SubagentStore {
   async getRunHeader(tenantId: string, runId: string, fullRecord = false): Promise<SubagentRunHeader | null> {
     await this.ready()
     return this.readHeader(this.db, tenantId, runId, undefined, fullRecord)
+  }
+
+  /** Publish immutable, synced local evidence before any terminal SQLite reference commits. */
+  async prepareResult(tenantId: string, text: string, kind: 'final' | 'partial'): Promise<SubagentResultMetadata & { summary: string }> {
+    await this.ready()
+    const reference = await this.payloads.files.put(tenantId, text)
+    return { ...resultMetadata(reference, text, kind), summary: resultPreview(text) }
+  }
+
+  /** The caller supplies a real parent session; hashes and file paths are never accepted as authority. */
+  async getResultPage(tenantId: string, parentSessionId: string, runId: string,
+    options: { offset?: number; limitBytes?: number; rootSessionId?: string } = {}): Promise<SubagentResultPage | null> {
+    if (typeof parentSessionId !== 'string' || !parentSessionId) throw new RangeError('parentSessionId required')
+    const offset = options.offset ?? 0, limitBytes = options.limitBytes ?? 16 * 1024
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limitBytes) || limitBytes < 4 || limitBytes > SUBAGENT_RESULT_PAGE_BYTES)
+      throw new RangeError('Invalid subagent result page range')
+    const header = await this.getRunHeader(tenantId, runId)
+    if (!header || header.parentSessionId !== parentSessionId || options.rootSessionId && header.rootSessionId !== options.rootSessionId) return null
+    const metadata = checkedResultMetadata(header)
+    if (!isTerminalRun(header.status) || !metadata) throw new Error('SUBAGENT_RESULT_UNAVAILABLE: This run has no verifiable complete result reference')
+    if (offset > metadata.resultBytes) throw new RangeError('Result offset exceeds length')
+    // readRange verifies the entire immutable checksum while retaining only this bounded page.
+    const range = await this.payloads.files.readRange(tenantId, resultStorageReference(tenantId, metadata), { offsetBytes: offset, limitBytes })
+    if (range.chunk.length && (range.chunk[0] & 0xc0) === 0x80) throw new RangeError('Result offset must be a UTF-8 boundary')
+    const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(range.chunk, { stream: offset + range.chunk.length < metadata.resultBytes })
+    const nextOffset = offset + Buffer.byteLength(text), hasMore = nextOffset < metadata.resultBytes
+    // A concurrent parent deletion/revocation must not grant a stale owned read after filesystem I/O.
+    const current = await this.getRunHeader(tenantId, runId)
+    if (!current || current.parentSessionId !== parentSessionId || current.resultRef !== metadata.resultRef
+      || options.rootSessionId && current.rootSessionId !== options.rootSessionId) return null
+    return { runId, resultRef: metadata.resultRef, resultHash: metadata.resultHash, resultKind: metadata.resultKind,
+      encoding: 'utf8', offset, totalBytes: metadata.resultBytes, hasMore, ...(hasMore ? { nextOffset } : {}), text }
   }
 
   async findHeaderByParentTool(tenantId: string, parentSessionId: string, parentToolCallId: string): Promise<SubagentRunHeader | null> {
@@ -603,6 +632,8 @@ export class SubagentStore {
       const current = await this.readHeader(tx, tenantId, runId)
       if (!current || options.allowedStatuses && !options.allowedStatuses.includes(current.status)) return null
       const update = boundHeaderPatch(typeof patch === 'function' ? patch(current) : patch)
+      if (isTerminalRun(current.status) && ['resultRef', 'resultHash', 'resultBytes', 'resultTruncated', 'resultKind'].some(key => Object.hasOwn(update, key)))
+        throw new Error('Subagent terminal result references are immutable')
       if (isTerminalRun(current.status) && update.status !== undefined) return null
       if (current.status === 'cancelling' && (update.status === 'running' || update.status === 'succeeded')) return null
       // Output callbacks carry a cumulative, bounded preview. Once that prefix

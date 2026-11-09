@@ -9,6 +9,7 @@ import { LocalSqliteProcessClient } from '../../../storage/sqlite/local-process-
 import { RootRunStore, type RootRun } from '../../../storage/root-runs/index.js'
 import { createConversationHistory } from '../../../storage/conversation/factory.js'
 import { SubagentRunner, type SubagentExecution, type SubagentStart } from '../runner.js'
+import * as subagentRunners from '../runner.js'
 import { SubagentStore } from '../store.js'
 import type { CreateSubagentRun } from '../types.js'
 import { CollaborationRuntime } from '../../collaboration/runtime.js'
@@ -18,6 +19,7 @@ import { projectOwnedSubagent } from '../projection.js'
 import { createToolRegistry } from '../../../tools/registry-factory.js'
 import { createSubagentToolRegistry } from '../../../tools/subagent/subagent-tool.js'
 import { ToolRegistry } from '../../tool-registry/index.js'
+import { subagentWaitTool } from '../../../tools/subagent/async-tools.js'
 
 const tenant = 'async-owned', barrier = () => { let release!: () => void; const promise = new Promise<void>(yes => { release = yes }); return { promise, release } }
 let backend = 'jsonl', directory: string, db: LocalSqliteProcessClient, roots: RootRunStore, root: RootRun
@@ -115,7 +117,7 @@ describe.each(['jsonl', 'sqlite'])('%s tracked async runner', selected => {
     const names = ['subagent_start', 'subagent_send', 'subagent_wait', 'subagent_cancel', 'subagent_participants', 'subagent_inbox']
     for (const name of names) {
       const { registry } = await createToolRegistry({ toolProfile: 'code', allowedTools: [name], allowedMcpServers: [], allowedSkills: [], strictSkillBindings: true })
-      expect(registry.list().map(tool => tool.name).sort()).toEqual([name, 'plan_update'].sort())
+      expect(registry.list().map(tool => tool.name).filter(toolName => toolName !== 'load_tools').sort()).toEqual([name, 'plan_update'].sort())
       expect(registry.executionMode(name, {})).toBe(['subagent_wait', 'subagent_participants', 'subagent_inbox'].includes(name) ? 'readonly' : 'serial')
     }
     const { registry } = await createToolRegistry({ toolProfile: 'code', allowedTools: ['subagent', ...names], allowedMcpServers: [], allowedSkills: [], strictSkillBindings: true })
@@ -312,5 +314,221 @@ describe.each(['jsonl', 'sqlite'])('%s tracked async runner', selected => {
     expect(child.execution.signal.aborted).toBe(false); child.finish.release(); await child.start.completion
     expect((await db.closeWithReceipt()).healthy).toBe(true)
     await expect(runner.waitOwned(parent, child.start.runId)).rejects.toThrow('Datasource')
+  })
+
+  it('waits for all actual joins and returns successful and failed children in requested order', async () => {
+    const first = await held('batch-all-first'), finish = gate(), entered = gate()
+    const second = await runner.start(await input('batch-all-failure'), parent, async () => {
+      entered.release(); await finish.promise; throw new Error('Expected child execution failure')
+    })
+    joins.push(second.completion.catch(() => undefined)); await entered.promise
+    const subscribed = gate(), waitForInput = runtime.waitForInput.bind(runtime)
+    const inbox = vi.spyOn(runtime, 'waitForInput').mockImplementation((...args) => { subscribed.release(); return waitForInput(...args) })
+    let settled = false
+    const waiting = runner.waitManyOwned(parent, [second.runId, first.start.runId]).then(result => { settled = true; return result })
+    joins.push(waiting.catch(() => undefined)); await subscribed.promise
+    first.finish.release(); await first.start.completion
+    await new Promise(resolve => setImmediate(resolve)); expect(settled).toBe(false)
+    finish.release()
+    const result = await waiting
+    expect(result.state).toBe('completed'); expect(result.reason).toBeUndefined()
+    expect(result.runs.map(value => value.state === 'completed' ? [value.run.runId, value.run.status] : value.state))
+      .toEqual([[second.runId, 'failed'], [first.start.runId, 'succeeded']])
+    expect(inbox).toHaveBeenCalledTimes(1)
+    expect(inbox.mock.calls[0][1].aborted).toBe(true)
+    for (const value of result.runs) {
+      if (value.state !== 'completed') throw new Error('Missing actual join')
+      expect(await agents.ownedParentProjection(tenant, value.run.runId, value.run.lastSeq)).toMatchObject({ acknowledged: true })
+    }
+    expect((await roots.finishOwned(owner, { status: 'succeeded' })).status).toBe('succeeded')
+  })
+
+  it('uses one shared 60-second deadline rather than one timeout per child', async () => {
+    const first = await held('batch-time-first'), second = await held('batch-time-second')
+    const subscribed = gate(), waitForInput = runtime.waitForInput.bind(runtime)
+    const inbox = vi.spyOn(runtime, 'waitForInput').mockImplementation((...args) => { subscribed.release(); return waitForInput(...args) })
+    const timers = vi.spyOn(globalThis, 'setTimeout'), cleared = vi.spyOn(globalThis, 'clearTimeout')
+    let settled = false
+    const waiting = runner.waitManyOwned(parent, [first.start.runId, second.start.runId])
+      .then(result => { settled = true; return result })
+    joins.push(waiting.catch(() => undefined)); await subscribed.promise
+    first.finish.release(); await first.start.completion
+    await new Promise(resolve => setImmediate(resolve)); expect(settled).toBe(false)
+    const index = timers.mock.calls.findIndex(call => call[1] === 60_000)
+    expect(index).toBeGreaterThanOrEqual(0)
+    expect(timers.mock.calls.filter(call => call[1] === 60_000)).toHaveLength(1)
+    // Fire the actual registered deadline callback without waiting a real minute.
+    timers.mock.calls[index][0]()
+    const result = await waiting
+    expect(result).toMatchObject({ state: 'pending', runs: [
+      { state: 'completed', run: { runId: first.start.runId, status: 'succeeded' } },
+      { state: 'pending', runId: second.start.runId },
+    ] })
+    expect(timers.mock.calls.filter(call => call[1] === 60_000)).toHaveLength(1)
+    expect(cleared).toHaveBeenCalledWith(timers.mock.results[index].value)
+    expect(inbox).toHaveBeenCalledTimes(1); expect(inbox.mock.calls[0][1].aborted).toBe(true)
+    expect(second.execution.signal.aborted).toBe(false)
+    expect((await agents.getRunHeader(tenant, second.start.runId))?.status).toBe('running')
+    second.finish.release()
+    expect((await second.start.completion).status).toBe('succeeded')
+  })
+
+  it.each([true, false])('batch mailbox wake before subscription=%s preserves completed results and unfinished children', async beforeWait => {
+    const first = await held('batch-mail-done'), second = await held('batch-mail-active')
+    first.finish.release(); await first.start.completion
+    const subscribed = gate(), waitForInput = runtime.waitForInput.bind(runtime)
+    const inbox = vi.spyOn(runtime, 'waitForInput').mockImplementation((...args) => { subscribed.release(); return waitForInput(...args) })
+    const send = () => runtime.send(owners.producerForExecution(second.execution.executionOwner!), {
+      recipientParticipantId: 'root:' + root.runId, message: 'Adjust both tasks before continuing', requestKey: 'batch-mail',
+    })
+    if (beforeWait) await send()
+    const waiting = runner.waitManyOwned(parent, [second.start.runId, first.start.runId], { timeoutMs: 60_000 })
+    joins.push(waiting.catch(() => undefined)); await subscribed.promise
+    if (!beforeWait) await send()
+    expect(await waiting).toMatchObject({ state: 'pending', reason: 'message', runs: [
+      { state: 'pending', runId: second.start.runId },
+      { state: 'completed', run: { runId: first.start.runId, status: 'succeeded' } },
+    ] })
+    expect(inbox).toHaveBeenCalledTimes(1); expect(inbox.mock.calls[0][1].aborted).toBe(true)
+    expect(second.execution.signal.aborted).toBe(false)
+    second.finish.release(); await second.start.completion
+  })
+
+  it.each(['caller', 'parent'] as const)('aborting the %s batch observer cleans up without cancelling children or another observer', async source => {
+    const first = await held('batch-abort-first'), second = await held('batch-abort-second'), aborter = new AbortController()
+    const add = vi.spyOn(aborter.signal, 'addEventListener'), remove = vi.spyOn(aborter.signal, 'removeEventListener')
+    const target = source === 'parent' ? { ...parent, signal: aborter.signal } : parent
+    const subscribed = gate(), waitForInput = runtime.waitForInput.bind(runtime)
+    const inbox = vi.spyOn(runtime, 'waitForInput').mockImplementation((...args) => { subscribed.release(); return waitForInput(...args) })
+    const timers = vi.spyOn(globalThis, 'setTimeout'), cleared = vi.spyOn(globalThis, 'clearTimeout')
+    const observation = runner.waitManyOwned(target, [first.start.runId, second.start.runId], { timeoutMs: 60_000, signal: aborter.signal })
+    void observation.catch(() => undefined); await subscribed.promise
+    const other = runner.waitManyOwned(parent, [first.start.runId, second.start.runId])
+    joins.push(other.catch(() => undefined))
+    aborter.abort(new Error('Batch observation only'))
+    await expect(observation).rejects.toThrow('Batch observation only')
+    expect(add).toHaveBeenCalledTimes(1); expect(remove).toHaveBeenCalledWith('abort', add.mock.calls[0][1])
+    const timer = timers.mock.results[timers.mock.calls.findIndex(call => call[1] === 60_000)].value
+    expect(cleared).toHaveBeenCalledWith(timer); expect(inbox.mock.calls[0][1].aborted).toBe(true)
+    expect(first.execution.signal.aborted).toBe(false); expect(second.execution.signal.aborted).toBe(false)
+    first.finish.release(); second.finish.release()
+    expect((await other).state).toBe('completed')
+  })
+
+  it('requires every target authority before installing a batch observer and rejects malformed batches', async () => {
+    const child = await held('batch-authority'), inbox = vi.spyOn(runtime, 'waitForInput')
+    for (const ids of [[], Array<string>(1), ['', child.start.runId], ['  '], [child.start.runId, child.start.runId], Array.from({ length: 9 }, () => randomUUID())]) {
+      await expect(runner.waitManyOwned(parent, ids)).rejects.toThrow('Invalid subagent wait runIds')
+    }
+    for (const timeoutMs of [-1, 60_001, NaN, 0.5]) await expect(runner.waitManyOwned(parent, [child.start.runId], { timeoutMs })).rejects.toThrow('Invalid subagent wait timeout')
+    const aborter = new AbortController(); aborter.abort(new Error('Already ended'))
+    await expect(runner.waitManyOwned(parent, [child.start.runId], { signal: aborter.signal })).rejects.toThrow('Already ended')
+    await expect(runner.waitManyOwned(parent, [child.start.runId, randomUUID()])).rejects.toThrow('JOIN_UNKNOWN')
+    await expect(runner.waitManyOwned({ ...parent, executionOwner: undefined }, [child.start.runId])).rejects.toThrow('CANONICAL_OWNER')
+    await expect(runner.waitManyOwned({ ...parent, tenantId: 'other' }, [child.start.runId])).rejects.toThrow('AUTHORITY_MISMATCH')
+    await expect(runner.waitManyOwned({ ...parent, executionOwner: Object.freeze({}) as ExecutionOwner }, [child.start.runId])).rejects.toThrow('Forged')
+    await expect(runner.waitManyOwned({ ...parent, sessionId: child.start.childSessionId, executionOwner: child.execution.executionOwner }, [child.start.runId])).rejects.toThrow('AUTHORITY_MISMATCH')
+    expect(inbox).not.toHaveBeenCalled(); expect(child.execution.signal.aborted).toBe(false)
+    child.finish.release(); await child.start.completion
+    expect((await new SubagentRunner(agents).waitManyOwned(parent, [child.start.runId], { timeoutMs: 0 })).state).toBe('completed')
+  })
+
+  it('keeps a terminal row pending in batch results until its exact projection and ticket finish', async () => {
+    const first = await held('batch-projection-done'); first.finish.release(); await first.start.completion
+    const history = parent.history as AgentContext['history'] & Required<Pick<AgentContext['history'], 'appendIfActiveToolCallAnchor'>>
+    const entered = gate(), projection = gate(), append = history.appendIfActiveToolCallAnchor.bind(history)
+    vi.spyOn(history, 'appendIfActiveToolCallAnchor').mockImplementation(async (...args) => { entered.release(); await projection.promise; return append(...args) })
+    const second = await runner.start(await input('batch-projection-held'), parent, async execution => {
+      await execution.observer.onOutcome({ status: 'succeeded', output: 'Projection still held' })
+    })
+    joins.push(second.completion.catch(() => undefined)); await entered.promise
+    expect((await agents.getRunHeader(tenant, second.runId))?.status).toBe('succeeded')
+    expect(await runner.waitManyOwned(parent, [second.runId, first.start.runId], { timeoutMs: 0 })).toMatchObject({ state: 'pending', runs: [
+      { state: 'pending', runId: second.runId }, { state: 'completed', run: { runId: first.start.runId } },
+    ] })
+    projection.release(); await second.completion
+    expect((await runner.waitManyOwned(parent, [second.runId, first.start.runId])).state).toBe('completed')
+    expect((await roots.finishOwned(owner, { status: 'succeeded' })).status).toBe('succeeded')
+  })
+
+  it('rejects failed projection joins rather than reporting a completed batch and removes its observer', async () => {
+    const first = await held('batch-failure-done'); first.finish.release(); await first.start.completion
+    const history = parent.history as AgentContext['history'] & Required<Pick<AgentContext['history'], 'appendIfActiveToolCallAnchor'>>
+    vi.spyOn(history, 'appendIfActiveToolCallAnchor').mockRejectedValue(new Error('BATCH_PROJECTION_FAILED'))
+    const second = await held('batch-failure-held'), subscribed = gate(), waitForInput = runtime.waitForInput.bind(runtime)
+    const inbox = vi.spyOn(runtime, 'waitForInput').mockImplementation((...args) => { subscribed.release(); return waitForInput(...args) })
+    const aborted = new AbortController(), remove = vi.spyOn(aborted.signal, 'removeEventListener')
+    const waiting = runner.waitManyOwned(parent, [first.start.runId, second.start.runId], { signal: aborted.signal })
+    void waiting.catch(() => undefined); await subscribed.promise
+    second.finish.release()
+    await expect(waiting).rejects.toThrow('BATCH_PROJECTION_FAILED')
+    expect(inbox.mock.calls[0][1].aborted).toBe(true); expect(remove).toHaveBeenCalledTimes(1)
+    await expect(roots.finishOwned(owner, { status: 'succeeded' })).rejects.toThrow('CHILD_CLEANUP_UNKNOWN')
+  })
+
+  it('cleans the batch timer and listeners when mailbox subscription throws synchronously', async () => {
+    const first = await held('batch-subscription-first'), second = await held('batch-subscription-second'), aborter = new AbortController()
+    const add = vi.spyOn(aborter.signal, 'addEventListener'), remove = vi.spyOn(aborter.signal, 'removeEventListener')
+    const timers = vi.spyOn(globalThis, 'setTimeout'), cleared = vi.spyOn(globalThis, 'clearTimeout')
+    const inbox = vi.spyOn(runtime, 'waitForInput').mockImplementationOnce(() => { throw new Error('Batch inbox authority revoked') })
+    await expect(runner.waitManyOwned(parent, [first.start.runId, second.start.runId], { signal: aborter.signal, timeoutMs: 60_000 })).rejects.toThrow('Batch inbox authority revoked')
+    expect(remove).toHaveBeenCalledWith('abort', add.mock.calls[0][1]); expect(inbox.mock.calls[0][1].aborted).toBe(true)
+    const timer = timers.mock.results[timers.mock.calls.findIndex(call => call[1] === 60_000)].value
+    expect(cleared).toHaveBeenCalledWith(timer)
+    expect(first.execution.signal.aborted).toBe(false); expect(second.execution.signal.aborted).toBe(false)
+    first.finish.release(); second.finish.release(); await Promise.all([first.start.completion, second.start.completion])
+  })
+
+  it('rechecks every durable authority after the shared observation before returning results', async () => {
+    const first = await held('batch-recheck-first'), second = await held('batch-recheck-second')
+    const read = agents.getRunHeader.bind(agents); let secondReads = 0
+    vi.spyOn(agents, 'getRunHeader').mockImplementation(async (...args) => {
+      const result = await read(...args)
+      if (args[1] === second.start.runId && ++secondReads === 2) {
+        const stored = (await roots.get(tenant, root.runId))!
+        await db.execute({ sql: 'UPDATE root_runs SET state=? WHERE run_id=?', args: [JSON.stringify({ ...stored, attemptId: randomUUID() }), root.runId] })
+      }
+      return result
+    })
+    const inbox = vi.spyOn(runtime, 'waitForInput')
+    await expect(runner.waitManyOwned(parent, [first.start.runId, second.start.runId], { timeoutMs: 0 })).rejects.toThrow('stale or inactive')
+    expect(secondReads).toBe(2); expect(inbox.mock.calls[0][1].aborted).toBe(true)
+    expect(first.execution.signal.aborted).toBe(false); expect(second.execution.signal.aborted).toBe(false)
+    first.finish.release(); second.finish.release(); await Promise.all([first.start.completion, second.start.completion])
+  })
+
+  it('returns one actual batch tool receipt without duplicating each durable result notification or its body', async () => {
+    const first = await held('batch-tool-first'), second = await held('batch-tool-second')
+    vi.spyOn(subagentRunners, 'getSubagentRunner').mockReturnValue(runner)
+    const subscribed = gate(), waitForInput = runtime.waitForInput.bind(runtime)
+    const inbox = vi.spyOn(runtime, 'waitForInput').mockImplementation((...args) => { subscribed.release(); return waitForInput(...args) })
+    let returns = 0
+    const waiting = subagentWaitTool.execute({ runIds: [second.start.runId, first.start.runId] }, parent)
+      .then(result => { returns++; return result })
+    joins.push(waiting.catch(() => undefined)); await subscribed.promise
+    first.finish.release(); await first.start.completion
+    await new Promise(resolve => setImmediate(resolve)); expect(returns).toBe(0)
+    second.finish.release()
+    const result = await waiting
+    expect(result.success, result.output).toBe(true); expect(returns).toBe(1); expect(inbox).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(result.output)).toMatchObject({ state: 'completed', runs: [second, first].map(child => ({
+      state: 'completed', runId: child.start.runId, childSessionId: child.start.childSessionId,
+      status: 'succeeded', resultMessageId: 'subagent-result:' + child.start.runId, projection: 'appended',
+    })) })
+    expect(result.output).not.toContain('Exact result batch-tool-')
+    expect(JSON.stringify(result.metadata)).not.toContain('Exact result batch-tool-')
+    const single = await subagentWaitTool.execute({ runId: first.start.runId }, parent)
+    expect(single.success, single.output).toBe(true)
+    expect(JSON.parse(single.output)).toMatchObject({ state: 'completed', runId: first.start.runId,
+      status: 'succeeded', resultMessageId: 'subagent-result:' + first.start.runId })
+    expect(single.output).not.toContain('Exact result batch-tool-')
+    expect(JSON.stringify(single.metadata)).not.toContain('Exact result batch-tool-')
+    const history = await parent.history.getFullHistory(parent)
+    for (const child of [first, second]) {
+      const notification = history.filter(message => message.id === 'subagent-result:' + child.start.runId)
+      expect(notification).toHaveLength(1)
+      expect(notification[0].content).toContain('Exact result batch-tool-')
+      expect(notification[0].metadata).toMatchObject({ subagentNotification: { runId: child.start.runId } })
+    }
   })
 })

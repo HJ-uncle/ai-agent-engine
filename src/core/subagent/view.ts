@@ -1,4 +1,5 @@
 import type { CompactionState, SubagentRun, SubagentRunView, SubagentToolSummary, SubagentDeltaEvent, SubagentCoverage } from './types.js'
+import { checkedResultMetadata } from './result.js'
 
 export const SUBAGENT_VIEW_MAX_TOOLS = 64
 export const SUBAGENT_VIEW_MAX_ACTIVE_TOOLS = 32
@@ -152,6 +153,7 @@ function checkedCoverage(view: SubagentRunView): boolean {
 
 /** Canonical v1 archives stay intact; the live protocol explicitly carries a bounded v2 view. */
 export function projectSubagentRunView(input: SubagentRun | SubagentRunView, budget: SubagentViewBudget = {}): SubagentRunView {
+  const result = checkedResultMetadata(input)
   if (!input || !['1', '2'].includes(String(input.schemaVersion)) || !integer(input.lastSeq)) throw new Error('Invalid subagent view version or sequence')
   if (input.schemaVersion === 2 && (input.view !== 'summary' || !checkedCoverage(input))) throw new Error('Invalid subagent coverage')
   for (const key of identityKeys) if (typeof input[key] !== 'string' || Buffer.byteLength(input[key], 'utf8') > 4096) throw new Error(`Invalid subagent identity: ${key}`)
@@ -229,6 +231,7 @@ export function projectSubagentRunView(input: SubagentRun | SubagentRunView, bud
     ...(input.stopReason === undefined ? {} : { stopReason: clip(input.stopReason, 1024) }),
     ...(input.error ? { error: { code: clip(input.error.code, 256) ?? '', message: clip(input.error.message, 1024) ?? '', retryable: input.error.retryable } } : {}),
     ...(input.resultSummary === undefined ? {} : { resultSummary: clip(input.resultSummary, 8192) }),
+    ...result,
     ...(input.partialOutput === undefined ? {} : { partialOutput: clip(input.partialOutput, 8192) }),
     ...(input.compaction === undefined ? {} : { compaction: summarizeSubagentCompaction(input.compaction) }),
     ...(input.externalEffectStatus === undefined ? {} : { externalEffectStatus: input.externalEffectStatus }),
@@ -287,7 +290,7 @@ export function mergeSubagentViews(existing: SubagentRunView, incoming: Subagent
   if (existing.status !== incoming.status) return reject('Status conflict at the same subagent sequence')
   for (const key of usageKeys) if (existing.usage[key] !== undefined && incoming.usage[key] !== undefined
     && existing.usage[key] !== incoming.usage[key]) return reject(`Usage conflict at the same subagent sequence: ${key}`)
-  for (const key of ['createdAt', 'updatedAt', 'startedAt', 'finishedAt', 'durationMs'] as const)
+  for (const key of ['createdAt', 'updatedAt', 'startedAt', 'finishedAt', 'durationMs', 'resultRef', 'resultHash', 'resultBytes', 'resultTruncated', 'resultKind'] as const)
     if (existing[key] !== undefined && incoming[key] !== undefined && existing[key] !== incoming[key]) return reject(`Header conflict at the same subagent sequence: ${key}`)
   const bothKnown = existing.coverage.completeness !== 'unknown' && incoming.coverage.completeness !== 'unknown'
   if (bothKnown && (existing.toolCount !== incoming.toolCount || existing.activeToolCount !== incoming.activeToolCount)) return reject('Tool count conflict at the same subagent sequence')
@@ -334,7 +337,7 @@ export function applySubagentDelta(existing: SubagentRunView | undefined, event:
     for (const key of usageKeys) if (patch.usage?.[key] !== undefined && existing.usage[key] !== patch.usage[key]) return invalid('Conflicting duplicate subagent usage')
     const previous = event.toolUpsert && existing.toolCalls.find(tool => tool.id === event.toolUpsert!.id)
     if (previous && previous.revisionSeq === event.toolUpsert!.revisionSeq && previous.status !== event.toolUpsert!.status) return invalid('Conflicting duplicate subagent tool')
-    for (const key of ['toolCount', 'activeToolCount', 'updatedAt', 'createdAt', 'startedAt', 'finishedAt'] as const)
+    for (const key of ['toolCount', 'activeToolCount', 'updatedAt', 'createdAt', 'startedAt', 'finishedAt', 'resultRef', 'resultHash', 'resultBytes', 'resultTruncated', 'resultKind'] as const)
       if (patch[key] !== undefined && existing[key] !== patch[key]) return invalid('Conflicting duplicate subagent header')
     if (event.toolUpsert && !previous) return { status: 'gap', view: { ...existing, recoveryRequired: true },
       reason: 'Duplicate tool delta is outside the verified resident coverage' }

@@ -3,6 +3,8 @@ import { getSubagentStore } from '../../../core/subagent/store.js'
 import { getSubagentRunner } from '../../../core/subagent/runner.js'
 import { success, fail } from '../response.js'
 import { DiscoveryRecoveryError, DISCOVERY_PAGE_BYTES } from '../../../core/subagent/discovery.js'
+import { SUBAGENT_RESULT_PAGE_BYTES } from '../../../core/subagent/result.js'
+import { SubagentPayloadFileError } from '../../../core/subagent/payload-files.js'
 
 const tenant = (request: FastifyRequest): string =>
   (request as FastifyRequest & { authContext?: { tenantId?: string } }).authContext?.tenantId ?? 'default'
@@ -55,6 +57,7 @@ export async function subagentRoutes(fastify: FastifyInstance): Promise<void> {
     schemaVersion: 2, eventVersions: [1, 2], views: ['legacy', 'summary'],
     toolPagination: true, eventPagination: true, detailChunks: true, exactWatermarks: true,
     activeDiscovery: true, lifecycleChanges: true, discoveryProtocol: 1,
+    resultPagination: true, resultProtocol: 1,
   })))
   fastify.get<{ Querystring: { parentSessionId: string; rootSessionId?: string; parentConversationId?: string; mode?: string; cursor?: string; afterRevision?: string; limit?: string } }>('/subagent/discovery', async (request, reply) => {
     try {
@@ -122,6 +125,27 @@ export async function subagentRoutes(fastify: FastifyInstance): Promise<void> {
       })
       return reply.send(page ? success(page) : fail(40901, 'Subagent checkpoint required', { checkpointRequired: true }))
     } catch (error) { return reply.send(errorResponse(error)) }
+  })
+
+  fastify.get<{ Params: RunParams; Querystring: RunScope & { offset?: string; limitBytes?: string } }>('/subagent/runs/:runId/result', async (request, reply) => {
+    try {
+      const parentSessionId = text(request.query.parentSessionId, 'parentSessionId')
+      if (!parentSessionId) throw new RangeError('parentSessionId required')
+      const page = await store.getResultPage(tenant(request), parentSessionId, request.params.runId, {
+        rootSessionId: text(request.query.rootSessionId, 'rootSessionId'), offset: integer(request.query.offset, 'offset'),
+        limitBytes: integer(request.query.limitBytes, 'limitBytes', { min: 4, max: SUBAGENT_RESULT_PAGE_BYTES }),
+      })
+      return page ? reply.send(success(page)) : reply.code(404).send(fail(40400, 'Subagent result not found'))
+    } catch (error) {
+      if (error instanceof RangeError) return reply.code(400).send(fail(40001, error.message))
+      if (error instanceof Error && error.message.startsWith('SUBAGENT_RESULT_UNAVAILABLE'))
+        return reply.code(409).send(fail(40902, 'This run has no verifiable complete result reference', { resultUnavailable: true }))
+      if (error instanceof SubagentPayloadFileError)
+        return reply.code(409).send(fail(40903, 'Complete subagent result evidence is unavailable', { resultUnavailable: true, evidenceRecoveryRequired: true }))
+      if (error instanceof Error && error.message.startsWith('SUBAGENT_RECOVERY_REQUIRED'))
+        return reply.code(409).send(errorResponse(error))
+      throw error
+    }
   })
 
   fastify.get<{ Params: RunParams & { toolCallId: string }; Querystring: RunScope & { atSeq?: string; offset?: string; limitBytes?: string } }>('/subagent/runs/:runId/tools/:toolCallId', async (request, reply) => {

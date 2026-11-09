@@ -202,7 +202,8 @@ export const codegraphTool: Tool = {
         }
       }
 
-      const cg = requiresReadonlyCodegraph() ? openReadonlyCodegraphSnapshot(root, CodeGraph, assertCurrent) : CodeGraph.openSync(root)
+      const readonly = requiresReadonlyCodegraph()
+      const cg = readonly ? await openReadonlyCodegraphSnapshot(root, CodeGraph, assertCurrent) : CodeGraph.openSync(root)
       try {
         const limit = Math.max(1, Math.min(args.limit ?? 20, 100))
 
@@ -214,7 +215,8 @@ export const codegraphTool: Tool = {
             const lastAt = cg.getLastIndexedAt()
             const lines = [
               `📋 代码图索引状态: ${root}`,
-              `- 状态: ${state}${stale ? '（检测到文件变动，建议重建索引）' : ''}`,
+              `- 状态: ${state}${stale ? '（索引提取版本已旧，建议更新索引）' : ''}`,
+              `- 当前角色查询: 可用${readonly ? '（只读快照）' : ''}`,
               `- 节点: ${stats.nodeCount} / 边: ${stats.edgeCount} / 文件: ${stats.fileCount}`,
             ]
             if (stats.nodesByKind) {

@@ -12,12 +12,12 @@ import { WorkspaceManager, workspaceManager } from '../../../workspace/index.js'
 import { createSubagentToolRegistry } from '../../subagent/subagent-tool.js'
 import { codegraphTool } from '../codegraph-tool.js'
 import { loadCodeGraph } from '../codegraph-module.js'
-import { openReadonlyCodegraphSnapshot } from '../codegraph-readonly.js'
+import { openReadonlyCodegraphSnapshot, disposeReadonlyCodegraphSnapshots } from '../codegraph-readonly.js'
 import * as indexing from '../index-runner.js'
 
 let fixture: string, authorized: string, outside: string, manager: WorkspaceManager, ctx: AgentContext
 const temporaryParent = fs.realpathSync(os.tmpdir())
-const snapshots = () => fs.readdirSync(temporaryParent).filter(name => name.startsWith('aether-codegraph-readonly-')).sort()
+const snapshots = () => fs.readdirSync(temporaryParent).filter(name => name.startsWith(`aether-codegraph-readonly-${process.pid}-`)).sort()
 function directoryState(root: string): unknown {
   return fs.readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)).map(entry => {
     const name = path.join(root, entry.name), stat = fs.lstatSync(name)
@@ -41,6 +41,7 @@ beforeEach(() => {
   setSecurityMode(ctx.tenantId, ctx.sessionId, 'safe')
 })
 afterEach(() => {
+  disposeReadonlyCodegraphSnapshots()
   clearSecurityMode(ctx.tenantId, ctx.sessionId)
   vi.restoreAllMocks(); vi.unstubAllEnvs()
   if (path.dirname(fixture) !== temporaryParent || !path.basename(fixture).startsWith('aether-codegraph-permissions-') || fs.lstatSync(fixture).isSymbolicLink()) throw new Error('Unsafe fixture cleanup')
@@ -68,6 +69,8 @@ describe('research codegraph authorization with the installed SDK', () => {
         if (args.action === 'files') expect(result.output).toContain('calc.ts')
       }
       expect(directoryState(authorized)).toEqual(before)
+      expect(snapshots().length).toBe(temporaryBefore.length + 1) // Reused across all query actions.
+      disposeReadonlyCodegraphSnapshots()
       expect(snapshots()).toEqual(temporaryBefore)
       expect((await ctx.tools.execute('codegraph', { action: 'index' }, ctx)).success).toBe(false)
     } finally { writer.close() }
@@ -105,7 +108,7 @@ describe('research codegraph authorization with the installed SDK', () => {
   it('fails closed for oversized or recovering snapshots and cleans up a failed SDK open', async () => {
     const sdk = await loadCodeGraph(), source = await sdk.init(authorized, { index: false }); source.close()
     const before = directoryState(authorized), temporaryBefore = snapshots()
-    expect(() => openReadonlyCodegraphSnapshot(authorized, sdk, () => {}, { maxBytes: 1 })).toThrow('上限')
+    await expect(openReadonlyCodegraphSnapshot(authorized, sdk, () => {}, { maxBytes: 1 })).rejects.toThrow('上限')
     expect(directoryState(authorized)).toEqual(before)
     const journal = path.join(authorized, '.ae', 'codegraph.db-journal')
     fs.writeFileSync(journal, 'recovery required')
@@ -114,7 +117,7 @@ describe('research codegraph authorization with the installed SDK', () => {
     fs.unlinkSync(journal)
     const afterFixtureChange = directoryState(authorized)
     const failing = { ...sdk, openSync: () => { throw new Error('SDK failed') } }
-    expect(() => openReadonlyCodegraphSnapshot(authorized, failing, () => {})).toThrow('SDK failed')
+    await expect(openReadonlyCodegraphSnapshot(authorized, failing, () => {})).rejects.toThrow('SDK failed')
     expect(snapshots()).toEqual(temporaryBefore)
     expect(directoryState(authorized)).toEqual(afterFixtureChange)
   })
@@ -124,15 +127,15 @@ describe('research codegraph authorization with the installed SDK', () => {
     try {
       const wal = path.join(authorized, '.ae', 'codegraph.db-wal')
       const original = fs.readFileSync(wal)
-      const realRead = fs.readSync, probe = vi.spyOn(sdk, 'openSync')
+      const realOpen = fs.promises.open, probe = vi.spyOn(sdk, 'openSync')
       let reads = 0
-      vi.spyOn(fs, 'readSync').mockImplementation(((...args: Parameters<typeof fs.readSync>) => {
-        const count = Reflect.apply(realRead, fs, args) as number
-        if (++reads === 2) fs.appendFileSync(wal, Buffer.from([1]))
-        return count
-      }) as typeof fs.readSync)
-      try { expect(() => openReadonlyCodegraphSnapshot(authorized, sdk, () => {})).toThrow('改变') }
-      finally { vi.mocked(fs.readSync).mockRestore(); fs.writeFileSync(wal, original) }
+      vi.spyOn(fs.promises, 'open').mockImplementation((async (...args: Parameters<typeof fs.promises.open>) => {
+        const handle = await Reflect.apply(realOpen, fs.promises, args)
+        if (String(args[0]) === wal && ++reads === 2) fs.appendFileSync(wal, Buffer.from([1]))
+        return handle
+      }) as typeof fs.promises.open)
+      try { await expect(openReadonlyCodegraphSnapshot(authorized, sdk, () => {})).rejects.toThrow('改变') }
+      finally { vi.mocked(fs.promises.open).mockRestore(); fs.writeFileSync(wal, original) }
       expect(probe).not.toHaveBeenCalled()
     } finally { source.close() }
   })

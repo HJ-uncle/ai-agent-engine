@@ -23,6 +23,19 @@ let directory: string, app: FastifyInstance, db: LocalSqliteProcessClient, conte
 let preloadOrchestration = true
 const releases: (() => void)[] = []
 const gate = () => { const value = barrier(); releases.push(value.release); return value }
+function expectJoinedNotification(messages: readonly Message[], toolCallId: string, runId: string, resultBody: string) {
+  const receipts = messages.filter(message => message.role === 'tool' && message.toolCallId === toolCallId)
+  expect(receipts).toHaveLength(1)
+  const receipt = receipts[0], resultMessageId = 'subagent-result:' + runId
+  expect(JSON.parse(String(receipt.content))).toMatchObject({ state: 'completed', runId, status: 'succeeded', projection: 'appended', resultMessageId })
+  expect(receipt.metadata?.subagentObservation).toMatchObject({ state: 'completed', run: { runId, status: 'succeeded', resultMessageId } })
+  expect(String(receipt.content)).not.toContain(resultBody)
+  expect(JSON.stringify(receipt.metadata)).not.toContain(resultBody)
+  const notifications = messages.filter(message => message.id === resultMessageId)
+  expect(notifications).toHaveLength(1)
+  expect(notifications[0]).toMatchObject({ role: 'assistant', metadata: { subagentNotification: { runId } } })
+  expect(String(notifications[0].content)).toContain(resultBody)
+}
 beforeEach(async () => {
   await database.closeDb()
   fs.mkdirSync('.e2e-tmp', { recursive: true }); directory = fs.mkdtempSync(path.resolve('.e2e-tmp/chat-async-subagents-'))
@@ -275,7 +288,7 @@ describe.each(['jsonl', 'sqlite'])('%s actual async model tools', backend => {
             args: JSON.stringify({ runId, timeoutMs: 30000 }) }] }
         } else {
           expect(parentCalls).toBe(3)
-          expect(messages.find(message => message.toolCallId === 'explicit-parent-join' && message.role === 'tool')?.content).toContain('Explicit child included the parent update')
+          expectJoinedNotification(messages, 'explicit-parent-join', runId, 'Explicit child included the parent update')
           yield { done: true, finishReason: 'stop', content: 'Parent verified explicitly selected work' }
         }
       },
@@ -289,7 +302,7 @@ describe.each(['jsonl', 'sqlite'])('%s actual async model tools', backend => {
     expect(parentCalls).toBe(3); expect(childCalls).toBe(2)
     const history = await createConversationHistory().getFullHistory({ tenantId: 'default', sessionId: 'explicit-async-route' })
     expect(history.filter(message => message.role === 'tool' && message.toolCallId === dispatchId)).toHaveLength(1)
-    expect(history.find(message => message.id === 'subagent-result:' + runId)).toMatchObject({ role: 'assistant', metadata: { subagentNotification: { runId } } })
+    expectJoinedNotification(history, 'explicit-parent-join', runId, 'Explicit child included the parent update')
     expect((await rootRunStore.list('default', 'explicit-async-route'))[0].status).toBe('succeeded')
   })
   it('actual cancel tool stays pending until the held child stops and then returns its exact cancelled result', async () => {
@@ -428,8 +441,7 @@ describe.each(['jsonl', 'sqlite'])('%s actual async model tools', backend => {
         } else {
           expect(parentCalls).toBe(7)
           expect(messages.filter(message => message.role === 'tool' && message.toolCallId === 'async-start')).toHaveLength(1)
-          expect(messages.some(message => message.role === 'tool' && message.toolCallId === 'parent-final-join' && String(message.content).includes('Actual async child final'))).toBe(true)
-          expect(messages.some(message => message.role === 'assistant' && message.metadata?.subagentNotification && String(message.content).includes('Actual async child final'))).toBe(true)
+          expectJoinedNotification(messages, 'parent-final-join', runId, 'Actual async child final')
           expect(messages.some(message => String(message.content).includes('Actual child to parent reply'))).toBe(true)
           yield { done: true, finishReason: 'stop', content: 'Actual async parent final' }
         }
@@ -443,7 +455,7 @@ describe.each(['jsonl', 'sqlite'])('%s actual async model tools', backend => {
     const root = (await rootRunStore.list('default', 'async-route'))[0], rows = await createConversationHistory().getFullHistory({ tenantId: 'default', sessionId: 'async-route' })
     expect(root.status).toBe('succeeded')
     expect(rows.filter(message => message.role === 'tool' && message.toolCallId === 'async-start')).toHaveLength(1)
-    expect(rows.filter(message => message.id === 'subagent-result:' + runId)).toHaveLength(1)
+    expectJoinedNotification(rows, 'parent-final-join', runId, 'Actual async child final')
     expect(rows.find(message => message.id === 'subagent-result:' + runId)).toMatchObject({ role: 'assistant', metadata: { subagentNotification: { runId, parentToolCallId: 'async-start' } } })
     const mail = (await db.execute('SELECT sender_participant_id,recipient_participant_id FROM collaboration_messages ORDER BY seq')).rows
     expect(mail).toEqual([{ sender_participant_id: 'root:' + root.runId, recipient_participant_id: 'child:' + childSessionId }, { sender_participant_id: 'child:' + childSessionId, recipient_participant_id: 'root:' + root.runId }])

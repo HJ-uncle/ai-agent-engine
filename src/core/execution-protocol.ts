@@ -41,7 +41,7 @@ export function buildExecutionProtocol(tools: Pick<IToolRegistry, 'list'>, profi
     has('browser_tabs') ? 'On browser failure restore observation/visibility first. Do not repeat an action with unknown outcome or bypass surface failures by editing pages/coordinates.' : '',
     has('subagent') || has('subagent_start') ? '每个task只含目标、实际工作区、独占文件/接口、已有事实/来源、必要约束、验收与短回报要求。research只读不产文件；executor完成实际产物；general处理混合任务。独立任务同轮发起，不广播整套需求，不让各代理重复读项目或重做同一文件。共享草稿只读，每份成品/共享配置一位负责人；共享目录不等于隔离checkout。' : '',
     has('subagent_followup') ? '运行中补充及完成后继续用subagent_followup；以新runId的真实结果验收，旧结果不能代替。暂停/取消后的旧消息不构成重新执行授权。' : '',
-    has('subagent_start') ? '派发后继续未重叠的主任务；全部委派结果必须在最终交付前收取并验收。subagent_wait用有界等待（通常60000ms），不要零超时轮询或反复询问进度；任务完成通知已有结果时复用，不重复索取整份输出。' : '',
+    has('subagent_start') ? '派发后继续主任务；全部委派结果必须在最终交付前收取并验收。多任务合用subagent_wait({runIds:[…],timeoutMs:60000})，共用期限收齐回传。不要逐个等待、零超时轮询；超时只续等pending项；消息唤醒先处理新需求。任务完成通知已有结果时复用。' : '',
     has('subagent_send') ? '同伴先查participants，在职责内交换路径、版本、证据与阻碍；不传整段日志，不相互确认空转。' : '',
     has('subagent') || has('subagent_start') ? '子回报仅给结论、产物路径/版本、必要证据、已验/未验与阻碍，通常一屏内；不贴源码全文。主Agent抽查关键约束并集成，不重做已验证工作。取消、预算、上下文或无进展终止时保留真实未完成项，不为继续同一探索另开替身，不虚构额度或步数限制。' : '',
     has('report_artifacts') ? 'Child artifacts are candidates until the parent verifies and adopts them.' : '',

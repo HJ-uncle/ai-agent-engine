@@ -259,7 +259,7 @@ describe('executable tool profiles', () => {
     const result = await createToolRegistry({ toolProfile, allowedTools: [], allowedMcpServers: [], ownedCollaboration: true })
     expect(result.registry.list().map(candidate => candidate.name).sort()).toEqual([
       'load_tools', 'plan_update', 'subagent_wait', 'subagent_cancel', 'subagent_send', 'subagent_participants', 'subagent_inbox',
-      'subagent_directory', 'subagent_followup', 'subagent_request_input',
+      'subagent_directory', 'subagent_followup', 'subagent_request_input', 'subagent_read_result',
     ].sort())
     for (const name of ['subagent', 'subagent_start', 'write_file', 'execute_cmd', 'http_request']) expect(result.registry.has(name)).toBe(false)
     expectExactCategories(result)

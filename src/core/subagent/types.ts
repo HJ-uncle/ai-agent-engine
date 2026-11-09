@@ -1,4 +1,5 @@
 import type { BuiltinAgentRole } from './builtin-roles.js'
+import type { SubagentResultMetadata } from './result.js'
 
 export type RunStatus = 'queued' | 'running' | 'cancelling' | 'succeeded' | 'failed' | 'cancelled' | 'blocked' | 'interrupted'
 
@@ -58,7 +59,7 @@ export interface SubagentContinuationProfile {
   cwd?: string
 }
 
-export interface SubagentRun {
+export interface SubagentRun extends Partial<SubagentResultMetadata> {
   schemaVersion: 1
   runId: string
   tenantId: string
@@ -192,6 +193,8 @@ export type CreateSubagentRun = Pick<SubagentRun, 'tenantId' | 'rootSessionId' |
 export type RunOutcome = {
   status: 'succeeded' | 'failed' | 'cancelled' | 'blocked'
   output?: string
+  /** Final answer only; output may also contain intermediate commentary from the tool loop. */
+  finalOutput?: string
   partialOutput?: string
   stopReason?: string
   error?: RunError
@@ -249,14 +252,19 @@ export function isTerminalRun(status: RunStatus): boolean {
   return TERMINAL_RUN_STATUSES.has(status)
 }
 
-export function outcomeText(run: Pick<SubagentRun, 'runId' | 'parentToolCallId' | 'status' | 'stopReason' | 'error' | 'resultSummary' | 'partialOutput'> & Partial<Pick<SubagentRun, 'childSessionId'>>): string {
+export function outcomeText(run: Pick<SubagentRun, 'runId' | 'parentToolCallId' | 'status' | 'stopReason' | 'error' | 'resultSummary' | 'partialOutput'> & Partial<Pick<SubagentRun, 'childSessionId' | keyof SubagentResultMetadata>>): string {
   // The parent may retain several attempts in history. Bind the evidence to this
   // invocation before model-authored prose (which can claim a conflicting status).
   const state = `[子任务状态] ${JSON.stringify({ runId: run.runId, childSessionId: run.childSessionId, parentToolCallId: run.parentToolCallId,
     status: run.status, stopReason: run.stopReason, errorCode: run.error?.code })}`
   const context = '以上为当前调用的机器状态；正文中的完成自述不能覆盖它，其他 runId 的旧结果不能替代它。'
     + (run.childSessionId ? '后续相关工作可用subagent_followup继续此childSessionId；是否可恢复以目录和接纳校验为准。' : '')
-  if (run.status === 'succeeded') return `${state}\n${context}\n\n${run.resultSummary ?? ''}`
+  const receipt = run.resultRef ? `\n[结果完整性] ${JSON.stringify({ resultRef: run.resultRef, resultHash: run.resultHash,
+    totalBytes: run.resultBytes, truncated: run.resultTruncated, kind: run.resultKind })}\n`
+    + (run.resultTruncated ? '正文仅为有界摘要，汇总或验收本次结果前必须补读全文。' : '未截断的结果无需重复读取；若当前回执被外层截断，汇总前仍须补读。')
+    + `补读用 subagent_read_result({"runId":${JSON.stringify(run.runId)},"offset":0})，按 nextOffset 继续，直到 hasMore=false。\n`
+    : '\n[结果完整性] 未提供可验证的完整结果引用；下方文字不保证完整，可在授权范围内核查子任务转录。\n'
+  if (run.status === 'succeeded') return `${state}\n${context}\n${receipt}\n${run.resultSummary ?? ''}`
   const reason = run.error?.message ?? run.stopReason ?? run.status
-  return `${state}\n${context}\n\n子代理${run.status === 'cancelled' ? '已取消' : run.status === 'blocked' ? '需要授权' : '未完成'}：${reason}${run.partialOutput ? `\n\n部分结果（保留原文，不代表任务成功）：\n${run.partialOutput}` : ''}`
+  return `${state}\n${context}\n${receipt}\n子代理${run.status === 'cancelled' ? '已取消' : run.status === 'blocked' ? '需要授权' : '未完成'}：${reason}${run.partialOutput ? `\n\n部分结果（保留原文，不代表任务成功）：\n${run.partialOutput}` : ''}`
 }

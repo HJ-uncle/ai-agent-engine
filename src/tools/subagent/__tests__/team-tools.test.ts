@@ -20,6 +20,9 @@ import { executeSubagent } from '../subagent-tool.js'
 import { readFileTool, writeFileTool } from '../../file/super-file-tool.js'
 import { buildRuntimeCapabilities, buildRuntimeCapabilitiesPrompt } from '../../../core/runtime-capabilities.js'
 import { setSecurityMode, clearSecurityMode } from '../../../security/policy-engine.js'
+import { subagentReadResultTool } from '../async-tools.js'
+import { getToolOutputLimit } from '../../../core/agent-loop/tool-output-limit.js'
+import { getSubagentPayloadFiles } from '../../../core/subagent/payload-files.js'
 
 const model = vi.hoisted(() => ({ calls: 0, histories: [] as string[], checkChild: undefined as ((child: AgentContext) => Promise<void>) | undefined }))
 vi.mock('../../../core/llm-adapter/resolve-model.js', () => ({
@@ -102,6 +105,49 @@ async function questioningChild() {
 }
 
 describe('persistent child directory and follow-up', () => {
+  it('settles the canonical executor, parent projection and ticket when the result volume fails', async () => {
+    await anchor('subagent_start')
+    await store.initialize()
+    vi.spyOn(await getSubagentPayloadFiles(db), 'put').mockRejectedValue(new Error('fixture result volume unavailable'))
+    const start = await runner.start({ tenantId: 'team', rootSessionId: 'parent', parentSessionId: 'parent',
+      parentConversationId: parent.turnId!, parentMessageId: parent.currentMessageId!, parentToolCallId: parent.currentToolCallId!,
+      task: 'Return final evidence', description: 'Result storage failure', modelId: 'fixture' }, parent, async ({ observer }) => {
+      await observer.onOutcome({ status: 'succeeded', finalOutput: 'Candidate result' })
+    })
+    expect(await start.completion).toMatchObject({ status: 'failed', stopReason: 'result_persistence_failed', error: { code: 'RESULT_PERSIST_FAILED' } })
+    const waited = await runner.waitOwned(parent, start.runId, { timeoutMs: 0 })
+    expect(waited).toMatchObject({ state: 'completed', run: { status: 'failed', error: { code: 'RESULT_PERSIST_FAILED' } } })
+    const result = (await parent.history.getHistory(parent)).find(message => message.id === 'subagent-result:' + start.runId)
+    expect(result?.content).toContain('RESULT_PERSIST_FAILED'); expect(result?.metadata?.subagent).not.toHaveProperty('resultRef')
+  })
+
+  it('lets the parent read persisted earlier results within Work output limits and rejects forged authority', async () => {
+    vi.stubEnv('TOOL_OUTPUT_MAX_CHARS', '4000')
+    const value = await store.createRunDelta({ tenantId: 'team', parentSessionId: 'parent', rootSessionId: 'parent',
+      parentConversationId: 'prior-turn', parentMessageId: 'prior-message', parentToolCallId: 'prior-call', task: 'Prior result', description: 'Prior result', modelId: 'fixture' })
+    const body = '结论🙂\u0000\n"\\'.repeat(1800), { summary, ...metadata } = await store.prepareResult('team', body, 'final')
+    await store.appendHeader('team', value.header.runId, 'finished', { status: 'succeeded', resultSummary: summary, ...metadata })
+    let offset = 0, actual = ''
+    while (true) {
+      const result = await subagentReadResultTool.execute({ runId: value.header.runId, offset, limitBytes: 65536 }, parent)
+      expect(result.success).toBe(true); expect(result.output.length).toBeLessThanOrEqual(getToolOutputLimit(parent.toolProfile, parent))
+      const page = JSON.parse(result.output)
+      expect(page).toMatchObject({ resultHash: metadata.resultHash, offset, totalBytes: Buffer.byteLength(body) })
+      actual += page.text
+      if (!page.hasMore) break
+      expect(result.output.indexOf('"nextOffset"')).toBeLessThan(result.output.indexOf('"text"'))
+      expect(page.nextOffset).toBeGreaterThan(offset); offset = page.nextOffset
+    }
+    expect(actual).toBe(body)
+    expect((await subagentReadResultTool.execute({ runId: value.header.runId, tenantId: 'team' }, parent)).success).toBe(false)
+    expect((await subagentReadResultTool.execute({ runId: value.header.runId, resultRef: metadata.resultRef }, parent)).success).toBe(false)
+    expect((await subagentReadResultTool.execute({ runId: value.header.runId }, { ...parent, sessionId: 'foreign-parent' })).success).toBe(false)
+    const { child } = await questioningChild()
+    expect((await subagentReadResultTool.execute({ runId: value.header.runId }, child)).success).toBe(false)
+    const sibling = await seed()
+    expect((await subagentReadResultTool.execute({ runId: sibling.runId }, child)).success).toBe(true)
+  })
+
   it.each([false, true])('rejects no-task follow-ups before mailbox delivery or admission (active=%s)', async active => {
     const original = await seed()
     if (active) await runtime.admitChild(owners.producerForExecution(parent.executionOwner!), {

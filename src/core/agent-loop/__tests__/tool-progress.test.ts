@@ -1,12 +1,24 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ToolCall, ToolResult } from '../../agent-context/types.js'
-import { ToolProgressTracker, toolFailureLimit } from '../tool-progress.js'
+import { ToolProgressTracker, toolFailureLimit, waitingOnActiveWork } from '../tool-progress.js'
 
 const read: ToolCall = { id: 'read', name: 'read_file', args: { path: 'shared.ts' } }
 const succeeded = (output: string): ToolResult => ({ success: true, status: 'succeeded', output })
 const failed = (output = 'invalid arguments'): ToolResult => ({ success: false, status: 'failed', output })
 
 describe('output-aware progress for long-running tools', () => {
+  it('treats genuine pending batch waits as active work without accepting failed or completed waits', () => {
+    const call = { ...read, name: 'subagent_wait', args: { runIds: ['one', 'two'] } }
+    const pending = { ...succeeded('pending'), metadata: { subagentObservation: { state: 'pending', runs: [
+      { state: 'completed', runId: 'one' }, { state: 'pending', runId: 'two' },
+    ] } } }
+    const tracker = new ToolProgressTracker(() => 'readonly')
+    for (let i = 0; i < 4; i++) expect(tracker.observe([call], [pending])).toBe(0)
+    expect(tracker.recoveryPrompt()).toBeUndefined()
+    expect(waitingOnActiveWork(call, { ...pending, success: false, status: 'failed' })).toBe(false)
+    expect(waitingOnActiveWork(call, { ...succeeded('done'), metadata: { subagentObservation: { state: 'completed' } } })).toBe(false)
+    expect(waitingOnActiveWork(read, pending)).toBe(false)
+  })
   it('keeps changed reads progressing across hundreds of identical calls', () => {
     const tracker = new ToolProgressTracker()
     for (let index = 0; index < 500; index++) expect(tracker.observe([read], [succeeded(`shared version ${index}`)])).toBe(0)

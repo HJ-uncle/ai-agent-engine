@@ -7,6 +7,7 @@ import { logRequestDispatch } from '../llm-adapter/dispatch-diagnostics.js'
 import { SubagentPool } from './pool.js'
 import { configuredSubagentConcurrency } from './concurrency.js'
 import { getSubagentStore, SubagentStore } from './store.js'
+import { resultPreview, type SubagentResultMetadata } from './result.js'
 import { isTerminalRun, type CreateSubagentRun, type RunError, type RunObserver, type RunOutcome,
   type SubagentMutation, type SubagentRunHeader, type SubagentRunView } from './types.js'
 
@@ -23,6 +24,7 @@ export interface SubagentStart {
   readonly completion: Promise<SubagentRunView>
 }
 export type SubagentWait = { state: 'completed'; run: SubagentRunView } | { state: 'pending'; runId: string; reason?: 'message' }
+export interface SubagentWaitMany { state: 'completed' | 'pending'; runs: SubagentWait[]; reason?: 'message' }
 export interface SubagentWaitOptions { timeoutMs?: number; signal?: AbortSignal }
 interface OwnedCompletion { runner: SubagentRunner; start: SubagentStart }
 // A second runner instance cannot reinterpret readable durable IDs as a new
@@ -44,9 +46,8 @@ function errorInfo(error: unknown): RunError {
   return { code, message: candidate.message, retryable: false }
 }
 
-function boundedText(text: string | undefined, limit = 8000): string | undefined {
-  if (text === undefined || text.length <= limit) return text
-  return `${text.slice(0, limit)}\n[内容已截断；子任务转录保留已落盘内容]`
+function boundedText(text: string | undefined): string | undefined {
+  return text === undefined ? undefined : resultPreview(text, '\n[内容已截断；这里只保留预览]')
 }
 
 /** Owns lifecycle and persistence; a model's text is never interpreted as an execution status. */
@@ -189,6 +190,63 @@ export class SubagentRunner {
     return result
   }
 
+  /** One observation window for owned executors, including their durable projection and ticket joins. */
+  async waitManyOwned(parent: AgentContext, runIds: readonly string[], options: SubagentWaitOptions = {}): Promise<SubagentWaitMany> {
+    if (!Array.isArray(runIds) || runIds.length < 1 || runIds.length > 8
+      || [...runIds].some(runId => typeof runId !== 'string' || !runId.trim()) || new Set(runIds).size !== runIds.length) {
+      throw new RangeError('Invalid subagent wait runIds: expected 1-8 unique non-empty IDs')
+    }
+    const ids = [...runIds], timeout = options.timeoutMs ?? 60_000
+    if (!Number.isSafeInteger(timeout) || timeout < 0 || timeout > 60_000) throw new RangeError('Invalid subagent wait timeout')
+    const signals = [...new Set([parent.signal, options.signal].filter((signal): signal is AbortSignal => !!signal))]
+    for (const signal of signals) signal.throwIfAborted()
+    // Validate every target before attaching an observer, including readable
+    // historical IDs for which this exact root no longer owns an executor.
+    const owned = await Promise.all(ids.map(runId => this.ownedCompletion(parent, runId)))
+    for (const signal of signals) signal.throwIfAborted()
+    const runs: SubagentWait[] = ids.map(runId => ({ state: 'pending', runId }))
+    const inputObservation = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined, done = false, completed = 0
+    const listeners: Array<{ signal: AbortSignal; listener: () => void }> = []
+    try {
+      const result = await new Promise<SubagentWaitMany>((resolve, reject) => {
+        const settle = (action: () => void) => { if (!done) { done = true; action() } }
+        const snapshot = (reason?: 'message'): SubagentWaitMany => ({
+          state: completed === runs.length ? 'completed' : 'pending', runs: [...runs], ...(reason ? { reason } : {}),
+        })
+        for (const signal of signals) {
+          if (done) break
+          const listener = () => settle(() => reject(signal.reason ?? new Error('Subagent wait aborted')))
+          listeners.push({ signal, listener }); signal.addEventListener('abort', listener, { once: true })
+          if (signal.aborted) listener()
+        }
+        if (done) return
+        owned.forEach(({ start }, index) => {
+          start.completion.then(run => {
+            if (done) return
+            runs[index] = { state: 'completed', run }; completed++
+            if (completed === runs.length) settle(() => resolve(snapshot()))
+          }, error => settle(() => reject(error)))
+        })
+        // A single timer and mailbox subscription serve the entire set. One
+        // child's completion never resets the remaining observation budget.
+        timer = setTimeout(() => settle(() => resolve(snapshot())), timeout)
+        const service = serviceForOwner(parent.executionOwner!)
+        service.collaboration.waitForInput(service.producerForExecution(parent.executionOwner!), inputObservation.signal)
+          .then(() => settle(() => resolve(snapshot('message'))), error => settle(() => reject(error)))
+      })
+      for (const signal of signals) signal.throwIfAborted()
+      await Promise.all(ids.map(runId => this.ownedCompletion(parent, runId)))
+      for (const signal of signals) signal.throwIfAborted()
+      return result
+    } finally {
+      done = true
+      if (timer !== undefined) clearTimeout(timer)
+      inputObservation.abort(new Error('Subagent wait observation ended'))
+      for (const { signal, listener } of listeners) signal.removeEventListener('abort', listener)
+    }
+  }
+
   /** A cancellation ACK is pending until the actual executor, projection and ticket all join. */
   async cancelOwned(parent: AgentContext, runId: string, options: SubagentWaitOptions & { reason?: string } = {}): Promise<SubagentWait> {
     if (!Number.isSafeInteger(options.timeoutMs ?? 30_000) || (options.timeoutMs ?? 30_000) < 0 || (options.timeoutMs ?? 30_000) > 60_000) throw new RangeError('Invalid subagent wait timeout')
@@ -248,6 +306,9 @@ export class SubagentRunner {
     let outcome: RunOutcome | undefined
     let attemptsSeen = false
     let partialOutput = ''
+    // One reference to the loop's current cumulative string, never a copied history.
+    // A failed outcome may omit partialOutput; do not archive its bounded preview as complete evidence.
+    let latestCompleteOutput = ''
     let lastOutputWrite = 0
     const group = `${tenantId}:${initial.rootSessionId}:${initial.parentConversationId}`
     const fallback = this.fallbackBudgets.get(group) ?? new RequestBudget(Infinity)
@@ -260,6 +321,7 @@ export class SubagentRunner {
         await emit(await this.store.appendHeader(tenantId, runId, 'output.updated', { compaction }, { allowedStatuses: ['running', 'cancelling'] }))
       },
       onOutput: async (text) => {
+        latestCompleteOutput = text
         partialOutput = boundedText(text) ?? ''
         if (Date.now() - lastOutputWrite < 200) return
         lastOutputWrite = Date.now()
@@ -346,23 +408,38 @@ export class SubagentRunner {
       outcome = {
         status: timedOut ? 'failed' : 'cancelled',
         stopReason: timedOut ? 'deadline_exceeded' : latest.stopReason ?? 'cancelled',
-        partialOutput: outcome?.partialOutput ?? outcome?.output ?? partialOutput,
+        partialOutput: outcome?.partialOutput ?? outcome?.finalOutput ?? outcome?.output ?? latestCompleteOutput,
         ...(timedOut ? { error: { code: 'DEADLINE_EXCEEDED', message: '子代理超过执行时限。', retryable: false } } : {}),
       }
     }
-    const final = outcome!
+    let final = outcome!
     const finishRequestKey = randomUUID()
-    const finishPayloadHash = createHash('sha256').update(JSON.stringify(final)).digest('hex')
     try {
+      const resultBody = final.status === 'succeeded' ? final.finalOutput ?? final.output ?? '' : final.partialOutput ?? final.finalOutput ?? final.output ?? latestCompleteOutput
+      let summary: string, resultFields: Partial<SubagentResultMetadata> = {}
+      try {
+        const prepared = await this.store.prepareResult(tenantId, resultBody, final.status === 'succeeded' ? 'final' : 'partial')
+        const { summary: preview, ...fields } = prepared
+        summary = preview; resultFields = fields
+      } catch (error) {
+        // Do not strand the executor/ticket or claim a complete result after a disk failure.
+        // The small terminal error can still commit when only the payload volume is unavailable.
+        parent.logger.error({ err: error, runId }, 'Subagent complete result persistence failed')
+        final = { status: 'failed', stopReason: 'result_persistence_failed', error: {
+          code: 'RESULT_PERSIST_FAILED', message: '子代理完整结果落盘失败，未将其标为成功。请检查本地存储后核查子任务转录。', retryable: false } }
+        summary = resultPreview(resultBody, '\n[仅保留部分预览；完整结果落盘失败]')
+      }
+      const finishPayloadHash = createHash('sha256').update(JSON.stringify(final)).digest('hex')
       let finished: SubagentMutation | null
       try { finished = await this.store.appendHeader(tenantId, runId, 'finished', (current) => {
         // Cancellation may win after the read above; decide the winner inside the write transaction.
         const settled = current.status === 'cancelling' && !timedOut
-          ? { ...final, status: 'cancelled' as const, stopReason: current.stopReason ?? 'cancelled', partialOutput: final.partialOutput ?? final.output }
+          ? { ...final, status: 'cancelled' as const, stopReason: current.stopReason ?? 'cancelled', partialOutput: final.partialOutput ?? final.finalOutput ?? final.output }
           : final
         return {
           status: settled.status, stopReason: settled.stopReason, error: settled.error,
-          ...(settled.status === 'succeeded' ? { resultSummary: boundedText(settled.output) ?? '' } : { partialOutput: boundedText(settled.partialOutput ?? settled.output ?? partialOutput) }),
+          ...resultFields, ...(resultFields.resultRef ? { resultKind: settled.status === 'succeeded' ? 'final' as const : 'partial' as const } : {}),
+          ...(settled.status === 'succeeded' ? { resultSummary: summary } : { partialOutput: summary }),
           ...(settled.status === 'cancelled' && current.nonPlanToolCount > 0 ? { externalEffectStatus: 'unknown' as const } : {}),
           finishedAt: Date.now(), durationMs: current.startedAt ? Date.now() - current.startedAt : 0,
         }

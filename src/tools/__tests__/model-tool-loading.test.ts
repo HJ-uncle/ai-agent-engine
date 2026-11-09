@@ -33,15 +33,26 @@ describe('scoped on-demand builtin definitions', () => {
       { role: 'assistant', content: '', toolCall: { id: 'directory', name: 'subagent_directory', args: {} } },
       { role: 'tool', toolCallId: 'directory', toolName: 'subagent_directory', content: '{}', metadata: { status: 'succeeded', success: true } },
     ]
-    expect(registry.listForRequest(history).map(tool => tool.name)).toEqual(expect.arrayContaining(['subagent_start', 'subagent_followup', 'subagent_wait']))
+    expect(registry.listForRequest(history).map(tool => tool.name)).toEqual(expect.arrayContaining(['subagent_start', 'subagent_followup', 'subagent_wait', 'subagent_read_result']))
     const restricted = createSubagentToolRegistry(registry, true)
     const selected = restricted.listForRequest!(history).map(tool => tool.name)
     expect(selected).not.toContain('subagent_start')
     expect(selected).not.toContain('subagent_followup')
+    expect(selected).toContain('subagent_read_result')
+    expect(restricted.executionMode?.('subagent_read_result', {})).toBe('readonly')
     const failed = (await createToolRegistry(options)).registry
     history[1].metadata = { status: 'failed', success: false }
     expect(failed.listForRequest(history).map(tool => tool.name)).not.toContain('subagent_followup')
     expect(failed.listForRequest(history).map(tool => tool.name)).not.toContain('subagent_wait')
+  })
+
+  it('offers the authorized result reader directly after a durable child notification, including restored history without its start call', async () => {
+    const { registry } = await createToolRegistry(options)
+    expect(names(registry)).not.toContain('subagent_read_result')
+    const history: Message[] = [{ id: 'subagent-result:retained-run', role: 'assistant', content: 'Durable summary with result reference' }]
+    expect(registry.listForRequest(history).map(tool => tool.name)).toContain('subagent_read_result')
+    const restricted = (await createToolRegistry({ ...options, allowedTools: ['read_file'] })).registry
+    expect(restricted.listForRequest(history).map(tool => tool.name)).not.toContain('subagent_read_result')
   })
   it('does not trust or rewrite an extension named load_tools', async () => {
     const registry = new ToolRegistry()
@@ -80,8 +91,8 @@ describe('scoped on-demand builtin definitions', () => {
   })
   it('keeps all 63 capabilities, exposes core schemas and discovers every permitted tool', async () => {
     const { registry } = await createToolRegistry(options)
-    expect(registry.list()).toHaveLength(64)
-    expect(registry.listForModel()).toHaveLength(64)
+    expect(registry.list()).toHaveLength(65)
+    expect(registry.listForModel()).toHaveLength(65)
     expect(names(registry).sort()).toEqual([...CORE_MODEL_TOOLS].sort())
     const loader = registry.listForRequest().find(tool => tool.name === 'load_tools')!
     for (const tool of registry.list()) if (tool.name !== 'load_tools') expect(loader.description).toContain(tool.name)

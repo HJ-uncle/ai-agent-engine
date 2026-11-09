@@ -64,7 +64,7 @@ describe('one empty terminal response recovery', () => {
     ])
     expect(f.history.find(m => m.metadata?.emptyOutputRecovery)?.id).not.toBe('final')
     expect(f.history.at(-1)?.id).toBe('final')
-    expect(f.outcomes).toEqual([{ status: 'succeeded', output: 'Verified remaining work.', stopReason: 'completed' }])
+    expect(f.outcomes).toEqual([{ status: 'succeeded', output: 'Verified remaining work.', finalOutput: 'Verified remaining work.', stopReason: 'completed' }])
   })
 
   it('fails honestly after a second empty response and accounts for both requests', async () => {

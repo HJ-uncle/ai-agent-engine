@@ -73,7 +73,7 @@ describe('reasoning-only terminal output recovery', () => {
       expect(options!.unboundedOutput).toBe(true)
     }
     expect(body(frames)).toBe('Public task result verified.')
-    expect(f.outcomes).toEqual([{ status: 'succeeded', output: body(frames), stopReason: 'completed' }])
+    expect(f.outcomes).toEqual([{ status: 'succeeded', output: body(frames), finalOutput: body(frames), stopReason: 'completed' }])
     const segments = f.appended.filter(m => m.role === 'assistant')
     expect(segments).toHaveLength(2)
     expect(segments[0]).toMatchObject({ content: '', reasoningContent: PRIVATE, metadata: { partial: true, status: 'failed', stopReason: 'output_limit', outputReasoningRecovery: true }, usage: { promptTokens: 20, completionTokens: 8192 } })
