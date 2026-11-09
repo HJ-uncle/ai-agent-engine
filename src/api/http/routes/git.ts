@@ -63,6 +63,21 @@ function argument(value: unknown, label: string, max = 4096): string {
   return out
 }
 
+function commitMessage(value: unknown, allowEmpty = false): string {
+  if (allowEmpty && value === undefined) return ''
+  if (typeof value !== 'string') throw new Error('提交说明必须是文本')
+  if (value.length > 32_000) throw new Error('提交说明不能超过 32000 个字符')
+  // Commit bodies are paragraphs, unlike paths and ref names. Keep newlines
+  // and tabs while rejecting NUL and other control characters before dispatch.
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value))
+    throw new Error('提交说明包含不支持的控制字符（允许换行和制表符）')
+  if (!value.trim()) {
+    if (allowEmpty) return ''
+    throw new Error('提交说明不能为空')
+  }
+  return value
+}
+
 function paths(value: unknown, label = 'paths'): string[] {
   if (!Array.isArray(value) || value.length > 500) throw new Error(`${label} 无效`)
   return value.map((item) => relative(item, label))
@@ -189,7 +204,7 @@ async function runAction(cwd: GitWorkspace, body: ActionBody): Promise<Record<st
   const result = (args: string[]) => run(cwd, args).then(() => ({ success: true })).catch((error: any) => ({ success: false, error: String(error?.stderr || error?.message || error), ...repositoryFailureMetadata(error) }))
   const file = () => relative(body.path, 'path')
   const many = () => paths(body.paths)
-  const message = () => argument(body.message, 'message', 32000)
+  const message = () => commitMessage(body.message, op === 'commit-empty')
   const branch = () => gitName(body.branch, 'branch')
   const ref = () => gitName(body.ref, 'ref')
   const remote = () => gitName(body.remote, 'remote', 256)
@@ -240,11 +255,11 @@ async function runAction(cwd: GitWorkspace, body: ActionBody): Promise<Record<st
       return resultFromInput(selected.repo, args, selected.patch)
     }
     case 'commit': return result(['commit', '-m', message()])
-    case 'stage-all-commit': { const staged = await result(['add', '-A']); return staged.success ? result(['commit', '-m', message()]) : staged }
+    case 'stage-all-commit': { const value = message(); const staged = await result(['add', '-A']); return staged.success ? result(['commit', '-m', value]) : staged }
     case 'commit-amend': return result(['commit', '--amend', '--no-edit'])
     case 'commit-amend-message': return result(['commit', '--amend', '-m', message()])
     case 'undo-commit': return result(['reset', '--soft', 'HEAD~1'])
-    case 'commit-empty': return result(['commit', '--allow-empty', ...(body.message?.trim() ? ['-m', body.message] : ['--allow-empty-message', '-m', ''])])
+    case 'commit-empty': { const value = message(); return result(['commit', '--allow-empty', ...(!value ? ['--allow-empty-message'] : []), '-m', value]) }
     case 'fetch': return result(['fetch', '--all', '--prune'])
     case 'pull': return pullWithStrategy(cwd, ['pull', '--no-edit'])
     case 'pull-merge': return pullWithStrategy(cwd, ['pull', '--no-rebase', '--no-edit'], body.remember, false)
@@ -328,7 +343,11 @@ export async function gitRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: ActionBody }>('/git/action', async (request, reply) => {
     let admitted=false
     try {
-      const body = request.body ?? {}
+      const body = { ...request.body }
+      // Validate user text before acquiring/admitting a mutation, especially
+      // smart commit's `add -A`, so rejection is provably not_started.
+      if (['commit', 'stage-all-commit', 'commit-amend-message', 'commit-empty'].includes(body.op ?? ''))
+        body.message = commitMessage(body.message, body.op === 'commit-empty')
       const sessionId = text(body.sessionId || 'default', 'sessionId', 256) || 'default'
       const cwdRelative = body.cwd === '.' ? '' : relative(body.cwd || '', 'cwd')
       const context={tenantId:tenant(request),sessionId}
