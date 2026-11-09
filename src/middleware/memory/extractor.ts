@@ -4,7 +4,7 @@ import { createLLMAdapterWithDbConfig, type LLMAdapter, type LLMAdapterOptions }
 import type { ExtractedMemory, LLMCredentials, MemoryRequestStage } from './types.js'
 import type { Message } from '../../core/agent-context/index.js'
 import type { MemoryScope, MemoryNode } from '../../storage/memory/types.js'
-import { createMemoryEmbeddingService, type MemoryEmbeddingService } from '../../storage/memory/embedding.js'
+import { createMemoryEmbeddingService, backfillMemoryEmbeddings, type MemoryEmbeddingService } from '../../storage/memory/embedding.js'
 import { resolveCapabilities } from '../../core/model-capabilities/index.js'
 import { estimateRequestInput } from '../../core/agent-loop/finalization.js'
 import { trackMemoryExtraction, type MemoryExtractionTracker } from '../../storage/memory/extraction-coordinator.js'
@@ -13,6 +13,36 @@ import { memoryRequestTokenBudget } from '../../core/memory-request-context.js'
 
 function utilityRequestOptions(llm: LLMCredentials, stage: MemoryRequestStage): Pick<LLMAdapterOptions, 'signal' | 'onRequestAttempt'> {
   return { signal: llm.signal, ...(llm.onRequestAttempt ? { onRequestAttempt: event => llm.onRequestAttempt!({ ...event, stage }) } : {}) }
+}
+
+type RecallContext = { sessionId?: string; scope?: MemoryScope; scopes?: readonly MemoryScope[] }
+const embeddingMaintenanceFailures = new Map<string, number>()
+function deferEmbeddingMaintenance(key: string) {
+  embeddingMaintenanceFailures.delete(key)
+  embeddingMaintenanceFailures.set(key, Date.now() + 60_000)
+  while (embeddingMaintenanceFailures.size > 128) embeddingMaintenanceFailures.delete(embeddingMaintenanceFailures.keys().next().value!)
+}
+
+/** Bounded post-turn maintenance, never on the response's foreground recall path. */
+export async function maintainMemoryEmbeddings(tenantId: string, memoryContext: RecallContext, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return
+  const contexts = memoryContexts({ tenantId, sessionId: memoryContext.sessionId, memoryScope: memoryContext.scope, memoryScopes: memoryContext.scopes })
+    .map(ctx => ({ ctx, key: JSON.stringify([process.env.DATA_DIR, ctx.tenantId, ctx.scope, ctx.sessionId]) }))
+    .filter(({ key }) => (embeddingMaintenanceFailures.get(key) ?? 0) <= Date.now())
+  if (!contexts.length) return
+  let service: MemoryEmbeddingService | undefined
+  try { service = await createMemoryEmbeddingService() }
+  catch { for (const { key } of contexts) deferEmbeddingMaintenance(key); return }
+  if (!service || signal?.aborted) return
+  const manager = new SQLiteMemoryManager()
+  for (const { ctx, key } of contexts) {
+    if (signal?.aborted) return
+    try {
+      const result = await backfillMemoryEmbeddings(manager, ctx, service, { limit: 20, signal })
+      if (result.errors.length) deferEmbeddingMaintenance(key)
+      else embeddingMaintenanceFailures.delete(key)
+    } catch { if (!signal?.aborted) deferEmbeddingMaintenance(key) }
+  }
 }
 
 // ============================================================================
@@ -292,6 +322,7 @@ export async function extractAndStoreMemories(opts: {
     const committed = await tracker.commit(snapshot.revision, async () => {
     throwIfAborted(opts.llm.signal)
     for (const memory of filtered) {
+      throwIfAborted(opts.llm.signal)
       try {
         const existing = await manager.findNodeBySummary(memory.content, ctx)
         if (existing) {
@@ -454,7 +485,7 @@ export async function buildMemoryRecallBlock(
   tenantId: string,
   query?: string,
   llm?: LLMCredentials,
-  memoryContext?: { sessionId?: string; scope?: MemoryScope; scopes?: readonly MemoryScope[] },
+  memoryContext?: RecallContext,
 ): Promise<string> {
   try {
     const contexts = memoryContexts({ tenantId, sessionId: memoryContext?.sessionId, memoryScope: memoryContext?.scope, memoryScopes: memoryContext?.scopes })

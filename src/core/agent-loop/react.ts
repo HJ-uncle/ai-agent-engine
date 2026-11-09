@@ -35,7 +35,7 @@ import { captureFileEvidence, clearedToolModelContent, isClearedToolMessage, TOO
 import { buildRuntimeCapabilitiesContext, RUNTIME_CAPABILITIES_GUIDANCE } from '../runtime-capabilities.js'
 import { prepareCodegraphRequestContext } from '../codegraph-prompt.js'
 import { requestContextMessage } from '../llm-adapter/request-context.js'
-import { buildExecutionProtocol } from '../execution-protocol.js'
+import { buildExecutionProtocol, buildDelegationRequestContext } from '../execution-protocol.js'
 import { isRetryable } from '../llm-adapter/retry.js'
 import { finalResults, TOOL_RESULT_IMAGE_ASSETS } from '../../storage/results/index.js'
 import { rootRunStore } from '../../storage/root-runs/index.js'
@@ -731,6 +731,7 @@ export class ReActStrategy implements LoopStrategy {
       }
       let requestEnvironment = ''
       let requestCodegraphContext = ''
+      let requestDelegationContext = ''
       const readCurrentModelHistory = async (): Promise<Message[]> => {
         const current = await readModelHistory()
         const deliveryRevision = deliveryCloseout.revision
@@ -754,7 +755,8 @@ export class ReActStrategy implements LoopStrategy {
         effectiveTools = deliveryCloseout.tools(toolList.filter(tool => tool.name !== 'ask_user' || askUserCount < maxAskUserCount))
         requestEnvironment = buildRuntimeCapabilitiesContext(ctx, effectiveTools)
         requestCodegraphContext = effectiveTools.some(tool => tool.name === 'codegraph') ? codegraphContext : ''
-        injectedExtras = [requestEnvironment, this.options.requestContext, requestCodegraphContext,
+        requestDelegationContext = buildDelegationRequestContext({ list: () => effectiveTools })
+        injectedExtras = [requestEnvironment, this.options.requestContext, requestCodegraphContext, requestDelegationContext,
           planContext, deliveryPrompt, recoveryPrompt, workflowReviewPrompt, readonlyHistoryNotice(readonlyHistoryPairs),
           childReview.pending ? CHILD_RESULT_REVIEW_PROMPT : undefined,
           delegationCorrectionUsed && this.options.hasPendingDelegations?.()
@@ -947,7 +949,7 @@ export class ReActStrategy implements LoopStrategy {
         // Evidence-only finalization must not contain an exploration cadence hint.
         const finalExtras = [executionPrompt(), RUNTIME_CAPABILITIES_GUIDANCE, injectedPlanPrompt].filter(Boolean).join('\n\n')
         requestContext = [buildRuntimeCapabilitiesContext(ctx, effectiveTools),
-          ...injectedExtras.filter(extra => extra && extra !== requestEnvironment && extra !== requestCodegraphContext && extra !== workflowReviewPrompt), FINALIZATION_PROMPT].join('\n\n')
+          ...injectedExtras.filter(extra => extra && extra !== requestEnvironment && extra !== requestCodegraphContext && extra !== requestDelegationContext && extra !== workflowReviewPrompt), FINALIZATION_PROMPT].join('\n\n')
         systemPrompt = [this.options.systemPrompt, finalExtras].filter(Boolean).join('\n\n')
         injectedSystemTokens = estimateTokens(finalExtras) + estimateModelMessageTokens(requestContextMessage(requestContext))
         if (!unboundedCode) maxOutputTokens = Math.min(maxOutputTokens ?? Infinity, 4096)

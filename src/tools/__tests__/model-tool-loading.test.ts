@@ -23,10 +23,12 @@ const receiptHistory = (selected: string[]): Message[] => [
 ]
 
 describe('scoped on-demand builtin definitions', () => {
-  it('opens only authorized team controls after successful directory discovery, without another loader round', async () => {
+  it('offers authorized creation initially and opens lifecycle controls after successful directory discovery', async () => {
     const { registry } = await createToolRegistry(options)
     expect(names(registry)).toContain('subagent_directory')
-    expect(names(registry)).not.toContain('subagent_start')
+    expect(names(registry)).toContain('subagent_start')
+    expect(names(registry)).not.toContain('subagent_followup')
+    expect(names(registry)).not.toContain('subagent_wait')
     const history: Message[] = [
       { role: 'assistant', content: '', toolCall: { id: 'directory', name: 'subagent_directory', args: {} } },
       { role: 'tool', toolCallId: 'directory', toolName: 'subagent_directory', content: '{}', metadata: { status: 'succeeded', success: true } },
@@ -38,7 +40,8 @@ describe('scoped on-demand builtin definitions', () => {
     expect(selected).not.toContain('subagent_followup')
     const failed = (await createToolRegistry(options)).registry
     history[1].metadata = { status: 'failed', success: false }
-    expect(failed.listForRequest(history).map(tool => tool.name)).not.toContain('subagent_start')
+    expect(failed.listForRequest(history).map(tool => tool.name)).not.toContain('subagent_followup')
+    expect(failed.listForRequest(history).map(tool => tool.name)).not.toContain('subagent_wait')
   })
   it('does not trust or rewrite an extension named load_tools', async () => {
     const registry = new ToolRegistry()

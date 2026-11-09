@@ -7,7 +7,7 @@ import { closeMemoryDb, getMemoryDb, initMemoryDb } from '../db.js'
 import { MEMORY_SCHEMA } from '../schema.js'
 import { SQLiteMemoryManager } from '../memory-manager.js'
 import { OpenAIMemoryEmbeddingService, createMemoryEmbeddingService, backfillMemoryEmbeddings } from '../embedding.js'
-import { buildMemoryRecallBlock, extractAndStoreMemories, renderMemoryRecallBlock } from '../../../middleware/memory/extractor.js'
+import { buildMemoryRecallBlock, extractAndStoreMemories, renderMemoryRecallBlock, maintainMemoryEmbeddings } from '../../../middleware/memory/extractor.js'
 import { createLLMAdapterWithDbConfig } from '../../../core/llm-adapter/index.js'
 import { estimateRequestInput } from '../../../core/agent-loop/finalization.js'
 import type { MemoryContext } from '../types.js'
@@ -153,6 +153,46 @@ describe('independent memory embedding service', () => {
     expect((await manager.getNode(memory.id, context))?.embeddingSpace).toBeNull()
   })
 
+  it('maintains at most twenty authorized memories per post-turn batch and deduplicates concurrent maintenance', async () => {
+    vi.stubEnv('EMBEDDING_BASE_URL', baseUrl); vi.stubEnv('EMBEDDING_MODEL', 'test-semantic-v1'); vi.stubEnv('EMBEDDING_DIMENSIONS', '3')
+    const nodes = await manager.writeBatch(Array.from({ length: 21 }, (_, index) => ({ type: 'fact' as const, summary: `authorized reference ${index}` })), [], context)
+    const foreign = await manager.createNode({ type: 'fact', summary: 'other session reference' }, { ...context, sessionId: 'two' })
+    await Promise.all([0, 1].map(() => maintainMemoryEmbeddings('a', { sessionId: 'one', scopes: ['session'] })))
+    expect(requests).toHaveLength(1)
+    expect(requests[0].input).toHaveLength(20)
+    expect(requests[0].input.every(text => text.startsWith('authorized reference'))).toBe(true)
+    const stored = await Promise.all(nodes.nodes.map(node => manager.getNode(node.id, context)))
+    expect(stored.filter(node => node?.embeddingSpace)).toHaveLength(20)
+    expect((await manager.getNode(foreign.id, { ...context, sessionId: 'two' }))?.embeddingSpace).toBeNull()
+    await maintainMemoryEmbeddings('a', { sessionId: 'one', scopes: ['session'] })
+    expect(requests).toHaveLength(2)
+    expect(requests[1].input).toHaveLength(1)
+  })
+
+  it('backs off failed maintenance for sixty seconds and skips disabled or cancelled requests', async () => {
+    vi.stubEnv('EMBEDDING_BASE_URL', baseUrl); vi.stubEnv('EMBEDDING_MODEL', 'test-semantic-v1'); vi.stubEnv('EMBEDDING_DIMENSIONS', '3')
+    await manager.createNode({ type: 'fact', summary: 'retryable reference' }, context)
+    const now = Date.now()
+    mode = 'wrong-dimensions'
+    await maintainMemoryEmbeddings('a', { sessionId: 'one', scopes: ['session'] })
+    await maintainMemoryEmbeddings('a', { sessionId: 'one', scopes: ['session'] })
+    expect(requests).toHaveLength(1)
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 61_000)
+    try {
+      const controller = new AbortController(); controller.abort()
+      await maintainMemoryEmbeddings('a', { sessionId: 'one', scopes: ['session'] }, controller.signal)
+      await maintainMemoryEmbeddings('a', { sessionId: 'one', scopes: [] })
+      vi.stubEnv('ENABLE_LONG_TERM_MEMORY', 'false')
+      await maintainMemoryEmbeddings('a', { sessionId: 'one', scopes: ['session'] })
+      expect(requests).toHaveLength(1)
+      vi.stubEnv('ENABLE_LONG_TERM_MEMORY', 'true')
+      mode = 'valid'
+      await maintainMemoryEmbeddings('a', { sessionId: 'one', scopes: ['session'] })
+      expect(requests).toHaveLength(2)
+      expect((await manager.listNodes({}, context))[0].embeddingSpace).toBeTruthy()
+    } finally { clock.mockRestore() }
+  })
+
   it('atomically deduplicates repeated extraction while allowing the same fact in another session', async () => {
     const input = { type: 'decision' as const, summary: 'Use exact decimal arithmetic', importance: 0.9 }
     const results = await Promise.all(Array.from({ length: 5 }, () => manager.createExtractedNodeIfAbsent(input, context)))
@@ -225,6 +265,10 @@ describe('independent memory embedding service', () => {
     expect(block).toContain('节选')
     expect(estimateRequestInput([{ role: 'system', content: block }], undefined, [])).toBeLessThanOrEqual(2_000)
     expect((await manager.getNode(long.id, context))?.summary).toBe(full)
+    const small = renderMemoryRecallBlock([older, long, current], 8_000)
+    expect(estimateRequestInput([{ role: 'system', content: small }], undefined, [])).toBeLessThanOrEqual(640)
+    expect(small).toContain('Use API v2')
+    expect(renderMemoryRecallBlock([current, long, older], 8_000)).toBe(small)
   })
 
   it('bounds recall from a 2501-node linked database while preserving every original node for later inspection', async () => {

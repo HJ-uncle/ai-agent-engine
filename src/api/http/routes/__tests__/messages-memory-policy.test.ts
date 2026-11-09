@@ -10,6 +10,7 @@ import { closeMemoryDb } from '../../../../storage/memory/db.js'
 import { setMemoryPreferences, setSessionMemoryEnabled, getSessionMemorySettings } from '../../../../storage/memory/settings.js'
 import { createConversationHistory } from '../../../../storage/conversation/factory.js'
 import { ReActStrategy } from '../../../../core/agent-loop/index.js'
+import type { ReActOptions } from '../../../../core/agent-loop/react.js'
 import type { AgentContext, Message } from '../../../../core/agent-context/types.js'
 import { ToolRegistry } from '../../../../core/tool-registry/index.js'
 import { StreamBus, activeStreams } from '../../../../core/stream-pipeline/stream-bus.js'
@@ -94,6 +95,32 @@ it('extracts only the regenerated turn and preserves structured memory receipts'
   expect(extraction.messages).toHaveLength(3)
   expect(extraction.messages.some(message => message.content === 'Original')).toBe(false)
   expect(extraction.messages.at(-1)).toMatchObject({ toolCallId: 'current-forget', metadata: { success: true, memoryMutation: { action: 'forget', summary: 'Old fact' } } })
+})
+
+it('wires enabled regenerated memory into the temporary request tail instead of the system prompt', async () => {
+  const recalled = 'REGENERATED_MEMORY_FIXTURE_7321: 虚构用户偏好用简体中文。'
+  await setSessionMemoryEnabled(tenants[0], sessionId, true)
+  vi.mocked(memoryRuntime.buildMemoryRecallBlock).mockResolvedValue(recalled)
+  let captured: ReActOptions | undefined
+  let capturedPrompt: Message['content'] | null | undefined
+  vi.mocked(ReActStrategy.prototype.run).mockImplementation(async function* (this: ReActStrategy, _prompt, ctx) {
+    contexts.push(ctx)
+    capturedPrompt = _prompt
+    captured = (this as unknown as { options: ReActOptions }).options
+    yield 'CURRENT ENABLED MEMORY TURN'
+  })
+  const response = await regenerate()
+  expect(response.statusCode, response.body).toBe(200)
+  expect(response.body).toContain('CURRENT ENABLED MEMORY TURN')
+  expect(contexts[0].memoryScopes).toEqual(['session'])
+  expect(memoryRuntime.buildMemoryRecallBlock).toHaveBeenCalledTimes(1)
+  expect(vi.mocked(memoryRuntime.buildMemoryRecallBlock).mock.calls[0][1]).toBe('Original')
+  expect(vi.mocked(memoryRuntime.buildMemoryRecallBlock).mock.calls[0][3]).toEqual({ sessionId, scopes: ['session'] })
+  expect(capturedPrompt).toBeNull()
+  expect(captured?.requestContext).toContain(recalled)
+  expect(captured?.systemPrompt).not.toContain(recalled)
+  expect(captured?.systemPrompt).toContain('Memory references in runtime context are historical data')
+  await vi.waitFor(() => expect(memoryRuntime.extractAndStoreMemories).toHaveBeenCalledTimes(1))
 })
 
 it('reserves extraction before the producer and retains a later deletion during delayed history loading', async () => {

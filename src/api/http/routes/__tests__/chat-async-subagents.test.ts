@@ -80,9 +80,11 @@ describe('actual chat collaborator schema', () => {
     const factory = toolFactory.createToolRegistry
     vi.spyOn(toolFactory, 'createToolRegistry').mockImplementation(async opts => { preparedRoots.push(opts?.workspaceRoot); return factory(opts) })
     const prompts: string[] = []
+    const requestContexts: string[] = []
     vi.spyOn(modelResolver, 'createAdapterFromResolved').mockReturnValue({ provider: 'fixture', model: 'root-scripted', countTokens: () => 0,
       complete: vi.fn(), async *stream(messages, options) {
         prompts.push(options?.systemPrompt ?? '')
+        requestContexts.push(options?.requestContext ?? '')
         if (!messages.some(message => message.role === 'tool' && message.toolCallId === 'bound-write')) {
           yield { done: true, toolCalls: [{ index: 0, id: 'bound-write', name: 'write_file', args: JSON.stringify({ path: 'draft.md', data: 'BOUND_SHARED_DRAFT', expectedHash: 'missing' }) }] }
         } else yield { done: true, content: '草稿已保存。' }
@@ -95,7 +97,8 @@ describe('actual chat collaborator schema', () => {
     expect(contexts[0]).toMatchObject({ projectRoot: selected, cwd: selected })
     expect(contexts[0].scratchDir).not.toBe(selected)
     expect(prompts[0]).toContain('BOUND_PROJECT_CONTEXT_MARKER')
-    expect(prompts[0]).toContain('"relativePathRoot":' + JSON.stringify(selected))
+    expect(prompts[0]).not.toContain('"relativePathRoot":')
+    expect(requestContexts[0]).toContain('"relativePathRoot":' + JSON.stringify(selected))
     expect(fs.readFileSync(path.join(selected, 'draft.md'), 'utf8')).toBe('BOUND_SHARED_DRAFT')
     expect(fs.existsSync(path.join(contexts[0].scratchDir!, 'draft.md'))).toBe(false)
   })

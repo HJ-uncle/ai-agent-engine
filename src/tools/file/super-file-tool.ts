@@ -13,6 +13,8 @@ import { throwIfAborted } from '../../core/utils/abort.js'
 import { writeConditionalFile } from './conditional-write.js'
 import { getToolOutputLimit } from '../../core/agent-loop/tool-output-limit.js'
 import { TextHandler } from './handlers/text-handler.js'
+import { JsonHandler } from './handlers/json-handler.js'
+import { ExcelHandler } from './handlers/excel-handler.js'
 import { readTextPage } from './text-page.js'
 import { fileBatchSchema, hasFileBatch, isFileBatchReadContext, readFileBatch, preflightFileReadBatch, preflightFileWriteBatch, writeFileBatch } from './file-batch.js'
 
@@ -25,8 +27,8 @@ const singleReadFileTool: Tool = {
     properties: {
       path: { type: 'string', description: '确切文件路径；相对路径基于当前工作区解析，不按文件名猜测其他目录。' },
       start_line: { type: 'number', description: '起始行号（从 1 开始），默认 1' },
-      end_line: { type: 'number', description: '结束行号。Work 普通文本默认按输出预算连续分页，参考 hasMore/nextStartLine/nextStartColumn；其他模式默认最多300行，full/exact按各自约定。' },
-      start_column: { type: 'integer', minimum: 1, description: '仅 Work 普通文本 auto 模式可用；1 起 UTF-16 列偏移，不得落在代理对中间。超长行按 nextStartLine/nextStartColumn 续读。' },
+      end_line: { type: 'number', description: '结束源行号。Work文本、批量文本/JSON/CSV按预算分页，参考hasMore/nextStartLine/nextStartColumn。单读JSON/CSV显式范围也按源文分页；未指定范围保留格式化展示。full从头、exact按原文合同。' },
+      start_column: { type: 'integer', minimum: 1, description: 'auto源文分页的1起UTF-16列偏移，不拆代理对；支持Work文本、批量文本/JSON/CSV及JSON/CSV单读续页。使用回执nextStartLine/nextStartColumn，片段不保证是完整JSON。' },
       mode: { type: 'string', enum: ['auto', 'full', 'summary', 'vision', 'ocr', 'exact'], description: 'auto(默认), full(全文), summary(摘要/签名), vision(图片预览), ocr(文本提取), exact(原始UTF-8 JSON，含完整expectedHash，可按行分页)' },
     },
     required: ['path'],
@@ -57,8 +59,18 @@ const singleReadFileTool: Tool = {
         if (before.content.byteLength > MAX_FILE_SIZE) return { success: false, output: `File too large (${before.content.byteLength} bytes, max ${MAX_FILE_SIZE} bytes)` }
         const text = decodeEditableText(canonicalPath, before.content)
         const handler = handlerRegistry.getHandler(canonicalPath)
-        if (start_column !== undefined && ((ctx.toolProfile !== 'general' && !isFileBatchReadContext(ctx)) || mode !== 'auto' || !(handler instanceof TextHandler) || text === null)) {
-          return { success: false, error: 'COLUMN_PAGING_UNSUPPORTED', output: 'start_column is supported only by Work ordinary UTF-8 text in auto mode; Code, exact and format-specific readers do not support column paging.' }
+        const batchRead = isFileBatchReadContext(ctx)
+        const structuredSource = handler instanceof JsonHandler
+          || handler instanceof ExcelHandler && path.extname(canonicalPath).toLowerCase() === '.csv'
+        // JSON/CSV have format handlers, but batch results still need bounded
+        // source pages. Reformatting first loses source line/column identities
+        // and makes an oversized document fail repeatedly instead of progressing.
+        // Explicit cursors also work outside a batch, so a final remainder can
+        // be read alone without switching back to a whole formatted document.
+        const sourcePaging = handler instanceof TextHandler && (ctx.toolProfile === 'general' || batchRead)
+          || structuredSource && (batchRead || mode === 'auto' && [start_line, end_line, start_column].some(value => value !== undefined))
+        if (start_column !== undefined && (!sourcePaging || mode !== 'auto' || text === null)) {
+          return { success: false, error: 'COLUMN_PAGING_UNSUPPORTED', output: 'start_column requires auto UTF-8 source paging: Work text, batch text/JSON/CSV, or single-file JSON/CSV continuation. Exact, full and other format readers do not accept column cursors.' }
         }
         const endings = text?.match(/\r\n|\r|\n/g) ?? []
         const endingKinds = [...new Set(endings)]
@@ -96,7 +108,7 @@ const singleReadFileTool: Tool = {
             output: JSON.stringify({ ...version, code: 'TEXT_ENCODING_UNSUPPORTED', message: 'CSV/TSV reading requires valid UTF-8 source text. This file is binary or uses another encoding; no spreadsheet conversion or lossy decoding was attempted.' }),
             metadata: { ...version, code: 'TEXT_ENCODING_UNSUPPORTED', fileMutationApplied: false } }
         }
-        if ((ctx.toolProfile === 'general' || isFileBatchReadContext(ctx)) && handler instanceof TextHandler && text !== null && (mode === 'auto' || mode === 'full')) {
+        if (sourcePaging && text !== null && (mode === 'auto' || mode === 'full')) {
           const page = readTextPage({ text, version: { ...version, byteLength: before.content.byteLength },
             maxChars: getToolOutputLimit(ctx.toolProfile, ctx), mode, startLine: start_line, endLine: end_line, startColumn: start_column })
           if (readFileVersionSync(canonicalPath).hash !== before.hash) return { success: false, output: 'File changed while being read; read it again to obtain a matching content and expectedHash.' }

@@ -104,6 +104,6 @@ describe('memory session scope isolation', () => {
     expect((await manager.listNodes({ orderBy: 'importance' }, sessionACtx)).map(node => node.id)).toEqual(ids)
     expect((await manager.recallSimilar([1, 0, 0], 5, sessionACtx)).map(node => node.id)).toEqual(ids)
     expect(await manager.getTags(ids[0], sessionACtx)).toEqual(['a-first', 'z-last'])
-    expect((await manager.listNodes({}, sessionACtx)).every(node => node.tags.join(',') === 'a-first,z-last')).toBe(true)
+    expect((await manager.listNodes({}, sessionACtx)).every(node => (node.tags ?? []).join(',') === 'a-first,z-last')).toBe(true)
   })
 })

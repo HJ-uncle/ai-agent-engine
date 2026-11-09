@@ -16,6 +16,7 @@ import { prependBootstrapToSystemPrompt } from '../../../core/osm-bootstrap.js'
 import { getProjectContextBlock } from '../../../core/project-context.js'
 import { tenantConfigStore } from '../../../storage/sqlite/tenant-config.js'
 import { estimateTokens } from '../../../core/utils/tokens.js'
+import { modelMessageContent } from '../../../core/utils/model-context.js'
 import { v4 as uuidv4 } from 'uuid'
 import { success, fail } from '../response.js'
 import { registerActiveChat, unregisterActiveChat } from './chat.js'
@@ -218,10 +219,17 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     }
 
     // Legacy edit/regenerate requests use the same persisted memory boundary as
-    // /chat.  Include the scoped recall block so an edited turn does not lose
-    // the session's selected memory context.
-    if (effectiveMemoryScopes.length > 0 && newMessageContent) {
-      memoryRecallBlock = await buildMemoryRecallBlock(tenantId, newMessageContent, {
+    // /chat. Regeneration keeps the original user message rather than appending
+    // a new one, but still needs that message as the scoped retrieval query.
+    let memoryQuery = newMessageContent
+    if (effectiveMemoryScopes.length > 0 && memoryQuery === undefined) {
+      const lastUser = [...await history.getHistory(ctx)].reverse().find(message => message.role === 'user')
+      const content = lastUser ? modelMessageContent(lastUser) : undefined
+      memoryQuery = typeof content === 'string' ? content : Array.isArray(content)
+        ? content.filter(part => part.type === 'text' && typeof part.text === 'string').map(part => part.text).join('\n') : undefined
+    }
+    if (effectiveMemoryScopes.length > 0 && memoryQuery) {
+      memoryRecallBlock = await buildMemoryRecallBlock(tenantId, memoryQuery, {
         model: currentModelName,
         apiKey: modelApiKey,
         baseUrl: modelBaseUrl,

@@ -66,9 +66,18 @@ describe('delimited text reading keeps source bytes and a usable edit contract',
       fs.writeFileSync(file, original)
       const result = await readFileTool.execute({ path: file, start_line: 2, end_line: 3 }, ctx)
       expect(result.success).toBe(true)
-      expect(result.output).toContain(`   2 | FR-11${delimiter}"死子\r\n   3 | 确认"\r`)
+      if (extension === '.csv') {
+        expect(JSON.parse(result.output)).toMatchObject({
+          numberedContent: '2 | FR-11,"死子\n3 | 确认"', startLine: 2, endLine: 3,
+          totalLines: 5, hasMore: false, rangeIsComplete: true, contentIsComplete: false,
+        })
+      } else {
+        expect(result.output).toContain(`   2 | FR-11${delimiter}"死子\r\n   3 | 确认"\r`)
+      }
       expect(result.output).not.toContain('FR-12')
       expect(result.metadata).toMatchObject({ expectedHash: hashFileContent(original), lineEnding: 'CRLF' })
+      expect(fs.readFileSync(file, 'utf8')).toBe(original)
+      expect(await store.list(ctx.tenantId, ctx.sessionId)).toEqual([])
     })
     it(`${extension} supports exact read -> conditional edit without losing BOM or CRLF`, async () => {
       const file = path.join(root, `edit${extension}`)

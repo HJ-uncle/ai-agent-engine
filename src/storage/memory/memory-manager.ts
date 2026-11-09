@@ -259,6 +259,21 @@ export class SQLiteMemoryManager implements MemoryManager {
   }
   async traversePath(startNodeId: string, maxHops: number, edgeTypes?: MemoryEdgeType[], ctx?: MemoryContext, maxNodes?: number): Promise<MemoryNode[]> {
     if (maxHops < 1 || (maxNodes !== undefined && (!Number.isSafeInteger(maxNodes) || maxNodes < 1))) return []
+    if (maxNodes !== undefined) {
+      // Bound each frontier before mapping full records/tags into application memory.
+      const seen = new Set([startNodeId]), nodes: MemoryNode[] = []
+      let frontier = [startNodeId]
+      for (let hop = 0; hop < maxHops && frontier.length && nodes.length < maxNodes; hop++) {
+        const related = await this.getRelatedNodes(frontier, edgeTypes, ctx, maxNodes + seen.size)
+        frontier = []
+        for (const node of related) {
+          if (seen.has(node.id)) continue
+          seen.add(node.id); nodes.push(node); frontier.push(node.id)
+          if (nodes.length >= maxNodes) break
+        }
+      }
+      return nodes
+    }
     const c = normalizeContext(ctx); const db = getMemoryDb()
     const start = scoped('start', c), e = scoped('e', c), next = scoped('next', c), end = scoped('n', c)
     const type = edgeTypes?.length ? ` AND e.type IN (${edgeTypes.map(() => '?').join(',')})` : ''
@@ -277,15 +292,12 @@ export class SQLiteMemoryManager implements MemoryManager {
         JOIN memory_edges e ON ${e.sql} AND e.target_node_id=t.node_id
         JOIN memory_nodes next ON next.id=e.source_node_id AND ${next.sql}
         WHERE t.hop<?${type}
-        ${maxNodes !== undefined ? 'ORDER BY 2 ASC,1 ASC LIMIT ?' : ''}
       ) SELECT DISTINCT n.* FROM traverse t JOIN memory_nodes n ON n.id=t.node_id
         WHERE t.node_id!=? AND ${end.sql}
-        ORDER BY n.importance DESC,n.timestamp DESC,n.strength DESC,n.id ASC${maxNodes !== undefined ? ' LIMIT ?' : ''}`
+        ORDER BY n.importance DESC,n.timestamp DESC,n.strength DESC,n.id ASC`
     const args: InValue[] = [startNodeId, ...start.args,
       ...e.args, ...next.args, maxHops, ...typeArgs,
-      ...e.args, ...next.args, maxHops, ...typeArgs,
-      ...(maxNodes !== undefined ? [maxNodes + 1] : []), startNodeId, ...end.args,
-      ...(maxNodes !== undefined ? [maxNodes] : [])]
+      ...e.args, ...next.args, maxHops, ...typeArgs, startNodeId, ...end.args]
     return this._mapWithTags((await db.execute({ sql, args })).rows, c)
   }
   async getRelatedNodes(nodeIds: string[], edgeTypes?: MemoryEdgeType[], ctx?: MemoryContext, maxNodes?: number): Promise<MemoryNode[]> {

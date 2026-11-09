@@ -137,8 +137,11 @@ describe('unpaged JSON compatibility and outer file identity', () => {
     for (const [start, end] of [[1, 2], [3, 5]]) {
       const result = await readFileTool.execute({ path: file, mode: 'auto', start_line: start, end_line: end }, ctx)
       expect(result).toMatchObject({ success: true, metadata: { path: file, expectedHash, lineEnding: 'CRLF', utf8Bom: true } })
-      expect(result.output).toContain(`第 ${start}-${end} 行，共 5 行`)
-      expect(result.output).toContain(expectedHash)
+      expect(JSON.parse(result.output)).toMatchObject({
+        expectedHash, startLine: start, endLine: end, totalLines: 5,
+        rangeIsComplete: true, contentIsComplete: false, hasMore: false,
+        numberedContent: raw.split('\r\n').slice(start - 1, end).map((line, index) => `${start + index} | ${line}`).join('\n'),
+      })
     }
     expect(fs.readFileSync(file, 'utf8')).toBe(raw)
     const invalid = await readFileTool.execute({ path: file, mode: 'auto', start_line: -1, end_line: 1 }, ctx)

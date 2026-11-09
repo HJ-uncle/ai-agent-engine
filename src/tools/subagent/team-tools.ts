@@ -63,7 +63,7 @@ export async function childDirectory(ctx: AgentContext, options: { cursor?: stri
 
 export const subagentDirectoryTool: Tool = {
   name: 'subagent_directory', displayName: '查看可复用子代理',
-  description: '分页查看当前父会话跨轮、跨重启的子代理，包含最新状态、任务摘要及可续用性。已完成实例仍可用subagent_followup继续；优先复用上下文相关实例。目录中的身份不授予旧执行权限，运行中通信还需当前根任务成员。',
+  description: '主Agent自动协作入口，无需用户@。分页查看当前父会话跨轮、跨重启的子代理状态、任务摘要及可续用性，优先用subagent_followup复用相关实例，包括已完成实例；目录为空表示没有旧实例，可继续用已授权的内置角色创建工具。成功查询后已授权的启动/续派/等待定义会加入下一请求。目录身份不授予旧执行权限，运行中通信仍需当前根任务成员。',
   parameters: { type: 'object', properties: { cursor: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 64 } }, additionalProperties: false },
   execute: guarded(async (raw, ctx) => {
     const input = args(raw, ['cursor', 'limit'])

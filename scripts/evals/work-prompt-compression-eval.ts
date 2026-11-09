@@ -16,6 +16,8 @@ import { batchFilesPrompt, batchThreeFilesPrompt, setupBatchFiles, checkBatchFil
   captureProviderToolEvidence } from './batch-io-fixture.js'
 import { checkCopyFirstPass } from './copy-firstpass-fixture.js'
 import { setupCodegraphResearch, checkCodegraphResearch } from './codegraph-research-fixture.js'
+import { delegationResearchPrompt, setupDelegationResearch, checkDelegationResearch,
+  delegationSingleFilePrompt, setupDelegationSingleFile, checkDelegationSingleFile } from './delegation-research-fixture.js'
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const args = Object.fromEntries(process.argv.slice(2).reduce<string[][]>((out, item, i, all) => {
@@ -99,6 +101,14 @@ function exactFileCase(id: string, sourceText: string, firstPass = false): Case 
     }}
 }
 const cases: Case[] = [
+  {id:'delegation_research',prompt:delegationResearchPrompt,setup:async()=>{
+    setupDelegationResearch(workspace)
+    const CodeGraph=await (await importSource('tools/codegraph/codegraph-module.ts')).loadCodeGraph()
+    const graph=await CodeGraph.init(workspace,{index:true})
+    try { if(graph.getIndexState()!=='complete')throw new Error('Synthetic research index is incomplete') }
+    finally { graph.close() }
+  },check:()=>checkDelegationResearch(current)},
+  {id:'delegation_small',prompt:delegationSingleFilePrompt,setup:()=>setupDelegationSingleFile(workspace),check:()=>checkDelegationSingleFile(current)},
   {id:'codegraph_research',prompt:'深度调研一下这个项目，说明架构、主要调用链和明显问题。只读检查，最后在会话中给出简洁结论。',
     setup:async()=>{
       setupCodegraphResearch(workspace)

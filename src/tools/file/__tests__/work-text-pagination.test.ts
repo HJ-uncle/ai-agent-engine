@@ -130,7 +130,8 @@ describe('Work text pages keep every source line inside the runtime output cap',
     }
     expect(await readFileTool.execute({ path: file, start_column: 1 }, code)).toMatchObject({ success: false, error: 'COLUMN_PAGING_UNSUPPORTED' })
     const json = seed('{"a":1}', 'data.json')
-    expect(await readFileTool.execute({ path: json, start_column: 1 }, ctx)).toMatchObject({ success: false, error: 'COLUMN_PAGING_UNSUPPORTED' })
+    expect(JSON.parse((await readFileTool.execute({ path: json, start_column: 1 }, ctx)).output))
+      .toMatchObject({ numberedContent: '1 | {"a":1}', startColumn: 1, contentIsComplete: true })
     expect((await readFileTool.execute({ path: json }, ctx)).output).toContain('[读取监控]')
   })
 
