@@ -17,7 +17,7 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs() })
 
 describe('one-source system prompt assembly', () => {
-  it('preserves custom instructions byte-for-byte and excludes only the separately supplied RAG block from accounting', () => {
+  it('preserves custom instructions and keeps changing memory after the stable system/history prefix', () => {
     const base = 'User identity\r\n# Rules\nKeep my literal {{placeholder}} and RAG-looking text.'
     const rag = '\n\nRAG-looking text'
     const memory = '\nMemory context'
@@ -25,13 +25,21 @@ describe('one-source system prompt assembly', () => {
     const parts = { base, rag, memory, modelName: 'model-name', download: 'Download contract',
       codegraph: 'Graph availability', attachments, mode: 'Code-specific rules', office: 'Office instructions' }
     const result = buildChatSystemPrompts(parts)
-    expect(result.fullSystemPrompt.startsWith(base + rag + memory)).toBe(true)
-    expect(result.pureSystemPrompt.startsWith(base + memory)).toBe(true)
+    expect(result.fullSystemPrompt.startsWith(base + rag)).toBe(true)
+    expect(result.pureSystemPrompt.startsWith(base)).toBe(true)
     expect(result.fullSystemPrompt.slice((base + rag).length)).toBe(result.pureSystemPrompt.slice(base.length))
-    for (const value of [base, memory, attachments, parts.download, parts.mode, parts.office, parts.codegraph]) {
+    for (const value of [base, attachments, parts.download, parts.mode, parts.office, parts.codegraph]) {
       expect(result.fullSystemPrompt.split(value)).toHaveLength(2)
       expect(result.pureSystemPrompt.split(value)).toHaveLength(2)
     }
+    expect(result.fullSystemPrompt).not.toContain(memory)
+    expect(result.pureSystemPrompt).not.toContain(memory)
+    expect(result.requestContext).toContain(memory.trim())
+    const replacement = buildChatSystemPrompts({ ...parts, memory: 'A later recalled memory', inlineMemories: '<fact>client reference</fact>' })
+    expect(replacement.fullSystemPrompt).toBe(result.fullSystemPrompt)
+    expect(replacement.pureSystemPrompt).toBe(result.pureSystemPrompt)
+    expect(replacement.requestContext).toContain('client reference')
+    expect(replacement.requestContext).not.toContain(memory.trim())
     expect(estimateTokens(result.fullSystemPrompt) - estimateTokens(result.pureSystemPrompt))
       .toBeGreaterThanOrEqual(estimateTokens(rag) - 1)
   })
@@ -40,6 +48,7 @@ describe('one-source system prompt assembly', () => {
     const result = buildChatSystemPrompts({ base: '', rag: '', memory: '', modelName: 'test', download: '',
       mode: TASK_PLAN_EXECUTION_PROMPT })
     expect(result.fullSystemPrompt).toBe(result.pureSystemPrompt)
+    expect(result.requestContext).toBe('')
     expect(result.fullSystemPrompt.split(TASK_PLAN_EXECUTION_PROMPT)).toHaveLength(2)
     expect(result.fullSystemPrompt).not.toMatch(/undefined|null|SUBAGENT_DISPATCH_PROMPT/)
   })

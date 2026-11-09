@@ -1,19 +1,69 @@
+import type { AgentContext } from './agent-context/types.js'
+import { workspaceManager } from '../workspace/index.js'
+import { canonicalFilePathSync } from '../shared/file-version.js'
+import { projectDataPath } from './project-storage.js'
+import { captureSubagentWorkspace, workspaceContains } from '../tools/subagent/workspace-scope.js'
+
 /**
- * 代码图索引的提示词注入
+ * 代码图索引的请求上下文
  *
- * 背景：codegraph 工具此前只做了「工具层」——工具描述里写了适合什么场景，
- * 但 system prompt 里零提及，也没有「索引已就绪」的信号。结果模型几乎想不起来用它，
- * 遇到「X 被谁调用」这类问题仍然去 grep/read 满仓库翻。
+ * 主 Agent、子代理和恢复执行都在 ReAct 的请求边界重新发现当前授权工作区中的索引。
+ * 已有索引时提供受当前注册表权限约束的查询定义，并返回项目调研与调用关系查询指引。
+ * 只探测索引是否存在，不打开数据库、不建图，也不将文件存在视为完整或最新的证明。
  *
- * 这里解决两件事：
- * 1. 让模型知道当前工作区**是否已建索引**（未建时不去调 codegraph，避免无效往返）；
- * 2. 索引可用时，明确给出「符号/调用关系/影响面 → 优先 codegraph」的工具选择策略。
+ * 动态指引放在历史之后的 requestContext 尾部，不写入会话历史或静态 system 前缀；
+ * ReAct 在工具被收尾策略移除时同步丢弃指引，避免要求模型调用不可用工具。
  *
- * 未建索引时不注入任何内容 —— 没有索引却引导模型用它，只会浪费一轮工具调用。
+ * 无索引、无工具或探测失败时返回空串。下方保留旧提示词构造接口供兼容调用方使用。
  */
 
 /** 注入区块的标记，便于日志/排查时识别 */
 const BLOCK_HEADER = '# 代码图索引（codegraph）'
+
+/** Discover only the current authorized roots. An existing index justifies
+ * exposing its query schema; it does not prove completeness or freshness.
+ * Kept request-local so child/resumed runs cannot inherit a stale root hint. */
+export async function prepareCodegraphRequestContext(ctx: AgentContext): Promise<string> {
+  try {
+    if (!ctx.tools.has?.('codegraph')) return ''
+    const scope = captureSubagentWorkspace(ctx)
+    const authorizedRoot = (root: string): string => {
+      scope.assertCurrent()
+      const resolved = canonicalFilePathSync(workspaceManager.resolveSafePathForSnapshot(ctx, scope.snapshot, root))
+      if (!scope.roots.some(allowed => workspaceContains(allowed, resolved))) throw new Error('Codegraph root outside workspace')
+      for (const entry of ['', 'codegraph.db', 'codegraph.db-wal', 'codegraph.db-shm', 'codegraph.db-journal']) {
+        if (!workspaceContains(resolved, projectDataPath(resolved, entry))) throw new Error('Codegraph storage outside project')
+      }
+      return resolved
+    }
+    const { loadCodeGraph } = await import('../tools/codegraph/codegraph-module.js')
+    const codegraph = await loadCodeGraph()
+    scope.assertCurrent()
+    const indexedRoots = scope.roots.flatMap(root => {
+      try {
+        const resolved = authorizedRoot(root)
+        return codegraph.isInitialized(resolved) && authorizedRoot(root) === resolved ? [resolved] : []
+      } catch { return [] }
+    })
+    scope.assertCurrent()
+    if (!indexedRoots.length || !ctx.tools.has('codegraph')) return ''
+    const offered = () => (ctx.tools.listForRequest?.() ?? ctx.tools.listForModel?.() ?? ctx.tools.list())
+      .some(tool => tool.name === 'codegraph')
+    if (!offered()) {
+      if (ctx.tools.hasModelToolLoader?.() !== true || !ctx.tools.loadForModel) return ''
+      ctx.tools.loadForModel(['codegraph'])
+    }
+    scope.assertCurrent()
+    if (!ctx.tools.has('codegraph') || !offered()) return ''
+    return `${BLOCK_HEADER}\n`
+      + '当前授权工作区发现已有索引文件，codegraph 查询定义已提供；尚未验证索引是否完整、最新或可查询。\n'
+      + '每次查询显式传入以下目标项目的绝对 path，不能将默认临时目录当作目标：\n'
+      + indexedRoots.map(root => '- ' + JSON.stringify(root)).join('\n')
+      + '\n项目架构梳理、整体/深度调研：先读取适用且尚未提供的 AGENTS.md/项目规则与必要入口说明，再优先用 codegraph status/files 获取覆盖范围和文件概览；按入口或模块符号用 search，再用 callers/callees 验证关键关系，避免用命令逐层枚举整个源码树。\n'
+      + '定位定义、调用关系、依赖或修改影响面时，优先 search/callers/callees/impact；纯文本、错误字符串和注释仍用 grep。用 read_file 按相关范围核对当前源码，代码图不能替代实现、运行行为或测试证据。\n'
+      + 'status 报 partial/failed/stale、缺失或查询失败时，明确覆盖限制并用 grep/read_file 继续，不循环重试，不把空结果当作不存在。不要仅为调研自动创建/重建索引；index 仍须用户明确要求且当前角色允许。普通聊天或与项目结构无关的任务无需调用代码图。'
+  } catch { return '' }
+}
 
 /**
  * 工作区索引状态探测结果

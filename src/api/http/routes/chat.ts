@@ -61,8 +61,9 @@ import { estimateTokens } from '../../../core/utils/tokens.js'
 import { searchChunks } from '../../../storage/knowledge/kb-repo.js'
 import { ModelsStore } from '../../../storage/sqlite/models.js'
 import { resolveCapabilities, loadDbCapabilityOverrides } from '../../../core/model-capabilities/index.js'
-import { extractAndStoreMemories, reserveMemoryExtraction, buildMemoryRecallBlock } from '../../../middleware/memory/index.js'
+import { extractAndStoreMemories, reserveMemoryExtraction, buildMemoryRecallBlock, maintainMemoryEmbeddings } from '../../../middleware/memory/index.js'
 import { getSessionMemorySettings, setSessionMemoryScope, type MemoryMode } from '../../../storage/memory/settings.js'
+import { createMemoryUsageObserver } from '../../../middleware/memory/usage.js'
 
 interface ChatBody {
   clientCapabilities?: ClientCapabilityManifest
@@ -1052,6 +1053,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
       requestBudget.observe(event)
       logRequestDispatch(event, reqLogger)
     }
+    const memoryUsage = createMemoryUsageObserver(reqLogger, ctx.onRequestAttempt)
     const skillsPrompt = buildSkillsSystemPrompt(externalSkills)
 
     // 注：客户端透传的 inlineSkills 已经在 createToolRegistry 内被合并到
@@ -1083,13 +1085,10 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
     // ── 客户端透传用户长期记忆（lobster-core buildAllMemoriesXml 直出）──────────
     let inlineMemoriesBlock = ''
     if (effectiveMemoryScopes.length > 0 && typeof requestedInlineMemoriesXml === 'string' && requestedInlineMemoriesXml.trim()) {
-      inlineMemoriesBlock =
-        '\n\n## 用户长期记忆（User Memories）\n' +
-        '以下记忆由客户端持久化并随每次会话同步，可作为回答的上下文参考：\n' +
-        requestedInlineMemoriesXml.trim()
+      inlineMemoriesBlock = requestedInlineMemoriesXml.trim()
       reqLogger.info(
         { byteLen: requestedInlineMemoriesXml.length },
-        'Inline user memories XML injected into systemPrompt'
+        'Inline memory references admitted for bounded request context'
       )
     }
 
@@ -1102,8 +1101,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
 
     const baseSystemPrompt = prependBootstrapToSystemPrompt(
       [effectiveSystemPrompt, skillsPrompt, projectContextBlock].filter(Boolean).join('\n\n')
-        + inlineKbBlock
-        + inlineMemoriesBlock,
+        + inlineKbBlock,
       reqLogger,
     )
 
@@ -1312,6 +1310,8 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
         baseUrl: modelBaseUrl,
         provider: modelProvider,
         apiFormat: modelApiFormat,
+        signal: ctx.signal,
+        onRequestAttempt: memoryUsage.observe,
       }, { sessionId, scopes: effectiveMemoryScopes }) : Promise.resolve('')
     ])
     
@@ -1323,25 +1323,13 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
       ragPrompt = `\n\n---\n# Relevant Knowledge Base Context\n\nUse the following retrieved context to answer the user's question:\n\n${context}\n---`
     }
 
-    // Codegraph discovery uses current roots; ReAct injects fresh environment
-    // and execution guidance for each model request, including continuations.
-    const allWorkspacePaths = workspaceManager.getPaths(ctx)
-
-    // 代码图索引提示：仅在已建索引时注入，引导模型优先用图谱而非逐字搜索
-    const { detectCodegraphAvailability, buildCodegraphPromptBlock } = await import(
-      '../../../core/codegraph-prompt.js'
-    )
-    const codegraphBlock = buildCodegraphPromptBlock(
-      await detectCodegraphAvailability(allWorkspacePaths),
-      allWorkspacePaths[0]
-    )
-
     const officeExecutionPrompt = buildOfficeExecutionPrompt(toolProfile, registry, externalSkills)
     const attachmentPrompt = attachments?.length
       ? '\n\n## 本次消息已附带以下文件\n' + attachments.map(a => '- ' + a.name).join('\n') + visionCapabilityNote : ''
-    const { fullSystemPrompt, pureSystemPrompt } = buildChatSystemPrompts({
+    const { fullSystemPrompt, pureSystemPrompt, requestContext: memoryRequestContext } = buildChatSystemPrompts({
       base: baseSystemPrompt, rag: ragPrompt, memory: memoryRecallBlock, modelName: currentModelName,
-      download: buildWorkspaceDownloadPrompt(sessionId, toolProfile === 'general' && registry.has('deliver_files') ? 'cards' : 'links'), codegraph: codegraphBlock, attachments: attachmentPrompt,
+      inlineMemories: inlineMemoriesBlock, contextWindow: effectiveContextWindow(modelCaps.contextWindow),
+      download: buildWorkspaceDownloadPrompt(sessionId, toolProfile === 'general' && registry.has('deliver_files') ? 'cards' : 'links'), attachments: attachmentPrompt,
       mode: toolProfile === 'code' ? CODE_AGENT_EXECUTION_PROMPT : '', office: officeExecutionPrompt,
     })
 
@@ -1627,6 +1615,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
           takeDelegatedTools: collaboration.takeDelegatedTools,
           hasPendingDelegations: collaboration.hasPendingDelegations,
           systemPrompt: strategySystemPrompt || undefined,
+          requestContext: memoryRequestContext || undefined,
           temperature: effectiveTemperature,
           unboundedCode: toolProfile === 'code',
           conversationId,
@@ -1653,7 +1642,8 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
             try {
               const usageStr = chunk.split('\x00__usage__')[1]
               const usage: Record<string, unknown> = { ...continuedTurnUsage(precedingTurnUsage, JSON.parse(usageStr)),
-                sessionId, runId: rootRun.runId, turnId: rootRun.turnId, attemptId, usageScope: 'turn' }
+                sessionId, runId: rootRun.runId, turnId: rootRun.turnId, attemptId, usageScope: 'turn',
+                memoryUsage: memoryUsage.snapshot() }
               if (typeof usage.currentPromptTokens === 'number' || typeof usage.promptTokens === 'number') {
                 usage.contextModelId = typeof usage.modelId === 'string' && usage.modelId
                   ? usage.modelId : rootRun.actualModelId ?? rootRun.modelId
@@ -1749,15 +1739,18 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
                 baseUrl: modelBaseUrl,
                 provider: modelProvider,
                 apiFormat: modelApiFormat,
+                signal: ctx.signal,
+                onRequestAttempt: memoryUsage.observe,
               },
               minImportance: 0.3,
-            }).then((res) => {
+            }).then(async (res) => {
               if (res.stored > 0) {
                 reqLogger.info({ extracted: res.extracted, stored: res.stored }, 'Memories auto-extracted')
               }
               if (res.errors.length > 0) {
                 reqLogger.warn({ errors: res.errors }, 'Memory extraction had errors')
               }
+              await maintainMemoryEmbeddings(tenantId, { sessionId, scopes: effectiveMemoryScopes }, ctx.signal)
             }).catch((err) => {
               reqLogger.warn({ err: (err as Error)?.message }, 'Memory extraction failed silently')
             }).finally(() => memoryReservation?.close())

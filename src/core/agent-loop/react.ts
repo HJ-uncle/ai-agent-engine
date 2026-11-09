@@ -33,6 +33,7 @@ import { DEFAULT_PUBLICATION_MAX_BYTES } from '../stream-pipeline/publication-qu
 import { imageFileVersion, imageToolFramePayload, imageToolPayload, MAX_NATIVE_IMAGE_BASE64_CHARS } from '../utils/multimodal-context.js'
 import { captureFileEvidence, clearedToolModelContent, isClearedToolMessage, TOOL_FILE_EVIDENCE_KEY, CLEARED_TOOL_EVIDENCE_KEY, CLEARED_TOOL_RESULT } from '../utils/tool-evidence.js'
 import { buildRuntimeCapabilitiesContext, RUNTIME_CAPABILITIES_GUIDANCE } from '../runtime-capabilities.js'
+import { prepareCodegraphRequestContext } from '../codegraph-prompt.js'
 import { requestContextMessage } from '../llm-adapter/request-context.js'
 import { buildExecutionProtocol } from '../execution-protocol.js'
 import { isRetryable } from '../llm-adapter/retry.js'
@@ -188,6 +189,8 @@ export interface ReActOptions {
   maxIterations?: number
   maxAskUserCount?: number
   systemPrompt?: string
+  /** Transient caller reference data, sent after durable history and never persisted. */
+  requestContext?: string
   temperature?: number
   /** Unique ID for this conversation round (one chat request = one conversationId) */
   conversationId?: string
@@ -727,6 +730,7 @@ export class ReActStrategy implements LoopStrategy {
         return buildExecutionProtocol({ list: () => behavioralTools }, ctx.toolProfile)
       }
       let requestEnvironment = ''
+      let requestCodegraphContext = ''
       const readCurrentModelHistory = async (): Promise<Message[]> => {
         const current = await readModelHistory()
         const deliveryRevision = deliveryCloseout.revision
@@ -741,12 +745,17 @@ export class ReActStrategy implements LoopStrategy {
           }
         }
         const deliveryPrompt = deliveryCloseout.prompt || staleDeliveryPrompt
+        // Discover existing indexes for this execution's current workspace and
+        // expose the authorized query definition before selecting request tools.
+        const codegraphContext = await prepareCodegraphRequestContext(ctx)
         // Successful structured load/call history restores request-local tool
         // definitions after restart without promoting arbitrary message text.
         toolList = ctx.tools.listForRequest?.(current) ?? ctx.tools.listForModel?.() ?? ctx.tools.list()
         effectiveTools = deliveryCloseout.tools(toolList.filter(tool => tool.name !== 'ask_user' || askUserCount < maxAskUserCount))
         requestEnvironment = buildRuntimeCapabilitiesContext(ctx, effectiveTools)
-        injectedExtras = [requestEnvironment, planContext, deliveryPrompt, recoveryPrompt, workflowReviewPrompt, readonlyHistoryNotice(readonlyHistoryPairs),
+        requestCodegraphContext = effectiveTools.some(tool => tool.name === 'codegraph') ? codegraphContext : ''
+        injectedExtras = [requestEnvironment, this.options.requestContext, requestCodegraphContext,
+          planContext, deliveryPrompt, recoveryPrompt, workflowReviewPrompt, readonlyHistoryNotice(readonlyHistoryPairs),
           childReview.pending ? CHILD_RESULT_REVIEW_PROMPT : undefined,
           delegationCorrectionUsed && this.options.hasPendingDelegations?.()
             ? '用户已选择的协作者尚未分工，不能直接宣称完成。现在用 collaborator_dispatch 为全部选择提交互不重复的具体任务，再收取并验收结果；不要让用户重复确认。' : undefined,
@@ -938,7 +947,7 @@ export class ReActStrategy implements LoopStrategy {
         // Evidence-only finalization must not contain an exploration cadence hint.
         const finalExtras = [executionPrompt(), RUNTIME_CAPABILITIES_GUIDANCE, injectedPlanPrompt].filter(Boolean).join('\n\n')
         requestContext = [buildRuntimeCapabilitiesContext(ctx, effectiveTools),
-          ...injectedExtras.filter(extra => extra && extra !== requestEnvironment && extra !== workflowReviewPrompt), FINALIZATION_PROMPT].join('\n\n')
+          ...injectedExtras.filter(extra => extra && extra !== requestEnvironment && extra !== requestCodegraphContext && extra !== workflowReviewPrompt), FINALIZATION_PROMPT].join('\n\n')
         systemPrompt = [this.options.systemPrompt, finalExtras].filter(Boolean).join('\n\n')
         injectedSystemTokens = estimateTokens(finalExtras) + estimateModelMessageTokens(requestContextMessage(requestContext))
         if (!unboundedCode) maxOutputTokens = Math.min(maxOutputTokens ?? Infinity, 4096)

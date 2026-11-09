@@ -83,4 +83,27 @@ describe('memory session scope isolation', () => {
   it('requires a session id for session-scoped operations', async () => {
     await expect(manager.createNode({ type: 'fact', summary: 'invalid' }, { tenantId: 'tenant-a', sessionId: '', scope: 'session' })).rejects.toThrow(/sessionId/)
   })
+
+  it('bounds graph expansion deterministically while leaving explicit full traversal available', async () => {
+    const root = await manager.createNode({ type: 'fact', summary: 'graph root' }, sessionACtx)
+    const children = await manager.writeBatch(Array.from({ length: 20 }, (_, index) => ({ type: 'fact' as const, summary: `child ${index}`, timestamp: index })), [], sessionACtx)
+    await manager.writeBatch([], children.nodes.map(node => ({ sourceNodeId: root.id, targetNodeId: node.id, type: 'part_of' as const })), sessionACtx)
+    const first = await manager.traversePath(root.id, 2, undefined, sessionACtx, 5)
+    expect(first).toHaveLength(5)
+    expect((await manager.traversePath(root.id, 2, undefined, sessionACtx, 5)).map(node => node.id)).toEqual(first.map(node => node.id))
+    expect(await manager.traversePath(root.id, 2, undefined, sessionBCtx, 5)).toEqual([])
+    expect(await manager.traversePath(root.id, 2, undefined, sessionACtx)).toHaveLength(20)
+    expect(await manager.getRelatedNodes([root.id], undefined, sessionACtx, 5)).toHaveLength(5)
+    expect(await manager.getRelatedNodes([root.id], undefined, globalCtx, 5)).toEqual([])
+  })
+
+  it('returns equal-distance vectors and equal-ranked lists in stable ID order with sorted tags', async () => {
+    const nodes = await manager.writeBatch(Array.from({ length: 5 }, (_, index) => ({ type: 'fact' as const, summary: `ordered ${index}`,
+      timestamp: 1, importance: 0.5, embedding: [1, 0, 0], tags: ['z-last', 'a-first'] })), [], sessionACtx)
+    const ids = nodes.nodes.map(node => node.id).sort()
+    expect((await manager.listNodes({ orderBy: 'importance' }, sessionACtx)).map(node => node.id)).toEqual(ids)
+    expect((await manager.recallSimilar([1, 0, 0], 5, sessionACtx)).map(node => node.id)).toEqual(ids)
+    expect(await manager.getTags(ids[0], sessionACtx)).toEqual(['a-first', 'z-last'])
+    expect((await manager.listNodes({}, sessionACtx)).every(node => node.tags.join(',') === 'a-first,z-last')).toBe(true)
+  })
 })

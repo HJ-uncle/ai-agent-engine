@@ -13,6 +13,8 @@ import type { MemoryScope } from '../../../storage/memory/types.js'
 import { createMemoryTools } from '../../../tools/memory/memory-tool.js'
 import type { AgentContext } from '../../../core/agent-context/types.js'
 import { getActiveMemoryExtractionCount } from '../../../storage/memory/extraction-coordinator.js'
+import type { LLMAdapterOptions, LLMRequestAttemptEvent } from '../../../core/llm-adapter/types.js'
+import type { MemoryRequestAttemptEvent } from '../types.js'
 
 vi.mock('../../../storage/sqlite/system-config.js', () => ({ systemConfigStore: { get: vi.fn(async () => null) } }))
 vi.mock('../../../core/llm-adapter/index.js', () => ({ createLLMAdapterWithDbConfig: vi.fn() }))
@@ -51,6 +53,65 @@ function extracted(scopes: readonly MemoryScope[]) {
 }
 
 describe('independent runtime memory scopes', () => {
+  it('skips providers when authorized namespaces are empty even if other namespaces contain data', async () => {
+    await manager.createNode({ type: 'fact', summary: 'Foreign private contract' }, { ...session, sessionId: 'other-session' })
+    await manager.createNode({ type: 'fact', summary: 'Foreign tenant contract' }, { ...global, tenantId: 'other-tenant' })
+    expect(await buildMemoryRecallBlock(tenantId, 'Find my contract', credentials, { sessionId, scopes: ['session', 'global'] })).toBe('')
+    expect(createLLMAdapterWithDbConfig).not.toHaveBeenCalled()
+  })
+
+  it.each(['你好！', ' 在吗？ ', 'HELLO!', '嗨'])('skips an exact greeting without a provider: %s', async query => {
+    await manager.createNode({ type: 'fact', summary: 'Existing contract' }, session)
+    expect(await buildMemoryRecallBlock(tenantId, query, credentials, { sessionId, scopes: ['session'] })).toBe('')
+    expect(createLLMAdapterWithDbConfig).not.toHaveBeenCalled()
+  })
+
+  it('keeps requests following a greeting and renders direct hits before higher-importance graph neighbors', async () => {
+    const complete = adapter('contract')
+    const direct = await manager.createNode({ type: 'decision', summary: 'contract: use the new API', importance: 0.2 }, session)
+    const neighbor = await manager.createNode({ type: 'fact', summary: 'Unrelated historical documentation '.repeat(100), importance: 1 }, session)
+    await manager.createEdge({ sourceNodeId: direct.id, targetNodeId: neighbor.id, type: 'part_of' }, session)
+    const block = await buildMemoryRecallBlock(tenantId, '你好，继续处理 contract', credentials, { sessionId, scopes: ['session'] })
+    expect(complete).toHaveBeenCalledTimes(1)
+    expect(block).toContain(direct.summary)
+    expect(block.indexOf(direct.id)).toBeLessThan(block.indexOf(neighbor.id))
+  })
+
+  it('forwards utility cancellation and complete provider usage with distinct stages', async () => {
+    await manager.createNode({ type: 'fact', summary: 'contract reference' }, session)
+    const controller = new AbortController(), events: MemoryRequestAttemptEvent[] = []
+    const usage = { promptTokens: 81, completionTokens: 3, cacheHitTokens: 40, cacheMissTokens: 36, cacheWriteTokens: 5, reasoningTokens: 2, unknown: false }
+    let calls = 0
+    const complete = vi.fn(async (_messages: unknown, options?: LLMAdapterOptions) => {
+      expect(options?.signal).toBe(controller.signal)
+      expect(options?.thinkingEnabled).toBe(false)
+      const identity = { requestAttemptId: `attempt-${++calls}`, provider: 'anthropic', model: 'fixture-memory' }
+      const start: LLMRequestAttemptEvent = { type: 'start', ...identity, estimatedInputTokens: 85, maxOutputTokens: options?.maxTokens }
+      await options?.onRequestAttempt?.(start)
+      await options?.onRequestAttempt?.({ type: 'finish', ...identity, outcome: 'succeeded', usage })
+      return { content: calls === 1 ? 'contract' : '[]', promptTokens: 81, completionTokens: 3, finishReason: 'stop' as const }
+    })
+    vi.mocked(createLLMAdapterWithDbConfig).mockResolvedValue({ provider: 'anthropic', model: 'fixture-memory', complete, stream: vi.fn(), countTokens: () => 0 })
+    const llm = { ...credentials, signal: controller.signal, onRequestAttempt: (event: MemoryRequestAttemptEvent) => { events.push(event) } }
+    expect(await buildMemoryRecallBlock(tenantId, 'contract', llm, { sessionId, scopes: ['session'] })).toContain('contract reference')
+    await extractAndStoreMemories({ tenantId, sessionId, memoryScopes: ['session'], llm, messages: [{ role: 'user', content: 'Current request' }] })
+    expect(events.map(event => event.stage)).toEqual(['memory_recall', 'memory_recall', 'memory_extraction', 'memory_extraction'])
+    expect(events.filter(event => event.type === 'finish').map(event => event.usage)).toEqual([usage, usage])
+    expect(complete.mock.calls[0][1]).toMatchObject({ maxTokens: 100, thinkingEnabled: false })
+  })
+
+  it('does not create providers or write memory for requests cancelled before recall or extraction', async () => {
+    await manager.createNode({ type: 'fact', summary: 'Retained contract' }, session)
+    const controller = new AbortController(); controller.abort(new Error('Stopped fixture request'))
+    const llm = { ...credentials, signal: controller.signal }
+    expect(await buildMemoryRecallBlock(tenantId, 'contract', llm, { sessionId, scopes: ['session'] })).toBe('')
+    expect(await extractAndStoreMemories({ tenantId, sessionId, memoryScopes: ['session'], llm, messages: [{ role: 'user', content: 'Do not store' }] }))
+      .toMatchObject({ stored: 0, errors: [expect.stringContaining('Stopped fixture request')] })
+    expect(createLLMAdapterWithDbConfig).not.toHaveBeenCalled()
+    expect(await manager.countNodes({}, session)).toBe(1)
+    expect(getActiveMemoryExtractionCount(session)).toBe(0)
+  })
+
   it('omitted policy performs no recall, extraction, reservation or provider call', async () => {
     await manager.createNode({ type: 'fact', summary: 'Existing private memory' }, session)
     expect(reserveMemoryExtraction({ tenantId, sessionId })).toBeUndefined()

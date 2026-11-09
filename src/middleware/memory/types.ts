@@ -1,5 +1,9 @@
 import type { MemoryNodeType, MemoryScope } from '../../storage/memory/types.js'
 import type { ApiFormat } from '../../core/llm-adapter/protocol.js'
+import type { LLMRequestAttemptEvent } from '../../core/llm-adapter/types.js'
+
+export type MemoryRequestStage = 'memory_recall' | 'memory_extraction'
+export type MemoryRequestAttemptEvent = LLMRequestAttemptEvent & { stage: MemoryRequestStage }
 
 export interface MemoryExtractorOptions {
   enabled: boolean
@@ -31,4 +35,7 @@ export interface LLMCredentials {
   apiFormat?: ApiFormat
   /** Effective request/model capability override, shared with the chat request. */
   contextWindow?: number
+  signal?: AbortSignal
+  /** Includes utility usage without changing the provider's original counters. */
+  onRequestAttempt?: (event: MemoryRequestAttemptEvent) => void | Promise<void>
 }

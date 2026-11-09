@@ -128,7 +128,7 @@ export class SQLiteMemoryManager implements MemoryManager {
   }
   async listNodes(filter: MemoryNodeFilter, ctx: MemoryContext): Promise<MemoryNode[]> {
     const c = normalizeContext(ctx); const db = getMemoryDb(); const { cond, args } = this._nodeWhere(filter, c)
-    const columns: Record<string, string> = { timestamp: 'timestamp', strength: 'strength', importance: 'importance', last_accessed: 'last_accessed' }; const order = columns[filter.orderBy ?? 'timestamp'] || 'timestamp'; const dir = filter.orderDir === 'ASC' ? 'ASC' : 'DESC'; const r = await db.execute({ sql: `SELECT * FROM memory_nodes WHERE ${cond.join(' AND ')} ORDER BY ${order} ${dir} LIMIT ? OFFSET ?`, args: [...args, filter.limit ?? 50, filter.offset ?? 0] }); return this._mapWithTags(r.rows, c)
+    const columns: Record<string, string> = { timestamp: 'timestamp', strength: 'strength', importance: 'importance', last_accessed: 'last_accessed' }; const order = columns[filter.orderBy ?? 'timestamp'] || 'timestamp'; const dir = filter.orderDir === 'ASC' ? 'ASC' : 'DESC'; const r = await db.execute({ sql: `SELECT * FROM memory_nodes WHERE ${cond.join(' AND ')} ORDER BY ${order} ${dir},${order === 'timestamp' ? '' : 'timestamp DESC,'}id ASC LIMIT ? OFFSET ?`, args: [...args, filter.limit ?? 50, filter.offset ?? 0] }); return this._mapWithTags(r.rows, c)
   }
   async countNodes(filter: MemoryNodeFilter, ctx: MemoryContext): Promise<number> {
     const c = normalizeContext(ctx); const db = getMemoryDb(); const { cond, args } = this._nodeWhere(filter, c)
@@ -178,11 +178,11 @@ export class SQLiteMemoryManager implements MemoryManager {
         let candidate: number[] = []
         try { candidate = JSON.parse(String(row.embedding_json)) } catch { /* ignore malformed embeddings */ }
         return { row, distance: cosineDistance(embedding, candidate) }
-      }).filter(item => Number.isFinite(item.distance) && item.distance <= maxDistance).sort((a, b) => a.distance - b.distance).slice(0, limit)
+      }).filter(item => Number.isFinite(item.distance) && item.distance <= maxDistance).sort((a, b) => a.distance - b.distance || String(a.row.id).localeCompare(String(b.row.id))).slice(0, limit)
       return this._mapWithTags(scored.map(item => item.row), c)
     }
     try {
-      const r = await db.execute({ sql: `WITH ranked AS (SELECT *,vector_distance_cos(embedding,vector32(?)) distance FROM memory_nodes WHERE ${s.sql} AND embedding IS NOT NULL) SELECT * FROM ranked WHERE distance<=? ORDER BY distance LIMIT ?`, args: [JSON.stringify(embedding), ...s.args, maxDistance, limit] })
+      const r = await db.execute({ sql: `WITH ranked AS (SELECT *,vector_distance_cos(embedding,vector32(?)) distance FROM memory_nodes WHERE ${s.sql} AND embedding IS NOT NULL) SELECT * FROM ranked WHERE distance<=? ORDER BY distance,id ASC LIMIT ?`, args: [JSON.stringify(embedding), ...s.args, maxDistance, limit] })
       return r.rows.length ? this._mapWithTags(r.rows, c) : fallback()
     } catch (error) {
       if (!/vector32|vector/i.test(String((error as Error)?.message))) throw error
@@ -257,8 +257,8 @@ export class SQLiteMemoryManager implements MemoryManager {
   async getNeighbors(nodeId: string, edgeTypes?: MemoryEdgeType[], ctx?: MemoryContext): Promise<MemoryNode[]> {
     return (await this.getRelatedNodes([nodeId], edgeTypes, ctx)).filter(node => node.id !== nodeId)
   }
-  async traversePath(startNodeId: string, maxHops: number, edgeTypes?: MemoryEdgeType[], ctx?: MemoryContext): Promise<MemoryNode[]> {
-    if (maxHops < 1) return []
+  async traversePath(startNodeId: string, maxHops: number, edgeTypes?: MemoryEdgeType[], ctx?: MemoryContext, maxNodes?: number): Promise<MemoryNode[]> {
+    if (maxHops < 1 || (maxNodes !== undefined && (!Number.isSafeInteger(maxNodes) || maxNodes < 1))) return []
     const c = normalizeContext(ctx); const db = getMemoryDb()
     const start = scoped('start', c), e = scoped('e', c), next = scoped('next', c), end = scoped('n', c)
     const type = edgeTypes?.length ? ` AND e.type IN (${edgeTypes.map(() => '?').join(',')})` : ''
@@ -277,15 +277,19 @@ export class SQLiteMemoryManager implements MemoryManager {
         JOIN memory_edges e ON ${e.sql} AND e.target_node_id=t.node_id
         JOIN memory_nodes next ON next.id=e.source_node_id AND ${next.sql}
         WHERE t.hop<?${type}
+        ${maxNodes !== undefined ? 'ORDER BY 2 ASC,1 ASC LIMIT ?' : ''}
       ) SELECT DISTINCT n.* FROM traverse t JOIN memory_nodes n ON n.id=t.node_id
-        WHERE t.node_id!=? AND ${end.sql}`
+        WHERE t.node_id!=? AND ${end.sql}
+        ORDER BY n.importance DESC,n.timestamp DESC,n.strength DESC,n.id ASC${maxNodes !== undefined ? ' LIMIT ?' : ''}`
     const args: InValue[] = [startNodeId, ...start.args,
       ...e.args, ...next.args, maxHops, ...typeArgs,
-      ...e.args, ...next.args, maxHops, ...typeArgs, startNodeId, ...end.args]
+      ...e.args, ...next.args, maxHops, ...typeArgs,
+      ...(maxNodes !== undefined ? [maxNodes + 1] : []), startNodeId, ...end.args,
+      ...(maxNodes !== undefined ? [maxNodes] : [])]
     return this._mapWithTags((await db.execute({ sql, args })).rows, c)
   }
-  async getRelatedNodes(nodeIds: string[], edgeTypes?: MemoryEdgeType[], ctx?: MemoryContext): Promise<MemoryNode[]> {
-    if (!nodeIds.length) return []
+  async getRelatedNodes(nodeIds: string[], edgeTypes?: MemoryEdgeType[], ctx?: MemoryContext, maxNodes?: number): Promise<MemoryNode[]> {
+    if (!nodeIds.length || (maxNodes !== undefined && (!Number.isSafeInteger(maxNodes) || maxNodes < 1))) return []
     const c = normalizeContext(ctx); const db = getMemoryDb(); const n = scoped('n', c), e = scoped('e', c)
     const ids = nodeIds.map(() => '?').join(',')
     const type = edgeTypes?.length ? ` AND e.type IN (${edgeTypes.map(() => '?').join(',')})` : ''
@@ -294,8 +298,8 @@ export class SQLiteMemoryManager implements MemoryManager {
       SELECT e.target_node_id FROM memory_edges e WHERE ${e.sql} AND e.source_node_id IN (${ids})${type}
       UNION
       SELECT e.source_node_id FROM memory_edges e WHERE ${e.sql} AND e.target_node_id IN (${ids})${type}
-      ) AND ${n.sql} ORDER BY n.strength DESC`
-    const rows = await db.execute({ sql, args: [...e.args, ...nodeIds, ...typeArgs, ...e.args, ...nodeIds, ...typeArgs, ...n.args] })
+       ) AND ${n.sql} ORDER BY n.strength DESC,n.importance DESC,n.timestamp DESC,n.id ASC${maxNodes !== undefined ? ' LIMIT ?' : ''}`
+    const rows = await db.execute({ sql, args: [...e.args, ...nodeIds, ...typeArgs, ...e.args, ...nodeIds, ...typeArgs, ...n.args, ...(maxNodes !== undefined ? [maxNodes] : [])] })
     return this._mapWithTags(rows.rows, c)
   }
 
@@ -328,7 +332,7 @@ export class SQLiteMemoryManager implements MemoryManager {
   }
   async writeBatch(nodes: CreateMemoryNodeInput[], edges: CreateMemoryEdgeInput[], ctx: MemoryContext): Promise<{ nodes: MemoryNode[]; edges: MemoryEdge[] }> { const db = getMemoryDb(); const tx = await db.transaction('write'); try { const createdNodes: MemoryNode[] = []; for (const input of nodes) createdNodes.push(await this.createNode(input, ctx, tx)); const createdEdges: MemoryEdge[] = []; for (const input of edges) createdEdges.push(await this.createEdge(input, ctx, tx)); await tx.commit(); return { nodes: createdNodes, edges: createdEdges } } catch (error) { await tx.rollback(); throw error } }
   private async _mapWithTags(rows: any[], ctx: Required<MemoryContext>): Promise<MemoryNode[]> { const nodes = rows.map((r: any) => mapNodeRow(r)); if (nodes.length) { const tags = await this._readTagsBatch(nodes.map(n => n.id), ctx); nodes.forEach(n => { n.tags = tags[n.id] || [] }) }; return nodes }
-  private async _readTagsBatch(ids: string[], ctx: Required<MemoryContext>): Promise<Record<string, string[]>> { if (!ids.length) return {}; const db = getMemoryDb(); const p = ids.map(() => '?').join(','); const s = scoped('n', ctx); const r = await db.execute({ sql: `SELECT mnt.node_id,mt.name FROM memory_tags mt JOIN memory_node_tags mnt ON mnt.tag_id=mt.id JOIN memory_nodes n ON n.id=mnt.node_id WHERE mnt.node_id IN (${p}) AND mt.tenant_id=? AND ${s.sql}`, args: [...ids, ctx.tenantId, ...s.args] }); const out: Record<string, string[]> = {}; r.rows.forEach((x: any) => { (out[x.node_id] ||= []).push(x.name) }); return out }
-  private async _readTags(id: string, ctx: Required<MemoryContext>, executor?: Executor): Promise<string[]> { const db = executor ?? getMemoryDb(); const s = scoped('n', ctx); const r = await db.execute({ sql: `SELECT mt.name FROM memory_tags mt JOIN memory_node_tags mnt ON mnt.tag_id=mt.id JOIN memory_nodes n ON n.id=mnt.node_id WHERE mnt.node_id=? AND mt.tenant_id=? AND ${s.sql}`, args: [id, ctx.tenantId, ...s.args] }); return r.rows.map((x: any) => x.name as string) }
+  private async _readTagsBatch(ids: string[], ctx: Required<MemoryContext>): Promise<Record<string, string[]>> { if (!ids.length) return {}; const db = getMemoryDb(); const p = ids.map(() => '?').join(','); const s = scoped('n', ctx); const r = await db.execute({ sql: `SELECT mnt.node_id,mt.name FROM memory_tags mt JOIN memory_node_tags mnt ON mnt.tag_id=mt.id JOIN memory_nodes n ON n.id=mnt.node_id WHERE mnt.node_id IN (${p}) AND mt.tenant_id=? AND ${s.sql} ORDER BY mnt.node_id ASC,mt.name ASC`, args: [...ids, ctx.tenantId, ...s.args] }); const out: Record<string, string[]> = {}; r.rows.forEach((x: any) => { (out[x.node_id] ||= []).push(x.name) }); return out }
+  private async _readTags(id: string, ctx: Required<MemoryContext>, executor?: Executor): Promise<string[]> { const db = executor ?? getMemoryDb(); const s = scoped('n', ctx); const r = await db.execute({ sql: `SELECT mt.name FROM memory_tags mt JOIN memory_node_tags mnt ON mnt.tag_id=mt.id JOIN memory_nodes n ON n.id=mnt.node_id WHERE mnt.node_id=? AND mt.tenant_id=? AND ${s.sql} ORDER BY mt.name ASC`, args: [id, ctx.tenantId, ...s.args] }); return r.rows.map((x: any) => x.name as string) }
   private async _attachTags(id: string, tags: string[], ctx: Required<MemoryContext>, executor?: Executor): Promise<void> { if (!tags.length) return; const db = executor ?? getMemoryDb(); const s = scoped('n', ctx); const a = await db.execute({ sql: `SELECT 1 FROM memory_nodes n WHERE n.id=? AND ${s.sql}`, args: [id, ...s.args] }); if (!a.rows.length) throw new Error('memory node is outside the requested tenant and scope'); for (const tag of tags) await db.execute({ sql: 'INSERT OR IGNORE INTO memory_tags(tenant_id,name) VALUES (?,?)', args: [ctx.tenantId, tag] }); const p = tags.map(() => '?').join(','); const r = await db.execute({ sql: `SELECT id FROM memory_tags WHERE tenant_id=? AND name IN (${p})`, args: [ctx.tenantId, ...tags] }); for (const row of r.rows) await db.execute({ sql: 'INSERT OR IGNORE INTO memory_node_tags(node_id,tag_id) VALUES (?,?)', args: [id, row.id as number] }) }
 }

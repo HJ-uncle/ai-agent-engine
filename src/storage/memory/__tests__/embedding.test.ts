@@ -131,15 +131,26 @@ describe('independent memory embedding service', () => {
     expect(row.rows[0]).toMatchObject({ embedding_json: null, embedding: null, embedding_space: null })
   })
 
-  it('recalls semantically related memory through an Anthropic chat adapter with no embed capability', async () => {
+  it('recalls preindexed semantic memory without foreground backfill through an Anthropic chat adapter', async () => {
     vi.stubEnv('EMBEDDING_BASE_URL', baseUrl); vi.stubEnv('EMBEDDING_MODEL', 'test-semantic-v1'); vi.stubEnv('EMBEDDING_DIMENSIONS', '3')
     await manager.createNode({ type: 'decision', summary: 'Escalation SLA is 30 seconds', importance: 0.9 }, context)
     await manager.createNode({ type: 'fact', summary: 'Routine task reviews are weekly', importance: 0.8 }, context)
+    await backfillMemoryEmbeddings(manager, context, service(baseUrl))
+    requests.length = 0
     const block = await buildMemoryRecallBlock('a', 'What should I do during an urgent outage?', { provider: 'anthropic', model: 'qwen3.8-flash' }, { sessionId: 'one', scope: 'session' })
     expect(block).toContain('Escalation SLA is 30 seconds')
     expect(block).not.toContain('Routine task reviews are weekly')
-    expect(requests).toHaveLength(2) // one backfill request, one query request
+    expect(requests).toHaveLength(1) // Only the query is embedded on the request path.
     expect(requests.every(request => request.model === 'test-semantic-v1')).toBe(true)
+  })
+
+  it('keeps unindexed memories available to lexical recall without embedding their contents on the request path', async () => {
+    vi.stubEnv('EMBEDDING_BASE_URL', baseUrl); vi.stubEnv('EMBEDDING_MODEL', 'test-semantic-v1'); vi.stubEnv('EMBEDDING_DIMENSIONS', '3')
+    const memory = await manager.createNode({ type: 'decision', summary: 'urgent outage escalation requires a manager' }, context)
+    const block = await buildMemoryRecallBlock('a', 'urgent outage', { provider: 'anthropic', model: 'qwen3.8-flash' }, { sessionId: 'one', scope: 'session' })
+    expect(block).toContain(memory.summary)
+    expect(requests).toEqual([{ model: 'test-semantic-v1', input: ['urgent outage'], encoding_format: 'float' }])
+    expect((await manager.getNode(memory.id, context))?.embeddingSpace).toBeNull()
   })
 
   it('atomically deduplicates repeated extraction while allowing the same fact in another session', async () => {
@@ -212,7 +223,7 @@ describe('independent memory embedding service', () => {
     expect(block).toContain(current.id)
     expect(block).toContain('search_history')
     expect(block).toContain('节选')
-    expect(estimateRequestInput([{ role: 'system', content: block }], undefined, [])).toBeLessThanOrEqual(8_000)
+    expect(estimateRequestInput([{ role: 'system', content: block }], undefined, [])).toBeLessThanOrEqual(2_000)
     expect((await manager.getNode(long.id, context))?.summary).toBe(full)
   })
 
@@ -225,9 +236,10 @@ describe('independent memory embedding service', () => {
     await manager.writeBatch([], children.nodes.map(node => ({ sourceNodeId: hub.id, targetNodeId: node.id, type: 'part_of' as const })), context)
     const block = await buildMemoryRecallBlock('a', 'urgent outage requirements', { provider: 'anthropic', model: 'glm-5.3', contextWindow: 100_000 }, { sessionId: 'one', scope: 'session' })
     expect(block).toContain('SLA 60 seconds')
-    expect(block).toContain('/2501 条')
-    expect(block).not.toContain('展示 2501/2501')
-    expect(estimateRequestInput([{ role: 'system', content: block }], undefined, [])).toBeLessThanOrEqual(8_000)
+    const candidates = Number(block.match(/展示 \d+\/(\d+) 条/)?.[1])
+    expect(candidates).toBeGreaterThan(0)
+    expect(candidates).toBeLessThanOrEqual(95) // 15 direct hits, two 40-node graph branches.
+    expect(estimateRequestInput([{ role: 'system', content: block }], undefined, [])).toBeLessThanOrEqual(2_000)
     expect(await manager.countNodes({}, context)).toBe(2501)
     expect((await manager.getNode(children.nodes[0].id, context))?.summary).toBe(children.nodes[0].summary)
   }, 60_000)

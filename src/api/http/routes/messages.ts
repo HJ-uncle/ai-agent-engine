@@ -21,8 +21,10 @@ import { success, fail } from '../response.js'
 import { registerActiveChat, unregisterActiveChat } from './chat.js'
 import { z } from 'zod'
 import { getSessionMemorySettings, setSessionMemoryScope, type MemoryMode } from '../../../storage/memory/settings.js'
-import { buildMemoryRecallBlock, extractAndStoreMemories, reserveMemoryExtraction } from '../../../middleware/memory/index.js'
+import { buildMemoryRecallBlock, extractAndStoreMemories, reserveMemoryExtraction, maintainMemoryEmbeddings } from '../../../middleware/memory/index.js'
 import { CODE_AGENT_EXECUTION_PROMPT } from '../../../core/code-agent-prompt.js'
+import { buildMemoryRequestContext, MEMORY_REFERENCE_GUIDANCE } from '../../../core/memory-request-context.js'
+import { createMemoryUsageObserver } from '../../../middleware/memory/usage.js'
 
 // ── Validation Schemas ──────────────────────────────────────────────────────
 const UpdateMessageSchema = z.object({
@@ -164,6 +166,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
       logger: reqLogger,
       requestId,
     })
+    const memoryUsage = createMemoryUsageObserver(reqLogger)
 
     const skillsPrompt = buildSkillsSystemPrompt(externalSkills)
     // ── 项目上下文（AE.md）注入（与 chat 路由保持一致）─────────────────────────
@@ -224,12 +227,13 @@ export async function messagesRoutes(fastify: FastifyInstance) {
         baseUrl: modelBaseUrl,
         provider: modelProvider,
         apiFormat: modelApiFormat,
+        onRequestAttempt: memoryUsage.observe,
       }, { sessionId, scopes: effectiveMemoryScopes })
     }
 
     const officeExecutionPrompt = buildOfficeExecutionPrompt(toolProfile, registry, externalSkills)
     const codeExecutionPrompt = toolProfile === 'code' ? `\n\n${CODE_AGENT_EXECUTION_PROMPT}` : ''
-    const fullSystemPrompt = finalSystemPrompt + ragPrompt + memoryRecallBlock + codeExecutionPrompt + officeExecutionPrompt + `
+    const fullSystemPrompt = finalSystemPrompt + ragPrompt + '\n\n' + MEMORY_REFERENCE_GUIDANCE + codeExecutionPrompt + officeExecutionPrompt + `
 ---
 # 智能交互规则
 1. 当你需要澄清用户的意图、确认关键操作或提供选择时，请调用 \`ask_user\` 工具。调用该工具后，系统将自动暂停执行，并向用户展示交互式选择界面，等待用户回复后再继续。
@@ -238,7 +242,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 `
 
     // systemPromptTokens: pure system prompt (excluding RAG)
-    const pureSystemPromptForMessages = finalSystemPrompt + memoryRecallBlock + codeExecutionPrompt + officeExecutionPrompt + `
+    const pureSystemPromptForMessages = finalSystemPrompt + '\n\n' + MEMORY_REFERENCE_GUIDANCE + codeExecutionPrompt + officeExecutionPrompt + `
 ---
 # 智能交互规则
 1. 当你需要澄清用户的意图、确认关键操作或提供选择时，请调用 \`ask_user\` 工具。调用该工具后，系统将自动暂停执行，并向用户展示交互式选择界面，等待用户回复后再继续。
@@ -297,6 +301,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
         const llm = createAdapterFromResolved(ctx.resolvedModel)
         const strategy = new ReActStrategy(llm, {
           systemPrompt: fullSystemPrompt || undefined,
+          requestContext: buildMemoryRequestContext(memoryRecallBlock) || undefined,
           unboundedCode: toolProfile === 'code',
           conversationId,
           promptBreakdown: { systemPromptTokens, systemToolsTokens, skillTokens, ragTokens, builtinToolsTokens, mcpToolsTokens },
@@ -322,9 +327,11 @@ export async function messagesRoutes(fastify: FastifyInstance) {
                 toolCall: m.toolCall, toolCallId: m.toolCallId, metadata: m.metadata,
               })),
               sessionId, tenantId, memoryScopes: effectiveMemoryScopes,
-              llm: { model: currentModelName, apiKey: modelApiKey, baseUrl: modelBaseUrl, provider: modelProvider, apiFormat: modelApiFormat },
+              llm: { model: currentModelName, apiKey: modelApiKey, baseUrl: modelBaseUrl, provider: modelProvider, apiFormat: modelApiFormat,
+                signal: ctx.signal, onRequestAttempt: memoryUsage.observe },
               minImportance: 0.3,
-            })).catch((error) => reqLogger.warn({ err: error }, 'Legacy memory extraction failed silently'))
+            })).then(() => maintainMemoryEmbeddings(tenantId, { sessionId, scopes: effectiveMemoryScopes }, ctx.signal))
+              .catch((error) => reqLogger.warn({ err: error }, 'Legacy memory extraction failed silently'))
               .finally(() => memoryReservation.close())
           })
         }

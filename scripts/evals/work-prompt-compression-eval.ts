@@ -15,6 +15,7 @@ import { batchFilesPrompt, batchThreeFilesPrompt, setupBatchFiles, checkBatchFil
   batchOfficePrompt, checkBatchOffice, batchOfficeInspectPrompt, setupBatchOfficeInspect, batchOfficeInspectHashes, checkBatchOfficeInspect,
   captureProviderToolEvidence } from './batch-io-fixture.js'
 import { checkCopyFirstPass } from './copy-firstpass-fixture.js'
+import { setupCodegraphResearch, checkCodegraphResearch } from './codegraph-research-fixture.js'
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const args = Object.fromEntries(process.argv.slice(2).reduce<string[][]>((out, item, i, all) => {
@@ -98,6 +99,16 @@ function exactFileCase(id: string, sourceText: string, firstPass = false): Case 
     }}
 }
 const cases: Case[] = [
+  {id:'codegraph_research',prompt:'深度调研一下这个项目，说明架构、主要调用链和明显问题。只读检查，最后在会话中给出简洁结论。',
+    setup:async()=>{
+      setupCodegraphResearch(workspace)
+      const CodeGraph=await (await importSource('tools/codegraph/codegraph-module.ts')).loadCodeGraph()
+      const graph=await CodeGraph.init(workspace,{index:true})
+      try { if(graph.getIndexState()!=='complete')throw new Error('Synthetic project index is incomplete') }
+      finally { graph.close() }
+    },check:()=>checkCodegraphResearch(current,true)},
+  {id:'codegraph_unindexed',prompt:'深度调研一下这个项目，说明架构、主要调用链和明显问题。只读检查，最后在会话中给出简洁结论。',
+    setup:()=>setupCodegraphResearch(workspace),check:()=>checkCodegraphResearch(current,false)},
   {id:'office_team',prompt:'项目需要生成 Excel 和文档、PPT 这些，做 web-2048 这个项目的。',
     setup:()=>setupOfficeBundle(workspace,args['office-project'] || 'C:/Users/wb.xielin02/wuzu_workspace/test01/web-2048'),
     seed:async()=>{current.expectedTurns=1},check:()=>checkOfficeBundle(current)},
