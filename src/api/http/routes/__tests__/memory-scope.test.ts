@@ -87,19 +87,19 @@ describe('memory HTTP scope isolation', () => {
 
   it('exposes and persists the per-session memory mode', async () => {
     const before = await app.inject({ method: 'GET', url: '/memory/settings?sessionId=A' })
-    expect(JSON.parse(before.body).data.memoryScope).toBe('session')
+    expect(JSON.parse(before.body).data.memoryScope).toBe('off')
     const update = await app.inject({ method: 'PUT', url: '/memory/settings', payload: { sessionId: 'A', memoryScope: 'session' } })
     expect(update.statusCode).toBe(200)
     const after = await app.inject({ method: 'GET', url: '/memory/settings?sessionId=A' })
     expect(JSON.parse(after.body).data.effectiveScope).toBe('session')
   })
 
-  it('defaults code conversations to session memory without changing general conversations', async () => {
+  it('defaults both code and general conversations to memory off', async () => {
     const code = await app.inject({ method: 'GET', url: '/memory/settings?sessionId=new-code', headers: { 'x-aether-tool-profile': 'code' } })
     expect(code.statusCode).toBe(200)
-    expect(code.json().data).toMatchObject({ memoryScope: 'session', effectiveScope: 'session', enabled: true })
+    expect(code.json().data).toMatchObject({ memoryScope: 'off', effectiveScope: 'off', enabled: true })
     const general = await app.inject({ method: 'GET', url: '/memory/settings?sessionId=new-general' })
-    expect(general.json().data).toMatchObject({ memoryScope: 'session', effectiveScope: 'session', globalEnabled: false, sessionOverride: null })
+    expect(general.json().data).toMatchObject({ memoryScope: 'off', effectiveScope: 'off', globalEnabled: false, sessionOverride: null })
   })
 
   it.each(['off', 'global', 'session'] as const)('preserves an explicit %s choice across a memory database reopen', async memoryScope => {
@@ -108,12 +108,14 @@ describe('memory HTTP scope isolation', () => {
     expect(updated.statusCode).toBe(200)
     await closeMemoryDb()
     const saved = await app.inject({ method: 'GET', url: `/memory/settings?sessionId=${sessionId}`, headers: { 'x-aether-tool-profile': 'code' } })
-    expect(saved.json().data).toMatchObject({ memoryScope, effectiveScope: memoryScope === 'global' ? 'session' : memoryScope, globalEnabled: false })
+    expect(saved.json().data).toMatchObject({ memoryScope, effectiveScope: memoryScope === 'global' ? 'off' : memoryScope, globalEnabled: false })
     const newSession = await app.inject({ method: 'GET', url: '/memory/settings?sessionId=another-code', headers: { 'x-aether-tool-profile': 'code' } })
-    expect(newSession.json().data.memoryScope).toBe('session')
+    expect(newSession.json().data.memoryScope).toBe('off')
   })
 
   it('honors server-disabled memory without overwriting the selected scope', async () => {
+    const selected = await app.inject({ method: 'PUT', url: '/memory/settings', payload: { sessionId: 'disabled-code', memoryScope: 'session' } })
+    expect(selected.statusCode).toBe(200)
     process.env.ENABLE_LONG_TERM_MEMORY = 'false'
     const disabled = await app.inject({ method: 'GET', url: '/memory/settings?sessionId=disabled-code', headers: { 'x-aether-tool-profile': 'code' } })
     expect(disabled.json().data).toMatchObject({ memoryScope: 'session', effectiveScope: 'off', enabled: false })

@@ -172,15 +172,15 @@ describe('browser tool contracts', () => {
 
   it('registers shared browser capabilities in both profiles and preserves read-only child boundaries', async () => {
     const code = await createToolRegistry({ toolProfile: 'code', allowedTools: browserTools.map(item => item.name) })
-    expect(code.registry.list().map(item => item.name).sort()).toEqual([...browserTools.map(item => item.name), 'plan_update'].sort())
+    expect(code.registry.list().map(item => item.name).sort()).toEqual([...browserTools.map(item => item.name), 'load_tools', 'plan_update'].sort())
     expect(code.registry.executionMode('browser_click', {})).toBe('serial')
     expect(code.registry.executionMode('browser_snapshot', {})).toBe('readonly')
     expect(code.registry.executionMode('browser_network_request', {})).toBe('readonly')
     const research = createSubagentToolRegistry(code.registry, true)
-    expect(research.list().map(item => item.name).sort()).toEqual(['browser_console', 'browser_network', 'browser_network_request', 'browser_screenshot', 'browser_snapshot', 'browser_tabs', 'plan_update'])
+    expect(research.list().map(item => item.name).sort()).toEqual(['browser_console', 'browser_network', 'browser_network_request', 'browser_screenshot', 'browser_snapshot', 'browser_tabs', 'load_tools', 'plan_update'])
     expect(research.has('browser_click')).toBe(false)
     const general = await createToolRegistry({ toolProfile: 'general', allowedTools: ['browser_tabs'] })
-    expect(general.registry.list().map(item => item.name).sort()).toEqual(['browser_tabs', 'plan_update'])
+    expect(general.registry.list().map(item => item.name).sort()).toEqual(['browser_tabs', 'load_tools', 'plan_update'])
   })
 
   it.each(['openai', 'anthropic'])('delivers screenshot pixels as %s multimodal image content', async provider => {

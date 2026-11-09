@@ -2,7 +2,7 @@ export const MEMORY_SCHEMA: string[] = [
   `CREATE TABLE IF NOT EXISTS memory_preferences (
     tenant_id TEXT PRIMARY KEY,
     global_enabled INTEGER NOT NULL DEFAULT 0 CHECK(global_enabled IN (0,1)),
-    session_default_enabled INTEGER NOT NULL DEFAULT 1 CHECK(session_default_enabled IN (0,1)),
+    session_default_enabled INTEGER NOT NULL DEFAULT 0 CHECK(session_default_enabled IN (0,1)),
     updated_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`,
   `CREATE TABLE IF NOT EXISTS memory_session_preferences (
@@ -16,7 +16,7 @@ export const MEMORY_SCHEMA: string[] = [
   `CREATE TABLE IF NOT EXISTS memory_session_settings (
     tenant_id  TEXT NOT NULL,
     session_id TEXT NOT NULL,
-    scope      TEXT NOT NULL DEFAULT 'global' CHECK(scope IN ('off','global','session')),
+    scope      TEXT NOT NULL DEFAULT 'off' CHECK(scope IN ('off','global','session')),
     updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
     PRIMARY KEY (tenant_id, session_id)
   )`,

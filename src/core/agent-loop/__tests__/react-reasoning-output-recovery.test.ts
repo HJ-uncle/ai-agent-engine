@@ -54,13 +54,13 @@ describe('reasoning-only terminal output recovery', () => {
     const caps: Array<number | undefined> = []
     f.llm.stream = vi.fn(async function* (messages: Message[], options?: LLMAdapterOptions) {
       caps.push(options?.maxTokens)
-      expect(options?.requestInputTokenEstimate).toBe(estimateRequestInput(messages, options?.systemPrompt, options?.tools ?? []))
+      expect(options?.requestInputTokenEstimate).toBe(estimateRequestInput(messages, options?.systemPrompt, options?.tools ?? [], options?.requestContext))
       if (++calls === 1) yield reasoning()
       else {
         expect(JSON.stringify(messages)).not.toContain(PRIVATE)
         expect(messages.filter(m => m.role === 'assistant')).toHaveLength(0)
         expect(messages.filter(m => m.role === 'user')).toHaveLength(1)
-        expect(options?.systemPrompt).toContain('before producing a public answer')
+        expect(options?.requestContext).toContain('before producing a public answer')
         expect(options?.thinkingEnabled).toBe(true)
         yield answer()
       }
@@ -106,9 +106,9 @@ describe('reasoning-only terminal output recovery', () => {
     f.ctx.onRequestAttempt = event => { budget.observe(event) }
     f.llm.stream = vi.fn(async function* (messages, options) {
       caps.push(options?.maxTokens)
-      const summaryReserve = estimateRequestInput(messages, options?.systemPrompt, []) + 4096 + 8192
+      const summaryReserve = estimateRequestInput(messages, options?.systemPrompt, [], options?.requestContext) + 4096 + 8192
       expect(options!.maxTokens!).toBe(Math.floor(budget.remaining - options!.requestInputTokenEstimate! - summaryReserve))
-      expect(options?.systemPrompt ?? '').not.toContain('探索已停止')
+      expect(options?.requestContext ?? '').not.toContain('探索已停止')
       const n = caps.length
       const usage = { promptTokens: n === 1 ? 20 : 40, completionTokens: n === 1 ? 8192 : 15 }
       await options?.onRequestAttempt?.({ type: 'start', requestAttemptId: 'finite-' + n,
@@ -131,7 +131,7 @@ describe('reasoning-only terminal output recovery', () => {
       f.ctx.modelCaps = { contextWindow: window }
       f.llm.stream = vi.fn(async function* (messages, options) {
         caps.push(options?.maxTokens)
-        expect(options?.requestInputTokenEstimate).toBe(estimateRequestInput(messages, options?.systemPrompt, options?.tools ?? []))
+        expect(options?.requestInputTokenEstimate).toBe(estimateRequestInput(messages, options?.systemPrompt, options?.tools ?? [], options?.requestContext))
         expect(options!.requestInputTokenEstimate! + options!.maxTokens!).toBe(window)
         yield caps.length === 1 ? { ...reasoning(), completionTokens: options!.maxTokens! } : answer()
       })
@@ -173,7 +173,7 @@ describe('reasoning-only terminal output recovery', () => {
       if (caps.length === 1) yield reasoning()
       else {
         expect(options?.tools).toEqual([])
-        expect(options?.systemPrompt).toContain('探索已停止')
+        expect(options?.requestContext).toContain('探索已停止')
         yield answer('Supported partial findings.')
       }
     })
@@ -376,7 +376,7 @@ describe('reasoning-only terminal output recovery', () => {
       else {
         expect(messages.some(m => m.role === 'assistant' && m.content === 'public prefix; ')).toBe(true)
         expect(JSON.stringify(messages)).not.toContain('starting exactly where the response stopped')
-        expect(options?.systemPrompt).toContain('before producing a public answer')
+        expect(options?.requestContext).toContain('before producing a public answer')
         yield answer()
       }
     })
@@ -460,7 +460,7 @@ describe('reasoning-only terminal output recovery', () => {
     expect(f.outcomes.at(-1)).toMatchObject({status:'failed',stopReason:'output_limit'})
     const g=fixture();let calls=0;g.llm.stream=vi.fn(async function*(_messages: Message[], options?: LLMAdapterOptions){
       if(++calls===1)yield tool()
-      else{expect(options?.systemPrompt).toContain('探索已停止');expect(options?.tools).toEqual([]);yield reasoning()}
+      else{expect(options?.requestContext).toContain('探索已停止');expect(options?.tools).toEqual([]);yield reasoning()}
     })
     await g.run({maxIterations:2,finalizeOnLimit:true})
     expect(g.llm.stream).toHaveBeenCalledTimes(2)

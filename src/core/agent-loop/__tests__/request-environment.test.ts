@@ -12,6 +12,7 @@ afterEach(() => { clearSecurityMode(identity.tenantId, identity.sessionId); vi.r
 function fixture() {
   const history: Message[] = []
   const requests: LLMAdapterOptions[] = []
+  const requestHistories: Message[][] = []
   const parameters = { type: 'object', additionalProperties: false, required: ['path'], properties: {
     path: { type: 'string', description: '完整参数说明', minLength: 1 },
     mode: { type: 'string', enum: ['text', 'image'] },
@@ -27,20 +28,21 @@ function fixture() {
     logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   } as unknown as AgentContext
   const llm: LLMAdapter = { model: 'test', provider: 'test', complete: vi.fn(), countTokens: () => 0,
-    stream: vi.fn(async function* (_messages, options) {
+    stream: vi.fn(async function* (messages, options) {
       requests.push(options!)
+      requestHistories.push(structuredClone(messages))
       if (requests.length === 1) yield { done: true, toolCalls: [{ index: 0, id: 'read-1', name: 'read_file', args: '{"path":"file.md"}' }] }
       else yield { done: true, content: 'Done.' }
     }) }
   const run = async (options: ReActOptions = {}) => {
     for await (const _frame of new ReActStrategy(llm, { maxIterations: 3, systemPrompt: 'Caller instructions.', ...options }).run('Read the file.', ctx)) { /* exercise real prompt assembly */ }
   }
-  return { ctx, history, requests, parameters, run, replaceTools: (next: typeof definitions) => { definitions = next } }
+  return { ctx, history, requests, requestHistories, parameters, run, replaceTools: (next: typeof definitions) => { definitions = next } }
 }
 
 function snapshot(options: LLMAdapterOptions) {
-  const tail = options.systemPrompt!.split('## 本次模型请求环境\n')[1]
-  return JSON.parse(tail.slice(tail.indexOf('\n') + 1).split('\n\n')[0])
+  const tail = options.requestContext!.split('## 本次模型请求环境\n')[1]
+  return JSON.parse(tail.split('\n\n')[0])
 }
 
 describe('automatic environment at the shared ReAct request boundary', () => {
@@ -66,10 +68,15 @@ describe('automatic environment at the shared ReAct request boundary', () => {
     expect(snapshot(f.requests[0]).registryVersion).not.toBe(snapshot(f.requests[1]).registryVersion)
     expect(f.requests[0].tools?.[0]).toMatchObject({ description: '完整工具说明，不应重复进系统提示', parameters: f.parameters })
     expect(f.requests[1].tools?.[0].parameters.required).toEqual(['path', 'mode'])
+    expect(f.requests[1].systemPrompt).toBe(f.requests[0].systemPrompt)
+    expect(f.requestHistories[1].slice(0, f.requestHistories[0].length)).toEqual(f.requestHistories[0])
+    expect(JSON.stringify(f.history)).not.toContain('## 本次模型请求环境')
+    expect(JSON.stringify(f.requestHistories)).not.toContain('clock')
     for (const options of f.requests) {
-      expect(options.systemPrompt!.split('## 本次模型请求环境')).toHaveLength(2)
-      expect(options.systemPrompt!.split('## Aether 公共执行协议')).toHaveLength(2)
+      expect(options.requestContext!.split('## 本次模型请求环境')).toHaveLength(2)
+      expect(options.systemPrompt!.split('## Execution')).toHaveLength(2)
       expect(options.systemPrompt).toContain('Caller instructions.')
+      expect(options.systemPrompt).not.toContain('currentTime')
       expect(options.systemPrompt).not.toMatch(/get_current_context|get_tool_details|get_time|完整参数说明|完整工具说明，不应重复进系统提示/)
       expect(options.systemPrompt).not.toContain('/old-project')
     }
@@ -85,7 +92,10 @@ describe('automatic environment at the shared ReAct request boundary', () => {
     expect(f.requests[1].tools).toEqual([])
     expect(snapshot(f.requests[1]).toolCount).toBe(0)
     expect(snapshot(f.requests[1]).tools).toBeUndefined()
-    expect(f.requests[1].systemPrompt!.split('## 本次模型请求环境')).toHaveLength(2)
+    expect(f.requests[1].requestContext!.split('## 本次模型请求环境')).toHaveLength(2)
+    expect(f.requests[1].requestContext).toContain('探索已停止')
+    expect(f.requests[1].systemPrompt).not.toContain('探索已停止')
+    expect(JSON.stringify(f.history)).not.toContain('## 本次模型请求环境')
   })
 
   it('rebuilds environment after history compaction while preserving full request schemas', async () => {
@@ -102,12 +112,14 @@ describe('automatic environment at the shared ReAct request boundary', () => {
     await f.run()
     expect(f.ctx.history.compress).toHaveBeenCalledTimes(1)
     expect(f.requests).toHaveLength(2)
+    expect(f.requests[1].systemPrompt).toBe(f.requests[0].systemPrompt)
+    expect(JSON.stringify(f.history)).not.toContain('## 本次模型请求环境')
     for (const options of f.requests) {
       expect(snapshot(options).environment.workspacePaths).toEqual(['/after-compaction'])
       expect(snapshot(options).clock.currentTime).toBeTruthy()
       expect(snapshot(options).permissions.securityMode).toBeTruthy()
       expect(options.tools?.[0].parameters).toEqual(f.parameters)
-      expect(options.systemPrompt!.split('## 本次模型请求环境')).toHaveLength(2)
+      expect(options.requestContext!.split('## 本次模型请求环境')).toHaveLength(2)
       expect(options.systemPrompt).not.toContain('old context ')
       expect(options.systemPrompt).not.toContain('完整参数说明')
     }

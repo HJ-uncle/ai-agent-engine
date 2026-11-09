@@ -65,12 +65,22 @@ export async function executeRegisteredTool(item: RegisteredToolCall, ctx: Agent
 }
 
 /** All decisions precede side effects; only explicitly classified groups overlap. */
-export async function executeToolBatch(items: RegisteredToolCall[], ctx: AgentContext): Promise<BatchExecution> {
+export async function executeToolBatch(items: RegisteredToolCall[], ctx: AgentContext, offeredTools?: ReadonlySet<string>): Promise<BatchExecution> {
   const results: Array<ToolResult | undefined> = new Array(items.length)
   for (let index = 0; index < items.length; index++) {
     const item = items[index]
     if (ctx.signal?.aborted) {
       results[index] = statusResult('cancelled', 'Tool execution cancelled before start', 'Cancelled')
+      continue
+    }
+    if (offeredTools && !offeredTools.has(item.call.name)) {
+      const recoverable = ctx.tools.has(item.call.name) && offeredTools.has('load_tools')
+      results[index] = statusResult('failed', JSON.stringify({
+        code: 'TOOL_NOT_LOADED', toolName: item.call.name, retryable: recoverable,
+        message: recoverable
+          ? 'Tool not executed: its definition was not offered in this request. Call load_tools with this exact name, then use the complete schema in the next request.'
+          : 'Tool not executed: this tool was not offered in the current request. Use the available definitions.',
+      }))
       continue
     }
     if (item.call._parseError) {
@@ -100,15 +110,27 @@ export async function executeToolBatch(items: RegisteredToolCall[], ctx: AgentCo
 
   let waitingIndex = results.findIndex(result => result?.status === 'waiting')
   if (waitingIndex === -1) {
+    let deliveryStaged = false
     for (let index = 0; index < items.length;) {
       if (results[index]) { index++; continue }
-      const mode = ctx.tools.executionMode?.(items[index].call.name, items[index].call.args) ?? 'serial'
+      if (deliveryStaged && !['plan_update', 'deliver_files'].includes(items[index].call.name)) {
+        results[index++] = statusResult('failed', JSON.stringify({ code: 'FINAL_DELIVERY_CLOSEOUT',
+          message: 'Tool not executed: the complete final file list was already registered in this batch. Reconcile the plan and answer. For a concrete repair, first clear deliver_files with items:[], then repair, validate and register again.' }))
+        continue
+      }
+      const mode = items[index].call.name === 'deliver_files' ? 'serial'
+        : ctx.tools.executionMode?.(items[index].call.name, items[index].call.args) ?? 'serial'
       const indexes = [index++]
-      if (mode !== 'serial') {
-        while (index < items.length && !results[index] && ctx.tools.executionMode?.(items[index].call.name, items[index].call.args) === mode) indexes.push(index++)
+      if (mode !== 'serial' && !deliveryStaged) {
+        while (index < items.length && !results[index] && ctx.tools.executionMode?.(items[index].call.name, items[index].call.args) === mode
+          && items[index].call.name !== 'deliver_files') indexes.push(index++)
       }
       // Each wrapper captures execution errors; every launched sibling finishes.
       await Promise.all(indexes.map(async i => { results[i] = await executeRegisteredTool(items[i], ctx) }))
+      for (const i of indexes) if (!ctx.parentSessionId && ctx.rootRunId && ctx.turnId && items[i].call.name === 'deliver_files'
+        && results[i]?.success && Array.isArray(items[i].call.args.items)) {
+        deliveryStaged = (items[i].call.args.items as unknown[]).length > 0
+      }
       waitingIndex = results.findIndex(result => result?.status === 'waiting')
       if (waitingIndex !== -1) break
     }

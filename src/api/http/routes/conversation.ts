@@ -14,7 +14,7 @@ import { rootRunStore, type CompactionState } from '../../../storage/root-runs/i
 import { withHistoryLock, invalidateSessionHistory, withSessionHistoryMutation, bindHistoryGeneration, withSessionHistoryCompression } from '../../../storage/conversation/serialization.js'
 import type { Message } from '../../../core/agent-context/types.js'
 import { commandJobs } from '../../../core/command-jobs/index.js'
-import { publicHistoryMessages } from '../history-projection.js'
+import { publicSessionHistoryMessages } from '../history-projection.js'
 import { createAdapterFromResolved, resolveModelConfig, type ResolvedModelConfig } from '../../../core/llm-adapter/resolve-model.js'
 import type { CreateAdapterOptions } from '../../../core/llm-adapter/factory.js'
 import { compressionSplitIndex } from '../../../storage/conversation/compression.js'
@@ -175,7 +175,7 @@ export async function conversationRoutes(fastify: FastifyInstance) {
     }
     const sessionUsage = await history.getSessionUsage({ tenantId, sessionId })
     
-    const response = paginateArray(publicHistoryMessages(messages), current, pageSize)
+    const response = paginateArray(await publicSessionHistoryMessages(tenantId, messages), current, pageSize)
     response.metadata = { sessionUsage, subagentRuns, runs: await rootRunStore.list(tenantId, sessionId), commandJobs: jobs }
     
     return reply.code(200).send(response)
@@ -203,7 +203,7 @@ export async function conversationRoutes(fastify: FastifyInstance) {
         const job = jobs.find(item => item.toolCallId && item.toolCallId === message.toolCallId && item.ownerSessionId === sessionId)
         if (job) message.metadata = { ...message.metadata, commandJob: job }
       }
-      return reply.send(success({ ...display, messages: publicHistoryMessages(display.messages) }))
+      return reply.send(success({ ...display, messages: await publicSessionHistoryMessages(tenantId, display.messages) }))
     } catch (error) {
       if (error instanceof DisplayHistoryAnchorNotFoundError) return reply.code(404).send(fail(40400, error.message))
       throw error
@@ -247,9 +247,10 @@ export async function conversationRoutes(fastify: FastifyInstance) {
       if (job) message.metadata = { ...message.metadata, commandJob: job }
     }
     const total = archive.totalMessageCount ?? archive.messages.length
+    const publicMessages = await publicSessionHistoryMessages(tenantId, archive.messages)
     const response = page && archive.totalMessageCount !== undefined
-      ? successWithPagination(publicHistoryMessages(archive.messages), { current: normalizedCurrent, pageSize: page.limit, total, totalPages: Math.ceil(total / page.limit) })
-      : paginateArray(publicHistoryMessages(archive.messages), current, pageSize)
+      ? successWithPagination(publicMessages, { current: normalizedCurrent, pageSize: page.limit, total, totalPages: Math.ceil(total / page.limit) })
+      : paginateArray(publicMessages, current, pageSize)
     response.metadata = {
       compressed: archive.compressed,
       currentMessageCount: archive.currentMessageCount,
@@ -332,7 +333,7 @@ export async function conversationRoutes(fastify: FastifyInstance) {
       return reply.code(200).send(fail(40400, `Conversation "${conversationId}" not found`))
     }
 
-    return reply.code(200).send(paginateArray(messages, current, pageSize))
+    return reply.code(200).send(paginateArray(await publicSessionHistoryMessages(tenantId, messages), current, pageSize))
   })
 
   // DELETE /conversation/turns/:conversationId — 删除一整轮（该 conversation_id 的所有行）

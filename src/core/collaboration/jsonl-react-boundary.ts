@@ -7,6 +7,7 @@ import type { SQLiteDeliveryBatch } from './sqlite-delivery.js'
 import { canonicalJSONLMessage, jsonlHistoryIdentity } from '../../storage/conversation/jsonl-origin.js'
 import { readAdmissionSeed } from '../../storage/root-admission/projection.js'
 import { withAuthenticatedHistoryMaintenance } from './history-maintenance.js'
+import { RequestHistoryChangedError } from './history-budget.js'
 
 declare const boundaryBrand: unique symbol
 export type JSONLReActBoundary = Readonly<{ [boundaryBrand]: true }>
@@ -78,5 +79,5 @@ export async function assertJSONLReActDispatch(capability: JSONLReActBoundary, c
   if (!found.consumer || !found.snapshotDigest) fail('JSONL dispatch has no authenticated budgeted history')
   const messages = await serviceForOwner(found.owner).collaboration.jsonlDeliverySnapshot(found.consumer!, ctx.inheritContext !== false)
   record(capability, ctx)
-  if (digest(messages) !== found.snapshotDigest) throw new CollaborationError('conflict', 'JSONL history changed after request budgeting; no provider request was dispatched')
+  if (digest(messages) !== found.snapshotDigest) throw new RequestHistoryChangedError('jsonl')
 }

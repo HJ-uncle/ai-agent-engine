@@ -1,0 +1,2545 @@
+{
+  "generatedAt": "2026-11-09T03:56:39.012Z",
+  "baseline": {
+    "mainResponses": 80,
+    "mainInput": 5021090,
+    "mainOutput": 103092,
+    "mainTotal": 5124182,
+    "elapsedMs": 883633,
+    "requestedThinking": "low"
+  },
+  "setupFailures": [
+    {
+      "name": "office-v1-thinking-2026-11-09T03-22-38-840Z-4979ee",
+      "error": "Error: ENOENT: no such file or directory, open 'D:\\dev\\ai-agent-engine\\.e2e-tmp\\office-incident-20261109\\candidate-v1\\package.json'",
+      "cases": 0
+    }
+  ],
+  "results": [
+    {
+      "run": "office-v1-direct-2026-11-09T03-23-38-791Z-6e75b3",
+      "case": "office_bundle",
+      "repeat": 1,
+      "thinkingRequested": false,
+      "sourceTreeSha256": "5d132aed44d2eed7919a40eaf690c20244273810c64fb5b1464744e9642e77e1",
+      "evidence": ".e2e-tmp/office-incident-20261109/live/office-v1-direct-2026-11-09T03-23-38-791Z-6e75b3/office_bundle-1.json",
+      "originalRecordedPassed": false,
+      "automatedPassed": false,
+      "passed": false,
+      "stopStates": [
+        "waiting"
+      ],
+      "pendingTools": [
+        {
+          "kind": "ask",
+          "tool": "ask_user"
+        }
+      ],
+      "elapsedMs": 7589,
+      "totalWallMs": 9220,
+      "mainResponses": 3,
+      "mainInput": 26741,
+      "mainOutput": 413,
+      "mainTotal": 27154,
+      "firstInput": 6447,
+      "lastInput": 12163,
+      "providerAttempts": 5,
+      "knownProviderInput": 27426,
+      "knownProviderOutput": 582,
+      "providerUsageComplete": true,
+      "sameRequestBodies": 0,
+      "duplicateWholeMessagesWithinRequests": 0,
+      "requestedWireEfforts": [],
+      "wireThinking": [
+        {
+          "toolCount": 0,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 0,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        }
+      ],
+      "officePolicyPresentOnAllToolRequests": false,
+      "plan": [],
+      "check": {
+        "threeFormatsDelivered": false,
+        "draftBeforeOfficeCreation": false,
+        "draftNotDelivered": true,
+        "artifactContentsAndHashesValid": false,
+        "spreadsheetErrorCellsAbsent": false,
+        "formulasCachedWithoutErrors": "N/A: no delivered formulas; formula execution and cache correctness were not tested",
+        "finalDeliveryOnlyCloses": false,
+        "planClosed": true,
+        "noFinalDownloadLinkList": true,
+        "backgroundIdle": true,
+        "wireRequestHashCoverageComplete": true,
+        "noIdenticalWireRequestResends": true,
+        "expectedTurnsSucceeded": false,
+        "formats": [],
+        "drafts": [],
+        "calls": [
+          {
+            "name": "get_skill"
+          },
+          {
+            "name": "get_skill"
+          },
+          {
+            "name": "get_skill"
+          },
+          {
+            "name": "get_skill"
+          },
+          {
+            "name": "ask_user"
+          }
+        ],
+        "wireRequestHashEvidence": {
+          "observedAttempts": 5,
+          "capturedBodyHashes": 5,
+          "repeatedBodyCount": 0,
+          "boundary": "Only identical serialized request bodies at the local fetch boundary are detected. Distinct bodies may contain duplicated history; gateway-internal retries are not observed."
+        },
+        "limitation": "Content floors validate visible text and basic structure, not factual accuracy or native Office rendering. Formula checks apply only when formulas exist and reuse the engine calculator, not an independent Excel implementation."
+      }
+    },
+    {
+      "run": "office-v1-direct-2026-11-09T03-23-38-791Z-6e75b3",
+      "case": "greeting",
+      "repeat": 1,
+      "thinkingRequested": false,
+      "sourceTreeSha256": "5d132aed44d2eed7919a40eaf690c20244273810c64fb5b1464744e9642e77e1",
+      "evidence": ".e2e-tmp/office-incident-20261109/live/office-v1-direct-2026-11-09T03-23-38-791Z-6e75b3/greeting-1.json",
+      "originalRecordedPassed": true,
+      "automatedPassed": true,
+      "passed": true,
+      "stopStates": [
+        "succeeded"
+      ],
+      "pendingTools": [],
+      "elapsedMs": 2293,
+      "totalWallMs": 4010,
+      "mainResponses": 1,
+      "mainInput": 6443,
+      "mainOutput": 12,
+      "mainTotal": 6455,
+      "firstInput": 6443,
+      "lastInput": 6443,
+      "providerAttempts": 3,
+      "knownProviderInput": 7119,
+      "knownProviderOutput": 49,
+      "providerUsageComplete": true,
+      "sameRequestBodies": 0,
+      "duplicateWholeMessagesWithinRequests": 0,
+      "requestedWireEfforts": [],
+      "wireThinking": [
+        {
+          "toolCount": 0,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 0,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        }
+      ],
+      "officePolicyPresentOnAllToolRequests": false,
+      "plan": [],
+      "check": {
+        "answered": true
+      }
+    },
+    {
+      "run": "office-v1-thinking-2026-11-09T03-23-11-085Z-cbd01f",
+      "case": "office_bundle",
+      "repeat": 1,
+      "thinkingRequested": true,
+      "sourceTreeSha256": "5d132aed44d2eed7919a40eaf690c20244273810c64fb5b1464744e9642e77e1",
+      "evidence": ".e2e-tmp/office-incident-20261109/live/office-v1-thinking-2026-11-09T03-23-11-085Z-cbd01f/office_bundle-1.json",
+      "originalRecordedPassed": false,
+      "automatedPassed": false,
+      "passed": false,
+      "stopStates": [
+        "waiting"
+      ],
+      "pendingTools": [
+        {
+          "kind": "permission",
+          "tool": "execute_cmd"
+        }
+      ],
+      "elapsedMs": 54542,
+      "totalWallMs": 56261,
+      "mainResponses": 19,
+      "mainInput": 497209,
+      "mainOutput": 5311,
+      "mainTotal": 502520,
+      "firstInput": 6462,
+      "lastInput": 41874,
+      "providerAttempts": 21,
+      "knownProviderInput": 497875,
+      "knownProviderOutput": 5487,
+      "providerUsageComplete": true,
+      "sameRequestBodies": 0,
+      "duplicateWholeMessagesWithinRequests": 0,
+      "requestedWireEfforts": [],
+      "wireThinking": [
+        {
+          "toolCount": 0,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 0,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        }
+      ],
+      "officePolicyPresentOnAllToolRequests": false,
+      "plan": [
+        {
+          "title": "梳理项目事实并写共享内容草稿",
+          "status": "in_progress"
+        },
+        {
+          "title": "生成 Word 项目说明文档",
+          "status": "pending"
+        },
+        {
+          "title": "生成 Excel 功能与测试清单并重算核对",
+          "status": "pending"
+        },
+        {
+          "title": "生成 PPT 项目汇报",
+          "status": "pending"
+        },
+        {
+          "title": "登记并交付三份文件",
+          "status": "pending"
+        }
+      ],
+      "check": {
+        "threeFormatsDelivered": false,
+        "draftBeforeOfficeCreation": false,
+        "draftNotDelivered": true,
+        "artifactContentsAndHashesValid": false,
+        "spreadsheetErrorCellsAbsent": false,
+        "formulasCachedWithoutErrors": "N/A: no delivered formulas; formula execution and cache correctness were not tested",
+        "finalDeliveryOnlyCloses": false,
+        "planClosed": false,
+        "noFinalDownloadLinkList": true,
+        "backgroundIdle": true,
+        "wireRequestHashCoverageComplete": true,
+        "noIdenticalWireRequestResends": true,
+        "expectedTurnsSucceeded": false,
+        "formats": [],
+        "drafts": [],
+        "calls": [
+          {
+            "name": "list_files"
+          },
+          {
+            "name": "get_skill"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/README.md"
+          },
+          {
+            "name": "plan_update"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/index.html"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/engine.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/game.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/app.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/app.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/app.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/test/engine.test.mjs"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/test/engine.test.mjs"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/test/smoke.mjs"
+          },
+          {
+            "name": "grep",
+            "path": "web-2048/test/smoke.mjs"
+          },
+          {
+            "name": "grep",
+            "path": "web-2048/test/smoke.mjs"
+          },
+          {
+            "name": "grep",
+            "path": "web-2048/test/engine.test.mjs"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/renderer.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/theme.js"
+          },
+          {
+            "name": "get_skill"
+          },
+          {
+            "name": "get_skill"
+          },
+          {
+            "name": "get_skill"
+          },
+          {
+            "name": "execute_cmd"
+          }
+        ],
+        "wireRequestHashEvidence": {
+          "observedAttempts": 21,
+          "capturedBodyHashes": 21,
+          "repeatedBodyCount": 0,
+          "boundary": "Only identical serialized request bodies at the local fetch boundary are detected. Distinct bodies may contain duplicated history; gateway-internal retries are not observed."
+        },
+        "limitation": "Content floors validate visible text and basic structure, not factual accuracy or native Office rendering. Formula checks apply only when formulas exist and reuse the engine calculator, not an independent Excel implementation."
+      }
+    },
+    {
+      "run": "office-v1-thinking-2026-11-09T03-23-11-085Z-cbd01f",
+      "case": "greeting",
+      "repeat": 1,
+      "thinkingRequested": true,
+      "sourceTreeSha256": "5d132aed44d2eed7919a40eaf690c20244273810c64fb5b1464744e9642e77e1",
+      "evidence": ".e2e-tmp/office-incident-20261109/live/office-v1-thinking-2026-11-09T03-23-11-085Z-cbd01f/greeting-1.json",
+      "originalRecordedPassed": true,
+      "automatedPassed": true,
+      "passed": true,
+      "stopStates": [
+        "succeeded"
+      ],
+      "pendingTools": [],
+      "elapsedMs": 2777,
+      "totalWallMs": 3956,
+      "mainResponses": 1,
+      "mainInput": 6462,
+      "mainOutput": 31,
+      "mainTotal": 6493,
+      "firstInput": 6462,
+      "lastInput": 6462,
+      "providerAttempts": 3,
+      "knownProviderInput": 7139,
+      "knownProviderOutput": 77,
+      "providerUsageComplete": true,
+      "sameRequestBodies": 0,
+      "duplicateWholeMessagesWithinRequests": 0,
+      "requestedWireEfforts": [],
+      "wireThinking": [
+        {
+          "toolCount": 0,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 0,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        }
+      ],
+      "officePolicyPresentOnAllToolRequests": false,
+      "plan": [],
+      "check": {
+        "answered": true
+      }
+    },
+    {
+      "run": "office-v2-direct-2026-11-09T03-31-13-253Z-e4a336",
+      "case": "office_bundle_replay",
+      "repeat": 1,
+      "thinkingRequested": false,
+      "sourceTreeSha256": "b2a96d1c9a0a0122ce9caaa16015907c3b0721625457e96439f7074643603520",
+      "evidence": ".e2e-tmp/office-incident-20261109/live/office-v2-direct-2026-11-09T03-31-13-253Z-e4a336/office_bundle_replay-1.json",
+      "originalRecordedPassed": false,
+      "automatedPassed": false,
+      "passed": false,
+      "stopStates": [
+        "waiting"
+      ],
+      "pendingTools": [
+        {
+          "kind": "ask",
+          "tool": "ask_user"
+        }
+      ],
+      "elapsedMs": 5256,
+      "totalWallMs": 6579,
+      "mainResponses": 1,
+      "mainInput": 6814,
+      "mainOutput": 275,
+      "mainTotal": 7089,
+      "firstInput": 6814,
+      "lastInput": 6814,
+      "providerAttempts": 3,
+      "knownProviderInput": 7500,
+      "knownProviderOutput": 377,
+      "providerUsageComplete": true,
+      "sameRequestBodies": 0,
+      "duplicateWholeMessagesWithinRequests": 0,
+      "requestedWireEfforts": [],
+      "wireThinking": [
+        {
+          "toolCount": 0,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 0,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        }
+      ],
+      "officePolicyPresentOnAllToolRequests": false,
+      "plan": [],
+      "check": {
+        "threeFormatsDelivered": false,
+        "draftBeforeOfficeCreation": false,
+        "draftNotDelivered": true,
+        "artifactContentsAndHashesValid": false,
+        "spreadsheetErrorCellsAbsent": false,
+        "formulasCachedWithoutErrors": "N/A: no delivered formulas; formula execution and cache correctness were not tested",
+        "finalDeliveryOnlyCloses": false,
+        "planClosed": true,
+        "noFinalDownloadLinkList": true,
+        "backgroundIdle": true,
+        "wireRequestHashCoverageComplete": true,
+        "noIdenticalWireRequestResends": true,
+        "expectedTurnsSucceeded": false,
+        "formats": [],
+        "drafts": [],
+        "calls": [
+          {
+            "name": "ask_user"
+          }
+        ],
+        "wireRequestHashEvidence": {
+          "observedAttempts": 3,
+          "capturedBodyHashes": 3,
+          "repeatedBodyCount": 0,
+          "boundary": "Only identical serialized request bodies at the local fetch boundary are detected. Distinct bodies may contain duplicated history; gateway-internal retries are not observed."
+        },
+        "limitation": "Content floors validate visible text and basic structure, not factual accuracy or native Office rendering. Formula checks apply only when formulas exist and reuse the engine calculator, not an independent Excel implementation."
+      }
+    },
+    {
+      "run": "office-v2-direct-2026-11-09T03-31-13-253Z-e4a336",
+      "case": "greeting",
+      "repeat": 1,
+      "thinkingRequested": false,
+      "sourceTreeSha256": "b2a96d1c9a0a0122ce9caaa16015907c3b0721625457e96439f7074643603520",
+      "evidence": ".e2e-tmp/office-incident-20261109/live/office-v2-direct-2026-11-09T03-31-13-253Z-e4a336/greeting-1.json",
+      "originalRecordedPassed": true,
+      "automatedPassed": true,
+      "passed": true,
+      "stopStates": [
+        "succeeded"
+      ],
+      "pendingTools": [],
+      "elapsedMs": 2007,
+      "totalWallMs": 3412,
+      "mainResponses": 1,
+      "mainInput": 6528,
+      "mainOutput": 12,
+      "mainTotal": 6540,
+      "firstInput": 6528,
+      "lastInput": 6528,
+      "providerAttempts": 3,
+      "knownProviderInput": 7204,
+      "knownProviderOutput": 35,
+      "providerUsageComplete": true,
+      "sameRequestBodies": 0,
+      "duplicateWholeMessagesWithinRequests": 0,
+      "requestedWireEfforts": [],
+      "wireThinking": [
+        {
+          "toolCount": 0,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 0,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        }
+      ],
+      "officePolicyPresentOnAllToolRequests": false,
+      "plan": [],
+      "check": {
+        "answered": true
+      }
+    },
+    {
+      "run": "office-v2-direct-2026-11-09T03-31-13-253Z-e4a336",
+      "case": "office",
+      "repeat": 1,
+      "thinkingRequested": false,
+      "sourceTreeSha256": "b2a96d1c9a0a0122ce9caaa16015907c3b0721625457e96439f7074643603520",
+      "evidence": ".e2e-tmp/office-incident-20261109/live/office-v2-direct-2026-11-09T03-31-13-253Z-e4a336/office-1.json",
+      "originalRecordedPassed": true,
+      "automatedPassed": true,
+      "passed": true,
+      "stopStates": [
+        "succeeded"
+      ],
+      "pendingTools": [],
+      "elapsedMs": 18093,
+      "totalWallMs": 19421,
+      "mainResponses": 11,
+      "mainInput": 143611,
+      "mainOutput": 1328,
+      "mainTotal": 144939,
+      "firstInput": 6567,
+      "lastInput": 11023,
+      "providerAttempts": 13,
+      "knownProviderInput": 144486,
+      "knownProviderOutput": 1430,
+      "providerUsageComplete": true,
+      "sameRequestBodies": 0,
+      "duplicateWholeMessagesWithinRequests": 0,
+      "requestedWireEfforts": [],
+      "wireThinking": [
+        {
+          "toolCount": 0,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 2,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 0,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        }
+      ],
+      "officePolicyPresentOnAllToolRequests": false,
+      "plan": [],
+      "check": {
+        "exists": true,
+        "formula": "SUM(A1:A2)",
+        "result": 42,
+        "formulaCorrect": true,
+        "resultCorrect": true,
+        "inputsCorrect": true,
+        "skillUsed": true,
+        "officeUsed": true
+      }
+    },
+    {
+      "run": "office-v2-low-2026-11-09T03-30-57-301Z-c59942",
+      "case": "office_bundle_replay",
+      "repeat": 1,
+      "thinkingRequested": "low",
+      "sourceTreeSha256": "b2a96d1c9a0a0122ce9caaa16015907c3b0721625457e96439f7074643603520",
+      "evidence": ".e2e-tmp/office-incident-20261109/live/office-v2-low-2026-11-09T03-30-57-301Z-c59942/office_bundle_replay-1.json",
+      "originalRecordedPassed": false,
+      "automatedPassed": false,
+      "passed": false,
+      "stopStates": [
+        "waiting"
+      ],
+      "pendingTools": [
+        {
+          "kind": "permission",
+          "tool": "execute_cmd"
+        }
+      ],
+      "elapsedMs": 157179,
+      "totalWallMs": 158533,
+      "mainResponses": 19,
+      "mainInput": 531506,
+      "mainOutput": 21174,
+      "mainTotal": 552680,
+      "firstInput": 6836,
+      "lastInput": 42502,
+      "providerAttempts": 21,
+      "knownProviderInput": 532158,
+      "knownProviderOutput": 21276,
+      "providerUsageComplete": true,
+      "sameRequestBodies": 0,
+      "duplicateWholeMessagesWithinRequests": 0,
+      "requestedWireEfforts": [],
+      "wireThinking": [
+        {
+          "toolCount": 0,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 18,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 18,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 18,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 18,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 18,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 18,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 18,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 18,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 18,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 18,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 18,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 18,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 0,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        }
+      ],
+      "officePolicyPresentOnAllToolRequests": false,
+      "plan": [
+        {
+          "title": "读取项目 README 与核心模块，确认可写事实",
+          "status": "done"
+        },
+        {
+          "title": "编写共用内容草稿 draft.md",
+          "status": "in_progress"
+        },
+        {
+          "title": "生成 Word 项目说明、Excel 项目台账、PPT 汇报",
+          "status": "pending"
+        },
+        {
+          "title": "校验（Excel 重算 + 文档结构/内容抽查）并修正",
+          "status": "pending"
+        },
+        {
+          "title": "登记交付并答复",
+          "status": "pending"
+        }
+      ],
+      "check": {
+        "threeFormatsDelivered": false,
+        "draftBeforeOfficeCreation": false,
+        "draftNotDelivered": true,
+        "artifactContentsAndHashesValid": false,
+        "spreadsheetErrorCellsAbsent": false,
+        "formulasCachedWithoutErrors": "N/A: no delivered formulas; formula execution and cache correctness were not tested",
+        "finalDeliveryOnlyCloses": false,
+        "planClosed": false,
+        "noFinalDownloadLinkList": true,
+        "backgroundIdle": true,
+        "wireRequestHashCoverageComplete": true,
+        "noIdenticalWireRequestResends": true,
+        "expectedTurnsSucceeded": false,
+        "formats": [],
+        "drafts": [
+          {
+            "path": ".ae/tmp/draft.md",
+            "toolSucceeded": true,
+            "completedBeforeOfficeCreation": false,
+            "existsWithBody": true,
+            "bodyCharacters": 1444
+          }
+        ],
+        "calls": [
+          {
+            "name": "get_skill"
+          },
+          {
+            "name": "list_files",
+            "path": "."
+          },
+          {
+            "name": "list_files",
+            "path": "web-2048"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/README.md"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/index.html"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/engine.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/game.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/app.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/theme.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/renderer.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/css/style.css"
+          },
+          {
+            "name": "load_tools"
+          },
+          {
+            "name": "glob"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/app.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/sound.js"
+          },
+          {
+            "name": "create_dir",
+            "path": ".ae/tmp"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/test/engine.test.mjs"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/app.js"
+          },
+          {
+            "name": "grep",
+            "path": "web-2048/test/engine.test.mjs"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/manifest.webmanifest"
+          },
+          {
+            "name": "plan_update"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/serve.mjs"
+          },
+          {
+            "name": "write_file",
+            "path": ".ae/tmp/draft.md"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/test/smoke.mjs"
+          },
+          {
+            "name": "execute_cmd"
+          }
+        ],
+        "wireRequestHashEvidence": {
+          "observedAttempts": 21,
+          "capturedBodyHashes": 21,
+          "repeatedBodyCount": 0,
+          "boundary": "Only identical serialized request bodies at the local fetch boundary are detected. Distinct bodies may contain duplicated history; gateway-internal retries are not observed."
+        },
+        "limitation": "Content floors validate visible text and basic structure, not factual accuracy or native Office rendering. Formula checks apply only when formulas exist and reuse the engine calculator, not an independent Excel implementation."
+      }
+    },
+    {
+      "run": "office-v3-direct-2026-11-09T03-38-54-198Z-a7cc8a",
+      "case": "office_bundle_replay",
+      "repeat": 1,
+      "thinkingRequested": false,
+      "sourceTreeSha256": "a2cce66116fe1f9b60e9ba84762355dcce1647bf02b1985bf387a8dc5197408b",
+      "evidence": ".e2e-tmp/office-incident-20261109/live/office-v3-direct-2026-11-09T03-38-54-198Z-a7cc8a/office_bundle_replay-1.json",
+      "originalRecordedPassed": true,
+      "automatedPassed": true,
+      "passed": true,
+      "stopStates": [
+        "succeeded"
+      ],
+      "pendingTools": [],
+      "elapsedMs": 76482,
+      "totalWallMs": 80482,
+      "mainResponses": 27,
+      "mainInput": 691051,
+      "mainOutput": 8734,
+      "mainTotal": 699785,
+      "firstInput": 6888,
+      "lastInput": 37866,
+      "providerAttempts": 29,
+      "knownProviderInput": 692050,
+      "knownProviderOutput": 9346,
+      "providerUsageComplete": true,
+      "sameRequestBodies": 0,
+      "duplicateWholeMessagesWithinRequests": 0,
+      "requestedWireEfforts": [],
+      "wireThinking": [
+        {
+          "toolCount": 0,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 2,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 0,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 0,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        }
+      ],
+      "officePolicyPresentOnAllToolRequests": true,
+      "plan": [
+        {
+          "title": "读取 2048 项目说明与关键模块，收敛内容",
+          "status": "done"
+        },
+        {
+          "title": "编写 draft.md（用途、结构、事实、待补）",
+          "status": "done"
+        },
+        {
+          "title": "生成 Word 项目文档、Excel 台账、PPT 汇报",
+          "status": "done"
+        },
+        {
+          "title": "校验（Excel 重算、正文/表格核对）并登记交付",
+          "status": "done"
+        }
+      ],
+      "check": {
+        "threeFormatsDelivered": true,
+        "draftBeforeOfficeCreation": true,
+        "draftNotDelivered": true,
+        "artifactContentsAndHashesValid": true,
+        "spreadsheetErrorCellsAbsent": true,
+        "formulasCachedWithoutErrors": "N/A: no delivered formulas; formula execution and cache correctness were not tested",
+        "finalDeliveryOnlyCloses": true,
+        "planClosed": true,
+        "noFinalDownloadLinkList": true,
+        "backgroundIdle": true,
+        "wireRequestHashCoverageComplete": true,
+        "noIdenticalWireRequestResends": true,
+        "expectedTurnsSucceeded": true,
+        "formats": [
+          {
+            "extension": ".docx",
+            "name": "2048项目说明文档.docx",
+            "bytes": 15161,
+            "references2048": true,
+            "projectIdentityVerified": true,
+            "projectModuleMatches": 5,
+            "sourceMatchesPublishedHash": true,
+            "valid": true,
+            "meaningfulStructure": true,
+            "topicCount": 7,
+            "structure": {
+              "paragraphs": 55
+            },
+            "formulaCount": 0,
+            "cachedFormulaCount": 0,
+            "errorCells": 0,
+            "formulaValidation": {
+              "status": "not_applicable",
+              "reason": "Not a spreadsheet"
+            },
+            "textCharacters": 2832,
+            "meaningfulCharacters": 2171
+          },
+          {
+            "extension": ".xlsx",
+            "name": "2048项目台账.xlsx",
+            "bytes": 14771,
+            "references2048": true,
+            "projectIdentityVerified": true,
+            "projectModuleMatches": 5,
+            "sourceMatchesPublishedHash": true,
+            "valid": true,
+            "meaningfulStructure": true,
+            "topicCount": 7,
+            "structure": {
+              "sheets": 5,
+              "tabularRows": 37,
+              "nonemptyCells": 190
+            },
+            "formulaCount": 0,
+            "cachedFormulaCount": 0,
+            "errorCells": 0,
+            "formulaValidation": {
+              "status": "not_applicable",
+              "reason": "Workbook contains no formulas; formula behavior was not tested"
+            },
+            "textCharacters": 1694,
+            "meaningfulCharacters": 1329
+          },
+          {
+            "extension": ".pptx",
+            "name": "2048项目汇报.pptx",
+            "bytes": 170014,
+            "references2048": true,
+            "projectIdentityVerified": true,
+            "projectModuleMatches": 4,
+            "sourceMatchesPublishedHash": true,
+            "valid": true,
+            "meaningfulStructure": true,
+            "topicCount": 7,
+            "structure": {
+              "slides": 8,
+              "substantiveSlides": 8
+            },
+            "formulaCount": 0,
+            "cachedFormulaCount": 0,
+            "errorCells": 0,
+            "formulaValidation": {
+              "status": "not_applicable",
+              "reason": "Not a spreadsheet"
+            },
+            "textCharacters": 979,
+            "meaningfulCharacters": 730
+          }
+        ],
+        "drafts": [
+          {
+            "path": ".ae/tmp/draft.md",
+            "toolSucceeded": true,
+            "completedBeforeOfficeCreation": true,
+            "existsWithBody": true,
+            "bodyCharacters": 1341
+          }
+        ],
+        "calls": [
+          {
+            "name": "list_files"
+          },
+          {
+            "name": "list_skills"
+          },
+          {
+            "name": "get_skill"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/README.md"
+          },
+          {
+            "name": "get_skill"
+          },
+          {
+            "name": "get_skill"
+          },
+          {
+            "name": "get_skill"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/engine.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/engine.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/game.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/app.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/theme.js"
+          },
+          {
+            "name": "plan_update"
+          },
+          {
+            "name": "write_file",
+            "path": ".ae/tmp/draft.md"
+          },
+          {
+            "name": "load_tools"
+          },
+          {
+            "name": "office_document",
+            "operation": "create",
+            "path": "2048-交付/2048项目说明文档.docx"
+          },
+          {
+            "name": "office_document",
+            "operation": "create",
+            "path": "2048-交付/2048项目台账.xlsx"
+          },
+          {
+            "name": "office_document",
+            "operation": "append_sheets",
+            "path": "2048-交付/2048项目台账.xlsx"
+          },
+          {
+            "name": "office_document",
+            "operation": "append_sheets",
+            "path": "2048-交付/2048项目台账.xlsx"
+          },
+          {
+            "name": "office_document",
+            "operation": "append_sheets",
+            "path": "2048-交付/2048项目台账.xlsx"
+          },
+          {
+            "name": "office_document",
+            "operation": "create",
+            "path": "2048-交付/2048项目汇报.pptx"
+          },
+          {
+            "name": "office_document",
+            "operation": "recalculate",
+            "path": "2048-交付/2048项目台账.xlsx"
+          },
+          {
+            "name": "office_inspect",
+            "path": "2048-交付/2048项目台账.xlsx"
+          },
+          {
+            "name": "office_inspect",
+            "path": "2048-交付/2048项目说明文档.docx"
+          },
+          {
+            "name": "office_inspect",
+            "path": "2048-交付/2048项目汇报.pptx"
+          },
+          {
+            "name": "deliver_files"
+          },
+          {
+            "name": "plan_update"
+          }
+        ],
+        "wireRequestHashEvidence": {
+          "observedAttempts": 29,
+          "capturedBodyHashes": 29,
+          "repeatedBodyCount": 0,
+          "boundary": "Only identical serialized request bodies at the local fetch boundary are detected. Distinct bodies may contain duplicated history; gateway-internal retries are not observed."
+        },
+        "limitation": "Content floors validate visible text and basic structure, not factual accuracy or native Office rendering. Formula checks apply only when formulas exist and reuse the engine calculator, not an independent Excel implementation."
+      }
+    },
+    {
+      "run": "office-v3-low-2026-11-09T03-38-36-980Z-6b0e46",
+      "case": "office_bundle_replay",
+      "repeat": 1,
+      "thinkingRequested": "low",
+      "sourceTreeSha256": "a2cce66116fe1f9b60e9ba84762355dcce1647bf02b1985bf387a8dc5197408b",
+      "evidence": ".e2e-tmp/office-incident-20261109/live/office-v3-low-2026-11-09T03-38-36-980Z-6b0e46/office_bundle_replay-1.json",
+      "originalRecordedPassed": true,
+      "automatedPassed": true,
+      "manualReview": {
+        "run": "office-v3-low-2026-11-09T03-38-36-980Z-6b0e46",
+        "case": "office_bundle_replay",
+        "passed": false,
+        "finding": "Word 渲染与动画时序及 PPT 第7页称合并回弹45ms，误把 renderer.js 中未使用的 POP_MS 常量当作实际行为；CSS bumpTile 动画为0.16s。",
+        "checked": [
+          "未声称本轮执行测试，18/47数量注明来自README",
+          "5个Excel公式与条目口径一致",
+          "项目、操作、主题及30步悔棋一致"
+        ],
+        "boundary": "只读事实核对；没有进行原生Office视觉渲染。"
+      },
+      "passed": false,
+      "stopStates": [
+        "succeeded"
+      ],
+      "pendingTools": [],
+      "elapsedMs": 144353,
+      "totalWallMs": 147521,
+      "mainResponses": 28,
+      "mainInput": 1086986,
+      "mainOutput": 20707,
+      "mainTotal": 1107693,
+      "firstInput": 6916,
+      "lastInput": 58535,
+      "providerAttempts": 30,
+      "knownProviderInput": 1088047,
+      "knownProviderOutput": 21170,
+      "providerUsageComplete": true,
+      "sameRequestBodies": 0,
+      "duplicateWholeMessagesWithinRequests": 0,
+      "requestedWireEfforts": [],
+      "wireThinking": [
+        {
+          "toolCount": 0,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 2,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 0,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 0,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        }
+      ],
+      "officePolicyPresentOnAllToolRequests": true,
+      "plan": [
+        {
+          "title": "读取 2048 项目 README 与关键源码，收敛文档事实",
+          "status": "done"
+        },
+        {
+          "title": "编写共用 draft.md（Word/Excel/PPT 内容结构）",
+          "status": "done"
+        },
+        {
+          "title": "生成 Word 项目说明、Excel 项目台账、PPT 项目汇报",
+          "status": "done"
+        },
+        {
+          "title": "重算 Excel 公式并核对三份成品内容",
+          "status": "done"
+        },
+        {
+          "title": "登记并交付三份文件",
+          "status": "done"
+        }
+      ],
+      "check": {
+        "threeFormatsDelivered": true,
+        "draftBeforeOfficeCreation": true,
+        "draftNotDelivered": true,
+        "artifactContentsAndHashesValid": true,
+        "spreadsheetErrorCellsAbsent": true,
+        "formulasCachedWithoutErrors": true,
+        "finalDeliveryOnlyCloses": true,
+        "planClosed": true,
+        "noFinalDownloadLinkList": true,
+        "backgroundIdle": true,
+        "wireRequestHashCoverageComplete": true,
+        "noIdenticalWireRequestResends": true,
+        "expectedTurnsSucceeded": true,
+        "formats": [
+          {
+            "extension": ".docx",
+            "name": "2048项目说明.docx",
+            "bytes": 16903,
+            "references2048": true,
+            "projectIdentityVerified": true,
+            "projectModuleMatches": 5,
+            "sourceMatchesPublishedHash": true,
+            "valid": true,
+            "meaningfulStructure": true,
+            "topicCount": 7,
+            "structure": {
+              "paragraphs": 58
+            },
+            "formulaCount": 0,
+            "cachedFormulaCount": 0,
+            "errorCells": 0,
+            "formulaValidation": {
+              "status": "not_applicable",
+              "reason": "Not a spreadsheet"
+            },
+            "textCharacters": 4012,
+            "meaningfulCharacters": 3152
+          },
+          {
+            "extension": ".xlsx",
+            "name": "2048项目台账.xlsx",
+            "bytes": 17504,
+            "references2048": true,
+            "projectIdentityVerified": true,
+            "projectModuleMatches": 5,
+            "sourceMatchesPublishedHash": true,
+            "valid": true,
+            "meaningfulStructure": true,
+            "topicCount": 7,
+            "structure": {
+              "sheets": 6,
+              "tabularRows": 60,
+              "nonemptyCells": 223
+            },
+            "formulaCount": 5,
+            "cachedFormulaCount": 5,
+            "errorCells": 0,
+            "formulaValidation": {
+              "status": "passed",
+              "recalculateSucceeded": true,
+              "cacheMismatches": [],
+              "method": "Compare saved caches with an in-memory rerun of the engine formula calculator"
+            },
+            "textCharacters": 2768,
+            "meaningfulCharacters": 2171
+          },
+          {
+            "extension": ".pptx",
+            "name": "2048项目汇报.pptx",
+            "bytes": 209055,
+            "references2048": true,
+            "projectIdentityVerified": true,
+            "projectModuleMatches": 4,
+            "sourceMatchesPublishedHash": true,
+            "valid": true,
+            "meaningfulStructure": true,
+            "topicCount": 7,
+            "structure": {
+              "slides": 10,
+              "substantiveSlides": 10
+            },
+            "formulaCount": 0,
+            "cachedFormulaCount": 0,
+            "errorCells": 0,
+            "formulaValidation": {
+              "status": "not_applicable",
+              "reason": "Not a spreadsheet"
+            },
+            "textCharacters": 1670,
+            "meaningfulCharacters": 1289
+          }
+        ],
+        "drafts": [
+          {
+            "path": ".ae/tmp/2048-draft.md",
+            "toolSucceeded": true,
+            "completedBeforeOfficeCreation": true,
+            "existsWithBody": true,
+            "bodyCharacters": 2199
+          }
+        ],
+        "calls": [
+          {
+            "name": "list_files",
+            "path": "."
+          },
+          {
+            "name": "get_skill"
+          },
+          {
+            "name": "list_files",
+            "path": "web-2048"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/README.md"
+          },
+          {
+            "name": "get_skill"
+          },
+          {
+            "name": "get_skill"
+          },
+          {
+            "name": "get_skill"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/engine.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/game.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/index.html"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/renderer.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/app.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/theme.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/app.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/app.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/js/sound.js"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/test/engine.test.mjs"
+          },
+          {
+            "name": "grep",
+            "path": "web-2048/css/style.css"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/css/style.css"
+          },
+          {
+            "name": "load_tools"
+          },
+          {
+            "name": "plan_update"
+          },
+          {
+            "name": "write_file",
+            "path": ".ae/tmp/2048-draft.md"
+          },
+          {
+            "name": "office_document",
+            "operation": "create",
+            "path": "2048项目说明.docx"
+          },
+          {
+            "name": "office_document",
+            "operation": "create",
+            "path": "2048项目台账.xlsx"
+          },
+          {
+            "name": "office_document",
+            "operation": "create",
+            "path": "2048项目汇报.pptx"
+          },
+          {
+            "name": "office_document",
+            "operation": "append_sheets",
+            "path": "2048项目台账.xlsx"
+          },
+          {
+            "name": "office_document",
+            "operation": "recalculate",
+            "path": "2048项目台账.xlsx"
+          },
+          {
+            "name": "office_inspect",
+            "path": "2048项目台账.xlsx"
+          },
+          {
+            "name": "office_inspect",
+            "path": "2048项目说明.docx"
+          },
+          {
+            "name": "office_inspect",
+            "path": "2048项目汇报.pptx"
+          },
+          {
+            "name": "office_inspect",
+            "path": "2048项目汇报.pptx"
+          },
+          {
+            "name": "plan_update"
+          },
+          {
+            "name": "deliver_files"
+          },
+          {
+            "name": "plan_update"
+          }
+        ],
+        "wireRequestHashEvidence": {
+          "observedAttempts": 30,
+          "capturedBodyHashes": 30,
+          "repeatedBodyCount": 0,
+          "boundary": "Only identical serialized request bodies at the local fetch boundary are detected. Distinct bodies may contain duplicated history; gateway-internal retries are not observed."
+        },
+        "limitation": "Content floors validate visible text and basic structure, not factual accuracy or native Office rendering. Formula checks apply only when formulas exist and reuse the engine calculator, not an independent Excel implementation."
+      }
+    },
+    {
+      "run": "office-v3-low-2026-11-09T03-38-36-980Z-6b0e46",
+      "case": "greeting",
+      "repeat": 1,
+      "thinkingRequested": "low",
+      "sourceTreeSha256": "a2cce66116fe1f9b60e9ba84762355dcce1647bf02b1985bf387a8dc5197408b",
+      "evidence": ".e2e-tmp/office-incident-20261109/live/office-v3-low-2026-11-09T03-38-36-980Z-6b0e46/greeting-1.json",
+      "originalRecordedPassed": true,
+      "automatedPassed": true,
+      "passed": true,
+      "stopStates": [
+        "succeeded"
+      ],
+      "pendingTools": [],
+      "elapsedMs": 2073,
+      "totalWallMs": 3347,
+      "mainResponses": 1,
+      "mainInput": 6643,
+      "mainOutput": 13,
+      "mainTotal": 6656,
+      "firstInput": 6643,
+      "lastInput": 6643,
+      "providerAttempts": 3,
+      "knownProviderInput": 7319,
+      "knownProviderOutput": 59,
+      "providerUsageComplete": true,
+      "sameRequestBodies": 0,
+      "duplicateWholeMessagesWithinRequests": 0,
+      "requestedWireEfforts": [],
+      "wireThinking": [
+        {
+          "toolCount": 0,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "enableThinking": true,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 0,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        }
+      ],
+      "officePolicyPresentOnAllToolRequests": true,
+      "plan": [],
+      "check": {
+        "answered": true
+      }
+    },
+    {
+      "run": "office-v4-low-2026-11-09T03-52-51-521Z-a6432b",
+      "case": "office_bundle_replay",
+      "repeat": 1,
+      "thinkingRequested": "low",
+      "sourceTreeSha256": "20b949dc2fe36c5243c98e07fef85a72a71ab338499344e36c07d1aa27c77ed3",
+      "evidence": ".e2e-tmp/office-incident-20261109/live/office-v4-low-2026-11-09T03-52-51-521Z-a6432b/office_bundle_replay-1.json",
+      "originalRecordedPassed": false,
+      "automatedPassed": true,
+      "manualReview": {
+        "run": "office-v4-low-2026-11-09T03-52-51-521Z-a6432b",
+        "case": "office_bundle_replay",
+        "passed": true,
+        "finding": "Excel以文件名标识2048，正文14个模块、操作快捷键、悔棋与主题与README及同套文档吻合。原断言要求所有成品正文出现2048过严；修正为明确文件名加具体模块/操作证据。",
+        "checked": [
+          "65=SUM(C2:C3)=18+47，是README用例总数而非实测通过数",
+          "Word、PPT备注和最终答复注明测试数量来源及本次未重跑，工具无execute_cmd",
+          "三件套没有45ms错误表述，内容与README一致"
+        ],
+        "remaining": "Excel单独打开时缺少来源/本次未重跑注释，可改善溯源；没有虚称实测或通过。",
+        "boundary": "只读事实核对；没有进行原生Office视觉渲染。"
+      },
+      "passed": true,
+      "stopStates": [
+        "succeeded"
+      ],
+      "pendingTools": [],
+      "elapsedMs": 71811,
+      "totalWallMs": 75380,
+      "mainResponses": 15,
+      "mainInput": 303259,
+      "mainOutput": 10592,
+      "mainTotal": 313851,
+      "firstInput": 6979,
+      "lastInput": 26148,
+      "providerAttempts": 17,
+      "knownProviderInput": 304167,
+      "knownProviderOutput": 10990,
+      "providerUsageComplete": true,
+      "sameRequestBodies": 0,
+      "duplicateWholeMessagesWithinRequests": 0,
+      "requestedWireEfforts": [
+        "low"
+      ],
+      "wireThinking": [
+        {
+          "toolCount": 0,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 18,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 18,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 18,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 18,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 18,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 18,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 18,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 18,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 18,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 2,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 0,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        }
+      ],
+      "officePolicyPresentOnAllToolRequests": true,
+      "plan": [],
+      "check": {
+        "threeFormatsDelivered": true,
+        "draftBeforeOfficeCreation": true,
+        "draftNotDelivered": true,
+        "artifactContentsAndHashesValid": true,
+        "spreadsheetErrorCellsAbsent": true,
+        "formulasCachedWithoutErrors": true,
+        "finalDeliveryOnlyCloses": true,
+        "planClosed": true,
+        "noFinalDownloadLinkList": true,
+        "backgroundIdle": true,
+        "wireRequestHashCoverageComplete": true,
+        "noIdenticalWireRequestResends": true,
+        "expectedTurnsSucceeded": true,
+        "formats": [
+          {
+            "extension": ".docx",
+            "name": "2048 项目说明.docx",
+            "bytes": 13905,
+            "references2048": true,
+            "projectIdentityVerified": true,
+            "projectModuleMatches": 5,
+            "sourceMatchesPublishedHash": true,
+            "valid": true,
+            "meaningfulStructure": true,
+            "topicCount": 7,
+            "structure": {
+              "paragraphs": 47
+            },
+            "formulaCount": 0,
+            "cachedFormulaCount": 0,
+            "errorCells": 0,
+            "formulaValidation": {
+              "status": "not_applicable",
+              "reason": "Not a spreadsheet"
+            },
+            "textCharacters": 2240,
+            "meaningfulCharacters": 1674
+          },
+          {
+            "extension": ".pptx",
+            "name": "2048 项目汇报.pptx",
+            "bytes": 185791,
+            "references2048": true,
+            "projectIdentityVerified": true,
+            "projectModuleMatches": 5,
+            "sourceMatchesPublishedHash": true,
+            "valid": true,
+            "meaningfulStructure": true,
+            "topicCount": 7,
+            "structure": {
+              "slides": 8,
+              "substantiveSlides": 8
+            },
+            "formulaCount": 0,
+            "cachedFormulaCount": 0,
+            "errorCells": 0,
+            "formulaValidation": {
+              "status": "not_applicable",
+              "reason": "Not a spreadsheet"
+            },
+            "textCharacters": 1281,
+            "meaningfulCharacters": 993
+          },
+          {
+            "extension": ".xlsx",
+            "name": "2048 项目清单.xlsx",
+            "bytes": 11945,
+            "references2048": false,
+            "projectIdentityVerified": true,
+            "projectModuleMatches": 5,
+            "sourceMatchesPublishedHash": true,
+            "valid": true,
+            "meaningfulStructure": true,
+            "topicCount": 7,
+            "structure": {
+              "sheets": 3,
+              "tabularRows": 26,
+              "nonemptyCells": 108
+            },
+            "formulaCount": 1,
+            "cachedFormulaCount": 1,
+            "errorCells": 0,
+            "formulaValidation": {
+              "status": "passed",
+              "recalculateSucceeded": true,
+              "cacheMismatches": [],
+              "method": "Compare saved caches with an in-memory rerun of the engine formula calculator"
+            },
+            "textCharacters": 1059,
+            "meaningfulCharacters": 822
+          }
+        ],
+        "drafts": [
+          {
+            "path": ".ae/tmp/2048-docs/draft.md",
+            "toolSucceeded": true,
+            "completedBeforeOfficeCreation": true,
+            "existsWithBody": true,
+            "bodyCharacters": 1564
+          }
+        ],
+        "calls": [
+          {
+            "name": "get_skill"
+          },
+          {
+            "name": "list_files"
+          },
+          {
+            "name": "read_file",
+            "path": "web-2048/README.md"
+          },
+          {
+            "name": "get_skill"
+          },
+          {
+            "name": "get_skill"
+          },
+          {
+            "name": "get_skill"
+          },
+          {
+            "name": "load_tools"
+          },
+          {
+            "name": "write_file",
+            "path": ".ae/tmp/2048-docs/draft.md"
+          },
+          {
+            "name": "office_document",
+            "operation": "create",
+            "path": "交付/2048 项目说明.docx"
+          },
+          {
+            "name": "office_document",
+            "operation": "create",
+            "path": "交付/2048 项目清单.xlsx"
+          },
+          {
+            "name": "office_document",
+            "operation": "edit",
+            "path": "交付/2048 项目清单.xlsx"
+          },
+          {
+            "name": "office_document",
+            "operation": "recalculate",
+            "path": "交付/2048 项目清单.xlsx"
+          },
+          {
+            "name": "office_inspect",
+            "path": "交付/2048 项目清单.xlsx"
+          },
+          {
+            "name": "office_document",
+            "operation": "create",
+            "path": "交付/2048 项目汇报.pptx"
+          },
+          {
+            "name": "office_inspect",
+            "path": "交付/2048 项目说明.docx"
+          },
+          {
+            "name": "office_inspect",
+            "path": "交付/2048 项目汇报.pptx"
+          },
+          {
+            "name": "deliver_files"
+          }
+        ],
+        "wireRequestHashEvidence": {
+          "observedAttempts": 17,
+          "capturedBodyHashes": 17,
+          "repeatedBodyCount": 0,
+          "boundary": "Only identical serialized request bodies at the local fetch boundary are detected. Distinct bodies may contain duplicated history; gateway-internal retries are not observed."
+        },
+        "limitation": "Content floors validate visible text and basic structure, not factual accuracy or native Office rendering. Formula checks apply only when formulas exist and reuse the engine calculator, not an independent Excel implementation."
+      }
+    },
+    {
+      "run": "office-v4-low-2026-11-09T03-52-51-521Z-a6432b",
+      "case": "office",
+      "repeat": 1,
+      "thinkingRequested": "low",
+      "sourceTreeSha256": "20b949dc2fe36c5243c98e07fef85a72a71ab338499344e36c07d1aa27c77ed3",
+      "evidence": ".e2e-tmp/office-incident-20261109/live/office-v4-low-2026-11-09T03-52-51-521Z-a6432b/office-1.json",
+      "originalRecordedPassed": true,
+      "automatedPassed": true,
+      "passed": true,
+      "stopStates": [
+        "succeeded"
+      ],
+      "pendingTools": [],
+      "elapsedMs": 19070,
+      "totalWallMs": 20154,
+      "mainResponses": 9,
+      "mainInput": 110616,
+      "mainOutput": 1598,
+      "mainTotal": 112214,
+      "firstInput": 6733,
+      "lastInput": 10324,
+      "providerAttempts": 11,
+      "knownProviderInput": 111456,
+      "knownProviderOutput": 1660,
+      "providerUsageComplete": true,
+      "sameRequestBodies": 0,
+      "duplicateWholeMessagesWithinRequests": 0,
+      "requestedWireEfforts": [
+        "low"
+      ],
+      "wireThinking": [
+        {
+          "toolCount": 0,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 17,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 2,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 0,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        }
+      ],
+      "officePolicyPresentOnAllToolRequests": true,
+      "plan": [],
+      "check": {
+        "exists": true,
+        "formula": "SUM(A1:A2)",
+        "result": 42,
+        "formulaCorrect": true,
+        "resultCorrect": true,
+        "inputsCorrect": true,
+        "skillUsed": true,
+        "officeUsed": true
+      }
+    },
+    {
+      "run": "office-v4-low-probe-2026-11-09T03-52-09-545Z-370df2",
+      "case": "greeting",
+      "repeat": 1,
+      "thinkingRequested": "low",
+      "sourceTreeSha256": "20b949dc2fe36c5243c98e07fef85a72a71ab338499344e36c07d1aa27c77ed3",
+      "evidence": ".e2e-tmp/office-incident-20261109/live/office-v4-low-probe-2026-11-09T03-52-09-545Z-370df2/greeting-1.json",
+      "originalRecordedPassed": true,
+      "automatedPassed": true,
+      "passed": true,
+      "stopStates": [
+        "succeeded"
+      ],
+      "pendingTools": [],
+      "elapsedMs": 2054,
+      "totalWallMs": 3301,
+      "mainResponses": 1,
+      "mainInput": 6718,
+      "mainOutput": 14,
+      "mainTotal": 6732,
+      "firstInput": 6718,
+      "lastInput": 6718,
+      "providerAttempts": 3,
+      "knownProviderInput": 7395,
+      "knownProviderOutput": 50,
+      "providerUsageComplete": true,
+      "sameRequestBodies": 0,
+      "duplicateWholeMessagesWithinRequests": 0,
+      "requestedWireEfforts": [
+        "low"
+      ],
+      "wireThinking": [
+        {
+          "toolCount": 0,
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 14,
+          "reasoningEffort": "low",
+          "httpStatus": 200
+        },
+        {
+          "toolCount": 0,
+          "thinking": {
+            "type": "disabled"
+          },
+          "httpStatus": 200
+        }
+      ],
+      "officePolicyPresentOnAllToolRequests": true,
+      "plan": [],
+      "check": {
+        "answered": true
+      }
+    }
+  ],
+  "campaign": {
+    "cases": 14,
+    "providerAttempts": 165,
+    "knownProviderInput": 3441341,
+    "knownProviderOutput": 72588,
+    "usageComplete": true
+  },
+  "boundaries": [
+    "Source-tree snapshots differ by candidate; failed candidates remain reported.",
+    "Original full history is not cloned. Replay seeds only the immediately preceding real user/assistant text, copies project inputs and issues the original topic supplement through the Work route.",
+    "Request hashes inspect the local fetch boundary, not retries inside the provider gateway. Whole-message hashes cannot detect all semantic duplication.",
+    "Artifact checks cover content, structure, formula caches and lifecycle. No native Office rendering was performed."
+  ]
+}

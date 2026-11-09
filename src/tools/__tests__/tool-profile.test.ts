@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { AgentContext, Tool } from '../../core/agent-context/types.js'
+import type { AgentContext, IToolRegistry, Tool } from '../../core/agent-context/types.js'
 import { ToolNotFoundError } from '../../core/agent-context/types.js'
 import { createToolRegistry } from '../registry-factory.js'
 import { CODE_BUILTIN_TOOLS, normalizeAllowedTools, normalizeToolName } from '../tool-profile.js'
@@ -45,6 +45,30 @@ beforeEach(() => {
 afterEach(() => { clearSecurityMode(context.tenantId, context.sessionId); vi.restoreAllMocks(); vi.unstubAllEnvs() })
 
 describe('executable tool profiles', () => {
+  it('pairs only the actual native Office tool with its bundled guide under strict empty external bindings', async () => {
+    vi.mocked(skillsRegistry.getSkills).mockReturnValue([
+      { name: 'aether-office', description: 'UNSELECTED_EXTERNAL_OVERRIDE', skillMdPath: '', inlineContent: 'UNSELECTED_EXTERNAL_OVERRIDE', order: 0, enabled: true },
+      { name: 'private-external', description: 'UNSELECTED_EXTERNAL', skillMdPath: '', inlineContent: 'UNSELECTED_EXTERNAL', order: 1, enabled: true },
+    ])
+    const office = await createToolRegistry({ toolProfile: 'general', allowedTools: ['office_document', 'get_skill'],
+      allowedSkills: [], strictSkillBindings: true, allowedMcpServers: [] })
+    expect(office.externalSkills).toHaveLength(1)
+    expect(office.externalSkills[0]).toMatchObject({ name: 'aether-office', builtin: true })
+    const guide = await office.registry.execute('get_skill', { name: 'aether-office' }, context)
+    expect(guide.success).toBe(true)
+    expect(guide.output).toContain('已有共享草稿直接复用')
+    expect(guide.output).not.toContain('UNSELECTED_EXTERNAL')
+    const withoutOffice = await createToolRegistry({ toolProfile: 'general', allowedTools: ['get_skill'],
+      allowedSkills: [], strictSkillBindings: true, allowedMcpServers: [] })
+    expect(withoutOffice.externalSkills).toEqual([])
+    expect((withoutOffice.registry as IToolRegistry).skillsForPrompt?.()).toEqual([])
+    withoutOffice.registry.register(tool('office_document', 'mcp'))
+    expect((withoutOffice.registry as IToolRegistry).skillsForPrompt?.()).toEqual([])
+    office.registry.unregister('office_document')
+    office.registry.register(tool('office_document', 'mcp'))
+    expect((office.registry as IToolRegistry).skillsForPrompt?.()).toEqual([])
+  })
+
   it('does not advertise the bundled office workflow when its required API is excluded', async () => {
     vi.mocked(skillsRegistry.getSkills).mockReturnValue([{ name: 'aether-office', description: 'office', builtin: true, skillMdPath: '', order: 0, enabled: true },
       { name: 'external-office', description: 'independent workflow', skillMdPath: '', order: 1, enabled: true }])
@@ -61,14 +85,14 @@ describe('executable tool profiles', () => {
     expect(code.registry.executionMode('workbench_context', {})).toBe('readonly')
     expect(code.registry.executionMode('workbench_open', {})).toBe('serial')
     const selected = await createToolRegistry({ toolProfile: 'code', allowedTools: ['workbench_context'] })
-    expect(selected.registry.list().map(item => item.name).sort()).toEqual(['plan_update', 'workbench_context'])
+    expect(selected.registry.list().map(item => item.name).sort()).toEqual(['load_tools', 'plan_update', 'workbench_context'])
     expect(createSubagentToolRegistry(code.registry, true).has('workbench_context')).toBe(true)
   })
 
   it.each(['off', 'balanced', 'methodology', 'max'])('keeps code capabilities independent of OSM %s', async mode => {
     vi.stubEnv('OSM_MODE', mode)
     const result = await createToolRegistry({ toolProfile: 'code' })
-    expect(result.registry.list().map(item => item.name).sort()).toEqual([...CODE_BUILTIN_TOOLS].filter(isDefaultTool).sort())
+    expect(result.registry.list().map(item => item.name).sort()).toEqual([...CODE_BUILTIN_TOOLS, 'load_tools'].filter(isDefaultTool).sort())
     for (const name of excluded) {
       expect(result.registry.has(name), name).toBe(false)
       await expect(result.registry.execute(name, {}, context)).rejects.toBeInstanceOf(ToolNotFoundError)
@@ -94,7 +118,9 @@ describe('executable tool profiles', () => {
     const implicit = await createToolRegistry()
     const explicit = await createToolRegistry({ toolProfile: 'general' })
     expect(implicit.registry.list()).toEqual(explicit.registry.list())
-    expect(implicit.registry.list().map(item => item.name)).toEqual(expect.arrayContaining(excluded.filter(name => name !== 'search_memory' && isDefaultTool(name))))
+    const memory = new Set(['remember', 'recall', 'search_memory', 'list_memories', 'forget', 'link_memories'])
+    expect(implicit.registry.list().map(item => item.name)).toEqual(expect.arrayContaining(excluded.filter(name => !memory.has(name) && isDefaultTool(name))))
+    for (const name of memory) expect(implicit.registry.has(name), name).toBe(false)
     for (const name of Object.keys(OPTIONAL_TOOL_EXPOSURES)) {
       expect(implicit.registry.has(name), name).toBe(false)
       await expect(implicit.registry.execute(name, {}, context)).rejects.toBeInstanceOf(ToolNotFoundError)
@@ -144,7 +170,7 @@ describe('executable tool profiles', () => {
     expect(observation).toMatchObject({ success: true, metadata: { readonly: true, fileMutationApplied: false } })
     expect(JSON.parse(observation.output)).toMatchObject({ runtime: 'restricted-files', status: 'unavailable' })
     const selected = await createToolRegistry({ allowedTools: ['office_environment'], allowedMcpServers: [] })
-    expect(selected.registry.list().map(candidate => candidate.name).sort()).toEqual(['office_environment', 'plan_update'])
+    expect(selected.registry.list().map(candidate => candidate.name).sort()).toEqual(['load_tools', 'office_environment', 'plan_update'])
     const narrowed = await createToolRegistry({ allowedTools: ['read_file'], allowedMcpServers: [] })
     expect(narrowed.registry.has('office_environment')).toBe(false)
     expect(createSubagentToolRegistry(narrowed.registry, true).has('office_environment')).toBe(false)
@@ -155,7 +181,7 @@ describe('executable tool profiles', () => {
 
   it.each(['general', 'code'] as const)('%s trusts only the builtin office inspector and never expands explicit tool selections', async toolProfile => {
     const selected = await createToolRegistry({ toolProfile, allowedTools: ['office_inspect'], allowedMcpServers: [] })
-    expect(selected.registry.list().map(candidate => candidate.name).sort()).toEqual(['office_inspect', 'plan_update'])
+    expect(selected.registry.list().map(candidate => candidate.name).sort()).toEqual(['load_tools', 'office_inspect', 'plan_update'])
     expect(selected.registry.executionMode('office_inspect', {})).toBe('readonly')
     expect(createSubagentToolRegistry(selected.registry, true).has('office_inspect')).toBe(true)
     for (const allowedTools of [[], ['read_file'], ['office_document']]) {
@@ -232,7 +258,7 @@ describe('executable tool profiles', () => {
   it.each(['general', 'code'] as const)('%s provides only owned lifecycle controls for verified user delegations with no business tools', async toolProfile => {
     const result = await createToolRegistry({ toolProfile, allowedTools: [], allowedMcpServers: [], ownedCollaboration: true })
     expect(result.registry.list().map(candidate => candidate.name).sort()).toEqual([
-      'plan_update', 'subagent_wait', 'subagent_cancel', 'subagent_send', 'subagent_participants', 'subagent_inbox',
+      'load_tools', 'plan_update', 'subagent_wait', 'subagent_cancel', 'subagent_send', 'subagent_participants', 'subagent_inbox',
       'subagent_directory', 'subagent_followup', 'subagent_request_input',
     ].sort())
     for (const name of ['subagent', 'subagent_start', 'write_file', 'execute_cmd', 'http_request']) expect(result.registry.has(name)).toBe(false)
@@ -367,9 +393,9 @@ describe('lean execution defaults and selectable compatibility catalogue', () =>
 
   it('preserves explicitly selected legacy tools while enforcing profile and exact allowlists', async () => {
     const selected = await createToolRegistry({ allowedTools: ['agent_list'], allowedMcpServers: [] })
-    expect(selected.registry.list().map(item => item.name).sort()).toEqual(['agent_list', 'plan_update'])
+    expect(selected.registry.list().map(item => item.name).sort()).toEqual(['agent_list', 'load_tools', 'plan_update'])
     const code = await createToolRegistry({ toolProfile: 'code', allowedTools: ['todo_list', 'agent_list'], allowedMcpServers: [] })
-    expect(code.registry.list().map(item => item.name).sort()).toEqual(['plan_update', 'todo_list'])
+    expect(code.registry.list().map(item => item.name).sort()).toEqual(['load_tools', 'plan_update', 'todo_list'])
     for (const toolExposure of ['runtime', 'catalogue'] as const) {
       const none = await createToolRegistry({ toolExposure, allowedTools: [], allowedMcpServers: [] })
       expect(none.registry.list().map(item => item.name)).toEqual(['plan_update'])
@@ -381,7 +407,7 @@ describe('lean execution defaults and selectable compatibility catalogue', () =>
     const normal = await createToolRegistry({ allowedMcpServers: [] })
     for (const name of ['todo_list', 'calculate', 'agent_list', 'task_list', 'install_package']) expect(normal.registry.has(name), name).toBe(false)
     const selected = await createToolRegistry({ allowedTools: ['todo_list', 'agent_list', 'read_file'], allowedMcpServers: [] })
-    expect(selected.registry.list().map(item => item.name).sort()).toEqual(['plan_update', 'read_file', 'todo_list'])
+    expect(selected.registry.list().map(item => item.name).sort()).toEqual(['load_tools', 'plan_update', 'read_file', 'todo_list'])
   })
 })
 

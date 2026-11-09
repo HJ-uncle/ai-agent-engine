@@ -3,7 +3,7 @@ import path from 'node:path'
 import { z } from 'zod'
 import type { AgentContext, Tool, ToolResult } from '../../core/agent-context/index.js'
 import { throwIfAborted } from '../../core/utils/abort.js'
-import { getToolOutputLimit } from '../../core/agent-loop/tool-output-limit.js'
+import { boundedToolContext, getToolOutputLimit } from '../../core/agent-loop/tool-output-limit.js'
 import { canonicalFilePathSync, hashFileContent, readFileVersionSync, withFileLocks } from '../../shared/file-version.js'
 import { workspaceManager } from '../../workspace/index.js'
 import { ChangeRecordingError, commitWriteChange, discardUnpublishedSnapshot, readOldSnapshot, type ChangeSnapshot } from '../file/change-recorder.js'
@@ -61,6 +61,8 @@ const inspectArguments = z.object({ operation: z.literal('inspect'), path: fileP
   contentLimit: z.number().int().min(2).max(32_000).optional(),
 }).strict()
 const readonlyInspectArguments = inspectArguments.omit({ operation: true })
+const readonlyInspectBatchArguments = z.object({ files: z.array(readonlyInspectArguments).min(1).max(16) }).strict()
+const readonlyInspectInput = z.union([readonlyInspectArguments, readonlyInspectBatchArguments])
 const createArguments = z.object({ operation: z.literal('create'), path: filePath, expectedHash: z.literal('missing'),
   markdown: z.string().min(1).max(300_000).optional(), title: z.string().max(256).optional(), author: z.string().max(200).optional(), workbook: workbook.optional(), presentation: presentation.optional() }).strict()
 const editArguments = z.object({ operation: z.literal('edit'), path: filePath, expectedHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
@@ -126,7 +128,7 @@ export const officeDocumentTool: Tool = {
       contentOffset: { type: 'integer', minimum: 0, maximum: maxContentOffset, description: '仅inspect：上页contentPage.nextOffset（UTF-16位置），覆盖提取预览。' },
       contentLimit: { type: 'integer', minimum: 2, maximum: 32000, description: '仅inspect：本页字符上限，仍受输出预算限制。' },
       markdown: { type: 'string', minLength: 1, maxLength: 300000, description: 'Word/PDF create正文：支持标题、段落、列表、表格。' },
-      title: { type: 'string', maxLength: 256, description: '可选的独立可见标题，同时写入文档属性；避免与 Markdown 首标题重复。' }, author: { type: 'string', maxLength: 200 },
+      title: { type: 'string', maxLength: 256, description: '仅 DOCX/PDF/PPTX create 可用，Excel 必须省略。可选独立可见标题及文档属性；避免与 Markdown 首标题重复。' }, author: { type: 'string', maxLength: 200, description: '仅 DOCX/PDF/PPTX create 可用，Excel 必须省略。' },
       presentation: { type: 'object', additionalProperties: false, description: '仅PPTX create：分页的演示内容，过长内容拆成多页，不缩成不可读小字。', properties: {
         slides: { type: 'array', minItems: 1, maxItems: 40, items: { type: 'object', additionalProperties: false, properties: {
           title: { type: 'string', minLength: 1, maxLength: 100, description: '单行短标题，最多94个英文字符宽度（中文约47字）。' },
@@ -138,7 +140,7 @@ export const officeDocumentTool: Tool = {
           notes: { type: 'string', maxLength: 3000 },
         }, required: ['title'] } },
       }, required: ['slides'] },
-      workbook: { type: 'object', additionalProperties: false, description: 'Excel create 或 append_sheets 的新增表内容。append_sheets 每次最多4张（建议一张），不重复提交已存在的表。', properties: { sheets: { type: 'array', minItems: 1, maxItems: 12,
+      workbook: { type: 'object', additionalProperties: false, description: 'Excel create 或 append_sheets 新表：columns.header 写第1行，rows 从第2行开始；要求精确单元格时用 edit 的 sheet/cell/value 定点校正、null清除多余单元格，再 recalculate/inspect，不重复创建文档。短表能完整输出时一次create；大表/新增表用append_sheets，每次1–4张，不重复提交已有表。', properties: { sheets: { type: 'array', minItems: 1, maxItems: 12,
         items: { type: 'object', additionalProperties: false, properties: {
           name: { type: 'string', minLength: 1, maxLength: 31 },
           columns: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'object', additionalProperties: false, properties: {
@@ -168,7 +170,7 @@ export const officeDocumentTool: Tool = {
   // This mixed read/write implementation must remain trusted serial in the
   // registry. A model-supplied operation never changes its scheduling authority.
   async execute(raw: unknown, ctx: AgentContext): Promise<ToolResult> {
-    const outputLimit = getToolOutputLimit(ctx.toolProfile)
+    const outputLimit = getToolOutputLimit(ctx.toolProfile, ctx)
     const failure = (code: string, message: string, metadata: Record<string, unknown> = {}) => officeFailure(code, message, metadata, outputLimit)
     const outputFailure = (result: { code: string; requiredChars?: number }, inspection: Inspection) => failure(result.code,
       result.code === 'OFFICE_INVALID_CONTENT_OFFSET' ? 'Use a valid contentPage.nextOffset from the same file version; the offset is outside the preview or splits a Unicode character.'
@@ -299,25 +301,184 @@ export const officeDocumentTool: Tool = {
   },
 }
 
+type ReadonlyInspectArguments = z.infer<typeof readonlyInspectArguments>
+interface InspectionBatchPlan {
+  files: ReadonlyInspectArguments[]
+  canonicalPaths: string[]
+  allowances: number[]
+  outputLimit: number
+}
+interface InspectionBatchItem {
+  path: string
+  success: boolean
+  executed: boolean
+  output: unknown
+  error?: string
+}
+const batchEnvelope = (files: InspectionBatchItem[], cancelled = false) => ({ batch: true,
+  files, totalFiles: files.length, completedFiles: files.filter(file => file.success).length,
+  cancelled, fileMutationApplied: false })
+function inspectionBatchFailure(ctx: AgentContext, code: string, message: string, metadata: Record<string, unknown> = {}) {
+  const result = officeFailure(code, message, { ...metadata, batch: true, executed: false, completedFiles: 0, fileMutationApplied: false }, getToolOutputLimit(ctx.toolProfile, ctx))
+  return code === 'OFFICE_INSPECT_CANCELLED' ? { ...result, status: 'cancelled' as const } : result
+}
+function inspectBatchInput(raw: unknown): boolean {
+  return !!raw && typeof raw === 'object' && Object.hasOwn(raw, 'files')
+}
+
+/** Check the complete batch before any document bytes are read. Called both by
+ * the registry's whole-response preflight and again at actual execution. */
+async function prepareInspectionBatch(files: ReadonlyInspectArguments[], ctx: AgentContext): Promise<InspectionBatchPlan | { failure: ToolResult }> {
+  const outputLimit = getToolOutputLimit(ctx.toolProfile, ctx)
+  const refuse = (code: string, message: string, metadata: Record<string, unknown> = {}) => ({ failure: inspectionBatchFailure(ctx, code, message, metadata) })
+  if (ctx.signal?.aborted) return refuse('OFFICE_INSPECT_CANCELLED', 'Batch cancelled before execution; no documents were read.', { cancelled: true })
+  if (!ctx.tools?.preflight) return refuse('OFFICE_BATCH_PREFLIGHT_UNAVAILABLE', 'Batch inspection requires the current tool registry preflight; no documents were read.')
+  const canonicalPaths: string[] = []
+  try {
+    for (const [index, args] of files.entries()) {
+      if ((args.contentOffset ?? 0) > 0 && !args.expectedHash) return refuse('OFFICE_INSPECT_VERSION_REQUIRED', 'Each continuation needs that file\'s previous expectedHash; no documents were read.', { fileIndex: index })
+      if (!['.docx', '.xlsx', '.pptx', '.pdf'].includes(path.extname(args.path).toLowerCase())) return refuse('OFFICE_UNSUPPORTED_FORMAT', 'Every batch item must be a .docx/.xlsx/.pptx/.pdf file; no documents were read.', { fileIndex: index })
+      const canonical = canonicalFilePathSync(workspaceManager.resolveSafePath(ctx, args.path))
+      workspaceManager.resolveSafePath(ctx, canonical)
+      canonicalPaths.push(canonical)
+    }
+  } catch (error) {
+    return refuse('OFFICE_BATCH_PATH_REJECTED', `Batch path validation failed; no documents were read. ${error instanceof Error ? error.message : String(error)}`)
+  }
+  // Reserve complete per-item identity and error framing before dividing the
+  // remaining channel. Parsed receipt objects avoid a second JSON escaping pass.
+  const skeleton = files.map(args => ({ path: args.path, success: false, executed: false, output: null, error: 'x'.repeat(80) }))
+  const overhead = JSON.stringify({ ...batchEnvelope(skeleton), completedFiles: files.length }).length - files.length * 4
+  const minimums = canonicalPaths.map(file => 768 + JSON.stringify(file).length)
+  const requiredOutputChars = overhead + minimums.reduce((sum, value) => sum + value, 0)
+  if (requiredOutputChars > outputLimit) return refuse('OFFICE_BATCH_OUTPUT_BUDGET_TOO_SMALL',
+    'The shared output budget cannot hold every file identity and a useful inspection receipt. Use a smaller batch or increase the output budget; no documents were read.',
+    { requiredOutputChars, outputLimit })
+  const extra = Math.floor((outputLimit - requiredOutputChars) / files.length)
+  try {
+    for (const [index, args] of files.entries()) {
+      if (ctx.signal?.aborted) return refuse('OFFICE_INSPECT_CANCELLED', 'Batch cancelled during preflight; no documents were read.', { cancelled: true })
+      const blocked = await ctx.tools.preflight('office_inspect', args, ctx)
+      if (blocked) {
+        const failure = inspectionBatchFailure(ctx, 'OFFICE_BATCH_PREFLIGHT_BLOCKED',
+          `File ${index + 1} did not pass inspection preflight; no documents were read. ${blocked.error ?? blocked.output}`,
+          { ...blocked.metadata, fileIndex: index })
+        return { failure: { ...blocked, ...failure, status: blocked.status, needsConfirmation: blocked.needsConfirmation } }
+      }
+    }
+  } catch (error) {
+    return refuse(ctx.signal?.aborted ? 'OFFICE_INSPECT_CANCELLED' : 'OFFICE_BATCH_PREFLIGHT_FAILED',
+      `Batch preflight did not complete; no documents were read. ${error instanceof Error ? error.message : String(error)}`,
+      { cancelled: ctx.signal?.aborted === true })
+  }
+  return { files, canonicalPaths, allowances: minimums.map(value => value + extra), outputLimit }
+}
+
+async function executeInspectionBatch(plan: InspectionBatchPlan, ctx: AgentContext): Promise<ToolResult> {
+  const items: InspectionBatchItem[] = new Array(plan.files.length)
+  const metadata: Record<string, unknown>[] = new Array(plan.files.length)
+  let cursor = 0, waiting: ToolResult | undefined
+  const worker = async () => {
+    for (;;) {
+      const index = cursor++
+      if (index >= plan.files.length) return
+      const args = plan.files[index], itemCtx = boundedToolContext(ctx, plan.allowances[index])
+      let executed = false, result: ToolResult
+      try {
+        if (ctx.signal?.aborted) result = officeFailure('OFFICE_INSPECT_CANCELLED', 'Cancelled before this file was read.', { cancelled: true }, plan.allowances[index])
+        else if (waiting) result = officeFailure('OFFICE_BATCH_PENDING_INPUT', 'A batch item now requires permission; this queued file was not read.', {}, plan.allowances[index])
+        else {
+          // Recheck mutable permissions immediately before each queued read.
+          const blocked = await ctx.tools.preflight!('office_inspect', args, itemCtx)
+          if (blocked) {
+            if (blocked.status === 'waiting' || blocked.needsConfirmation) waiting ??= blocked
+            result = officeFailure('OFFICE_BATCH_PREFLIGHT_BLOCKED', blocked.error ?? blocked.output,
+              { ...blocked.metadata, blocked: true, fileMutationApplied: false }, plan.allowances[index])
+          }
+          else if (ctx.signal?.aborted) result = officeFailure('OFFICE_INSPECT_CANCELLED', 'Cancelled before this file was read.', { cancelled: true }, plan.allowances[index])
+          else if (waiting) result = officeFailure('OFFICE_BATCH_PENDING_INPUT', 'A batch item now requires permission; this queued file was not read.', {}, plan.allowances[index])
+          else {
+            const current = canonicalFilePathSync(workspaceManager.resolveSafePath(itemCtx, args.path))
+            if (!samePath(current, plan.canonicalPaths[index])) result = officeFailure('OFFICE_PATH_CONFLICT', 'The file path changed after batch preflight; this file was not read.', {}, plan.allowances[index])
+            else {
+              executed = true
+              result = await officeDocumentTool.execute({ ...args, operation: 'inspect' }, itemCtx)
+              if (!result.success && ctx.signal?.aborted) result = officeFailure('OFFICE_INSPECT_CANCELLED',
+                'Inspection was cancelled; no validated preview is available for this file.', { cancelled: true }, plan.allowances[index])
+            }
+          }
+        }
+      } catch (error) {
+        result = officeFailure(ctx.signal?.aborted ? 'OFFICE_INSPECT_CANCELLED' : 'OFFICE_FAILED',
+          error instanceof Error ? error.message : String(error), { cancelled: ctx.signal?.aborted === true }, plan.allowances[index])
+      }
+      let output: unknown
+      try { output = JSON.parse(result.output) }
+      catch {
+        result = officeFailure('OFFICE_INVALID_RECEIPT', 'The inspection did not return a complete JSON receipt.', {}, plan.allowances[index])
+        output = JSON.parse(result.output)
+      }
+      items[index] = { path: args.path, success: result.success, executed, output,
+        ...(result.success ? {} : { error: (result.error ?? 'OFFICE_FAILED').slice(0, 80) }) }
+      const receipt = output && typeof output === 'object' ? output as Record<string, unknown> : {}
+      metadata[index] = { ...result.metadata, path: result.metadata?.path ?? plan.canonicalPaths[index], success: result.success, executed,
+        ...(result.success ? { contentIncluded: receipt.contentIncluded, contentTruncated: receipt.contentTruncated, contentPage: receipt.contentPage } : { error: items[index].error }),
+        fileMutationApplied: false }
+    }
+  }
+  // Parse at most two Office packages concurrently; queued files observe abort.
+  await Promise.all(Array.from({ length: Math.min(2, plan.files.length) }, worker))
+  const cancelled = items.some(item => item.error === 'OFFICE_INSPECT_CANCELLED')
+  const envelope = batchEnvelope(items, cancelled), output = JSON.stringify(envelope)
+  if (output.length > plan.outputLimit) return officeFailure('OFFICE_BATCH_OUTPUT_OVERFLOW',
+    'Inspection receipts exceeded their reserved framing; no complete batch preview was returned. Retry fewer files.',
+    { batch: true, executed: items.some(item => item.executed), files: metadata, cancelled }, plan.outputLimit)
+  const success = items.every(item => item.success)
+  return { ...waiting, success, output, ...(success ? {} : { error: cancelled ? 'OFFICE_INSPECT_CANCELLED' : 'OFFICE_BATCH_PARTIAL_FAILURE' }),
+    ...(cancelled ? { status: 'cancelled' as const, needsConfirmation: false } : {}),
+    metadata: { batch: true, files: metadata, completedFiles: envelope.completedFiles, cancelled, fileMutationApplied: false } }
+}
+
+const readonlyInspectionProperties = {
+  path: { type: 'string', minLength: 1, maxLength: 4096, description: '当前工作区中的 .docx/.xlsx/.pptx/.pdf 文件路径。' },
+  expectedHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$', description: '首次可省略；分页须该文件上页sha256，防混读版本。' },
+  contentOffset: { type: 'integer', minimum: 0, maximum: maxContentOffset, description: '该文件上页contentPage.nextOffset（UTF-16字符位置），仅覆盖已提取预览。' },
+  contentLimit: { type: 'integer', minimum: 2, maximum: 32000, description: '本页预览字符上限，仍受共享工具输出预算限制。' },
+}
+
 export const officeInspectTool: Tool = {
   name: 'office_inspect', displayName: '检查办公文档',
-  description: '只读提取DOCX/XLSX/PPTX/PDF文字/表格预览，返回warnings、expectedHash。Excel限2000格/格600字符；保存的错误计数覆盖全表，位置有界；不重算公式，不保证业务/视觉正确。Word仅正文。PPTX附1起始slide/textRun及editable；备注额外标target=notes，供定点编辑。分页仅覆盖已提取预览，非全文；写入/重算用获授权的office_document。',
+  description: '只读提取DOCX/XLSX/PPTX/PDF文字/表格预览，返回warnings、expectedHash。单文件path或批量files二选一；files最多16项，共享输出预算、逐文件分页，预算不足先拒绝未执行，失败逐项报告；需更完整内容按各文件游标及版本续读。Excel限2000格/格600字符；保存的错误计数覆盖全表，位置有界；不重算公式，不保证业务/视觉正确。Word仅正文。PPTX附1起始slide/textRun及editable；备注额外标target=notes，供定点编辑。分页仅覆盖已提取预览，非全文；写入/重算用获授权的office_document。',
   parameters: {
     type: 'object', additionalProperties: false,
     properties: {
-      path: { type: 'string', minLength: 1, maxLength: 4096, description: '当前工作区中的 .docx/.xlsx/.pptx/.pdf 文件路径。' },
-      expectedHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$', description: '首次可省略；分页时必须复用同文件上一页返回的 sha256，防止混读不同版本。' },
-      contentOffset: { type: 'integer', minimum: 0, maximum: maxContentOffset, description: '上页 contentPage.nextOffset（UTF-16字符位置），仅覆盖已提取预览。' },
-      contentLimit: { type: 'integer', minimum: 2, maximum: 32000, description: '本页预览字符上限，仍受工具输出预算限制。' },
-    }, required: ['path'],
+      ...readonlyInspectionProperties,
+      files: { type: 'array', minItems: 1, maxItems: 16, description: '独立文件同批检查；不能与顶层path/expectedHash/contentOffset/contentLimit混用。每项权限先检，通过后有界并发读取，结果按输入顺序返回。',
+        items: { type: 'object', additionalProperties: false, properties: readonlyInspectionProperties, required: ['path'] } },
+    }, oneOf: [{ required: ['path'], not: { required: ['files'] } },
+      { required: ['files'], not: { anyOf: ['path', 'expectedHash', 'contentOffset', 'contentLimit'].map(field => ({ required: [field] })) } }],
+  },
+  async preflight(raw: unknown, ctx: AgentContext): Promise<ToolResult | undefined> {
+    if (!inspectBatchInput(raw)) return undefined
+    if (!boundedInput(raw)) return inspectionBatchFailure(ctx, 'OFFICE_INPUT_TOO_LARGE', 'Office batch arguments exceed their bounded input limits; no documents were read.')
+    const parsed = readonlyInspectBatchArguments.safeParse(raw)
+    if (!parsed.success) return inspectionBatchFailure(ctx, 'OFFICE_INVALID_ARGUMENTS', 'Use 1–16 readonly files, without top-level single-file or write arguments; no documents were read.')
+    const prepared = await prepareInspectionBatch(parsed.data.files, ctx)
+    return 'failure' in prepared ? prepared.failure : undefined
   },
   async execute(raw: unknown, ctx: AgentContext): Promise<ToolResult> {
-    const outputLimit = getToolOutputLimit(ctx.toolProfile)
-    if (!boundedInput(raw)) return officeFailure('OFFICE_INPUT_TOO_LARGE', 'Office arguments must fit within 2 MiB of text, 220000 values and bounded nesting.', {}, outputLimit)
-    const parsed = readonlyInspectArguments.safeParse(raw)
-    if (!parsed.success) return officeFailure('OFFICE_INVALID_ARGUMENTS', parsed.error.issues.slice(0, 5).map(issue => `${issue.path.join('.') || 'arguments'}: ${issue.message}`).join('; '), {}, outputLimit)
+    const outputLimit = getToolOutputLimit(ctx.toolProfile, ctx)
+    const failure = (code: string, message: string) => inspectBatchInput(raw)
+      ? inspectionBatchFailure(ctx, code, message + ' No documents were read.') : officeFailure(code, message, {}, outputLimit)
+    if (!boundedInput(raw)) return failure('OFFICE_INPUT_TOO_LARGE', 'Office arguments must fit within 2 MiB of text, 220000 values and bounded nesting.')
+    const parsed = readonlyInspectInput.safeParse(raw)
+    if (!parsed.success) return failure('OFFICE_INVALID_ARGUMENTS', parsed.error.issues.slice(0, 5).map(issue => `${issue.path.join('.') || 'arguments'}: ${issue.message}`).join('; '))
     // Parse a strict read-only contract before fixing the operation. The shared
     // inspect branch retains the same byte, workspace, version and paging fences.
+    if ('files' in parsed.data) {
+      const prepared = await prepareInspectionBatch(parsed.data.files, ctx)
+      return 'failure' in prepared ? prepared.failure : executeInspectionBatch(prepared, ctx)
+    }
     return officeDocumentTool.execute({ ...parsed.data, operation: 'inspect' }, ctx)
   },
 }

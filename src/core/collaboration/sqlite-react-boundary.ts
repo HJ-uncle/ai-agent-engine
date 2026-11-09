@@ -8,6 +8,7 @@ import type { SQLiteDeliveryConsumer, SQLiteDeliveryBatch } from './sqlite-deliv
 import { sqliteHistoryIdentity } from '../../storage/conversation/sqlite-origin.js'
 import { readAdmissionSeed } from '../../storage/root-admission/projection.js'
 import { withAuthenticatedHistoryMaintenance } from './history-maintenance.js'
+import { RequestHistoryChangedError } from './history-budget.js'
 
 declare const boundaryBrand: unique symbol
 export type SQLiteReActBoundary = Readonly<{ [boundaryBrand]: true }>
@@ -108,5 +109,5 @@ export async function assertSQLiteReActDispatch(capability: SQLiteReActBoundary,
   if (!found.consumer || !found.snapshotDigest) fail('SQLite ReAct dispatch has no admitted history snapshot')
   const rows = await serviceForOwner(found.owner).collaboration.sqliteDeliverySnapshot(found.consumer!, ctx.inheritContext !== false)
   record(capability, ctx)
-  if (digest(rows) !== found.snapshotDigest) throw new CollaborationError('conflict', 'History changed after request budgeting; no provider request was dispatched')
+  if (digest(rows) !== found.snapshotDigest) throw new RequestHistoryChangedError('sqlite')
 }

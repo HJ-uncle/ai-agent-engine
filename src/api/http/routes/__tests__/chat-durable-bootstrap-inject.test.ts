@@ -147,6 +147,23 @@ it('actual POST chat admits the authenticated user controller and its receipt st
 
 // Old stored requests can contain a selector inferred before independent settings.
 // An answer resumes execution; it must not replay that historical preference write.
+it.each(['general','code'])('new %s HTTP chat defaults memory off with server capability available',async profile=>{
+  vi.stubEnv('ENABLE_LONG_TERM_MEMORY','true')
+  const recall=vi.spyOn(memoryRuntime,'buildMemoryRecallBlock').mockResolvedValue('')
+  const extraction=vi.spyOn(memoryRuntime,'extractAndStoreMemories').mockResolvedValue({extracted:0,stored:0,errors:[]})
+  const execute=vi.spyOn(ReActStrategy.prototype,'run').mockImplementation(async function*(_prompt,ctx){
+    expect(ctx.memoryScopes).toEqual([]);expect(ctx.memoryScope).toBe('off')
+    for(const name of ['remember','recall','search_memory','list_memories','forget','link_memories'])expect(ctx.tools.has(name)).toBe(false)
+    yield 'DEFAULT MEMORY CLOSED'
+    await ctx.runObserver?.onOutcome?.({status:'succeeded',stopReason:'completed'})
+  })
+  const result=await app.inject({method:'POST',url:'/chat',headers:{'x-aether-tool-profile':profile,'x-aether-run-lifetime':'durable','x-aether-subagent-protocol':'2'},
+    payload:{sessionId,message:'New task without a memory preference',workspacePaths:[directory]}})
+  expect(result.statusCode,result.body).toBe(200);expect(result.body).toContain('DEFAULT MEMORY CLOSED');expect(execute).toHaveBeenCalledOnce()
+  expect(recall).not.toHaveBeenCalled();expect(extraction).not.toHaveBeenCalled()
+  expect(await getSessionMemorySettings(tenantId,sessionId)).toMatchObject({sessionOverride:null,globalEnabled:false,sessionDefaultEnabled:false,effectiveScopes:[]})
+},20000)
+
 it.each([
   {legacy:'session' as const,current:false,global:false,scopes:[]},
   {legacy:'global' as const,current:false,global:false,scopes:[]},

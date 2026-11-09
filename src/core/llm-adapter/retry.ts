@@ -112,7 +112,7 @@ export class FallbackAdapter implements LLMAdapter {
     let maxTokens = options?.maxTokens
     if (Number.isFinite(contextWindow)) {
       const input = Math.max(options?.requestInputTokenEstimate ?? 0,
-        estimateRequestInput(messages, options?.systemPrompt, options?.tools ?? []))
+        estimateRequestInput(messages, options?.systemPrompt, options?.tools ?? [], options?.requestContext))
       if (options?.unboundedOutput) maxTokens = Math.min(maxTokens ?? Infinity, Math.max(1, Math.floor(contextWindow - input)))
       const requested = input + (maxTokens ?? 4096)
       if (requested > contextWindow) throw Object.assign(new Error(

@@ -11,6 +11,8 @@ import { up } from '../../../storage/sqlite/migrations/011_add_security_and_perf
 import { clearSecurityMode, policyEngine, setSecurityMode } from '../../../security/policy-engine.js'
 import { ChangeStore } from '../../../storage/changes/index.js'
 import { hashFileContent } from '../../../shared/file-version.js'
+import { captureCreatedDirectories } from '../../../storage/changes/directories.js'
+import { commitWriteChange, readOldSnapshot } from '../../file/change-recorder.js'
 import { cmdTool, commandJobScope } from '../execute-command.js'
 import { cancelCommandTool, commandOutputTool } from '../job-tools.js'
 import { COMMAND_CHANGE_LIMITS, createCommandChangeObserver } from '../command-change-observer.js'
@@ -36,7 +38,7 @@ const fakeJob = (): CommandJobSnapshot => ({ schemaVersion: 1, jobId: 'observed-
   exitCode: null, signal: null, cursor: 0, earliestCursor: 0 })
 
 beforeEach(async () => {
-  fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-command-observation-'))
+  fixture = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'aether-command-observation-'))
   workspace = path.join(fixture, 'workspace'); fs.mkdirSync(workspace)
   vi.stubEnv('DATA_DIR', path.join(fixture, 'db.sqlite'))
   db = createClient({ url: 'file::memory:' })
@@ -56,11 +58,64 @@ afterEach(async () => {
   // real datasource in addition to the mocked client. Join it before removal.
   await database.closeDb()
   vi.restoreAllMocks(); vi.unstubAllEnvs()
-  if (path.dirname(fixture) !== path.resolve(os.tmpdir()) || !path.basename(fixture).startsWith('aether-command-observation-')) throw new Error('Unsafe cleanup')
+  if (path.dirname(fixture) !== fs.realpathSync.native(os.tmpdir()) || !path.basename(fixture).startsWith('aether-command-observation-')) throw new Error('Unsafe cleanup')
   fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 })
 })
 
 describe('command workspace observation and guarded rollback', () => {
+  it('tracks new command parent directories and removes only those once their files are reverted', async () => {
+    const existing = path.join(workspace, 'existing'); fs.mkdirSync(existing)
+    const observer = await createCommandChangeObserver(ctx, workspace, fakeJob())
+    const created = path.join(workspace, 'delivery', 'nested'); fs.mkdirSync(created, { recursive: true })
+    fs.writeFileSync(path.join(created, 'book.xlsx'), Buffer.from([0, 255, 1]))
+    fs.writeFileSync(path.join(existing, 'notes.txt'), 'notes')
+    const observed = await observer.finish(); observer.dispose()
+    expect(observed.changes).toHaveLength(2)
+    const preview = await store.previewRevert(ctx.tenantId, { sessionId: ctx.sessionId })
+    expect(preview.changes.filter(item => item.entryType === 'directory').map(item => item.path).sort()).toEqual([created, path.dirname(created)].sort())
+    const result = await store.revertBatch(ctx.tenantId, { sessionId: ctx.sessionId, reviewedCommandChangeIds: preview.changes.map(item => item.id) })
+    expect(result).toMatchObject({ reverted: 4, unavailable: 0, removedDirectories: [created, path.dirname(created)] })
+    expect(fs.existsSync(created)).toBe(false)
+    expect(fs.existsSync(existing)).toBe(true)
+  })
+
+  it('tracks a standalone command mkdir even when no files were produced', async () => {
+    const observer = await createCommandChangeObserver(ctx, workspace, fakeJob())
+    const directory = path.join(workspace, 'empty'); fs.mkdirSync(directory)
+    const observed = await observer.finish(); observer.dispose()
+    expect(observed.changes).toEqual([])
+    expect(observed.tracking).toMatchObject({ recordedCount: 0, recordedDirectoryCount: 1 })
+    const preview = await store.previewRevert(ctx.tenantId, { sessionId: ctx.sessionId })
+    expect(preview.changes).toEqual([expect.objectContaining({ path: directory, entryType: 'directory', requiresExplicitRevert: true })])
+    expect(await store.revertBatch(ctx.tenantId, { sessionId: ctx.sessionId })).toMatchObject({ unavailable: 1 })
+    expect(await store.revertBatch(ctx.tenantId, { sessionId: ctx.sessionId, reviewedCommandChangeIds: [preview.changes[0].id] })).toMatchObject({ reverted: 1, removedDirectories: [directory] })
+    expect(fs.existsSync(directory)).toBe(false)
+  })
+
+  it('does not claim a managed directory created by a concurrent session', async () => {
+    const observer = await createCommandChangeObserver(ctx, workspace, fakeJob())
+    const directory = path.join(workspace, 'other-session'); fs.mkdirSync(directory)
+    await store.recordCreatedDirectories(ctx.tenantId, { sessionId: 'other-session' }, captureCreatedDirectories(path.join(directory, '.probe'), [directory]))
+    const observed = await observer.finish(); observer.dispose()
+    expect(observed.tracking).toMatchObject({ status: 'partial', concurrentChangesExcluded: 1 })
+    expect((await store.previewRevert(ctx.tenantId, { sessionId: ctx.sessionId })).changes).toEqual([])
+    expect(fs.existsSync(directory)).toBe(true)
+  })
+
+  it('does not claim implicit parent directories created by a concurrent file/office writer', async () => {
+    const observer = await createCommandChangeObserver(ctx, workspace, fakeJob())
+    const directory = path.join(workspace, 'other-writer', 'delivery'), file = path.join(directory, 'report.docx')
+    const snapshot = await readOldSnapshot(file)
+    fs.mkdirSync(directory, { recursive: true }); fs.writeFileSync(file, Buffer.from([0, 255, 1]))
+    await commitWriteChange({ ...ctx, sessionId: 'other-session' }, file, file, snapshot)
+    const observed = await observer.finish(); observer.dispose()
+    expect(observed.changes).toEqual([])
+    expect(observed.tracking).toMatchObject({ status: 'partial', concurrentChangesExcluded: 3, recordedDirectoryCount: 0 })
+    expect((await store.previewRevert(ctx.tenantId, { sessionId: ctx.sessionId })).changes).toEqual([])
+    expect(fs.existsSync(file)).toBe(true)
+    expect(fs.existsSync(directory)).toBe(true)
+  })
+
   it('records real script create/edit/delete/binary changes, requires explicit selection, and restores exact bytes', async () => {
     fs.writeFileSync(path.join(workspace, 'edit.txt'), 'original')
     fs.writeFileSync(path.join(workspace, 'remove.txt'), 'keep me')

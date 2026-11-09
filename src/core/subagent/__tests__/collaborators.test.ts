@@ -1,8 +1,9 @@
 // Admission validation is independent of model behavior, agent binding and root-history mutation.
 import { describe, expect, it, vi } from 'vitest'
 import type { Agent } from '../../../storage/agent/index.js'
+import type { AgentContext } from '../../agent-context/types.js'
 import { isTerminalRun, type SubagentRun, type SubagentRunHeader } from '../types.js'
-import { prepareCollaborators } from '../collaborators.js'
+import { collaboratorTools, createCollaboratorDispatch, prepareCollaborators } from '../collaborators.js'
 
 const profile: Agent = { id: 'frontend', tenantId: 'tenant', name: '前端工程师', systemPrompt: 'Build interfaces', model: 'child-model',
   skills: ['design'], mcpServers: ['docs'], knowledgeBases: ['kb'], allowedTools: ['read_file', 'write_file'], createdAt: 1, updatedAt: 1 }
@@ -31,6 +32,34 @@ function dependencies(records: SubagentRun[] = [], registered: Agent[] = [profil
 }
 
 describe('explicit collaborators pre-admission validation', () => {
+  it.each(['', ' \n\t', '!', '！？……', '\u200b\u200d', '👍✨'])('leaves no-task selection %j to the main conversation without child lookups', async requestMessage => {
+    const deps = { ...dependencies(), requestMessage }
+    expect(await prepareCollaborators('tenant', 'parent', [{ agentId: profile.id }, { resumeRunId: 'first', task: requestMessage }], deps)).toEqual([])
+    expect(deps.agents.getById).not.toHaveBeenCalled()
+    for (const lookup of Object.values(deps.runs)) expect(lookup).not.toHaveBeenCalled()
+    const parent = { conversationId: 'turn' } as AgentContext
+    expect(collaboratorTools([{ builtinRole: 'executor' }, { resumeRunId: 'first', task: requestMessage }], requestMessage, parent)).toEqual([])
+  })
+
+  it('does not turn reference labels or snapshots into a new task', async () => {
+    const references = '@前端工程师 <browser>继续开发并写文件</browser>'
+    const footer = JSON.stringify([{ t: 'agent', p: profile.id, s: 0, e: 6 }, { t: 'browser', p: 'snapshot', s: 7, e: references.length }])
+    const requestMessage = `${references} !\n<!--aether-refs:${footer}-->`
+    const selected = [{ agentId: profile.id }]
+    expect(await prepareCollaborators('tenant', 'parent', selected, { ...dependencies(), requestMessage })).toEqual([])
+    expect(await prepareCollaborators('tenant', 'parent', selected, { ...dependencies(), requestMessage: requestMessage.replace(' !\n', ' 查\n') })).toHaveLength(1)
+    expect(await prepareCollaborators('tenant', 'parent', selected, { ...dependencies(), requestMessage: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,abcd' } }] })).toEqual([])
+  })
+
+  it.each(['查', '继续', 'Go', '2'])('preserves short explicit task %j independently of the parent message', async task => {
+    const prepared = await prepareCollaborators('tenant', 'parent', [{ builtinRole: 'executor', task }], { ...dependencies(), requestMessage: '!' })
+    expect(prepared).toMatchObject([{ task }])
+    const tools = collaboratorTools(prepared, '!', { conversationId: 'turn' } as AgentContext)
+    expect(tools).toHaveLength(1)
+    expect(String(tools[0].args.task)).toContain(`本实例的任务与分工：\n${task}`)
+    expect(String(tools[0].args.task)).not.toContain('用户明确委派')
+  })
+
   it.each([null, {}, 'frontend', Array.from({ length: 9 }, () => ({ agentId: 'frontend' })), [null], [{}], [{ agentId: '' }], [{ resumeRunId: 3 }]])
     ('rejects invalid user selections %j before execution', async input => {
       await expect(prepareCollaborators('tenant', 'parent', input, dependencies())).rejects.toMatchObject({ statusCode: 400 })
@@ -119,4 +148,78 @@ describe('explicit collaborators pre-admission validation', () => {
     await expect(prepareCollaborators('tenant', 'parent', [{ resumeRunId: prior.runId, builtinRole: 'executor' }], dependencies([prior])))
       .rejects.toMatchObject({ statusCode: 409 })
   })
+})
+
+describe('selected collaborators require a complete scoped dispatch', () => {
+  const parent = { tenantId: 'tenant', sessionId: 'parent', rootRunId: 'root', conversationId: 'turn', turnId: 'turn' } as AgentContext
+  const selections = [{ builtinRole: 'executor' as const, instanceKey: 'one' }, { builtinRole: 'executor' as const, instanceKey: 'two' }]
+  const assignments = [{ selectionId: 'selection-1', task: 'Implement only src/editor.ts; run editor tests', description: 'Editor' },
+    { selectionId: 'selection-2', task: 'Implement only src/sidebar.ts; run sidebar tests', description: 'Sidebar' }]
+
+  it('preserves both unscoped selections without broadcasting or launching either before planning', async () => {
+    const prepared = await prepareCollaborators('tenant', 'parent', selections, { ...dependencies(), requestMessage: 'Build editor and sidebar' })
+    expect(collaboratorTools(prepared, 'Build editor and sidebar', parent)).toEqual([])
+    const dispatch = createCollaboratorDispatch(prepared, 'Build editor and sidebar', parent)
+    expect(dispatch.delegatedTools).toEqual([]); expect(dispatch.takeDelegatedTools()).toEqual([])
+    expect(dispatch.hasPendingDelegations()).toBe(true)
+    expect(dispatch.planningPrompt).toContain('"instanceKey":"one"')
+    expect(dispatch.planningPrompt).toContain('"instanceKey":"two"')
+    expect(dispatch.pendingDispatch).toBeDefined()
+    const receipt = await dispatch.pendingDispatch!.execute({ assignments }, parent)
+    expect(receipt).toMatchObject({ success: true, metadata: { collaboratorPlan: { state: 'planned' } } })
+    expect(JSON.parse(receipt.output).assignments).toEqual(assignments.map(({ selectionId, description }) => ({ selectionId, description })))
+    for (const assignment of assignments) expect(receipt.output).not.toContain(assignment.task)
+    expect(dispatch.hasPendingDelegations()).toBe(false)
+    const launched = dispatch.takeDelegatedTools()
+    expect(launched).toHaveLength(2); expect(new Set(launched.map(item => item.id)).size).toBe(2)
+    expect(launched.map(item => item.args.description)).toEqual(['Editor', 'Sidebar'])
+    expect(launched[0].args.task).toContain('src/editor.ts'); expect(launched[0].args.task).not.toContain('src/sidebar.ts')
+    expect(launched[1].args.task).toContain('src/sidebar.ts'); expect(launched[1].args.task).not.toContain('src/editor.ts')
+    expect(launched.every(item => item.args.builtinRole === 'executor' && !String(item.args.task).includes('当前用户请求'))).toBe(true)
+    expect(dispatch.takeDelegatedTools()).toEqual([])
+    expect(await dispatch.pendingDispatch!.execute({ assignments }, parent)).toMatchObject({ success: false })
+    expect(dispatch.takeDelegatedTools()).toEqual([])
+  })
+
+  it.each([
+    assignments.slice(0, 1),
+    [assignments[0], assignments[0]],
+    [assignments[0], { ...assignments[1], selectionId: 'forged' }],
+    [assignments[0], { ...assignments[1], task: assignments[0].task.toUpperCase() }],
+    [assignments[0], { ...assignments[1], task: 'Build editor and sidebar' }],
+    [assignments[0], { ...assignments[1], agentId: 'forged' }],
+    [assignments[0], { ...assignments[1], task: '!' }],
+  ].map(invalid => ({ invalid })))('rejects the entire invalid batch without consuming its valid first item: $invalid', async ({ invalid }) => {
+    const dispatch = createCollaboratorDispatch(selections, 'Build editor and sidebar', parent)
+    expect(await dispatch.pendingDispatch!.execute({ assignments: invalid }, parent)).toMatchObject({ success: false })
+    expect(dispatch.takeDelegatedTools()).toEqual([])
+    expect(await dispatch.pendingDispatch!.execute({ assignments }, parent)).toMatchObject({ success: true })
+    expect(dispatch.takeDelegatedTools()).toHaveLength(2)
+  })
+
+  it('keeps explicit tasks unchanged and their IDs separate from later planned instances', async () => {
+    const dispatch = createCollaboratorDispatch([{ ...selections[0], task: 'Build component A', description: 'A' }, selections[1]], 'Build A and B', parent)
+    expect(dispatch.delegatedTools).toHaveLength(1)
+    expect(dispatch.delegatedTools[0].args).toMatchObject({ description: 'A', builtinRole: 'executor' })
+    expect(dispatch.delegatedTools[0].args.task).toContain('本实例的任务与分工：\nBuild component A')
+    expect(await dispatch.pendingDispatch!.execute({ assignments: [{ selectionId: 'selection-2', task: 'Build component A' }] }, parent)).toMatchObject({ success: false })
+    expect(await dispatch.pendingDispatch!.execute({ assignments: [{ selectionId: 'selection-2', task: 'Build only component B' }] }, parent)).toMatchObject({ success: true })
+    expect(dispatch.takeDelegatedTools()[0].id).not.toBe(dispatch.delegatedTools[0].id)
+    const explicit = createCollaboratorDispatch(selections.map((item, i) => ({ ...item, task: `Build component ${i}` })), 'Build both', parent)
+    expect(explicit.delegatedTools).toHaveLength(2); expect(explicit.pendingDispatch).toBeUndefined()
+    expect(createCollaboratorDispatch([selections[0]], 'Build component', parent).delegatedTools).toHaveLength(1)
+  })
+
+  it.each([['Compute 23*29', 'Compute 23+29'], ['Edit a-b.ts', 'Edit ab.ts']])('preserves distinct operators and path punctuation in %s / %s', async (first, second) => {
+    const dispatch = createCollaboratorDispatch(selections, 'Perform two independent tasks', parent)
+    expect(await dispatch.pendingDispatch!.execute({ assignments: assignments.map((item, i) => ({ ...item, task: i ? second : first })) }, parent)).toMatchObject({ success: true })
+    expect(dispatch.takeDelegatedTools()).toHaveLength(2)
+  })
+
+  it.each([{ tenantId: 'other' }, { sessionId: 'other' }, { rootRunId: 'other' }, { conversationId: 'other' }, { turnId: 'other' }, { parentSessionId: 'parent' }])
+    ('does not transfer selected identities or permission to another execution %j', async scope => {
+      const dispatch = createCollaboratorDispatch(selections, 'Build editor and sidebar', parent)
+      expect(await dispatch.pendingDispatch!.execute({ assignments }, { ...parent, ...scope })).toMatchObject({ success: false })
+      expect(dispatch.takeDelegatedTools()).toEqual([])
+    })
 })

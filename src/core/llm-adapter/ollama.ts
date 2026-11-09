@@ -1,4 +1,5 @@
 import { applyThinkingPreference } from './thinking.js'
+import { requestContextMessages } from './request-context.js'
 import { observeRequest, observeStreamRequest, prepareRequestContext } from './request-attempt.js'
 import type { RequestAttemptUsage } from './types.js'
 import type { LLMAdapter, LLMResponse, LLMAdapterOptions, LLMStreamChunk } from './types.js'
@@ -50,7 +51,7 @@ export class OllamaAdapter implements LLMAdapter {
 
   async complete(messages: Message[], options?: LLMAdapterOptions): Promise<LLMResponse> {
     options = applyThinkingPreference(options, this.provider, options?.model ?? this.model)
-    const ollamaMessages = this.toOllamaMessages(messages, options?.systemPrompt)
+    const ollamaMessages = this.toOllamaMessages(requestContextMessages(messages, options?.requestContext), options?.systemPrompt)
 
     const requestBody: any = {
       model: options?.model ?? this.model,
@@ -89,7 +90,7 @@ export class OllamaAdapter implements LLMAdapter {
 
   async *stream(messages: Message[], options?: LLMAdapterOptions): AsyncIterable<LLMStreamChunk> {
     options = applyThinkingPreference(options, this.provider, options?.model ?? this.model)
-    const ollamaMessages = this.toOllamaMessages(messages, options?.systemPrompt)
+    const ollamaMessages = this.toOllamaMessages(requestContextMessages(messages, options?.requestContext), options?.systemPrompt)
 
     const requestBody: any = {
       model: options?.model ?? this.model,

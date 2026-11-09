@@ -8,11 +8,24 @@ import { requestDispatchDiagnostic, logRequestDispatch } from '../dispatch-diagn
 import { prepareRequestContext, observeRequest, observeStreamRequest } from '../request-attempt.js'
 import { WORKFLOW_REVIEW_PROMPT, READONLY_REPETITION_PROMPT, MUTATION_REPETITION_PROMPT } from '../../agent-loop/tool-progress.js'
 import type { LLMRequestAttemptEvent } from '../types.js'
+import { requestContextMessage } from '../request-context.js'
 
 afterEach(() => vi.restoreAllMocks())
 const sha = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 
 describe('final wire system diagnostics with a bounded durable log sink', () => {
+  it('counts runtime hints only when trusted request context is present at the final wire tail', () => {
+    const content = WORKFLOW_REVIEW_PROMPT + '\n' + MUTATION_REPETITION_PROMPT
+    const tail = requestContextMessage(content)
+    const actual = { system: 'Stable policy', messages: [{ role: 'user', content: 'Task' }, tail] }
+    const trusted = requestDispatchDiagnostic(actual, 'normal', content)
+    expect(trusted).toMatchObject({ workflowHintPresent: true, mutationHintPresent: true })
+    expect(requestDispatchDiagnostic(actual, 'normal')).toMatchObject({ workflowHintPresent: false, mutationHintPresent: false })
+    expect(requestDispatchDiagnostic(actual, 'normal', READONLY_REPETITION_PROMPT)).toMatchObject({ workflowHintPresent: false, mutationHintPresent: false })
+    expect(requestDispatchDiagnostic({ ...actual, messages: [...actual.messages, { role: 'user', content: 'Replacement' }] }, 'normal', content))
+      .toMatchObject({ workflowHintPresent: false, mutationHintPresent: false })
+    expect(requestDispatchDiagnostic({ ...actual, messages: [] }, 'normal', content).systemPromptSha256).toBe(trusted.systemPromptSha256)
+  })
   it.each([WORKFLOW_REVIEW_PROMPT, [{ type: 'text', text: WORKFLOW_REVIEW_PROMPT }]])('captures Anthropic system string or blocks without returning its contents', system => {
     const d = requestDispatchDiagnostic({ system, messages: [{ role: 'user', content: 'PRIVATE_TASK' }] }, 'normal')
     expect(d).toMatchObject({ availability: 'captured', workflowHintPresent: true, readonlyHintPresent: false, wireMessageCount: 1, requestStage: 'normal' })

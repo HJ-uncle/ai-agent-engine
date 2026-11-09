@@ -1,9 +1,12 @@
-import path from 'node:path'
 import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
 import { workspaceManager } from '../../workspace/index.js'
 import { loadCodeGraph } from './codegraph-module.js'
 import type { CgInstance, CgNode, CgEdge } from './codegraph-module.js'
 import { startIndexing, getIndexRunState, isIndexRunning } from './index-runner.js'
+import { captureSubagentWorkspace, workspaceContains } from '../subagent/workspace-scope.js'
+import { canonicalFilePathSync } from '../../shared/file-version.js'
+import { projectDataPath } from '../../core/project-storage.js'
+import { openReadonlyCodegraphSnapshot, requiresReadonlyCodegraph } from './codegraph-readonly.js'
 
 /**
  * 代码图查询工具（codegraph）
@@ -23,16 +26,15 @@ import { startIndexing, getIndexRunState, isIndexRunning } from './index-runner.
  *   - action=index 仅作用于当前工作区（不接受任意路径，防 Agent 乱建）
  */
 
-/** 解析项目根目录：绝对路径直接用；相对路径基于工作区 cwd 解析 */
-function resolveProjectRoot(rawPath: string | undefined, ctx: AgentContext): string {
-  if (rawPath && path.isAbsolute(rawPath)) return rawPath
-  let cwd = process.cwd()
-  try {
-    cwd = workspaceManager.getWorkingDirectory(ctx)
-  } catch {
-    // ctx 不完整（如脱离完整 AgentContext 的测试场景）时退回 process.cwd()
+/** Every role is scoped to effective workspace roots, including non-safe sessions. */
+function authorizedProject(rawPath: string | undefined, ctx: AgentContext, scope: ReturnType<typeof captureSubagentWorkspace>): string {
+  const root = workspaceManager.resolveSafePathForSnapshot(ctx, scope.snapshot, rawPath ?? '.')
+  if (!scope.roots.some(allowed => workspaceContains(allowed, root))) throw new Error('Codegraph path is outside the authorized workspace')
+  if (!workspaceContains(root, projectDataPath(root))) throw new Error('Codegraph index directory is outside the authorized project')
+  for (const name of ['codegraph.db', 'codegraph.db-wal', 'codegraph.db-shm', 'codegraph.db-journal']) {
+    if (!workspaceContains(root, projectDataPath(root, name))) throw new Error('Codegraph index file is outside the authorized project')
   }
-  return rawPath ? path.resolve(cwd, rawPath) : cwd
+  return canonicalFilePathSync(root)
 }
 
 /** 截断过长文本 */
@@ -140,22 +142,28 @@ export const codegraphTool: Tool = {
       return { success: false, output: '❌ 缺少必填参数 action' }
     }
     try {
+      const workspace = captureSubagentWorkspace(ctx)
+      const root = authorizedProject(args.path, ctx, workspace)
+      const assertCurrent = () => {
+        workspace.assertCurrent()
+        if (authorizedProject(args.path, ctx, workspace) !== root) throw new Error('Codegraph project changed during query')
+      }
+      try {
+      assertCurrent()
       const CodeGraph = await loadCodeGraph()
-      const root = resolveProjectRoot(args.path, ctx)
+      assertCurrent()
 
-      // 建索引 action：只作用于当前工作区（忽略 path 参数，防 Agent 对任意目录建索引）
+      // 建索引 action：只作用于当前工作区，显式拒绝其它目标。
       if (action === 'index') {
-        let wsRoot: string
-        try {
-          wsRoot = workspaceManager.getWorkingDirectory(ctx)
-        } catch {
-          return { success: false, output: '❌ 无法确定当前工作区，无法创建索引' }
-        }
-        const r = await startIndexing(wsRoot)
+        if (requiresReadonlyCodegraph()) return { success: false, output: '只读调研不能创建或更新索引。', metadata: { code: 'TOOL_ACTION_NOT_ALLOWED' } }
+        const wsRoot = canonicalFilePathSync(workspace.snapshot.root)
+        if (root !== wsRoot) return { success: false, output: '创建索引仅支持当前绑定工作区。' }
+        const r = await startIndexing(wsRoot, { assertCurrent })
         if (r.error && !r.started) {
           if (r.alreadyRunning) {
             const s = getIndexRunState()
-            return { success: true, output: `⏳ 已有索引任务进行中: ${s?.root}\n可用 action=status 查询进度` }
+            return { success: true, output: s && canonicalFilePathSync(s.root) === root
+              ? `⏳ 已有索引任务进行中: ${root}\n可用 action=status 查询进度` : '⏳ 索引服务正忙，请稍后重试。' }
           }
           return { success: false, output: `❌ 无法创建索引: ${r.error}` }
         }
@@ -169,7 +177,8 @@ export const codegraphTool: Tool = {
       }
 
       // 建索引进度优先展示（索引刚开始时目录可能尚未标记为已初始化）
-      if (action === 'status' && (isIndexRunning() || getIndexRunState()?.phase === 'failed')) {
+      if (action === 'status' && getIndexRunState()?.root && canonicalFilePathSync(getIndexRunState()!.root) === root
+        && (isIndexRunning() || getIndexRunState()?.phase === 'failed')) {
         const s = getIndexRunState()!
         const p = s.progress
         const lines = [
@@ -192,7 +201,7 @@ export const codegraphTool: Tool = {
         }
       }
 
-      const cg = CodeGraph.openSync(root)
+      const cg = requiresReadonlyCodegraph() ? openReadonlyCodegraphSnapshot(root, CodeGraph, assertCurrent) : CodeGraph.openSync(root)
       try {
         const limit = Math.max(1, Math.min(args.limit ?? 20, 100))
 
@@ -315,10 +324,11 @@ export const codegraphTool: Tool = {
             return { success: false, output: `❌ 未知 action: ${action}（可选 status/search/callers/callees/impact/files）` }
         }
       } finally {
-        try { cg.close() } catch { /* 忽略关闭异常 */ }
+        cg.close()
       }
+      } finally { assertCurrent() }
     } catch (e: any) {
-      return { success: false, output: `❌ 代码图查询失败: ${e?.message ?? String(e)}` }
+      return { success: false, output: `❌ 代码图查询失败: ${e?.message ?? String(e)}`, metadata: { code: e?.code ?? 'CODEGRAPH_QUERY_FAILED' } }
     }
   },
 }

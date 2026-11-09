@@ -304,6 +304,19 @@ export interface IToolRegistry {
   register(tool: Tool): void
   unregister(name: string): void
   list(): Array<{ name: string; displayName?: string; description: string; parameters: JSONSchema; source?: string; outputSchema?: JSONSchema }>
+  /** Trusted builtin descriptions may be compacted for model input; execution/catalogue stay canonical. */
+  listForModel?(): ReturnType<IToolRegistry['list']>
+  /** Request exposure may defer trusted builtin schemas; it never grants execution rights. */
+  listForRequest?(history?: readonly Message[]): ReturnType<IToolRegistry['list']>
+  loadForModel?(names: readonly string[]): string[]
+  modelToolLoadingCandidates?(): readonly string[]
+  /** Implementation identity checks stay server-side, never inferred from a tool name. */
+  hasModelToolLoader?(): boolean
+  modelToolRegistrationVersion?(name: string): number | undefined
+  /** Trusted builtins that support recoverable, request-only write argument projection. */
+  supportsHistoryProjection?(name: string): boolean
+  /** Already-resolved, admitted skill descriptions; never rebuild from global discovery in children. */
+  skillsForPrompt?(): readonly import('../../skills/external-loader.js').ExternalSkill[]
   execute(name: string, args: unknown, ctx: AgentContext): Promise<ToolResult>
   preflight?(name: string, args: unknown, ctx: AgentContext): Promise<ToolResult | undefined>
   executionMode?(name: string, args?: unknown): ToolExecutionMode

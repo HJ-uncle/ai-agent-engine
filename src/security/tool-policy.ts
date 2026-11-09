@@ -4,6 +4,8 @@ import { getSecurityMode } from './policy-engine.js'
 /** Trust attaches to implementations, not model-supplied or extension-supplied names. */
 const trustedModes = new WeakMap<Tool, 'readonly' | 'subagent' | 'serial'>()
 const orchestrationTools = new WeakSet<Tool>()
+/** Name collisions and extension metadata cannot opt into builtin history rewriting. */
+export function isTrustedBuiltinTool(tool: Tool): boolean { return trustedModes.has(tool) }
 export function trustBuiltinTool<T extends Tool>(tool: T, mode: 'readonly' | 'subagent' | 'serial' = 'serial', options: { orchestration?: boolean } = {}): T {
   trustedModes.set(tool, mode)
   if (options.orchestration) orchestrationTools.add(tool)

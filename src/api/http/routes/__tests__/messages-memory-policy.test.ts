@@ -17,6 +17,7 @@ import { resolveCapabilities } from '../../../../core/model-capabilities/index.j
 import * as resolver from '../../../../core/llm-adapter/resolve-model.js'
 import * as factory from '../../../../tools/registry-factory.js'
 import * as memoryRuntime from '../../../../middleware/memory/index.js'
+import { SQLiteMemoryManager } from '../../../../storage/memory/memory-manager.js'
 
 const tenants = ['legacy-memory-a', 'legacy-memory-b']
 const sessionId = 'same-legacy-session'
@@ -71,6 +72,60 @@ it.each(['edit', 'regenerate'])('%s ignores forged array and old metadata policy
   expect(memoryRuntime.buildMemoryRecallBlock).not.toHaveBeenCalled(); expect(memoryRuntime.extractAndStoreMemories).not.toHaveBeenCalled()
   expect(await getSessionMemorySettings(tenants[0], sessionId)).toMatchObject({ sessionOverride: false, globalEnabled: false, effectiveScopes: [] })
 })
+
+it('extracts only the regenerated turn and preserves structured memory receipts', async () => {
+  await setSessionMemoryEnabled(tenants[0], sessionId, true)
+  vi.mocked(ReActStrategy.prototype.run).mockImplementation(async function* (this: ReActStrategy, _prompt, ctx) {
+    contexts.push(ctx)
+    const conversationId = (this as unknown as { options: { conversationId: string } }).options.conversationId
+    const call = { id: 'current-forget', name: 'forget', args: { id: 'forgotten-node' } }
+    for (const message of [
+      { role: 'user', content: 'Forget the old fact.' },
+      { role: 'assistant', content: '', toolCall: call },
+      { role: 'tool', content: 'Deleted.', toolCallId: call.id, metadata: { success: true, memoryMutation: { action: 'forget', id: 'forgotten-node', summary: 'Old fact' } } },
+    ] as Message[]) await ctx.history.append({ ...message, conversationId } as Message & { conversationId: string }, ctx)
+    yield 'CURRENT MEMORY TURN'
+  })
+  const response = await regenerate()
+  expect(response.statusCode, response.body).toBe(200)
+  await vi.waitFor(() => expect(memoryRuntime.extractAndStoreMemories).toHaveBeenCalledTimes(1))
+  const extraction = vi.mocked(memoryRuntime.extractAndStoreMemories).mock.calls[0][0]
+  expect(extraction.sourceTurnId).toBeTruthy()
+  expect(extraction.messages).toHaveLength(3)
+  expect(extraction.messages.some(message => message.content === 'Original')).toBe(false)
+  expect(extraction.messages.at(-1)).toMatchObject({ toolCallId: 'current-forget', metadata: { success: true, memoryMutation: { action: 'forget', summary: 'Old fact' } } })
+})
+
+it('reserves extraction before the producer and retains a later deletion during delayed history loading', async () => {
+  await setSessionMemoryEnabled(tenants[0], sessionId, true)
+  const scope = { tenantId: tenants[0], sessionId, scope: 'session' as const }
+  const manager = new SQLiteMemoryManager()
+  const forgotten = await manager.createNode({ type: 'fact', summary: 'Delayed history fact' }, scope)
+  let release!: () => void, started!: () => void
+  const pending = new Promise<void>(resolve => { release = resolve })
+  const arrived = new Promise<void>(resolve => { started = resolve })
+  let captured: unknown, reservation: ReturnType<typeof memoryRuntime.reserveMemoryExtraction>
+  vi.mocked(ReActStrategy.prototype.run).mockImplementation(async function* (_prompt, ctx) {
+    vi.spyOn(ctx.history, 'getByConversationId').mockImplementationOnce(async () => {
+      started(); await pending
+      return [{ role: 'user', content: 'Delayed history fact' }]
+    })
+    yield 'CURRENT MEMORY TURN'
+  })
+  vi.mocked(memoryRuntime.extractAndStoreMemories).mockImplementation(async options => {
+    reservation = options.extractionTracker
+    captured = reservation?.snapshot().exclusions
+    return { extracted: 0, stored: 0, errors: [] }
+  })
+  const response = await regenerate()
+  expect(response.statusCode, response.body).toBe(200)
+  await arrived
+  await manager.deleteNode(forgotten.id, scope)
+  release()
+  await vi.waitFor(() => expect(captured).toEqual([{ action: 'forget', summary: 'Delayed history fact' }]))
+  await vi.waitFor(() => expect(reservation?.matches(scope)).toBe(false))
+})
+
 it('retains equal-named sessions independently and an old expiry cannot evict a successor', async () => {
   const timers = vi.spyOn(globalThis, 'setTimeout')
   try {

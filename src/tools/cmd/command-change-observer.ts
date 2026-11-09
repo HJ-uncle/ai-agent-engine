@@ -7,6 +7,7 @@ import { getDb, getDbEpoch } from '../../storage/sqlite/db.js'
 import { canonicalFilePathSync, hashFileContent, withFileLocks } from '../../shared/file-version.js'
 import { discardUnpublishedSnapshot, snapshotFromBytes, type ChangeSnapshot } from '../file/change-recorder.js'
 import { serviceForOwner } from '../../core/collaboration/execution-owner.js'
+import { captureCreatedDirectories } from '../../storage/changes/directories.js'
 
 export const COMMAND_CHANGE_LIMITS = Object.freeze({ maxFiles: 512, maxBytes: 16 * 1024 * 1024,
   maxFileBytes: 8 * 1024 * 1024, maxEntries: 10_000, maxDepth: 16, maxScanMs: 1500, maxChanges: 128 })
@@ -16,6 +17,7 @@ const key = (value: string) => process.platform === 'win32' ? path.resolve(value
 const inside = (root: string, file: string) => { const relative = path.relative(root, file); return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative)) }
 interface SnapshotTree {
   files: Map<string, { path: string; bytes?: Buffer; signature?: string }>
+  directories: Set<string>
   known: Set<string>
   completeDirectories: Set<string>
 }
@@ -52,6 +54,7 @@ export async function createCommandChangeObserver(ctx: AgentContext, root: strin
     if (getDb() !== sourceDb || sourceDb.closed || getDbEpoch(sourceDb) !== sourceEpoch) throw new Error('Command observation datasource changed')
   }
   const sequence = await store.latestSequence()
+  const directorySequence = await store.latestDirectorySequence()
   const skippedReasons: Record<string, number> = {}
   const skippedSamples: string[] = []
   let skippedCount = 0, concurrentChangesExcluded = 0
@@ -84,7 +87,7 @@ export async function createCommandChangeObserver(ctx: AgentContext, root: strin
     } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error }
   }
   async function scan(capture: boolean): Promise<SnapshotTree> {
-    const tree: SnapshotTree = { files: new Map(), known: new Set([key(canonicalRoot)]), completeDirectories: new Set() }
+    const tree: SnapshotTree = { files: new Map(), directories: new Set(), known: new Set([key(canonicalRoot)]), completeDirectories: new Set() }
     let entries = 0, totalBytes = 0
     const started = Date.now()
     const queue = [{ dir: canonicalRoot, depth: 0 }]
@@ -96,6 +99,7 @@ export async function createCommandChangeObserver(ctx: AgentContext, root: strin
       try {
         const stat = await fs.lstat(dir)
         if (!stat.isDirectory() || stat.isSymbolicLink() || !safe(dir)) { skip(dir, 'linked-or-changed-directory'); continue }
+        tree.directories.add(dir)
         handle = await fs.opendir(dir)
         for (;;) {
           if (entries >= limits.maxEntries || Date.now() - started > limits.maxScanMs) { skip(dir, 'scan-limit'); break }
@@ -176,6 +180,7 @@ export async function createCommandChangeObserver(ctx: AgentContext, root: strin
     const after = await scan(false)
     const candidates = new Map([...before.files, ...after.files])
     let finalBytes = 0
+    let recordedDirectoryCount = 0
     for (const [identity, candidate] of candidates) {
       if (Date.now() - started > limits.maxScanMs) { skip(candidate.path, 'final-scan-limit'); continue }
       const prior = before.files.get(identity)
@@ -226,7 +231,25 @@ export async function createCommandChangeObserver(ctx: AgentContext, root: strin
         if (!recorded) { if (oldSnapshot) discardUnpublishedSnapshot(oldSnapshot); if (newSnapshot) discardUnpublishedSnapshot(newSnapshot) }
       }
     }
-    return { changes, tracking: tracking(skippedCount ? 'partial' : 'complete', changes.length) }
+    // A command may only mkdir, with file tools writing into it later. That
+    // absence boundary must survive independently of those later file edits.
+    for (const directory of after.directories) {
+      if (key(directory) === key(canonicalRoot) || !isNewWithinCoveredDirectory(directory)) continue
+      if (Date.now() - started > limits.maxScanMs || changes.length + recordedDirectoryCount >= limits.maxChanges) { skip(directory, 'directory-receipt-limit'); continue }
+      const entries = captureCreatedDirectories(path.join(directory, '.directory-creation-probe'), [directory])
+      if (!entries.length) continue
+      try {
+        ensureSource()
+        if (await store.hasDirectoryChangesAfter(directory, directorySequence, sequence)) {
+          concurrentChangesExcluded++; skip(directory, 'concurrent-managed-directory'); continue
+        }
+        const recordedDirectories = await store.recordCreatedDirectories(tenantId, {
+          sessionId, turnId: job.turnId, runId: job.runId, source: 'command-observation', commandJobId: job.jobId, requiresExplicitRevert: true,
+        }, entries)
+        recordedDirectoryCount += recordedDirectories.length
+      } catch { skip(directory, 'directory-recording-failed') }
+    }
+    return { changes, tracking: { ...tracking(skippedCount ? 'partial' : 'complete', changes.length), recordedDirectoryCount } }
   }
   return { initial: tracking('observing'), finish: () => finished ??= finish(), dispose: () => before.files.clear() }
 }

@@ -12,7 +12,7 @@ afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks() })
 const mutation = (): ToolCall => ({ id: '', name: 'write_file', args: { path: 'private/module.ts', content: 'same' } })
 const execute = (): ToolCall => ({ id: '', name: 'execute_cmd', args: { command: 'node', args: ['-v'] } })
 const read = (): ToolCall => ({ id: '', name: 'read_file', args: { path: 'private/module.ts' } })
-const hasNotice = (request: { options: LLMAdapterOptions }) => request.options.systemPrompt?.includes(MUTATION_REPETITION_PROMPT) ?? false
+const hasNotice = (request: { options: LLMAdapterOptions }) => request.options.requestContext?.includes(MUTATION_REPETITION_PROMPT) ?? false
 
 function fixture(calls: ToolCall[], profile: 'code' | 'general' = 'code') {
   const history: Message[] = []
@@ -56,13 +56,13 @@ describe('request-local repeated mutation advice', () => {
   it.each(['code', 'general'] as const)('is dispatched through the next %s ReAct request and disappears after changed evidence', async profile => {
     const f = fixture([mutation(), mutation(), mutation(), { ...mutation(), args: { path: 'module.ts', content: 'changed' } }], profile)
     await f.run()
-    expect(f.requests.slice(0, 3).every(request => !request.options.systemPrompt?.includes(MUTATION_REPETITION_PROMPT))).toBe(true)
-    expect(f.requests[3].options.systemPrompt).toContain(MUTATION_REPETITION_PROMPT)
+    expect(f.requests.slice(0, 3).every(request => !request.options.requestContext?.includes(MUTATION_REPETITION_PROMPT))).toBe(true)
+    expect(f.requests[3].options.requestContext).toContain(MUTATION_REPETITION_PROMPT)
     expect(f.requests[3].options.tools?.map(tool => tool.name)).toContain('write_file')
     expect(f.requests[3].options.requestInputTokenEstimate).toBe(estimateRequestInput(
-      f.requests[3].messages, f.requests[3].options.systemPrompt, f.requests[3].options.tools!))
+      f.requests[3].messages, f.requests[3].options.systemPrompt, f.requests[3].options.tools!, f.requests[3].options.requestContext))
     expect(f.requests[3].options.requestInputTokenEstimate! + f.requests[3].options.maxTokens!).toBeLessThanOrEqual(100_000)
-    expect(f.requests[4].options.systemPrompt ?? '').not.toContain(MUTATION_REPETITION_PROMPT)
+    expect(f.requests[4].options.requestContext ?? '').not.toContain(MUTATION_REPETITION_PROMPT)
     expect(f.history.some(message => String(message.content).includes(MUTATION_REPETITION_PROMPT))).toBe(false)
     expect(f.ctx.tools.preflight).toHaveBeenCalledTimes(4)
     expect(f.outcomes.at(-1)).toMatchObject({ status: 'succeeded', stopReason: 'completed' })
@@ -79,8 +79,8 @@ describe('request-local repeated mutation advice', () => {
   it.each(['code', 'general'] as const)('dispatches advice for alternating successful %s write and execute calls without changing base progress', async profile => {
     const f = fixture([mutation(), execute(), mutation(), execute(), mutation(), execute()], profile)
     await f.run()
-    expect(f.requests.slice(0, 4).every(request => !request.options.systemPrompt?.includes(MUTATION_REPETITION_PROMPT))).toBe(true)
-    expect(f.requests.slice(4).every(request => request.options.systemPrompt?.includes(MUTATION_REPETITION_PROMPT))).toBe(true)
+    expect(f.requests.slice(0, 4).every(request => !request.options.requestContext?.includes(MUTATION_REPETITION_PROMPT))).toBe(true)
+    expect(f.requests.slice(4).every(request => request.options.requestContext?.includes(MUTATION_REPETITION_PROMPT))).toBe(true)
     expect(f.requests[4].options.systemPrompt).not.toContain('private/module.ts')
     expect(f.requests.length).toBe(7)
     expect(f.outcomes.at(-1)).toMatchObject({ status: 'succeeded', stopReason: 'completed' })
@@ -158,7 +158,7 @@ describe('request-local repeated mutation advice', () => {
       ? { success: true, output: JSON.stringify({ status: 'running' }), metadata: { commandJob: { status: 'running' } } }
       : { success: true, output: 'done' })
     await f.run()
-    expect(f.requests.some(request => request.options.systemPrompt?.includes(MUTATION_REPETITION_PROMPT))).toBe(false)
+    expect(f.requests.some(request => request.options.requestContext?.includes(MUTATION_REPETITION_PROMPT))).toBe(false)
   })
 
   it('preserves a blocked permission outcome without changing access or injecting advice', async () => {
@@ -168,7 +168,7 @@ describe('request-local repeated mutation advice', () => {
       pendingAction: { type: 'fs_policy' } }))
     await f.run()
     expect(f.requests).toHaveLength(1)
-    expect(f.requests[0].options.systemPrompt ?? '').not.toContain(MUTATION_REPETITION_PROMPT)
+    expect(f.requests[0].options.requestContext ?? '').not.toContain(MUTATION_REPETITION_PROMPT)
     expect(f.ctx.tools.execute).not.toHaveBeenCalled()
     expect(f.outcomes.at(-1)).toMatchObject({ status: 'blocked' })
   })

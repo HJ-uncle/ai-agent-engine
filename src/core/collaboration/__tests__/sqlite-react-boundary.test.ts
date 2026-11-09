@@ -69,8 +69,27 @@ async function child(key = 'dispatch-one') {
   return { ...admitted, input, target: 'child:' + admitted.mutation.header.childSessionId }
 }
 async function mail(body = 'Peer evidence', key: string = randomUUID()) {
-  const sender = await child()
-  return runtime.send(sender.producer, { recipientParticipantId: 'root:' + rootRunId, message: body, requestKey: key })
+  const input = { tenantId: scope.tenantId, rootSessionId: scope.sessionId, parentSessionId: scope.sessionId,
+    parentConversationId: turnId, parentMessageId: 'peer-dispatch:' + key, parentToolCallId: 'peer-call:' + key,
+    task: 'Send peer evidence to the parent.', description: key, modelId: 'scripted-only',
+    continuation: { readOnly: true, systemPrompt: '', toolNames: [], workspacePaths: [] } }
+  await ctx.history.append((await readAdmissionSeed(db, scope, rootRunId)).message, scope)
+  await raw.append({ id: input.parentMessageId, role: 'assistant', content: '',
+    toolCall: { id: input.parentToolCallId, name: 'subagent_start', args: { task: input.task } }, conversationId: turnId }, scope)
+  let accepted!: Awaited<ReturnType<CollaborationRuntime['send']>>
+  const started = await new SubagentRunner(agents).start(input, ctx, async execution => {
+    const target = context(createConversationHistory(), execution.executionOwner!, execution.snapshot.childSessionId)
+    delete target.userMessageId; target.runId = execution.snapshot.runId; target.runObserver = execution.observer; target.signal = execution.signal
+    target.sqliteDelivery = createSQLiteReActBoundary(target)
+    accepted = await runtime.send(owners.producerForExecution(execution.executionOwner!), {
+      recipientParticipantId: 'root:' + rootRunId, message: body, requestKey: key,
+    })
+    await run(input.task, target, { ...llm,
+      stream: vi.fn(async function* () { yield { done: true, content: 'Peer evidence sent.' } }),
+    })
+  })
+  expect((await started.completion).status).toBe('succeeded')
+  return { ...accepted, dispatchId: input.parentMessageId, resultId: 'subagent-result:' + started.runId }
 }
 beforeEach(async () => {
   const old = getDb() as LocalSqliteProcessClient; await closeDb(); await old.whenClosed()
@@ -122,7 +141,9 @@ it('continues for mail accepted during the last provider response before sealing
   expect(calls).toBe(2)
   expect(outcomes).toMatchObject([{ status: 'succeeded' }])
   expect((await runtime.sqliteDeliveryReceipt(producer, acceptedId))?.state).toBe('integrated')
-  await expect(mail('after final fence')).rejects.toMatchObject({ code: 'closed' })
+  // Keep the sender valid so this specifically tests the root recipient fence.
+  await expect(runtime.send(producer, { recipientParticipantId: 'root:' + rootRunId,
+    message: 'after final fence', requestKey: 'after-final-fence' })).rejects.toMatchObject({ code: 'closed' })
 })
 
 it('preserves the admitted human plus both peers and the actual current tool exchange when inheritance is disabled', async () => {
@@ -139,7 +160,8 @@ it('preserves the admitted human plus both peers and the actual current tool exc
   expect(llm.stream).toHaveBeenCalledTimes(1)
   const messages = vi.mocked(llm.stream).mock.calls[0][0]
   const receipt1 = await runtime.sqliteDeliveryReceipt(producer, first.messageId), receipt2 = await runtime.sqliteDeliveryReceipt(producer, second.messageId)
-  expect(messages.map(message => message.id)).toEqual([userId, receipt1!.historyMessageId, 'current-assistant', 'current-tool', receipt2!.historyMessageId])
+  expect(messages.map(message => message.id)).toEqual([userId, first.dispatchId, first.resultId, receipt1!.historyMessageId,
+    'current-assistant', 'current-tool', second.dispatchId, second.resultId, receipt2!.historyMessageId])
   expect(messages[0].content).toBe(task)
   expect(messages.filter(message => String(message.content).startsWith('[对等 Agent 消息]'))).toHaveLength(2)
   expect(outcomes.at(-1)?.status).toBe('succeeded')
@@ -148,7 +170,8 @@ it('uses the authenticated SQLite origin reader even when no private consumer wa
   await seed(); const accepted = await mail()
   await runtime.consumeSQLiteDelivery(await runtime.bindSQLiteDelivery(producer, { db, ...scope, anchorId: userId }))
   delete ctx.sqliteDelivery; await run()
-  expect(vi.mocked(llm.stream).mock.calls[0][0].map(message => message.id)).toEqual([userId, (await runtime.sqliteDeliveryReceipt(producer, accepted.messageId))!.historyMessageId])
+  expect(vi.mocked(llm.stream).mock.calls[0][0].map(message => message.id)).toEqual([userId, accepted.dispatchId, accepted.resultId,
+    (await runtime.sqliteDeliveryReceipt(producer, accepted.messageId))!.historyMessageId])
 })
 it('refuses an independently edited root input before first binding rather than adopting its readable ID', async () => {
   const admitted = await readAdmissionSeed(db, scope, rootRunId)
@@ -165,7 +188,8 @@ it.each(['compress', 'micro-compact'] as const)('atomically invalidates %s, supp
   const consumer = await runtime.bindSQLiteDelivery(producer, { db, ...scope, anchorId: userId }); await runtime.consumeSQLiteDelivery(consumer)
   await raw.append({ id: 'compact-tool', role: 'tool', content: 'large evidence '.repeat(500), toolCallId: 'old-call', conversationId: turnId }, scope)
   const prior = await epoch()
-  if (kind === 'compress') await raw.compress(scope, async () => 'Owned summary', 3)
+  // The current exchange now also includes the real peer's dispatch and result.
+  if (kind === 'compress') await raw.compress(scope, async () => 'Owned summary', 5)
   else expect((await raw.microCompactToolResults(scope, { keepRecent: 0 })).cleared).toBe(1)
   expect(await epoch()).toBe(prior + 1)
   expect(await runtime.sqliteDeliveryReceipt(producer, accepted.messageId)).toMatchObject({ state: 'suppressed', reason: 'history_changed' })
@@ -236,7 +260,7 @@ it('consumes a bounded backlog over real ReAct iterations without duplicate hist
   expect(messages[1].filter(message => String(message.content).startsWith('[对等 Agent 消息]'))).toHaveLength(35)
   expect(await count('collaboration_deliveries')).toBe(35)
   expect(Number((await observer.execute("SELECT count(*) AS n FROM conversations WHERE message_id LIKE 'peer:%'")).rows[0].n)).toBe(35)
-})
+}, 30_000) // 35 real child executions, terminal projections and durable mailbox receipts.
 it('keeps integrated distinct from provider failure and does not append the same mail on model retry', async () => {
   const accepted = await mail()
   llm.stream = vi.fn(async function* () { throw new Error('scripted provider failure'); yield { done: true } })

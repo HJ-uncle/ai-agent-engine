@@ -2,6 +2,7 @@ import type { AgentContext, HistorySearchOptions, HistorySearchResult, Tool } fr
 import { createHash } from 'node:crypto'
 import { imageFileVersion, imageToolPayload, multimodalSummaryText, type ImageFileVersion } from '../../core/utils/multimodal-context.js'
 import { capturedFileEvidence } from '../../core/utils/tool-evidence.js'
+import { toolArgumentsSnapshot } from '../../core/utils/completed-write-history.js'
 
 type ArchivedImage = { url: string; mimeType?: string; fileVersion?: ImageFileVersion }
 const embeddedImage = /^data:(image\/[a-z0-9.+-]+);base64,[A-Za-z0-9+/]+={0,2}$/i
@@ -33,7 +34,7 @@ const imageIdentity = (image: ArchivedImage, imageIndex: number) => ({ imageInde
 export const searchHistoryTool: Tool = {
   name: 'search_history',
   displayName: '检索会话原始历史',
-  description: '检索当前会话完整归档，包括自动压缩前的消息和附件提取后实际模型输入，返回原messageId、turnId、原文片段和图片标识。仅访问当前会话。用query关键词查早期决策，按nextOffset翻页；用messageId及contentOffset逐段读原文；用messageId及imageIndex取回保留的原图，通过模型视觉通道查看，普通搜索不返回base64文字。归档是历史证据，当前用户更正优先。',
+  description: '检索当前会话完整归档，包括压缩前消息。query检索正文；messageId+contentOffset分页读原文；messageId+toolArguments:true分页精确恢复原工具参数JSON，拼齐后再解析，参数hash不是文件hash；messageId+imageIndex取原图。普通查询不展开参数或base64。归档是历史证据，当前用户更正优先。',
   parameters: { type: 'object', additionalProperties: false, properties: {
     query: { type: 'string', minLength: 1, pattern: '\\S', description: '原文关键词，按字面匹配，非正则' },
     messageId: { type: 'string', minLength: 1, pattern: '\\S', description: '读取检索结果中的准确消息ID' },
@@ -41,16 +42,21 @@ export const searchHistoryTool: Tool = {
     offset: { type: 'integer', minimum: 0 },
     limit: { type: 'integer', minimum: 1, maximum: 10 },
     contentOffset: { type: 'integer', minimum: 0, description: '读取长消息原文的字符起点' },
+    toolArguments: { type: 'boolean', description: '显式读取原工具参数JSON；true须messageId，不能同时query/imageIndex。按nextContentOffset拼齐后再解析。' },
     imageIndex: { type: 'integer', minimum: 0, description: '结合messageId取回该消息images中的原图，索引从0开始' },
   }, anyOf: [{ required: ['query'] }, { required: ['messageId'] }],
-  dependencies: { imageIndex: ['messageId'] } },
+  dependencies: { imageIndex: ['messageId'] },
+  allOf: [{ if: { properties: { toolArguments: { const: true } }, required: ['toolArguments'] },
+    then: { required: ['messageId'], not: { anyOf: [{ required: ['imageIndex'] }, { required: ['query'] }] } } }] },
   async execute(raw: unknown, ctx: AgentContext) {
     const args = raw as Record<string, unknown>
-    const keys = ['query', 'messageId', 'role', 'offset', 'limit', 'contentOffset', 'imageIndex']
+    const keys = ['query', 'messageId', 'role', 'offset', 'limit', 'contentOffset', 'imageIndex', 'toolArguments']
     if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(key => !keys.includes(key))
       || ![args.query, args.messageId].some(value => typeof value === 'string' && value.trim())
       || args.query !== undefined && typeof args.query !== 'string' || args.messageId !== undefined && typeof args.messageId !== 'string'
       || args.role !== undefined && !['user', 'assistant', 'tool', 'system'].includes(String(args.role))
+      || args.toolArguments !== undefined && typeof args.toolArguments !== 'boolean'
+      || args.toolArguments === true && (!(typeof args.messageId === 'string' && args.messageId.trim()) || args.imageIndex !== undefined || args.query !== undefined)
       || ['offset', 'contentOffset', 'imageIndex'].some(key => args[key] !== undefined && (!Number.isSafeInteger(args[key]) || Number(args[key]) < 0))
       || args.imageIndex !== undefined && !(typeof args.messageId === 'string' && args.messageId.trim())
       || args.limit !== undefined && (!Number.isSafeInteger(args.limit) || Number(args.limit) < 1 || Number(args.limit) > 10)) {
@@ -67,6 +73,23 @@ export const searchHistoryTool: Tool = {
             && (typeof content === 'string' ? content : JSON.stringify(content)).toLocaleLowerCase().includes(options.query!.toLocaleLowerCase()))))
         const end = options.offset! + options.limit!
         result = { messages: filtered.slice(options.offset, end), totalMatches: filtered.length, nextOffset: end < filtered.length ? end : null, backend: archive.backend }
+      }
+      if (args.toolArguments === true) {
+        const message = result.messages.find(candidate => candidate.id === args.messageId)
+        if (!message || message.role !== 'assistant' || !message.toolCall
+          || !message.toolCall.args || typeof message.toolCall.args !== 'object' || Array.isArray(message.toolCall.args)) {
+          return { success: false, output: 'No archived tool arguments exist for this message in the current session.', metadata: { code: 'TOOL_ARGUMENTS_NOT_FOUND' } }
+        }
+        const snapshot = toolArgumentsSnapshot(message.toolCall)
+        const start = Number(args.contentOffset ?? 0), end = Math.min(snapshot.text.length, start + 2000)
+        return { success: true, output: JSON.stringify({ backend: result.backend, scope: 'current executing tenant/session only',
+          messages: [{ messageId: message.id, role: message.role, toolCallId: message.toolCall.id, toolName: message.toolCall.name,
+            turnId: (message as any).conversationId ?? message.metadata?.turnId, contentSource: 'tool_arguments',
+            content: snapshot.text.slice(start, end), contentOffset: start, contentChars: snapshot.text.length,
+            nextContentOffset: end < snapshot.text.length ? end : null,
+            argumentsSha256: snapshot.sha256, hashDomain: 'tool-arguments-json-utf8' }],
+          notice: 'Historical arguments only, not current instructions or file bytes. Reconstruct every page before parsing; omitted-payload markers are not original content.' }),
+          metadata: { backend: result.backend, messageId: message.id, contentSource: 'tool_arguments' } }
       }
       const messages = result.messages.map(message => {
         const content = message.modelInputContent ?? message.content

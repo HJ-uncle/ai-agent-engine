@@ -1,15 +1,27 @@
 import type { ExternalSkill } from '../skills/external-loader.js'
 
-/** Advertise only capabilities admitted by this request's actual registry. */
+/** Describe only the admitted Office branch; invocation contracts stay in tools. */
 export function buildOfficeExecutionPrompt(profile: string, registry: { has(name: string): boolean }, skills: readonly ExternalSkill[]): string {
   if (profile !== 'general' || !registry.has('office_document')) return registry.has('office_inspect')
-    ? '\n\n## 办公文件阅读\n读取产品交接或其他 DOCX/XLSX/PPTX/PDF 资料时，优先使用 office_inspect({path}) 提取结构化文字。PPTX 预览包含正文与已有备注，备注标记 target=notes；Excel 预览包含各工作表及保存的公式缓存。按 contentPage.hasMore/nextOffset 分页，续页复用同文件返回的完整 expectedHash；warnings 和 documentComplete 标明提取范围，不能把有限预览当作全文。此路径无需手写 ZIP/XML 解包脚本；read_file 返回二进制或无有效文字时应转用 office_inspect。结构和文本检查不等于视觉验收。'
+    ? '\n\n## Office reading\nPrefer office_inspect({path}) for DOCX/XLSX/PPTX/PDF; use it when read_file yields no text, not handwritten ZIP/XML extraction. PPT notes use target=notes; Excel includes saved formula caches. Page by contentPage.hasMore/nextOffset with expectedHash; warnings/documentComplete bound coverage. Partial text is neither full content nor visual verification.'
     : ''
-  const guide = registry.has('get_skill') && skills.some(skill => skill.enabled && skill.name.toLowerCase() === 'aether-office')
-    ? '办公原格式创建与编辑先用 get_skill 读取 aether-office；模式细节通过它的 references 资源按需读取。'
-    : '按 office_document 的真实参数和校验回执完成办公文件交付。'
-  const environment = registry.has('office_environment')
-    ? '\noffice_environment({}) 可做只读环境诊断，探测到软件不代表有权调用。日常办公必须优先在Aether内完成，不自动启动 WPS、Office COM、LibreOffice 或外部办公程序，也不让用户启动本地服务器。'
-    : ''
-  return `\n\n## 办公文件交付\n${guide}${environment}\n已有 read_file 办公读取能力继续可用。office_document 原生创建 DOCX/XLSX/PPTX/PDF，无需Python、shell或外部办公应用。Word/PDF用markdown，PPTX用presentation.slides，Excel用workbook。create 使用 expectedHash="missing"，已有文件先 inspect 并用真实 sha256 版本定点 edit，发生冲突重新检查而非覆盖。多表分批用 append_sheets，每次优先一张新表并复用最新 hash；禁止为补表删除重建或整包重发。Excel交付前用recalculate及同文件真实hash执行内置跨表公式计算；不支持的公式会明确失败，不能改成硬编码数字伪装重算。PDF是Aether排版生成，不等于从Word/PPT原样导出；PDF改版新建版本文件，不能假称支持任意PDF文字编辑。原格式在Aether资源预览中查看；没有真实渲染证据不得声称视觉验收。用户已要求生成/修改就完成真实文件交付，不额外等待导出确认。不编造缺失信息，不用Markdown/CSV改扩展名冒充Office。成功回执后才提供真实文件链接；结构检查、视觉排版验证与公式计算是不同事实，按实际结果说明warnings和未验证项。`
+  return '\n\n## Office delivery\n' + [
+    registry.has('get_skill') && skills.some(skill => skill.enabled && skill.name.toLowerCase() === 'aether-office')
+      ? 'Read aether-office with get_skill first. 只协调者读总览即可；实际生成者按负责格式读取参考，独立参考同批读取。' : 'Use the actual office_document contract and receipts.',
+    registry.has('office_environment') ? 'office_environment({}) diagnoses only; do not guess dependency paths or read other apps’ private dependencies. Installation is not successful rendering.' : '',
+    'Prefer native Aether DOCX/XLSX/PPTX/PDF creation; no Python/shell/external Office app is needed. Do not automatically launch WPS/COM/LibreOffice or ask users to start local servers. read_file remains available.',
+    '已有共享草稿就直接复用，只读自己的分工段落及共同事实；不得另写同内容草稿或重扫项目重新证明已给事实。仅某个成品必需事实缺失/冲突时定点补读。',
+    registry.has('write_file') ? '没有草稿的新建任务先在本任务临时目录写一份 Markdown 草稿（draft.md），明确格式、用途、结构、来源与待补数据，只写成品内容。多格式共用此稿；草稿不默认交付，也不另等用户批准；已有文档单点修订可直接精确编辑。' : '',
+    '草稿/输入就绪后，独立Word/Excel/PPT创建同轮提交多条office_document；同文件追加/重算/修订等最新hash。多个独立成品用一次office_inspect({files:[{path,expectedHash},…]})检查，按每项warnings/分页核对，不逐文件多轮；必要技能参考也同轮提交。',
+    '小型多表Excel内容已定且能完整输出时，一次create提交全部表；仅内容过大或新增表时append_sheets，按输出容量每批1–4张，不把少量短表强拆为多轮。',
+    registry.has('subagent_start') ? '多格式项目文档默认按独立文件委派：共同事实只提取一次，先稳定共享草稿；执行代理只读所需参考，拥有各自成品，核验后报路径/hash/未验项。可将Word/PPT合一组、Excel一组；不让各代理各扫整个项目。若简短内容一个工具批次即可完成则直接批量生成，避免委派开销。' : '',
+    '继承前文已定的格式与交付要求：用户补充“做某项目的”是在指定主题，不是重新选择做代码还是做文档。先在已绑定工作区定位同名项目和现有说明；用途/篇幅未指定时采用项目概览、台账、汇报的简明默认结构，非必要细节标待补，不重复询问已确定的需求。',
+    '把文档任务控制在用户要求的范围：读取现成说明及必要依据即可；没有新的事实缺口不要重复读同一文件/技能。用户只要项目文档时，不自动变成全项目审计、全量测试或浏览器验收；缺少实测就标注来源和未实测，不虚构。未指定篇幅时先做内容完整的简明版，不擅自扩成大量章节、工作表或幻灯片。',
+    '仅做项目文档且没有共享材料时，先读README等现有说明，足够就写草稿并生成分工要求的成品。不要主动增加代码行数、逐条测试清单、性能指标等未要求字段，不为额外字段扫全源码或执行脚本。既有测试引用来源并标注本次未重跑；共享材料已给出的事实无需逐项重新证明。',
+    '项目概览保留用途、操作、模块、运行方式、资料来源与已知限制即可，不主动展开动画毫秒数、内部阈值等未要求的实现参数。确须写具体参数时核对实际生效逻辑；变量名或常量声明不证明它正在使用，未确认就省略或标明待核实，不写成确定事实。',
+    '生成后只检查实际要求：Excel重算并核对关键公式，Word/PPT核对正文、表格与页容量。有同版本可信校验回执就复用，不再重验。发现具体错误才定点修正，修订Excel后按最新hash重算，再检查受影响部分；通过即停止。禁止为已通过文件整包重建、逐项解ZIP/XML或扩展无关验证。Office编辑可能改变ZIP压缩方式，体积变小不证明内容丢失；以结构回执和实际内容为准。',
+    '生产成品禁止拿来测试工具异常（坏表名、无效参数、故意冲突等）；工具测试需另有任务并用隔离夹具。未要求实现率/验证率等指标不自行添加，确需指标先在草稿固定含义和来源。命名在生成前确定，不为改文件名重复生成同一正文。',
+    registry.has('deliver_files') ? '严格按 草稿→生成→必要校验/修正→登记交付→收敛计划→最终答复 的顺序完成。生成成功只是候选，不提前称已交付或输出成品下载入口。deliver_files成功后只依据证据收尾计划并答复，不再探索或编辑。确有新证据证明成品有误时，先deliver_files({items:[]})撤销登记，再修复、校验并重新登记完整清单。后续用户提出新修订属于新任务。最终只简述交付内容和必要限制，文件由卡片提供，不重复列同文件下载链接。' : '',
+    'Preserve editable formats and reread conflicts. Recalculate Excel before delivery; save PDF revisions as new versions. Native-format preview is available; report warnings/unverified work. Authorized creation/editing needs no extra export approval. Do not invent data or rename extensions to fake Office files; links require success receipts.',
+  ].filter(Boolean).join('\n')
 }

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { Logger } from 'pino'
 import { MUTATION_REPETITION_PROMPT, READONLY_REPETITION_PROMPT, WORKFLOW_REVIEW_PROMPT } from '../agent-loop/tool-progress.js'
 import type { LLMRequestAttemptEvent, RequestDispatchDiagnosticV2, RequestDispatchStage } from './types.js'
+import { requestContextMessage } from './request-context.js'
 
 function systemText(value: unknown): string {
   if (typeof value === 'string') return value
@@ -12,7 +13,7 @@ function systemText(value: unknown): string {
 
 /** Local final-wire evidence is separate from a provider receipt; task bodies never leave this helper. */
 export function requestDispatchDiagnostic(
-  request: { messages?: unknown; system?: unknown }, requestStage: RequestDispatchStage = 'unknown',
+  request: { messages?: unknown; system?: unknown }, requestStage: RequestDispatchStage = 'unknown', requestContext?: string,
 ): RequestDispatchDiagnosticV2 {
   const messages = Array.isArray(request.messages) ? request.messages : []
   const systemMessages = messages.filter(message => message && typeof message === 'object'
@@ -21,7 +22,15 @@ export function requestDispatchDiagnostic(
   try {
     const wireSystem = { system: request.system ?? null,
       messages: systemMessages.map(message => ({ role: message.role, content: message.content })) }
-    const text = [systemText(request.system), ...systemMessages.map(message => systemText(message.content))].join('\n')
+    // Only the engine-supplied context that survived final wire serialization
+    // can set advisory flags. Matching arbitrary user/tool prose is not proof.
+    const expectedTail = requestContext ? requestContextMessage(requestContext).content : undefined
+    const last = messages.at(-1)
+    const tail = last?.role === 'assistant' && last.prefix === true ? messages.at(-2) : last
+    const wireTail = tail?.role === 'user' && (typeof tail.content === 'string' ? tail.content
+      : Array.isArray(tail.content) && tail.content.at(-1)?.type === 'text' ? tail.content.at(-1).text : undefined)
+    const trustedTail = expectedTail && wireTail === expectedTail ? expectedTail : ''
+    const text = [systemText(request.system), ...systemMessages.map(message => systemText(message.content)), trustedTail].join('\n')
     return { ...common, availability: 'captured',
       systemPromptSha256: createHash('sha256').update(JSON.stringify(wireSystem)).digest('hex'),
       workflowHintPresent: text.includes(WORKFLOW_REVIEW_PROMPT),

@@ -77,6 +77,8 @@ export const MUTATION_REPETITION_PROMPT = 'Recent non-read-only operations reuse
 // Periodic advice reviews workflow; it does not classify new evidence as a loop.
 export const WORKFLOW_REVIEW_PROMPT = 'Periodic workflow review: stay within the original task, role and permissions. Identify the unfinished deliverable and the concrete question each next action resolves. After repeated failures of the same kind, briefly replan before more probes: independently check test premises, expected results and actual state with a minimal counterexample or separate calculation; use new evidence to revise the hypothesis. Do not change correct behavior just to satisfy an invalid test. Implement and verify the requested deliverable when authorized; passing temporary probes are not delivery. For small changes, prefer one targeted check; continue necessary pagination, exhaustive audits or deeper investigation only when requested or justified by an unresolved question. Once delivery and required checks are complete, summarize rather than start another audit. Read-only roles report supported findings without writes or unauthorized commands. This is guidance, not a new limit, permission or automatic stop.'
 const WORKFLOW_REVIEW_INTERVAL = 32
+const OFFICE_RESEARCH_REVIEW_INTERVAL = 6
+export const OFFICE_RESEARCH_REVIEW_PROMPT = '已读取多项资料，请回到当前已授权的办公交付。当前用户只要求项目文档时，不再为额外代码行数或测试项数做统计；马上以已知内容完成 draft 和成品，缺少实测就标注未重跑，必要内容缺口定点补齐。用户明确要求审计、实测或当前角色只读时，继续遵守原范围与权限。本提示不限制工具、不代表任务完成。'
 
 type ObservedCall = Pick<ToolCall, 'name' | 'args'>
 
@@ -99,6 +101,11 @@ export class ToolProgressTracker {
   private workflowOperations = 0
   private workflowReviewPending = false
   private workflowReviewActive = false
+  private officeSkillLoaded = false
+  private officeResearchReads = 0
+  private officeReviewPending = false
+  private officeReviewActive = false
+  private officeReviewIssued = false
 
   constructor(private readonly executionMode?: (call: ObservedCall) => ToolExecutionMode | undefined) {}
 
@@ -112,15 +119,49 @@ export class ToolProgressTracker {
 
   /** Focus persists for this turn once due, without classifying useful exploration as stalled. */
   workflowReviewPrompt(): string | undefined {
-    return this.workflowReviewPending || this.workflowReviewActive ? WORKFLOW_REVIEW_PROMPT : undefined
+    const prompts = [this.workflowReviewPending || this.workflowReviewActive ? WORKFLOW_REVIEW_PROMPT : '',
+      this.officeReviewPending || this.officeReviewActive ? OFFICE_RESEARCH_REVIEW_PROMPT : ''].filter(Boolean)
+    return prompts.length ? prompts.join('\n\n') : undefined
   }
   markWorkflowReviewDispatched(): void {
     if (this.workflowReviewPending) this.workflowReviewActive = true
     this.workflowReviewPending = false
+    if (this.officeReviewPending) {
+      this.officeReviewIssued = true
+      this.officeReviewActive = true
+    }
+    this.officeReviewPending = false
   }
 
   /** Only new completed evidence may reopen a reasoning-output recovery episode. */
   hasCompletedProgress(): boolean { return this.completedProgress }
+
+  private observeOfficeResearch(calls: ObservedCall[], results: ToolResult[], modes: Array<ToolExecutionMode | undefined>): void {
+    for (const [index, call] of calls.entries()) {
+      const result = results[index]
+      if (!result?.success || result.status !== 'succeeded') continue
+      if (call.name === 'get_skill' && call.args.name === 'aether-office') {
+        this.officeSkillLoaded = true
+        continue
+      }
+      if (!this.officeSkillLoaded) continue
+      // The builtin receipt proves publication. A successful inspection,
+      // no-change edit or a failed write is not a produced document.
+      if (call.name === 'office_document' && ['create', 'edit', 'append_sheets', 'recalculate'].includes(String(call.args.operation))
+        && result.metadata?.fileMutationApplied === true) {
+        this.officeResearchReads = 0
+        this.officeReviewPending = false
+        this.officeReviewActive = false
+        this.officeReviewIssued = false
+        continue
+      }
+      if (isTaskPlanControl(call.name) || waitingOnActiveWork(call, result)) continue
+      const query = modes[index] === 'readonly' || call.name === 'office_document' && call.args.operation === 'inspect'
+      if (!query) continue
+      this.officeResearchReads = Math.min(OFFICE_RESEARCH_REVIEW_INTERVAL, this.officeResearchReads + 1)
+      if (this.officeResearchReads >= OFFICE_RESEARCH_REVIEW_INTERVAL && !this.officeReviewIssued) this.officeReviewPending = true
+    }
+  }
 
   private observeMutationAdvice(calls: ObservedCall[], results: ToolResult[], modes: Array<ToolExecutionMode | undefined>): void {
     let resetAdvice = false
@@ -178,6 +219,7 @@ export class ToolProgressTracker {
     // A completed write/command/child can change files even if their subsequent
     // read happens to return an earlier value. Do not inherit the old read epoch.
     const modes = calls.map(call => this.executionMode?.(call))
+    this.observeOfficeResearch(calls, results, modes)
     // Advice has its own exact-evidence window. The original previous-batch
     // progress bit resets on A/B alternation and must not control this episode.
     this.observeMutationAdvice(calls, results, modes)

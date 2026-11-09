@@ -37,7 +37,7 @@ describe('Work executable browser capabilities', () => {
     expect(empty.registry.list().map(tool => tool.name)).toEqual(['plan_update'])
     await expect(empty.registry.execute('browser_open', { url: 'http://synthetic.invalid' }, context)).rejects.toBeInstanceOf(ToolNotFoundError)
     const limited = await createToolRegistry({ toolProfile: 'general', allowedTools: ['browser_snapshot'] })
-    expect(limited.registry.list().map(tool => tool.name).sort()).toEqual(['browser_snapshot', 'plan_update'])
+    expect(limited.registry.list().map(tool => tool.name).sort()).toEqual(['browser_snapshot', 'load_tools', 'plan_update'])
   })
 
   it('executes open/snapshot/click/close through actual queue receipts pinned to the task', async () => {

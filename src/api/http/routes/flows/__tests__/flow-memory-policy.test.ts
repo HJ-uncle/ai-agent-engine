@@ -52,6 +52,13 @@ it.each(['general', 'code'])('%s nodes honor disabled tenant preferences despite
     tenantId: 'tenant-a', sessionId: contexts[0].sessionId, toolProfile: profile,
   } }))
 })
+it.each(['general', 'code'])('new %s automated Flow nodes keep memory off without saved preferences', async profile => {
+  const result = await run({}, { 'x-aether-tool-profile': profile })
+  expect(result.statusCode, result.body).toBe(200)
+  expect(contexts).toHaveLength(1)
+  expect(contexts[0]).toMatchObject({ toolProfile: profile, memoryScope: 'off', memoryScopes: [] })
+  expect(fixture.registry).toHaveBeenCalledWith(expect.objectContaining({ memoryScope: 'off', memoryScopes: [] }))
+})
 it('isolates equal Flow definitions across authenticated tenants', async () => {
   await setMemoryPreferences('tenant-a', { globalEnabled: true, sessionDefaultEnabled: false })
   await setMemoryPreferences('tenant-b', { globalEnabled: false, sessionDefaultEnabled: true })

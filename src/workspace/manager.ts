@@ -383,7 +383,10 @@ export class WorkspaceManager {
   getPaths(ctx: CtxLike): string[] {
     this.assertContext(ctx)
     const child = this.childScope(ctx)
-    if (child) return [...new Set([...child.roots, child.scratch])]
+    // Frozen permission roots may come from legacy continuations in arbitrary
+    // order. The relative-path base is always the inherited binding, never the
+    // first output/scratch directory mentioned in that permission list.
+    if (child) return [...new Set([child.snapshot.root, ...child.roots, child.scratch])]
     const paths = [this.getWorkingDirectory(ctx), this.getScratchDirectory(ctx)]
     if (!this.isAuthenticated()) {
       paths.push(...(ctx.projectRoot ? [path.resolve(ctx.projectRoot)] : []))

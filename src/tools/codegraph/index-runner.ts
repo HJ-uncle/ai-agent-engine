@@ -46,6 +46,8 @@ export interface StartIndexResult {
 export interface StartIndexOptions {
   /** true = 删库重建（recreate 后重新索引），用于设置页的「重建索引」 */
   rebuild?: boolean
+  /** Tool callers freeze and recheck their workspace authorization before dispatch. */
+  assertCurrent?: () => void
 }
 
 /**
@@ -63,6 +65,7 @@ export async function startIndexing(root: string, options?: StartIndexOptions): 
   } catch (e: any) {
     return { started: false, error: e?.message ?? String(e) }
   }
+  options?.assertCurrent?.()
   // rebuild 仅对已初始化的项目生效：未初始化时退回首次建索引（recreate 会因未初始化抛错）
   let effectiveRebuild = false
   if (CodeGraph.isInitialized(root)) {

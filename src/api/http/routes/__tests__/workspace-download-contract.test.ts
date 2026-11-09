@@ -70,6 +70,14 @@ it('the system prompt example downloads the exact company-relative nested file w
   expect(response.headers['content-disposition']).toBe(`attachment; filename*=UTF-8''${encodeURIComponent(path.basename(relativePath))}`)
 })
 
+it('uses registered Work cards once while retaining the link contract for clients without cards', () => {
+  const work = buildWorkspaceDownloadPrompt(identity.sessionId, 'cards')
+  expect(work).toContain('不再列同文件的Markdown下载链接')
+  expect(work).toContain('用户明确索要正文链接')
+  expect(work).toContain('URLSearchParams')
+  expect(buildWorkspaceDownloadPrompt(identity.sessionId)).not.toContain('不再列同文件')
+})
+
 it('preserves Chinese names, spaces and query/Markdown delimiters without truncation or double decoding', async () => {
   const relativePath = '财务 团队/交付 v002/报告 (最终) & 回款+现金#50%20.xlsx'
   artifact(relativePath, 'exact special-name bytes')

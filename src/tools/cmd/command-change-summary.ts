@@ -4,7 +4,7 @@ import type { CommandJobSnapshot } from '../../core/command-jobs/types.js'
  * actionable file versions and honest coverage, not repeated transport IDs. */
 export function commandChangeSummary(job: Pick<CommandJobSnapshot, 'changes' | 'changeTracking'>): string {
   const tracking = job.changeTracking, changes = job.changes ?? []
-  if (!changes.length && tracking?.status !== 'partial' && tracking?.status !== 'unavailable') return ''
+  if (!changes.length && !tracking?.recordedDirectoryCount && tracking?.status !== 'partial' && tracking?.status !== 'unavailable') return ''
   const fields = ['id', 'path', 'kind', 'oldHash', 'newHash', 'status'] as const
   const compact = changes.map(change => ({
     ...Object.fromEntries(fields.filter(key => change[key] !== undefined).map(key => [key, change[key]])),
@@ -16,6 +16,7 @@ export function commandChangeSummary(job: Pick<CommandJobSnapshot, 'changes' | '
     rollback: '可能含外部并发编辑，须审阅并明确选择变更 ID 后回退',
     ...(tracking?.status === 'partial' ? { warning: '覆盖不完整，未列出不代表未改变或可回退' } : {}),
     ...(tracking?.recordedCount !== undefined ? { recordedCount: tracking.recordedCount } : {}),
+    ...(tracking?.recordedDirectoryCount ? { recordedDirectoryCount: tracking.recordedDirectoryCount } : {}),
     ...(tracking?.skippedCount ? { skippedCount: tracking.skippedCount } : {}),
     ...(tracking?.skippedReasons && Object.keys(tracking.skippedReasons).length ? { skippedReasons: tracking.skippedReasons } : {}),
     ...(tracking?.skippedSamples?.length ? { skippedSamples: tracking.skippedSamples } : {}),

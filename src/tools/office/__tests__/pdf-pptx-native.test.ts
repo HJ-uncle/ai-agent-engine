@@ -2,7 +2,7 @@
 import fs from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import { createPdf, inspectPdf } from '../pdf.js'
-import { createPptx, editPptx, inspectPptx } from '../pptx.js'
+import { createPptx, editPptx, inspectPptx, type PptxSlide } from '../pptx.js'
 import { readOfficeZip, writeOfficeZip } from '../office-zip.js'
 
 describe('native PDF office delivery', () => {
@@ -109,6 +109,38 @@ describe('native PPTX office delivery', () => {
       table: { headers: ['项目', '说明'], rows: [['物料', '长'.repeat(26)]] } }] })).rejects.toThrow('第 2 页表格第 2 行第 2 列（表头为第 1 行）内容过长：宽度 52/50')
     await expect(createPptx({ slides: [{ title: '预算',
       table: { headers: ['项目\n名称', '说明'], rows: [['物料', '短']] } }] })).rejects.toThrow('第 1 页表格第 1 行第 1 列（表头为第 1 行）不支持换行')
+  })
+
+  it.each<{ name: string; slide: PptxSlide; message: string }>([
+    { name: 'plain slide bullet count', slide: { title: '要点', bullets: Array(7).fill('item') }, message: '第 3 页要点数量 7/6，最多 6 条' },
+    { name: 'table slide bullet count', slide: { title: '表格', bullets: ['一', '二', '三'], table: { headers: ['项目'], rows: [['值']] } }, message: '第 3 页含表格，要点数量 3/2，最多 2 条' },
+    { name: 'second bullet width', slide: { title: '要点', bullets: ['正常', '宽'.repeat(71)] }, message: '第 3 页第 2 条要点过长：宽度 142/140' },
+    { name: 'second bullet newline', slide: { title: '要点', bullets: ['正常', '需\n拆分'] }, message: '第 3 页第 2 条要点不支持换行' },
+    { name: 'second bullet character limit', slide: { title: '要点', bullets: ['正常', 'a'.repeat(161)] }, message: '第 3 页第 2 条要点 文本为空或超过 160 字符' },
+    { name: 'title width', slide: { title: '宽'.repeat(48) }, message: '第 3 页标题过长：宽度 96/94' },
+    { name: 'title newline', slide: { title: '需\n拆分' }, message: '第 3 页标题不支持换行' },
+    { name: 'table columns', slide: { title: '表格', table: { headers: Array(7).fill('列'), rows: [] } }, message: '第 3 页表格列数 7/6，需要 1–6 列' },
+    { name: 'table without columns', slide: { title: '表格', table: { headers: [], rows: [] } }, message: '第 3 页表格列数 0/6，需要 1–6 列' },
+    { name: 'plain table rows', slide: { title: '表格', table: { headers: ['列'], rows: Array.from({ length: 9 }, () => ['值']) } }, message: '第 3 页表格数据行数 9/8，最多 8 行（不含表头）' },
+    { name: 'table with bullets rows', slide: { title: '表格', bullets: ['要点'], table: { headers: ['列'], rows: Array.from({ length: 6 }, () => ['值']) } }, message: '第 3 页表格含要点，数据行数 6/5，最多 5 行（不含表头）' },
+    { name: 'second data row columns', slide: { title: '表格', table: { headers: ['一', '二'], rows: [[1, 2], [3]] } }, message: '第 3 页表格第 3 行（表头为第 1 行）单元格数量 1/2，必须与表头一致' },
+    { name: 'slide notes', slide: { title: '备注', notes: 'a'.repeat(4001) }, message: '第 3 页备注 notes 文本为空或超过 4000 字符' },
+  ])('locates $name on a later slide without echoing the presentation', async ({ slide, message }) => {
+    await expect(createPptx({ slides: [{ title: '正常第一页' }, { title: '正常第二页' }, slide] })).rejects.toThrow(message)
+  })
+
+  it('keeps exact layout limits valid without truncating text or table rows', async () => {
+    const title = 'A'.repeat(94), bullet = 'B'.repeat(140), cell = 'C'.repeat(16)
+    const result = await inspectPptx(await createPptx({ slides: [
+      { title, bullets: Array(6).fill(bullet) },
+      { title: '含要点表格', bullets: ['要点一', '要点二'], table: { headers: Array(6).fill(cell), rows: Array.from({ length: 5 }, () => Array(6).fill(cell)) } },
+      { title: '纯表格', table: { headers: ['列'], rows: Array.from({ length: 8 }, (_, index) => [`保留第${index + 1}行`]) } },
+    ] }))
+    expect(result.summary.slides).toBe(3)
+    expect(result.content).toContain(title)
+    expect(result.content.match(new RegExp(bullet, 'g'))).toHaveLength(6)
+    expect(result.content).toContain(cell)
+    expect(result.content).toContain('保留第8行')
   })
 
   it('rejects layout overloads, malformed rows and corrupted slide relationships', async () => {

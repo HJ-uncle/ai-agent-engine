@@ -148,8 +148,11 @@ describe('readonly office inspection capability', () => {
   })
 
   it('advertises only readonly arguments and states preview/recalculation limits', () => {
-    expect(officeInspectTool.parameters).toMatchObject({ additionalProperties: false, required: ['path'] })
-    expect(Object.keys(officeInspectTool.parameters.properties ?? {}).sort()).toEqual(['contentLimit', 'contentOffset', 'expectedHash', 'path'])
+    expect(officeInspectTool.parameters).toMatchObject({ additionalProperties: false,
+      oneOf: [{ required: ['path'] }, { required: ['files'] }] })
+    expect(Object.keys(officeInspectTool.parameters.properties ?? {}).sort()).toEqual(['contentLimit', 'contentOffset', 'expectedHash', 'files', 'path'])
+    expect(officeInspectTool.parameters.properties?.files).toMatchObject({ minItems: 1, maxItems: 16,
+      items: { additionalProperties: false, required: ['path'], properties: { path: { type: 'string' }, contentOffset: { type: 'integer' } } } })
     expect(officeInspectTool.description).toContain('2000')
     expect(officeInspectTool.description).toContain('600')
     expect(officeInspectTool.description).toContain('不重算公式')

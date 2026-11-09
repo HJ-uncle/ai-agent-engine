@@ -463,7 +463,7 @@ describe('ReActStrategy', () => {
   })
 
   // ── 7. systemPrompt and temperature are forwarded to LLM ────────────────────
-  it('passes systemPrompt and temperature options to LLM complete()', async () => {
+  it('preserves caller system instructions and temperature in the composed stream request', async () => {
     const llm = makeLLMAdapter([
       {
         content: 'Done.',
@@ -485,10 +485,14 @@ describe('ReActStrategy', () => {
     expect(llm.stream).toHaveBeenCalledWith(
       expect.any(Array),
       expect.objectContaining({
-        systemPrompt: 'You are a helpful assistant.',
+        systemPrompt: expect.stringMatching(/^You are a helpful assistant\.\n/),
         temperature: 0.7,
       }),
     )
+    const prompt = vi.mocked(llm.stream).mock.calls[0][1]!.systemPrompt!
+    expect(prompt.split('You are a helpful assistant.')).toHaveLength(2)
+    expect(prompt).not.toContain('## 本次模型请求环境')
+    expect(vi.mocked(llm.stream).mock.calls[0][1]!.requestContext).toContain('## 本次模型请求环境')
   })
 })
 

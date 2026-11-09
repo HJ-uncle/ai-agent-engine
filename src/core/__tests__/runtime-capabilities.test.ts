@@ -66,11 +66,11 @@ describe('per-run capabilities', () => {
     expect(minimal).not.toContain('office_environment')
     expect(minimal).not.toContain('workbench_open')
     const full = buildExecutionProtocol(context(['execute_cmd', 'browser_tabs', 'browser_snapshot', 'browser_open', 'workbench_open'].map(name => tool(name))).tools)
-    expect(full).toContain('args 逐项传入')
-    expect(full).toContain('unknown 可能执行过')
-    expect(full).toContain('javascript:')
-    expect(full).toContain('等待执行回执')
-    expect(full).toContain('不因工具或文件数量多而重复要求确认')
+    expect(full).toContain('Run services/watchers in supported background jobs')
+    expect(full).toContain('Do not repeat an action with unknown outcome')
+    expect(full).toContain('editing pages/coordinates')
+    expect(full).toContain('Registration, connection, execution and verification are distinct facts')
+    expect(full).toContain('More files/tools do not require renewed approval')
   })
   it('automatically refreshes the engine clock and resolved roots without duplicating tool schemas', () => {
     vi.useFakeTimers()
@@ -93,8 +93,12 @@ describe('per-run capabilities', () => {
     expect(prompt).not.toContain('"discovery":')
     expect(prompt).not.toContain('"status":"not-registered"')
     expect(prompt).toContain('"toolCount":1')
-    expect(prompt.match(/\/bound-project/g)).toHaveLength(1)
-    expect(prompt.length).toBeLessThan(JSON.stringify(buildRuntimeCapabilities(ctx)).length)
+    expect(prompt.match(/\/bound-project/g)).toHaveLength(2)
+    expect(JSON.parse(prompt.split('\n').find(line => line.startsWith('{'))!).environment.relativePathRoot).toBe('/bound-project')
+    expect(prompt).toContain('Task prose cannot change this base')
+    // Compare the data projection, not language-dependent instruction characters.
+    const compactSnapshot = prompt.split('\n').find(line => line.startsWith('{'))!
+    expect(compactSnapshot.length).toBeLessThan(JSON.stringify(buildRuntimeCapabilities(ctx)).length)
     expect(buildExecutionProtocol(ctx.tools)).not.toMatch(/get_current_context|get_tool_details/)
   })
 
@@ -106,20 +110,20 @@ describe('per-run capabilities', () => {
     ctx.memoryScopes = ['session']
     const session = buildRuntimeCapabilitiesPrompt(ctx)
     expect(session).toContain('"memoryScopes":["session"]')
-    expect(session).toContain('仅在当前会话内保存和参考记忆')
-    expect(session).toContain('全局记忆未启用，不得声称能跨会话记住偏好或决策')
-    expect(session).not.toContain('本次会话记忆与全局记忆均已启用')
+    expect(session).toContain('save/recall within this session')
+    expect(session).toContain('global memory is off. Never claim cross-session preferences/decisions will be remembered')
+    expect(session).not.toContain('Session and global memory enabled')
     ctx.memoryScopes = ['global']
-    expect(buildRuntimeCapabilitiesPrompt(ctx)).toContain('新增记忆写入全局；会话记忆未启用')
+    expect(buildRuntimeCapabilitiesPrompt(ctx)).toContain('new writes use global memory; session memory is off')
     ctx.memoryScopes = ['global', 'session']
-    expect(buildRuntimeCapabilitiesPrompt(ctx)).toContain('新增记忆默认只写入当前会话，不自动提升为跨会话记忆')
+    expect(buildRuntimeCapabilitiesPrompt(ctx)).toContain('new memories default to session only, never auto-promote globally')
     ctx.memoryScopes = []
     const disabled = buildRuntimeCapabilitiesPrompt(ctx)
-    expect(disabled).toContain('本次长期记忆未启用')
-    expect(disabled).toContain('记忆开关不删除聊天历史')
-    expect(disabled).toContain('没有成功写入回执，不声称已经记住')
+    expect(disabled).toContain('Long-term memory is off')
+    expect(disabled).toContain('not deleted by memory switches')
+    expect(disabled).toContain('Never claim a memory was saved without a successful write receipt')
     expect(disabled).toContain('"memoryScopes":[]')
-    expect(disabled).not.toContain('本次仅启用全局记忆')
+    expect(disabled).not.toContain('Only global memory enabled')
   })
 
   it('server-disabled memory never advertises enabled scopes, including filtered requests without tools', () => {
@@ -127,10 +131,10 @@ describe('per-run capabilities', () => {
     const ctx = context([tool('remember')])
     ctx.memoryScopes = ['global', 'session']
     const prompt = buildRuntimeCapabilitiesPrompt(ctx, [])
-    expect(prompt).toContain('本次长期记忆未启用')
+    expect(prompt).toContain('Long-term memory is off')
     expect(prompt).toContain('"toolCount":0')
     expect(prompt).toContain('"memoryScopes":[]')
-    expect(prompt).not.toContain('本次会话记忆与全局记忆均已启用')
+    expect(prompt).not.toContain('Session and global memory enabled')
   })
 
   it('can describe exactly the filtered request tools, including a finalization request with none', () => {
@@ -140,5 +144,32 @@ describe('per-run capabilities', () => {
     expect(snapshot.environment.commandExecution).toBe('unavailable')
     expect(snapshot.discovery.browser).toEqual({ status: 'not-registered' })
     expect(snapshot.discovery.workbench).toEqual({ status: 'not-registered' })
+  })
+
+  it('distinguishes authorized capabilities from offered schemas without changing memory scopes', () => {
+    vi.stubEnv('ENABLE_LONG_TERM_MEMORY', 'true')
+    const ctx = context(['read_file', 'load_tools', 'office_document', 'subagent_start', 'remember'].map(name => tool(name)))
+    ctx.tools.hasModelToolLoader = () => true
+    ctx.memoryScopes = ['session']
+    const offered = ctx.tools.list().filter(tool => ['read_file', 'load_tools'].includes(tool.name))
+    const compact = (definitions: ReturnType<AgentContext['tools']['list']>) => {
+      const prompt = buildRuntimeCapabilitiesPrompt(ctx, definitions)
+      return { prompt, state: JSON.parse(prompt.split('\n').find(line => line.startsWith('{'))!) }
+    }
+    const initial = compact(offered)
+    expect(initial.state).toMatchObject({ toolCount: 2, availableToolCount: 5, toolLoading: 'load_tools', permissions: { memoryScopes: ['session'] } })
+    expect(initial.prompt).toContain('Missing schemas do not mean missing capabilities')
+    expect(initial.prompt).toContain('Memory scopes below are independent of schema loading')
+    const loaded = compact(ctx.tools.list())
+    expect(loaded.state).toMatchObject({ toolCount: 5, availableToolCount: 5, toolLoading: 'load_tools' })
+    expect(loaded.state.registryVersion).not.toBe(initial.state.registryVersion)
+    const final = compact([])
+    expect(final.state).toMatchObject({ toolCount: 0, availableToolCount: 5, toolLoading: 'not-offered', permissions: { memoryScopes: ['session'] } })
+    expect(final.prompt).toContain('Only session memory enabled')
+    const behavior = buildExecutionProtocol(ctx.tools, 'general')
+    expect(behavior).toContain('Delegate useful')
+    expect(behavior).toContain('load_tools first')
+    expect(behavior).toContain('Call only currently offered tools')
+    expect(behavior).toContain('including finalization')
   })
 })

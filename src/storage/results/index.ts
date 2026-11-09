@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import type { Client } from '@libsql/client'
-import type { AgentContext, ConversationHistory } from '../../core/agent-context/types.js'
+import type { AgentContext, ConversationHistory, Message } from '../../core/agent-context/types.js'
 import { serviceForOwner } from '../../core/collaboration/execution-owner.js'
 import { throwIfAborted } from '../../core/utils/abort.js'
 import { MAX_RESULT_ASSET_BYTES, MAX_RESULT_ITEMS, MAX_RESULT_TOTAL_BYTES, type FinalResult, type FinalResultItem } from '../../core/final-result.js'
@@ -33,6 +33,13 @@ export type ChildArtifactInput = { childSessionId: string; runId: string; artifa
 export type ResultFileInput = { path: string; name?: string } | { toolCallId: string; imageIndex?: number; name?: string } | ChildArtifactInput
 export interface ChildArtifactManifest { childSessionId: string; runId: string; items: FinalResultItem[] }
 export const TOOL_RESULT_IMAGE_ASSETS = '__aetherResultImageAssets'
+export class StaleFinalDeliveryError extends Error {
+  readonly code = 'FINAL_DELIVERY_STALE'
+  constructor(readonly paths: string[]) {
+    super('Staged final files changed or became unavailable. Validate the intended final versions and replace the full deliver_files list, or clear it with items:[]: ' + paths.join(', '))
+    this.name = 'StaleFinalDeliveryError'
+  }
+}
 interface Scope { tenantId: string; sessionId: string; runId: string; turnId: string; attemptId: string }
 type OwnedContext = Pick<AgentContext, 'tenantId' | 'sessionId' | 'rootRunId' | 'turnId' | 'executionOwner' | 'signal'>
 
@@ -59,7 +66,10 @@ async function ready(db: Client): Promise<void> {
         tenant_id TEXT NOT NULL, parent_session_id TEXT NOT NULL, child_session_id TEXT NOT NULL,
         run_id TEXT NOT NULL, root_run_id TEXT NOT NULL, root_attempt_id TEXT NOT NULL,
         report_key TEXT NOT NULL, input_hash TEXT NOT NULL, items TEXT NOT NULL, created_at INTEGER NOT NULL,
-        PRIMARY KEY(tenant_id,child_session_id,run_id,report_key))`], 'write').then(() => {})
+        PRIMARY KEY(tenant_id,child_session_id,run_id,report_key))`,
+      `CREATE TABLE IF NOT EXISTS result_asset_sources (
+        tenant_id TEXT NOT NULL, session_id TEXT NOT NULL, asset_id TEXT NOT NULL, source_change_id TEXT,
+        PRIMARY KEY(tenant_id,session_id,asset_id))`], 'write').then(() => {})
     schemas.set(db, promise)
     promise.catch(() => { if (schemas.get(db) === promise) schemas.delete(db) })
   }
@@ -71,6 +81,89 @@ export class FinalResultStore {
   constructor(private readonly options: { db?: Client; root?: string } = {}) {}
   private get db(): Client { return this.options.db ?? getDb() }
   private get root(): string { return this.options.root ?? path.join(path.dirname(path.resolve(process.env.DATA_DIR ?? './data/agent.db')), 'result-assets') }
+
+  private async sourceForFile(ctx: AgentContext, item: FinalResultItem): Promise<string | null> {
+    const db = this.db
+    if (!(await db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='file_changes'")).rows.length) return null
+    const row = (await db.execute({ sql: `SELECT id,new_hash,status FROM file_changes WHERE tenant_id=? AND session_id=?
+      AND status!='reverted' AND path${process.platform === 'win32' ? ' COLLATE NOCASE' : ''}=? ORDER BY seq DESC LIMIT 1`,
+      args: [ctx.tenantId, ctx.rootSessionId ?? ctx.parentSessionId ?? ctx.sessionId, item.path] })).rows[0]
+    // An explicit null also matters: a manually recreated file must not later
+    // acquire the provenance of a previously rolled back identical version.
+    return row && row.status !== 'reverted' && row.new_hash === `sha256:${item.sha256}` ? String(row.id) : null
+  }
+
+  private async rememberSource(tenantId: string, sessionId: string, assetId: string, sourceChangeId: string | null): Promise<void> {
+    await ready(this.db)
+    await this.db.execute({ sql: `INSERT INTO result_asset_sources(tenant_id,session_id,asset_id,source_change_id) VALUES(?,?,?,?)`,
+      args: [tenantId, sessionId, assetId, sourceChangeId] })
+  }
+
+  /** A retained copy is not a second publication: a reverted producing version
+   * must disappear even when a different file blocks truncating the transcript.
+   * Read the durable change status, so a crash between file rollback and an HTTP
+   * response cannot leave an independent revocation flag out of sync. */
+  private async revokedAssets(tenantId: string, results: Array<Pick<FinalResult, 'sessionId' | 'turnId' | 'runId' | 'publishedAt' | 'items'>>): Promise<Map<string, Set<string>>> {
+    const revoked = new Map<string, Set<string>>()
+    if (!results.some(result => result.items.length)) return revoked
+    const db = this.db
+    await ready(db)
+    if (!(await db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='file_changes'")).rows.length) return revoked
+    const identity = (file: string) => process.platform === 'win32' ? path.resolve(file).toLowerCase() : path.resolve(file)
+    for (const sessionId of new Set(results.map(result => result.sessionId))) {
+      const sessionResults = results.filter(result => result.sessionId === sessionId)
+      const items = sessionResults.flatMap(result => result.items)
+      const sources = new Map((await db.execute({ sql: `SELECT asset_id,source_change_id FROM result_asset_sources
+        WHERE tenant_id=? AND session_id=? AND asset_id IN (SELECT value FROM json_each(?))`,
+        args: [tenantId, sessionId, JSON.stringify(items.flatMap(item => [item.assetId, ...(item.producerArtifactId ? [item.producerArtifactId] : [])]))] })).rows
+        .map(row => [String(row.asset_id), row.source_change_id === null ? null : String(row.source_change_id)]))
+      const changes = (await db.execute({ sql: `SELECT id,path,new_hash,status,turn_id,producer_run_id,created_at FROM file_changes
+        WHERE tenant_id=? AND session_id=? AND (id IN (SELECT value FROM json_each(?))
+          OR new_hash IN (SELECT value FROM json_each(?))) ORDER BY seq DESC`,
+        args: [tenantId, sessionId, JSON.stringify([...sources.values()].filter(Boolean)), JSON.stringify(items.map(item => `sha256:${item.sha256}`))] })).rows
+      const legacyReports = items.some(item => item.producerArtifactId && !sources.has(item.assetId) && !sources.has(item.producerArtifactId))
+        ? (await db.execute({ sql: `SELECT created_at,items FROM child_artifact_manifests WHERE tenant_id=? AND parent_session_id=?
+          AND run_id IN (SELECT value FROM json_each(?))`, args: [tenantId, sessionId, JSON.stringify(items.flatMap(item => item.producerRunId ? [item.producerRunId] : []))] })).rows : []
+      for (const result of sessionResults) {
+        const assets = new Set<string>()
+        for (const item of result.items) {
+          if (item.path.startsWith('tool-result/')) continue
+          const file = identity(item.path)
+          const sourceKey = sources.has(item.assetId) ? item.assetId : item.producerArtifactId && sources.has(item.producerArtifactId) ? item.producerArtifactId : undefined
+          const sourceId = sourceKey ? sources.get(sourceKey) : undefined
+          const report = sourceKey === undefined && item.producerArtifactId ? legacyReports.find(row =>
+            (JSON.parse(String(row.items)) as FinalResultItem[]).some(candidate => candidate.assetId === item.producerArtifactId)) : undefined
+          // Older manifests lack exact provenance. Infer the producing version
+          // across turns, bounded by the child report or root publication time.
+          // A later re-delivery does not make the same undone file valid again.
+          const producing = sourceKey !== undefined ? sourceId ? changes.find(change => change.id === sourceId) : undefined
+            : changes.find(change => Number(change.created_at) <= Number(report?.created_at ?? result.publishedAt)
+              && (!item.producerRunId || change.producer_run_id === item.producerRunId)
+              && change.new_hash === `sha256:${item.sha256}` && identity(String(change.path)) === file)
+          if (producing?.status === 'reverted') assets.add(item.assetId)
+        }
+        if (assets.size) revoked.set(result.runId, assets)
+      }
+    }
+    return revoked
+  }
+
+  /** Keep the original answer as evidence when rollback is partial, while all
+   * public projections agree on which attachments are still delivered. */
+  async projectHistory(tenantId: string, messages: Message[]): Promise<Message[]> {
+    const results = messages.flatMap(message => {
+      const result = message.metadata?.finalResult as FinalResult | undefined
+      return result?.schemaVersion === 1 && Array.isArray(result.items) ? [result] : []
+    })
+    const revoked = await this.revokedAssets(tenantId, results)
+    if (!revoked.size) return messages
+    return messages.map(message => {
+      const result = message.metadata?.finalResult as FinalResult | undefined
+      const assets = result && revoked.get(result.runId)
+      return !result || !assets ? message : { ...message, metadata: { ...message.metadata,
+        finalResult: { ...result, items: result.items.filter(item => !assets.has(item.assetId)) } } }
+    })
+  }
 
   private async assetFile(tenantId: string, hash: string, create = false): Promise<string> {
     if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error('Invalid result asset hash')
@@ -144,7 +237,7 @@ export class FinalResultStore {
     return binding
   }
 
-  private async captureFile(ctx: AgentContext, input: ChildArtifactFileInput): Promise<{ item: FinalResultItem; bytes: Buffer }> {
+  private async captureFile(ctx: AgentContext, input: ChildArtifactFileInput, trackSource = true): Promise<{ item: FinalResultItem; bytes: Buffer; sourceChangeId: string | null }> {
     const canonical = await fs.realpath(workspaceManager.resolveSafePath(ctx, input.path))
     workspaceManager.resolveSafePath(ctx, canonical)
     const roots = await Promise.all(workspaceManager.getPaths(ctx).map(root => fs.realpath(root).catch(() => undefined)))
@@ -175,7 +268,8 @@ export class FinalResultStore {
     if (input.expectedHash !== undefined && input.expectedHash !== `sha256:${hash}`) throw new Error('Artifact file version changed before reporting')
     const mimeType = MIME[path.extname(canonical).toLowerCase()] ?? 'application/octet-stream'
     const assetId = randomUUID()
-    return { bytes, item: { id: assetId, assetId, name, path: canonical, mimeType, size: bytes.length, sha256: hash, kind: mimeType.startsWith('image/') ? 'image' : 'file' } }
+    const item: FinalResultItem = { id: assetId, assetId, name, path: canonical, mimeType, size: bytes.length, sha256: hash, kind: mimeType.startsWith('image/') ? 'image' : 'file' }
+    return { bytes, item, sourceChangeId: trackSource ? await this.sourceForFile(ctx, item) : null }
   }
 
   /** A child records immutable candidate bytes; only a root may later adopt them. */
@@ -208,7 +302,7 @@ export class FinalResultStore {
     let total = 0
     for (const file of files) {
       this.childScope(ctx)
-      const { item, bytes } = await this.captureFile(fileContext, file)
+      const { item, bytes, sourceChangeId } = await this.captureFile(fileContext, file)
       if (!frozenRoots.some(root => {
         if (!root) return false
         const relative = path.relative(root, item.path)
@@ -222,6 +316,7 @@ export class FinalResultStore {
       Object.assign(item, { producerChildSessionId: binding.sessionId, producerRunId: binding.invocationRunId, producerArtifactId: item.assetId })
       this.childScope(ctx)
       await this.saveBytes(binding.tenantId, bytes, item)
+      await this.rememberSource(binding.tenantId, binding.rootSessionId, item.assetId, sourceChangeId)
       items.push(item)
     }
     const tx = await db.transaction('write')
@@ -248,7 +343,7 @@ export class FinalResultStore {
     ownedScope(ctx)
     if (!child || child.childSessionId !== input.childSessionId || child.parentSessionId !== scope.sessionId
       || child.rootSessionId !== scope.sessionId) throw new Error('Child artifact does not belong to this parent session')
-    const rows = await this.db.execute({ sql: `SELECT j.value AS item FROM child_artifact_manifests m,json_each(m.items) j
+    const rows = await this.db.execute({ sql: `SELECT j.value AS item,m.created_at FROM child_artifact_manifests m,json_each(m.items) j
       WHERE m.tenant_id=? AND m.parent_session_id=? AND m.child_session_id=? AND m.run_id=? AND json_extract(j.value,'$.assetId')=?`,
       args: [scope.tenantId, scope.sessionId, input.childSessionId, input.runId, input.artifactId] })
     ownedScope(ctx)
@@ -256,6 +351,8 @@ export class FinalResultStore {
     const source: FinalResultItem = JSON.parse(String(rows.rows[0].item))
     if (source.producerChildSessionId !== input.childSessionId || source.producerRunId !== input.runId
       || source.producerArtifactId !== input.artifactId) throw new Error('Child artifact receipt identity mismatch')
+    if ((await this.revokedAssets(scope.tenantId, [{ ...scope, items: [source], publishedAt: Date.now() }])).get(scope.runId)?.has(source.assetId))
+      throw new Error('Child artifact receipt was withdrawn by file rollback')
     const sourcePath = canonicalFilePathSync(workspaceManager.resolveSafePath(ctx, source.path))
     if (!workspaceManager.getPaths(ctx).some(root => {
       const relative = path.relative(canonicalFilePathSync(root), sourcePath)
@@ -265,6 +362,16 @@ export class FinalResultStore {
     const name = input.name?.trim() || source.name
     if (!name || name.length > 255 || /[\\/\u0000-\u001f\u007f]/.test(name)) throw new Error('Invalid result file name')
     const assetId = randomUUID()
+    const provenance = (await this.db.execute({ sql: `SELECT source_change_id FROM result_asset_sources WHERE tenant_id=? AND session_id=? AND asset_id=?`,
+      args: [scope.tenantId, scope.sessionId, source.assetId] })).rows[0]
+    let sourceChangeId = provenance?.source_change_id == null ? null : String(provenance.source_change_id)
+    if (!provenance && (await this.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='file_changes'")).rows.length) {
+      const receipt = (await this.db.execute({ sql: `SELECT id FROM file_changes WHERE tenant_id=? AND session_id=? AND producer_run_id=?
+        AND path${process.platform === 'win32' ? ' COLLATE NOCASE' : ''}=? AND new_hash=? AND created_at<=? ORDER BY seq DESC LIMIT 1`,
+        args: [scope.tenantId, scope.sessionId, source.producerRunId!, source.path, `sha256:${source.sha256}`, rows.rows[0].created_at] })).rows[0]
+      sourceChangeId = receipt ? String(receipt.id) : null
+    }
+    await this.rememberSource(scope.tenantId, scope.sessionId, assetId, sourceChangeId)
     return { ...source, id: assetId, assetId, name }
   }
 
@@ -312,7 +419,7 @@ export class FinalResultStore {
         items.push(item)
         continue
       }
-      const { item, bytes } = await this.captureFile(ctx, input)
+      const { item, bytes, sourceChangeId } = await this.captureFile(ctx, input)
       const key = process.platform === 'win32' ? item.path.toLowerCase() : item.path
       if (seen.has(key)) throw new Error('A result file may only appear once')
       seen.add(key)
@@ -320,6 +427,7 @@ export class FinalResultStore {
       if (total > MAX_RESULT_TOTAL_BYTES) throw new Error('Result files exceed the 128 MiB total limit')
       ownedScope(ctx)
       await this.saveBytes(scope.tenantId, bytes, item)
+      await this.rememberSource(scope.tenantId, scope.sessionId, item.assetId, sourceChangeId)
       items.push(item)
     }
     await withHistoryLock(scope.tenantId, async () => {
@@ -336,6 +444,36 @@ export class FinalResultStore {
     return items
   }
 
+  private async changedSources(ctx: AgentContext, items: FinalResultItem[]): Promise<string[]> {
+    const changed: string[] = []
+    const revoked = (await this.revokedAssets(ctx.tenantId, [{ sessionId: ctx.sessionId, runId: ctx.rootRunId!, turnId: ctx.turnId!,
+      items, publishedAt: Date.now() }])).get(ctx.rootRunId!)
+    for (const item of items) {
+      if (revoked?.has(item.assetId)) { changed.push(item.path); continue }
+      // Explicit child receipts and tool images intentionally select historical
+      // immutable bytes. Direct paths select the root's accepted current file.
+      if (item.producerArtifactId || item.path.startsWith('tool-result/')) continue
+      try {
+        const current = await this.captureFile(ctx, { path: item.path }, false)
+        if (current.item.sha256 !== item.sha256) changed.push(item.path)
+      } catch { changed.push(item.path) }
+    }
+    return changed
+  }
+
+  /** Reopening a changed draft never silently substitutes new, unaccepted bytes. */
+  async stalePaths(ctx: AgentContext): Promise<string[]> {
+    if (!ctx.rootRunId || !ctx.turnId || ctx.parentSessionId || !ctx.executionOwner) return []
+    const scope = ownedScope(ctx), db = this.db
+    await ready(db)
+    const row = (await db.execute({ sql: 'SELECT items,turn_id FROM final_result_manifests WHERE tenant_id=? AND session_id=? AND run_id=?',
+      args: [scope.tenantId, scope.sessionId, scope.runId] })).rows[0]
+    if (!row || row.turn_id !== scope.turnId) return []
+    const changed = await this.changedSources(ctx, JSON.parse(String(row.items)))
+    ownedScope(ctx)
+    return changed
+  }
+
   /** This is a candidate until both the assistant archive and root success are durable. */
   async prepare(ctx: AgentContext, text: string, assistantMessageId: string): Promise<FinalResult | undefined> {
     if (!ctx.rootRunId || !ctx.turnId || ctx.parentSessionId || !ctx.executionOwner) return undefined
@@ -350,6 +488,8 @@ export class FinalResultStore {
       // may adopt it; stale attempts cannot replace it because stage rechecks ownership.
       const stored = row.rows[0]
       const items: FinalResultItem[] = stored?.turn_id === scope.turnId ? JSON.parse(String(stored.items)) : []
+      const changed = await this.changedSources(ctx, items)
+      if (changed.length) throw new StaleFinalDeliveryError(changed)
       for (const item of items) await this.readBytes(scope.tenantId, item)
       ownedScope(ctx)
       const result: FinalResult = { schemaVersion: 1, sessionId: scope.sessionId, turnId: scope.turnId, runId: scope.runId, assistantMessageId, text, items, publishedAt: Date.now() }
@@ -380,6 +520,7 @@ export class FinalResultStore {
       if (message?.role !== 'assistant' || JSON.stringify(message.metadata?.finalResult) !== JSON.stringify(result)) throw new Error('Final result is no longer in this conversation')
       const item = result.items.find(candidate => candidate.assetId === assetId)
       if (!item) throw new Error('Result asset does not belong to this final result')
+      if ((await this.revokedAssets(tenantId, [result])).get(runId)?.has(assetId)) throw new Error('Result asset was withdrawn by file rollback')
       return { result, item }
     }
     const { item } = await authorize()

@@ -26,7 +26,7 @@ export function isMemoryMode(value: unknown): value is MemoryMode {
 }
 
 export function defaultMemoryMode(_profile?: ToolProfile): MemoryMode {
-  return 'session'
+  return 'off'
 }
 
 function requireSession(sessionId: string): void {
@@ -44,7 +44,7 @@ export async function getMemoryPreferences(tenantId: string): Promise<MemoryPref
   const row = result.rows[0]
   return {
     globalEnabled: Number(row?.global_enabled ?? 0) === 1,
-    sessionDefaultEnabled: Number(row?.session_default_enabled ?? 1) === 1,
+    sessionDefaultEnabled: Number(row?.session_default_enabled ?? 0) === 1,
     enabled: process.env.ENABLE_LONG_TERM_MEMORY !== 'false',
   }
 }
@@ -61,7 +61,7 @@ export async function setMemoryPreferences(tenantId: string, patch: Partial<Pick
   // Patch in SQL so independent settings windows cannot lose each other's update.
   await db.execute({
     sql: `INSERT INTO memory_preferences (tenant_id, global_enabled, session_default_enabled, updated_at)
-          VALUES (?, coalesce(?, 0), coalesce(?, 1), unixepoch())
+          VALUES (?, coalesce(?, 0), coalesce(?, 0), unixepoch())
           ON CONFLICT(tenant_id) DO UPDATE SET
             global_enabled = coalesce(?, memory_preferences.global_enabled),
             session_default_enabled = coalesce(?, memory_preferences.session_default_enabled), updated_at = unixepoch()`,
@@ -85,7 +85,7 @@ export async function getSessionMemorySettings(tenantId: string, sessionId: stri
   })
   const row = result.rows[0]
   const globalEnabled = Number(row?.global_enabled ?? 0) === 1
-  const sessionDefaultEnabled = Number(row?.session_default_enabled ?? 1) === 1
+  const sessionDefaultEnabled = Number(row?.session_default_enabled ?? 0) === 1
   const legacy = isMemoryMode(row?.scope) ? row.scope : undefined
   // An old global selection never authorizes tenant-wide sharing. Only the new
   // explicit settings switch can enable it; old off/session choices remain explicit.

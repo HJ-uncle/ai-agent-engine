@@ -8,8 +8,11 @@ import { MEMORY_SCHEMA } from '../../../storage/memory/schema.js'
 import { SQLiteMemoryManager } from '../../../storage/memory/memory-manager.js'
 import { getSessionMemorySettings, setMemoryPreferences, setSessionMemoryEnabled, setSessionMemoryScope } from '../../../storage/memory/settings.js'
 import { createLLMAdapterWithDbConfig } from '../../../core/llm-adapter/index.js'
-import { buildMemoryRecallBlock, extractAndStoreMemories } from '../extractor.js'
+import { buildMemoryRecallBlock, extractAndStoreMemories, reserveMemoryExtraction } from '../extractor.js'
 import type { MemoryScope } from '../../../storage/memory/types.js'
+import { createMemoryTools } from '../../../tools/memory/memory-tool.js'
+import type { AgentContext } from '../../../core/agent-context/types.js'
+import { getActiveMemoryExtractionCount } from '../../../storage/memory/extraction-coordinator.js'
 
 vi.mock('../../../storage/sqlite/system-config.js', () => ({ systemConfigStore: { get: vi.fn(async () => null) } }))
 vi.mock('../../../core/llm-adapter/index.js', () => ({ createLLMAdapterWithDbConfig: vi.fn() }))
@@ -38,7 +41,7 @@ afterEach(async () => {
 })
 
 function adapter(content: string) {
-  const complete = vi.fn(async () => ({ content, promptTokens: 1, completionTokens: 1, finishReason: 'stop' as const }))
+  const complete = vi.fn(async (_messages: Array<{ content: unknown }>) => ({ content, promptTokens: 1, completionTokens: 1, finishReason: 'stop' as const }))
   vi.mocked(createLLMAdapterWithDbConfig).mockResolvedValue({ provider: 'anthropic', model: 'fixture-memory', complete, stream: vi.fn(), countTokens: () => 0 })
   return complete
 }
@@ -48,11 +51,21 @@ function extracted(scopes: readonly MemoryScope[]) {
 }
 
 describe('independent runtime memory scopes', () => {
-  it('defaults to session only, and both scopes still extract private content exclusively into this session', async () => {
+  it('omitted policy performs no recall, extraction, reservation or provider call', async () => {
+    await manager.createNode({ type: 'fact', summary: 'Existing private memory' }, session)
+    expect(reserveMemoryExtraction({ tenantId, sessionId })).toBeUndefined()
+    expect(await extractAndStoreMemories({ tenantId, sessionId, llm: credentials, messages: [{ role: 'user', content: 'Never save automatically' }] }))
+      .toEqual({ extracted: 0, stored: 0, errors: [] })
+    expect(await buildMemoryRecallBlock(tenantId, 'Existing private memory', credentials, { sessionId })).toBe('')
+    expect(createLLMAdapterWithDbConfig).not.toHaveBeenCalled()
+    expect(await manager.countNodes({}, session)).toBe(1)
+    expect(getActiveMemoryExtractionCount(session)).toBe(0)
+  })
+  it('defaults off, and explicit opt-in to both scopes still extracts private content exclusively into this session', async () => {
     const initial = await getSessionMemorySettings(tenantId, sessionId, 'code')
-    expect(initial).toMatchObject({ globalEnabled: false, sessionEnabled: true, effectiveScopes: ['session'] })
+    expect(initial).toMatchObject({ globalEnabled: false, sessionEnabled: false, effectiveScopes: [] })
     const complete = adapter(JSON.stringify([{ type: 'decision', content: 'Keep the private project contract', importance: 0.9, emotion: 0, tags: ['project'] }]))
-    await setMemoryPreferences(tenantId, { globalEnabled: true })
+    await setMemoryPreferences(tenantId, { globalEnabled: true, sessionDefaultEnabled: true })
     const both = await getSessionMemorySettings(tenantId, sessionId)
     expect(both.effectiveScopes).toEqual(['global', 'session'])
     expect(await extracted(both.effectiveScopes)).toMatchObject({ stored: 1, errors: [] })
@@ -100,7 +113,7 @@ describe('independent runtime memory scopes', () => {
     await setSessionMemoryScope(tenantId, sessionId, 'global')
     const legacy = await getSessionMemorySettings(tenantId, sessionId)
     expect(legacy.globalEnabled).toBe(false)
-    expect(legacy.effectiveScopes).toEqual(['session'])
+    expect(legacy.effectiveScopes).toEqual([])
     await setSessionMemoryEnabled(tenantId, sessionId, false)
     const off = await getSessionMemorySettings(tenantId, sessionId)
     expect(off.effectiveScopes).toEqual([])
@@ -116,5 +129,157 @@ describe('independent runtime memory scopes', () => {
     expect(await extracted(['global', 'session'])).toEqual({ extracted: 0, stored: 0, errors: [] })
     expect(await buildMemoryRecallBlock(tenantId, 'urgent outage', credentials, { sessionId, scopes: ['global', 'session'] })).toBe('')
     expect(createLLMAdapterWithDbConfig).not.toHaveBeenCalled()
+  })
+
+  it('does not recreate exact managed facts when extraction ignores exclusions, while retaining independent facts', async () => {
+    const complete = adapter(JSON.stringify([
+      { type: 'preference', content: 'Prefer blue', importance: 0.9, emotion: 0, tags: ['color'] },
+      { type: 'preference', content: 'Prefer red', importance: 0.9, emotion: 0, tags: ['color'] },
+      { type: 'decision', content: 'Project deadline is Friday', importance: 0.9, emotion: 0, tags: ['project'] },
+    ]))
+    const result = await extractAndStoreMemories({ tenantId, sessionId, memoryScopes: ['session'], llm: credentials,
+      messages: [
+        { role: 'user', content: 'Save blue, forget red. Project deadline is Friday.' },
+        { role: 'assistant', content: '', toolCall: { id: 'save', name: 'remember', args: { content: 'Prefer blue' } } },
+        { role: 'tool', content: 'saved', toolCallId: 'save', metadata: { success: true, memoryMutation: { action: 'remember', id: 'blue', summary: 'Prefer blue' } } },
+        { role: 'assistant', content: '', toolCall: { id: 'delete', name: 'forget', args: { id: 'red' } } },
+        { role: 'tool', content: 'deleted', toolCallId: 'delete', metadata: { success: true, memoryMutation: { action: 'forget', id: 'red', summary: 'Prefer red' } } },
+      ] })
+    expect(result).toMatchObject({ stored: 1, errors: [] })
+    expect((await manager.listNodes({}, session)).map(node => node.summary)).toEqual(['Project deadline is Friday'])
+    expect(complete.mock.calls[0][0][0].content).toContain('本轮已执行的记忆操作')
+  })
+
+  it('revalidates a delayed extraction after a later scoped deletion without losing unrelated facts or future consent', async () => {
+    const deleted = await manager.createNode({ type: 'preference', summary: 'Prefer blue', tags: ['color'] }, session)
+    const foreign = await manager.createNode({ type: 'preference', summary: 'Prefer blue', tags: ['color'] }, { ...session, sessionId: 'other' })
+    let release!: () => void, started!: () => void
+    const pending = new Promise<void>(resolve => { release = resolve })
+    const arrived = new Promise<void>(resolve => { started = resolve })
+    const output = JSON.stringify([
+      { type: 'preference', content: 'Prefer blue', importance: 0.9, emotion: 0, tags: ['color'] },
+      { type: 'decision', content: 'Project deadline is Friday', importance: 0.9, emotion: 0, tags: ['project'] },
+    ])
+    const complete = adapter(output)
+    complete.mockImplementationOnce(async () => { started(); await pending; return { content: output, promptTokens: 1, completionTokens: 1, finishReason: 'stop' } })
+    const extraction = extractAndStoreMemories({ tenantId, sessionId, memoryScopes: ['session'], llm: credentials,
+      messages: [{ role: 'user', content: 'Prefer blue. Project deadline is Friday.' }] })
+    await arrived
+    await manager.deleteNode(deleted.id, session)
+    release()
+    expect(await extraction).toMatchObject({ stored: 1, errors: [] })
+    expect(complete).toHaveBeenCalledTimes(2)
+    expect(complete.mock.calls[1][0][0].content).toContain('"action":"forget","summary":"Prefer blue"')
+    expect((await manager.listNodes({}, session)).map(node => node.summary)).toEqual(['Project deadline is Friday'])
+    expect(await manager.getNode(foreign.id, { ...session, sessionId: 'other' })).not.toBeNull()
+    // A later explicit user save is independent of the finished extraction.
+    const saved = await createMemoryTools().find(tool => tool.name === 'remember')!.execute(
+      { content: 'Prefer blue', type: 'preference', tags: ['color'] }, { tenantId, sessionId, memoryScopes: ['session'] } as unknown as AgentContext)
+    expect(saved.success).toBe(true)
+    expect(await manager.findNodeBySummary('Prefer blue', session)).not.toBeNull()
+  })
+
+  it('retains deletion exclusions across a delayed history load before extractor entry and releases the reservation', async () => {
+    const node = await manager.createNode({ type: 'fact', summary: 'Forget before loading history' }, session)
+    expect(getActiveMemoryExtractionCount(session)).toBe(0)
+    const reservation = reserveMemoryExtraction({ tenantId, sessionId, memoryScopes: ['session'] })!
+    expect(getActiveMemoryExtractionCount(session)).toBe(1)
+    expect(getActiveMemoryExtractionCount(global)).toBe(0)
+    let release!: () => void
+    const historyLoaded = new Promise<void>(resolve => { release = resolve })
+    const complete = adapter(JSON.stringify([
+      { type: 'fact', content: 'Forget before loading history', importance: 0.9, emotion: 0, tags: ['old'] },
+      { type: 'fact', content: 'Independent fact', importance: 0.9, emotion: 0, tags: ['new'] },
+    ]))
+    const extraction = (async () => {
+      await historyLoaded
+      return extractAndStoreMemories({ tenantId, sessionId, memoryScopes: ['session'], llm: credentials, extractionTracker: reservation,
+        messages: [{ role: 'user', content: 'Forget before loading history; Independent fact' }] })
+    })()
+    await manager.deleteNode(node.id, session)
+    release()
+    expect(await extraction).toMatchObject({ stored: 1, errors: [] })
+    expect(complete).toHaveBeenCalledTimes(1)
+    expect(complete.mock.calls[0][0][0].content).toContain('"action":"forget","summary":"Forget before loading history"')
+    expect(await manager.findNodeBySummary('Forget before loading history', session)).toBeNull()
+    expect(await manager.findNodeBySummary('Independent fact', session)).not.toBeNull()
+    expect(reservation.matches(session)).toBe(false)
+    expect(reservation.snapshot().exclusions).toEqual([])
+    expect(getActiveMemoryExtractionCount(session)).toBe(0)
+    // A fresh explicitly authorized turn receives no historical suppression.
+    expect(await extractAndStoreMemories({ tenantId, sessionId, memoryScopes: ['session'], llm: credentials,
+      messages: [{ role: 'user', content: 'Save Forget before loading history again.' }] })).toMatchObject({ stored: 1, errors: [] })
+    expect(await manager.findNodeBySummary('Forget before loading history', session)).not.toBeNull()
+  })
+
+  it('keeps the final commit guarded when deletion happens during delayed embedding', async () => {
+    const target = await manager.createNode({ type: 'preference', summary: 'Old color' }, session)
+    let release!: () => void, started!: () => void
+    const pending = new Promise<void>(resolve => { release = resolve })
+    const arrived = new Promise<void>(resolve => { started = resolve })
+    const output = JSON.stringify([{ type: 'decision', content: 'Unrelated deadline', importance: 0.9, emotion: 0, tags: ['project'] }])
+    const complete = adapter(output)
+    const embed = vi.fn(async () => [[1, 0]])
+    embed.mockImplementationOnce(async () => { started(); await pending; return [[1, 0]] })
+    // The factory has not been called yet; attach an independent deferred embed adapter.
+    vi.mocked(createLLMAdapterWithDbConfig).mockResolvedValue({ provider: 'anthropic', model: 'fixture-memory', complete, embed, stream: vi.fn(), countTokens: () => 0 })
+    const extraction = extracted(['session'])
+    await arrived
+    await manager.deleteNode(target.id, session)
+    release()
+    expect(await extraction).toMatchObject({ stored: 1, errors: [] })
+    expect(complete).toHaveBeenCalledTimes(2)
+    expect(await manager.findNodeBySummary('Unrelated deadline', session)).not.toBeNull()
+    expect(await manager.getNode(target.id, session)).toBeNull()
+  })
+
+  it('does not invalidate extraction for failed or foreign-scope deletions', async () => {
+    const foreignScope = { ...session, sessionId: 'other' }
+    const foreign = await manager.createNode({ type: 'fact', summary: 'Local reusable fact' }, foreignScope)
+    const output = JSON.stringify([{ type: 'fact', content: 'Local reusable fact', importance: 0.9, emotion: 0, tags: ['local'] }])
+    const complete = adapter(output)
+    complete.mockImplementationOnce(async () => {
+      await manager.deleteNode(foreign.id, session)
+      await manager.deleteNode(foreign.id, foreignScope)
+      return { content: output, promptTokens: 1, completionTokens: 1, finishReason: 'stop' }
+    })
+    expect(await extracted(['session'])).toMatchObject({ stored: 1, errors: [] })
+    expect(complete).toHaveBeenCalledTimes(1)
+    expect(await manager.findNodeBySummary('Local reusable fact', session)).not.toBeNull()
+  })
+
+  it('reports continuous concurrent mutations instead of committing a stale third response', async () => {
+    const targets = await Promise.all([0, 1, 2].map(index => manager.createNode({ type: 'fact', summary: `Old ${index}` }, session)))
+    const output = JSON.stringify([{ type: 'fact', content: 'Retained in original history', importance: 0.9, emotion: 0, tags: ['local'] }])
+    const complete = adapter(output)
+    let next = 0
+    complete.mockImplementation(async () => {
+      await manager.deleteNode(targets[next++].id, session)
+      return { content: output, promptTokens: 1, completionTokens: 1, finishReason: 'stop' }
+    })
+    const result = await extracted(['session'])
+    expect(result.stored).toBe(0)
+    expect(result.errors).toEqual([expect.stringContaining('Memory changed during extraction three times')])
+    expect(complete).toHaveBeenCalledTimes(3)
+    expect(await manager.countNodes({}, session)).toBe(0)
+  })
+
+  it('uses exact case- and whitespace-sensitive strings for the code exclusion guard', async () => {
+    const complete = adapter(JSON.stringify([
+      { type: 'fact', content: 'src/Token.ts', importance: 0.8, emotion: 0, tags: ['path'] },
+      { type: 'fact', content: 'src/token.ts', importance: 0.8, emotion: 0, tags: ['path'] },
+      { type: 'fact', content: 'key = A  B', importance: 0.8, emotion: 0, tags: ['code'] },
+      { type: 'fact', content: 'key = A B', importance: 0.8, emotion: 0, tags: ['code'] },
+    ]))
+    const result = await extractAndStoreMemories({ tenantId, sessionId, memoryScopes: ['session'], llm: credentials, messages: [
+      { role: 'user', content: 'Case and spacing distinguish these source values.' },
+      ...['src/Token.ts', 'key = A  B'].flatMap((summary, index) => [
+        { role: 'assistant', content: '', toolCall: { id: `call-${index}`, name: 'forget', args: { id: `node-${index}` } } },
+        { role: 'tool', content: 'Deleted', toolCallId: `call-${index}`, metadata: { success: true, memoryMutation: { action: 'forget', id: `node-${index}`, summary } } },
+      ]),
+    ] })
+    expect(result).toMatchObject({ stored: 2, errors: [] })
+    expect((await manager.listNodes({}, session)).map(node => node.summary).sort()).toEqual(['key = A B', 'src/token.ts'])
+    expect(complete).toHaveBeenCalledTimes(1)
   })
 })

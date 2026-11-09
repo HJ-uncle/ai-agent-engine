@@ -7,6 +7,8 @@ import { readOldSnapshot, commitDeleteChange, ChangeRecordingError } from './cha
 import { moveToSystemTrash } from './trash.js'
 import { withFileLocks } from '../../shared/file-version.js'
 import { throwIfAborted } from '../../core/utils/abort.js'
+import { ChangeStore } from '../../storage/changes/index.js'
+import { captureCreatedDirectories, missingParentDirectories } from '../../storage/changes/directories.js'
 
 // ── list_files ───────────────────────────────────────────────────────────
 
@@ -20,11 +22,12 @@ export const listFilesTool: Tool = {
       path: { type: 'string' },
       recursive: { type: 'boolean' },
       maxResults: { type: 'integer', minimum: 1, maximum: 2000, description: '本次所有工作区合计的最大条目数，默认500' },
+      includeSizes: { type: 'boolean', description: '显示普通文件的字节大小，用于规划读取批次；默认 false，不跟随符号链接。' },
     },
     required: [],
   },
   async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
-    const { path: dirPath = '.', recursive = false, maxResults = 500 } = rawArgs as { path?: string; recursive?: boolean; maxResults?: number }
+    const { path: dirPath = '.', recursive = false, maxResults = 500, includeSizes = false } = rawArgs as { path?: string; recursive?: boolean; maxResults?: number; includeSizes?: boolean }
     try {
       const budget = createListingBudget(maxResults)
       const allPaths = workspaceManager.getPaths(ctx)
@@ -36,7 +39,7 @@ export const listFilesTool: Tool = {
         if (budget.truncated) break
         // Recheck the workspace boundary before starting each filesystem walk.
         const safePath = workspaceManager.resolveSafePath(ctx, root)
-        const entries = await listDirectoryEntries(safePath, recursive, budget, ctx.signal)
+        const entries = await listDirectoryEntries(safePath, recursive, budget, ctx.signal, includeSizes)
         const output = entries.length ? entries.join('\n') : 'Directory is empty'
         sections.push(roots.length > 1 ? safePath + ':\n' + output : output)
       }
@@ -111,8 +114,14 @@ export const createDirTool: Tool = {
       return await withFileLocks([safePath], async ([canonicalPath]) => {
         throwIfAborted(ctx.signal)
         workspaceManager.resolveSafePath(ctx, canonicalPath)
+        const absent = missingParentDirectories(path.join(canonicalPath, '.directory-creation-probe'))
         fs.mkdirSync(canonicalPath, { recursive: true })
-        return { success: true, output: `Created directory: ${dirPath}` }
+        const created = captureCreatedDirectories(path.join(canonicalPath, '.directory-creation-probe'), absent)
+        const changes = await new ChangeStore().recordCreatedDirectories(ctx.tenantId, {
+          sessionId: ctx.rootSessionId ?? ctx.sessionId, turnId: ctx.turnId ?? ctx.parentConversationId ?? ctx.conversationId,
+          runId: ctx.rootRunId,
+        }, created)
+        return { success: true, output: `Created directory: ${dirPath}`, metadata: { createdDirectoryChangeIds: changes.map(change => change.id) } }
       })
     } catch (err) {
       return { success: false, output: err instanceof Error ? err.message : 'Unknown error' }

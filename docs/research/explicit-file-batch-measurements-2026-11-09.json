@@ -1,0 +1,541 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-11-09",
+  "model": "deepseek-v4.1-flash-1017",
+  "originalEvidence": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\explicit-batch-live\\results\\explicit-batch-v1-2026-11-09T10-23-27-259Z-0d7fec\\evidence.json",
+  "originalEvidenceSha256": "a28fb1b6e79c10b529e4cd678b4f7197354c08e0a043748153212840fac27b2e",
+  "originalEvidenceUnchanged": true,
+  "liveSourceTreeSha256": "a42a2fb0af0106bfa77c29598a0328d339c8d66760f7ad89053041a213c573fd",
+  "engineBuildSha256": "3e2c41ae304e91361f4a8bf2afa10ac19ab313571da3aa5e7599d7f8eafacf29",
+  "cases": [
+    {
+      "case": "batch_io",
+      "physicalProviderRequests": 3,
+      "inputTokens": 32489,
+      "outputTokens": 436,
+      "firstRequestInputTokens": 9266,
+      "originalFailedChecks": [],
+      "passedAfterOfflineReview": true,
+      "check": {
+        "inputsUnchanged": true,
+        "sixExactOutputs": true,
+        "sumCorrect": true,
+        "sixReadsInOneModelResponse": true,
+        "sixWritesInOneModelResponse": true,
+        "maxReadBatch": 6,
+        "maxWriteBatch": 6,
+        "proposedReadTargets": 6,
+        "proposedWriteTargets": 6,
+        "batches": [
+          [
+            {
+              "name": "read_file",
+              "filesCount": 6,
+              "paths": [
+                "a.txt",
+                "b.txt",
+                "c.txt",
+                "d.txt",
+                "e.txt",
+                "f.txt"
+              ],
+              "succeeded": true
+            }
+          ],
+          [
+            {
+              "name": "write_file",
+              "filesCount": 6,
+              "paths": [
+                "out-a.txt",
+                "out-b.txt",
+                "out-c.txt",
+                "out-d.txt",
+                "out-e.txt",
+                "out-f.txt"
+              ],
+              "succeeded": true
+            }
+          ]
+        ],
+        "allReadsInOneExplicitCall": true,
+        "allWritesInOneExplicitCall": true,
+        "completeReadReceiptInNextRequest": true,
+        "completeWriteReceiptInNextRequest": true,
+        "readBatch": {
+          "complete": true,
+          "receipt": {
+            "callId": "toolu_4c527da321b74526bae8f27b",
+            "nextRequest": 2,
+            "complete": true,
+            "expectedBytes": 3798,
+            "deliveredBytes": 3798
+          },
+          "invocations": 1,
+          "maxFilesPerCall": 6
+        },
+        "writeBatch": {
+          "complete": true,
+          "receipt": {
+            "callId": "toolu_beebb888f55f48e991c8fca2",
+            "nextRequest": 3,
+            "complete": true,
+            "expectedBytes": 3656,
+            "deliveredBytes": 3656
+          },
+          "invocations": 1,
+          "maxFilesPerCall": 6
+        },
+        "physicalProviderRequests": 3,
+        "workProviderRequests": 3,
+        "modelToolBatches": 2,
+        "toolInvocations": 2,
+        "providerRequests": [
+          {
+            "attempt": 1,
+            "toolCount": 15,
+            "inputTokens": 9266,
+            "requestToolCalls": [],
+            "requestToolResults": []
+          },
+          {
+            "attempt": 2,
+            "toolCount": 15,
+            "inputTokens": 10745,
+            "requestToolCalls": [
+              {
+                "id": "toolu_4c527da321b74526bae8f27b",
+                "name": "read_file",
+                "filesCount": 6
+              }
+            ],
+            "requestToolResults": [
+              {
+                "id": "toolu_4c527da321b74526bae8f27b",
+                "sha256": "f95116275f5d09c5650020489720fb8e93e928a433a2b56f0c2c4a8553a33b84",
+                "bytes": 3798
+              }
+            ]
+          },
+          {
+            "attempt": 3,
+            "toolCount": 15,
+            "inputTokens": 12478,
+            "requestToolCalls": [
+              {
+                "id": "toolu_4c527da321b74526bae8f27b",
+                "name": "read_file",
+                "filesCount": 6
+              },
+              {
+                "id": "toolu_beebb888f55f48e991c8fca2",
+                "name": "write_file",
+                "filesCount": 6
+              }
+            ],
+            "requestToolResults": [
+              {
+                "id": "toolu_4c527da321b74526bae8f27b",
+                "sha256": "f95116275f5d09c5650020489720fb8e93e928a433a2b56f0c2c4a8553a33b84",
+                "bytes": 3798
+              },
+              {
+                "id": "toolu_beebb888f55f48e991c8fca2",
+                "sha256": "6154cdb752589a7385cdff50a6fa27471bfb5ad187a0bfd2f389a8f8b50ee963",
+                "bytes": 3656
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "case": "batch_io_3",
+      "physicalProviderRequests": 3,
+      "inputTokens": 30277,
+      "outputTokens": 298,
+      "firstRequestInputTokens": 9274,
+      "originalFailedChecks": [],
+      "passedAfterOfflineReview": true,
+      "check": {
+        "inputsUnchanged": true,
+        "threeExactOutputs": true,
+        "sumCorrect": true,
+        "threeReadsInOneModelResponse": true,
+        "threeWritesInOneModelResponse": true,
+        "maxReadBatch": 3,
+        "maxWriteBatch": 3,
+        "proposedReadTargets": 3,
+        "proposedWriteTargets": 3,
+        "batches": [
+          [
+            {
+              "name": "read_file",
+              "filesCount": 3,
+              "paths": [
+                "a.txt",
+                "b.txt",
+                "c.txt"
+              ],
+              "succeeded": true
+            }
+          ],
+          [
+            {
+              "name": "write_file",
+              "filesCount": 3,
+              "paths": [
+                "out-a.txt",
+                "out-b.txt",
+                "out-c.txt"
+              ],
+              "succeeded": true
+            }
+          ]
+        ],
+        "allReadsInOneExplicitCall": true,
+        "allWritesInOneExplicitCall": true,
+        "completeReadReceiptInNextRequest": true,
+        "completeWriteReceiptInNextRequest": true,
+        "readBatch": {
+          "complete": true,
+          "receipt": {
+            "callId": "toolu_984937b723e548169b0aac31",
+            "nextRequest": 2,
+            "complete": true,
+            "expectedBytes": 1917,
+            "deliveredBytes": 1917
+          },
+          "invocations": 1,
+          "maxFilesPerCall": 3
+        },
+        "writeBatch": {
+          "complete": true,
+          "receipt": {
+            "callId": "toolu_0c65c57ce8564612bfee4bf4",
+            "nextRequest": 3,
+            "complete": true,
+            "expectedBytes": 1845,
+            "deliveredBytes": 1845
+          },
+          "invocations": 1,
+          "maxFilesPerCall": 3
+        },
+        "physicalProviderRequests": 3,
+        "workProviderRequests": 3,
+        "modelToolBatches": 2,
+        "toolInvocations": 2,
+        "providerRequests": [
+          {
+            "attempt": 1,
+            "toolCount": 15,
+            "inputTokens": 9274,
+            "requestToolCalls": [],
+            "requestToolResults": []
+          },
+          {
+            "attempt": 2,
+            "toolCount": 15,
+            "inputTokens": 10047,
+            "requestToolCalls": [
+              {
+                "id": "toolu_984937b723e548169b0aac31",
+                "name": "read_file",
+                "filesCount": 3
+              }
+            ],
+            "requestToolResults": [
+              {
+                "id": "toolu_984937b723e548169b0aac31",
+                "sha256": "c062dc2966613eafe03e43bd74d8b12d74c7b2cab7976d631f654e0a7db62106",
+                "bytes": 1917
+              }
+            ]
+          },
+          {
+            "attempt": 3,
+            "toolCount": 15,
+            "inputTokens": 10956,
+            "requestToolCalls": [
+              {
+                "id": "toolu_984937b723e548169b0aac31",
+                "name": "read_file",
+                "filesCount": 3
+              },
+              {
+                "id": "toolu_0c65c57ce8564612bfee4bf4",
+                "name": "write_file",
+                "filesCount": 3
+              }
+            ],
+            "requestToolResults": [
+              {
+                "id": "toolu_984937b723e548169b0aac31",
+                "sha256": "c062dc2966613eafe03e43bd74d8b12d74c7b2cab7976d631f654e0a7db62106",
+                "bytes": 1917
+              },
+              {
+                "id": "toolu_0c65c57ce8564612bfee4bf4",
+                "sha256": "161803dbdd0542b8aaa84e35352039d5f8d2a3504781eb83824fcc2bbd66b1ce",
+                "bytes": 1845
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "case": "batch_office_inspect",
+      "physicalProviderRequests": 5,
+      "inputTokens": 55591,
+      "outputTokens": 445,
+      "firstRequestInputTokens": 9259,
+      "originalFailedChecks": [
+        "factsCorrect"
+      ],
+      "passedAfterOfflineReview": true,
+      "check": {
+        "threeInspectionsInOneExplicitCall": true,
+        "completeInspectionReceiptInNextRequest": true,
+        "inspectionContentVerified": true,
+        "originalOfficeBytesUnchanged": true,
+        "allThreeMarkersReported": true,
+        "factsCorrect": true,
+        "noMutationTools": true,
+        "inspectionBatch": {
+          "complete": true,
+          "receipt": {
+            "callId": "toolu_27675e52de5e4df1b5b01a39",
+            "nextRequest": 5,
+            "complete": true,
+            "expectedBytes": 3477,
+            "deliveredBytes": 3477
+          },
+          "invocations": 1,
+          "maxFilesPerCall": 3
+        },
+        "batches": [
+          [
+            {
+              "name": "list_files",
+              "filesCount": 0,
+              "succeeded": true
+            }
+          ],
+          [
+            {
+              "name": "get_skill",
+              "filesCount": 0,
+              "succeeded": true
+            }
+          ],
+          [
+            {
+              "name": "load_tools",
+              "filesCount": 0,
+              "succeeded": true
+            }
+          ],
+          [
+            {
+              "name": "office_inspect",
+              "filesCount": 3,
+              "paths": [
+                "inspect.docx",
+                "inspect.xlsx",
+                "inspect.pptx"
+              ],
+              "succeeded": true
+            }
+          ]
+        ],
+        "physicalProviderRequests": 5,
+        "workProviderRequests": 5,
+        "modelToolBatches": 4,
+        "toolInvocations": 4,
+        "providerRequests": [
+          {
+            "attempt": 1,
+            "toolCount": 15,
+            "inputTokens": 9259,
+            "requestToolCalls": [],
+            "requestToolResults": []
+          },
+          {
+            "attempt": 2,
+            "toolCount": 15,
+            "inputTokens": 9503,
+            "requestToolCalls": [
+              {
+                "id": "toolu_a5b64ad23b464ea99aa4811b",
+                "name": "list_files",
+                "filesCount": 0
+              }
+            ],
+            "requestToolResults": [
+              {
+                "id": "toolu_a5b64ad23b464ea99aa4811b",
+                "sha256": "f8cbb67c53fb46d9b42dfa0d109d4dc37c72e2176256ee98dc06c8e21b7b0bc2",
+                "bytes": 434
+              }
+            ]
+          },
+          {
+            "attempt": 3,
+            "toolCount": 15,
+            "inputTokens": 11382,
+            "requestToolCalls": [
+              {
+                "id": "toolu_a5b64ad23b464ea99aa4811b",
+                "name": "list_files",
+                "filesCount": 0
+              },
+              {
+                "id": "toolu_01c53cc505bd49928dadbad9",
+                "name": "get_skill",
+                "filesCount": 0
+              }
+            ],
+            "requestToolResults": [
+              {
+                "id": "toolu_a5b64ad23b464ea99aa4811b",
+                "sha256": "f8cbb67c53fb46d9b42dfa0d109d4dc37c72e2176256ee98dc06c8e21b7b0bc2",
+                "bytes": 434
+              },
+              {
+                "id": "toolu_01c53cc505bd49928dadbad9",
+                "sha256": "ac666e2b48616e0a6806267f3d35f59d7462de48cdcc0d7794819fb3750acd72",
+                "bytes": 7885
+              }
+            ]
+          },
+          {
+            "attempt": 4,
+            "toolCount": 16,
+            "inputTokens": 12124,
+            "requestToolCalls": [
+              {
+                "id": "toolu_a5b64ad23b464ea99aa4811b",
+                "name": "list_files",
+                "filesCount": 0
+              },
+              {
+                "id": "toolu_01c53cc505bd49928dadbad9",
+                "name": "get_skill",
+                "filesCount": 0
+              },
+              {
+                "id": "toolu_81c7e49c0fa34d509443af77",
+                "name": "load_tools",
+                "filesCount": 0
+              }
+            ],
+            "requestToolResults": [
+              {
+                "id": "toolu_a5b64ad23b464ea99aa4811b",
+                "sha256": "f8cbb67c53fb46d9b42dfa0d109d4dc37c72e2176256ee98dc06c8e21b7b0bc2",
+                "bytes": 434
+              },
+              {
+                "id": "toolu_01c53cc505bd49928dadbad9",
+                "sha256": "ac666e2b48616e0a6806267f3d35f59d7462de48cdcc0d7794819fb3750acd72",
+                "bytes": 7885
+              },
+              {
+                "id": "toolu_81c7e49c0fa34d509443af77",
+                "sha256": "5e2a8836bb7f3613ced36f36ff62161d6867ea3450c0cbc4b4d9c6f8f7e35e5a",
+                "bytes": 105
+              }
+            ]
+          },
+          {
+            "attempt": 5,
+            "toolCount": 16,
+            "inputTokens": 13323,
+            "requestToolCalls": [
+              {
+                "id": "toolu_a5b64ad23b464ea99aa4811b",
+                "name": "list_files",
+                "filesCount": 0
+              },
+              {
+                "id": "toolu_01c53cc505bd49928dadbad9",
+                "name": "get_skill",
+                "filesCount": 0
+              },
+              {
+                "id": "toolu_81c7e49c0fa34d509443af77",
+                "name": "load_tools",
+                "filesCount": 0
+              },
+              {
+                "id": "toolu_27675e52de5e4df1b5b01a39",
+                "name": "office_inspect",
+                "filesCount": 3
+              }
+            ],
+            "requestToolResults": [
+              {
+                "id": "toolu_a5b64ad23b464ea99aa4811b",
+                "sha256": "f8cbb67c53fb46d9b42dfa0d109d4dc37c72e2176256ee98dc06c8e21b7b0bc2",
+                "bytes": 434
+              },
+              {
+                "id": "toolu_01c53cc505bd49928dadbad9",
+                "sha256": "ac666e2b48616e0a6806267f3d35f59d7462de48cdcc0d7794819fb3750acd72",
+                "bytes": 7885
+              },
+              {
+                "id": "toolu_81c7e49c0fa34d509443af77",
+                "sha256": "5e2a8836bb7f3613ced36f36ff62161d6867ea3450c0cbc4b4d9c6f8f7e35e5a",
+                "bytes": 105
+              },
+              {
+                "id": "toolu_27675e52de5e4df1b5b01a39",
+                "sha256": "bf0d7c443dc0202d22c5ba9b800a886e56c5a810902942984b73d76a9a5052e7",
+                "bytes": 3477
+              }
+            ]
+          }
+        ],
+        "limitation": "Real Office package text and saved bytes are checked; no native Office layout or rendering claim."
+      }
+    },
+    {
+      "case": "identity",
+      "physicalProviderRequests": 1,
+      "inputTokens": 9197,
+      "outputTokens": 44,
+      "firstRequestInputTokens": 9197,
+      "originalFailedChecks": [],
+      "passedAfterOfflineReview": true,
+      "check": {
+        "answered": true
+      }
+    }
+  ],
+  "totals": {
+    "requests": 12,
+    "inputTokens": 127554,
+    "outputTokens": 1223
+  },
+  "validation": {
+    "engineFiles": 41,
+    "enginePassed": 657,
+    "engineFailed": 0,
+    "fixturePassed": 14,
+    "frontendPassed": 15,
+    "engineTypecheck": true,
+    "engineBuild": true,
+    "frontendTypecheck": true,
+    "frontendBuild": true,
+    "guiRun": false,
+    "productionRestarted": false
+  },
+  "limitations": [
+    "One live repetition per scenario; not a matched old/new A/B",
+    "Shared output budget may require large-file continuation",
+    "Office checks do not validate native visual layout",
+    "Office facts checker corrected offline; original evidence preserved"
+  ]
+}

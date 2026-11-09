@@ -142,8 +142,11 @@ export async function searchChunks(tenantId: string, query: unknown, limit = 5, 
   }
   const termsLike = nonAscii.length ? nonAscii : rows.length ? [] : ascii
   if (termsLike.length) {
-    const conditions = termsLike.map(() => "dc.content LIKE ? ESCAPE '\\'").join(' OR ')
-    const found = await db.execute({ sql: `SELECT dc.id chunk_id,dc.document_id,d.knowledge_base_id,d.filename,dc.content,0.0 score,dc.chunk_index FROM document_chunks dc JOIN documents d ON d.id=dc.document_id WHERE dc.tenant_id=? AND d.tenant_id=? AND (${conditions})${scope} ORDER BY dc.chunk_index LIMIT ?`, args: [tenantId, tenantId, ...termsLike.map(x => `%${like(x)}%`), ...(ids ?? []), limit] })
+    // Large Work messages also reach automatic RAG. Bind a term table so SQL
+    // depth and placeholder count stay constant; keep all terms and escaping.
+    const patterns = JSON.stringify([...new Set(termsLike)].map(x => `%${like(x)}%`))
+    const conditions = "EXISTS (SELECT 1 FROM json_each(?) AS search_term WHERE dc.content LIKE search_term.value ESCAPE '\\')"
+    const found = await db.execute({ sql: `SELECT dc.id chunk_id,dc.document_id,d.knowledge_base_id,d.filename,dc.content,0.0 score,dc.chunk_index FROM document_chunks dc JOIN documents d ON d.id=dc.document_id WHERE dc.tenant_id=? AND d.tenant_id=? AND ${conditions}${scope} ORDER BY dc.chunk_index LIMIT ?`, args: [tenantId, tenantId, patterns, ...(ids ?? []), limit] })
     for (const row of found.rows) if (!seen.has(String(row.chunk_id))) { seen.add(String(row.chunk_id)); rows.push(row as Record<string, unknown>) }
   }
   return rows.slice(0, limit).map(row => ({ chunkId: String(row.chunk_id), documentId: String(row.document_id), knowledgeBaseId: row.knowledge_base_id == null ? null : String(row.knowledge_base_id), filename: String(row.filename), content: String(row.content), score: Number(row.score), chunkIndex: Number(row.chunk_index) }))

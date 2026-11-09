@@ -2,6 +2,7 @@ import { getMemoryDb } from './db.js'
 import type { InValue } from '@libsql/client'
 import type { MemoryManager, MemoryNode, MemoryEdge, MemoryGraphMeta, MemoryContext, MemoryScope, MemoryNodeType, MemoryEdgeType, MemoryNodeFilter, CreateMemoryNodeInput, UpdateMemoryNodeInput, CreateMemoryEdgeInput } from './types.js'
 import { v4 as uuidv4 } from 'uuid'
+import { coordinateMemoryDeletion } from './extraction-coordinator.js'
 
 type Executor = { execute(stmt: { sql: string; args: InValue[] } | string): Promise<any> }
 
@@ -113,7 +114,18 @@ export class SQLiteMemoryManager implements MemoryManager {
     }
     return this.getNode(id, c)
   }
-  async deleteNode(id: string, ctx: MemoryContext): Promise<void> { const c = normalizeContext(ctx); const db = getMemoryDb(); const s = scoped('', c); await db.execute({ sql: `DELETE FROM memory_nodes WHERE id=? AND ${s.sql}`, args: [id, ...s.args] }) }
+  async deleteNode(id: string, ctx: MemoryContext): Promise<void> {
+    const c = normalizeContext(ctx), s = scoped('', c)
+    await coordinateMemoryDeletion(c, async () => {
+      const tx = await getMemoryDb().transaction('write')
+      try {
+        const node = await this.getNode(id, c, tx)
+        await tx.execute({ sql: `DELETE FROM memory_nodes WHERE id=? AND ${s.sql}`, args: [id, ...s.args] })
+        await tx.commit()
+        return { value: undefined, summary: node?.summary }
+      } catch (error) { await tx.rollback(); throw error }
+    })
+  }
   async listNodes(filter: MemoryNodeFilter, ctx: MemoryContext): Promise<MemoryNode[]> {
     const c = normalizeContext(ctx); const db = getMemoryDb(); const { cond, args } = this._nodeWhere(filter, c)
     const columns: Record<string, string> = { timestamp: 'timestamp', strength: 'strength', importance: 'importance', last_accessed: 'last_accessed' }; const order = columns[filter.orderBy ?? 'timestamp'] || 'timestamp'; const dir = filter.orderDir === 'ASC' ? 'ASC' : 'DESC'; const r = await db.execute({ sql: `SELECT * FROM memory_nodes WHERE ${cond.join(' AND ')} ORDER BY ${order} ${dir} LIMIT ? OFFSET ?`, args: [...args, filter.limit ?? 50, filter.offset ?? 0] }); return this._mapWithTags(r.rows, c)
@@ -122,6 +134,30 @@ export class SQLiteMemoryManager implements MemoryManager {
     const c = normalizeContext(ctx); const db = getMemoryDb(); const { cond, args } = this._nodeWhere(filter, c)
     const r = await db.execute({ sql: `SELECT COUNT(*) AS count FROM memory_nodes WHERE ${cond.join(' AND ')}`, args })
     return Number((r.rows[0] as any)?.count ?? 0)
+  }
+  /** One ordered page across server-authorized scopes, without loading each scope's prefix. */
+  async listNodesInContexts(filter: MemoryNodeFilter, contexts: readonly MemoryContext[]): Promise<MemoryNode[]> {
+    const unique = new Map<string, Required<MemoryContext>>()
+    for (const context of contexts) {
+      const c = normalizeContext(context)
+      unique.set(JSON.stringify([c.tenantId, c.scope, c.scope === 'session' ? c.sessionId : '']), c)
+    }
+    const normalized = [...unique.values()]
+    if (!normalized.length) return []
+    if (normalized.some(c => c.tenantId !== normalized[0].tenantId)) throw new Error('memory pagination requires one tenant')
+    const predicates = normalized.map(c => this._nodeWhere(filter, c))
+    const columns: Record<string, string> = { timestamp: 'timestamp', strength: 'strength', importance: 'importance', last_accessed: 'last_accessed' }
+    const order = columns[filter.orderBy ?? 'timestamp'] || 'timestamp', direction = filter.orderDir === 'ASC' ? 'ASC' : 'DESC'
+    const result = await getMemoryDb().execute({
+      sql: `SELECT * FROM memory_nodes WHERE ${predicates.map(p => `(${p.cond.join(' AND ')})`).join(' OR ')} ORDER BY ${order} ${direction},id ASC LIMIT ? OFFSET ?`,
+      args: [...predicates.flatMap(p => p.args), filter.limit ?? 50, filter.offset ?? 0],
+    })
+    const nodes = new Map<string, MemoryNode>()
+    for (const c of normalized) {
+      const rows = result.rows.filter(row => row.tenant_id === c.tenantId && row.scope === c.scope && (c.scope !== 'session' || row.session_id === c.sessionId))
+      for (const node of await this._mapWithTags(rows, c)) nodes.set(node.id, node)
+    }
+    return result.rows.map(row => nodes.get(String(row.id))!)
   }
   async recallByTags(tags: string[], ctx: MemoryContext): Promise<MemoryNode[]> { return this.listNodes({ tags, orderBy: 'strength', limit: 30 }, ctx) }
   async recallRecent(limit: number, ctx: MemoryContext): Promise<MemoryNode[]> { return this.listNodes({ orderBy: 'timestamp', limit }, ctx) }
@@ -277,7 +313,16 @@ export class SQLiteMemoryManager implements MemoryManager {
     if (filter.maxStrength !== undefined) { cond.push('strength<=?'); args.push(filter.maxStrength) }
     if (filter.minImportance !== undefined) { cond.push('importance>=?'); args.push(filter.minImportance) }
     if (filter.sessionId) { cond.push('session_id=?'); args.push(filter.sessionId) }
-    if (filter.keyword) { const words = filter.keyword.split(/[\s,，.。?？!！;；、]+/).map(w => w.trim()).filter(w => w.length > 1); const terms = words.length ? words : [filter.keyword]; cond.push(`(${terms.map(() => '(summary LIKE ? OR detail LIKE ?)').join(' OR ')})`); for (const word of terms) args.push(`%${word}%`, `%${word}%`) }
+    if (filter.summaryContains !== undefined) { cond.push('instr(summary,?)>0'); args.push(filter.summaryContains) }
+    if (filter.keyword) {
+      const words = filter.keyword.split(/[\s,，.。?？!！;；、]+/).map(w => w.trim()).filter(w => w.length > 1)
+      const terms = [...new Set(words.length ? words : [filter.keyword])]
+      // A long user message can contain thousands of keywords. Keep them as
+      // bound data rather than an OR expression per term (SQLite depth 1000),
+      // preserving every term and the existing summary/detail LIKE semantics.
+      cond.push('EXISTS (SELECT 1 FROM json_each(?) AS memory_keyword WHERE memory_nodes.summary LIKE memory_keyword.value OR memory_nodes.detail LIKE memory_keyword.value)')
+      args.push(JSON.stringify(terms.map(word => `%${word}%`)))
+    }
     if (filter.tags?.length) { const p = filter.tags.map(() => '?').join(','); cond.push(`id IN (SELECT mnt.node_id FROM memory_node_tags mnt JOIN memory_tags mt ON mt.id=mnt.tag_id WHERE mt.name IN (${p}) AND mt.tenant_id=?)`); args.push(...filter.tags, c.tenantId) }
     return { cond, args }
   }

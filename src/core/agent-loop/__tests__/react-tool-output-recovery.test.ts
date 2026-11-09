@@ -105,7 +105,7 @@ describe('safe regeneration after a terminal tool output limit', () => {
     const f = fixture(profile)
     let calls = 0
     f.llm.stream = vi.fn(async function* (messages: Message[], options?: LLMAdapterOptions): AsyncGenerator<LLMStreamChunk> {
-      expect(options!.requestInputTokenEstimate).toBe(estimateRequestInput(messages, options!.systemPrompt, options!.tools!))
+      expect(options!.requestInputTokenEstimate).toBe(estimateRequestInput(messages, options!.systemPrompt, options!.tools!, options!.requestContext))
       expect(options!.requestInputTokenEstimate! + options!.maxTokens!).toBeLessThanOrEqual(100_000)
       const count = ++calls, id = 'attempt-' + count
       await options!.onRequestAttempt!({ type: 'start', requestAttemptId: id, provider: 'test', model: 'model', estimatedInputTokens: options!.requestInputTokenEstimate, maxOutputTokens: options!.maxTokens })
@@ -115,9 +115,9 @@ describe('safe regeneration after a terminal tool output limit', () => {
       else if (count === 2) {
         expect(f.ctx.tools.execute).not.toHaveBeenCalled()
         expect(f.ctx.tools.preflight).not.toHaveBeenCalled()
-        expect(options!.systemPrompt).toContain(notice)
-        expect(options!.systemPrompt).not.toContain('UNTRUSTED_ARGUMENT_INJECTION')
-        expect(options!.systemPrompt).not.toContain('outside-scope')
+        expect(options!.requestContext).toContain(notice)
+        expect(options!.requestContext).not.toContain('UNTRUSTED_ARGUMENT_INJECTION')
+        expect(options!.requestContext).not.toContain('outside-scope')
         expect(options!.tools!.map(t => t.name)).toEqual(['subagent', 'write_file'])
         expect(messages.filter(m => m.role === 'tool')).toHaveLength(2)
         expect(messages.filter(m => m.role === 'tool').every(m => m.metadata?.status === 'interrupted')).toBe(true)
@@ -125,7 +125,7 @@ describe('safe regeneration after a terminal tool output limit', () => {
         yield { done: true, finishReason: 'tool_calls', promptTokens: 40, completionTokens: 10,
           toolCalls: [tc('new-child', '{"task":"Review authorized brief.json."}')] }
       } else {
-        expect(String(options!.systemPrompt)).not.toContain(notice)
+        expect(String(options!.requestContext)).not.toContain(notice)
         yield { done: true, content: 'verified', promptTokens: 60, completionTokens: 15 }
       }
     })
@@ -177,7 +177,7 @@ describe('safe regeneration after a terminal tool output limit', () => {
     f.llm.stream = vi.fn(async function* (_messages: Message[], options?: LLMAdapterOptions): AsyncGenerator<LLMStreamChunk> {
       const count = ++calls
       if (count <= 12) {
-        if (count > 2) expect(options!.systemPrompt).toContain('Reduce the next argument payload further')
+        if (count > 2) expect(options!.requestContext).toContain('Reduce the next argument payload further')
         yield { done: true, finishReason: 'length', promptTokens: 10, completionTokens: 3, toolCalls: [tc('same-provider-id')] }
       } else if (count === 13) yield { done: true, toolCalls: [tc('same-provider-id', '{"task":"Review authorized brief.json."}')] }
       else yield { done: true, content: 'done' }
@@ -264,11 +264,11 @@ describe('safe regeneration after a terminal tool output limit', () => {
           expect(messages.at(-1)!.content).toContain('starting exactly where the response stopped')
           yield { done: true, finishReason: 'length', toolCalls: [tc('separate-fragment')] }; break
         case 3:
-          expect(options!.systemPrompt).toContain(notice)
+          expect(options!.requestContext).toContain(notice)
           expect(messages.some(m => String(m.content).includes('starting exactly where the response stopped'))).toBe(false)
           yield { done: true, content: 'verified', finishReason: 'length' }; break
         default:
-          expect(String(options!.systemPrompt)).not.toContain(notice)
+          expect(String(options!.requestContext)).not.toContain(notice)
           expect(messages.at(-1)!.content).toContain('starting exactly where the response stopped')
           yield { done: true, content: ']' }
       }
@@ -728,7 +728,8 @@ describe('safe regeneration after a terminal tool output limit', () => {
       const count = ++request
       if (count === 2) {
         expect(f.ctx.tools.execute).not.toHaveBeenCalled()
-        expect(String(bodies[1].system)).toContain(notice)
+        expect(String(bodies[1].system)).not.toContain(notice)
+        expect(JSON.stringify(bodies[1].messages)).toContain(notice)
         expect(JSON.stringify(bodies[1])).toContain('Model response ended before this tool could execute')
       }
       return count === 1 ? sse('sdk-partial', unfinished, 'max_tokens') : count === 2 ? sse('sdk-text', undefined, 'max_tokens', '[')

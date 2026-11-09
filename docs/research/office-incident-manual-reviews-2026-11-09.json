@@ -1,0 +1,19 @@
+[
+  {
+    "run": "office-v3-low-2026-11-09T03-38-36-980Z-6b0e46",
+    "case": "office_bundle_replay",
+    "passed": false,
+    "finding": "Word 渲染与动画时序及 PPT 第7页称合并回弹45ms，误把 renderer.js 中未使用的 POP_MS 常量当作实际行为；CSS bumpTile 动画为0.16s。",
+    "checked": ["未声称本轮执行测试，18/47数量注明来自README", "5个Excel公式与条目口径一致", "项目、操作、主题及30步悔棋一致"],
+    "boundary": "只读事实核对；没有进行原生Office视觉渲染。"
+  },
+  {
+    "run": "office-v4-low-2026-11-09T03-52-51-521Z-a6432b",
+    "case": "office_bundle_replay",
+    "passed": true,
+    "finding": "Excel以文件名标识2048，正文14个模块、操作快捷键、悔棋与主题与README及同套文档吻合。原断言要求所有成品正文出现2048过严；修正为明确文件名加具体模块/操作证据。",
+    "checked": ["65=SUM(C2:C3)=18+47，是README用例总数而非实测通过数", "Word、PPT备注和最终答复注明测试数量来源及本次未重跑，工具无execute_cmd", "三件套没有45ms错误表述，内容与README一致"],
+    "remaining": "Excel单独打开时缺少来源/本次未重跑注释，可改善溯源；没有虚称实测或通过。",
+    "boundary": "只读事实核对；没有进行原生Office视觉渲染。"
+  }
+]

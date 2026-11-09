@@ -1,10 +1,11 @@
 import fs from 'node:fs'
 import type { AgentContext, Tool, ToolResult } from '../../core/agent-context/index.js'
 import { workspaceManager } from '../../workspace/index.js'
-import { hashFileContent, readFileVersionSync, withFileLocks } from '../../shared/file-version.js'
+import { readFileVersionSync, withFileLocks } from '../../shared/file-version.js'
 import { throwIfAborted } from '../../core/utils/abort.js'
 import { MAX_FILE_SIZE } from './constants.js'
-import { ChangeRecordingError, commitWriteChange, decodeEditableText, readOldSnapshot } from './change-recorder.js'
+import { ChangeRecordingError, commitWriteChange, commitWriteChangeWithReceipt, decodeEditableText, readOldSnapshot } from './change-recorder.js'
+import { describeFileBytes, formatWriteReceipt } from './write-receipt.js'
 
 interface TextEdit { oldText: string; newText: string }
 interface EditFileArgs { path: string; expectedHash: string; edits: TextEdit[] }
@@ -25,7 +26,7 @@ function validArgs(value: unknown): value is EditFileArgs {
 
 export const editFileTool: Tool = {
   name: 'edit_file', displayName: '精确编辑文件',
-  description: '对已有 UTF-8 文本文件做精确替换。使用同一文件最近一次 read_file / write_file / edit_file 成功返回的 expectedHash；已经掌握原文时无需重复读取，不要计算或猜测 hash。原文不确定时先 read_file mode="exact" 获取无行号 content；正文必须逐字匹配，保留 CRLF、Unicode 和 BOM，不自动格式化。所有 edits 都匹配同一原文件：每个 oldText 必须非空且唯一，多项不可重叠。版本不一致、匹配不存在或不唯一时整次修改失败，不猜位置。大文件的改动快照保存到磁盘并可安全撤回。',
+  description: '对已有 UTF-8 文本文件做精确替换。使用同一文件最近一次 read_file / write_file / edit_file 成功返回的 expectedHash；已经掌握原文时无需重复读取，不要计算或猜测 hash。原文不确定时先 read_file mode="exact" 获取无行号 content；正文必须逐字匹配，保留 CRLF、Unicode 和 BOM，不自动格式化。所有 edits 都匹配同一原文件：每个 oldText 必须非空且唯一，多项不可重叠。版本不一致、匹配不存在或不唯一时整次修改失败，不猜位置。大文件的改动快照保存到磁盘并可安全撤回。原地修改须改源文件；如还需副本，修改后另复制，保留尾部换行；源与副本最新 expectedHash 必须一致，不一致先纠正，不能声称完成。回执 sha256 即实际完整文件 SHA-256，无需另运行命令。',
   parameters: {
     type: 'object', additionalProperties: false,
     properties: {
@@ -83,7 +84,11 @@ export const editFileTool: Tool = {
         for (const match of [...matches].reverse()) updated = updated.slice(0, match.start) + match.newText + updated.slice(match.end)
         const afterBytes = Buffer.from(updated, 'utf8')
         if (afterBytes.toString('utf8') !== updated || afterBytes.includes(0)) return failure('EDIT_NOT_TEXT', 'Replacement must remain valid UTF-8 text without binary content.')
-        if (before.content.equals(afterBytes)) return { success: true, output: `No change: ${canonicalPath}\nexpectedHash: ${before.hash}`, metadata: { path: canonicalPath, expectedHash: before.hash, noChange: true, oldHash: before.hash, newHash: before.hash } }
+        if (before.content.equals(afterBytes)) {
+          const receipt = describeFileBytes(canonicalPath, before, original)
+          return { success: true, output: `No change: ${canonicalPath}\n${formatWriteReceipt(receipt)}`,
+            metadata: { ...receipt, noChange: true, oldHash: before.hash, newHash: before.hash, fileMutationApplied: false } }
+        }
 
         // No await from the full-byte version read above through this write. In-process
         // editor writes, agent writes and reverts also hold this canonical path lock.
@@ -107,9 +112,9 @@ export const editFileTool: Tool = {
           }
           throw error
         }
-        const change = await commitWriteChange(ctx, args.path, canonicalPath, snapshot)
-        return { success: true, output: `Edited ${canonicalPath}: ${matches.length} replacement(s)\nexpectedHash: ${hashFileContent(afterBytes)}`,
-          change, metadata: { path: canonicalPath, expectedHash: change.newHash, oldHash: before.hash, newHash: change.newHash, replacements: matches.length, fileMutationApplied: true, rollbackAvailable: !change.truncated } }
+        const { change, receipt } = await commitWriteChangeWithReceipt(ctx, args.path, canonicalPath, snapshot)
+        return { success: true, output: `Edited ${canonicalPath}: ${matches.length} replacement(s)\n${formatWriteReceipt(receipt)}`,
+          change, metadata: { ...receipt, oldHash: before.hash, newHash: change.newHash, replacements: matches.length, fileMutationApplied: true, rollbackAvailable: !change.truncated } }
       })
     } catch (error) {
       if (error instanceof ChangeRecordingError) return failure('EDIT_RECORD_FAILED', error.message, { fileMutationApplied: true, rollbackAvailable: false })

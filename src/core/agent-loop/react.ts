@@ -32,11 +32,16 @@ import { browserOutputFramePayload, browserOutputPresentation } from '../utils/b
 import { DEFAULT_PUBLICATION_MAX_BYTES } from '../stream-pipeline/publication-queue.js'
 import { imageFileVersion, imageToolFramePayload, imageToolPayload, MAX_NATIVE_IMAGE_BASE64_CHARS } from '../utils/multimodal-context.js'
 import { captureFileEvidence, clearedToolModelContent, isClearedToolMessage, TOOL_FILE_EVIDENCE_KEY, CLEARED_TOOL_EVIDENCE_KEY, CLEARED_TOOL_RESULT } from '../utils/tool-evidence.js'
-import { buildRuntimeCapabilitiesPrompt } from '../runtime-capabilities.js'
+import { buildRuntimeCapabilitiesContext, RUNTIME_CAPABILITIES_GUIDANCE } from '../runtime-capabilities.js'
+import { requestContextMessage } from '../llm-adapter/request-context.js'
 import { buildExecutionProtocol } from '../execution-protocol.js'
 import { isRetryable } from '../llm-adapter/retry.js'
 import { finalResults, TOOL_RESULT_IMAGE_ASSETS } from '../../storage/results/index.js'
 import { rootRunStore } from '../../storage/root-runs/index.js'
+import { DeliveryCloseout } from './delivery-closeout.js'
+import { projectCompletedWriteHistory, restoreCompletedWriteHistory } from '../utils/completed-write-history.js'
+import { ChildResultReview, CHILD_RESULT_REVIEW_PROMPT } from './child-result-review.js'
+import { RequestHistoryChangedError } from '../collaboration/history-budget.js'
 
 const OUTPUT_CONTINUATION_PROMPT = 'The previous model response reached its single-response output limit. Continue the same user task from the retained partial response and history, starting exactly where the response stopped. Do not repeat text already emitted, restart completed work, or repeat executed tools. Use tools only for remaining work; finish normally when the original task is complete.'
 
@@ -171,6 +176,10 @@ export interface ReActOptions {
     args: Record<string, unknown>
     execute(ctx: AgentContext): Promise<ToolResult>
   }>
+  /** Drain server-validated assignments once, each through the standard durable admission path. */
+  takeDelegatedTools?: () => NonNullable<ReActOptions['delegatedTools']>
+  /** User-selected identities must be scoped before the parent may claim completion. */
+  hasPendingDelegations?: () => boolean
   /** Reserve the final child iteration for returning evidence instead of starting more tools. */
   finalizeOnLimit?: boolean
   /** Code mode uses remaining context capacity without a fixed completion or cumulative budget. */
@@ -260,7 +269,17 @@ async function requestHistory(ctx: AgentContext, recoveryToolInRequest: boolean)
   const projected = projectReadonlyHistory(selected.filter(message => !isReasoningRecoverySegment(message) && !isEmptyRecoverySegment(message)),
     call => ctx.tools.executionMode?.(call.name, call.args))
   const searchHistoryAvailable = recoveryToolInRequest && ctx.tools.has('search_history') && ctx.tools.executionMode?.('search_history', {}) === 'readonly'
-  return { ...projected, messages: pairToolHistory(projected.messages.map(message => projectModelMessage(message, searchHistoryAvailable))),
+  const argumentRecovery = ctx.tools.supportsHistoryProjection?.('search_history') === true
+    && ctx.tools.executionMode?.('search_history', {}) === 'readonly'
+    && (recoveryToolInRequest || ctx.tools.hasModelToolLoader?.() === true)
+  const writes = projectCompletedWriteHistory(projected.messages, {
+    argumentRecoveryAvailable: argumentRecovery,
+    canProject: call => ctx.tools.supportsHistoryProjection?.(call.name) === true,
+  })
+  // Only load recovery when an actual completed payload is being projected.
+  // Greetings and short writes keep the original small tool surface.
+  if (writes.projectedCalls && !recoveryToolInRequest) ctx.tools.loadForModel?.(['search_history'])
+  return { ...projected, messages: pairToolHistory(writes.messages.map(message => projectModelMessage(message, searchHistoryAvailable))),
     emptyRecoveryUsed: ctx.rootRunId !== undefined && all.some(message => isEmptyRecoverySegment(message)
       && message.metadata?.rootRunId === ctx.rootRunId && message.metadata?.turnId === ctx.turnId) }
 }
@@ -286,6 +305,50 @@ export class ReActStrategy implements LoopStrategy {
     private readonly llm: LLMAdapter,
     private readonly options: ReActOptions = {},
   ) {}
+
+  /** Each admitted selection retains its own durable tool anchor and child identity. */
+  private async *launchDelegations(delegations: NonNullable<ReActOptions['delegatedTools']>, ctx: AgentContext): AsyncGenerator<string> {
+    if (delegations.length) {
+      const launches: Array<RegisteredToolCall & { execute(ctx: AgentContext): Promise<ToolResult> }> = []
+      for (const delegation of delegations) {
+        if (ctx.signal?.aborted) break
+        const call = { id: delegation.id, name: delegation.name ?? 'subagent', args: delegation.args }
+        const messageId = uuidv4()
+        await appendRunHistory({ id: messageId, role: 'assistant', content: '', toolCall: call,
+          toolCallId: call.id, createdAt: Date.now(), tokens: 0, conversationId: ctx.conversationId,
+          metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId, userDelegated: true } } as Message, ctx)
+        await ctx.runObserver?.onToolStart?.({ toolCallId: call.id, name: call.name, args: call.args })
+        yield '\x00__tool_start__' + JSON.stringify({ toolCallId: call.id, toolName: call.name,
+          name: call.name, args: call.args, messageId, rootRunId: ctx.rootRunId, turnId: ctx.turnId })
+        launches.push({ call, messageId, execute: delegation.execute })
+      }
+      // The runner's pool controls admitted child concurrency. Persist all announcements
+      // before starting so interrupted batches can be replayed without inventing work.
+      const pending = new Map(launches.map((item, index) => [index, (async () => {
+        let result: ToolResult
+        try {
+          result = ctx.signal?.aborted ? { success: false, status: 'cancelled', output: '用户已停止，未启动子代理。' }
+            : await item.execute({ ...ctx, currentMessageId: item.messageId, currentToolCallId: item.call.id })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          result = { success: false, status: ctx.signal?.aborted ? 'cancelled' : 'failed', output: message, error: message }
+        }
+        return { index, result }
+      })()]))
+      let failedToPersist = false
+      // Settle each admission immediately. Async children retain their real
+      // executor joins; the parent can now coordinate them in its normal loop.
+      while (pending.size) {
+        const completed = await Promise.race(pending.values())
+        pending.delete(completed.index)
+        const settled = yield* this.settleTool(launches[completed.index], completed.result, ctx)
+        failedToPersist ||= settled.failedToPersist
+      }
+      if (failedToPersist) throw new Error('Delegated Agent result could not be persisted; execution will not be repeated automatically')
+      if (ctx.signal?.aborted) return
+    }
+
+  }
 
   /** Settle one invocation without letting storage/observer failure skip siblings. */
   private async *settleTool(item: RegisteredToolCall, rawResult: ToolResult, ctx: AgentContext): AsyncGenerator<string, { tokens: number; failedToPersist: boolean }> {
@@ -522,11 +585,15 @@ export class ReActStrategy implements LoopStrategy {
     let recoveryCallIdentity = false
     let emittedOutput = ''
     let readonlyHistoryPairs = 0
+    const deliveryCloseout = new DeliveryCloseout()
+    const childReview = new ChildResultReview()
+    let delegationCorrectionUsed = false
+    let staleDeliveryPrompt = ''
     const readModelHistory = async (): Promise<Message[]> => {
       const projection = await requestHistory(ctx, toolList.some(tool => tool.name === 'search_history'))
       emptyOutputRecoveryUsed ||= projection.emptyRecoveryUsed
       readonlyHistoryPairs = projection.collapsedPairs
-      const messages = projection.messages
+      const messages = childReview.includeResults(projection.messages)
       if (!outputContinuation) return messages
       // The full segment is durable and searchable. If compaction covered it,
       // its short suffix also anchors the precise point where generation stopped.
@@ -556,48 +623,11 @@ export class ReActStrategy implements LoopStrategy {
       if (ctx.signal?.aborted) return
     }
 
-    if (this.options.delegatedTools?.length) {
-      const launches: Array<RegisteredToolCall & { execute(ctx: AgentContext): Promise<ToolResult> }> = []
-      for (const delegation of this.options.delegatedTools) {
-        if (ctx.signal?.aborted) break
-        const call = { id: delegation.id, name: delegation.name ?? 'subagent', args: delegation.args }
-        const messageId = uuidv4()
-        await appendRunHistory({ id: messageId, role: 'assistant', content: '', toolCall: call,
-          toolCallId: call.id, createdAt: Date.now(), tokens: 0, conversationId: ctx.conversationId,
-          metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId, userDelegated: true } } as Message, ctx)
-        await ctx.runObserver?.onToolStart?.({ toolCallId: call.id, name: call.name, args: call.args })
-        yield '\x00__tool_start__' + JSON.stringify({ toolCallId: call.id, toolName: call.name,
-          name: call.name, args: call.args, messageId, rootRunId: ctx.rootRunId, turnId: ctx.turnId })
-        launches.push({ call, messageId, execute: delegation.execute })
-      }
-      // The runner's pool controls admitted child concurrency. Persist all announcements
-      // before starting so interrupted batches can be replayed without inventing work.
-      const pending = new Map(launches.map((item, index) => [index, (async () => {
-        let result: ToolResult
-        try {
-          result = ctx.signal?.aborted ? { success: false, status: 'cancelled', output: '用户已停止，未启动子代理。' }
-            : await item.execute({ ...ctx, currentMessageId: item.messageId, currentToolCallId: item.call.id })
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          result = { success: false, status: ctx.signal?.aborted ? 'cancelled' : 'failed', output: message, error: message }
-        }
-        return { index, result }
-      })()]))
-      let failedToPersist = false
-      // Settle each admission immediately. Async children retain their real
-      // executor joins; the parent can now coordinate them in its normal loop.
-      while (pending.size) {
-        const completed = await Promise.race(pending.values())
-        pending.delete(completed.index)
-        const settled = yield* this.settleTool(launches[completed.index], completed.result, ctx)
-        failedToPersist ||= settled.failedToPersist
-      }
-      if (failedToPersist) throw new Error('Delegated Agent result could not be persisted; execution will not be repeated automatically')
-      if (ctx.signal?.aborted) return
-    }
+    yield* this.launchDelegations(this.options.delegatedTools ?? [], ctx)
+    if (ctx.signal?.aborted) return
 
     // Build tool list from registry
-    let toolList = ctx.tools.list()
+    let toolList = ctx.tools.listForRequest?.() ?? ctx.tools.listForModel?.() ?? ctx.tools.list()
 
     /** Names of tools actually called in the last iteration */
     let lastUsedToolNames: Set<string> = new Set()
@@ -634,6 +664,7 @@ export class ReActStrategy implements LoopStrategy {
     }
 
     const toolProgress = new ToolProgressTracker(call => ctx.tools.executionMode?.(call.name, call.args))
+    let historyBudgetRefreshes = 0
 
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       // ── 每轮迭代开始时检查 abort signal，确保用户中止能及时生效 ──────────────
@@ -644,9 +675,15 @@ export class ReActStrategy implements LoopStrategy {
         return
       }
 
+      const queuedDelegations = this.options.takeDelegatedTools?.() ?? []
+      if (queuedDelegations.length) {
+        yield* this.launchDelegations(queuedDelegations, ctx)
+        if (ctx.signal?.aborted) return
+      }
+
       // Each request uses the current definitions, including registration changes
       // after a tool or continuation, rather than a run-start capability snapshot.
-      toolList = ctx.tools.list()
+      toolList = ctx.tools.listForRequest?.() ?? ctx.tools.listForModel?.() ?? ctx.tools.list()
       const planEnabled = toolList.some(tool => tool.name === 'plan_update')
       let effectiveTools = toolList.filter(tool => tool.name !== 'ask_user' || askUserCount < maxAskUserCount)
 
@@ -680,21 +717,51 @@ export class ReActStrategy implements LoopStrategy {
       let baseSystemPrompt: string | undefined
       let injectedSystemTokens = 0
       let injectedExtras: Array<string | undefined> = []
-      const runtimePrompt = () => buildExecutionProtocol({ list: () => effectiveTools }, ctx.toolProfile) + buildRuntimeCapabilitiesPrompt(ctx, effectiveTools)
+      let requestContext: string | undefined
+      let staticExtras = ''
+      const executionPrompt = () => {
+        // Deferred definitions must not erase delegation/delivery guidance.
+        // Finalization offers no loader and therefore no callable tool policy.
+        const behavioralTools = ctx.tools.hasModelToolLoader?.() === true && effectiveTools.some(tool => tool.name === 'load_tools')
+          ? ctx.tools.list().filter(tool => tool.name !== 'ask_user' || askUserCount < maxAskUserCount) : effectiveTools
+        return buildExecutionProtocol({ list: () => behavioralTools }, ctx.toolProfile)
+      }
       let requestEnvironment = ''
       const readCurrentModelHistory = async (): Promise<Message[]> => {
         const current = await readModelHistory()
-        requestEnvironment = runtimePrompt()
-        injectedExtras = [requestEnvironment, injectedPlanPrompt, planContext, recoveryPrompt, workflowReviewPrompt, readonlyHistoryNotice(readonlyHistoryPairs),
+        const deliveryRevision = deliveryCloseout.revision
+        deliveryCloseout.observe(current, ctx)
+        if (deliveryRevision !== deliveryCloseout.revision) staleDeliveryPrompt = ''
+        if (deliveryCloseout.hasSelection) {
+          const stale = await finalResults.stalePaths(ctx)
+          if (stale.length) {
+            deliveryCloseout.invalidate()
+            staleDeliveryPrompt = 'The staged final file list is stale because these direct source paths changed or became unavailable: ' + JSON.stringify(stale)
+              + '. Recheck only the changed versions, then replace the complete deliver_files list; clear items:[] if no files should be delivered. Never claim the old list contains later edits.'
+          }
+        }
+        const deliveryPrompt = deliveryCloseout.prompt || staleDeliveryPrompt
+        // Successful structured load/call history restores request-local tool
+        // definitions after restart without promoting arbitrary message text.
+        toolList = ctx.tools.listForRequest?.(current) ?? ctx.tools.listForModel?.() ?? ctx.tools.list()
+        effectiveTools = deliveryCloseout.tools(toolList.filter(tool => tool.name !== 'ask_user' || askUserCount < maxAskUserCount))
+        requestEnvironment = buildRuntimeCapabilitiesContext(ctx, effectiveTools)
+        injectedExtras = [requestEnvironment, planContext, deliveryPrompt, recoveryPrompt, workflowReviewPrompt, readonlyHistoryNotice(readonlyHistoryPairs),
+          childReview.pending ? CHILD_RESULT_REVIEW_PROMPT : undefined,
+          delegationCorrectionUsed && this.options.hasPendingDelegations?.()
+            ? '用户已选择的协作者尚未分工，不能直接宣称完成。现在用 collaborator_dispatch 为全部选择提交互不重复的具体任务，再收取并验收结果；不要让用户重复确认。' : undefined,
           outputToolRecovery ? TOOL_OUTPUT_RECOVERY_PROMPT : undefined,
           outputReasoningRecovery ? REASONING_OUTPUT_RECOVERY_PROMPT : undefined,
           pendingEmptyOutputRecovery ? EMPTY_OUTPUT_RECOVERY_PROMPT : undefined,
           outputToolRecovery && toolOutputRecoveryRepeats > 1
             ? 'The last incomplete tool arguments repeated without completing. Reduce the next argument payload further or use authorized file references while preserving the task requirements. Generate a new complete call; never append to the interrupted fragment.' : undefined]
-        const extras = injectedExtras.filter(Boolean).join('\n\n')
-        baseSystemPrompt = [this.options.systemPrompt, extras].filter(Boolean).join('\n\n') || undefined
-        injectedSystemTokens = estimateTokens(extras)
-        return current
+        // Keep rules ahead of history, but send changing execution facts only
+        // after it. This tail is not persisted or treated as a new user turn.
+        staticExtras = [executionPrompt(), RUNTIME_CAPABILITIES_GUIDANCE, injectedPlanPrompt].filter(Boolean).join('\n\n')
+        requestContext = injectedExtras.filter(Boolean).join('\n\n') || undefined
+        baseSystemPrompt = [this.options.systemPrompt, staticExtras].filter(Boolean).join('\n\n') || undefined
+        injectedSystemTokens = estimateTokens(staticExtras) + (requestContext ? estimateModelMessageTokens(requestContextMessage(requestContext)) : 0)
+        return effectiveTools.some(tool => tool.name === 'search_history') ? current : restoreCompletedWriteHistory(current)
       }
 
       // 1. 先检查是否需要压缩（用 raw token count，不受 window 限制）
@@ -724,7 +791,7 @@ export class ReActStrategy implements LoopStrategy {
       const outputReservation = maxOutputTokens ?? (Number.isFinite(effectiveBudget)
         ? Math.min(8192, Math.max(256, Math.floor(effectiveBudget * 0.05))) : 0)
       const fixedInputTokens = estimateRequestInput(messages.filter(message => message.role === 'system'
-        && !(ctx.history.retainsArchive && message.metadata?.isCompactSummary)), baseSystemPrompt, effectiveTools)
+        && !(ctx.history.retainsArchive && message.metadata?.isCompactSummary)), baseSystemPrompt, effectiveTools, requestContext)
       if ((maxOutputTokens !== undefined && (!Number.isFinite(maxOutputTokens) || maxOutputTokens <= 0))
         || (Number.isFinite(effectiveBudget) && fixedInputTokens + outputReservation > effectiveBudget)) {
         await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'context_limit',
@@ -735,7 +802,7 @@ export class ReActStrategy implements LoopStrategy {
       }
       // 压缩、请求准入和用量显示必须使用同一个有效窗口。
       const compressThreshold = Math.floor(effectiveBudget * compressRatio)
-      let rawTokens = estimateRequestInput(messages, baseSystemPrompt, effectiveTools) + outputReservation
+      let rawTokens = estimateRequestInput(messages, baseSystemPrompt, effectiveTools, requestContext) + outputReservation
       if (rawTokens > compressThreshold && typeof ctx.history.microCompactToolResults === 'function') {
         // 先做 micro-compact：清理旧工具结果（不调 LLM），省下的空间可能足以
         // 避免全量压缩——对齐 Claude Code「先轻量清理再考虑总结」的分级策略。
@@ -744,7 +811,7 @@ export class ReActStrategy implements LoopStrategy {
           const micro = await maintainHistory(() => ctx.history.microCompactToolResults!(ctx, { keepRecent: 10, maxChars: microOutputLimit }))
           if (micro.cleared > 0) {
             messages = await readCurrentModelHistory()
-            rawTokens = estimateRequestInput(messages, baseSystemPrompt, effectiveTools) + outputReservation
+            rawTokens = estimateRequestInput(messages, baseSystemPrompt, effectiveTools, requestContext) + outputReservation
             ctx.logger.info({ ...micro, rawTokens }, 'Micro-compact done')
           }
         } catch (err: any) {
@@ -805,7 +872,7 @@ export class ReActStrategy implements LoopStrategy {
             await notifyCompaction(compaction)
           }
           const compressedMessages = await readCurrentModelHistory()
-          const compressedRequestTokens = estimateRequestInput(compressedMessages, baseSystemPrompt, effectiveTools) + outputReservation
+          const compressedRequestTokens = estimateRequestInput(compressedMessages, baseSystemPrompt, effectiveTools, requestContext) + outputReservation
           ctx.logger.info({ preTokens: stats.preTokens, postTokens: stats.postTokens,
             preRequestTokens: rawTokens, postRequestTokens: compressedRequestTokens, compressionPass }, 'Compression done')
           rawTokens = compressedRequestTokens
@@ -852,9 +919,9 @@ export class ReActStrategy implements LoopStrategy {
 
       let finalizationReason: 'budget' | 'max_steps' | undefined
       let systemPrompt = baseSystemPrompt
-      let requestInputTokenEstimate = estimateRequestInput(messages, systemPrompt, effectiveTools)
+      let requestInputTokenEstimate = estimateRequestInput(messages, systemPrompt, effectiveTools, requestContext)
       // One more exploration request must leave enough for a summary, including likely tool-result growth.
-      const summaryReserve = unboundedCode ? 0 : estimateRequestInput(messages, systemPrompt, []) + 4096 + 8192
+      const summaryReserve = unboundedCode ? 0 : estimateRequestInput(messages, systemPrompt, [], requestContext) + 4096 + 8192
       ctx.finalizationReserveTokens = unboundedCode ? 0 : summaryReserve + 8192
       if (!unboundedCode && ctx.requestBudget && !ctx.requestBudget.canAfford(requestInputTokenEstimate + outputReservation + summaryReserve)) {
         finalizationReason = 'budget'
@@ -864,19 +931,21 @@ export class ReActStrategy implements LoopStrategy {
       const finalizationNotice = finalizationReason === 'budget'
         ? '已接近本次任务的引擎本地累计用量上限，停止探索并交回已有证据；尚未完成全部核实。'
         : '已达到本次子任务的探索步数上限，停止探索并交回已有证据；尚未完成全部核实。'
-      if (finalizationReason) messages = messages.map(message => projectModelMessage(message, false))
+      if (finalizationReason) messages = restoreCompletedWriteHistory(messages).map(message => projectModelMessage(message, false))
       const recordedEvidence = finalizationReason ? partialEvidence(messages) : ''
       if (finalizationReason) {
         effectiveTools = []
         // Evidence-only finalization must not contain an exploration cadence hint.
-        const finalExtras = [runtimePrompt(), ...injectedExtras.filter(extra => extra && extra !== requestEnvironment && extra !== workflowReviewPrompt)].join('\n\n')
-        systemPrompt = [this.options.systemPrompt, finalExtras, FINALIZATION_PROMPT].filter(Boolean).join('\n\n')
-        injectedSystemTokens = estimateTokens(finalExtras) + estimateTokens(FINALIZATION_PROMPT)
+        const finalExtras = [executionPrompt(), RUNTIME_CAPABILITIES_GUIDANCE, injectedPlanPrompt].filter(Boolean).join('\n\n')
+        requestContext = [buildRuntimeCapabilitiesContext(ctx, effectiveTools),
+          ...injectedExtras.filter(extra => extra && extra !== requestEnvironment && extra !== workflowReviewPrompt), FINALIZATION_PROMPT].join('\n\n')
+        systemPrompt = [this.options.systemPrompt, finalExtras].filter(Boolean).join('\n\n')
+        injectedSystemTokens = estimateTokens(finalExtras) + estimateModelMessageTokens(requestContextMessage(requestContext))
         if (!unboundedCode) maxOutputTokens = Math.min(maxOutputTokens ?? Infinity, 4096)
-        requestInputTokenEstimate = estimateRequestInput(messages, systemPrompt, [])
+        requestInputTokenEstimate = estimateRequestInput(messages, systemPrompt, [], requestContext)
         if (!unboundedCode && ctx.requestBudget && !ctx.requestBudget.canAfford(requestInputTokenEstimate + maxOutputTokens!)) {
           messages = [...messages.filter(message => message.role === 'system'), ...finalizationMessages(messages)]
-          requestInputTokenEstimate = estimateRequestInput(messages, systemPrompt, [])
+          requestInputTokenEstimate = estimateRequestInput(messages, systemPrompt, [], requestContext)
         }
         if (!unboundedCode && ctx.requestBudget && !ctx.requestBudget.canAfford(requestInputTokenEstimate + maxOutputTokens!)) {
           const evidence = emittedOutput || recordedEvidence
@@ -916,6 +985,16 @@ export class ReActStrategy implements LoopStrategy {
 
       ctx.logger.debug({ iteration, toolCount: effectiveTools.length, finalizationReason }, 'Preparing model request')
 
+      let providerAttemptStarted = false
+      let requestRecorded = false
+      const recordModelDispatch = () => {
+        if (requestRecorded) return
+        requestRecorded = true
+        historyBudgetRefreshes = 0
+        toolProgress.markWorkflowReviewDispatched()
+        pendingEmptyOutputRecovery = false
+        childReview.recordRequest(messages)
+      }
       const llmOptions: LLMAdapterOptions = {
         model: this.llm.model,
         maxTokens: dispatchMaxOutputTokens,
@@ -929,11 +1008,14 @@ export class ReActStrategy implements LoopStrategy {
             if (ctx.sqliteDelivery) await assertSQLiteReActDispatch(ctx.sqliteDelivery, ctx)
             else if (ctx.jsonlDelivery) await assertJSONLReActDispatch(ctx.jsonlDelivery, ctx)
             assertOwnedDispatch(ctx.executionOwner)
+            providerAttemptStarted = true
           }
           await ctx.onRequestAttempt?.(event)
+          if (event.type === 'start') recordModelDispatch()
         } : ctx.onRequestAttempt,
         requestStage: finalizationReason ? 'finalization' : 'normal',
         systemPrompt,
+        requestContext,
         temperature: this.options.temperature,
         thinkingEnabled: this.options.thinkingEnabled,
         // Finalization must retain an explicit Off instead of restoring provider defaults.
@@ -1026,6 +1108,7 @@ export class ReActStrategy implements LoopStrategy {
       let partialPersistenceFailed = false
       let persistenceOutcomeReported = false
       let failureDiagnostic: string | undefined
+      let rebudgetBeforeDispatch = false
       const persistInterruptedPartial = async () => {
         if (partialSaved || partialPersistenceFailed) return
         try { await persistPartial(ctx.signal?.aborted ? 'cancelled' : 'failed', ctx.signal?.aborted ? 'cancelled' : failureReason) }
@@ -1079,8 +1162,6 @@ export class ReActStrategy implements LoopStrategy {
             systemPromptSha256: systemPrompt ? createHash('sha256').update(systemPrompt).digest('hex') : undefined } },
           'Readonly recovery request dispatch')
         }
-        toolProgress.markWorkflowReviewDispatched()
-        pendingEmptyOutputRecovery = false
         if (ctx.sqliteDelivery) await assertSQLiteReActDispatch(ctx.sqliteDelivery, ctx)
         else if (ctx.jsonlDelivery) await assertJSONLReActDispatch(ctx.jsonlDelivery, ctx)
         assertOwnedDispatch(ctx.executionOwner)
@@ -1090,6 +1171,8 @@ export class ReActStrategy implements LoopStrategy {
         } as LLMAdapterOptions & { signal?: AbortSignal })
 
         for await (const chunk of stream) {
+          // Non-provider/test adapters may omit physical attempt events.
+          recordModelDispatch()
           if (ctx.signal?.aborted) throw Object.assign(new Error('Model request cancelled'), { name: 'AbortError' })
           streamChunkCount++
           receivedTerminalChunk ||= chunk.done === true
@@ -1202,6 +1285,17 @@ export class ReActStrategy implements LoopStrategy {
         }
         streamCompleted = true
       } catch (err: any) {
+        if (err instanceof RequestHistoryChangedError && !providerAttemptStarted && streamChunkCount === 0
+          && !ctx.signal?.aborted && historyBudgetRefreshes < 8) {
+          // A child result or newly integrated message arrived after budgeting,
+          // including inside the adapter before its first physical attempt.
+          // Reread, compact and budget the unsent request without using an iteration.
+          historyBudgetRefreshes++
+          rebudgetBeforeDispatch = true
+          ctx.logger.debug({ iteration, historyBudgetRefreshes, backend: err.backend }, 'Refreshing changed history before provider dispatch')
+          iteration--
+          continue
+        }
         failureReason = err.name === 'AbortError' || ctx.signal?.aborted ? 'cancelled'
           : err?.code === 'TOKEN_BUDGET_EXCEEDED' ? 'budget' : 'provider_error'
         failureDiagnostic = err instanceof Error ? err.message : String(err)
@@ -1249,7 +1343,7 @@ export class ReActStrategy implements LoopStrategy {
       } finally {
         // AsyncGenerator.return must finish cleanup without yielding to a
         // disconnected viewer; otherwise return itself can stay suspended.
-        if (!streamCompleted) {
+        if (!streamCompleted && !rebudgetBeforeDispatch) {
           await persistInterruptedPartial()
           await settleInterruptedStream()
           await reportInterruptedPersistenceFailure()
@@ -1298,16 +1392,13 @@ export class ReActStrategy implements LoopStrategy {
     // 优先使用 LLM API 返回的 promptTokens（真实计费值）。
     // 本地估算的 systemPromptTokens / systemToolsTokens / skillTokens 仅用于分项展示参考。
     // 实际发送给 LLM 的工具数 = effectiveTools.length，不是全量 registry。
-    const effectiveToolDefsTokens = estimateTokens(
-      effectiveTools.map(t => `${t.name}: ${t.description} ${JSON.stringify(t.parameters ?? {})}`).join('\n')
+    const estimateToolDefinitions = (definitions: typeof effectiveTools) => estimateTokens(
+      definitions.map(t => `${t.name}: ${t.description} ${JSON.stringify(t.parameters ?? {})}`).join('\n')
     )
-    const builtinToolsTokensRaw = (bd as any).builtinToolsTokens ?? 0
-    const mcpToolsTokensRaw = (bd as any).mcpToolsTokens ?? 0
-    const configuredToolDefsTokens = builtinToolsTokensRaw + mcpToolsTokensRaw
-    // Only definitions still sent in this invocation occupy its context.
-    const effectiveBuiltin = configuredToolDefsTokens > 0
-      ? Math.round(effectiveToolDefsTokens * builtinToolsTokensRaw / configuredToolDefsTokens) : effectiveToolDefsTokens
-    const effectiveMcp = effectiveToolDefsTokens - effectiveBuiltin
+    // Loading/registration changes the mix each request. An initial catalogue
+    // ratio would attribute unloaded definitions (or a removed MCP) to usage.
+    const effectiveBuiltin = estimateToolDefinitions(effectiveTools.filter(tool => tool.source !== 'mcp'))
+    const effectiveMcp = estimateToolDefinitions(effectiveTools.filter(tool => tool.source === 'mcp'))
     const currentToolResultsTokens = messages.filter(message => message.role === 'tool')
       .reduce((total, message) => total + estimateModelMessageTokens(message), 0)
     const requestMessagesTokens = estimateModelHistoryTokens(messages)
@@ -1584,7 +1675,8 @@ export class ReActStrategy implements LoopStrategy {
           throw error
         }
 
-        const batch = await executeToolBatch(registered, ctx)
+        const batch = await executeToolBatch(registered, ctx,
+          ctx.tools.listForRequest || deliveryCloseout.phase ? new Set(effectiveTools.map(tool => tool.name)) : undefined)
         let failedToPersist = false
         if (batch.pending) {
           try {
@@ -1619,6 +1711,13 @@ export class ReActStrategy implements LoopStrategy {
         if (failedToPersist) throw new Error('One or more tool results could not be persisted; all started tools have settled')
         if (ctx.signal?.aborted) {
           await ctx.runObserver?.onOutcome?.({ status: 'cancelled', stopReason: 'cancelled', partialOutput: emittedOutput || undefined })
+          return
+        }
+        if (deliveryCloseout.phase === 'answer') {
+          // The single reconciliation exchange already ran. A provider that
+          // ignores the answer-only tool list must not restart a tool loop.
+          await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'runtime_error', partialOutput: emittedOutput || undefined,
+            error: { code: 'DELIVERY_CLOSEOUT_UNRESOLVED', message: 'Final delivery closeout requires a final answer; no further tools were executed.', retryable: false } })
           return
         }
         if (batch.pending) {
@@ -1725,9 +1824,28 @@ export class ReActStrategy implements LoopStrategy {
       // ordinary iteration. The durable seal and sends share a writer lock:
       // a sender either wins this iteration or gets an explicit closed result.
       if (!finalizationReason && !ctx.signal?.aborted) {
-        const sealed = ctx.sqliteDelivery ? await sealSQLiteReActInput(ctx.sqliteDelivery, ctx)
-          : ctx.jsonlDelivery ? await sealJSONLReActInput(ctx.jsonlDelivery, ctx) : true
+        const pendingDelegations = this.options.hasPendingDelegations?.() === true
+        if (pendingDelegations && (delegationCorrectionUsed || iteration + 1 >= maxIterations)) {
+          await persistPartial('failed', 'collaborator_plan_required')
+          await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'runtime_error', partialOutput: emittedOutput || undefined,
+            error: { code: 'COLLABORATOR_PLAN_REQUIRED', message: '所选协作者尚未分工，任务未完成。', retryable: false } })
+          yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, ...contextSnapshot() })}`
+          return
+        }
+        let sealed: boolean
+        try {
+          const reviewRequired = pendingDelegations || await childReview.beforeFinal(ctx)
+          sealed = reviewRequired ? false : ctx.sqliteDelivery ? await sealSQLiteReActInput(ctx.sqliteDelivery, ctx)
+            : ctx.jsonlDelivery ? await sealJSONLReActInput(ctx.jsonlDelivery, ctx) : true
+        } catch (error) {
+          // The provider already completed and charged this response. Preserve
+          // it exactly once even if cancellation/projection fails during join.
+          await persistPartial(ctx.signal?.aborted ? 'cancelled' : 'failed', ctx.signal?.aborted ? 'cancelled' : 'child_review_failed')
+          yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, ...contextSnapshot() })}`
+          throw error
+        }
         if (!sealed) {
+          if (pendingDelegations) delegationCorrectionUsed = true
           await appendRunHistory({ id: uuidv4(), role: 'assistant', content: response.content || '',
             reasoningContent: response.reasoningContent, createdAt: Date.now(), tokens: completionTokens,
             usage: currentUsage as unknown as Record<string, number>, modelId: response.model, conversationId,

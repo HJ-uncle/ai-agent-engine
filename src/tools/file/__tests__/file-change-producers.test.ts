@@ -3,15 +3,15 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { writeFileTool } from '../super-file-tool.js'
-import { deleteFileTool } from '../basic.js'
+import { createDirTool, deleteFileTool } from '../basic.js'
 import { handlerRegistry } from '../handlers/registry.js'
 import { moveToSystemTrash } from '../trash.js'
 import { hashFileContent } from '../../../shared/file-version.js'
 import type { AgentContext } from '../../../core/agent-context/index.js'
 import type { RecordChangeInput } from '../../../storage/changes/index.js'
 
-const { record, records } = vi.hoisted(() => ({ record: vi.fn(), records: [] as RecordChangeInput[] }))
-vi.mock('../../../storage/changes/index.js', () => ({ ChangeStore: class { record = record } }))
+const { record, directoryRecord, records } = vi.hoisted(() => ({ record: vi.fn(), directoryRecord: vi.fn(), records: [] as RecordChangeInput[] }))
+vi.mock('../../../storage/changes/index.js', () => ({ ChangeStore: class { record = record; recordCreatedDirectories = directoryRecord } }))
 vi.mock('../../../workspace/index.js', () => ({ workspaceManager: {
   resolveSafePath: (ctx: AgentContext, file: string) => path.resolve(ctx.cwd!, file),
 } }))
@@ -30,6 +30,7 @@ beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-producer-'))
   ctx = { tenantId: 'test', sessionId: 'parent', cwd: root, logger: { warn: vi.fn() } } as unknown as AgentContext
   records.length = 0
+  directoryRecord.mockReset().mockImplementation(async (_tenant, _input, directories) => directories.map((directory: { path: string }, index: number) => ({ id: `directory-${index}`, ...directory })))
   record.mockReset().mockImplementation(async (_tenant, input: RecordChangeInput) => {
     records.push(input)
     return { ...input, id: `change-${records.length}`, status: 'pending' }
@@ -50,6 +51,20 @@ function gate() {
 }
 
 describe('file mutation producers', () => {
+  it('records only newly created directories with root turn attribution, including a directory-only tool call', async () => {
+    fs.mkdirSync(path.join(root, 'existing'))
+    const nested = path.join(root, 'existing', 'new', 'empty')
+    const child = { ...ctx, sessionId: 'child', rootSessionId: 'parent', rootRunId: 'root-run', turnId: 'root-turn' }
+    const result = await createDirTool.execute({ path: nested }, child)
+    expect(result).toMatchObject({ success: true, metadata: { createdDirectoryChangeIds: ['directory-0', 'directory-1'] } })
+    const [tenantId, input, directories] = directoryRecord.mock.calls[0]
+    expect(tenantId).toBe('test')
+    expect(input).toEqual({ sessionId: 'parent', turnId: 'root-turn', runId: 'root-run' })
+    expect(directories.map((item: { path: string }) => path.relative(fs.realpathSync.native(root), item.path))).toEqual(['existing/new/empty', 'existing/new'].map(item => item.replaceAll('/', path.sep)))
+    expect(fs.readdirSync(nested)).toEqual([])
+    await createDirTool.execute({ path: nested }, child)
+    expect(directoryRecord.mock.calls[1][2]).toEqual([])
+  })
   it('retains child producer identity while grouping actual writes and deletes under the parent', async () => {
     const child = { ...ctx, sessionId: 'child', parentSessionId: 'parent', rootSessionId: 'parent', rootRunId: 'root-run', runId: 'child-run' }
     const written = await writeFileTool.execute({ path: 'owned.txt', data: 'child output' }, child)

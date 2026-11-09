@@ -204,12 +204,14 @@ describe('actual ReAct request admission with periodic workflow advice',()=>{
   it.each(['code','general'] as const)('keeps %s policy, budgeting and complete durable evidence through changing read ranges',async profile=>{
     const f=fixture(profile,66),frames=await f.run()
     expect(f.requests).toHaveLength(67)
-    expect(f.requests.map((request,index)=>request.options.systemPrompt?.includes(WORKFLOW_REVIEW_PROMPT)?index:-1).filter(index=>index>=0)).toEqual(Array.from({length:35},(_,index)=>index+32))
+    expect(f.requests.map((request,index)=>request.options.requestContext?.includes(WORKFLOW_REVIEW_PROMPT)?index:-1).filter(index=>index>=0)).toEqual(Array.from({length:35},(_,index)=>index+32))
     const admitted=f.requests[32]
     expect(admitted.options.systemPrompt).toContain('Read-only comprehensive audit; do not modify files.')
     expect(admitted.options.systemPrompt).not.toContain('PRIVATE_SOURCE')
     expect(admitted.options.systemPrompt).not.toContain('TOOL_OUTPUT_ATTACK')
-    expect(admitted.options.requestInputTokenEstimate).toBe(estimateRequestInput(admitted.messages,admitted.options.systemPrompt,f.ctx.tools.list()))
+    expect(admitted.options.requestContext).not.toContain('PRIVATE_SOURCE')
+    expect(admitted.options.requestContext).not.toContain('TOOL_OUTPUT_ATTACK')
+    expect(admitted.options.requestInputTokenEstimate).toBe(estimateRequestInput(admitted.messages,admitted.options.systemPrompt,f.ctx.tools.list(), admitted.options.requestContext))
     expect(admitted.options.requestInputTokenEstimate!+admitted.options.maxTokens!).toBeLessThanOrEqual(100000)
     expect(f.ctx.tools.execute).toHaveBeenCalledTimes(66)
     expect(f.history.filter(message=>message.role==='tool')).toHaveLength(66)
@@ -238,7 +240,7 @@ describe('actual ReAct request admission with periodic workflow advice',()=>{
     })
     await f.run()
     expect(f.requests).toHaveLength(37)
-    expect(f.requests.slice(32).every(request=>request.options.systemPrompt?.includes(WORKFLOW_REVIEW_PROMPT))).toBe(true)
+    expect(f.requests.slice(32).every(request=>request.options.requestContext?.includes(WORKFLOW_REVIEW_PROMPT))).toBe(true)
     expect(f.requests.every(request=>request.options.systemPrompt?.includes('Read-only comprehensive audit; do not modify files.'))).toBe(true)
     expect(f.requests.every(request=>!request.options.tools?.some(tool=>['write_file','edit_file','execute_cmd','subagent'].includes(tool.name)))).toBe(true)
     expect(f.ctx.tools.execute).toHaveBeenCalledTimes(36)
@@ -263,7 +265,7 @@ describe('actual ReAct request admission with periodic workflow advice',()=>{
     })
     await f.run()
     expect(f.requests).toHaveLength(35)
-    expect(f.requests.slice(32).every(request=>request.options.systemPrompt?.includes(WORKFLOW_REVIEW_PROMPT))).toBe(true)
+    expect(f.requests.slice(32).every(request=>request.options.requestContext?.includes(WORKFLOW_REVIEW_PROMPT))).toBe(true)
     expect(JSON.stringify(f.requests[33].messages)).toContain('Continue the same user task')
     expect(f.requests[34].options.systemPrompt).toContain('Read-only comprehensive audit; do not modify files.')
     expect(f.requests.every(request=>request.options.tools?.map(tool=>tool.name).join(',')==='read_file,task_status')).toBe(true)
@@ -276,7 +278,7 @@ describe('actual ReAct request admission with periodic workflow advice',()=>{
     const f=fixture('general',67,34)
     await f.run({systemPrompt:'Implement and verify the requested file using only the provided tools and existing permissions.'})
     expect(f.requests).toHaveLength(68)
-    expect(f.requests.map((request,index)=>request.options.systemPrompt?.includes(WORKFLOW_REVIEW_PROMPT)?index:-1).filter(index=>index>=0)).toEqual(Array.from({length:36},(_,index)=>index+32))
+    expect(f.requests.map((request,index)=>request.options.requestContext?.includes(WORKFLOW_REVIEW_PROMPT)?index:-1).filter(index=>index>=0)).toEqual(Array.from({length:36},(_,index)=>index+32))
     expect(f.requests.every(request=>JSON.stringify(request.options.tools?.map(tool=>tool.name))===JSON.stringify(['read_file','write_file']))).toBe(true)
     expect(f.requests.every(request=>!request.options.systemPrompt?.includes('PRIVATE_SOURCE') && !request.options.systemPrompt?.includes('TOOL_OUTPUT_ATTACK'))).toBe(true)
     expect(f.ctx.tools.execute).toHaveBeenCalledTimes(67)
@@ -293,10 +295,10 @@ describe('actual ReAct request admission with periodic workflow advice',()=>{
     const consume = async () => { for await (const _frame of strategy.run('Deliver the requested review.', f.ctx)) { /* consume the mock run */ } }
     await consume()
     expect(f.requests).toHaveLength(35)
-    expect(f.requests.at(-1)!.options.systemPrompt).toContain(WORKFLOW_REVIEW_PROMPT)
+    expect(f.requests.at(-1)!.options.requestContext).toContain(WORKFLOW_REVIEW_PROMPT)
     await consume()
     expect(f.requests).toHaveLength(36)
-    expect(f.requests.at(-1)!.options.systemPrompt).not.toContain(WORKFLOW_REVIEW_PROMPT)
+    expect(f.requests.at(-1)!.options.requestContext).not.toContain(WORKFLOW_REVIEW_PROMPT)
     expect(f.requests.at(-1)!.options.systemPrompt).toContain('Use only the provided tools and existing permissions.')
     expect(f.history.some(message => String(message.content).includes(WORKFLOW_REVIEW_PROMPT))).toBe(false)
     expect(f.outcomes.map(outcome => outcome.status)).toEqual(['succeeded', 'succeeded'])
@@ -305,13 +307,13 @@ describe('actual ReAct request admission with periodic workflow advice',()=>{
   it('does not conflict with explicit max-step evidence-only finalization after focus was dispatched',async()=>{
     const f=fixture('general'),frames=await f.run({maxIterations:35,finalizeOnLimit:true})
     expect(f.requests).toHaveLength(35)
-    expect(f.requests[33].options.systemPrompt).toContain(WORKFLOW_REVIEW_PROMPT)
+    expect(f.requests[33].options.requestContext).toContain(WORKFLOW_REVIEW_PROMPT)
     const last=f.requests.at(-1)!
     expect(last.options.tools).toEqual([])
-    expect(last.options.systemPrompt).toContain(FINALIZATION_PROMPT)
-    expect(last.options.systemPrompt).not.toContain(WORKFLOW_REVIEW_PROMPT)
+    expect(last.options.requestContext).toContain(FINALIZATION_PROMPT)
+    expect(last.options.requestContext).not.toContain(WORKFLOW_REVIEW_PROMPT)
     expect(last.options.systemPrompt).toContain('Read-only comprehensive audit; do not modify files.')
-    expect(last.options.requestInputTokenEstimate).toBe(estimateRequestInput(last.messages,last.options.systemPrompt,[]))
+    expect(last.options.requestInputTokenEstimate).toBe(estimateRequestInput(last.messages,last.options.systemPrompt,[], last.options.requestContext))
     expect(f.ctx.tools.execute).toHaveBeenCalledTimes(34)
     expect(f.outcomes.at(-1)).toMatchObject({status:'failed',stopReason:'max_steps'})
     expect(frames.join('')).toContain('探索步数上限')
@@ -323,10 +325,10 @@ describe('actual ReAct request admission with periodic workflow advice',()=>{
     await f.run()
     const last=f.requests.at(-1)!
     expect(f.requests).toHaveLength(35)
-    expect(f.requests[33].options.systemPrompt).toContain(WORKFLOW_REVIEW_PROMPT)
+    expect(f.requests[33].options.requestContext).toContain(WORKFLOW_REVIEW_PROMPT)
     expect(last.options.tools).toEqual([])
-    expect(last.options.systemPrompt).toContain(FINALIZATION_PROMPT)
-    expect(last.options.systemPrompt).not.toContain(WORKFLOW_REVIEW_PROMPT)
+    expect(last.options.requestContext).toContain(FINALIZATION_PROMPT)
+    expect(last.options.requestContext).not.toContain(WORKFLOW_REVIEW_PROMPT)
     expect(f.ctx.tools.execute).toHaveBeenCalledTimes(34)
     expect(f.outcomes.at(-1)).toMatchObject({status:'failed',stopReason:'budget'})
   })
@@ -342,10 +344,10 @@ describe('actual ReAct request admission with periodic workflow advice',()=>{
     })
     await f.run()
     expect(f.requests).toHaveLength(34)
-    expect(f.requests.map((request,index)=>request.options.systemPrompt?.includes(WORKFLOW_REVIEW_PROMPT)?index:-1).filter(index=>index>=0)).toEqual([32,33])
+    expect(f.requests.map((request,index)=>request.options.requestContext?.includes(WORKFLOW_REVIEW_PROMPT)?index:-1).filter(index=>index>=0)).toEqual([32,33])
     if(kind==='body')expect(JSON.stringify(f.requests[33].messages)).toContain('Continue the same user task')
-    else expect(f.requests[33].options.systemPrompt).toContain('before producing a public answer')
-    expect(f.requests[33].options.systemPrompt).toContain(WORKFLOW_REVIEW_PROMPT)
+    else expect(f.requests[33].options.requestContext).toContain('before producing a public answer')
+    expect(f.requests[33].options.requestContext).toContain(WORKFLOW_REVIEW_PROMPT)
     expect(f.requests[33].options.requestInputTokenEstimate!+f.requests[33].options.maxTokens!).toBeLessThanOrEqual(100000)
     expect(f.requests[33].messages.some(message=>String(message.content).includes(WORKFLOW_REVIEW_PROMPT))).toBe(false)
     if(kind==='reasoning')expect(JSON.stringify(f.requests[33].messages)).not.toContain('PRIVATE_REASONING')
@@ -371,15 +373,28 @@ describe('actual ReAct request admission with periodic workflow advice',()=>{
     })
     let reads=0
     f.ctx.tools.execute=vi.fn(async(_name,args)=>{
-      if(++reads===32)vi.stubEnv('COMPRESS_THRESHOLD_RATIO','0.07')
+      if(++reads===32) {
+        // Put the threshold between the current transcript and its compacted
+        // replacement, accounting for the current fixed prompt and output reserve.
+        // A fixed 7% can fall below the prompt alone as execution guidance evolves.
+        const request=f.requests.at(-1)!
+        const prompt=request.options.systemPrompt
+        const context=[request.options.requestContext,WORKFLOW_REVIEW_PROMPT].join('\n\n')
+        const tools=request.options.tools??[]
+        const fixedInput=estimateRequestInput([],prompt,tools,context)
+        const historyInput=estimateRequestInput(f.history,prompt,tools,context)-fixedInput
+        const threshold=fixedInput+100+Math.ceil(historyInput/2)
+        vi.stubEnv('COMPRESS_THRESHOLD_RATIO',String(threshold/f.ctx.modelCaps!.contextWindow!))
+      }
       return{success:true,output:'line '+(args as Record<string,unknown>).start_line}
     })
-    await f.run()
+    await f.run({maxOutputTokens:100})
     expect(f.ctx.history.compress).toHaveBeenCalledTimes(1)
     expect(completeRequests.length).toBeGreaterThan(0)
-    expect(completeRequests.every(request=>!request.options?.systemPrompt?.includes(WORKFLOW_REVIEW_PROMPT) && !JSON.stringify(request.messages).includes(WORKFLOW_REVIEW_PROMPT))).toBe(true)
+    expect(completeRequests.every(request=>!request.options?.systemPrompt?.includes(WORKFLOW_REVIEW_PROMPT)
+      && !request.options?.requestContext?.includes(WORKFLOW_REVIEW_PROMPT) && !JSON.stringify(request.messages).includes(WORKFLOW_REVIEW_PROMPT))).toBe(true)
     expect(f.requests).toHaveLength(35)
-    expect(f.requests.map((request,index)=>request.options.systemPrompt?.includes(WORKFLOW_REVIEW_PROMPT)?index:-1).filter(index=>index>=0)).toEqual([32,33,34])
+    expect(f.requests.map((request,index)=>request.options.requestContext?.includes(WORKFLOW_REVIEW_PROMPT)?index:-1).filter(index=>index>=0)).toEqual([32,33,34])
     expect(f.history.filter(message=>message.role==='tool')).toHaveLength(34)
     expect(f.outcomes.at(-1)).toMatchObject({status:'succeeded',stopReason:'completed'})
   })

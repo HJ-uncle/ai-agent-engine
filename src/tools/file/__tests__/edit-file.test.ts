@@ -76,6 +76,56 @@ describe('binary PowerPoint read guidance', () => {
 })
 
 describe('D6 exact text edits with full byte versions', () => {
+  it.each([
+    { name: 'LF with final newline', original: 'alpha\nbeta\nend\n', ending: 'LF', bom: false },
+    { name: 'CRLF with BOM and Unicode', original: '\uFEFF标题😀\r\nbeta\r\n末尾\r\n', ending: 'CRLF', bom: true },
+    { name: 'CR with final newline', original: 'alpha\rbeta\rend\r', ending: 'CR', bom: false },
+    { name: 'no final newline', original: 'alpha\nbeta\nend', ending: 'none', bom: false },
+    { name: 'mixed endings', original: 'alpha\r\nbeta\rend\n', ending: 'LF', bom: false },
+  ])('copies edited $name bytes and reports the same complete SHA-256 without a shell', async ({ original, ending, bom }) => {
+    const { file } = seed(original, 'input.txt')
+    const source = JSON.parse((await readFileTool.execute({ path: file, mode: 'exact' }, ctx)).output)
+    expect(source).toMatchObject({ content: original, contentIsComplete: true, byteLength: Buffer.byteLength(original), trailingLineEnding: ending, utf8Bom: bom })
+    const edited = await editFileTool.execute({ path: file, expectedHash: source.expectedHash, edits: [{ oldText: 'beta', newText: 'gamma' }] }, ctx)
+    expect(edited.success).toBe(true)
+    const modified = JSON.parse((await readFileTool.execute({ path: file, mode: 'exact' }, ctx)).output)
+    const output = path.join(root, 'output.txt')
+    const copied = await writeFileTool.execute({ path: output, expectedHash: 'missing', createOnly: true, data: modified.content }, ctx)
+    expect(copied.success).toBe(true)
+    const expected = Buffer.from(original.replace('beta', 'gamma'))
+    expect(fs.readFileSync(file)).toEqual(expected)
+    expect(fs.readFileSync(output)).toEqual(expected)
+    const copy = JSON.parse((await readFileTool.execute({ path: output, mode: 'exact' }, ctx)).output)
+    expect(copy).toMatchObject({ expectedHash: hashFileContent(expected), sha256: modified.sha256, byteLength: expected.byteLength, contentIsComplete: true, trailingLineEnding: ending, utf8Bom: bom })
+    expect(copy.expectedHash).toBe(modified.expectedHash)
+    expect(copied.output).toContain(`sha256: ${copy.sha256}`)
+    expect(edited.output).toContain(`sha256: ${copy.sha256}`)
+    expect(await store.list(ctx.tenantId, ctx.sessionId)).toHaveLength(2)
+  })
+
+  it('makes a missing trailing newline visible in the byte/hash receipt and permits versioned correction', async () => {
+    const { file } = seed('alpha\ngamma\nend\n', 'input.txt')
+    const source = JSON.parse((await readFileTool.execute({ path: file, mode: 'exact' }, ctx)).output)
+    const output = path.join(root, 'output.txt')
+    const incomplete = await writeFileTool.execute({ path: output, data: source.content.trimEnd() }, ctx)
+    const copy = JSON.parse((await readFileTool.execute({ path: output, mode: 'exact' }, ctx)).output)
+    expect(copy).toMatchObject({ byteLength: source.byteLength - 1, trailingLineEnding: 'none' })
+    expect(copy.expectedHash).not.toBe(source.expectedHash)
+    expect(copy.sha256).not.toBe(source.sha256)
+    expect(incomplete.output).toContain(`sha256: ${copy.sha256}`)
+    const fixed = await writeFileTool.execute({ path: output, expectedHash: copy.expectedHash, data: source.content }, ctx)
+    expect(fixed).toMatchObject({ success: true, metadata: { expectedHash: source.expectedHash } })
+    expect(fs.readFileSync(output)).toEqual(fs.readFileSync(file))
+  })
+
+  it('distinguishes a partial exact page from whole-file hash and newline metadata', async () => {
+    const { file, expectedHash } = seed('\uFEFFfirst\r\nsecond\r\nthird', 'input.txt')
+    const page = JSON.parse((await readFileTool.execute({ path: file, mode: 'exact', start_line: 2, end_line: 2 }, ctx)).output)
+    expect(page).toMatchObject({ content: 'second\r\n', contentIsComplete: false, expectedHash, byteLength: fs.statSync(file).size, trailingLineEnding: 'none', utf8Bom: true })
+    expect(`sha256:${page.sha256}`).toBe(expectedHash)
+    expect(`sha256:${page.sha256}`).not.toBe(hashFileContent(page.content))
+  })
+
   it('chains write and edits using the model-visible versions without a redundant read', async () => {
     const file = path.join(root, '.ae', 'tmp', 'test-gomoku.mjs')
     const content = '\uFEFFconst 标题 = "旧😀";\r\nconst value = 1;\r\n'

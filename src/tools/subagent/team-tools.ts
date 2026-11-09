@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto'
-import path from 'node:path'
 import type { AgentContext, Tool, ToolResult } from '../../core/agent-context/types.js'
 import { serviceForOwner } from '../../core/collaboration/execution-owner.js'
 import { CollaborationError, type CollaborationReceipt } from '../../core/collaboration/types.js'
 import { getSubagentRunner } from '../../core/subagent/runner.js'
+import { hasSubagentTaskContent } from '../../core/subagent/task-content.js'
 import { isTerminalRun } from '../../core/subagent/types.js'
 import { executeSubagent } from './subagent-tool.js'
+import { captureSubagentWorkspace, subagentWorkspaceMatches } from './workspace-scope.js'
 
 function args(raw: unknown, keys: string[]): Record<string, unknown> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).some(key => !keys.includes(key))) throw new Error('Invalid subagent arguments')
@@ -14,11 +15,6 @@ function args(raw: unknown, keys: string[]): Record<string, unknown> {
 function required(value: unknown, field: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${field} must be a nonempty string`)
   return value
-}
-const normalizeRoot = (root: string) => process.platform === 'win32' ? path.resolve(root).toLowerCase() : path.resolve(root)
-function workspaceMatches(saved: readonly string[], ctx: AgentContext): boolean {
-  const roots = new Set((ctx.workspacePaths ?? []).map(normalizeRoot))
-  return saved.every(root => roots.has(normalizeRoot(root)))
 }
 async function authority(ctx: AgentContext, rootOnly = false) {
   if (!ctx.executionOwner) throw new Error('A live execution owner is required')
@@ -46,11 +42,12 @@ const guarded = (run: (raw: unknown, ctx: AgentContext) => Promise<ToolResult>):
 
 /** Session-scoped discovery is separate from the active root's participant capabilities. */
 export async function childDirectory(ctx: AgentContext, options: { cursor?: string; limit?: number } = {}) {
+  const workspace = captureSubagentWorkspace(ctx)
   const parent = ctx.rootSessionId ?? ctx.sessionId
   const page = await getSubagentRunner().store.listChildSessionsPage(ctx.tenantId, parent, options)
-  const items = page.items.filter(({ run }) => run.rootSessionId === (ctx.rootSessionId ?? ctx.sessionId)).map(({ run, hasContinuation, workspacePaths }) => {
+  const items = page.items.filter(({ run }) => run.rootSessionId === (ctx.rootSessionId ?? ctx.sessionId)).map(({ run, hasContinuation, workspacePaths, projectRoot, cwd }) => {
     const terminal = isTerminalRun(run.status)
-    const reason = !hasContinuation ? 'missing_continuation' : !workspaceMatches(workspacePaths, ctx) ? 'workspace_changed' : !terminal ? 'active' : undefined
+    const reason = !hasContinuation ? 'missing_continuation' : !subagentWorkspaceMatches({ workspacePaths, projectRoot, cwd }, ctx, workspace) ? 'workspace_changed' : !terminal ? 'active' : undefined
     return { childSessionId: run.childSessionId, runId: run.runId, agentId: run.agentId, agentName: run.agentName,
       ...run.continuationDisplay, task: run.task.slice(0, 1200), description: run.description.slice(0, 160), status: run.status,
       updatedAt: run.updatedAt, canResume: !reason, ...(reason ? { resumeUnavailableReason: reason } : {}),
@@ -60,6 +57,7 @@ export async function childDirectory(ctx: AgentContext, options: { cursor?: stri
       ...(run.externalEffectStatus ? { externalEffectStatus: run.externalEffectStatus } : {}),
     }
   })
+  workspace.assertCurrent()
   return { items, hasMore: page.hasMore, ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}) }
 }
 
@@ -84,10 +82,12 @@ export const subagentFollowupTool: Tool = {
   execute: guarded(async (raw, ctx) => {
     const input = args(raw, ['childSessionId', 'message', 'requestKey'])
     const childSessionId = required(input.childSessionId, 'childSessionId'), message = required(input.message, 'message')
+    if (!hasSubagentTaskContent(message)) throw new Error('续派消息需要包含实际任务，不能只有空白或标点。请补充要完成的工作。')
     if (Buffer.byteLength(message) > 32 * 1024) throw new Error('Follow-up message exceeds 32 KiB')
     const key = required(input.requestKey ?? ctx.currentToolCallId, 'requestKey')
     if (key.length > 256 || childSessionId.length > 256) throw new Error('Follow-up identity is too long')
     const { runtime, producer, binding } = await authority(ctx, true)
+    const workspace = captureSubagentWorkspace(ctx)
     const runner = getSubagentRunner()
     const requestKey = 'followup:' + createHash('sha256').update(JSON.stringify([binding.rootRunId, binding.rootAttemptId, key])).digest('hex')
     const recipientParticipantId = `child:${childSessionId}`
@@ -106,10 +106,11 @@ export const subagentFollowupTool: Tool = {
     }
     let latest = await runner.store.latestChildHeader(ctx.tenantId, ctx.sessionId, childSessionId, true)
     if (!latest || latest.rootSessionId !== binding.rootSessionId) throw new Error('Child does not belong to the current parent session')
-    if (!latest.continuation || !workspaceMatches(latest.continuation.workspacePaths, ctx)) throw new Error('Child continuation is unavailable in the current workspace')
+    if (!latest.continuation || !subagentWorkspaceMatches(latest.continuation, ctx, workspace)) throw new Error('Child continuation is unavailable in the current workspace')
     if (!isTerminalRun(latest.status)) {
       if (latest.parentConversationId !== binding.turnId) throw new Error('Child belongs to a different active parent turn')
       try {
+        workspace.assertCurrent()
         const accepted = await runtime.send(producer, { recipientParticipantId, message, requestKey })
         return { success: true, output: JSON.stringify({ action: 'queued', childSessionId, receipt: accepted }), metadata: { collaborationReceipt: accepted } }
       } catch (error) {
@@ -119,6 +120,7 @@ export const subagentFollowupTool: Tool = {
       }
     }
     await requireAnchor(ctx, required(ctx.currentMessageId, 'current message anchor'), required(ctx.currentToolCallId, 'current tool anchor'))
+    workspace.assertCurrent()
     const admission = await runner.store.reserveFollowup(ctx.tenantId, ctx.sessionId, requestKey, { payloadHash, childSessionId, resumeFromRunId: latest.runId,
       parentToolCallId: required(ctx.currentToolCallId, 'current tool anchor'), parentMessageId: required(ctx.currentMessageId, 'current message anchor'), description: latest.description })
     await requireAnchor(ctx, admission.parentMessageId, admission.parentToolCallId)

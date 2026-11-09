@@ -42,6 +42,8 @@ export interface CommandChangeTracking {
   skippedReasons?: Record<string, number>
   concurrentChangesExcluded?: number
   recordedCount?: number
+  /** Directory receipts are exposed by revert-preview, not as file diffs. */
+  recordedDirectoryCount?: number
 }
 
 export interface CommandChangeObserver {

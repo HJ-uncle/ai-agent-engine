@@ -68,17 +68,39 @@ async function seed() {
   if (ctx.jsonlDelivery) await jsonlBoundary.bindJSONLReActBoundary(ctx.jsonlDelivery, ctx, userId)
   else await sqliteBoundary.bindSQLiteReActBoundary(ctx.sqliteDelivery!, ctx, userId)
 }
-async function child(key = 'dispatch-one') {
-  const input = { tenantId: scope.tenantId, rootSessionId: scope.sessionId, parentSessionId: scope.sessionId,
-    parentConversationId: turnId, parentMessageId: 'dispatch-message', parentToolCallId: key,
-    task: 'Delegated task', description: key, modelId: 'scripted-only',
-    continuation: { readOnly: true, systemPrompt: '', toolNames: [], workspacePaths: [] } }
-  const admitted = await runtime.admitChild(producer, input)
-  return { ...admitted, input, target: 'child:' + admitted.mutation.header.childSessionId }
-}
 async function mail(body = 'Peer evidence', key: string = randomUUID()) {
-  const sender = await child()
-  return runtime.send(sender.producer, { recipientParticipantId: 'root:' + rootRunId, message: body, requestKey: key })
+  const input = { tenantId: scope.tenantId, rootSessionId: scope.sessionId, parentSessionId: scope.sessionId,
+    parentConversationId: turnId, parentMessageId: 'peer-dispatch:' + key, parentToolCallId: 'peer-call:' + key,
+    task: 'Send peer evidence to the parent.', description: key, modelId: 'scripted-only',
+    continuation: { readOnly: true, systemPrompt: '', toolNames: [], workspacePaths: [] } }
+  await raw.append({ id: input.parentMessageId, role: 'assistant', content: '',
+    toolCall: { id: input.parentToolCallId, name: 'subagent_start', args: { task: input.task } }, conversationId: turnId }, scope)
+  let accepted!: Awaited<ReturnType<CollaborationRuntime['send']>>
+  // A persisted admission alone cannot provide the parent's real executor join.
+  // Use the production runner and child loop, including its terminal projection.
+  const started = await new SubagentRunner(agents).start(input, ctx, async execution => {
+    const target = context(createConversationHistory(), execution.executionOwner!, execution.snapshot.childSessionId)
+    delete target.userMessageId; target.runId = execution.snapshot.runId; target.runObserver = execution.observer; target.signal = execution.signal
+    installProductionCollaborationBoundary(target)
+    accepted = await runtime.send(owners.producerForExecution(execution.executionOwner!), {
+      recipientParticipantId: 'root:' + rootRunId, message: body, requestKey: key,
+    })
+    await run(input.task, target, { ...llm,
+      stream: vi.fn(async function* () { yield { done: true, content: 'Peer evidence sent.' } }),
+    })
+  })
+  expect((await started.completion).status).toBe('succeeded')
+  return { ...accepted, runId: started.runId }
+}
+function expectOneResultReview(...runIds: string[]) {
+  expect(llm.stream).toHaveBeenCalledTimes(2)
+  const requests = vi.mocked(llm.stream).mock.calls.map(([messages]) => messages)
+  for (const runId of runIds) {
+    const id = 'subagent-result:' + runId
+    expect(requests[0].some(message => message.id === id)).toBe(false)
+    expect(requests[1].find(message => message.id === id)?.content).toContain('Peer evidence sent.')
+  }
+  expect(outcomes).toMatchObject([{ status: 'succeeded' }])
 }
 beforeEach(async () => {
   const old = getDb() as LocalSqliteProcessClient; await closeDb(); await old.whenClosed()
@@ -148,7 +170,7 @@ describe.each(['jsonl', 'sqlite'] as const)('%s exact private compaction continu
     ctx.modelCaps = { contextWindow: 6000 }; ctx.tokenBudget = 6000
     await run()
     expect(llm.stream).toHaveBeenCalledTimes(1)
-    expect(outcomes.at(-1)?.status).toBe('succeeded')
+    expect(outcomes.at(-1)?.status, JSON.stringify(outcomes.at(-1))).toBe('succeeded')
     expect(await identity(userId)).toEqual(before)
     expect(await receipt(accepted.messageId)).toEqual(peerBefore)
     const messages = vi.mocked(llm.stream).mock.calls[0][0]
@@ -170,7 +192,9 @@ describe.each(['jsonl', 'sqlite'] as const)('%s exact private compaction continu
     await run()
     expect(llm.complete).toHaveBeenCalled()
     if (backend === 'sqlite') expect(String(vi.mocked(llm.complete).mock.calls[0][0][0].content)).not.toContain('[user, verbatim]')
-    expect(llm.stream).toHaveBeenCalledTimes(1); expect(outcomes.at(-1)?.status).toBe('succeeded')
+    // The summary retired the peer's terminal body. The parent must receive it
+    // once more for acceptance, without replaying the already retired mailbox.
+    expectOneResultReview(accepted.runId)
     expect(await identity(userId)).toEqual(before)
     expect((await receipt(accepted.messageId))?.state).toBe('suppressed')
     const messages = vi.mocked(llm.stream).mock.calls[0][0]
@@ -197,7 +221,7 @@ describe.each(['jsonl', 'sqlite'] as const)('%s exact private compaction continu
     expect(await identity(userId)).toEqual(original); expect(await identity('pending-dispatch')).toEqual(dispatchBefore)
     expect((await receipt(recent.messageId))?.state).toBe('suppressed')
     const newest = await mail('New mail after two summaries', 'newest-key'); expect((await consume()).receipts).toHaveLength(1)
-    await run(); expect(llm.stream).toHaveBeenCalledTimes(1); expect(outcomes.at(-1)?.status).toBe('succeeded')
+    await run(); expectOneResultReview(old.runId, recent.runId)
     expect((await receipt(newest.messageId))?.state).toBe('integrated')
     expect((await consume()).receipts).toHaveLength(0)
     expect(await maintenanceCount()).toBe(2)
@@ -436,7 +460,7 @@ describe('JSONL durable private compaction recovery', () => {
     expect((await receipt(accepted.messageId))?.state).toBe('suppressed')
     expect(await maintenanceCount()).toBe(1)
     expect((await observer.execute('SELECT state FROM collaboration_history_maintenance')).rows[0].state).toBe('committed')
-    await run(); expect(llm.stream).toHaveBeenCalledTimes(1); expect(outcomes.at(-1)?.status).toBe('succeeded')
+    await run(); expectOneResultReview(accepted.runId)
     const file = path.join(directory, 'sessions', scope.tenantId, scope.sessionId + '.jsonl')
     const summaries = fs.readFileSync(file, 'utf8').split('\n').flatMap(line => { try { const row = JSON.parse(line); return row.type === 'summary' ? [row] : [] } catch { return [] } })
     expect(summaries).toHaveLength(1)
@@ -476,7 +500,7 @@ describe('JSONL durable private compaction recovery', () => {
       expect(result.messageIds).toContain('fresh-process-marker')
       expect(await identity(userId)).toEqual(originalInput)
       expect((await receipt(accepted.messageId))?.state).toBe('suppressed')
-      await run(); expect(llm.stream).toHaveBeenCalledTimes(1)
+      await run(); expectOneResultReview(accepted.runId)
     } else {
       expect(result.error).toContain('physical record changed')
       expect(fs.readFileSync(archive, 'utf8')).not.toContain('fresh-process-marker')

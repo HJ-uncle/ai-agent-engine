@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import Fastify, { type FastifyInstance } from 'fastify'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentContext } from '../../../core/agent-context/types.js'
 import { projectDataPath } from '../../../core/project-storage.js'
 import { codegraphRoutes } from '../../../api/http/routes/codegraph.js'
@@ -32,6 +32,7 @@ async function query(args: Record<string, unknown>) {
 
 describe.sequential('codegraph installed runtime integration', () => {
   beforeEach(() => {
+    vi.stubEnv('AUTH_ENABLED', 'false')
     fixtureDir = fs.mkdtempSync(path.join(fixtureParent, 'aether-codegraph-runtime-'))
     fs.writeFileSync(path.join(fixtureDir, 'pricing.ts'), [
       'export function computeSubtotal(price: number, quantity: number): number {',
@@ -57,6 +58,7 @@ describe.sequential('codegraph installed runtime integration', () => {
   })
 
   afterEach(async () => {
+    vi.unstubAllEnvs()
     await app?.close()
     app = undefined
     // Never remove a directory while an asynchronous writer may still own it.

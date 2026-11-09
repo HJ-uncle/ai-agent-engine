@@ -1,24 +1,36 @@
-import type { Tool, IToolRegistry, AgentContext, ToolResult, JSONSchema } from '../agent-context/index.js'
+import type { Tool, IToolRegistry, AgentContext, ToolResult, JSONSchema, Message } from '../agent-context/index.js'
 import { DuplicateToolError, ToolNotFoundError } from '../agent-context/index.js'
 import { getGlobalToolPool } from '../utils/concurrency-pool.js'
-import { bypassesOrdinaryToolPool, preflightTool, toolExecutionMode } from '../../security/tool-policy.js'
+import { bypassesOrdinaryToolPool, preflightTool, toolExecutionMode, isTrustedBuiltinTool } from '../../security/tool-policy.js'
+import { CORE_MODEL_TOOLS, loadModelTools, loadToolsTool, selectRequestTools } from '../../tools/model-tool-loading.js'
 
 export class ToolRegistry implements IToolRegistry {
   private tools = new Map<string, Tool>()
+  private modelDefinitions = new Map<string, Pick<Tool, 'description' | 'parameters'>>()
+  private loadedModelTools = new Set<string>()
+  private registrationVersions = new Map<string, number>()
+  private nextRegistrationVersion = 0
+  private invalidatedModelHistory = new Set<string>()
 
   constructor(private readonly canRegister?: (tool: Tool) => boolean) {}
 
-  register(tool: Tool): void {
+  register(tool: Tool, modelDefinition?: Pick<Tool, 'description' | 'parameters'>): void {
     // Enforce capability selection at insertion, including dynamically loaded registrations.
     if (this.canRegister && !this.canRegister(tool)) return
     if (this.tools.has(tool.name)) {
       throw new DuplicateToolError(tool.name)
     }
     this.tools.set(tool.name, tool)
+    this.registrationVersions.set(tool.name, ++this.nextRegistrationVersion)
+    if (modelDefinition) this.modelDefinitions.set(tool.name, modelDefinition)
   }
 
   unregister(name: string): void {
+    if (this.tools.has(name)) this.invalidatedModelHistory.add(name)
     this.tools.delete(name)
+    this.modelDefinitions.delete(name)
+    this.loadedModelTools.delete(name)
+    this.registrationVersions.delete(name)
   }
 
   has(name: string): boolean {
@@ -35,6 +47,35 @@ export class ToolRegistry implements IToolRegistry {
       ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
     }))
   }
+
+  listForModel(): ReturnType<IToolRegistry['list']> {
+    return this.list().map(tool => {
+      const definition = this.modelDefinitions.get(tool.name)
+      return definition ? { ...tool, ...definition } : tool
+    })
+  }
+
+  modelToolLoadingCandidates(): string[] {
+    return [...this.modelDefinitions.keys()].filter(name => this.tools.has(name) && !CORE_MODEL_TOOLS.has(name))
+  }
+
+  listForRequest(history: readonly Message[] = []): ReturnType<IToolRegistry['list']> {
+    return selectRequestTools(this.listForModel(), new Set(this.modelToolLoadingCandidates()), this.loadedModelTools, history, this.hasModelToolLoader(), this.invalidatedModelHistory)
+  }
+
+  loadForModel(names: readonly string[]): string[] {
+    if (!this.hasModelToolLoader()) throw new Error('This registry has no trusted model tool loader')
+    return loadModelTools(this.listForModel(), this.loadedModelTools, names)
+  }
+
+  hasModelToolLoader(): boolean { return this.tools.get('load_tools') === loadToolsTool }
+
+  supportsHistoryProjection(name: string): boolean {
+    const tool = this.tools.get(name)
+    return Boolean(tool && ['write_file', 'office_document', 'search_history'].includes(name) && isTrustedBuiltinTool(tool))
+  }
+
+  modelToolRegistrationVersion(name: string): number | undefined { return this.registrationVersions.get(name) }
 
   async execute(name: string, args: unknown, ctx: AgentContext): Promise<ToolResult> {
     const tool = this.tools.get(name)

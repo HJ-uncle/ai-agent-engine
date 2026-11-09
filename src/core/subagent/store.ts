@@ -311,13 +311,17 @@ export class SubagentStore {
       const items = []
       for (const row of rows.rows.slice(0, limit)) {
         const latest = await tx.execute({ sql: `SELECT r.run_id,json_type(coalesce(m.record,r.snapshot),'$.continuation') AS profile_type,
-          json_extract(coalesce(m.record,r.snapshot),'$.continuation.workspacePaths') AS roots
+          json_extract(coalesce(m.record,r.snapshot),'$.continuation.workspacePaths') AS roots,
+          json_extract(coalesce(m.record,r.snapshot),'$.continuation.projectRoot') AS project_root,
+          json_extract(coalesce(m.record,r.snapshot),'$.continuation.cwd') AS cwd
           FROM subagent_runs r LEFT JOIN subagent_records m ON m.tenant_id=r.tenant_id AND m.run_id=r.run_id
           WHERE r.rowid=? AND r.tenant_id=? AND r.parent_session_id=?`, args: [Number(row.latest), tenantId, parentSessionId] })
         const entry = latest.rows[0]
         if (!entry) continue
         const run = await this.readHeader(tx, tenantId, String(entry.run_id))
-        if (run) items.push({ run, hasContinuation: entry.profile_type === 'object', workspacePaths: entry.roots ? parse<string[]>(entry.roots) : [] })
+        if (run) items.push({ run, hasContinuation: entry.profile_type === 'object', workspacePaths: entry.roots ? parse<string[]>(entry.roots) : [],
+          projectRoot: typeof entry.project_root === 'string' ? entry.project_root : undefined,
+          cwd: typeof entry.cwd === 'string' ? entry.cwd : undefined })
       }
       const hasMore = rows.rows.length > limit
       return { items, hasMore, ...(hasMore && items.length ? { nextCursor: cursorEncode({ scope, upperRow, after: items.at(-1)!.run.childSessionId }) } : {}) }

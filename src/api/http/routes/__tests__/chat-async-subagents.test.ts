@@ -14,10 +14,13 @@ import { resolveCapabilities } from '../../../../core/model-capabilities/index.j
 import { activeStreams } from '../../../../core/stream-pipeline/stream-bus.js'
 import { chatRoutes } from '../chat.js'
 import { COLLABORATOR_LIMITS } from '../../../../core/subagent/collaborators.js'
+import { WorkspaceManager, workspaceManager } from '../../../../workspace/index.js'
+import * as toolFactory from '../../../../tools/registry-factory.js'
 
 const headers = { 'x-aether-tool-profile': 'code', 'x-aether-run-lifetime': 'durable', 'x-aether-subagent-protocol': '2' }
 const barrier = () => { let release!: () => void; const promise = new Promise<void>(yes => { release = yes }); return { promise, release } }
 let directory: string, app: FastifyInstance, db: LocalSqliteProcessClient, contexts: AgentContext[]
+let preloadOrchestration = true
 const releases: (() => void)[] = []
 const gate = () => { const value = barrier(); releases.push(value.release); return value }
 beforeEach(async () => {
@@ -29,8 +32,19 @@ beforeEach(async () => {
   db = new LocalSqliteProcessClient({ url: 'file:' + path.join(directory, 'fixture.db').replaceAll('\\', '/') })
   vi.spyOn(database, 'getDb').mockImplementation(() => db); await database.initDb()
   contexts = []
+  preloadOrchestration = true
   const install = boundary.installProductionCollaborationBoundary
-  vi.spyOn(boundary, 'installProductionCollaborationBoundary').mockImplementation(ctx => { install(ctx); contexts.push(ctx) })
+  vi.spyOn(boundary, 'installProductionCollaborationBoundary').mockImplementation(ctx => {
+    install(ctx)
+    // These scripted adapters exercise lifecycle ordering, not tool discovery.
+    // Preload only authorized orchestration schemas; real-model evaluations and
+    // model-tool-projection tests cover load_tools admission and next-request use.
+    if (preloadOrchestration && ctx.tools.hasModelToolLoader?.()) {
+      const names = ctx.tools.list().map(tool => tool.name).filter(name => name.startsWith('subagent'))
+      if (names.length) ctx.tools.loadForModel?.(names)
+    }
+    contexts.push(ctx)
+  })
   vi.spyOn(modelResolver, 'resolveModelConfig').mockImplementation(async ({ model }) => ({ model: model ?? 'root-scripted', provider: 'fixture',
     capabilities: resolveCapabilities({ model: 'gpt-4o', provider: 'openai' }), thinkingEnabled: false }))
   app = Fastify(); app.decorateRequest('authContext', null)
@@ -47,6 +61,45 @@ afterEach(async () => {
 })
 
 describe('actual chat collaborator schema', () => {
+  it('initializes project context and real relative writes from the persisted binding after paths are omitted', async () => {
+    const selected = path.join(directory, 'selected-project')
+    fs.mkdirSync(selected)
+    fs.writeFileSync(path.join(selected, 'AE.md'), 'BOUND_PROJECT_CONTEXT_MARKER: read only the selected project.\n')
+    vi.stubEnv('AUTH_ENABLED', 'true')
+    vi.stubEnv('WORKSPACE_ROOT', path.join(directory, 'scratch'))
+    vi.stubEnv('AETHER_ALLOWED_WORKSPACE_ROOTS', directory)
+    vi.stubEnv('AETHER_WORKSPACE_BINDINGS_FILE', path.join(directory, 'bindings.json'))
+    const manager = new WorkspaceManager(path.join(directory, 'scratch'))
+    manager.bind({ tenantId: 'default', sessionId: 'bound-workspace-chat' }, selected)
+    vi.spyOn(workspaceManager, 'getPaths').mockImplementation(ctx => manager.getPaths(ctx))
+    vi.spyOn(workspaceManager, 'getWorkingDirectory').mockImplementation(ctx => manager.getWorkingDirectory(ctx))
+    vi.spyOn(workspaceManager, 'getBindingSnapshot').mockImplementation(ctx => manager.getBindingSnapshot(ctx))
+    vi.spyOn(workspaceManager, 'bindingReadGuard').mockImplementation((ctx, expected) => manager.bindingReadGuard(ctx, expected))
+    vi.spyOn(workspaceManager, 'resolveSafePath').mockImplementation((ctx, value) => manager.resolveSafePath(ctx, value))
+    const preparedRoots: Array<string | undefined> = []
+    const factory = toolFactory.createToolRegistry
+    vi.spyOn(toolFactory, 'createToolRegistry').mockImplementation(async opts => { preparedRoots.push(opts?.workspaceRoot); return factory(opts) })
+    const prompts: string[] = []
+    vi.spyOn(modelResolver, 'createAdapterFromResolved').mockReturnValue({ provider: 'fixture', model: 'root-scripted', countTokens: () => 0,
+      complete: vi.fn(), async *stream(messages, options) {
+        prompts.push(options?.systemPrompt ?? '')
+        if (!messages.some(message => message.role === 'tool' && message.toolCallId === 'bound-write')) {
+          yield { done: true, toolCalls: [{ index: 0, id: 'bound-write', name: 'write_file', args: JSON.stringify({ path: 'draft.md', data: 'BOUND_SHARED_DRAFT', expectedHash: 'missing' }) }] }
+        } else yield { done: true, content: '草稿已保存。' }
+      } })
+    await app.register(chatRoutes)
+    const response = await app.inject({ method: 'POST', url: '/chat', headers,
+      payload: { sessionId: 'bound-workspace-chat', message: '在当前项目写入草稿', workspacePaths: [] } })
+    expect(response.statusCode, response.body).toBe(200)
+    expect(preparedRoots).toEqual([selected])
+    expect(contexts[0]).toMatchObject({ projectRoot: selected, cwd: selected })
+    expect(contexts[0].scratchDir).not.toBe(selected)
+    expect(prompts[0]).toContain('BOUND_PROJECT_CONTEXT_MARKER')
+    expect(prompts[0]).toContain('"relativePathRoot":' + JSON.stringify(selected))
+    expect(fs.readFileSync(path.join(selected, 'draft.md'), 'utf8')).toBe('BOUND_SHARED_DRAFT')
+    expect(fs.existsSync(path.join(contexts[0].scratchDir!, 'draft.md'))).toBe(false)
+  })
+
   it('preserves builtin role, independent instance key, task and description before dispatch', async () => {
     // Fastify executes its real route schema before this test-only dispatch gate.
     // No provider or child is needed to verify which fields reach the handler.
@@ -98,6 +151,89 @@ describe('actual chat collaborator schema', () => {
 })
 
 describe.each(['jsonl', 'sqlite'])('%s actual async model tools', backend => {
+  it.each(['duplicate-plan', 'premature-final'])('plans selected same-role instances after %s before any child starts, then publishes independent scoped admissions', async firstAttempt => {
+    vi.stubEnv('HISTORY_BACKEND', backend)
+    preloadOrchestration = false
+    let parentCalls = 0
+    const childTasks: string[] = []
+    const message = 'Implement editor and sidebar. ORIGINAL_SHARED_REQUEST_SENTINEL'
+    const assignments = [{ selectionId: 'selection-1', task: 'Implement only editor.ts with keyboard editing tests', description: 'Editor' },
+      { selectionId: 'selection-2', task: 'Implement only sidebar.ts with selection tests', description: 'Sidebar' }]
+    vi.spyOn(modelResolver, 'createAdapterFromResolved').mockImplementation(config => ({ provider: 'fixture', model: config.model,
+      countTokens: text => Math.ceil(text.length / 4), complete: async () => { throw new Error('UNEXPECTED_COMPLETION') },
+      async *stream(messages, options) {
+        if (config.model === 'scoped-child') {
+          const task = String([...messages].reverse().find(item => item.role === 'user')?.content)
+          childTasks.push(task)
+          expect(task).not.toContain('ORIGINAL_SHARED_REQUEST_SENTINEL')
+          expect(options?.tools?.some(tool => tool.name === 'collaborator_dispatch')).toBe(false)
+          yield { done: true, finishReason: 'stop', content: task.includes('editor.ts') ? 'Editor scope finished' : 'Sidebar scope finished' }
+          return
+        }
+        parentCalls++
+        if (parentCalls <= 2) {
+          expect((await db.execute('SELECT count(*) AS n FROM subagent_runs')).rows[0].n).toBe(0)
+          expect(options?.tools?.some(tool => tool.name === 'collaborator_dispatch')).toBe(true)
+          if (parentCalls === 1 && firstAttempt === 'premature-final') {
+            yield { done: true, finishReason: 'stop', content: 'Premature unplanned candidate' }
+            return
+          }
+          if (parentCalls === 2 && firstAttempt === 'duplicate-plan') expect(messages.find(item => item.role === 'tool' && item.toolCallId === 'invalid-plan')?.metadata?.success).toBe(false)
+          yield { done: true, finishReason: 'tool_calls', toolCalls: [{ id: parentCalls === 1 ? 'invalid-plan' : 'scoped-plan', index: 0,
+            name: 'collaborator_dispatch', args: JSON.stringify({ assignments: parentCalls === 1
+              ? [assignments[0], { ...assignments[1], task: assignments[0].task }] : assignments }) }] }
+        } else if (parentCalls === 3) {
+          const admissions = messages.filter(item => item.role === 'tool' && item.toolName === 'subagent_start')
+          expect(admissions).toHaveLength(2)
+          expect(new Set(admissions.map(item => item.toolCallId)).size).toBe(2)
+          expect(messages.find(item => item.role === 'tool' && item.toolCallId === 'scoped-plan')?.content).toContain('"state":"planned"')
+          expect(options?.tools?.some(tool => tool.name === 'subagent_wait')).toBe(true)
+          yield { done: true, finishReason: 'tool_calls', toolCalls: admissions.map((item, index) => ({ id: 'join-scoped-' + index, index,
+            name: 'subagent_wait', args: JSON.stringify({ runId: JSON.parse(String(item.content)).runId, timeoutMs: 30000 }) })) }
+        } else {
+          expect(parentCalls).toBe(4)
+          expect(childTasks).toHaveLength(2)
+          yield { done: true, finishReason: 'stop', content: 'Parent verified both distinct scopes' }
+        }
+      },
+    }))
+    await app.register(chatRoutes)
+    const response = await app.inject({ method: 'POST', url: '/chat', headers, payload: { sessionId: 'scoped-selection-route', message,
+      collaborators: [{ builtinRole: 'executor', instanceKey: 'one' }, { builtinRole: 'executor', instanceKey: 'two' }],
+      model: 'scoped-parent', subagentModel: 'scoped-child', workspacePaths: [directory], memoryScope: 'off', thinkingMode: false, skills: [], mcpServers: [], knowledgeBases: [] } })
+    expect(response.statusCode).toBe(200); expect(response.body).toContain('Parent verified both distinct scopes')
+    expect(response.body).toContain('"subagentEvent"')
+    expect(parentCalls).toBe(4)
+    const history = await createConversationHistory().getFullHistory({ tenantId: 'default', sessionId: 'scoped-selection-route' })
+    const starts = history.filter(item => item.role === 'assistant' && item.toolCall?.name === 'subagent_start')
+    expect(starts).toHaveLength(2)
+    expect(new Set(starts.map(item => item.toolCall!.id)).size).toBe(2)
+    expect(starts.map(item => item.toolCall!.args.description).sort()).toEqual(['Editor', 'Sidebar'])
+    expect(history.filter(item => item.metadata?.subagentNotification)).toHaveLength(2)
+    expect((await db.execute('SELECT count(*) AS n FROM subagent_runs')).rows[0].n).toBe(2)
+    expect((await rootRunStore.list('default', 'scoped-selection-route'))[0].status).toBe('succeeded')
+  })
+
+  it('does not report success or loop indefinitely when the model ignores selected collaborators twice', async () => {
+    vi.stubEnv('HISTORY_BACKEND', backend)
+    preloadOrchestration = false
+    let calls = 0
+    vi.spyOn(modelResolver, 'createAdapterFromResolved').mockImplementation(config => ({ provider: 'fixture', model: config.model,
+      countTokens: text => Math.ceil(text.length / 4), complete: async () => { throw new Error('UNEXPECTED_COMPLETION') },
+      async *stream() { calls++; yield { done: true, finishReason: 'stop', content: 'Ignored the selected collaborators', promptTokens: 100, completionTokens: 5 } },
+    }))
+    await app.register(chatRoutes)
+    const response = await app.inject({ method: 'POST', url: '/chat', headers, payload: { sessionId: 'unplanned-selection-route', message: 'Build editor and sidebar',
+      collaborators: [{ builtinRole: 'executor', instanceKey: 'one' }, { builtinRole: 'executor', instanceKey: 'two' }],
+      model: 'unplanned-parent', workspacePaths: [directory], memoryScope: 'off', thinkingMode: false, skills: [], mcpServers: [], knowledgeBases: [] } })
+    expect(response.statusCode).toBe(200)
+    expect(calls).toBe(2)
+    expect((await db.execute('SELECT count(*) AS n FROM subagent_runs')).rows[0].n).toBe(0)
+    expect((await rootRunStore.list('default', 'unplanned-selection-route'))[0]).toMatchObject({ status: 'failed', error: { code: 'COLLABORATOR_PLAN_REQUIRED' } })
+    expect(response.body).not.toContain('"finalResult"')
+    expect(response.body).toContain('"totalTokens":210')
+  })
+
   it('an explicitly selected collaborator admits before the parent model and receives live parent steering before completion', async () => {
     vi.stubEnv('HISTORY_BACKEND', backend)
     const entered = gate(), finish = gate()
@@ -189,28 +325,39 @@ describe.each(['jsonl', 'sqlite'])('%s actual async model tools', backend => {
     expect(rows.find(message => message.id === 'subagent-result:' + runId)?.metadata?.subagent).toMatchObject({ status: 'cancelled' })
     expect((await rootRunStore.list('default', 'cancel-route'))[0].status).toBe('succeeded')
   })
-  it('actual parent final output remains draining until the asynchronous child executor and independent projection really settle', async () => {
+  it('an early parent final stays open until the child settles and the model receives its result for acceptance', async () => {
     vi.stubEnv('HISTORY_BACKEND', backend)
     const { registry } = await (await import('../../../../tools/registry-factory.js')).createToolRegistry({ toolProfile: 'code', allowedTools: ['subagent_start'], allowedMcpServers: [] })
     expect(registry.has('subagent_start')).toBe(true)
     const entered = gate(), finish = gate(); let parentCalls = 0
     vi.spyOn(modelResolver, 'createAdapterFromResolved').mockImplementation(config => ({ provider: 'fixture', model: config.model,
       countTokens: text => Math.ceil(text.length / 4), complete: async () => { throw new Error('UNEXPECTED_COMPLETION') },
-      async *stream() {
+      async *stream(messages) {
         if (config.model === 'child-drain') { entered.release(); await finish.promise; yield { done: true, finishReason: 'stop', content: 'Exact async child after parent final' }; return }
         parentCalls++
         if (parentCalls === 1) yield { done: true, finishReason: 'tool_calls', toolCalls: [{ id: 'drain-start', index: 0, name: 'subagent_start', args: JSON.stringify({ task: 'Actual drain target', model: 'child-drain' }) }] }
-        else { await entered.promise; yield { done: true, finishReason: 'stop', content: 'Actual parent final before child join' } }
+        else if (parentCalls === 2) { await entered.promise; yield { done: true, finishReason: 'stop', content: 'Premature parent candidate' } }
+        else {
+          expect(parentCalls).toBe(3)
+          expect(messages.some(message => message.metadata?.subagentNotification && String(message.content).includes('Exact async child after parent final'))).toBe(true)
+          yield { done: true, finishReason: 'stop', content: 'Parent accepted exact child result' }
+        }
       },
     }))
     await app.register(chatRoutes)
     let settled = false
     const pending = app.inject({ method: 'POST', url: '/chat', headers, payload: { sessionId: 'drain-route', message: 'Start child then finish parent', model: 'root-drain', workspacePaths: [directory], memoryScope: 'off', thinkingMode: false, skills: [], mcpServers: [], knowledgeBases: [] } }).then(response => { settled = true; return response })
     try {
-      await expect.poll(async () => (await db.execute('SELECT phase FROM collaboration_roots')).rows[0]?.phase).toBe('draining')
+      await entered.promise
+      await expect.poll(() => parentCalls).toBe(2)
+      expect((await db.execute('SELECT phase FROM collaboration_roots')).rows[0]?.phase).toBe('open')
       expect(settled).toBe(false); expect((await db.execute('SELECT status FROM subagent_runs')).rows[0].status).toBe('running')
       finish.release(); const response = await pending
-      expect(response.statusCode).toBe(200); expect(response.body).toContain('Actual parent final before child join')
+      expect(response.statusCode).toBe(200); expect(response.body).toContain('Parent accepted exact child result')
+      const final = response.body.split('\n').filter(line => line.startsWith('data: {')).map(line => JSON.parse(line.slice(6)))
+        .find(frame => frame.finalResult)?.finalResult
+      expect(final?.text).toBe('Parent accepted exact child result')
+      expect(parentCalls).toBe(3)
       expect((await rootRunStore.list('default', 'drain-route'))[0].status).toBe('succeeded')
       const child = (await db.execute('SELECT run_id FROM subagent_runs')).rows[0]
       const rows = await createConversationHistory().getFullHistory({ tenantId: 'default', sessionId: 'drain-route' })

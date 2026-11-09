@@ -1,0 +1,1953 @@
+{
+  "scope": "Batch I/O evaluation; Work HTTP route with isolated workspace/state, production model configuration read-only.",
+  "countPolicy": "Provider totals include cached input and auxiliary requests, not a currency bill. requestsWithTools counts requests carrying schemas. Retain failed attempts.",
+  "acceptance": "Distinct expected targets with successful tool receipts in one response; exact bytes/formulas/facts and final manifest identity. No native Office visual claim.",
+  "totals": {
+    "scenarios": 20,
+    "passed": 16,
+    "providerRequests": 162,
+    "knownProviderInput": 1498917,
+    "knownProviderOutput": 39858,
+    "knownProviderTotal": 1538775,
+    "providerUsageComplete": true
+  },
+  "followUpTotals": {
+    "scenarios": 9,
+    "passed": 9,
+    "providerRequests": 54,
+    "knownProviderInput": 391940,
+    "knownProviderOutput": 12285,
+    "knownProviderTotal": 404225,
+    "providerUsageComplete": true
+  },
+  "pagination": {
+    "fixtureCount": 107,
+    "budgets": [
+      300,
+      350,
+      400,
+      450,
+      500,
+      650,
+      800,
+      1200,
+      2400
+    ],
+    "totalCases": 963,
+    "successfulCases": 649,
+    "budgetFailures": 314,
+    "pages": 13491,
+    "assertions": [
+      "valid JSON",
+      "serialized output within character budget",
+      "monotonic continuation cursor",
+      "no split UTF-16 surrogate pairs",
+      "complete line reconstruction for successful cases",
+      "explicit OUTPUT_BUDGET_TOO_SMALL for insufficient budgets"
+    ]
+  },
+  "runs": [
+    {
+      "label": "batch-v1-low",
+      "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v1-low-2026-11-09T05-14-46-142Z-ff135d\\evidence.json",
+      "sourceTreeSha256": "00806b04bcd379d7f3dfac12aac330c3c4fe139749cff02eed2efa08f5500c12",
+      "model": {
+        "provider": "deepseek",
+        "modelId": "deepseek-v4.1-flash-1017",
+        "apiFormat": "auto",
+        "endpointHost": "token-plan.cn-beijing.maas.aliyuncs.com",
+        "capabilities": {
+          "vision": true,
+          "thinking": true,
+          "contextWindow": 256000
+        }
+      },
+      "thinking": "low",
+      "startedAt": "2026-11-09T05:14:46.145Z",
+      "finishedAt": "2026-11-09T05:16:10.765Z",
+      "cases": [
+        {
+          "case": "batch_io",
+          "repeat": 1,
+          "originalPassed": false,
+          "acceptanceLevel": "final outcome; may include repairs",
+          "passed": false,
+          "runStatus": "failed",
+          "failedChecks": [
+            "sumCorrect"
+          ],
+          "checks": {
+            "inputsUnchanged": true,
+            "sixExactOutputs": true,
+            "sumCorrect": false,
+            "sixReadsInOneModelResponse": true,
+            "sixWritesInOneModelResponse": true,
+            "maxReadBatch": 6,
+            "maxWriteBatch": 6,
+            "proposedReadTargets": 6,
+            "proposedWriteTargets": 6
+          },
+          "batches": [
+            [
+              {
+                "name": "list_files",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "read_file",
+                "path": "a.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "b.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "c.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "d.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "e.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "f.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "write_file",
+                "path": "out-a.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-b.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-c.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-d.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-e.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-f.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "edit_file",
+                "path": "out-a.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "read_file",
+                "path": "out-a.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "edit_file",
+                "path": "out-b.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "read_file",
+                "path": "out-b.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "edit_file",
+                "path": "out-c.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "read_file",
+                "path": "out-c.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "edit_file",
+                "path": "out-d.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "read_file",
+                "path": "out-d.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "edit_file",
+                "path": "out-e.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "read_file",
+                "path": "out-e.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "edit_file",
+                "path": "out-f.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "read_file",
+                "path": "out-f.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "read_file",
+                "path": "a.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "load_tools",
+                "succeeded": true
+              }
+            ]
+          ],
+          "totalProviderRequests": 18,
+          "requestsWithTools": 17,
+          "firstWorkInput": 7262,
+          "knownProviderInput": 198905,
+          "knownProviderOutput": 3349,
+          "knownProviderTotal": 202254,
+          "providerUsageComplete": true,
+          "elapsedMs": 42964,
+          "totalWallMs": 50601,
+          "answer": "",
+          "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v1-low-2026-11-09T05-14-46-142Z-ff135d\\batch_io-1.json"
+        },
+        {
+          "case": "batch_office",
+          "repeat": 1,
+          "originalPassed": true,
+          "acceptanceLevel": "final outcome; may include repairs",
+          "passed": true,
+          "runStatus": "succeeded",
+          "failedChecks": [],
+          "checks": {
+            "threeFilesPresent": true,
+            "threeCreatesInOneModelResponse": true,
+            "wordFacts": true,
+            "twoSlidesWithFacts": true,
+            "spreadsheetFacts": true,
+            "spreadsheetFormula42": true,
+            "spreadsheetRecalculatedBeforeDelivery": true,
+            "spreadsheetCachesVerified": true,
+            "threeFinalItems": true,
+            "deliveredHashesMatch": true,
+            "maxCreateBatch": 3,
+            "proposedCreateTargets": 3,
+            "formulaValidation": {
+              "passed": true,
+              "recalculateSucceeded": true,
+              "cacheMismatches": [],
+              "method": "Saved caches compared with an in-memory engine recalculation"
+            },
+            "limitation": "Checks text, labels, structure and engine-calculated caches; does not establish Word page count, native Office rendering, or independent Excel equivalence."
+          },
+          "batches": [
+            [
+              {
+                "name": "get_skill",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "get_skill",
+                "succeeded": true
+              },
+              {
+                "name": "get_skill",
+                "succeeded": true
+              },
+              {
+                "name": "get_skill",
+                "succeeded": true
+              },
+              {
+                "name": "load_tools",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "write_file",
+                "path": "draft.md",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "office_document",
+                "path": "batch.docx",
+                "operation": "create",
+                "succeeded": true
+              },
+              {
+                "name": "office_document",
+                "path": "batch.pptx",
+                "operation": "create",
+                "succeeded": true
+              },
+              {
+                "name": "office_document",
+                "path": "batch.xlsx",
+                "operation": "create",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "office_document",
+                "path": "batch.xlsx",
+                "operation": "recalculate",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "office_inspect",
+                "path": "batch.xlsx",
+                "succeeded": true
+              },
+              {
+                "name": "office_inspect",
+                "path": "batch.docx",
+                "succeeded": true
+              },
+              {
+                "name": "office_inspect",
+                "path": "batch.pptx",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "deliver_files",
+                "succeeded": true
+              }
+            ]
+          ],
+          "totalProviderRequests": 10,
+          "requestsWithTools": 8,
+          "firstWorkInput": 7280,
+          "knownProviderInput": 120075,
+          "knownProviderOutput": 2985,
+          "knownProviderTotal": 123060,
+          "providerUsageComplete": true,
+          "elapsedMs": 24351,
+          "totalWallMs": 26975,
+          "answer": "三份文件已完成并登记：\n\n- **batch.docx**：一页说明，含概况段、组别与完成项数表格（甲组 12、乙组 30、合计 42），以及一句合计说明。\n- **batch.pptx**：两页简报——第 1 页三组要点，第 2 页完成项数表格，数字与 Word 一致。\n- **batch.xlsx**：单张“批量验收”事实表，B4 保留 `=SUM(B2:B3)`，已重算、缓存值 42，无错误单元格。\n\n仅使用给定的三条事实，未添加其他数据。文件经结构检查与文本读回；未做视觉渲染验收。",
+          "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v1-low-2026-11-09T05-14-46-142Z-ff135d\\batch_office-1.json"
+        },
+        {
+          "case": "greeting",
+          "repeat": 1,
+          "originalPassed": true,
+          "acceptanceLevel": "greeting",
+          "passed": true,
+          "runStatus": "succeeded",
+          "failedChecks": [],
+          "checks": {
+            "answered": true
+          },
+          "totalProviderRequests": 3,
+          "requestsWithTools": 1,
+          "firstWorkInput": 7198,
+          "knownProviderInput": 7875,
+          "knownProviderOutput": 62,
+          "knownProviderTotal": 7937,
+          "providerUsageComplete": true,
+          "elapsedMs": 2114,
+          "totalWallMs": 3200,
+          "answer": "你好！很高兴见到你，有什么可以帮你的吗？",
+          "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v1-low-2026-11-09T05-14-46-142Z-ff135d\\greeting-1.json"
+        }
+      ]
+    },
+    {
+      "label": "batch-v2-low",
+      "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v2-low-2026-11-09T05-22-24-937Z-9814fa\\evidence.json",
+      "sourceTreeSha256": "169ca6bbbb587a500dfb9c8cd37dc2af6cf47921a114958bf17f5a4fe3954a3a",
+      "model": {
+        "provider": "deepseek",
+        "modelId": "deepseek-v4.1-flash-1017",
+        "apiFormat": "auto",
+        "endpointHost": "token-plan.cn-beijing.maas.aliyuncs.com",
+        "capabilities": {
+          "vision": true,
+          "thinking": true,
+          "contextWindow": 256000
+        }
+      },
+      "thinking": "low",
+      "startedAt": "2026-11-09T05:22:24.939Z",
+      "finishedAt": "2026-11-09T05:24:06.970Z",
+      "cases": [
+        {
+          "case": "batch_io",
+          "repeat": 1,
+          "originalPassed": false,
+          "acceptanceLevel": "final outcome; may include repairs",
+          "passed": false,
+          "runStatus": "failed",
+          "failedChecks": [
+            "sumCorrect"
+          ],
+          "checks": {
+            "inputsUnchanged": true,
+            "sixExactOutputs": true,
+            "sumCorrect": false,
+            "sixReadsInOneModelResponse": true,
+            "sixWritesInOneModelResponse": true,
+            "maxReadBatch": 6,
+            "maxWriteBatch": 6,
+            "proposedReadTargets": 6,
+            "proposedWriteTargets": 6
+          },
+          "batches": [
+            [
+              {
+                "name": "list_files",
+                "path": ".",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "a.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "b.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "c.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "d.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "e.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "f.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "write_file",
+                "path": "out-a.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-b.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-c.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-d.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-e.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-f.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "read_file",
+                "path": "out-a.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "read_file",
+                "path": "out-b.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "edit_file",
+                "path": "out-a.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "edit_file",
+                "path": "out-b.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "read_file",
+                "path": "out-c.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "edit_file",
+                "path": "out-c.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "out-d.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "out-e.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "out-f.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "edit_file",
+                "path": "out-d.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "edit_file",
+                "path": "out-e.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "edit_file",
+                "path": "out-f.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "read_file",
+                "path": "out-a.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "read_file",
+                "path": "out-b.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "read_file",
+                "path": "out-c.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "read_file",
+                "path": "out-d.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "read_file",
+                "path": "out-e.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "read_file",
+                "path": "out-f.txt",
+                "succeeded": true
+              }
+            ]
+          ],
+          "totalProviderRequests": 18,
+          "requestsWithTools": 17,
+          "firstWorkInput": 7296,
+          "knownProviderInput": 214141,
+          "knownProviderOutput": 3536,
+          "knownProviderTotal": 217677,
+          "providerUsageComplete": true,
+          "elapsedMs": 42744,
+          "totalWallMs": 50300,
+          "answer": "",
+          "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v2-low-2026-11-09T05-22-24-937Z-9814fa\\batch_io-1.json"
+        },
+        {
+          "case": "batch_office",
+          "repeat": 1,
+          "originalPassed": false,
+          "acceptanceLevel": "final outcome; may include repairs",
+          "passed": false,
+          "runStatus": "succeeded",
+          "failedChecks": [
+            "threeCreatesInOneModelResponse"
+          ],
+          "checks": {
+            "threeFilesPresent": true,
+            "threeCreatesInOneModelResponse": false,
+            "wordFacts": true,
+            "twoSlidesWithFacts": true,
+            "spreadsheetFacts": true,
+            "spreadsheetFormula42": true,
+            "spreadsheetRecalculatedBeforeDelivery": true,
+            "spreadsheetCachesVerified": true,
+            "threeFinalItems": true,
+            "deliveredHashesMatch": true,
+            "maxCreateBatch": 2,
+            "proposedCreateTargets": 3,
+            "formulaValidation": {
+              "passed": true,
+              "recalculateSucceeded": true,
+              "cacheMismatches": [],
+              "method": "Saved caches compared with an in-memory engine recalculation"
+            },
+            "limitation": "Checks text, labels, structure and engine-calculated caches; does not establish Word page count, native Office rendering, or independent Excel equivalence."
+          },
+          "batches": [
+            [
+              {
+                "name": "get_skill",
+                "succeeded": true
+              },
+              {
+                "name": "load_tools",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "write_file",
+                "path": "draft.md",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "office_document",
+                "path": "batch.docx",
+                "operation": "create",
+                "succeeded": true
+              },
+              {
+                "name": "office_document",
+                "path": "batch.pptx",
+                "operation": "create",
+                "succeeded": true
+              },
+              {
+                "name": "office_document",
+                "path": "batch.xlsx",
+                "operation": "create",
+                "succeeded": false
+              }
+            ],
+            [
+              {
+                "name": "office_document",
+                "path": "batch.xlsx",
+                "operation": "create",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "office_document",
+                "path": "batch.xlsx",
+                "operation": "recalculate",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "office_inspect",
+                "path": "batch.xlsx",
+                "succeeded": true
+              },
+              {
+                "name": "office_inspect",
+                "path": "batch.docx",
+                "succeeded": true
+              },
+              {
+                "name": "office_inspect",
+                "path": "batch.pptx",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "load_tools",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "delete_file",
+                "path": "batch.docx",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "office_document",
+                "path": "batch.docx",
+                "operation": "create",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "office_inspect",
+                "path": "batch.docx",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "deliver_files",
+                "succeeded": true
+              }
+            ]
+          ],
+          "totalProviderRequests": 14,
+          "requestsWithTools": 12,
+          "firstWorkInput": 7326,
+          "knownProviderInput": 170344,
+          "knownProviderOutput": 5536,
+          "knownProviderTotal": 175880,
+          "providerUsageComplete": true,
+          "elapsedMs": 41834,
+          "totalWallMs": 44959,
+          "answer": "三份“批量验收”文件已生成并核对：\n\n- **batch.docx**：一页说明，含组别/完成项数表和结论句，数字为 12、30、42。\n- **batch.pptx**：两页简报，第 1 页三条要点，第 2 页完成情况表，数字一致。\n- **batch.xlsx**：单张“验收事实表”，B4 保留 `=SUM(B2:B3)`，已在内置引擎重算，缓存值 42，无错误单元格。\n\n内容仅使用指定的三条事实，未添加日期、人名或额外指标。结构检查已通过；未做视觉渲染验收。",
+          "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v2-low-2026-11-09T05-22-24-937Z-9814fa\\batch_office-1.json"
+        },
+        {
+          "case": "greeting",
+          "repeat": 1,
+          "originalPassed": true,
+          "acceptanceLevel": "greeting",
+          "passed": true,
+          "runStatus": "succeeded",
+          "failedChecks": [],
+          "checks": {
+            "answered": true
+          },
+          "totalProviderRequests": 3,
+          "requestsWithTools": 1,
+          "firstWorkInput": 7236,
+          "knownProviderInput": 7913,
+          "knownProviderOutput": 62,
+          "knownProviderTotal": 7975,
+          "providerUsageComplete": true,
+          "elapsedMs": 1590,
+          "totalWallMs": 2925,
+          "answer": "你好！很高兴见到你，有什么可以帮你的吗？",
+          "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v2-low-2026-11-09T05-22-24-937Z-9814fa\\greeting-1.json"
+        }
+      ]
+    },
+    {
+      "label": "batch-v3-low",
+      "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v3-low-2026-11-09T05-26-48-020Z-01a3bf\\evidence.json",
+      "sourceTreeSha256": "b2d8dbbd47803c92317cd60ee2ba94e56a052a0a8a2462edeabfa3e943a0ad91",
+      "model": {
+        "provider": "deepseek",
+        "modelId": "deepseek-v4.1-flash-1017",
+        "apiFormat": "auto",
+        "endpointHost": "token-plan.cn-beijing.maas.aliyuncs.com",
+        "capabilities": {
+          "vision": true,
+          "thinking": true,
+          "contextWindow": 256000
+        }
+      },
+      "thinking": "low",
+      "startedAt": "2026-11-09T05:26:48.023Z",
+      "finishedAt": "2026-11-09T05:27:52.892Z",
+      "cases": [
+        {
+          "case": "batch_io",
+          "repeat": 1,
+          "originalPassed": false,
+          "acceptanceLevel": "final outcome; may include repairs",
+          "passed": false,
+          "runStatus": "succeeded",
+          "failedChecks": [
+            "sumCorrect"
+          ],
+          "checks": {
+            "inputsUnchanged": true,
+            "sixExactOutputs": true,
+            "sumCorrect": false,
+            "sixReadsInOneModelResponse": true,
+            "sixWritesInOneModelResponse": true,
+            "maxReadBatch": 6,
+            "maxWriteBatch": 6,
+            "proposedReadTargets": 6,
+            "proposedWriteTargets": 6
+          },
+          "batches": [
+            [
+              {
+                "name": "list_files",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "read_file",
+                "path": "a.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "b.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "c.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "d.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "e.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "f.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "write_file",
+                "path": "out-a.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-b.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-c.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-d.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-e.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-f.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "edit_file",
+                "path": "out-a.txt",
+                "succeeded": true
+              },
+              {
+                "name": "edit_file",
+                "path": "out-b.txt",
+                "succeeded": true
+              },
+              {
+                "name": "edit_file",
+                "path": "out-c.txt",
+                "succeeded": true
+              },
+              {
+                "name": "edit_file",
+                "path": "out-d.txt",
+                "succeeded": true
+              },
+              {
+                "name": "edit_file",
+                "path": "out-e.txt",
+                "succeeded": true
+              },
+              {
+                "name": "edit_file",
+                "path": "out-f.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "read_file",
+                "path": "out-a.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "out-b.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "out-c.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "out-d.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "out-e.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "out-f.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "a.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "f.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "load_tools",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "deliver_files",
+                "succeeded": true
+              }
+            ]
+          ],
+          "totalProviderRequests": 10,
+          "requestsWithTools": 8,
+          "firstWorkInput": 7372,
+          "knownProviderInput": 91126,
+          "knownProviderOutput": 3255,
+          "knownProviderTotal": 94381,
+          "providerUsageComplete": true,
+          "elapsedMs": 25926,
+          "totalWallMs": 27276,
+          "answer": "六个文件都已读取，输入文件保持原样，没有改动。每个文件都生成了对应的结果文件，每个结果文件只写入一行数字，并以换行符结尾：\n\n| 输入 | 数值 | 输出 | 结果 |\n|---|---|---|---|\n| a.txt | 19 | out-a.txt | 38 |\n| b.txt | 23 | out-b.txt | 46 |\n| c.txt | 41 | out-c.txt | 82 |\n| d.txt | 47 | out-d.txt | 94 |\n| e.txt | 53 | out-e.txt | 106 |\n| f.txt | 61 | out-f.txt | 122 |\n\n六个结果的总和为 **528**（38 + 46 + 82 + 94 + 106 + 122），正好等于输入总和 244 的两倍。\n\n每个文件写入完成后都做了复读校验：内容和字节数符合预期，只含数字和单个换行；a.txt 与 f.txt 也重新读取确认未变。",
+          "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v3-low-2026-11-09T05-26-48-020Z-01a3bf\\batch_io-1.json"
+        },
+        {
+          "case": "batch_office",
+          "repeat": 1,
+          "originalPassed": true,
+          "acceptanceLevel": "final outcome; may include repairs",
+          "passed": true,
+          "runStatus": "succeeded",
+          "failedChecks": [],
+          "checks": {
+            "threeFilesPresent": true,
+            "threeCreatesInOneModelResponse": true,
+            "wordFacts": true,
+            "twoSlidesWithFacts": true,
+            "spreadsheetFacts": true,
+            "spreadsheetFormula42": true,
+            "spreadsheetRecalculatedBeforeDelivery": true,
+            "spreadsheetCachesVerified": true,
+            "threeFinalItems": true,
+            "deliveredHashesMatch": true,
+            "maxCreateBatch": 3,
+            "proposedCreateTargets": 3,
+            "formulaValidation": {
+              "passed": true,
+              "recalculateSucceeded": true,
+              "cacheMismatches": [],
+              "method": "Saved caches compared with an in-memory engine recalculation"
+            },
+            "limitation": "Checks text, labels, structure and engine-calculated caches; does not establish Word page count, native Office rendering, or independent Excel equivalence."
+          },
+          "batches": [
+            [
+              {
+                "name": "get_skill",
+                "succeeded": true
+              },
+              {
+                "name": "load_tools",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "list_files",
+                "path": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v3-low-2026-11-09T05-26-48-020Z-01a3bf\\workspace\\default\\eval-batch-v3-low-batch_office-eee89f23-a8c1-46ea-8e0c-5b60151f35a6",
+                "succeeded": true
+              },
+              {
+                "name": "create_dir",
+                "path": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v3-low-2026-11-09T05-26-48-020Z-01a3bf\\workspace\\default\\eval-batch-v3-low-batch_office-eee89f23-a8c1-46ea-8e0c-5b60151f35a6\\.ae\\tmp",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "write_file",
+                "path": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v3-low-2026-11-09T05-26-48-020Z-01a3bf\\workspace\\default\\eval-batch-v3-low-batch_office-eee89f23-a8c1-46ea-8e0c-5b60151f35a6\\.ae\\tmp\\draft.md",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "office_document",
+                "path": "batch.docx",
+                "operation": "create",
+                "succeeded": true
+              },
+              {
+                "name": "office_document",
+                "path": "batch.pptx",
+                "operation": "create",
+                "succeeded": true
+              },
+              {
+                "name": "office_document",
+                "path": "batch.xlsx",
+                "operation": "create",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "office_document",
+                "path": "batch.xlsx",
+                "operation": "recalculate",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "office_inspect",
+                "path": "batch.docx",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "office_inspect",
+                "path": "batch.pptx",
+                "succeeded": true
+              },
+              {
+                "name": "office_inspect",
+                "path": "batch.xlsx",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "deliver_files",
+                "succeeded": true
+              }
+            ]
+          ],
+          "totalProviderRequests": 11,
+          "requestsWithTools": 9,
+          "firstWorkInput": 7394,
+          "knownProviderInput": 120420,
+          "knownProviderOutput": 3696,
+          "knownProviderTotal": 124116,
+          "providerUsageComplete": true,
+          "elapsedMs": 28828,
+          "totalWallMs": 30288,
+          "answer": "三份文件已经完成并登记：\n\n- **batch.docx**：一页说明，包含概述、三行「分组 / 完成项数」表格：甲组 12、乙组 30、合计 42，并附一句合计说明。\n- **batch.pptx**：两页简报，第 1 页列出甲组 12 项、乙组 30 项、合计 42 项；第 2 页为相同数字的表格。\n- **batch.xlsx**：工作表「事实表」，A2:B4 为甲组 12、乙组 30、合计 `=SUM(B2:B3)`；已重算，缓存值为 42，无公式错误。\n\n三份文件的数字一致，除这三条事实外未添加其他数据；Word/PPT 的版式仅做结构检查，未做渲染级视觉验收。",
+          "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v3-low-2026-11-09T05-26-48-020Z-01a3bf\\batch_office-1.json"
+        },
+        {
+          "case": "greeting",
+          "repeat": 1,
+          "originalPassed": true,
+          "acceptanceLevel": "greeting",
+          "passed": true,
+          "runStatus": "succeeded",
+          "failedChecks": [],
+          "checks": {
+            "answered": true
+          },
+          "totalProviderRequests": 3,
+          "requestsWithTools": 1,
+          "firstWorkInput": 7302,
+          "knownProviderInput": 7979,
+          "knownProviderOutput": 67,
+          "knownProviderTotal": 8046,
+          "providerUsageComplete": true,
+          "elapsedMs": 2283,
+          "totalWallMs": 3428,
+          "answer": "你好，很高兴见到你，有什么可以帮你的吗？",
+          "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v3-low-2026-11-09T05-26-48-020Z-01a3bf\\greeting-1.json"
+        }
+      ]
+    },
+    {
+      "label": "batch-v4-low",
+      "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v4-low-2026-11-09T05-31-24-951Z-1fb1dc\\evidence.json",
+      "sourceTreeSha256": "21c3c41cd0f661907962c1628c65971877b79c952f0f738f3bbc1577dc5ca1d7",
+      "model": {
+        "provider": "deepseek",
+        "modelId": "deepseek-v4.1-flash-1017",
+        "apiFormat": "auto",
+        "endpointHost": "token-plan.cn-beijing.maas.aliyuncs.com",
+        "capabilities": {
+          "vision": true,
+          "thinking": true,
+          "contextWindow": 256000
+        }
+      },
+      "thinking": "low",
+      "startedAt": "2026-11-09T05:31:24.992Z",
+      "finishedAt": "2026-11-09T05:32:13.386Z",
+      "cases": [
+        {
+          "case": "batch_io",
+          "repeat": 1,
+          "originalPassed": true,
+          "acceptanceLevel": "final outcome; may include repairs",
+          "passed": true,
+          "runStatus": "succeeded",
+          "failedChecks": [],
+          "checks": {
+            "inputsUnchanged": true,
+            "sixExactOutputs": true,
+            "sumCorrect": true,
+            "sixReadsInOneModelResponse": true,
+            "sixWritesInOneModelResponse": true,
+            "maxReadBatch": 6,
+            "maxWriteBatch": 6,
+            "proposedReadTargets": 6,
+            "proposedWriteTargets": 6
+          },
+          "batches": [
+            [
+              {
+                "name": "read_file",
+                "path": "a.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "b.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "c.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "d.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "e.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "f.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "write_file",
+                "path": "out-a.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-b.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-c.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-d.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-e.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-f.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "edit_file",
+                "path": "out-a.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "write_file",
+                "path": "out-b.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-c.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-d.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-e.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-f.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "write_file",
+                "path": "out-b.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "edit_file",
+                "path": "out-b.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "write_file",
+                "path": "out-c.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "edit_file",
+                "path": "out-c.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "edit_file",
+                "path": "out-d.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "edit_file",
+                "path": "out-e.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "edit_file",
+                "path": "out-f.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "read_file",
+                "path": "out-a.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "out-b.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "out-c.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "out-d.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "out-e.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "out-f.txt",
+                "succeeded": true
+              }
+            ]
+          ],
+          "totalProviderRequests": 15,
+          "requestsWithTools": 13,
+          "firstWorkInput": 7363,
+          "knownProviderInput": 160213,
+          "knownProviderOutput": 4960,
+          "knownProviderTotal": 165173,
+          "providerUsageComplete": true,
+          "elapsedMs": 40048,
+          "totalWallMs": 41373,
+          "answer": "处理完成，所有文件都已重新读取，内容也已核对：\n\n| 输入 | 原值 | 输出 | 内容 |\n|---|---|---|---|\n| a.txt | 19 | out-a.txt | 38\\n |\n| b.txt | 23 | out-b.txt | 46\\n |\n| c.txt | 41 | out-c.txt | 82\\n |\n| d.txt | 47 | out-d.txt | 94\\n |\n| e.txt | 53 | out-e.txt | 106\\n |\n| f.txt | 61 | out-f.txt | 122\\n |\n\n六个结果的总和：**488**（244×2；逐项相加 38+46+82+94+106+122，结果一致）。\n\nout-a.txt 到 out-f.txt 这六个输出文件各含一个数字加一个 LF 换行，字节数为 3 或 4。a.txt 到 f.txt 这六个输入文件没有被修改，保持原样。",
+          "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v4-low-2026-11-09T05-31-24-951Z-1fb1dc\\batch_io-1.json"
+        },
+        {
+          "case": "greeting",
+          "repeat": 1,
+          "originalPassed": true,
+          "acceptanceLevel": "greeting",
+          "passed": true,
+          "runStatus": "succeeded",
+          "failedChecks": [],
+          "checks": {
+            "answered": true
+          },
+          "totalProviderRequests": 3,
+          "requestsWithTools": 1,
+          "firstWorkInput": 7309,
+          "knownProviderInput": 7986,
+          "knownProviderOutput": 65,
+          "knownProviderTotal": 8051,
+          "providerUsageComplete": true,
+          "elapsedMs": 1776,
+          "totalWallMs": 3217,
+          "answer": "你好，很高兴见到你！有什么我可以帮你的吗？",
+          "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v4-low-2026-11-09T05-31-24-951Z-1fb1dc\\greeting-1.json"
+        }
+      ]
+    },
+    {
+      "label": "batch-v5-compat",
+      "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v5-compat-2026-11-09T05-51-55-135Z-49c69c\\evidence.json",
+      "sourceTreeSha256": "c5e703851641894f701ee2674755faf85fa58964ab87201066ad8ea0139db1b8",
+      "model": {
+        "provider": "deepseek",
+        "modelId": "deepseek-v4.1-flash-1017",
+        "apiFormat": "auto",
+        "endpointHost": "token-plan.cn-beijing.maas.aliyuncs.com",
+        "capabilities": {
+          "vision": true,
+          "thinking": true,
+          "contextWindow": 256000
+        }
+      },
+      "thinking": "low",
+      "startedAt": "2026-11-09T05:51:55.142Z",
+      "finishedAt": "2026-11-09T05:53:02.990Z",
+      "cases": [
+        {
+          "case": "greeting",
+          "repeat": 1,
+          "originalPassed": true,
+          "acceptanceLevel": "greeting",
+          "passed": true,
+          "runStatus": "succeeded",
+          "failedChecks": [],
+          "checks": {
+            "answered": true
+          },
+          "totalProviderRequests": 3,
+          "requestsWithTools": 1,
+          "firstWorkInput": 7490,
+          "knownProviderInput": 8166,
+          "knownProviderOutput": 73,
+          "knownProviderTotal": 8239,
+          "providerUsageComplete": true,
+          "elapsedMs": 2884,
+          "totalWallMs": 4330,
+          "answer": "你好！很高兴见到你，有什么我可以帮忙的吗？",
+          "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v5-compat-2026-11-09T05-51-55-135Z-49c69c\\greeting-1.json"
+        },
+        {
+          "case": "files_crlf_bom",
+          "repeat": 1,
+          "originalPassed": true,
+          "acceptanceLevel": "final outcome; may include repairs",
+          "passed": true,
+          "runStatus": "succeeded",
+          "failedChecks": [],
+          "checks": {
+            "exists": true,
+            "exact": true,
+            "inputEdited": true,
+            "sha256": "063ddcef8951a712c429cfee0fc31409d58f8ae46b9ca7fb58cbcd897dd8ecd7",
+            "reportedHashCorrect": true,
+            "expectedBytes": 32,
+            "actualBytes": 32
+          },
+          "totalProviderRequests": 11,
+          "requestsWithTools": 9,
+          "firstWorkInput": 7528,
+          "knownProviderInput": 80168,
+          "knownProviderOutput": 2867,
+          "knownProviderTotal": 83035,
+          "providerUsageComplete": true,
+          "elapsedMs": 30390,
+          "totalWallMs": 31671,
+          "answer": "已完成。\n\n- `input.txt` 已原地替换：`beta` → `gamma`，其余内容（UTF-8 BOM、CRLF 换行、末尾空行、emoji）均原样保留。\n- `output.txt` 为该文件按字节原样复制，内容与原文件逐字节一致。\n- 校验结果：两者 SHA-256 相同，均为 `063ddcef8951a712c429cfee0fc31409d58f8ae46b9ca7fb58cbcd897dd8ecd7`（32 字节）。\n\n`output.txt` 的 SHA-256：**063ddcef8951a712c429cfee0fc31409d58f8ae46b9ca7fb58cbcd897dd8ecd7**",
+          "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v5-compat-2026-11-09T05-51-55-135Z-49c69c\\files_crlf_bom-1.json"
+        },
+        {
+          "case": "files_no_eol",
+          "repeat": 1,
+          "originalPassed": true,
+          "acceptanceLevel": "final outcome; may include repairs",
+          "passed": true,
+          "runStatus": "succeeded",
+          "failedChecks": [],
+          "checks": {
+            "exists": true,
+            "exact": true,
+            "inputEdited": true,
+            "sha256": "20d15f2eca307c50db933d1a89c3f5fdb69e49d73f09e8832c5a8edc1e1d195a",
+            "reportedHashCorrect": true,
+            "expectedBytes": 25,
+            "actualBytes": 25
+          },
+          "totalProviderRequests": 11,
+          "requestsWithTools": 9,
+          "firstWorkInput": 7520,
+          "knownProviderInput": 78664,
+          "knownProviderOutput": 2100,
+          "knownProviderTotal": 80764,
+          "providerUsageComplete": true,
+          "elapsedMs": 27099,
+          "totalWallMs": 28915,
+          "answer": "已完成：`input.txt` 中的 `beta` 已原地替换为 `gamma`，其他内容保持原样，包括无结尾换行（最后一行末尾仍是两个空格），并另存为 `output.txt`。\n\n- 替换后 `input.txt` 的 SHA-256：`20d15f2eca307c50db933d1a89c3f5fdb69e49d73f09e8832c5a8edc1e1d195a`\n- `output.txt` 大小 25 字节，UTF-8、无 BOM、LF 换行、无结尾换行\n- `output.txt` 的 SHA-256：`20d15f2eca307c50db933d1a89c3f5fdb69e49d73f09e8832c5a8edc1e1d195a`\n\n两者哈希一致，说明复制内容与修改后的 `input.txt` 完全相同。",
+          "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v5-compat-2026-11-09T05-51-55-135Z-49c69c\\files_no_eol-1.json"
+        }
+      ]
+    },
+    {
+      "label": "batch-v5-firstpass",
+      "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v5-firstpass-2026-11-09T05-49-53-950Z-fddb2c\\evidence.json",
+      "sourceTreeSha256": "c5e703851641894f701ee2674755faf85fa58964ab87201066ad8ea0139db1b8",
+      "model": {
+        "provider": "deepseek",
+        "modelId": "deepseek-v4.1-flash-1017",
+        "apiFormat": "auto",
+        "endpointHost": "token-plan.cn-beijing.maas.aliyuncs.com",
+        "capabilities": {
+          "vision": true,
+          "thinking": true,
+          "contextWindow": 256000
+        }
+      },
+      "thinking": "low",
+      "startedAt": "2026-11-09T05:49:53.953Z",
+      "finishedAt": "2026-11-09T05:50:39.312Z",
+      "cases": [
+        {
+          "case": "batch_io_firstpass",
+          "repeat": 1,
+          "originalPassed": false,
+          "acceptanceLevel": "first-pass: no corrective writes",
+          "passed": true,
+          "acceptanceRecheck": "The unchanged-input requirement permits one post-write batch verifying unique expected inputs and/or outputs against their known hashes.",
+          "changedChecks": [
+            "atMostOneBatchedVerification"
+          ],
+          "originalEvidencePreserved": true,
+          "runStatus": "succeeded",
+          "failedChecks": [],
+          "checks": {
+            "inputsUnchanged": true,
+            "sixExactOutputs": true,
+            "sumCorrect": true,
+            "sixReadsInOneModelResponse": true,
+            "sixWritesInOneModelResponse": true,
+            "sixInitialReadsSucceededTogether": true,
+            "sixFirstWritesExplicitLF": true,
+            "sixFirstWriteArgumentsExact": true,
+            "sixFirstWriteReceiptsMatch": true,
+            "sixFirstWritesSucceededTogether": true,
+            "noCorrectiveFileMutations": true,
+            "atMostOneBatchedVerification": true
+          },
+          "totalProviderRequests": 8,
+          "requestsWithTools": 6,
+          "firstWorkInput": 7560,
+          "knownProviderInput": 61563,
+          "knownProviderOutput": 2250,
+          "knownProviderTotal": 63813,
+          "providerUsageComplete": true,
+          "elapsedMs": 20836,
+          "totalWallMs": 22161,
+          "answer": "六个文件已读取并完成乘 2 计算，结果写入 out-a.txt 到 out-f.txt，每个文件只含一个结果数字和一个 LF 换行：\n\n| 输入 | 原值 | 输出 | 结果 |\n|---|---|---|---|\n| a.txt | 19 | out-a.txt | 38 |\n| b.txt | 23 | out-b.txt | 46 |\n| c.txt | 41 | out-c.txt | 82 |\n| d.txt | 47 | out-d.txt | 94 |\n| e.txt | 53 | out-e.txt | 106 |\n| f.txt | 61 | out-f.txt | 122 |\n\n**六个结果的总和：488**\n\n原文件 a.txt 到 f.txt 未被修改；重新读取后，它们的 sha256 与原值一致，内容仍为 19、23、41、47、53、61。",
+          "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v5-firstpass-2026-11-09T05-49-53-950Z-fddb2c\\batch_io_firstpass-1.json"
+        },
+        {
+          "case": "batch_io_firstpass",
+          "repeat": 2,
+          "originalPassed": true,
+          "acceptanceLevel": "first-pass: no corrective writes",
+          "passed": true,
+          "acceptanceRecheck": "The unchanged-input requirement permits one post-write batch verifying unique expected inputs and/or outputs against their known hashes.",
+          "changedChecks": [],
+          "originalEvidencePreserved": true,
+          "runStatus": "succeeded",
+          "failedChecks": [],
+          "checks": {
+            "inputsUnchanged": true,
+            "sixExactOutputs": true,
+            "sumCorrect": true,
+            "sixReadsInOneModelResponse": true,
+            "sixWritesInOneModelResponse": true,
+            "sixInitialReadsSucceededTogether": true,
+            "sixFirstWritesExplicitLF": true,
+            "sixFirstWriteArgumentsExact": true,
+            "sixFirstWriteReceiptsMatch": true,
+            "sixFirstWritesSucceededTogether": true,
+            "noCorrectiveFileMutations": true,
+            "atMostOneBatchedVerification": true
+          },
+          "totalProviderRequests": 5,
+          "requestsWithTools": 3,
+          "firstWorkInput": 7566,
+          "knownProviderInput": 29350,
+          "knownProviderOutput": 1628,
+          "knownProviderTotal": 30978,
+          "providerUsageComplete": true,
+          "elapsedMs": 17356,
+          "totalWallMs": 19288,
+          "answer": "读取与计算已完成，输入文件未改动。\n\n| 输入 | 原值 | 输出 | 结果 |\n|---|---|---|---|\n| a.txt | 19 | out-a.txt | 38 |\n| b.txt | 23 | out-b.txt | 46 |\n| c.txt | 41 | out-c.txt | 82 |\n| d.txt | 47 | out-d.txt | 94 |\n| e.txt | 53 | out-e.txt | 106 |\n| f.txt | 61 | out-f.txt | 122 |\n\n六个结果的总和为 **488**。校验：原值合计为 244，乘 2 后得到 488，与逐个相加一致。每个输出文件只写入结果数字和一个 LF 换行，字节数分别为 3、3、3、3、4、4。",
+          "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v5-firstpass-2026-11-09T05-49-53-950Z-fddb2c\\batch_io_firstpass-2.json"
+        }
+      ]
+    },
+    {
+      "label": "batch-v6-firstpass",
+      "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v6-firstpass-2026-11-09T06-04-29-062Z-75a2b7\\evidence.json",
+      "sourceTreeSha256": "5ecdf9460584b6ce56542849d2b13b772ec836cd6835db58213365ed7222ce25",
+      "model": {
+        "provider": "deepseek",
+        "modelId": "deepseek-v4.1-flash-1017",
+        "apiFormat": "auto",
+        "endpointHost": "token-plan.cn-beijing.maas.aliyuncs.com",
+        "capabilities": {
+          "vision": true,
+          "thinking": true,
+          "contextWindow": 256000
+        }
+      },
+      "thinking": "low",
+      "startedAt": "2026-11-09T06:04:29.065Z",
+      "finishedAt": "2026-11-09T06:05:25.065Z",
+      "cases": [
+        {
+          "case": "batch_io_firstpass",
+          "repeat": 1,
+          "originalPassed": true,
+          "acceptanceLevel": "first-pass: no corrective writes",
+          "passed": true,
+          "runStatus": "succeeded",
+          "failedChecks": [],
+          "checks": {
+            "inputsUnchanged": true,
+            "sixExactOutputs": true,
+            "sumCorrect": true,
+            "sixReadsInOneModelResponse": true,
+            "sixWritesInOneModelResponse": true,
+            "maxReadBatch": 6,
+            "maxWriteBatch": 6,
+            "proposedReadTargets": 6,
+            "proposedWriteTargets": 6,
+            "sixInitialReadsSucceededTogether": true,
+            "sixFirstWritesExplicitLF": true,
+            "sixFirstWriteArgumentsExact": true,
+            "sixFirstWriteReceiptsMatch": true,
+            "sixFirstWritesSucceededTogether": true,
+            "noCorrectiveFileMutations": true,
+            "atMostOneBatchedVerification": true,
+            "firstWriteEvidence": [
+              {
+                "path": "out-a.txt",
+                "callId": "toolu_9a0aeda153c3425aaa23263b",
+                "expectedHash": "sha256:a2c6c14110a317833ac8f2fbae7080ee844af7469b2aa702876548dcf4c58077",
+                "explicitLF": true,
+                "argumentsExact": true,
+                "receiptMatches": true,
+                "batch": 1
+              },
+              {
+                "path": "out-b.txt",
+                "callId": "toolu_16ecbb4079104d5a9a66fc21",
+                "expectedHash": "sha256:a5331f18877e9e1543361e44b4cb0a1f5f0ed5f8297d850bf1fcc68bd7a3ab5f",
+                "explicitLF": true,
+                "argumentsExact": true,
+                "receiptMatches": true,
+                "batch": 1
+              },
+              {
+                "path": "out-c.txt",
+                "callId": "toolu_20c272fe3a5b4e02942f1f93",
+                "expectedHash": "sha256:6950980e3aca96f4dc400eb2e47cc5c343e0d3f483a4e70adcae1d7e6bb22d9c",
+                "explicitLF": true,
+                "argumentsExact": true,
+                "receiptMatches": true,
+                "batch": 1
+              },
+              {
+                "path": "out-d.txt",
+                "callId": "toolu_93ffee1d25a2488896aab2b6",
+                "expectedHash": "sha256:6fc16b03d8c15b9885876848a301a01816cccaf7b48e74f2b51db99c007a3bd5",
+                "explicitLF": true,
+                "argumentsExact": true,
+                "receiptMatches": true,
+                "batch": 1
+              },
+              {
+                "path": "out-e.txt",
+                "callId": "toolu_36136280e2d9409d97149c99",
+                "expectedHash": "sha256:79f0cdc11a64b21e76816c25cc0d066a873134770fba891b54e01445c2620c4c",
+                "explicitLF": true,
+                "argumentsExact": true,
+                "receiptMatches": true,
+                "batch": 1
+              },
+              {
+                "path": "out-f.txt",
+                "callId": "toolu_c8ffeec1122d4ed0a13c5997",
+                "expectedHash": "sha256:03e5575136ba25c6c8e6e4260e7e1ed1072a27472f41a43188f976a580f285b2",
+                "explicitLF": true,
+                "argumentsExact": true,
+                "receiptMatches": true,
+                "batch": 1
+              }
+            ],
+            "verificationBatchCount": 0
+          },
+          "batches": [
+            [
+              {
+                "name": "read_file",
+                "path": "a.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "b.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "c.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "d.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "e.txt",
+                "succeeded": true
+              },
+              {
+                "name": "read_file",
+                "path": "f.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "write_file",
+                "path": "out-a.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-b.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-c.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-d.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-e.txt",
+                "succeeded": true
+              },
+              {
+                "name": "write_file",
+                "path": "out-f.txt",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "load_tools",
+                "succeeded": true
+              }
+            ],
+            [
+              {
+                "name": "deliver_files",
+                "succeeded": true
+              }
+            ]
+          ],
+          "totalProviderRequests": 5,
+          "requestsWithTools": 5,
+          "firstWorkInput": 7474,
+          "knownProviderInput": 47810,
+          "knownProviderOutput": 1480,
+          "knownProviderTotal": 49290,
+          "providerUsageComplete": true,
+          "elapsedMs": 17287,
+          "totalWallMs": 18131,
+          "answer": "已完成：六个输入分别是 19、23、41、47、53、61，翻倍结果依次为：\n\n| 文件 | 原值 | 结果 |\n|---|---|---|\n| out-a.txt | 19 | 38 |\n| out-b.txt | 23 | 46 |\n| out-c.txt | 41 | 82 |\n| out-d.txt | 47 | 94 |\n| out-e.txt | 53 | 106 |\n| out-f.txt | 61 | 122 |\n\n每个输出文件只包含结果数字和一个 LF 换行，分别为 3 或 4 字节；六个输入文件均保持原样，未被修改。\n\n**六个结果的总和为 488**。按原值校验：输入总和为 244，244 × 2 = 488，结果一致。",
+          "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v6-firstpass-2026-11-09T06-04-29-062Z-75a2b7\\batch_io_firstpass-1.json"
+        },
+        {
+          "case": "greeting",
+          "repeat": 1,
+          "originalPassed": true,
+          "acceptanceLevel": "greeting",
+          "passed": true,
+          "runStatus": "succeeded",
+          "failedChecks": [],
+          "checks": {
+            "answered": true
+          },
+          "totalProviderRequests": 1,
+          "requestsWithTools": 1,
+          "firstWorkInput": 7408,
+          "knownProviderInput": 7408,
+          "knownProviderOutput": 30,
+          "knownProviderTotal": 7438,
+          "providerUsageComplete": true,
+          "elapsedMs": 3045,
+          "totalWallMs": 3893,
+          "answer": "你好！很高兴见到你，有什么我可以帮忙的，随时告诉我。",
+          "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v6-firstpass-2026-11-09T06-04-29-062Z-75a2b7\\greeting-1.json"
+        },
+        {
+          "case": "files_crlf_bom_firstpass",
+          "repeat": 1,
+          "originalPassed": true,
+          "acceptanceLevel": "first-pass: no corrective writes",
+          "passed": true,
+          "runStatus": "succeeded",
+          "failedChecks": [],
+          "checks": {
+            "exists": true,
+            "exact": true,
+            "inputEdited": true,
+            "reportedHashCorrect": true,
+            "inputEditedOnce": true,
+            "inputEditCompletedBeforeCopy": true,
+            "firstOutputUsesVersionedCopy": true,
+            "modifiedSourceVersionObservedBeforeCopy": true,
+            "firstOutputReceiptMatches": true,
+            "noOutputCorrection": true,
+            "sha256": "063ddcef8951a712c429cfee0fc31409d58f8ae46b9ca7fb58cbcd897dd8ecd7",
+            "expectedBytes": 32,
+            "actualBytes": 32,
+            "firstCopyEvidence": {
+              "callId": "toolu_aa7be26d5c9748509ace64f6",
+              "referencedSourceCallId": "toolu_60705211796c45db89dd9da6",
+              "sourceExpectedHash": "sha256:063ddcef8951a712c429cfee0fc31409d58f8ae46b9ca7fb58cbcd897dd8ecd7",
+              "resultExpectedHash": "sha256:063ddcef8951a712c429cfee0fc31409d58f8ae46b9ca7fb58cbcd897dd8ecd7"
+            }
+          },
+          "totalProviderRequests": 4,
+          "requestsWithTools": 4,
+          "firstWorkInput": 7454,
+          "knownProviderInput": 32044,
+          "knownProviderOutput": 929,
+          "knownProviderTotal": 32973,
+          "providerUsageComplete": true,
+          "elapsedMs": 12317,
+          "totalWallMs": 13157,
+          "answer": "已完成：\n\n- `input.txt` 已原地把 `beta` 替换为 `gamma`。这份文件保持 UTF-8 BOM、CRLF 换行和两处尾部空行，其余内容不变。\n- `output.txt` 已通过字节级复制生成；复制后的字节校验一致，文件大小 32 字节。\n- `output.txt` 的 SHA-256 为：`063ddcef8951a712c429cfee0fc31409d58f8ae46b9ca7fb58cbcd897dd8ecd7`",
+          "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v6-firstpass-2026-11-09T06-04-29-062Z-75a2b7\\files_crlf_bom_firstpass-1.json"
+        },
+        {
+          "case": "files_no_eol_firstpass",
+          "repeat": 1,
+          "originalPassed": true,
+          "acceptanceLevel": "first-pass: no corrective writes",
+          "passed": true,
+          "runStatus": "succeeded",
+          "failedChecks": [],
+          "checks": {
+            "exists": true,
+            "exact": true,
+            "inputEdited": true,
+            "reportedHashCorrect": true,
+            "inputEditedOnce": true,
+            "inputEditCompletedBeforeCopy": true,
+            "firstOutputUsesVersionedCopy": true,
+            "modifiedSourceVersionObservedBeforeCopy": true,
+            "firstOutputReceiptMatches": true,
+            "noOutputCorrection": true,
+            "sha256": "20d15f2eca307c50db933d1a89c3f5fdb69e49d73f09e8832c5a8edc1e1d195a",
+            "expectedBytes": 25,
+            "actualBytes": 25,
+            "firstCopyEvidence": {
+              "callId": "toolu_cb01b4b1413b44b9a8c1eb08",
+              "referencedSourceCallId": "toolu_9b6aac631475440c83a2141b",
+              "sourceExpectedHash": "sha256:20d15f2eca307c50db933d1a89c3f5fdb69e49d73f09e8832c5a8edc1e1d195a",
+              "resultExpectedHash": "sha256:20d15f2eca307c50db933d1a89c3f5fdb69e49d73f09e8832c5a8edc1e1d195a"
+            }
+          },
+          "totalProviderRequests": 6,
+          "requestsWithTools": 6,
+          "firstWorkInput": 7458,
+          "knownProviderInput": 46767,
+          "knownProviderOutput": 928,
+          "knownProviderTotal": 47695,
+          "providerUsageComplete": true,
+          "elapsedMs": 16206,
+          "totalWallMs": 17038,
+          "answer": "已完成。\n\n- `input.txt` 原地替换：唯一一处 `beta` → `gamma`，其余内容（含 emoji、行尾空格、无末尾换行）保持不变。\n- 复制保存为 `output.txt`，复制校验通过（copyVerified: true）。\n- `output.txt` 的 SHA-256：`20d15f2eca307c50db933d1a89c3f5fdb69e49d73f09e8832c5a8edc1e1d195a`（25 字节，UTF-8，无 BOM，LF 换行）。",
+          "evidencePath": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\read-batch-20261109\\live\\batch-v6-firstpass-2026-11-09T06-04-29-062Z-75a2b7\\files_no_eol_firstpass-1.json"
+        }
+      ]
+    }
+  ]
+}

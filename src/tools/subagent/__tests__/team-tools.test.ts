@@ -17,8 +17,11 @@ import { ToolRegistry } from '../../../core/tool-registry/index.js'
 import { WorkspaceManager, workspaceManager } from '../../../workspace/index.js'
 import { subagentDirectoryTool, subagentFollowupTool, subagentRequestInputTool, buildSubagentTeamContext } from '../team-tools.js'
 import { executeSubagent } from '../subagent-tool.js'
+import { readFileTool, writeFileTool } from '../../file/super-file-tool.js'
+import { buildRuntimeCapabilities, buildRuntimeCapabilitiesPrompt } from '../../../core/runtime-capabilities.js'
+import { setSecurityMode, clearSecurityMode } from '../../../security/policy-engine.js'
 
-const model = vi.hoisted(() => ({ calls: 0, histories: [] as string[] }))
+const model = vi.hoisted(() => ({ calls: 0, histories: [] as string[], checkChild: undefined as ((child: AgentContext) => Promise<void>) | undefined }))
 vi.mock('../../../core/llm-adapter/resolve-model.js', () => ({
   resolveModelConfig: async () => ({ model: 'scripted', provider: 'fixture', capabilities: { contextWindow: 100_000 } }),
   createAdapterFromResolved: () => ({}),
@@ -26,6 +29,7 @@ vi.mock('../../../core/llm-adapter/resolve-model.js', () => ({
 vi.mock('../../../core/agent-loop/react.js', () => ({ ReActStrategy: class {
   async *run(task: string, child: AgentContext) {
     model.calls++
+    await model.checkChild?.(child)
     model.histories.push(JSON.stringify(await child.history.getHistory(child)))
     await child.history.append({ id: `followup-user-${child.runId}`, role: 'user', content: task }, child)
     await child.history.append({ id: `followup-answer-${child.runId}`, role: 'assistant', content: 'Verified follow-up' }, child)
@@ -35,16 +39,22 @@ vi.mock('../../../core/agent-loop/react.js', () => ({ ReActStrategy: class {
 } }))
 
 let directory: string, db: LocalSqliteProcessClient, store: SubagentStore, runner: runners.SubagentRunner
-let runtime: CollaborationRuntime, owners: ExecutionOwners, parent: AgentContext
+let runtime: CollaborationRuntime, owners: ExecutionOwners, parent: AgentContext, manager: WorkspaceManager
 let id = 0
 beforeEach(async () => {
   await database.closeDb()
   fs.mkdirSync('.e2e-tmp', { recursive: true }); directory = fs.mkdtempSync(path.resolve('.e2e-tmp/team-tools-'))
   vi.stubEnv('DATA_DIR', path.join(directory, 'fixture.db')); vi.stubEnv('HISTORY_BACKEND', 'jsonl')
+  vi.stubEnv('WORKSPACE_ROOT', path.join(directory, 'scratch'))
   vi.stubEnv('AETHER_ALLOWED_WORKSPACE_ROOTS', directory); vi.stubEnv('AETHER_WORKSPACE_BINDINGS_FILE', path.join(directory, 'bindings.json'))
-  const manager = new WorkspaceManager(path.join(directory, 'scratch'))
+  manager = new WorkspaceManager(path.join(directory, 'scratch'))
   manager.bind({ tenantId: 'team', sessionId: 'parent' }, directory)
   vi.spyOn(workspaceManager, 'getWorkingDirectory').mockImplementation(scope => manager.getWorkingDirectory(scope))
+  vi.spyOn(workspaceManager, 'getPaths').mockImplementation(scope => manager.getPaths(scope))
+  vi.spyOn(workspaceManager, 'getBindingSnapshot').mockImplementation(scope => manager.getBindingSnapshot(scope))
+  vi.spyOn(workspaceManager, 'bindingReadGuard').mockImplementation((scope, expected) => manager.bindingReadGuard(scope, expected))
+  vi.spyOn(workspaceManager, 'getScratchDirectory').mockImplementation(scope => manager.getScratchDirectory(scope))
+  vi.spyOn(workspaceManager, 'resolveSafePath').mockImplementation((scope, value) => manager.resolveSafePath(scope, value))
   vi.spyOn(workspaceManager, 'inheritChildWorkspace').mockImplementation((child, source, roots) => manager.inheritChildWorkspace(child, source, roots))
   db = new LocalSqliteProcessClient({ url: 'file:' + path.join(directory, 'fixture.db').replaceAll('\\', '/') })
   vi.spyOn(database, 'getDb').mockReturnValue(db); await database.initDb()
@@ -57,9 +67,10 @@ beforeEach(async () => {
   tools.register({ name: 'subagent', description: '', parameters: {}, execute: vi.fn() })
   parent = { tenantId: 'team', sessionId: 'parent', rootSessionId: 'parent', rootRunId: root.runId, turnId: root.turnId, conversationId: root.turnId,
     workspacePaths: [directory], workspaceDir: directory, projectRoot: directory, cwd: directory, modelName: 'scripted', executionOwner, tools, history: createConversationHistory(), logger: pino({ level: 'silent' }) } as AgentContext
-  model.calls = 0; model.histories = []
+  model.calls = 0; model.histories = []; model.checkChild = undefined
 })
 afterEach(async () => {
+  clearSecurityMode('team', 'parent')
   await database.closeDb(); await db.closeWithReceipt(); vi.restoreAllMocks(); vi.unstubAllEnvs()
   if (path.dirname(directory) !== path.resolve('.e2e-tmp') || !path.basename(directory).startsWith('team-tools-')) throw new Error('Unsafe test cleanup')
   fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 })
@@ -69,11 +80,11 @@ async function anchor(name = 'subagent_followup') {
   parent.currentToolCallId = `tool-${++id}`; parent.currentMessageId = `message-${id}`
   await parent.history.append({ id: parent.currentMessageId, role: 'assistant', content: '', toolCall: { id: parent.currentToolCallId, name, args: {} }, ...{ conversationId: parent.turnId } }, parent)
 }
-async function seed() {
+async function seed(legacyWorkspace = false, workspacePaths = [directory]) {
   await anchor('subagent_start')
   return runner.run({ tenantId: parent.tenantId, parentSessionId: 'parent', rootSessionId: 'parent', parentConversationId: parent.turnId!,
     parentMessageId: parent.currentMessageId!, parentToolCallId: parent.currentToolCallId!, task: 'Build chart component', description: 'Chart executor', modelId: 'scripted',
-    continuation: { builtinRole: 'executor', builtinRoleVersion: 1, readOnly: false, systemPrompt: 'PRIVATE_PROMPT', toolNames: [], workspacePaths: [directory] } }, parent, async execution => {
+    continuation: { builtinRole: 'executor', builtinRoleVersion: 1, readOnly: false, systemPrompt: 'PRIVATE_PROMPT', toolNames: [], workspacePaths: legacyWorkspace ? [] : workspacePaths, ...(legacyWorkspace ? { projectRoot: directory, cwd: directory } : {}) } }, parent, async execution => {
       await parent.history.append({ id: 'retained-context', role: 'assistant', content: 'Chart uses the existing canvas API' }, { tenantId: 'team', sessionId: execution.snapshot.childSessionId })
       await execution.observer.onOutcome({ status: 'succeeded', output: 'Chart completed' })
     })
@@ -91,6 +102,26 @@ async function questioningChild() {
 }
 
 describe('persistent child directory and follow-up', () => {
+  it.each([false, true])('rejects no-task follow-ups before mailbox delivery or admission (active=%s)', async active => {
+    const original = await seed()
+    if (active) await runtime.admitChild(owners.producerForExecution(parent.executionOwner!), {
+      tenantId: 'team', parentSessionId: 'parent', rootSessionId: 'parent', parentConversationId: parent.turnId!,
+      parentMessageId: 'active-empty-guard', parentToolCallId: 'active-empty-guard', task: 'Active task',
+      description: 'Active task', modelId: 'scripted', resumeFromRunId: original.runId,
+    })
+    const before = await store.listRunsForParent('team', 'parent')
+    const send = vi.spyOn(runtime, 'send'), reserve = vi.spyOn(store, 'reserveFollowup')
+    await anchor()
+    for (const message of ['', ' \n\t', '!', '！？……', '\u200b\u200d', '👍✨']) {
+      const result = await subagentFollowupTool.execute({ childSessionId: original.childSessionId, message }, parent)
+      expect(result.success, message).toBe(false)
+    }
+    expect(send).not.toHaveBeenCalled()
+    expect(reserve).not.toHaveBeenCalled()
+    expect(await store.listRunsForParent('team', 'parent')).toEqual(before)
+    expect(model.calls).toBe(0)
+  })
+
   it('captures the authoritative bound workspace when a new request omits workspace paths', async () => {
     await anchor('subagent_start')
     const result = await executeSubagent({ builtinRole: 'executor', task: 'Build in the existing workspace' }, {
@@ -153,10 +184,106 @@ describe('persistent child directory and follow-up', () => {
     expect((await store.listChildSessionsPage('other', 'parent')).items).toHaveLength(0)
     expect(await buildSubagentTeamContext(parent)).toContain(first.childSessionId)
     await anchor()
+    const narrower = path.join(directory, 'narrower'); fs.mkdirSync(narrower)
+    manager.bind(parent, narrower)
     expect((await subagentFollowupTool.execute({ childSessionId: first.childSessionId, message: 'next' }, { ...parent, workspacePaths: [] })).success).toBe(false)
     expect((await subagentFollowupTool.execute({ childSessionId: 'not-owned', message: 'next' }, parent)).success).toBe(false)
     const publicView = await store.getRunView('team', first.runId)
     expect(publicView?.continuation).toEqual({ readOnly: false, builtinRole: 'executor', builtinRoleVersion: 1 })
+  })
+
+  it.each([undefined, []])('discovers and follows up retained children when request roots are %s', async workspacePaths => {
+    const original = await seed()
+    const reconnected = { ...parent, workspacePaths }
+    const directoryResult = await subagentDirectoryTool.execute({}, reconnected)
+    expect(directoryResult.success, directoryResult.output).toBe(true)
+    expect(JSON.parse(directoryResult.output).items[0]).toMatchObject({ canResume: true })
+    await anchor()
+    const result = await subagentFollowupTool.execute({ childSessionId: original.childSessionId, message: 'Add keyboard navigation' }, { ...parent, workspacePaths })
+    expect(result.success, result.output).toBe(true)
+    expect(await runner.waitOwned(parent, JSON.parse(result.output).runId, { timeoutMs: 3000 })).toMatchObject({ state: 'completed', run: { status: 'succeeded' } })
+  })
+
+  it('resumes a legacy default-workspace child using its persisted project root with no request paths', async () => {
+    const original = await seed(true)
+    const reconnected = { ...parent, workspacePaths: undefined }
+    const directoryResult = await subagentDirectoryTool.execute({}, reconnected)
+    expect(JSON.parse(directoryResult.output).items[0]).toMatchObject({ canResume: true })
+    await anchor('subagent')
+    const result = await executeSubagent({ resumeRunId: original.runId, task: 'Continue the chart work' }, { ...parent, workspacePaths: [] }, { asynchronous: true })
+    expect(result.success, result.output).toBe(true)
+    expect(await runner.waitOwned(parent, JSON.parse(result.output).runId, { timeoutMs: 3000 })).toMatchObject({ state: 'completed', run: { status: 'succeeded' } })
+  })
+
+  it('rejects directory results if the binding epoch changes during database access', async () => {
+    await seed()
+    const original = store.listChildSessionsPage.bind(store)
+    vi.spyOn(store, 'listChildSessionsPage').mockImplementation(async (...args) => {
+      const page = await original(...args)
+      manager.bind(parent, directory)
+      return page
+    })
+    const result = await subagentDirectoryTool.execute({}, parent)
+    expect(result.success).toBe(false)
+    expect(result.output).toContain('binding changed')
+  })
+
+  it('keeps the real bound relative root while sharing an absolute parent output path with an owned child', async () => {
+    const project = path.join(directory, 'selected-project'), stale = path.join(directory, 'stale-request-root')
+    fs.mkdirSync(project); fs.mkdirSync(stale)
+    manager.bind(parent, project)
+    setSecurityMode('team', 'parent', 'safe')
+    // Reconnect left descriptive fields stale; the persisted selection governs
+    // both actual filesystem dispatch and the child capability, not ctx.cwd.
+    parent.workspacePaths = []; parent.projectRoot = stale; parent.cwd = stale
+    const output = manager.getScratchDirectory(parent)
+    const draftPath = path.join(output, 'deliverables', 'draft.md')
+    const shared = await writeFileTool.execute({ path: draftPath, data: '共同事实：只生成分工产物。', expectedHash: 'missing' }, parent)
+    expect(shared.success, shared.output).toBe(true)
+    const local = await writeFileTool.execute({ path: 'deliverables/draft.md', data: '项目内同名文件，不是共享草稿。', expectedHash: 'missing' }, parent)
+    expect(local.success, local.output).toBe(true)
+    expect(fs.readFileSync(draftPath, 'utf8')).toBe('共同事实：只生成分工产物。')
+    expect(fs.readFileSync(path.join(project, 'deliverables/draft.md'), 'utf8')).toContain('项目内同名')
+    const outside = path.join(directory, 'outside.txt'); fs.writeFileSync(outside, 'not granted')
+    model.checkChild = async child => {
+      expect(manager.getWorkingDirectory(child)).toBe(project)
+      expect(buildRuntimeCapabilities(child).environment.cwd).toBe(project)
+      expect(buildRuntimeCapabilitiesPrompt(child)).toContain('"relativePathRoot":' + JSON.stringify(project))
+      expect(manager.getPaths(child)).toContain(output)
+      const absolute = await readFileTool.execute({ path: draftPath, mode: 'exact' }, child)
+      expect(absolute.success, absolute.output).toBe(true)
+      expect(absolute.output).toContain('共同事实')
+      const relative = await readFileTool.execute({ path: 'deliverables/draft.md', mode: 'exact' }, child)
+      expect(relative.success, relative.output).toBe(true)
+      expect(relative.output).toContain('项目内同名')
+      expect((await readFileTool.execute({ path: outside }, child)).success).toBe(false)
+      expect(() => manager.resolveSafePath(child, path.join(stale, 'private.txt'))).toThrow('outside')
+      manager.bind(parent, project) // Same root, new epoch must invalidate the live child.
+      expect((await readFileTool.execute({ path: draftPath }, child)).success).toBe(false)
+    }
+    await anchor('subagent_start')
+    const result = await executeSubagent({ builtinRole: 'research', task: `共享草稿仅只读：${draftPath}；相对路径仍使用已绑定项目。` }, parent)
+    expect(result.success, result.output).toBe(true)
+    expect(model.calls).toBe(1)
+  })
+
+  it('does not reinterpret an output-first legacy permission list as the resumed child working directory', async () => {
+    const project = path.join(directory, 'project'), output = manager.getScratchDirectory(parent)
+    fs.mkdirSync(project); fs.mkdirSync(output, { recursive: true })
+    manager.bind(parent, project)
+    const original = await seed(false, [output, project])
+    model.checkChild = async child => {
+      expect(child.projectRoot).toBe(project)
+      expect(child.cwd).toBe(project)
+      expect(manager.getPaths(child)).toEqual(expect.arrayContaining([project, output]))
+      expect(manager.getPaths(child)[0]).toBe(project)
+      expect(manager.resolveSafePath(child, 'draft.md')).toBe(path.join(project, 'draft.md'))
+      expect(buildRuntimeCapabilities(child).environment.primaryWorkspace).toBe(project)
+    }
+    await anchor('subagent')
+    const result = await executeSubagent({ resumeRunId: original.runId, task: 'Continue using the shared output by absolute path' }, { ...parent, workspacePaths: [] })
+    expect(result.success, result.output).toBe(true)
+    expect(model.calls).toBe(1)
   })
 
   it('serializes follow-up reservations and keeps a retry bound to its original target and input', async () => {

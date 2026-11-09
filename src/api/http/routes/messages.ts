@@ -21,7 +21,7 @@ import { success, fail } from '../response.js'
 import { registerActiveChat, unregisterActiveChat } from './chat.js'
 import { z } from 'zod'
 import { getSessionMemorySettings, setSessionMemoryScope, type MemoryMode } from '../../../storage/memory/settings.js'
-import { buildMemoryRecallBlock, extractAndStoreMemories } from '../../../middleware/memory/index.js'
+import { buildMemoryRecallBlock, extractAndStoreMemories, reserveMemoryExtraction } from '../../../middleware/memory/index.js'
 import { CODE_AGENT_EXECUTION_PROMPT } from '../../../core/code-agent-prompt.js'
 
 // ── Validation Schemas ──────────────────────────────────────────────────────
@@ -250,7 +250,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     const skillTokens = estimateTokens(skillsPrompt)
 
     // Tool definitions: estimate separately for builtin vs MCP
-    const allToolsList = registry.list()
+    const allToolsList = registry.listForModel?.() ?? registry.list()
     const builtinToolNamesSet = new Set(toolCategories.builtinTools)
     const mcpToolNamesSet = new Set(toolCategories.mcpTools)
     const builtinToolDefsText = allToolsList.filter(t => builtinToolNamesSet.has(t.name))
@@ -284,6 +284,8 @@ export async function messagesRoutes(fastify: FastifyInstance) {
     reply.raw.on('aborted', onClientClose)
 
     async function* runAgent(): AsyncIterable<string> {
+      const memoryReservation = reserveMemoryExtraction({ tenantId, sessionId, memoryScopes: effectiveMemoryScopes })
+      let memoryExtractionScheduled = false
       // ★ 注册到全局 cancel 表，使 POST /chat/cancel 能中止此流（regenerate/edit 场景）
       registerActiveChat(tenantId, sessionId, abortController)
       try {
@@ -308,6 +310,24 @@ export async function messagesRoutes(fastify: FastifyInstance) {
         ctx.signal = abortController.signal
 
         yield* pipeline.pipe(strategy.run(prompt, ctx))
+        if (memoryReservation) {
+          memoryExtractionScheduled = true
+          setImmediate(() => {
+            void ctx.history.getByConversationId(conversationId, tenantId).then((messages) => extractAndStoreMemories({
+              extractionTracker: memoryReservation,
+              sourceTurnId: conversationId,
+              messages: messages.map((m: any) => ({
+                role: m.role as string,
+                content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+                toolCall: m.toolCall, toolCallId: m.toolCallId, metadata: m.metadata,
+              })),
+              sessionId, tenantId, memoryScopes: effectiveMemoryScopes,
+              llm: { model: currentModelName, apiKey: modelApiKey, baseUrl: modelBaseUrl, provider: modelProvider, apiFormat: modelApiFormat },
+              minImportance: 0.3,
+            })).catch((error) => reqLogger.warn({ err: error }, 'Legacy memory extraction failed silently'))
+              .finally(() => memoryReservation.close())
+          })
+        }
       } catch (err: any) {
         if (abortController.signal.aborted) {
           // 被 cancel 中止，静默退出，不输出错误信息
@@ -316,6 +336,7 @@ export async function messagesRoutes(fastify: FastifyInstance) {
         reqLogger.error({ err }, 'Agent execution error')
         yield `\n\n[System Error: ${err.message || String(err)}]`
       } finally {
+        if (!memoryExtractionScheduled) memoryReservation?.close()
         unregisterActiveChat(tenantId, sessionId, abortController)
       }
     }
@@ -339,24 +360,6 @@ export async function messagesRoutes(fastify: FastifyInstance) {
 
     await sseStream(busToIterable(streamBus), reply)
 
-    // Keep the legacy endpoint's automatic extraction semantics aligned with
-    // /chat.  Extraction is deliberately detached from the response so an LLM
-    // failure here cannot change the already delivered turn result.
-    if (effectiveMemoryScopes.length > 0) {
-      setImmediate(() => {
-        void ctx.history.getFullHistory(ctx).then((messages) => extractAndStoreMemories({
-          messages: messages.map((m: any) => ({
-            role: m.role as string,
-            content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-          })),
-          sessionId,
-          tenantId,
-          memoryScopes: effectiveMemoryScopes,
-          llm: { model: currentModelName, apiKey: modelApiKey, baseUrl: modelBaseUrl, provider: modelProvider, apiFormat: modelApiFormat },
-          minImportance: 0.3,
-        })).catch((error) => reqLogger.warn({ err: error }, 'Legacy memory extraction failed silently'))
-      })
-    }
   }
 
   // 3. 编辑用户消息并重新生成响应

@@ -60,7 +60,7 @@ describe('single-response output limit continuation', () => {
     f.ctx.inheritContext = false
     let calls = 0
     f.llm.stream = vi.fn(async function* (messages: Message[], options?: LLMAdapterOptions) {
-      expect(options!.requestInputTokenEstimate).toBe(estimateRequestInput(messages, options!.systemPrompt, options!.tools!))
+      expect(options!.requestInputTokenEstimate).toBe(estimateRequestInput(messages, options!.systemPrompt, options!.tools!, options!.requestContext))
       if (++calls === 1) yield { done: true, content: 'First part; ', reasoningContent: 'first reasoning',
         finishReason: 'length' as const, promptTokens: 20, completionTokens: 10 }
       else {

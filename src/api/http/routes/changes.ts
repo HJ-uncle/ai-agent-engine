@@ -8,6 +8,13 @@ const getTenantId = (req: FastifyRequest): string =>
 
 /** Complete scopes and file version checks live on the server, shared by all callers. */
 export async function changeRoutes(fastify: FastifyInstance) {
+  fastify.post<{ Body: RevertBatchInput }>('/changes/revert-preview', {
+    schema: { body: { type: 'object', required: ['sessionId'], additionalProperties: false, properties: {
+      sessionId: { type: 'string', minLength: 1 },
+      createdAfter: { type: 'number' }, scope: { type: 'string', enum: ['pending', 'all'] }, fromTurnId: { type: 'string', minLength: 1 }
+    } } }
+  }, async (req, reply) => reply.send(success(await store.previewRevert(getTenantId(req), req.body))))
+
   fastify.get<{ Querystring: { sessionId: string; status?: ChangeStatus; createdAfter?: number; view?: 'net' } }>('/changes', {
     schema: { querystring: { type: 'object', required: ['sessionId'], properties: {
       sessionId: { type: 'string', minLength: 1 }, status: { type: 'string', enum: ['pending', 'kept', 'reverted'] }, createdAfter: { type: 'number' }, view: { type: 'string', enum: ['net'] }
@@ -24,6 +31,7 @@ export async function changeRoutes(fastify: FastifyInstance) {
     schema: { body: { type: 'object', required: ['sessionId'], additionalProperties: false, properties: {
       sessionId: { type: 'string', minLength: 1 },
       ids: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } },
+      reviewedCommandChangeIds: { type: 'array', items: { type: 'string', minLength: 1 } },
       createdAfter: { type: 'number' }, scope: { type: 'string', enum: ['pending', 'all'] }, fromTurnId: { type: 'string', minLength: 1 }
     } } }
   }, async (req, reply) => reply.send(success(await store.revertBatch(getTenantId(req), req.body))))

@@ -36,19 +36,44 @@ afterEach(async () => {
 afterAll(async () => { await app?.close(); await closeMemoryDb(); vi.unstubAllEnvs() })
 
 describe('independent memory defaults and session inheritance', () => {
-  it('defaults global memory off and session memory on for both Work and Code', async () => {
-    expect((await prefs()).json().data).toEqual({ globalEnabled: false, sessionDefaultEnabled: true, enabled: true })
+  it('defaults both memory switches off while keeping manual enable available for Work and Code', async () => {
+    expect((await prefs()).json().data).toEqual({ globalEnabled: false, sessionDefaultEnabled: false, enabled: true })
     for (const profile of ['general', 'code']) {
       const response = await app.inject({ url: `/memory/settings?sessionId=${profile}`, headers: { ...headers(), 'x-aether-tool-profile': profile } })
-      expect(response.json().data).toMatchObject({ sessionOverride: null, sessionEnabled: true, globalEnabled: false,
-        sessionDefaultEnabled: true, effectiveScopes: ['session'], effectiveScope: 'session' })
+      expect(response.json().data).toMatchObject({ sessionOverride: null, sessionEnabled: false, globalEnabled: false,
+        sessionDefaultEnabled: false, effectiveScopes: [], effectiveScope: 'off', memoryScope: 'off' })
     }
   })
   it('can enable global and session memory together without an exclusive scope selector', async () => {
-    expect((await changePrefs({ globalEnabled: true })).statusCode).toBe(200)
+    expect((await changePrefs({ globalEnabled: true, sessionDefaultEnabled: true })).statusCode).toBe(200)
     expect((await settings()).json().data).toMatchObject({ globalEnabled: true, sessionEnabled: true, effectiveScopes: ['global', 'session'] })
     await changeSession(false)
     expect((await settings()).json().data).toMatchObject({ globalEnabled: true, sessionOverride: false, sessionEnabled: false, effectiveScopes: ['global'] })
+  })
+  it('does not opt into the other switch when saving only one preference', async () => {
+    expect((await changePrefs({ globalEnabled: true })).json().data).toMatchObject({ globalEnabled: true, sessionDefaultEnabled: false })
+    expect((await settings()).json().data.effectiveScopes).toEqual(['global'])
+    await setMemoryPreferences('tenant-b', { sessionDefaultEnabled: true })
+    expect(await getMemoryPreferences('tenant-b')).toMatchObject({ globalEnabled: false, sessionDefaultEnabled: true })
+  })
+  it('SQL defaults are closed without rewriting explicit preferences', async () => {
+    await getMemoryDb().execute({ sql: 'INSERT INTO memory_preferences(tenant_id) VALUES (?)', args: ['tenant-a'] })
+    await getMemoryDb().execute({ sql: 'INSERT INTO memory_session_settings(tenant_id,session_id) VALUES (?,?)', args: ['tenant-a', 'schema-default'] })
+    expect(await getMemoryPreferences('tenant-a')).toMatchObject({ globalEnabled: false, sessionDefaultEnabled: false })
+    expect(await getSessionMemorySettings('tenant-a', 'schema-default')).toMatchObject({ memoryScope: 'off', effectiveScopes: [] })
+    await setMemoryPreferences('tenant-a', { globalEnabled: true, sessionDefaultEnabled: true })
+    await closeMemoryDb()
+    expect(await getMemoryPreferences('tenant-a')).toMatchObject({ globalEnabled: true, sessionDefaultEnabled: true })
+    expect(await getSessionMemorySettings('tenant-a', 'new-after-reopen')).toMatchObject({ effectiveScopes: ['global', 'session'] })
+  })
+  it('restoring both defaults and session inheritance closes memory without deleting stored nodes', async () => {
+    await changePrefs({ globalEnabled: true, sessionDefaultEnabled: true }); await changeSession(true)
+    const created = await app.inject({ method: 'POST', url: '/memory/nodes', headers: headers(), payload: { summary: 'Preserve user-authored memory', scope: 'session', sessionId: 'session' } })
+    expect(created.statusCode).toBe(201)
+    await changePrefs({ globalEnabled: false, sessionDefaultEnabled: false }); await changeSession(null)
+    expect((await settings()).json().data).toMatchObject({ globalEnabled: false, sessionDefaultEnabled: false, sessionOverride: null, effectiveScopes: [] })
+    const stored = await app.inject({ url: `/memory/nodes/${created.json().data.id}?scope=session&sessionId=session`, headers: headers() })
+    expect(stored.statusCode).toBe(200); expect(stored.json().data.summary).toBe('Preserve user-authored memory')
   })
   it('applies changed defaults to inherited sessions and lets explicit choices override them', async () => {
     await changeSession(true, 'explicit-on'); await changeSession(false, 'explicit-off')
@@ -59,8 +84,8 @@ describe('independent memory defaults and session inheritance', () => {
     expect((await settings('explicit-off')).json().data).toMatchObject({ sessionOverride: false, sessionEnabled: false, effectiveScopes: [] })
   })
   it('resets a session to inheritance with null and follows future changes', async () => {
-    await changeSession(false)
-    expect((await changeSession(null)).json().data).toMatchObject({ sessionOverride: null, sessionEnabled: true })
+    await changeSession(true)
+    expect((await changeSession(null)).json().data).toMatchObject({ sessionOverride: null, sessionEnabled: false, effectiveScopes: [] })
     await changePrefs({ sessionDefaultEnabled: false })
     expect((await settings()).json().data).toMatchObject({ sessionOverride: null, sessionEnabled: false })
     await changePrefs({ sessionDefaultEnabled: true })
@@ -69,8 +94,8 @@ describe('independent memory defaults and session inheritance', () => {
   it('keeps tenant defaults and equal-named session overrides isolated', async () => {
     await changePrefs({ globalEnabled: true, sessionDefaultEnabled: false })
     await changeSession(true)
-    expect((await prefs('b')).json().data).toMatchObject({ globalEnabled: false, sessionDefaultEnabled: true })
-    expect((await settings('session', 'b')).json().data).toMatchObject({ sessionOverride: null, globalEnabled: false, effectiveScopes: ['session'] })
+    expect((await prefs('b')).json().data).toMatchObject({ globalEnabled: false, sessionDefaultEnabled: false })
+    expect((await settings('session', 'b')).json().data).toMatchObject({ sessionOverride: null, globalEnabled: false, effectiveScopes: [] })
     expect((await settings()).json().data).toMatchObject({ sessionOverride: true, globalEnabled: true, effectiveScopes: ['global', 'session'] })
   })
   it('requires a tenant or instance administrator to edit defaults', async () => {
@@ -96,19 +121,19 @@ describe('independent memory defaults and session inheritance', () => {
     expect(result.memoryScope).toBe(scope)
     expect(result.globalEnabled).toBe(false)
     expect(result.sessionOverride).toBe(scope === 'global' ? null : scope === 'session')
-    expect(result.effectiveScopes).toEqual(scope === 'off' ? [] : ['session'])
+    expect(result.effectiveScopes).toEqual(scope === 'session' ? ['session'] : [])
     await setSessionMemoryEnabled('tenant-a', 'legacy', null)
     expect((await getSessionMemorySettings('tenant-a', 'legacy')).sessionOverride).toBe(null)
   })
   it('keeps the old setter as compatibility only and does not enable global sharing', async () => {
     await setSessionMemoryScope('tenant-a', 'legacy-api', 'global')
-    expect(await getSessionMemorySettings('tenant-a', 'legacy-api')).toMatchObject({ memoryScope: 'global', globalEnabled: false, sessionOverride: null, effectiveScopes: ['session'] })
+    expect(await getSessionMemorySettings('tenant-a', 'legacy-api')).toMatchObject({ memoryScope: 'global', globalEnabled: false, sessionOverride: null, effectiveScopes: [] })
   })
 })
 
 describe('disabled server capability retains preferences and reports actionable Chinese refusals', () => {
   it('reports known disabled capability while retaining both enabled preferences', async () => {
-    await changePrefs({ globalEnabled: true }); await changeSession(true)
+    await changePrefs({ globalEnabled: true, sessionDefaultEnabled: true }); await changeSession(true)
     vi.stubEnv('ENABLE_LONG_TERM_MEMORY', 'false')
     expect((await prefs()).json().data).toMatchObject({ globalEnabled: true, sessionDefaultEnabled: true, enabled: false })
     expect((await settings()).json().data).toMatchObject({ sessionOverride: true, sessionEnabled: true, globalEnabled: true, enabled: false, effectiveScopes: [], effectiveScope: 'off' })
@@ -127,7 +152,7 @@ describe('disabled server capability retains preferences and reports actionable 
     expect(rejected.statusCode).toBe(409)
     expect(rejected.json()).toMatchObject({ data: { reason: 'MEMORY_DISABLED_BY_SERVER', sessionId: 'session', sessionOverride: false, sessionEnabled: false, effectiveScopes: [] } })
     expect((await settings()).json().data.sessionOverride).toBe(false)
-    expect((await changeSession(null)).json().data).toMatchObject({ sessionOverride: null, sessionEnabled: true, effectiveScopes: [] })
+    expect((await changeSession(null)).json().data).toMatchObject({ sessionOverride: null, sessionEnabled: false, effectiveScopes: [] })
     expect((await changeSession(false)).json().data).toMatchObject({ sessionOverride: false, effectiveScopes: [] })
   })
   it('allows disabling global and changing future-session defaults while the capability is disabled', async () => {

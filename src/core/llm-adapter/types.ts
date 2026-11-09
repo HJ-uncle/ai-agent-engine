@@ -118,6 +118,8 @@ export interface LLMAdapterOptions {
   maxTokens?: number
   temperature?: number
   systemPrompt?: string
+  /** Fresh engine state appended after history; never a durable user turn. */
+  requestContext?: string
   tools?: Tool[]
   /** Explicit user intent; kept separate from provider-specific wire parameters. */
   thinkingEnabled?: boolean

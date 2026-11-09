@@ -11,6 +11,7 @@ import { changeRoutes } from '../changes.js'
 import { rootRunStore } from '../../../../storage/root-runs/index.js'
 import { commitWriteChange, readOldSnapshot } from '../../../../tools/file/change-recorder.js'
 import type { AgentContext } from '../../../../core/agent-context/index.js'
+import { captureCreatedDirectories, missingParentDirectories } from '../../../../storage/changes/directories.js'
 
 /** Real filesystem + SQLite + HTTP: verify effects, versions, scopes and concurrency. */
 let db: LocalSqliteProcessClient
@@ -21,7 +22,8 @@ const tenant = 'd2-tenant'
 const session = 'd2-session'
 
 beforeEach(async () => {
-  fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-d2-revert-'))
+  fixture = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'aether-d2-revert-'))
+  vi.stubEnv('DATA_DIR', path.join(fixture, 'changes.db'))
   // Exercise the production transaction/connection lifecycle. libsql's raw
   // :memory: client opens a new empty database after an interactive transaction.
   db = new LocalSqliteProcessClient({ url: `file:${path.join(fixture, 'changes.db')}` })
@@ -40,7 +42,8 @@ afterEach(async () => {
   const closed = await db.closeWithReceipt()
   expect(closed.healthy, closed.errors.join('; ')).toBe(true)
   vi.restoreAllMocks()
-  if (path.dirname(fixture) !== os.tmpdir() || !path.basename(fixture).startsWith('aether-d2-revert-')) throw new Error('Unsafe fixture cleanup')
+  vi.unstubAllEnvs()
+  if (path.dirname(fixture) !== fs.realpathSync.native(os.tmpdir()) || !path.basename(fixture).startsWith('aether-d2-revert-')) throw new Error('Unsafe fixture cleanup')
   fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
 })
 
@@ -64,6 +67,205 @@ async function batch(body: Record<string, unknown> = {}, tenantId = tenant): Pro
 }
 
 describe('D2 guarded batch revert', () => {
+  it('reverts an independent mkdir and later file writes in the same turn without deleting older directories', async () => {
+    const prior = path.join(fixture, 'existing'); fs.mkdirSync(prior)
+    const run = await rootRunStore.create(tenant, session, 'fixture', [fixture], {})
+    const directory = path.join(prior, 'delivery')
+    const probe = path.join(directory, '.probe'), absent = missingParentDirectories(probe)
+    fs.mkdirSync(directory)
+    await store.recordCreatedDirectories(tenant, { sessionId: session, turnId: run.turnId }, captureCreatedDirectories(probe, absent))
+    const file = path.join(directory, 'nested', 'report.txt')
+    const snapshot = await readOldSnapshot(file)
+    fs.mkdirSync(path.dirname(file)); fs.writeFileSync(file, 'report')
+    await commitWriteChange({ tenantId: tenant, sessionId: session, turnId: run.turnId, logger: { warn: vi.fn() } } as unknown as AgentContext, file, file, snapshot)
+    const preview = await store.previewRevert(tenant, { sessionId: session, fromTurnId: run.turnId, scope: 'all' })
+    expect(preview.changes).toHaveLength(2)
+    expect(preview.changes.filter(item => item.entryType === 'directory')).toEqual([expect.objectContaining({ path: directory })])
+    const result = await batch({ fromTurnId: run.turnId, scope: 'all' })
+    expect(result).toMatchObject({ total: 2, reverted: 2, conflicts: 0, unavailable: 0 })
+    expect(result.removedDirectories).toEqual([path.dirname(file), directory])
+    expect(fs.existsSync(directory)).toBe(false)
+    expect(fs.existsSync(prior)).toBe(true)
+    expect(await batch({ fromTurnId: run.turnId, scope: 'all' })).toMatchObject({ total: 2, reverted: 0, conflicts: 0 })
+  })
+
+  it('protects other writers inside independently created directories and retries safely', async () => {
+    const directory = path.join(fixture, 'shared-folder'), probe = path.join(directory, '.probe')
+    const absent = missingParentDirectories(probe); fs.mkdirSync(directory)
+    const receipts = await store.recordCreatedDirectories(tenant, { sessionId: session }, captureCreatedDirectories(probe, absent))
+    const userFile = path.join(directory, 'user.txt'); fs.writeFileSync(userFile, 'user')
+    const result = await batch({ scope: 'all' })
+    expect(result).toMatchObject({ reverted: 0, conflicts: 1 })
+    expect(result.results[0]).toMatchObject({ entryType: 'directory', id: receipts[0].id })
+    expect(fs.readFileSync(userFile, 'utf8')).toBe('user')
+    fs.unlinkSync(userFile)
+    expect(await batch({ scope: 'all' })).toMatchObject({ reverted: 1, removedDirectories: [directory] })
+    expect(fs.existsSync(directory)).toBe(false)
+  })
+
+  it('rejects another session directory ID without disclosing its path', async () => {
+    const directory = path.join(fixture, 'private-folder'), probe = path.join(directory, '.probe')
+    const absent = missingParentDirectories(probe); fs.mkdirSync(directory)
+    const [receipt] = await store.recordCreatedDirectories(tenant, { sessionId: 'private-session' }, captureCreatedDirectories(probe, absent))
+    const result = await batch({ ids: [receipt.id] })
+    expect(result.results[0]).toEqual({ id: receipt.id, path: '', status: 'unavailable', message: '改动不存在或不属于当前会话' })
+    expect(fs.existsSync(directory)).toBe(true)
+  })
+
+  it('preserves a replaced directory or junction when reverting a standalone mkdir receipt', async () => {
+    const directory = path.join(fixture, 'owned-folder'), probe = path.join(directory, '.probe')
+    const absent = missingParentDirectories(probe); fs.mkdirSync(directory)
+    const [receipt] = await store.recordCreatedDirectories(tenant, { sessionId: session }, captureCreatedDirectories(probe, absent))
+    const moved = directory + '-moved'; fs.renameSync(directory, moved); fs.mkdirSync(directory)
+    expect(await batch({ ids: [receipt.id] })).toMatchObject({ reverted: 0, conflicts: 1, removedDirectories: [] })
+    fs.rmdirSync(directory)
+    const target = path.join(fixture, 'unrelated'); fs.mkdirSync(target)
+    fs.symlinkSync(target, directory, process.platform === 'win32' ? 'junction' : 'dir')
+    expect(await batch({ ids: [receipt.id] })).toMatchObject({ reverted: 0, conflicts: 1, removedDirectories: [] })
+    expect(fs.existsSync(moved)).toBe(true)
+    expect(fs.existsSync(target)).toBe(true)
+    expect(fs.lstatSync(directory).isSymbolicLink()).toBe(true)
+  })
+  it('previews the authoritative turn scope and only includes command observations that were reviewed', async () => {
+    const earlier = await rootRunStore.create(tenant, session, 'fixture', [fixture], {})
+    await rootRunStore.update(tenant, earlier.runId, { status: 'succeeded' })
+    const current = await rootRunStore.create(tenant, session, 'fixture', [fixture], {})
+    const observed = async (name: string, turnId: string) => {
+      const file = path.join(fixture, name)
+      fs.writeFileSync(file, name)
+      return store.record(tenant, { sessionId: session, turnId, path: file, kind: 'write', oldContent: null,
+        newContent: name, source: 'command-observation', requiresExplicitRevert: true })
+    }
+    const prior = await observed('prior.txt', earlier.turnId)
+    const first = await observed('command.txt', current.turnId)
+    const preview = (await app.inject({ method: 'POST', url: '/changes/revert-preview', payload: {
+      sessionId: session, fromTurnId: current.turnId, scope: 'all',
+    } })).json()
+    expect(preview.data).toMatchObject({ total: 1, changes: [{ id: first.id, requiresExplicitRevert: true }] })
+    expect(preview.data.changes[0]).not.toHaveProperty('newContent')
+    const raced = await observed('after-preview.txt', current.turnId)
+    const result = await batch({ fromTurnId: current.turnId, scope: 'all', reviewedCommandChangeIds: [first.id, prior.id] })
+    expect(result).toMatchObject({ total: 2, reverted: 1, unavailable: 1 })
+    expect(result.results.find(item => item.id === raced.id)?.status).toBe('unavailable')
+    expect(fs.existsSync(first.path)).toBe(false)
+    expect(fs.existsSync(prior.path)).toBe(true)
+    expect(fs.existsSync(raced.path)).toBe(true)
+    expect(await batch({ fromTurnId: current.turnId, scope: 'all', reviewedCommandChangeIds: [raced.id] })).toMatchObject({ reverted: 1, unavailable: 0 })
+  })
+
+  it('never resurrects a temporary command log before its creation has been reviewed', async () => {
+    const file = path.join(fixture, '.ae-smoke.log')
+    fs.writeFileSync(file, 'command output')
+    const created = await store.record(tenant, { sessionId: session, path: file, kind: 'write', oldContent: null,
+      newContent: 'command output', source: 'command-observation', requiresExplicitRevert: true })
+    const deleted = await mutate(file, null)
+    const unreviewed = await batch({ scope: 'all' })
+    expect(unreviewed).toMatchObject({ reverted: 0, unavailable: 2 })
+    expect(fs.existsSync(file)).toBe(false)
+    const reviewed = await batch({ scope: 'all', reviewedCommandChangeIds: [created.id] })
+    expect(reviewed).toMatchObject({ reverted: 2, unavailable: 0, conflicts: 0 })
+    expect(reviewed.results.map(item => item.id)).toEqual([deleted.id, created.id])
+    expect(fs.existsSync(file)).toBe(false)
+    expect(await batch({ scope: 'all' })).toMatchObject({ reverted: 0, unavailable: 0 })
+  })
+
+  it('finishes the already partial command-log rollback after review without replaying reverted records', async () => {
+    const file = path.join(fixture, '.ae-smoke.log')
+    fs.writeFileSync(file, 'command output')
+    const created = await store.record(tenant, { sessionId: session, path: file, kind: 'write', oldContent: null,
+      newContent: 'command output', source: 'command-observation', requiresExplicitRevert: true })
+    const deleted = await mutate(file, null)
+    expect(await batch({ ids: [deleted.id] })).toMatchObject({ reverted: 1 })
+    expect(fs.readFileSync(file, 'utf8')).toBe('command output')
+    const response = await batch({ scope: 'all', reviewedCommandChangeIds: [created.id] })
+    expect(response).toMatchObject({ reverted: 1, unavailable: 0, conflicts: 0 })
+    expect(response.results.find(item => item.id === deleted.id)?.status).toBe('already_reverted')
+    expect(fs.existsSync(file)).toBe(false)
+  })
+
+  it('removes only proven newly created empty directories and preserves preexisting empty folders', async () => {
+    const existing = path.join(fixture, 'existing')
+    fs.mkdirSync(existing)
+    const recordWrite = async (file: string) => {
+      const snapshot = await readOldSnapshot(file)
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      fs.writeFileSync(file, 'generated')
+      return commitWriteChange({ tenantId: tenant, sessionId: session, logger: { warn: vi.fn() } } as unknown as AgentContext, file, file, snapshot)
+    }
+    await recordWrite(path.join(existing, 'file.txt'))
+    const deep = path.join(fixture, 'new', 'nested')
+    const first = await recordWrite(path.join(deep, 'a.txt'))
+    const second = await recordWrite(path.join(deep, 'b.txt'))
+    const partial = await batch({ ids: [String(first.id)] })
+    expect(partial.removedDirectories).toEqual([])
+    expect(fs.existsSync(deep)).toBe(true)
+    await batch({ ids: [String(second.id)] })
+    expect(fs.existsSync(deep)).toBe(true)
+    const finished = await batch({ scope: 'all' })
+    expect(finished.removedDirectories).toEqual([deep, path.dirname(deep)])
+    expect(fs.existsSync(deep)).toBe(false)
+    expect(fs.existsSync(existing)).toBe(true)
+    expect(fs.readdirSync(existing)).toEqual([])
+  })
+
+  it('preserves user contents in created folders and removes them on a later safe retry', async () => {
+    const directory = path.join(fixture, 'new-folder'), file = path.join(directory, 'generated.txt')
+    const before = await readOldSnapshot(file)
+    fs.mkdirSync(directory); fs.writeFileSync(file, 'generated')
+    const change = await commitWriteChange({ tenantId: tenant, sessionId: session, logger: { warn: vi.fn() } } as unknown as AgentContext, file, file, before)
+    const userFile = path.join(directory, 'user.txt'); fs.writeFileSync(userFile, 'keep')
+    expect((await batch({ ids: [change.id] })).removedDirectories).toEqual([])
+    expect(fs.readFileSync(userFile, 'utf8')).toBe('keep')
+    fs.unlinkSync(userFile)
+    expect((await batch({ ids: [change.id] })).removedDirectories).toEqual([directory])
+    expect(fs.existsSync(directory)).toBe(false)
+  })
+
+  it('reports retained implicit directories as incomplete for whole-turn rollback and clears them on retry', async () => {
+    const root = await rootRunStore.create(tenant, session, 'fixture', [fixture], {})
+    const directory = path.join(fixture, 'delivery'), file = path.join(directory, 'report.txt')
+    const before = await readOldSnapshot(file)
+    fs.mkdirSync(directory); fs.writeFileSync(file, 'report')
+    await commitWriteChange({ tenantId: tenant, sessionId: session, turnId: root.turnId, logger: { warn: vi.fn() } } as unknown as AgentContext, file, file, before)
+    const userFile = path.join(directory, 'user.txt'); fs.writeFileSync(userFile, 'keep me')
+    const partial = await batch({ fromTurnId: root.turnId, scope: 'all' })
+    expect(partial).toMatchObject({ reverted: 1, conflicts: 1, removedDirectories: [] })
+    expect(partial.results.find(item => item.entryType === 'directory')).toMatchObject({ path: directory, status: 'conflict' })
+    expect(fs.existsSync(file)).toBe(false)
+    expect(fs.readFileSync(userFile, 'utf8')).toBe('keep me')
+    fs.unlinkSync(userFile)
+    const retry = await batch({ fromTurnId: root.turnId, scope: 'all' })
+    expect(retry).toMatchObject({ reverted: 0, conflicts: 0, removedDirectories: [directory] })
+    expect(fs.existsSync(directory)).toBe(false)
+  })
+
+  it('does not remove a recreated directory with the same name', async () => {
+    const directory = path.join(fixture, 'replaced'), file = path.join(directory, 'file.txt')
+    const before = await readOldSnapshot(file)
+    fs.mkdirSync(directory); fs.writeFileSync(file, 'generated')
+    const change = await commitWriteChange({ tenantId: tenant, sessionId: session, logger: { warn: vi.fn() } } as unknown as AgentContext, file, file, before)
+    fs.renameSync(directory, directory + '-original')
+    fs.mkdirSync(directory); fs.writeFileSync(file, 'generated')
+    expect((await batch({ ids: [change.id] })).removedDirectories).toEqual([])
+    expect(fs.existsSync(directory)).toBe(true)
+    expect(fs.readFileSync(path.join(directory + '-original', 'file.txt'), 'utf8')).toBe('generated')
+    expect(await batch({ scope: 'all' })).toMatchObject({ conflicts: 1, removedDirectories: [] })
+  })
+
+  it('reports a missing byte snapshot for its own file and still reverts independent paths', async () => {
+    const lostFile = path.join(fixture, 'a-lost.bin')
+    const bytes = Buffer.from([0, 255, 1])
+    fs.writeFileSync(lostFile, bytes)
+    const missing = await store.record(tenant, { sessionId: session, path: lostFile, kind: 'write', oldContent: null, newContent: null,
+      oldHash: 'missing', newHash: hashFileContent(bytes), truncated: true, newSnapshotRef: 'lost.bin' })
+    const independent = await mutate(path.join(fixture, 'z-independent.txt'), 'generated')
+    const result = await batch()
+    expect(result).toMatchObject({ total: 2, reverted: 1, unavailable: 1, failed: 0 })
+    expect(result.results.find(item => item.id === missing.id)?.status).toBe('unavailable')
+    expect(fs.readFileSync(lostFile)).toEqual(bytes)
+    expect(fs.existsSync(independent.path)).toBe(false)
+  })
+
   it('reverts A→B→C by stable sequence even when all timestamps match and input IDs are shuffled', async () => {
     const file = path.join(fixture, 'same-time.txt')
     fs.writeFileSync(file, 'A\r\n中文')

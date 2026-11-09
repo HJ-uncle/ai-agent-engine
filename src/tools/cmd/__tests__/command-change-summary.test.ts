@@ -11,6 +11,11 @@ const tracking: CommandChangeTracking = Object.freeze({ status: 'complete', root
 const parse = (output: string) => JSON.parse(output.slice(output.indexOf('{')))
 
 describe('model-facing command change summary', () => {
+  it('reports recorded directory-only changes without inventing file diffs', () => {
+    const data = parse(commandChangeSummary({ changes: [], changeTracking: { ...tracking, recordedCount: 0, recordedDirectoryCount: 2 } }))
+    expect(data.changes).toEqual([])
+    expect(data.changeTracking).toMatchObject({ recordedCount: 0, recordedDirectoryCount: 2 })
+  })
   it('keeps actionable versions and rollback boundaries without repeating attribution or UI budgets', () => {
     const job = Object.freeze({ changes: [change], changeTracking: tracking }), before = JSON.stringify(job)
     const output = commandChangeSummary(job), data = parse(output)

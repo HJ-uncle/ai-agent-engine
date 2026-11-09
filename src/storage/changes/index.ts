@@ -6,6 +6,8 @@ import { getDb } from '../sqlite/db.js'
 import { rootRunStore } from '../root-runs/index.js'
 import { canonicalFilePathSync, hashFileContent, readFileVersionSync, withFileLocks } from '../../shared/file-version.js'
 import { hasTrustedVersions, partitionChangeHistory, projectSegment, type NetFileChange, type ProjectionIssue } from './net-projection.js'
+import { removeCreatedEmptyDirectories, type CreatedDirectory } from './directories.js'
+import { CreatedDirectoryStore, type DirectoryChange, type DirectoryChangeInput } from './directory-store.js'
 
 export type { NetFileChange, ProjectionIssue } from './net-projection.js'
 
@@ -38,6 +40,7 @@ export interface FileChange {
   source?: 'command-observation'
   commandJobId?: string
   requiresExplicitRevert?: boolean
+  createdDirectories?: CreatedDirectory[]
 }
 
 export interface RecordChangeInput {
@@ -58,6 +61,7 @@ export interface RecordChangeInput {
   source?: 'command-observation'
   commandJobId?: string
   requiresExplicitRevert?: boolean
+  createdDirectories?: CreatedDirectory[]
 }
 
 export interface RevertBatchInput {
@@ -66,6 +70,8 @@ export interface RevertBatchInput {
   createdAfter?: number
   scope?: 'pending' | 'all'
   fromTurnId?: string
+  /** Only command observations explicitly shown and confirmed by the caller. */
+  reviewedCommandChangeIds?: string[]
 }
 
 export interface RevertResult {
@@ -75,6 +81,7 @@ export interface RevertResult {
   message?: string
   expectedHash?: string
   actualHash?: string
+  entryType?: 'directory'
 }
 
 export interface RevertBatchResult {
@@ -84,6 +91,12 @@ export interface RevertBatchResult {
   conflicts: number
   unavailable: number
   failed: number
+  removedDirectories?: string[]
+}
+
+export interface RevertPreviewResult {
+  total: number
+  changes: Array<Pick<FileChange, 'id' | 'path' | 'status' | 'turnId' | 'source' | 'requiresExplicitRevert'> & { entryType?: 'directory' }>
 }
 
 const MAX_CONTENT_CHARS = 100_000
@@ -127,6 +140,7 @@ function rowToChange(row: Record<string, unknown>): FileChange {
     ...(row.source === 'command-observation' ? { source: 'command-observation' as const } : {}),
     ...(row.command_job_id == null ? {} : { commandJobId: String(row.command_job_id) }),
     ...(Number(row.requires_explicit_revert) === 1 ? { requiresExplicitRevert: true } : {}),
+    ...(row.created_directories ? { createdDirectories: JSON.parse(String(row.created_directories)) as CreatedDirectory[] } : {}),
   }
 }
 
@@ -145,9 +159,29 @@ function storedPathIdentity(filePath: string): string {
   return process.platform === 'win32' ? absolute.toLowerCase() : absolute
 }
 
+function isDirectoryChange(change: FileChange): change is DirectoryChange {
+  return 'entryType' in change && change.entryType === 'directory'
+}
+
 export class ChangeStore {
   constructor(private readonly boundDb?: Client) {}
   private get db() { return this.boundDb ?? getDb() }
+  private get directories() { return new CreatedDirectoryStore(this.db) }
+
+  async recordCreatedDirectories(tenantId: string, input: DirectoryChangeInput, directories: readonly CreatedDirectory[]): Promise<DirectoryChange[]> {
+    return this.directories.record(tenantId, input, directories)
+  }
+  async latestDirectorySequence(): Promise<number> { return this.directories.latestSequence() }
+  async hasDirectoryChangesAfter(directory: string, sequence: number, fileSequence?: number): Promise<boolean> {
+    if (await this.directories.hasPathChangesAfter(directory, sequence)) return true
+    if (fileSequence === undefined) return false
+    await this.ensureTable()
+    // File/office writers own the parent directories captured before their
+    // mkdir as well; a concurrent command must not claim those directories.
+    const rows = await this.db.execute({ sql: 'SELECT created_directories FROM file_changes WHERE seq>? AND created_directories IS NOT NULL', args: [fileSequence] })
+    const identity = storedPathIdentity(directory)
+    return rows.rows.some(row => (JSON.parse(String(row.created_directories)) as CreatedDirectory[]).some(item => storedPathIdentity(item.path) === identity))
+  }
 
   private async ensureTable(): Promise<void> {
     const db = this.db
@@ -179,6 +213,7 @@ export class ChangeStore {
         if (!columns.has('source')) await db.execute('ALTER TABLE file_changes ADD COLUMN source TEXT')
         if (!columns.has('command_job_id')) await db.execute('ALTER TABLE file_changes ADD COLUMN command_job_id TEXT')
         if (!columns.has('requires_explicit_revert')) await db.execute('ALTER TABLE file_changes ADD COLUMN requires_explicit_revert INTEGER NOT NULL DEFAULT 0')
+        if (!columns.has('created_directories')) await db.execute('ALTER TABLE file_changes ADD COLUMN created_directories TEXT')
         await db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_file_changes_seq ON file_changes(seq)')
         await db.execute('CREATE INDEX IF NOT EXISTS idx_file_changes_session ON file_changes(tenant_id, session_id, seq)')
       })()
@@ -199,13 +234,14 @@ export class ChangeStore {
     }
     const result = await this.db.execute({
       // One SQL statement allocates order, including in old development tables.
-      sql: `INSERT INTO file_changes (seq, id, tenant_id, session_id, turn_id, run_id, path, kind, old_content, new_content, old_hash, new_hash, old_snapshot_ref, new_snapshot_ref, truncated, status, created_at, source, command_job_id, requires_explicit_revert, producer_child_session_id, producer_run_id)
-        SELECT COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ? FROM file_changes RETURNING *`,
+      sql: `INSERT INTO file_changes (seq, id, tenant_id, session_id, turn_id, run_id, path, kind, old_content, new_content, old_hash, new_hash, old_snapshot_ref, new_snapshot_ref, truncated, status, created_at, source, command_job_id, requires_explicit_revert, producer_child_session_id, producer_run_id, created_directories)
+        SELECT COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ? FROM file_changes RETURNING *`,
       args: [uuidv4(), tenantId, input.sessionId, input.turnId ?? null, input.runId ?? null, canonicalFilePathSync(input.path), input.kind,
         (input.oldContent?.length ?? 0) > MAX_CONTENT_CHARS ? null : input.oldContent,
         (input.newContent?.length ?? 0) > MAX_CONTENT_CHARS ? null : input.newContent,
         oldHash, newHash, input.oldSnapshotRef ?? null, input.newSnapshotRef ?? null, truncated ? 1 : 0, Date.now(),
-        input.source ?? null, input.commandJobId ?? null, input.requiresExplicitRevert ? 1 : 0, input.producerChildSessionId ?? null, input.producerRunId ?? null]
+        input.source ?? null, input.commandJobId ?? null, input.requiresExplicitRevert ? 1 : 0, input.producerChildSessionId ?? null, input.producerRunId ?? null,
+        input.createdDirectories?.length ? JSON.stringify(input.createdDirectories) : null]
     })
     return rowToChange(result.rows[0])
   }
@@ -358,7 +394,7 @@ export class ChangeStore {
     for (const change of changes) discardChangeSnapshots(change)
   }
 
-  async revertBatch(tenantId: string, input: RevertBatchInput): Promise<RevertBatchResult> {
+  private async selectRevertScope(tenantId: string, input: RevertBatchInput): Promise<{ ids?: string[]; selected: Array<FileChange | DirectoryChange | null> }> {
     let turns: Set<string> | undefined
     if (input.fromTurnId !== undefined) {
       if (input.ids !== undefined || input.createdAfter !== undefined) throw Object.assign(new Error('fromTurnId 不能与 ids 或 createdAfter 混用'), { statusCode: 400 })
@@ -368,25 +404,46 @@ export class ChangeStore {
       turns = new Set(runs.filter(run => run.seq >= first.seq).map(run => run.turnId))
     }
     const ids = input.ids === undefined ? undefined : [...new Set(input.ids)]
-    let selected = ids === undefined
-      ? await this.list(tenantId, input.sessionId, input.scope === 'all' ? undefined : 'pending', input.createdAfter)
-      : await Promise.all(ids.map(id => this.getById(id, tenantId)))
+    let selected: Array<FileChange | DirectoryChange | null> = ids === undefined
+      ? [...await this.list(tenantId, input.sessionId, input.scope === 'all' ? undefined : 'pending', input.createdAfter),
+        ...await this.directories.list(tenantId, input.sessionId, input.scope === 'all' ? undefined : 'pending', input.createdAfter)]
+      : await Promise.all(ids.map(async id => await this.getById(id, tenantId) ?? await this.directories.get(id, tenantId)))
     if (turns) selected = selected.filter(change => change?.turnId && turns!.has(change.turnId))
+    return { ids, selected }
+  }
+
+  async previewRevert(tenantId: string, input: RevertBatchInput): Promise<RevertPreviewResult> {
+    const { selected } = await this.selectRevertScope(tenantId, input)
+    return { total: selected.length, changes: selected.flatMap(change => !change || change.sessionId !== input.sessionId ? [] : [{
+      id: change.id, path: change.path, status: change.status, turnId: change.turnId,
+      source: change.source, requiresExplicitRevert: change.requiresExplicitRevert,
+      ...('entryType' in change ? { entryType: change.entryType } : {}),
+    }]) }
+  }
+
+  async revertBatch(tenantId: string, input: RevertBatchInput): Promise<RevertBatchResult> {
+    const { ids, selected } = await this.selectRevertScope(tenantId, input)
+    const reviewedCommands = new Set(input.reviewedCommandChangeIds ?? [])
     const results: RevertResult[] = []
-    const targets: FileChange[] = []
+    const targets: Array<FileChange | DirectoryChange> = []
+    const removedDirectories: string[] = []
+    const unreviewedPaths = new Set<string>()
     selected.forEach((change, index) => {
       if (!change || change.sessionId !== input.sessionId) {
         results.push({ id: ids![index], path: '', status: 'unavailable', message: '改动不存在或不属于当前会话' })
-      } else if (change.requiresExplicitRevert && ids === undefined && change.status !== 'reverted') {
+      } else if (change.requiresExplicitRevert && ids === undefined && !reviewedCommands.has(change.id) && change.status !== 'reverted') {
         results.push({ id: change.id, path: change.path, status: 'unavailable',
+          ...('entryType' in change ? { entryType: change.entryType } : {}),
           message: '这是命令运行期间观察到的文件变化，可能包含并发编辑；请在改动面板审阅并明确选择后撤回' })
+        unreviewedPaths.add(storedPathIdentity(change.path))
       } else targets.push(change)
     })
     if (targets.length === 0) return summarize(results)
     try {
       await withFileLocks(targets.map(change => change.path), async (canonicalPaths) => {
         const ordered = targets.map((change, index) => ({ change, canonical: canonicalPaths[index] }))
-          .sort((a, b) => a.canonical.localeCompare(b.canonical) || b.change.seq - a.change.seq)
+          .sort((a, b) => Number('entryType' in a.change) - Number('entryType' in b.change) ||
+            ('entryType' in a.change ? b.canonical.length - a.canonical.length : 0) || a.canonical.localeCompare(b.canonical) || b.change.seq - a.change.seq)
         const blocked = new Set<string>()
         const selectedIds = new Set(targets.map(change => change.id))
         const storedPaths = await this.storedPaths()
@@ -395,7 +452,7 @@ export class ChangeStore {
         // Only whole, selected, globally contiguous chains can be marked reverted
         // without replaying temporary creates/deletes. Partial historical scopes
         // continue to restore their actual boundary snapshot.
-        for (const filePath of new Set(targets.map(change => change.path))) {
+        for (const filePath of new Set(targets.filter(change => !('entryType' in change)).map(change => change.path))) {
           const history = await this.pathHistory(filePath, storedPaths)
           const liveIds = new Set(history.filter(change => selectedIds.has(change.id) && change.tenantId === tenantId &&
             change.sessionId === input.sessionId && change.status !== 'reverted' && (!pendingScope || change.status === 'pending')).map(change => change.id))
@@ -410,26 +467,56 @@ export class ChangeStore {
           if (handled.has(target.change.id)) continue
           const { canonical } = target
           // Re-read after waiting: another request may already have reverted this change.
-          const change = await this.getById(target.change.id, tenantId)
-          const base = { id: target.change.id, path: target.change.path }
+          const change = 'entryType' in target.change ? await this.directories.get(target.change.id, tenantId) : await this.getById(target.change.id, tenantId)
+          const base = { id: target.change.id, path: target.change.path, ...('entryType' in target.change ? { entryType: target.change.entryType } : {}) }
           if (!change || change.sessionId !== input.sessionId) {
             results.push({ ...base, status: 'unavailable', message: '改动不存在或不属于当前会话' })
             blocked.add(canonical)
             continue
           }
           if (change.status === 'reverted') { results.push({ ...base, status: 'already_reverted' }); continue }
+          if (unreviewedPaths.has(storedPathIdentity(change.path))) {
+            results.push({ ...base, status: 'unavailable', message: '该文件的回退范围包含尚未确认的命令改动，未部分恢复此文件' })
+            blocked.add(canonical)
+            continue
+          }
           if (pendingScope && change.status !== 'pending') {
             results.push({ ...base, status: 'conflict', message: '改动已被保留，请刷新后选择需要撤回的范围' })
             blocked.add(canonical)
             continue
           }
+          if (isDirectoryChange(change)) {
+            try {
+              // Explicit mkdir receipts can own a parent of directories created
+              // by subsequent file writes. Remove those proven empty children
+              // before attempting their parent.
+              const completed = new Set(results.filter(result => result.status === 'reverted' || result.status === 'already_reverted').map(result => result.id))
+              removedDirectories.push(...removeCreatedEmptyDirectories(targets.filter(item => completed.has(item.id)).flatMap(item => item.createdDirectories ?? [])))
+              const removed = removeCreatedEmptyDirectories([change.directory])
+              removedDirectories.push(...removed)
+              let missing = false
+              try { fs.lstatSync(change.path) } catch (error) {
+                if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+                missing = true
+              }
+              if (!missing) results.push({ ...base, status: 'conflict', message: '目录包含保留的内容或目录身份已变化，未删除目录' })
+              else {
+                await this.directories.markReverted(change.id, tenantId)
+                results.push({ ...base, status: removed.length ? 'reverted' : 'already_reverted' })
+              }
+            } catch (error) { results.push({ ...base, status: 'failed', message: `目录撤回失败：${error instanceof Error ? error.message : String(error)}` }) }
+            continue
+          }
           const noOp = noOpChains.get(change.id)
-          const oldVersionValid = change.oldSnapshotRef
-            ? hashFileContent(readSnapshot(change.oldSnapshotRef)) === change.oldHash
-            : hashFileContent(change.oldContent) === change.oldHash
-          const newVersionValid = change.newSnapshotRef
-            ? hashFileContent(readSnapshot(change.newSnapshotRef)) === change.newHash
-            : hashFileContent(change.newContent) === change.newHash
+          // A missing snapshot belongs to this file, not to every later file in
+          // the batch. Net-zero chains do not need their temporary byte copies.
+          let oldVersionValid = Boolean(noOp), newVersionValid = Boolean(noOp)
+          if (!noOp) {
+            try {
+              oldVersionValid = hashFileContent(change.oldSnapshotRef ? readSnapshot(change.oldSnapshotRef) : change.oldContent) === change.oldHash
+              newVersionValid = hashFileContent(change.newSnapshotRef ? readSnapshot(change.newSnapshotRef) : change.newContent) === change.newHash
+            } catch { /* report unavailable below and continue independent paths */ }
+          }
           if (!noOp && (!change.oldHash || !change.newHash || !oldVersionValid || !newVersionValid)) {
             results.push({ ...base, status: 'unavailable', message: '未保存可验证的完整文件快照，无法自动撤回' })
             blocked.add(canonical)
@@ -495,6 +582,34 @@ export class ChangeStore {
         if (!results.some(item => item.id === change.id)) results.push({ id: change.id, path: change.path, status: 'failed', message: `无法锁定文件：${error instanceof Error ? error.message : String(error)}` })
       }
     }
-    return summarize(results)
+    // Retry already-reverted records as well: another file may have kept their
+    // created parent nonempty in a previous partial batch.
+    const successful = new Set(results.filter(result => result.status === 'reverted' || result.status === 'already_reverted').map(result => result.id))
+    const directories = targets.filter(change => successful.has(change.id)).flatMap(change => change.createdDirectories ?? [])
+    try { removedDirectories.push(...removeCreatedEmptyDirectories(directories)) } catch (error) {
+      results.push({ id: '', path: '', status: 'failed', message: `空目录清理失败：${error instanceof Error ? error.message : String(error)}` })
+    }
+    if (ids === undefined) {
+      // A whole-turn rollback must not silently call itself complete while
+      // directories created by its files remain. Explicit file-ID requests,
+      // by contrast, need not remove a parent shared by unselected files.
+      const reported = new Set(results.filter(result => result.entryType === 'directory').map(result => storedPathIdentity(result.path)))
+      for (const directory of directories) {
+        const identity = storedPathIdentity(directory.path)
+        if (reported.has(identity)) continue
+        const base = { id: `directory:${hashFileContent(directory.path).slice('sha256:'.length)}`, path: directory.path, entryType: 'directory' as const }
+        try {
+          fs.lstatSync(directory.path)
+          results.push({ ...base, status: 'conflict', message: '本轮新建目录包含保留的内容或身份已变化，目录尚未撤回' })
+          reported.add(identity)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+            results.push({ ...base, status: 'failed', message: `无法确认目录回退状态：${error instanceof Error ? error.message : String(error)}` })
+            reported.add(identity)
+          }
+        }
+      }
+    }
+    return { ...summarize(results), removedDirectories }
   }
 }

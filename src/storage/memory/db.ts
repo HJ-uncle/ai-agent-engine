@@ -36,6 +36,11 @@ export function getMemoryDb(): Client {
   return client
 }
 
+/** Observe the current connection without opening a database or starting initialization. */
+export function peekMemoryDb(): Client | undefined {
+  return client && !client.closed ? client : undefined
+}
+
 /**
  * 尝试执行 SQL，如果失败且涉及 F32_BLOB，自动回退到 BLOB 版本
  */

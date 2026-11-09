@@ -125,6 +125,8 @@ export interface MemoryNodeFilter {
   tags?: string[]
   sessionId?: string
   keyword?: string
+  /** Case-sensitive literal substring of summary, without tokenization or wildcards. */
+  summaryContains?: string
   orderBy?: 'timestamp' | 'strength' | 'importance' | 'last_accessed'
   orderDir?: 'ASC' | 'DESC'
   limit?: number

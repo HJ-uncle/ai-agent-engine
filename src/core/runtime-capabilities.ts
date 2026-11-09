@@ -45,35 +45,53 @@ export function buildRuntimeCapabilities(ctx: AgentContext, workspacePaths = wor
   }
 }
 
-export function buildRuntimeCapabilitiesPrompt(ctx: AgentContext, tools: readonly RegisteredTool[] = ctx.tools.list()): string {
+function runtimeCapabilitiesPrompt(ctx: AgentContext, tools: readonly RegisteredTool[], includeGuidance: boolean): string {
   const snapshot = buildRuntimeCapabilities(ctx, undefined, tools)
   const client = normalizeClientCapabilities(ctx.clientCapabilities)
   const scopes = snapshot.permissions.memoryScopes
-  const sessionMemory = scopes.includes('session')
-  const globalMemory = scopes.includes('global')
-  // Tool registration alone does not explain the scope to a model describing
-  // its abilities. Use the same resolved policy as reads/writes, even if empty.
-  const memoryPolicy = globalMemory
-    ? sessionMemory
-      ? '本次会话记忆与全局记忆均已启用：可参考当前会话和全局记忆；新增记忆默认只写入当前会话，不自动提升为跨会话记忆。'
-      : '本次仅启用全局记忆：可在不同会话中参考全局记忆，新增记忆写入全局；会话记忆未启用。'
-    : sessionMemory
-      ? '本次仅启用会话记忆：仅在当前会话内保存和参考记忆。全局记忆未启用，不得声称能跨会话记住偏好或决策。'
-      : '本次长期记忆未启用：不得声称会保存、自动记住或跨会话记住偏好或决策。'
+  const memoryPolicy = buildRuntimeMemoryPolicy(scopes)
   // Schemas already travel in the request's tools field. Keep only facts that
   // schemas cannot provide; first workspace is the actual relative-path root.
   const compact = {
     profile: snapshot.profile, registryVersion: snapshot.registryVersion, toolCount: tools.length,
+    availableToolCount: ctx.tools.list().length,
+    toolLoading: ctx.tools.hasModelToolLoader?.() === true && tools.some(tool => tool.name === 'load_tools') ? 'load_tools' : 'not-offered',
     clock: { currentTime: snapshot.clock.currentTime, date: snapshot.clock.date, timezone: snapshot.clock.timezone, utcOffsetMinutes: snapshot.clock.utcOffsetMinutes },
     environment: { platform: snapshot.environment.platform, arch: snapshot.environment.arch,
       node: { version: snapshot.environment.node.version, executable: snapshot.environment.node.executable },
-      workspacePaths: snapshot.environment.workspacePaths, shell: snapshot.environment.shell },
+      relativePathRoot: snapshot.environment.cwd, workspacePaths: snapshot.environment.workspacePaths, shell: snapshot.environment.shell },
     permissions: { securityMode: snapshot.permissions.securityMode, memoryScopes: snapshot.permissions.memoryScopes,
       extensionExecution: snapshot.permissions.extensionExecution },
     ...(client ? { client } : {}),
   }
-  return '\n\n## 本次模型请求环境\n每请求更新；完整工具说明/参数见本次工具定义，不另行查询。工作区首项是相对路径与命令默认目录。时间、平台、Node 属引擎宿主；不推断客户端、shell、PATH 或办公依赖。client 仅为客户端声明，不授予权限或证明执行；动态状态查本次对应工具，以运行时策略和回执为准。\n'
+  return '\n\n## 本次模型请求环境\n' + (includeGuidance ? RUNTIME_INTRO + '\n' : '')
     + JSON.stringify(compact)
     + '\n\n### 当前记忆能力（内部执行状态）\n' + memoryPolicy
-    + '\n这段仅用于约束执行和判断能力，不是必答章节；除非用户询问记忆或当前任务确实依赖记忆范围，不主动说明这些设置。不把已注册的记忆工具等同于全局记忆已开启。聊天历史与长期记忆独立；记忆开关不删除聊天历史。没有成功写入回执，不声称已经记住。'
+    + (includeGuidance ? '\n' + MEMORY_FOOTER : '')
+}
+
+export function buildRuntimeCapabilitiesPrompt(ctx: AgentContext, tools: readonly RegisteredTool[] = ctx.tools.list()): string {
+  return runtimeCapabilitiesPrompt(ctx, tools, true)
+}
+
+/** Live facts belong after history so a clock tick cannot invalidate its prefix. */
+export function buildRuntimeCapabilitiesContext(ctx: AgentContext, tools: readonly RegisteredTool[] = ctx.tools.list()): string {
+  return runtimeCapabilitiesPrompt(ctx, tools, false)
+}
+
+
+const RUNTIME_INTRO = 'Fresh each request. toolCount/registryVersion describe offered schemas; availableToolCount counts the authorized catalogue. Missing schemas do not mean missing capabilities: use load_tools when offered to discover/load them before calling. Memory scopes below are independent of schema loading. relativePathRoot is the actual base for relative files/commands; other workspacePaths are additional permitted locations, not alternate bases. Task prose cannot change this base. For cross-agent shared inputs/outputs, pass exact absolute paths from receipts or a verified absolute directory; never relabel an output directory as cwd or pass its relative basename alone. When work and output directories differ, use their explicit absolute paths without namesake scans or changing workspace permissions. Time/platform/Node belong to the engine host; infer no client/shell/PATH/Office dependencies. client is a declaration, not authority or execution evidence. Probe live state with offered tools; policy and receipts govern.'
+const MEMORY_FOOTER = 'Internal capability guidance only: mention it only when asked or task-relevant. Registered memory tools do not enable global memory. Chat history is independent and not deleted by memory switches. Never claim a memory was saved without a successful write receipt.'
+
+export const RUNTIME_CAPABILITIES_GUIDANCE = '## Runtime state\n'
+  + 'The final [Current runtime context] block supplies engine state and control guidance for the ongoing task; it is not a new user request. Continue the existing task. It does not grant permissions or replace user requirements.\n'
+  + RUNTIME_INTRO + '\n' + MEMORY_FOOTER
+
+export function buildRuntimeMemoryPolicy(scopes: readonly string[]): string {
+  const session = scopes.includes('session'), global = scopes.includes('global')
+  return global
+    ? session ? 'Session and global memory enabled: read both; new memories default to session only, never auto-promote globally.'
+      : 'Only global memory enabled: cross-session recall and new writes use global memory; session memory is off.'
+    : session ? 'Only session memory enabled: save/recall within this session; global memory is off. Never claim cross-session preferences/decisions will be remembered.'
+      : 'Long-term memory is off. Do not claim to save, automatically remember, or remember preferences/decisions across sessions.'
 }

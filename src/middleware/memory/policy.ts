@@ -16,9 +16,9 @@ export function effectiveMemoryScopes(policy: MemoryPolicy): MemoryScope[] {
   }
   if (policy.memoryScope === 'off') return []
   if (policy.memoryScope === 'global' || policy.memoryScope === 'session') return [policy.memoryScope]
-  // Legacy Code registries stay closed unless their request resolved a policy.
-  // Production requests always supply scopes, with session memory on by default.
-  return policy.toolProfile === 'code' ? [] : ['session']
+  // An omitted policy never grants memory access. Production requests resolve
+  // stored preferences explicitly; internal callers must also opt in.
+  return []
 }
 
 export function memoryContexts(policy: MemoryPolicy & { tenantId: string; sessionId?: string }): MemoryContext[] {

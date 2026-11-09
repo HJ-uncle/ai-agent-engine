@@ -53,32 +53,32 @@ function fixture(profile: AgentContext['toolProfile'], toolRounds = 0) {
 }
 
 function snapshot(options: LLMAdapterOptions) {
-  const tail = options.systemPrompt!.split('## 本次模型请求环境\n')[1]
-  return JSON.parse(tail.slice(tail.indexOf('\n') + 1).split('\n\n')[0])
+  const tail = options.requestContext!.split('## 本次模型请求环境\n')[1]
+  return JSON.parse(tail.split('\n\n')[0])
 }
 
 function expectSinglePolicy(options: LLMAdapterOptions) {
-  expect(options.systemPrompt!.split('## 本次模型请求环境')).toHaveLength(2)
-  expect(options.systemPrompt!.split('### 当前记忆能力（内部执行状态）')).toHaveLength(2)
+  expect(options.requestContext!.split('## 本次模型请求环境')).toHaveLength(2)
+  expect(options.requestContext!.split('### 当前记忆能力（内部执行状态）')).toHaveLength(2)
   expect(options.systemPrompt).toContain('Caller instructions.')
-  expect(options.systemPrompt).toContain('这段仅用于约束执行和判断能力，不是必答章节')
-  expect(options.systemPrompt).toContain('除非用户询问记忆或当前任务确实依赖记忆范围，不主动说明这些设置')
-  expect(options.systemPrompt).toContain('聊天历史与长期记忆独立；记忆开关不删除聊天历史')
-  expect(options.systemPrompt).toContain('没有成功写入回执，不声称已经记住')
+  expect(options.systemPrompt).toContain('Internal capability guidance only')
+  expect(options.systemPrompt).toContain('mention it only when asked or task-relevant')
+  expect(options.systemPrompt).toContain('Chat history is independent and not deleted by memory switches')
+  expect(options.systemPrompt).toContain('Never claim a memory was saved without a successful write receipt')
 }
 
 function expectUserCommunication(options: LLMAdapterOptions) {
   const prompt = options.systemPrompt!
-  expect(prompt.split('### 面向用户的表达')).toHaveLength(2)
-  expect(prompt).toContain('直接对用户说话，用日常语言说明能帮他完成什么、结果是什么')
-  expect(prompt).toContain('已有信息足够时直接回答')
-  expect(prompt).toContain('不要为了介绍自己而扫描目录、读取项目规则、启动计划或调用工具')
-  expect(prompt).toContain('3–5 个简短的日常任务示例，按真实可用能力表述')
-  expect(prompt).toContain('只有用户问到、当前操作确实受阻、涉及必要授权，或影响用户选择与结果可信度时')
-  expect(prompt).toContain('才简短说明相关限制和可行下一步')
-  expect(prompt).toContain('真实失败和本次未完成的必要检查仍须如实说明')
-  expect(prompt).toContain('普通介绍不附记忆开关、工作区权限、验收纪律或外部软件限制清单')
-  expect(prompt).toContain('以下规则只在相关执行任务中适用，不是每次回复都要输出的章节')
+  expect(prompt.split('## Execution')).toHaveLength(2)
+  expect(prompt).toContain('Speak plainly, conclusion first, with detail appropriate to the question')
+  expect(prompt).toContain('ordinary chat, capability introductions, or explanations supported by supplied material, answer directly')
+  expect(prompt).toContain('no directory/rule scans, plans or tools')
+  expect(prompt).toContain('Describe capabilities briefly or with 3–5 everyday examples')
+  expect(prompt).toContain('only when asked, blocked, authorization is necessary, or choices/reliability depend on them')
+  expect(prompt).toContain('Mention relevant limits and next steps')
+  expect(prompt).toContain('Report actual failures and required unchecked work')
+  expect(prompt).toContain('Do not volunteer memory, permission, verification or external-software caveats')
+  expect(prompt).toContain('For execution tasks:')
   expect(prompt).not.toContain('- 先读适用且未提供的 AGENTS.md / AE.md')
   expect(prompt).not.toContain('- 交付真实文件、用法、已做验证和未验证项')
 }
@@ -92,7 +92,7 @@ describe('memory capabilities at the shared ReAct request boundary', () => {
     expect(snapshot(request)).toMatchObject({ profile, permissions: { memoryScopes: ['session'] } })
     expectUserCommunication(request)
     expectSinglePolicy(request)
-    expect(request.systemPrompt).toContain('全局记忆未启用，不得声称能跨会话记住偏好或决策')
+    expect(request.requestContext).toContain('global memory is off. Never claim cross-session preferences/decisions will be remembered')
     expect(request.tools?.map(tool => tool.name)).toEqual(['read_file', 'remember', 'recall', 'search_history'])
   })
 
@@ -103,11 +103,11 @@ describe('memory capabilities at the shared ReAct request boundary', () => {
     const request = f.requests[0]
     expect(request.tools?.map(tool => tool.name)).toContain('remember')
     expect(snapshot(request)).toMatchObject({ profile, permissions: { memoryScopes: ['session'] } })
-    expect(request.systemPrompt).toContain('仅在当前会话内保存和参考记忆')
-    expect(request.systemPrompt).toContain('全局记忆未启用，不得声称能跨会话记住偏好或决策')
-    expect(request.systemPrompt).toContain('不把已注册的记忆工具等同于全局记忆已开启')
-    expect(request.systemPrompt).not.toContain('本次仅启用全局记忆')
-    expect(request.systemPrompt).not.toContain('本次会话记忆与全局记忆均已启用')
+    expect(request.requestContext).toContain('save/recall within this session')
+    expect(request.requestContext).toContain('global memory is off. Never claim cross-session preferences/decisions will be remembered')
+    expect(request.systemPrompt).toContain('Registered memory tools do not enable global memory')
+    expect(request.requestContext).not.toContain('Only global memory enabled')
+    expect(request.requestContext).not.toContain('Session and global memory enabled')
     expectSinglePolicy(request)
     expect(f.ctx.tools.execute).not.toHaveBeenCalled()
   })
@@ -126,23 +126,23 @@ describe('memory capabilities at the shared ReAct request boundary', () => {
     expect(f.requests.map(request => snapshot(request).permissions.memoryScopes))
       .toEqual([['session'], ['session', 'global'], ['global'], []])
     const statements = [
-      '本次仅启用会话记忆',
-      '本次会话记忆与全局记忆均已启用',
-      '本次仅启用全局记忆',
-      '本次长期记忆未启用',
+      'Only session memory enabled',
+      'Session and global memory enabled',
+      'Only global memory enabled',
+      'Long-term memory is off',
     ]
     f.requests.forEach((request, index) => {
       expectSinglePolicy(request)
-      expect(request.systemPrompt).toContain(statements[index])
+      expect(request.requestContext).toContain(statements[index])
       statements.filter((_, other) => other !== index).forEach(statement => {
-        expect(request.systemPrompt).not.toContain(statement)
+        expect(request.requestContext).not.toContain(statement)
       })
       expect(snapshot(request).registryVersion).toBe(snapshot(f.requests[0]).registryVersion)
       expect(request.tools?.map(tool => tool.name)).toContain('remember')
     })
-    expect(f.requests[1].systemPrompt).toContain('新增记忆默认只写入当前会话，不自动提升为跨会话记忆')
-    expect(f.requests[2].systemPrompt).toContain('新增记忆写入全局；会话记忆未启用')
-    expect(f.requests[3].systemPrompt).toContain('不得声称会保存、自动记住或跨会话记住偏好或决策')
+    expect(f.requests[1].requestContext).toContain('new memories default to session only, never auto-promote globally')
+    expect(f.requests[2].requestContext).toContain('new writes use global memory; session memory is off')
+    expect(f.requests[3].requestContext).toContain('Do not claim to save, automatically remember, or remember preferences/decisions across sessions')
   })
 
   it('honors server-disabled memory in the finalization request even when resolved scopes and the registry still contain memory', async () => {
@@ -154,15 +154,15 @@ describe('memory capabilities at the shared ReAct request boundary', () => {
     })
     await f.run({ maxIterations: 2, finalizeOnLimit: true })
     expect(f.requests).toHaveLength(2)
-    expect(f.requests[0].systemPrompt).toContain('本次会话记忆与全局记忆均已启用')
+    expect(f.requests[0].requestContext).toContain('Session and global memory enabled')
     expect(f.ctx.tools.list().map(tool => tool.name)).toContain('remember')
     expect(f.ctx.memoryScopes).toEqual(['session', 'global'])
     const finalization = f.requests[1]
     expect(finalization.requestStage).toBe('finalization')
     expect(finalization.tools).toEqual([])
     expect(snapshot(finalization)).toMatchObject({ toolCount: 0, permissions: { memoryScopes: [] } })
-    expect(finalization.systemPrompt).toContain('本次长期记忆未启用')
-    expect(finalization.systemPrompt).not.toContain('本次会话记忆与全局记忆均已启用')
+    expect(finalization.requestContext).toContain('Long-term memory is off')
+    expect(finalization.requestContext).not.toContain('Session and global memory enabled')
     expectUserCommunication(finalization)
     expectSinglePolicy(finalization)
   })

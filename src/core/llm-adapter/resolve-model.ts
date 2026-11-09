@@ -2,6 +2,7 @@ import { ModelsStore } from '../../storage/sqlite/models.js'
 import { loadDbCapabilityOverrides, resolveCapabilities, type ModelCapabilities } from '../model-capabilities/index.js'
 import { createLLMAdapter, resolveAdapterOptionsWithDbConfig, type CreateAdapterOptions } from './factory.js'
 import type { LLMAdapter } from './types.js'
+import { resolveThinkingFamily } from './thinking-family.js'
 
 /** This object holds credentials by memory reference. Never put it in history, events or logs. */
 export interface ResolvedModelConfig extends CreateAdapterOptions {
@@ -52,7 +53,7 @@ export async function resolveModelConfig({tenantId, model, parent, overrides}: R
   const whitelist = capabilities.thinking ? (await store.getWhitelists()).find(value => value.modelId === resolvedModel && value.thinkingMode) : undefined
   return Object.freeze({
     ...resolved, model: resolvedModel, provider, capabilities, thinkingEnabled, reasoningEffort,
-    thinkingConfig: thinkingEnabled === false ? null : overrides?.thinkingConfig !== undefined ? overrides.thinkingConfig : (reasoningEffort && /deepseek/i.test(provider + resolvedModel) ? { reasoning_effort: reasoningEffort } : whitelist?.thinkingConfig),
+    thinkingConfig: thinkingEnabled === false ? null : overrides?.thinkingConfig !== undefined ? overrides.thinkingConfig : (reasoningEffort && resolveThinkingFamily(resolvedModel, provider, resolved.baseUrl) === 'deepseek' ? { reasoning_effort: reasoningEffort } : whitelist?.thinkingConfig),
     responseThinkingField: thinkingEnabled === false ? null : overrides?.responseThinkingField !== undefined ? overrides.responseThinkingField : whitelist?.responseThinkingField,
   })
 }

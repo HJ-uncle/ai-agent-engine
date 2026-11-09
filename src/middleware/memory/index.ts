@@ -1,4 +1,4 @@
-export { extractAndStoreMemories, formatMessages, parseMemories, buildExtractionPrompt, buildMemoryRecallBlock } from './extractor.js'
+export { extractAndStoreMemories, reserveMemoryExtraction, formatMessages, parseMemories, buildExtractionPrompt, buildMemoryRecallBlock } from './extractor.js'
 export type {
   MemoryExtractorOptions,
   ExtractedMemory,

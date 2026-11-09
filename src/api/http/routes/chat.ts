@@ -34,14 +34,15 @@ import { continuedTurnUsage, sessionUsageAtWatermark, sessionSubagentUsage } fro
 import { SubagentStore } from '../../../core/subagent/store.js'
 import { ParentPublicationAuthority } from '../../../core/subagent/parent-publication.js'
 import { PublishedTurnBootstraps, type TurnBootstrap } from '../../../core/subagent/turn-bootstrap.js'
-import { COLLABORATOR_LIMITS, CollaboratorError, prepareCollaborators, collaboratorTools, type CollaboratorInput } from '../../../core/subagent/collaborators.js'
+import { COLLABORATOR_LIMITS, CollaboratorError, prepareCollaborators, createCollaboratorDispatch, type CollaboratorInput } from '../../../core/subagent/collaborators.js'
 import { buildSubagentTeamContext } from '../../../tools/subagent/team-tools.js'
 import { TodoStore } from '../../../storage/todo/index.js'
+import { resolveThinkingFamily } from '../../../core/llm-adapter/thinking-family.js'
 import { ChangeStore } from '../../../storage/changes/index.js'
 import { commandJobs, type CommandScopeCapture } from '../../../core/command-jobs/index.js'
 import { CODE_AGENT_EXECUTION_PROMPT } from '../../../core/code-agent-prompt.js'
 import { normalizeClientCapabilities, type ClientCapabilityManifest } from '../../../core/client-capabilities.js'
-import { publicHistoryMessages } from '../history-projection.js'
+import { publicSessionHistoryMessages } from '../history-projection.js'
 import { getExecutionOwners, serviceForOwner, type ExecutionOwner } from '../../../core/collaboration/execution-owner.js'
 import { installProductionCollaborationBoundary } from '../../../core/collaboration/production-boundary.js'
 import { prepareUserAdmission, type UserAdmissionSelector } from '../../../storage/root-admission/index.js'
@@ -50,54 +51,7 @@ import { registerUserAdmissionRoutes } from './chat-admission.js'
 import { registerChildRecoveryPages, checkedChildEnvelope, childProjectionReferences, sendChildRecoveryFailure } from './live-child-recovery.js'
 import { requireChildRecovery } from '../../../core/subagent/child-usage-authority.js'
 
-/**
- * 主 Agent 的子代理委派纪律（对齐 wuzu-client codeAgent.ts 的「探索预算」章节）。
- *
- * 解决的实际症状：主 Agent 遇到调研/审计类任务时倾向闷头自己读，不派子代理；
- * 派了也只有一个模糊 task，子代理没有范围/输出格式/已知线索，效果差。
- * 这段注入把「何时该派、怎么写好一个委派 prompt、怎么回收结果」讲清。
- */
-const SUBAGENT_DISPATCH_PROMPT = [
-  '## 子代理委派（subagent 工具）',
-  '',
-  '按任务收益主动协作，主代理负责理解目标、分工、集成验收和最终交付。三类内置模板可按需启动多个独立实例：builtinRole=research只读调研；executor实际完成代码、文档和文件任务；general处理混合或特殊工作。',
-  '创建前先查看subagent_directory中的已有实例；上下文相关且权限适合时优先subagent_followup，运行中补充，已完成也可继续同一子会话。简单任务直接完成，不为凑团队启动全部角色。',
-  '适合委派的情形：',
-  '- 广度：要跨多个文件/多个目录的调研、审计、批量定位；',
-  '- 噪音：会产生大量一次性中间输出的动作（全仓扫描、长日志、递归统计）；',
-  '- 并行：仅在任务确实需要多个独立产出时拆分，避免重复范围。',
-  '先遵守用户要求的深度。简单、快速、概览类调研默认只派一个只读子代理；只看目录、入口和少量关键文件，输出简短概览。不要自行升级为深挖或全面审计。',
-  '',
-  '互不干涉的组件、文档素材和验证可以分给多个executor；派发明确责任文件和接口，公共配置、锁文件及同一Office文件指定单一集成者。共享目录不等于隔离checkout，不同时覆盖同一文件。小改动和短查找可由主代理直接完成。',
-  '',
-  '派发时，task 必须自包含（子代理看不到本会话历史，缺什么就要给什么），写清四项：',
-  '1. 目标：一句话说清产出什么；',
-  '2. 范围：限定要看的目录/文件，禁止全仓乱扫；',
-  '3. 深度：快扫定位还是深挖实现；',
-  '4. 已知线索与输出格式：已确认的路径/结论一并给出，要求结论先行、发现带 文件路径+行号、不贴大段源码。',
-  '委派时同时写明父任务的只读/方案约束、验收标准和不可做事项，子代理不得越过父任务权限。',
-  '',
-  '回收纪律：已有路径和行号证据可以直接复用；如果当前工作树、时间或证据状态发生冲突，只做最小范围复核，不要整段重做。',
-  '子代理结果必须包含 status、facts、evidence、actions、verification、unverified 和 next；主 Agent 根据结果决定是否继续，不把未核实项当成完成。',
-  '子任务因取消、请求预算、上下文容量或无进展保护结束时，使用它返回的部分证据完成总结，并说明未核实范围。不要把本地预算解释为模型服务商欠费，也不要自行制造步数上限或再次派发同一探索。',
-].join('\n')
-
-/** Keep ordinary Work turns scoped without weakening explicit long-running jobs.
- * The engine intentionally remains capable of durable runs; this guidance
- * prevents a one-file change from being expanded into an unsolicited audit. */
-const GENERAL_WORK_EXECUTION_PROMPT = [
-  '## Work 任务执行协议',
-  '',
-  '普通问答、能力介绍和仅解释已给材料时直接回答，不套用下面的实施流程或交付模板；不为自我介绍读取工作区。只有用户要求实际调查、生成或修改时，才按任务规模执行。',
-  '先判断任务规模：quick=单点/单文件小改，standard=有联动的常规改动，large=跨模块、高风险或用户明确要求全面/高强度。',
-  'quick：只读取与目标和直接依赖相关的代码，优先复用已有组件；完成改动后做一次针对性验证，验收通过立即总结，不自行扩展审计。',
-  'standard：先做有边界的影响面调研，再用 plan_update 列出短计划，按计划落地并验证；不要重复读取未变化的文件。',
-  'large：先完成影响面和复用组件调研，输出简洁计划、风险、验收标准；在需要用户确认时先停在计划阶段，不要先写大范围代码。',
-  '用户明确说“直接开始/直接做/马上执行/无需确认”或同义授权时，视为已授权实施：即使任务属于 large，也直接按计划开工，不再弹出确认；仍需保留必要的风险说明和验收结果。',
-  '只有用户明确要求全面、高强度、长时间或 7×24 测试时，才进入 exhaustive 研究或压力测试；长任务必须说明当前阶段和剩余目标。',
-  '前台服务、开发服务器或 watch 进程必须使用工具支持的后台任务方式并设置合理超时；同一命令/文件已有充分证据时不得反复执行。',
-  '实施任务的核心验收已满足就结束本轮，简洁报告结果及相关证据；有实际影响的未验证项或必要下一步才说明，不添加无关边界清单，不要为了“更确定”继续制造无关 token 消耗。',
-].join('\n')
+import { buildChatSystemPrompts } from '../../../core/chat-system-prompt.js'
 import { prependBootstrapToSystemPrompt } from '../../../core/osm-bootstrap.js'
 import { getProjectContextBlock } from '../../../core/project-context.js'
 import { SQLiteAgentStore } from '../../../storage/agent/index.js'
@@ -107,7 +61,7 @@ import { estimateTokens } from '../../../core/utils/tokens.js'
 import { searchChunks } from '../../../storage/knowledge/kb-repo.js'
 import { ModelsStore } from '../../../storage/sqlite/models.js'
 import { resolveCapabilities, loadDbCapabilityOverrides } from '../../../core/model-capabilities/index.js'
-import { extractAndStoreMemories, buildMemoryRecallBlock } from '../../../middleware/memory/index.js'
+import { extractAndStoreMemories, reserveMemoryExtraction, buildMemoryRecallBlock } from '../../../middleware/memory/index.js'
 import { getSessionMemorySettings, setSessionMemoryScope, type MemoryMode } from '../../../storage/memory/settings.js'
 
 interface ChatBody {
@@ -718,7 +672,8 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
     if (!request.body.toolResponse) {
       try {
         selectedCollaborators = await prepareCollaborators(getTenantId(request), request.body.sessionId, request.body.collaborators,
-          { workspacePaths: request.body.workspacePaths })
+          { workspaceContext: { tenantId: getTenantId(request), sessionId: request.body.sessionId, workspacePaths: request.body.workspacePaths },
+            requestMessage: request.body.message ?? null })
       } catch (error) {
         if (error instanceof CollaboratorError) return reply.code(error.statusCode).send(fail(error.statusCode === 400 ? 40001 : error.statusCode === 404 ? 40400 : 40900, error.message))
         throw error
@@ -908,14 +863,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
       reqLogger.info('Tenant-level default identity applied')
     }
 
-    // ── 主 Agent 子代理委派纪律（对齐 wuzu-client codeAgent.ts 的「探索预算」章节）──
-    // 放在末尾追加：不改变上层 prompt 的相对优先级，只补充默认缺失的行为约束。
-    // 已注册的 agent / inlineAgent 提示词若自带委派说明，此段会与之共存而非冲突
-    // （二者语义一致，重复无害）。
-    effectiveSystemPrompt = [
-      effectiveSystemPrompt,
-      SUBAGENT_DISPATCH_PROMPT,
-    ].filter(Boolean).join('\n\n')
+    // Shared execution/delegation rules are injected once by ReAct for the actual registry.
 
     // ── inlineAgents 诊断日志 ─────────────────────────────────────────────────
     if (Array.isArray(requestedInlineAgents) && requestedInlineAgents.length > 0) {
@@ -959,6 +907,11 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
       reqLogger.info({ requestedModel: effectiveModel }, 'Request-level model override applied')
     }
 
+    // Persisted selection is authoritative even when a reconnect omits or sends
+    // stale request paths. Use one captured binding for project skill discovery,
+    // AE.md and context construction; scratch remains a separate output location.
+    const { workspaceManager } = await import('../../../workspace/index.js')
+    const preparingWorkspace = workspaceManager.bindingReadGuard({ tenantId, sessionId, workspacePaths })
     // Build tool registry（统一工厂，含所有内置工具 + MCP + Skills）
     // 把客户端透传的 inline 资源（桌面端本地 skill / mcp）一并注入，
     // 让 list_skills / get_skill / MCP 工具都能即时看到 + 调用。
@@ -988,7 +941,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
         inlineSkills: requestedInlineSkills,
         inlineMcpServers: requestedInlineMcpServers,
         inlineAgents: requestedInlineAgents,
-        workspaceRoot: workspacePaths?.[0]
+        workspaceRoot: preparingWorkspace.snapshot.root
       })
     } catch (error) {
       if (abortController.signal.aborted) return reply.code(499).send(fail(49900, 'Chat preparation cancelled'))
@@ -1061,6 +1014,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
       }
     }
 
+    preparingWorkspace.assertCurrent()
     // Build agent context
     const ctx = createAgentContext({
       clientCapabilities: normalizeClientCapabilities(request.body.clientCapabilities),
@@ -1072,6 +1026,8 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
       sessionId,
       tenantId,
       workspacePaths,
+      projectRoot: preparingWorkspace.snapshot.root,
+      cwd: preparingWorkspace.snapshot.root,
       tools: registry,
       history: createConversationHistory(),
       logger: reqLogger,
@@ -1243,11 +1199,9 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
 
     // ── 模型 provider 自动路由（仅决定走哪个 LLM Adapter） ──────────────────
     const effectiveBaseUrl = modelBaseUrl || process.env.OPENAI_BASE_URL || ''
-    const isQwenModel =
-      /qwen|qwq/i.test(currentModelName) ||
-      /qwen|qwq|dashscope|aliyuncs/i.test(effectiveBaseUrl)
-    const isDeepSeekModel =
-      /deepseek/i.test(currentModelName) || /deepseek/i.test(effectiveBaseUrl)
+    const thinkingFamily = resolveThinkingFamily(resolvedModel ?? currentModelName, modelProvider, effectiveBaseUrl)
+    const isQwenModel = thinkingFamily === 'qwen'
+    const isDeepSeekModel = thinkingFamily === 'deepseek'
 
     if (isDeepSeekModel && !modelProvider) {
       modelProvider = 'deepseek'
@@ -1371,8 +1325,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
 
     // Codegraph discovery uses current roots; ReAct injects fresh environment
     // and execution guidance for each model request, including continuations.
-    const { workspaceManager } = await import('../../../workspace/index.js')
-    const allWorkspacePaths = workspaceManager.getPaths({ tenantId, sessionId, workspacePaths })
+    const allWorkspacePaths = workspaceManager.getPaths(ctx)
 
     // 代码图索引提示：仅在已建索引时注入，引导模型优先用图谱而非逐字搜索
     const { detectCodegraphAvailability, buildCodegraphPromptBlock } = await import(
@@ -1384,48 +1337,22 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
     )
 
     const officeExecutionPrompt = buildOfficeExecutionPrompt(toolProfile, registry, externalSkills)
-    const workspaceDownloadPrompt = buildWorkspaceDownloadPrompt(sessionId)
-    const codeExecutionPrompt = toolProfile === 'code' ? `\n\n${CODE_AGENT_EXECUTION_PROMPT}` : ''
-    const workExecutionPrompt = toolProfile === 'general' ? `\n\n${GENERAL_WORK_EXECUTION_PROMPT}` : ''
-    const fullSystemPrompt = baseSystemPrompt + ragPrompt + memoryRecallBlock + `
----
-# Rules
-1. **Use the \`ask_user\` tool ONLY** when you need the user to make a critical decision among specific options to continue a complex task. For normal conversational questions, open-ended clarifications, or when chatting naturally, DO NOT use the \`ask_user\` tool — just output your question as plain text.
-1a. When calling \`ask_user\`, you MUST provide **at least 2 meaningful, specific options**. NEVER call it with only one option (e.g. only "其他").
-1b. **能自行查证的一律自行查证，禁止用 \`ask_user\` 代替探索。** 只要信息可以通过工具获得（读文件、列目录、grep、看诊断、读代码图），就必须先去查，而不是先问用户。典型反例：不给路径就问「你指哪个文件」、不读代码就问「是哪个组件」、不跑测试就问「是不是这里错了」。只有在**信息确实只存在于用户脑子里**（业务偏好、优先级取舍、无法从仓库推断的需求）时才用 \`ask_user\`。
-2. 用户可见说明使用中文；工具调用必须使用已注册的原始 name，不编造中文别名或不存在的工具。
-3. You are ${currentModelName}.
-${workspaceDownloadPrompt}
-5. 多步任务使用内建 \`plan_update\` 静默维护完整任务计划；简单单步请求无需建计划。首次可省略 id，后续复用返回 id，保留仍需展示的已完成步骤。status 使用 pending/in_progress/completed/cancelled；只在步骤真实完成且有依据后标记 completed。计划由引擎持久化并独立展示，不复述创建/更新日志，不通过命令或脚本维护；失败先修正输入，不声称未落盘的状态已保存。
-6. **先给结论，再说理由。** 不要在回答里反复自我怀疑或把同一假设推演多遍；一旦确认了一件事，就把它当既定事实继续推进，不要回头重复论证。
-7. **禁止绕过工具链自造轮子。** 当现有工具做不到某件事时（例如看不到图片），**不要**自己写脚本去实现底层能力（手写 PNG/JPEG 解码器、二进制解析、像素取证、OCR 引擎等）。这类自造轮子几乎必然失败，且会烧掉几十轮工具调用。正确做法：① 换用受支持的路径（如 \`read_file mode:"ocr"\`）；② 确认该路径确实不可用后，直接向用户说明限制并给出替代方案。**同一件事尝试失败一次就换路径，绝不允许用「再换个脚本试试」的方式反复试探。**
-${codegraphBlock}${attachments && attachments.length > 0 ? `\n\n## 本次消息已附带以下文件\n${attachments.map(a => `- ${a.name}`).join('\n')}${visionCapabilityNote}` : ''}${codeExecutionPrompt}${workExecutionPrompt}${officeExecutionPrompt}
-`
+    const attachmentPrompt = attachments?.length
+      ? '\n\n## 本次消息已附带以下文件\n' + attachments.map(a => '- ' + a.name).join('\n') + visionCapabilityNote : ''
+    const { fullSystemPrompt, pureSystemPrompt } = buildChatSystemPrompts({
+      base: baseSystemPrompt, rag: ragPrompt, memory: memoryRecallBlock, modelName: currentModelName,
+      download: buildWorkspaceDownloadPrompt(sessionId, toolProfile === 'general' && registry.has('deliver_files') ? 'cards' : 'links'), codegraph: codegraphBlock, attachments: attachmentPrompt,
+      mode: toolProfile === 'code' ? CODE_AGENT_EXECUTION_PROMPT : '', office: officeExecutionPrompt,
+    })
 
-    // ── Estimate token counts for each injected prompt section ──────────
-    // systemPromptTokens: pure system prompt (excluding RAG context)
-    const pureSystemPrompt = baseSystemPrompt + memoryRecallBlock + `
----
-# Rules
-1. **Use the \`ask_user\` tool ONLY** when you need the user to make a critical decision among specific options to continue a complex task. For normal conversational questions, open-ended clarifications, or when chatting naturally, DO NOT use the \`ask_user\` tool — just output your question as plain text.
-1a. When calling \`ask_user\`, you MUST provide **at least 2 meaningful, specific options**. NEVER call it with only one option (e.g. only "其他").
-1b. **能自行查证的一律自行查证，禁止用 \`ask_user\` 代替探索。** 只要信息可以通过工具获得（读文件、列目录、grep、看诊断、读代码图），就必须先去查，而不是先问用户。典型反例：不给路径就问「你指哪个文件」、不读代码就问「是哪个组件」、不跑测试就问「是不是这里错了」。只有在**信息确实只存在于用户脑子里**（业务偏好、优先级取舍、无法从仓库推断的需求）时才用 \`ask_user\`。
-2. 用户可见说明使用中文；工具调用必须使用已注册的原始 name，不编造中文别名或不存在的工具。
-3. You are ${currentModelName}.
-${workspaceDownloadPrompt}
-5. 多步任务使用内建 \`plan_update\` 静默维护完整任务计划；简单单步请求无需建计划。首次可省略 id，后续复用返回 id，保留仍需展示的已完成步骤。status 使用 pending/in_progress/completed/cancelled；只在步骤真实完成且有依据后标记 completed。计划由引擎持久化并独立展示，不复述创建/更新日志，不通过命令或脚本维护；失败先修正输入，不声称未落盘的状态已保存。
-6. **先给结论，再说理由。** 不要在回答里反复自我怀疑或把同一假设推演多遍；一旦确认了一件事，就把它当既定事实继续推进，不要回头重复论证。
-7. **禁止绕过工具链自造轮子。** 当现有工具做不到某件事时（例如看不到图片），**不要**自己写脚本去实现底层能力（手写 PNG/JPEG 解码器、二进制解析、像素取证、OCR 引擎等）。这类自造轮子几乎必然失败，且会烧掉几十轮工具调用。正确做法：① 换用受支持的路径（如 \`read_file mode:"ocr"\`）；② 确认该路径确实不可用后，直接向用户说明限制并给出替代方案。**同一件事尝试失败一次就换路径，绝不允许用「再换个脚本试试」的方式反复试探。**
-${codegraphBlock}${codeExecutionPrompt}${workExecutionPrompt}${officeExecutionPrompt}
-`
+    // Skills are embedded in base, while RAG travels only in full. Count the same strings sent.
     const skillTokens = estimateTokens(skillsPrompt)
     // Skills are already embedded in baseSystemPrompt, but have their own
     // usage category. Each input section must be counted exactly once.
-    const systemPromptTokens = Math.max(0, estimateTokens(pureSystemPrompt) - skillTokens)
     const ragTokens = estimateTokens(ragPrompt)
 
     // Tool definitions: estimate separately for builtin vs MCP
-    const allToolsList = registry.list()
+    const allToolsList = registry.listForModel?.() ?? registry.list()
     const builtinToolNames = new Set(toolCategories.builtinTools)
     const mcpToolNames = new Set(toolCategories.mcpTools)
     const builtinToolDefsText = allToolsList.filter(t => builtinToolNames.has(t.name))
@@ -1646,6 +1573,8 @@ ${codegraphBlock}${codeExecutionPrompt}${workExecutionPrompt}${officeExecutionPr
     let finalUsage: any = null
 
     async function* runAgent(): AsyncIterable<string> {
+      const memoryReservation = enableMemory ? reserveMemoryExtraction({ tenantId, sessionId, memoryScopes: effectiveMemoryScopes }) : undefined
+      let memoryExtractionScheduled = false
       try {
         // 提取消息中的纯文本部分（message 可能是数组格式）
         const messageText = extractPlainText(message)
@@ -1680,13 +1609,28 @@ ${codegraphBlock}${codeExecutionPrompt}${workExecutionPrompt}${officeExecutionPr
         let teamContext = ''
         try { teamContext = await buildSubagentTeamContext(ctx) }
         catch (error) { reqLogger.warn({ err: error }, 'Existing child directory could not be included; explicit discovery remains available') }
+        const collaboration = createCollaboratorDispatch(selectedCollaborators, prompt, ctx)
+        const collaboratorToolTokens = collaboration.pendingDispatch ? estimateTokens(`${collaboration.pendingDispatch.name}: ${collaboration.pendingDispatch.description} ${JSON.stringify(collaboration.pendingDispatch.parameters)}`) : 0
+        if (collaboration.pendingDispatch) {
+          ctx.tools.register(collaboration.pendingDispatch)
+          if (!ctx.tools.has(collaboration.pendingDispatch.name)) throw new Error('Selected collaborator planning tool could not be installed')
+        }
+        const collaboratorPrompt = selectedCollaborators.length
+          ? collaboration.planningPrompt
+          : !request.body.toolResponse && request.body.collaborators?.length ? '\n\n本轮协作者选择未附带实际任务，因此未启动或续跑子代理。正常回应当前消息；需要明确任务时简短询问，不把纯标点、引用或附件内容推断为继续指令。' : ''
+        const collaborationPrompt = teamContext + collaboratorPrompt
+        const strategySystemPrompt = fullSystemPrompt + collaborationPrompt
+        const measuredSystemPrompt = pureSystemPrompt + collaborationPrompt
+        const systemPromptTokens = Math.max(0, estimateTokens(measuredSystemPrompt) - skillTokens)
         const strategy = new ReActStrategy(llm, {
-          delegatedTools: selectedCollaborators.length ? collaboratorTools(selectedCollaborators, prompt, ctx) : undefined,
-          systemPrompt: (fullSystemPrompt + teamContext + (selectedCollaborators.length ? '\n\n用户本轮明确指定的协作子代理已由系统发起，历史中的subagent_start回执仅代表接纳。主Agent现在可以继续自己的工作、协调子任务并等待真实结果；最终答复前用subagent_wait收取结果并验收。不能要求用户新建任务来使用这些Agent，不能把子代理当作更换主Agent。需要追加工作时用subagent_followup继续同一子代理上下文，避免重复创建或重复已完成工作。' : '')) || undefined,
+          delegatedTools: collaboration.delegatedTools,
+          takeDelegatedTools: collaboration.takeDelegatedTools,
+          hasPendingDelegations: collaboration.hasPendingDelegations,
+          systemPrompt: strategySystemPrompt || undefined,
           temperature: effectiveTemperature,
           unboundedCode: toolProfile === 'code',
           conversationId,
-          promptBreakdown: { systemPromptTokens, systemToolsTokens, skillTokens, ragTokens, builtinToolsTokens, mcpToolsTokens },
+          promptBreakdown: { systemPromptTokens, systemToolsTokens: systemToolsTokens + collaboratorToolTokens, skillTokens, ragTokens, builtinToolsTokens: builtinToolsTokens + collaboratorToolTokens, mcpToolsTokens },
           thinkingEnabled,
           thinkingConfig: finalThinkingConfig,
           responseThinkingField: finalResponseThinkingField,
@@ -1771,7 +1715,7 @@ ${codegraphBlock}${codeExecutionPrompt}${workExecutionPrompt}${officeExecutionPr
           userMessage: message,
           assistantResponse,
           reasoningContent: reasoningContent || undefined,
-          systemPromptContent: pureSystemPrompt || undefined,
+          systemPromptContent: measuredSystemPrompt || undefined,
           ragContent: ragPrompt || undefined,
           skillPromptContent: skillsPrompt || undefined,
           builtinToolsContent: builtinToolDefsText || undefined,
@@ -1782,15 +1726,18 @@ ${codegraphBlock}${codeExecutionPrompt}${workExecutionPrompt}${officeExecutionPr
           createdAt: Date.now()
         })
 
+        memoryExtractionScheduled = enableMemory
         setImmediate(() => {
           // Reuse the request's capability decision; an explicit conversation
           // memory policy also applies to code-profile runs.
           if (enableMemory) {
             extractAndStoreMemories({
+              extractionTracker: memoryReservation,
               sourceTurnId: conversationId,
               messages: fullHistory.map((m: any) => ({
                 role: m.role as string,
                 content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+                toolCall: m.toolCall, toolCallId: m.toolCallId, metadata: m.metadata,
               })),
               sessionId,
               tenantId,
@@ -1813,7 +1760,7 @@ ${codegraphBlock}${codeExecutionPrompt}${workExecutionPrompt}${officeExecutionPr
               }
             }).catch((err) => {
               reqLogger.warn({ err: (err as Error)?.message }, 'Memory extraction failed silently')
-            })
+            }).finally(() => memoryReservation?.close())
           }
 
         })
@@ -1855,6 +1802,8 @@ ${codegraphBlock}${codeExecutionPrompt}${workExecutionPrompt}${officeExecutionPr
           ? JSON.stringify({ errorType: dsErrorType, message: err.message, rechargeUrl: err.rechargeUrl })
           : null
         yield `\n\n[System Error: ${err.message || String(err)}]${errPayload ? `\n__DS_ERR__${errPayload}` : ''}`
+      } finally {
+        if (!memoryExtractionScheduled) memoryReservation?.close()
       }
     }
 
@@ -1977,7 +1926,7 @@ ${codegraphBlock}${codeExecutionPrompt}${workExecutionPrompt}${officeExecutionPr
             const publishedUsage = checkpoint.snapshot.projection.find(frame=>frame.usage)?.usage as Record<string,unknown>|undefined
             return checkedChildEnvelope(success({...checkpoint.snapshot,finished:closure.closed,...(closure.error?{error:closure.error}:{}),
               source:'persisted-published',sessionId,run,executionRun:rootRunStore.public(stillOwned!),
-              runs:[...runs.filter(item=>item.runId!==run.runId),run].sort((a,b)=>a.seq-b.seq),history:publicHistoryMessages(storedHistory),
+              runs:[...runs.filter(item=>item.runId!==run.runId),run].sort((a,b)=>a.seq-b.seq),history:await publicSessionHistoryMessages(tenantId, storedHistory),
               historySource:cached?'pre-compaction-cache':'current-history',historyCompacted:storedHistory.some(item=>item.role==='system' && item.metadata?.isCompactSummary===true),
               todos,changes,commandJobs:jobs,sessionUsage:sessionUsageAtWatermark(totals.sessionUsage,totals.turnUsage,publishedUsage),
               currentTurnComplete:checkpoint.currentTurnComplete,bootstrap:{checkpointId:checkpoint.checkpointId,fence,currentTurnComplete:checkpoint.currentTurnComplete},
@@ -2010,7 +1959,7 @@ ${codegraphBlock}${codeExecutionPrompt}${workExecutionPrompt}${officeExecutionPr
           const { subagentWatermarks: _legacyWatermarks, ...header } = snapshot
           return checkedChildEnvelope(success({ ...header, projection, projectionIndices, source: 'live', sessionId, run, executionRun: rootRunStore.public(owned!),
             runs: [...runs.filter(item => item.runId !== run.runId), run].sort((a, b) => a.seq - b.seq),
-            history: publicHistoryMessages(storedHistory), historyCompacted: storedHistory.some(message => message.role === 'system' && message.metadata?.isCompactSummary === true),
+            history: await publicSessionHistoryMessages(tenantId, storedHistory), historyCompacted: storedHistory.some(message => message.role === 'system' && message.metadata?.isCompactSummary === true),
             todos, changes, commandJobs: jobs, sessionUsage: sessionUsageAtWatermark(totals.sessionUsage, totals.turnUsage, publishedUsage),
             subagentRecovery: { source: 'live-published', ...recovery.data },
             subagentProjectionArchive: { protocolVersion: 1, snapshotId: recovery.data.snapshotId, totalCount: entries.length,
@@ -2049,7 +1998,7 @@ ${codegraphBlock}${codeExecutionPrompt}${workExecutionPrompt}${officeExecutionPr
           const subagentRuns = publishedSubagentRuns(childRuns, publishedChildren, { tenantId, sessionId }, subagentProtocol, run.turnId)
           const projection = subagentProjectionForViewer(snapshot.projection, publishedChildren, subagentProtocol)
           return reply.send(success({ ...snapshot, projection, source: 'live', sessionId, run, executionRun: runs.find(item => item.runId === run.runId), runs: projectedRuns,
-            history: publicHistoryMessages(cache.history), historyCompacted: cache.history.some(message => message.role === 'system' && message.metadata?.isCompactSummary === true),
+            history: await publicSessionHistoryMessages(tenantId, cache.history), historyCompacted: cache.history.some(message => message.role === 'system' && message.metadata?.isCompactSummary === true),
             todos, changes, commandJobs: jobs, subagentRuns,
             sessionUsage: sessionUsageAtWatermark(cache.totals.sessionUsage, cache.totals.turnUsage, publishedUsage),
             sessionSubagentUsage: sessionSubagentUsage(subagentRuns, { tenantId, sessionId }) }))
@@ -2070,7 +2019,7 @@ ${codegraphBlock}${codeExecutionPrompt}${workExecutionPrompt}${officeExecutionPr
           ? await snapshotHistory.getUsageTotals({ tenantId, sessionId }, latestTurnId)
           : { sessionUsage: await snapshotHistory.getSessionUsage({ tenantId, sessionId }),
             turnUsage: latestTurnId ? await snapshotHistory.getSessionUsage({ tenantId, sessionId }, latestTurnId) : {} }
-        const history = publicHistoryMessages(storedHistory)
+        const history = await publicSessionHistoryMessages(tenantId, storedHistory)
         // JSONL keeps the pre-compaction transcript on disk but exposes only
         // the summary + recent tail to the model/UI snapshot.  Tell the UI
         // that an explicit archive read is available without embedding the

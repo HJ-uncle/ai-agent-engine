@@ -1,0 +1,1028 @@
+{
+  "generatedAt": "2026-11-09T09:06:17.208Z",
+  "campaign": "D:\\dev\\ai-agent-engine\\.e2e-tmp\\team-token-20261109\\results",
+  "accounting": "Final provider input (including cached input) plus output, once per fetch response. All parent/child calls included. Incomplete/aborted receipts make total a KNOWN LOWER BOUND, never an exact bill. Persisted usage is independently deduplicated by session/message ID. These are token counts, not monetary charges.",
+  "limitations": [
+    "Historical comparisons are not controlled A/B tests.",
+    "Identical body hashes only detect identical local fetch requests, not semantic duplication or gateway retries.",
+    "Native Office visual rendering was not tested."
+  ],
+  "cases": [
+    {
+      "run": "team-token-v1-2026-11-09T07-49-16-851Z-c39431",
+      "case": "greeting",
+      "repeat": 1,
+      "evidence": ".e2e-tmp/team-token-20261109/results/team-token-v1-2026-11-09T07-49-16-851Z-c39431/greeting-1.json",
+      "passed": true,
+      "runStatus": "succeeded",
+      "requests": 1,
+      "input": 7737,
+      "output": 14,
+      "total": 7751,
+      "totalIsLowerBound": false,
+      "unmeteredRequests": [],
+      "providerUsageComplete": true,
+      "evaluationGuardFailures": [],
+      "persistedTotal": 7751,
+      "persistedMatchesProvider": true,
+      "actors": {
+        "parent": {
+          "responses": 1,
+          "input": 7737,
+          "output": 14,
+          "total": 7751
+        }
+      },
+      "elapsedMs": 1137,
+      "children": [],
+      "toolCalls": {},
+      "checks": {
+        "answered": true
+      },
+      "deliveredFormats": []
+    },
+    {
+      "run": "team-token-v1-2026-11-09T07-49-16-851Z-c39431",
+      "case": "office_team",
+      "repeat": 1,
+      "evidence": ".e2e-tmp/team-token-20261109/results/team-token-v1-2026-11-09T07-49-16-851Z-c39431/office_team-1.json",
+      "passed": true,
+      "runStatus": "succeeded",
+      "requests": 17,
+      "input": 348455,
+      "output": 6531,
+      "total": 354986,
+      "totalIsLowerBound": false,
+      "unmeteredRequests": [],
+      "providerUsageComplete": true,
+      "evaluationGuardFailures": [],
+      "persistedTotal": 354986,
+      "persistedMatchesProvider": true,
+      "actors": {
+        "parent": {
+          "responses": 17,
+          "input": 348455,
+          "output": 6531,
+          "total": 354986
+        }
+      },
+      "elapsedMs": 56021,
+      "children": [],
+      "toolCalls": {
+        "get_skill": 4,
+        "list_files": 2,
+        "read_file": 1,
+        "write_file": 1,
+        "load_tools": 1,
+        "plan_update": 2,
+        "office_document": 4,
+        "office_inspect": 3,
+        "deliver_files": 1
+      },
+      "checks": {
+        "threeFormatsDelivered": true,
+        "draftBeforeOfficeCreation": true,
+        "draftNotDelivered": true,
+        "artifactContentsAndHashesValid": true,
+        "spreadsheetErrorCellsAbsent": true,
+        "formulasCachedWithoutErrors": true,
+        "finalDeliveryOnlyCloses": true,
+        "planClosed": true,
+        "noFinalDownloadLinkList": true,
+        "backgroundIdle": true,
+        "wireRequestHashCoverageComplete": true,
+        "noIdenticalWireRequestResends": true,
+        "expectedTurnsSucceeded": true
+      },
+      "deliveredFormats": [
+        {
+          "extension": ".docx",
+          "name": "web-2048 项目说明文档.docx",
+          "bytes": 14033,
+          "references2048": true,
+          "projectIdentityVerified": true,
+          "projectModuleMatches": 5,
+          "sourceMatchesPublishedHash": true,
+          "valid": true,
+          "meaningfulStructure": true,
+          "topicCount": 7,
+          "structure": {
+            "paragraphs": 45
+          },
+          "formulaCount": 0,
+          "cachedFormulaCount": 0,
+          "errorCells": 0,
+          "formulaValidation": {
+            "status": "not_applicable",
+            "reason": "Not a spreadsheet"
+          },
+          "textCharacters": 2306,
+          "meaningfulCharacters": 1690
+        },
+        {
+          "extension": ".xlsx",
+          "name": "web-2048 项目信息与测试台账.xlsx",
+          "bytes": 11796,
+          "references2048": true,
+          "projectIdentityVerified": true,
+          "projectModuleMatches": 5,
+          "sourceMatchesPublishedHash": true,
+          "valid": true,
+          "meaningfulStructure": true,
+          "topicCount": 6,
+          "structure": {
+            "sheets": 3,
+            "tabularRows": 32,
+            "nonemptyCells": 120
+          },
+          "formulaCount": 1,
+          "cachedFormulaCount": 1,
+          "errorCells": 0,
+          "formulaValidation": {
+            "status": "passed",
+            "recalculateSucceeded": true,
+            "cacheMismatches": [],
+            "method": "Compare saved caches with an in-memory rerun of the engine formula calculator"
+          },
+          "textCharacters": 1121,
+          "meaningfulCharacters": 863
+        },
+        {
+          "extension": ".pptx",
+          "name": "web-2048 项目概览.pptx",
+          "bytes": 140161,
+          "references2048": true,
+          "projectIdentityVerified": true,
+          "projectModuleMatches": 5,
+          "sourceMatchesPublishedHash": true,
+          "valid": true,
+          "meaningfulStructure": true,
+          "topicCount": 6,
+          "structure": {
+            "slides": 8,
+            "substantiveSlides": 8
+          },
+          "formulaCount": 0,
+          "cachedFormulaCount": 0,
+          "errorCells": 0,
+          "formulaValidation": {
+            "status": "not_applicable",
+            "reason": "Not a spreadsheet"
+          },
+          "textCharacters": 997,
+          "meaningfulCharacters": 760
+        }
+      ]
+    },
+    {
+      "run": "team-token-v1-2026-11-09T07-49-16-851Z-c39431",
+      "case": "selected_team",
+      "repeat": 1,
+      "evidence": ".e2e-tmp/team-token-20261109/results/team-token-v1-2026-11-09T07-49-16-851Z-c39431/selected_team-1.json",
+      "passed": true,
+      "runStatus": "succeeded",
+      "requests": 12,
+      "input": 118828,
+      "output": 2584,
+      "total": 121412,
+      "totalIsLowerBound": false,
+      "unmeteredRequests": [],
+      "providerUsageComplete": true,
+      "evaluationGuardFailures": [],
+      "persistedTotal": 121412,
+      "persistedMatchesProvider": true,
+      "actors": {
+        "parent": {
+          "responses": 8,
+          "input": 92239,
+          "output": 1296,
+          "total": 93535
+        },
+        "subagent-85ea2ed1-c360-4ddc-a5b5-844491f945f4": {
+          "responses": 2,
+          "input": 13269,
+          "output": 639,
+          "total": 13908
+        },
+        "subagent-9f8840f1-83ac-46de-87a0-92020af15144": {
+          "responses": 2,
+          "input": 13320,
+          "output": 649,
+          "total": 13969
+        }
+      },
+      "elapsedMs": 20078,
+      "children": [
+        {
+          "run_id": "b9546fcf-ddf9-48d9-8585-d15d4744bc59",
+          "child_session_id": "subagent-85ea2ed1-c360-4ddc-a5b5-844491f945f4",
+          "status": "succeeded"
+        },
+        {
+          "run_id": "9fedca94-fc9c-4f2e-963e-146b3fff2d6e",
+          "child_session_id": "subagent-9f8840f1-83ac-46de-87a0-92020af15144",
+          "status": "succeeded"
+        }
+      ],
+      "toolCalls": {
+        "list_files": 1,
+        "collaborator_dispatch": 1,
+        "subagent_start": 2,
+        "subagent_wait": 1,
+        "read_file": 2,
+        "load_tools": 1,
+        "deliver_files": 1,
+        "write_file": 2
+      },
+      "checks": {
+        "filesCorrect": true,
+        "twoChildren": true,
+        "allChildrenSucceeded": true,
+        "structuredDispatch": true
+      },
+      "deliveredFormats": []
+    },
+    {
+      "run": "team-token-v1-2026-11-09T07-49-16-851Z-c39431",
+      "case": "subagent",
+      "repeat": 1,
+      "evidence": ".e2e-tmp/team-token-20261109/results/team-token-v1-2026-11-09T07-49-16-851Z-c39431/subagent-1.json",
+      "passed": true,
+      "runStatus": "succeeded",
+      "requests": 7,
+      "input": 54203,
+      "output": 1014,
+      "total": 55217,
+      "totalIsLowerBound": false,
+      "unmeteredRequests": [],
+      "providerUsageComplete": true,
+      "evaluationGuardFailures": [],
+      "persistedTotal": 55217,
+      "persistedMatchesProvider": true,
+      "actors": {
+        "parent": {
+          "responses": 5,
+          "input": 46001,
+          "output": 794,
+          "total": 46795
+        },
+        "subagent-4f2c08e7-281b-48b7-bb78-0efb1eb20008": {
+          "responses": 2,
+          "input": 8202,
+          "output": 220,
+          "total": 8422
+        }
+      },
+      "elapsedMs": 14051,
+      "children": [
+        {
+          "run_id": "a4f7f9e1-9ac7-4840-a647-ceb55b97a3b5",
+          "child_session_id": "subagent-4f2c08e7-281b-48b7-bb78-0efb1eb20008",
+          "status": "succeeded"
+        },
+        {
+          "run_id": "aa75cc03-38fa-4810-9235-efc4cda93ab7",
+          "child_session_id": "subagent-4f2c08e7-281b-48b7-bb78-0efb1eb20008",
+          "status": "succeeded"
+        }
+      ],
+      "toolCalls": {
+        "load_tools": 1,
+        "subagent_directory": 1,
+        "subagent": 1,
+        "subagent_followup": 1,
+        "subagent_wait": 1
+      },
+      "checks": {
+        "first": true,
+        "second": true,
+        "singleChild": true,
+        "twoCompletedRuns": true,
+        "followupUsed": true
+      },
+      "deliveredFormats": []
+    },
+    {
+      "run": "team-token-v3-2026-11-09T08-03-58-404Z-f9e4e8",
+      "case": "office_team_selected",
+      "repeat": 1,
+      "evidence": ".e2e-tmp/team-token-20261109/results/team-token-v3-2026-11-09T08-03-58-404Z-f9e4e8/office_team_selected-1.json",
+      "passed": false,
+      "runStatus": "failed",
+      "error": {
+        "retryable": false,
+        "code": "PROVIDER_ERROR",
+        "message": "JSONL history changed after request budgeting; no provider request was dispatched"
+      },
+      "requests": 34,
+      "input": 576069,
+      "output": 16735,
+      "total": 592804,
+      "totalIsLowerBound": false,
+      "unmeteredRequests": [],
+      "providerUsageComplete": true,
+      "evaluationGuardFailures": [],
+      "persistedTotal": 592804,
+      "persistedMatchesProvider": true,
+      "actors": {
+        "parent": {
+          "responses": 13,
+          "input": 257188,
+          "output": 3528,
+          "total": 260716
+        },
+        "subagent-27726190-61e8-4d24-bed2-8c9fff057fcc": {
+          "responses": 10,
+          "input": 164749,
+          "output": 9369,
+          "total": 174118
+        },
+        "subagent-12909ca4-5e98-4bac-8d80-3d390edb013d": {
+          "responses": 11,
+          "input": 154132,
+          "output": 3838,
+          "total": 157970
+        }
+      },
+      "elapsedMs": 112312,
+      "children": [
+        {
+          "run_id": "59d6af37-4918-480a-9fb9-a6878d166bb9",
+          "child_session_id": "subagent-27726190-61e8-4d24-bed2-8c9fff057fcc",
+          "status": "failed"
+        },
+        {
+          "run_id": "78d2f118-fc95-45df-9971-3bbd238c6e66",
+          "child_session_id": "subagent-12909ca4-5e98-4bac-8d80-3d390edb013d",
+          "status": "failed"
+        }
+      ],
+      "toolCalls": {
+        "list_files": 5,
+        "get_skill": 1,
+        "read_file": 14,
+        "load_tools": 3,
+        "create_dir": 1,
+        "write_file": 1,
+        "collaborator_dispatch": 1,
+        "subagent_start": 2,
+        "plan_update": 1,
+        "subagent_wait": 1,
+        "office_document": 7,
+        "grep": 2,
+        "office_inspect": 2
+      },
+      "checks": {
+        "threeFormatsDelivered": false,
+        "draftBeforeOfficeCreation": true,
+        "draftNotDelivered": true,
+        "artifactContentsAndHashesValid": false,
+        "spreadsheetErrorCellsAbsent": false,
+        "finalDeliveryOnlyCloses": false,
+        "planClosed": false,
+        "noFinalDownloadLinkList": true,
+        "backgroundIdle": true,
+        "wireRequestHashCoverageComplete": true,
+        "noIdenticalWireRequestResends": true,
+        "expectedTurnsSucceeded": false,
+        "twoIndependentChildren": true,
+        "allChildrenSucceeded": false
+      },
+      "deliveredFormats": []
+    },
+    {
+      "run": "team-token-v4-2026-11-09T08-31-20-807Z-b4919d",
+      "case": "office_team_selected",
+      "repeat": 1,
+      "evidence": ".e2e-tmp/team-token-20261109/results/team-token-v4-2026-11-09T08-31-20-807Z-b4919d/office_team_selected-1.json",
+      "passed": false,
+      "runStatus": "failed",
+      "error": {
+        "retryable": false,
+        "code": "PROVIDER_ERROR",
+        "message": "JSONL history changed after request budgeting; no provider request was dispatched"
+      },
+      "requests": 34,
+      "input": 560396,
+      "output": 16062,
+      "total": 576458,
+      "totalIsLowerBound": false,
+      "unmeteredRequests": [],
+      "providerUsageComplete": true,
+      "evaluationGuardFailures": [],
+      "persistedTotal": 576458,
+      "persistedMatchesProvider": true,
+      "actors": {
+        "parent": {
+          "responses": 12,
+          "input": 250391,
+          "output": 4449,
+          "total": 254840
+        },
+        "subagent-41bc8d9a-2059-4d64-8c8c-7f8cf7239bf7": {
+          "responses": 12,
+          "input": 159102,
+          "output": 5252,
+          "total": 164354
+        },
+        "subagent-b8cf22cd-2035-4428-b8a6-0b27877b31b7": {
+          "responses": 10,
+          "input": 150903,
+          "output": 6361,
+          "total": 157264
+        }
+      },
+      "elapsedMs": 93444,
+      "children": [
+        {
+          "run_id": "e8ba9d3e-c501-46d2-8325-f7065e97ad0d",
+          "child_session_id": "subagent-41bc8d9a-2059-4d64-8c8c-7f8cf7239bf7",
+          "status": "failed"
+        },
+        {
+          "run_id": "b5eb467f-2c58-42b3-a86b-50a149ccef2a",
+          "child_session_id": "subagent-b8cf22cd-2035-4428-b8a6-0b27877b31b7",
+          "status": "failed"
+        }
+      ],
+      "toolCalls": {
+        "list_files": 8,
+        "load_tools": 3,
+        "read_file": 9,
+        "get_skill": 6,
+        "write_file": 1,
+        "collaborator_dispatch": 1,
+        "subagent_start": 2,
+        "plan_update": 1,
+        "subagent_wait": 1,
+        "office_document": 6,
+        "office_inspect": 2
+      },
+      "checks": {
+        "threeFormatsDelivered": false,
+        "draftBeforeOfficeCreation": false,
+        "draftNotDelivered": true,
+        "artifactContentsAndHashesValid": false,
+        "spreadsheetErrorCellsAbsent": false,
+        "finalDeliveryOnlyCloses": false,
+        "planClosed": false,
+        "noFinalDownloadLinkList": true,
+        "backgroundIdle": true,
+        "wireRequestHashCoverageComplete": true,
+        "noIdenticalWireRequestResends": true,
+        "expectedTurnsSucceeded": false,
+        "twoIndependentChildren": true,
+        "allChildrenSucceeded": false
+      },
+      "deliveredFormats": []
+    },
+    {
+      "run": "team-token-v5-2026-11-09T08-48-56-221Z-65b9c0",
+      "case": "office_team_selected",
+      "repeat": 1,
+      "evidence": ".e2e-tmp/team-token-20261109/results/team-token-v5-2026-11-09T08-48-56-221Z-65b9c0/office_team_selected-1.json",
+      "passed": false,
+      "runStatus": "failed",
+      "error": {
+        "retryable": false,
+        "code": "PROVIDER_ERROR",
+        "message": "400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"EVAL_CUMULATIVE_INPUT_LIMIT\"}}"
+      },
+      "requests": 32,
+      "input": 565300,
+      "output": 15336,
+      "total": 580636,
+      "totalIsLowerBound": false,
+      "unmeteredRequests": [],
+      "providerUsageComplete": true,
+      "evaluationGuardFailures": [
+        {
+          "code": "EVAL_CUMULATIVE_INPUT_LIMIT",
+          "at": 1794214221033,
+          "chargedInput": 564504,
+          "estimatedInput": 47215,
+          "limit": 600000
+        },
+        {
+          "code": "EVAL_CUMULATIVE_INPUT_LIMIT",
+          "at": 1794214225176,
+          "chargedInput": 565300,
+          "estimatedInput": 45565,
+          "limit": 600000
+        }
+      ],
+      "persistedTotal": 580636,
+      "persistedMatchesProvider": true,
+      "actors": {
+        "parent": {
+          "responses": 11,
+          "input": 169148,
+          "output": 3493,
+          "total": 172641
+        },
+        "subagent-ac1b5019-92d6-4bfa-8569-61177fedf7f0": {
+          "responses": 8,
+          "input": 150832,
+          "output": 7158,
+          "total": 157990
+        },
+        "subagent-55f1af45-cc02-4b21-be3a-442029364b17": {
+          "responses": 13,
+          "input": 245320,
+          "output": 4685,
+          "total": 250005
+        }
+      },
+      "elapsedMs": 86067,
+      "children": [
+        {
+          "run_id": "bc73bc9d-8051-4cf7-9dcc-c6336288fe75",
+          "child_session_id": "subagent-ac1b5019-92d6-4bfa-8569-61177fedf7f0",
+          "status": "succeeded"
+        },
+        {
+          "run_id": "410c1730-f073-436d-a307-a2e73ca2eaf5",
+          "child_session_id": "subagent-55f1af45-cc02-4b21-be3a-442029364b17",
+          "status": "failed"
+        }
+      ],
+      "toolCalls": {
+        "list_files": 4,
+        "read_file": 3,
+        "get_skill": 9,
+        "write_file": 1,
+        "collaborator_dispatch": 1,
+        "subagent_start": 2,
+        "plan_update": 1,
+        "subagent_wait": 1,
+        "load_tools": 3,
+        "office_document": 9,
+        "office_inspect": 4,
+        "report_artifacts": 2
+      },
+      "checks": {
+        "threeFormatsDelivered": false,
+        "draftBeforeOfficeCreation": true,
+        "draftNotDelivered": true,
+        "artifactContentsAndHashesValid": false,
+        "spreadsheetErrorCellsAbsent": false,
+        "finalDeliveryOnlyCloses": false,
+        "planClosed": false,
+        "noFinalDownloadLinkList": true,
+        "backgroundIdle": true,
+        "wireRequestHashCoverageComplete": true,
+        "noIdenticalWireRequestResends": true,
+        "expectedTurnsSucceeded": false,
+        "twoIndependentChildren": true,
+        "allChildrenSucceeded": false
+      },
+      "deliveredFormats": []
+    },
+    {
+      "run": "team-token-v6-2026-11-09T08-59-00-668Z-27a607",
+      "case": "office_team_selected",
+      "repeat": 1,
+      "evidence": ".e2e-tmp/team-token-20261109/results/team-token-v6-2026-11-09T08-59-00-668Z-27a607/office_team_selected-1.json",
+      "passed": false,
+      "runStatus": "failed",
+      "error": {
+        "retryable": false,
+        "code": "PROVIDER_ERROR",
+        "message": "400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"EVAL_CUMULATIVE_INPUT_LIMIT\"}}"
+      },
+      "requests": 29,
+      "input": 510319,
+      "output": 14776,
+      "total": 525095,
+      "totalIsLowerBound": true,
+      "unmeteredRequests": [
+        {
+          "attempt": 29,
+          "httpStatus": 200,
+          "streamReadFailed": true,
+          "inputReservation": 42000
+        }
+      ],
+      "providerUsageComplete": false,
+      "evaluationGuardFailures": [
+        {
+          "code": "EVAL_CUMULATIVE_INPUT_LIMIT",
+          "at": 1794214822155,
+          "chargedInput": 552319,
+          "estimatedInput": 53286,
+          "limit": 600000
+        }
+      ],
+      "persistedTotal": 541284,
+      "persistedMatchesProvider": null,
+      "actors": {
+        "parent": {
+          "responses": 10,
+          "input": 172862,
+          "output": 3694,
+          "total": 176556
+        },
+        "subagent-969e5a0a-a721-437d-81f5-5e89bf35a00b": {
+          "responses": 9,
+          "input": 178369,
+          "output": 5714,
+          "total": 184083
+        },
+        "subagent-742a2bf0-5f3a-438c-9364-8861c89dc6db": {
+          "responses": 10,
+          "input": 175277,
+          "output": 5368,
+          "total": 180645
+        }
+      },
+      "elapsedMs": 78613,
+      "children": [
+        {
+          "run_id": "f3ff7c3f-2a8a-4b48-bdd0-45fdf1c1cef8",
+          "child_session_id": "subagent-969e5a0a-a721-437d-81f5-5e89bf35a00b",
+          "status": "succeeded"
+        },
+        {
+          "run_id": "b92f6a69-2c34-4f4b-96a3-03facd2ee08e",
+          "child_session_id": "subagent-742a2bf0-5f3a-438c-9364-8861c89dc6db",
+          "status": "cancelled"
+        }
+      ],
+      "toolCalls": {
+        "list_files": 2,
+        "read_file": 6,
+        "load_tools": 3,
+        "get_skill": 7,
+        "write_file": 1,
+        "collaborator_dispatch": 1,
+        "subagent_start": 2,
+        "subagent_wait": 1,
+        "office_document": 9,
+        "office_inspect": 2,
+        "report_artifacts": 1
+      },
+      "checks": {
+        "threeFormatsDelivered": false,
+        "draftBeforeOfficeCreation": true,
+        "draftNotDelivered": true,
+        "artifactContentsAndHashesValid": false,
+        "spreadsheetErrorCellsAbsent": false,
+        "finalDeliveryOnlyCloses": false,
+        "planClosed": true,
+        "noFinalDownloadLinkList": true,
+        "backgroundIdle": true,
+        "wireRequestHashCoverageComplete": true,
+        "noIdenticalWireRequestResends": true,
+        "expectedTurnsSucceeded": false,
+        "twoIndependentChildren": true,
+        "allChildrenSucceeded": false
+      },
+      "deliveredFormats": []
+    },
+    {
+      "run": "team-token-v7-2026-11-09T09-02-59-397Z-2e4575",
+      "case": "greeting",
+      "repeat": 1,
+      "evidence": ".e2e-tmp/team-token-20261109/results/team-token-v7-2026-11-09T09-02-59-397Z-2e4575/greeting-1.json",
+      "passed": true,
+      "runStatus": "succeeded",
+      "requests": 1,
+      "input": 7974,
+      "output": 12,
+      "total": 7986,
+      "totalIsLowerBound": false,
+      "unmeteredRequests": [],
+      "providerUsageComplete": true,
+      "evaluationGuardFailures": [],
+      "persistedTotal": 7986,
+      "persistedMatchesProvider": true,
+      "actors": {
+        "parent": {
+          "responses": 1,
+          "input": 7974,
+          "output": 12,
+          "total": 7986
+        }
+      },
+      "elapsedMs": 1167,
+      "children": [],
+      "toolCalls": {},
+      "checks": {
+        "answered": true
+      },
+      "deliveredFormats": []
+    },
+    {
+      "run": "team-token-v7-2026-11-09T09-02-59-397Z-2e4575",
+      "case": "office_team",
+      "repeat": 1,
+      "evidence": ".e2e-tmp/team-token-20261109/results/team-token-v7-2026-11-09T09-02-59-397Z-2e4575/office_team-1.json",
+      "passed": true,
+      "runStatus": "succeeded",
+      "requests": 12,
+      "input": 274384,
+      "output": 8394,
+      "total": 282778,
+      "totalIsLowerBound": false,
+      "unmeteredRequests": [],
+      "providerUsageComplete": true,
+      "evaluationGuardFailures": [],
+      "persistedTotal": 282778,
+      "persistedMatchesProvider": true,
+      "actors": {
+        "parent": {
+          "responses": 12,
+          "input": 274384,
+          "output": 8394,
+          "total": 282778
+        }
+      },
+      "elapsedMs": 67561,
+      "children": [],
+      "toolCalls": {
+        "list_files": 2,
+        "get_skill": 4,
+        "read_file": 1,
+        "load_tools": 1,
+        "write_file": 1,
+        "office_document": 4,
+        "office_inspect": 3,
+        "deliver_files": 1,
+        "plan_update": 1
+      },
+      "checks": {
+        "threeFormatsDelivered": true,
+        "draftBeforeOfficeCreation": true,
+        "draftNotDelivered": true,
+        "artifactContentsAndHashesValid": true,
+        "spreadsheetErrorCellsAbsent": true,
+        "formulasCachedWithoutErrors": true,
+        "finalDeliveryOnlyCloses": true,
+        "planClosed": true,
+        "noFinalDownloadLinkList": true,
+        "backgroundIdle": true,
+        "wireRequestHashCoverageComplete": true,
+        "noIdenticalWireRequestResends": true,
+        "expectedTurnsSucceeded": true
+      },
+      "deliveredFormats": [
+        {
+          "extension": ".docx",
+          "name": "web-2048项目说明.docx",
+          "bytes": 14398,
+          "references2048": true,
+          "projectIdentityVerified": true,
+          "projectModuleMatches": 5,
+          "sourceMatchesPublishedHash": true,
+          "valid": true,
+          "meaningfulStructure": true,
+          "topicCount": 7,
+          "structure": {
+            "paragraphs": 55
+          },
+          "formulaCount": 0,
+          "cachedFormulaCount": 0,
+          "errorCells": 0,
+          "formulaValidation": {
+            "status": "not_applicable",
+            "reason": "Not a spreadsheet"
+          },
+          "textCharacters": 2561,
+          "meaningfulCharacters": 1949
+        },
+        {
+          "extension": ".xlsx",
+          "name": "web-2048项目台账.xlsx",
+          "bytes": 14237,
+          "references2048": true,
+          "projectIdentityVerified": true,
+          "projectModuleMatches": 5,
+          "sourceMatchesPublishedHash": true,
+          "valid": true,
+          "meaningfulStructure": true,
+          "topicCount": 7,
+          "structure": {
+            "sheets": 4,
+            "tabularRows": 41,
+            "nonemptyCells": 209
+          },
+          "formulaCount": 4,
+          "cachedFormulaCount": 4,
+          "errorCells": 0,
+          "formulaValidation": {
+            "status": "passed",
+            "recalculateSucceeded": true,
+            "cacheMismatches": [],
+            "method": "Compare saved caches with an in-memory rerun of the engine formula calculator"
+          },
+          "textCharacters": 1945,
+          "meaningfulCharacters": 1492
+        },
+        {
+          "extension": ".pptx",
+          "name": "web-2048项目汇报.pptx",
+          "bytes": 163385,
+          "references2048": true,
+          "projectIdentityVerified": true,
+          "projectModuleMatches": 5,
+          "sourceMatchesPublishedHash": true,
+          "valid": true,
+          "meaningfulStructure": true,
+          "topicCount": 7,
+          "structure": {
+            "slides": 8,
+            "substantiveSlides": 8
+          },
+          "formulaCount": 0,
+          "cachedFormulaCount": 0,
+          "errorCells": 0,
+          "formulaValidation": {
+            "status": "not_applicable",
+            "reason": "Not a spreadsheet"
+          },
+          "textCharacters": 1180,
+          "meaningfulCharacters": 908
+        }
+      ]
+    },
+    {
+      "run": "team-token-v7-2026-11-09T09-02-59-397Z-2e4575",
+      "case": "office_team_selected",
+      "repeat": 1,
+      "evidence": ".e2e-tmp/team-token-20261109/results/team-token-v7-2026-11-09T09-02-59-397Z-2e4575/office_team_selected-1.json",
+      "passed": true,
+      "runStatus": "succeeded",
+      "requests": 34,
+      "input": 581846,
+      "output": 12016,
+      "total": 593862,
+      "totalIsLowerBound": false,
+      "unmeteredRequests": [],
+      "providerUsageComplete": true,
+      "evaluationGuardFailures": [],
+      "persistedTotal": 593862,
+      "persistedMatchesProvider": true,
+      "actors": {
+        "parent": {
+          "responses": 18,
+          "input": 317823,
+          "output": 4487,
+          "total": 322310
+        },
+        "subagent-32f2210b-51fd-4aa3-8c05-733ac25d6f1b": {
+          "responses": 8,
+          "input": 135368,
+          "output": 4576,
+          "total": 139944
+        },
+        "subagent-b2ff65e3-62b6-4f5f-91d3-f3ca8a871308": {
+          "responses": 8,
+          "input": 128655,
+          "output": 2953,
+          "total": 131608
+        }
+      },
+      "elapsedMs": 91491,
+      "children": [
+        {
+          "run_id": "ee67d298-83de-4f2a-95e2-4026493ca082",
+          "child_session_id": "subagent-32f2210b-51fd-4aa3-8c05-733ac25d6f1b",
+          "status": "succeeded"
+        },
+        {
+          "run_id": "6166ad71-9cf3-4379-9217-eefa9fdd7497",
+          "child_session_id": "subagent-b2ff65e3-62b6-4f5f-91d3-f3ca8a871308",
+          "status": "succeeded"
+        }
+      ],
+      "toolCalls": {
+        "list_files": 2,
+        "read_file": 3,
+        "list_skills": 1,
+        "get_skill": 7,
+        "write_file": 1,
+        "collaborator_dispatch": 2,
+        "subagent_start": 2,
+        "plan_update": 2,
+        "subagent_wait": 1,
+        "load_tools": 4,
+        "office_inspect": 6,
+        "deliver_files": 1,
+        "office_document": 5,
+        "search_history": 1,
+        "report_artifacts": 2
+      },
+      "checks": {
+        "threeFormatsDelivered": true,
+        "draftBeforeOfficeCreation": true,
+        "draftNotDelivered": true,
+        "artifactContentsAndHashesValid": true,
+        "spreadsheetErrorCellsAbsent": true,
+        "formulasCachedWithoutErrors": true,
+        "finalDeliveryOnlyCloses": true,
+        "planClosed": true,
+        "noFinalDownloadLinkList": true,
+        "backgroundIdle": true,
+        "wireRequestHashCoverageComplete": true,
+        "noIdenticalWireRequestResends": true,
+        "expectedTurnsSucceeded": true,
+        "twoIndependentChildren": true,
+        "allChildrenSucceeded": true
+      },
+      "deliveredFormats": [
+        {
+          "extension": ".docx",
+          "name": "web-2048-项目总览.docx",
+          "bytes": 13524,
+          "references2048": true,
+          "projectIdentityVerified": true,
+          "projectModuleMatches": 5,
+          "sourceMatchesPublishedHash": true,
+          "valid": true,
+          "meaningfulStructure": true,
+          "topicCount": 7,
+          "structure": {
+            "paragraphs": 38
+          },
+          "formulaCount": 0,
+          "cachedFormulaCount": 0,
+          "errorCells": 0,
+          "formulaValidation": {
+            "status": "not_applicable",
+            "reason": "Not a spreadsheet"
+          },
+          "textCharacters": 1926,
+          "meaningfulCharacters": 1480
+        },
+        {
+          "extension": ".pptx",
+          "name": "web-2048-项目概览.pptx",
+          "bytes": 166543,
+          "references2048": true,
+          "projectIdentityVerified": true,
+          "projectModuleMatches": 4,
+          "sourceMatchesPublishedHash": true,
+          "valid": true,
+          "meaningfulStructure": true,
+          "topicCount": 6,
+          "structure": {
+            "slides": 9,
+            "substantiveSlides": 9
+          },
+          "formulaCount": 0,
+          "cachedFormulaCount": 0,
+          "errorCells": 0,
+          "formulaValidation": {
+            "status": "not_applicable",
+            "reason": "Not a spreadsheet"
+          },
+          "textCharacters": 1172,
+          "meaningfulCharacters": 882
+        },
+        {
+          "extension": ".xlsx",
+          "name": "web-2048-项目台账.xlsx",
+          "bytes": 12111,
+          "references2048": true,
+          "projectIdentityVerified": true,
+          "projectModuleMatches": 5,
+          "sourceMatchesPublishedHash": true,
+          "valid": true,
+          "meaningfulStructure": true,
+          "topicCount": 7,
+          "structure": {
+            "sheets": 3,
+            "tabularRows": 33,
+            "nonemptyCells": 117
+          },
+          "formulaCount": 3,
+          "cachedFormulaCount": 3,
+          "errorCells": 0,
+          "formulaValidation": {
+            "status": "passed",
+            "recalculateSucceeded": true,
+            "cacheMismatches": [],
+            "method": "Compare saved caches with an in-memory rerun of the engine formula calculator"
+          },
+          "textCharacters": 1553,
+          "meaningfulCharacters": 1227
+        }
+      ]
+    }
+  ],
+  "startupFailures": [
+    {
+      "run": "team-token-v2-2026-11-09T08-00-27-404Z-7d3667",
+      "error": "Error: Engine build manifest is missing; rebuild the engine",
+      "cases": 0
+    }
+  ],
+  "totals": {
+    "requests": 213,
+    "input": 3605511,
+    "output": 93474,
+    "total": 3698985,
+    "totalIsLowerBound": true,
+    "unmeteredRequests": 1
+  }
+}

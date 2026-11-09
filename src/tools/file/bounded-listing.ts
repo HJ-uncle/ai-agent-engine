@@ -1,4 +1,4 @@
-import { opendir } from 'node:fs/promises'
+import { lstat, opendir } from 'node:fs/promises'
 import path from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { setImmediate as yieldToLoop } from 'node:timers/promises'
@@ -15,7 +15,7 @@ export function createListingBudget(maxResults = 500): ListingBudget {
 
 /** Stream directory entries instead of materializing an unbounded synchronous tree.
  * One budget is shared across workspace roots. Links are leaves, never traversal roots. */
-export async function listDirectoryEntries(root: string, recursive: boolean, budget: ListingBudget, signal?: AbortSignal): Promise<string[]> {
+export async function listDirectoryEntries(root: string, recursive: boolean, budget: ListingBudget, signal?: AbortSignal, includeSizes = false): Promise<string[]> {
   const entries: string[] = []
   const stop = (reason: NonNullable<ListingBudget['reason']>) => { budget.truncated = true; budget.reason ??= reason }
   const visit = async (directory: string, depth: number): Promise<void> => {
@@ -28,7 +28,17 @@ export async function listDirectoryEntries(root: string, recursive: boolean, bud
       if (budget.count >= budget.maxResults) { stop('results'); break }
       if (performance.now() - budget.startedAt > 2000) { stop('time'); break }
       const full = path.join(directory, entry.name)
-      const label = path.relative(root, full) + (entry.isDirectory() ? '/' : entry.isSymbolicLink() ? '@' : '')
+      let label = path.relative(root, full) + (entry.isDirectory() ? '/' : entry.isSymbolicLink() ? '@' : '')
+      if (includeSizes && entry.isFile()) {
+        try {
+          // A directory entry may be replaced during traversal. Never follow a
+          // newly substituted symlink merely to obtain a target's size.
+          const stat = await lstat(full)
+          label += stat.isFile() ? `\t${stat.size} B` : '\tsize unknown'
+        } catch { label += '\tsize unknown' }
+        throwIfAborted(signal)
+        if (performance.now() - budget.startedAt > 2000) { stop('time'); break }
+      }
       const bytes = Buffer.byteLength(label, 'utf8') + 1
       if (budget.bytes + bytes > 128 * 1024) { stop('bytes'); break }
       entries.push(label); budget.count++; budget.bytes += bytes

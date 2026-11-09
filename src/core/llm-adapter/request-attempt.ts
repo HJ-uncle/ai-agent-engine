@@ -10,7 +10,7 @@ export function prepareRequestContext(options: LLMAdapterOptions | undefined,
   const requestInputTokenEstimate = Math.max(options?.requestInputTokenEstimate ?? 0, estimateProviderRequestInput(request))
   const contextWindow = options?.contextWindow
   const result = { ...options, model: String(request.model ?? options?.model ?? ''), requestInputTokenEstimate,
-    requestDispatchDiagnostic: requestDispatchDiagnostic(request, options?.requestStage) }
+    requestDispatchDiagnostic: requestDispatchDiagnostic(request, options?.requestStage, options?.requestContext) }
   if (typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0) {
     const remaining = Math.floor(contextWindow - requestInputTokenEstimate)
     if (remaining < 1) throw Object.assign(new Error('Provider request input exceeds its configured context window'),

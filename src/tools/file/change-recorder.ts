@@ -4,12 +4,14 @@ import crypto from 'node:crypto'
 import type { AgentContext } from '../../core/agent-context/index.js'
 import { ChangeStore } from '../../storage/changes/index.js'
 import { readFileVersion } from '../../shared/file-version.js'
+import { captureCreatedDirectories, missingParentDirectories } from '../../storage/changes/directories.js'
+import { describeFileBytes, type FileWriteReceipt } from './write-receipt.js'
 
 /** Snapshot payloads are bounded; hashes always describe the complete file bytes. */
 const changeStore = new ChangeStore()
 export const MAX_CHANGE_CONTENT_BYTES = 100_000
 const BINARY_EXTENSIONS = new Set([
-  '.xlsx', '.xls', '.docx', '.doc', '.pdf',
+  '.xlsx', '.xls', '.docx', '.doc', '.pptx', '.ppt', '.pdf',
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.bmp',
   '.zip', '.gz', '.7z', '.rar', '.tar',
   '.exe', '.dll', '.so', '.dylib', '.node',
@@ -31,6 +33,7 @@ export interface ChangeSnapshot {
   truncated: boolean
   /** Opaque durable byte snapshot for large/binary files. */
   snapshotRef?: string
+  missingParents?: string[]
 }
 
 /** Capture already-read bytes only when a command observation really changed.
@@ -92,7 +95,7 @@ export function restoreSnapshot(absPath: string, snapshot: ChangeSnapshot): void
 /** Call while holding the canonical file lock. Read failures prevent mutation. */
 export async function readOldSnapshot(absPath: string): Promise<ChangeSnapshot> {
   const { content, hash } = await readFileVersion(absPath)
-  if (content === null) return { oldContent: null, oldHash: hash, exists: false, truncated: false }
+  if (content === null) return { oldContent: null, oldHash: hash, exists: false, truncated: false, missingParents: missingParentDirectories(absPath) }
   const text = content.byteLength > MAX_CHANGE_CONTENT_BYTES ? null : decodeEditableText(absPath, content)
   // Invalid UTF-8 cannot be faithfully restored from a SQLite text snapshot.
   const truncated = text === null || !Buffer.from(text, 'utf8').equals(content)
@@ -114,10 +117,29 @@ export async function commitWriteChange(
   absPath: string,
   snapshot: ChangeSnapshot,
 ): Promise<Record<string, unknown>> {
+  return (await recordWriteChange(ctx, displayPath, absPath, snapshot, false)).change
+}
+
+/** Facts are returned separately and are never added to the durable change model. */
+export async function commitWriteChangeWithReceipt(
+  ctx: AgentContext, displayPath: string, absPath: string, snapshot: ChangeSnapshot,
+): Promise<{ change: Record<string, unknown>; receipt: FileWriteReceipt }> {
+  const result = await recordWriteChange(ctx, displayPath, absPath, snapshot, true)
+  return { change: result.change, receipt: result.receipt! }
+}
+
+async function recordWriteChange(
+  ctx: AgentContext, displayPath: string, absPath: string, snapshot: ChangeSnapshot, includeReceipt: boolean,
+): Promise<{ change: Record<string, unknown>; receipt?: FileWriteReceipt }> {
   let afterSnapshotRef: string | undefined
   try {
-    const after = await readOldSnapshot(absPath)
+    // Snapshot, hash and receipt must refer to exactly the same observed bytes.
+    // A second read after awaiting SQLite could mix two external file versions.
+    const observed = await readFileVersion(absPath)
+    const after = snapshotFromBytes(absPath, observed.content)
     afterSnapshotRef = after.snapshotRef
+    const receipt = includeReceipt ? describeFileBytes(absPath, observed,
+      observed.content === null ? null : decodeEditableText(absPath, observed.content)) : undefined
     const change = await changeStore.record(ctx.tenantId, {
       sessionId: ctx.rootSessionId ?? ctx.sessionId, path: absPath, kind: 'write',
       ...(ctx.parentSessionId && ctx.runId ? { producerChildSessionId: ctx.sessionId, producerRunId: ctx.runId } : {}),
@@ -126,8 +148,9 @@ export async function commitWriteChange(
       oldHash: snapshot.oldHash, newHash: after.oldHash,
       oldSnapshotRef: snapshot.snapshotRef, newSnapshotRef: after.snapshotRef,
       truncated: snapshot.truncated || after.truncated,
+      createdDirectories: captureCreatedDirectories(absPath, snapshot.missingParents ?? []),
     })
-    return { ...change, displayPath, isNew: !snapshot.exists }
+    return { change: { ...change, displayPath, isNew: !snapshot.exists }, ...(receipt ? { receipt } : {}) }
   } catch (error) {
     discardSnapshot(snapshot.snapshotRef)
     discardSnapshot(afterSnapshotRef)

@@ -1,28 +1,34 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentContext } from '../../agent-context/index.js'
 import type { LLMAdapter, LLMAdapterOptions, LLMStreamChunk } from '../../llm-adapter/types.js'
 import * as modelResolution from '../../llm-adapter/resolve-model.js'
 import type { CompactionState, RunOutcome } from '../../subagent/types.js'
 import { JSONLConversationHistory } from '../../../storage/conversation/jsonl-history.js'
+import { closeDb } from '../../../storage/sqlite/db.js'
+import { CLEARED_TOOL_RESULT } from '../../utils/tool-evidence.js'
 import { ReActStrategy } from '../react.js'
 
 vi.mock('../../../storage/todo/index.js', () => ({ TodoStore: class { async list() { return [] } } }))
 
 let fixtureDirectory: string
-beforeEach(() => {
+beforeEach(async () => {
+  await closeDb()
   fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-compaction-progress-'))
   vi.stubEnv('DATA_DIR', path.join(fixtureDirectory, 'agent.db'))
   vi.stubEnv('LLM_SUMMARIZE_MODEL', '')
   vi.stubEnv('COMPRESS_THRESHOLD_RATIO', '0.92')
 })
-afterEach(() => {
-  vi.restoreAllMocks(); vi.unstubAllEnvs()
+afterEach(async () => {
+  vi.restoreAllMocks()
+  await closeDb()
+  vi.unstubAllEnvs()
   if (path.dirname(fixtureDirectory) !== path.resolve(os.tmpdir())
     || !path.basename(fixtureDirectory).startsWith('aether-compaction-progress-')) throw new Error('Unsafe fixture cleanup')
-  fs.rmSync(fixtureDirectory, { recursive: true, force: true })
+  fs.rmSync(fixtureDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
 })
 
 function deferred() {
@@ -32,7 +38,7 @@ function deferred() {
 }
 
 async function fixture(seed = true) {
-  const location = { tenantId: 'progress-tenant', sessionId: 'progress-session' }
+  const location = { tenantId: 'progress-tenant', sessionId: 'progress-session-' + randomUUID() }
   const directory = path.join(fixtureDirectory, 'sessions', location.tenantId)
   fs.mkdirSync(directory, { recursive: true })
   fs.writeFileSync(path.join(directory, location.sessionId + '.jsonl'), '')
@@ -42,7 +48,7 @@ async function fixture(seed = true) {
   }, location)
   const states: CompactionState[] = [], outcomes: RunOutcome[] = []
   const ctx = {
-    ...location, rootRunId: 'root-progress', turnId: 'turn-progress',
+    ...location, rootRunId: 'root-' + location.sessionId, turnId: 'turn-' + location.sessionId,
     userMessageId: 'current-request', assistantMessageId: 'current-answer',
     workspaceDir: '.', toolProfile: 'code', modelCaps: { contextWindow: 20_000 },
     history, logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -135,16 +141,19 @@ describe('observable automatic compaction lifecycle', () => {
     expect(f.states).toEqual([])
     expect(f.llm.complete).not.toHaveBeenCalled()
     const g = await fixture(false)
+    await g.history.append({ id: 'old-read', role: 'assistant', content: '',
+      toolCall: { id: 'old-call', name: 'read_file', args: { path: 'old-source.ts' } } }, g.ctx)
     await g.history.append({ id: 'old-tool', role: 'tool', toolCallId: 'old-call', toolName: 'read_file',
       content: 'large prior source code '.repeat(4500) }, g.ctx)
-    vi.spyOn(g.history, 'microCompactToolResults').mockImplementation(async () => {
-      await g.history.clear(g.ctx)
-      return { cleared: 1, freedTokens: 30_000 }
-    })
+    const micro = vi.spyOn(g.history, 'microCompactToolResults')
     await g.run()
+    expect(micro).toHaveBeenCalled()
     expect(g.states).toEqual([])
     expect(g.llm.complete).not.toHaveBeenCalled()
-    expect(g.outcomes.at(-1)?.status).toBe('succeeded')
+    expect(g.outcomes.at(-1)?.status, JSON.stringify(g.outcomes.at(-1))).toBe('succeeded')
+    const retained = await g.history.getFullHistory(g.ctx)
+    expect(retained.find(message => message.id === 'old-tool')?.content).toBe(CLEARED_TOOL_RESULT)
+    expect(retained.some(message => message.id === 'current-request' && message.role === 'user')).toBe(true)
   })
 
   it('uses the configured summary model database context window for every summary request', async () => {

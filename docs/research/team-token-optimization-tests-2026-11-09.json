@@ -1,0 +1,331 @@
+{
+  "files": 63,
+  "total": 1131,
+  "passed": 1131,
+  "failed": 0,
+  "pending": 0,
+  "sources": [
+    "final-regression.json",
+    "supplemental-regression.json",
+    "final-contract-regression.json",
+    "final-chat-contract-regression.json",
+    "final-office-regression.json"
+  ],
+  "results": [
+    {
+      "name": "D:/dev/ai-agent-engine/src/api/http/routes/__tests__/chat-async-subagents.test.ts",
+      "status": "passed",
+      "tests": 22
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/api/http/routes/__tests__/collaborator-chat.test.ts",
+      "status": "passed",
+      "tests": 9
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/__tests__/chat-system-prompt.test.ts",
+      "status": "passed",
+      "tests": 6
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/__tests__/code-agent-prompt.test.ts",
+      "status": "passed",
+      "tests": 6
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/__tests__/office-prompt.test.ts",
+      "status": "passed",
+      "tests": 4
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/__tests__/runtime-capabilities.test.ts",
+      "status": "passed",
+      "tests": 10
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/archived-compaction.test.ts",
+      "status": "passed",
+      "tests": 9
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/batch-independent-io.test.ts",
+      "status": "passed",
+      "tests": 7
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/child-result-review.test.ts",
+      "status": "passed",
+      "tests": 11
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/compaction-progress.test.ts",
+      "status": "passed",
+      "tests": 5
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/completed-write-projection.test.ts",
+      "status": "passed",
+      "tests": 8
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/delivery-closeout.test.ts",
+      "status": "passed",
+      "tests": 16
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/edit-file-integration.test.ts",
+      "status": "passed",
+      "tests": 2
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/memory-capability-prompt.test.ts",
+      "status": "passed",
+      "tests": 6
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/model-tool-projection.test.ts",
+      "status": "passed",
+      "tests": 3
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/mutation-advice-reviewed.test.ts",
+      "status": "passed",
+      "tests": 21
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/office-research-review.test.ts",
+      "status": "passed",
+      "tests": 15
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/react-empty-output-compaction.test.ts",
+      "status": "passed",
+      "tests": 8
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/react-empty-output-recovery.test.ts",
+      "status": "passed",
+      "tests": 17
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/react-output-continuation.test.ts",
+      "status": "passed",
+      "tests": 15
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/react-reasoning-output-recovery.test.ts",
+      "status": "passed",
+      "tests": 38
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/react-streaming-context.test.ts",
+      "status": "passed",
+      "tests": 64
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/react-tool-output-recovery.test.ts",
+      "status": "passed",
+      "tests": 74
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/react-tool-repetition.test.ts",
+      "status": "passed",
+      "tests": 11
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/react.test.ts",
+      "status": "passed",
+      "tests": 27
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/readonly-history.test.ts",
+      "status": "passed",
+      "tests": 37
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/request-environment.test.ts",
+      "status": "passed",
+      "tests": 3
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/task-plan-controls.test.ts",
+      "status": "passed",
+      "tests": 19
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/tool-batch-parse-error.test.ts",
+      "status": "passed",
+      "tests": 1
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/tool-batch-settlement.test.ts",
+      "status": "passed",
+      "tests": 27
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/tool-progress-read-timing.test.ts",
+      "status": "passed",
+      "tests": 16
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/tool-progress.test.ts",
+      "status": "passed",
+      "tests": 21
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/agent-loop/__tests__/workflow-review.test.ts",
+      "status": "passed",
+      "tests": 36
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/collaboration/__tests__/child-drain-continuation.test.ts",
+      "status": "passed",
+      "tests": 32
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/collaboration/__tests__/history-rebudget.test.ts",
+      "status": "passed",
+      "tests": 18
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/collaboration/__tests__/production-compaction.test.ts",
+      "status": "passed",
+      "tests": 24
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/collaboration/__tests__/production-jsonl.test.ts",
+      "status": "passed",
+      "tests": 19
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/collaboration/__tests__/sqlite-react-boundary.test.ts",
+      "status": "passed",
+      "tests": 19
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/llm-adapter/__tests__/fallback-stream.test.ts",
+      "status": "passed",
+      "tests": 27
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/llm-adapter/__tests__/provider-attempts.test.ts",
+      "status": "passed",
+      "tests": 23
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/subagent/__tests__/collaborators.test.ts",
+      "status": "passed",
+      "tests": 53
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/subagent/__tests__/subagent-compaction.test.ts",
+      "status": "passed",
+      "tests": 4
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/core/utils/__tests__/completed-write-history.test.ts",
+      "status": "passed",
+      "tests": 34
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/storage/results/results.test.ts",
+      "status": "passed",
+      "tests": 39
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/tools/__tests__/model-tool-definitions.test.ts",
+      "status": "passed",
+      "tests": 8
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/tools/__tests__/model-tool-loading.test.ts",
+      "status": "passed",
+      "tests": 10
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/tools/__tests__/tool-profile.test.ts",
+      "status": "passed",
+      "tests": 37
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/tools/codegraph/__tests__/codegraph-module.test.ts",
+      "status": "passed",
+      "tests": 7
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/tools/codegraph/__tests__/codegraph-permissions.test.ts",
+      "status": "passed",
+      "tests": 6
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/tools/codegraph/__tests__/codegraph-runtime.test.ts",
+      "status": "passed",
+      "tests": 6
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/tools/codegraph/__tests__/codegraph-storage.test.ts",
+      "status": "passed",
+      "tests": 5
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/tools/get-context/__tests__/search-history-arguments.test.ts",
+      "status": "passed",
+      "tests": 8
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/tools/get-context/__tests__/search-history-image.test.ts",
+      "status": "passed",
+      "tests": 13
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/tools/get-context/__tests__/search-history-tool.test.ts",
+      "status": "passed",
+      "tests": 22
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/tools/office/__tests__/office-tool.test.ts",
+      "status": "passed",
+      "tests": 19
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/tools/office/__tests__/pdf-pptx-native.test.ts",
+      "status": "passed",
+      "tests": 24
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/tools/office/__tests__/pptx-notes-edit.test.ts",
+      "status": "passed",
+      "tests": 17
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/tools/office/__tests__/pptx-targeted-edit.test.ts",
+      "status": "passed",
+      "tests": 7
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/tools/office/__tests__/xlsx-append.test.ts",
+      "status": "passed",
+      "tests": 9
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/tools/subagent/__tests__/subagent-capabilities.test.ts",
+      "status": "passed",
+      "tests": 9
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/tools/subagent/__tests__/subagent-office-prompt.test.ts",
+      "status": "passed",
+      "tests": 4
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/tools/subagent/__tests__/subagent-reviewer-access.test.ts",
+      "status": "passed",
+      "tests": 36
+    },
+    {
+      "name": "D:/dev/ai-agent-engine/src/tools/subagent/__tests__/team-tools.test.ts",
+      "status": "passed",
+      "tests": 18
+    }
+  ]
+}

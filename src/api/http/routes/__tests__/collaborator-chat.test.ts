@@ -77,6 +77,18 @@ beforeAll(async () => {
       async *stream(messages, options) {
         modelCalls.push({ model: config.model, messages: structuredClone(messages), options })
         if (config.model !== 'frontend-fixture') {
+          const currentRequest = String([...messages].reverse().find(message => message.role === 'user')?.content)
+          if (currentRequest.includes('第一轮')) {
+            if (!options?.tools?.some(tool => tool.name === 'subagent_participants')) {
+              yield { done: true, finishReason: 'tool_calls', toolCalls: [{ id: 'load-parent-participants', name: 'load_tools',
+                args: '{"names":["subagent_participants"]}', index: 0 }] }
+              return
+            }
+            if (!messages.some(message => message.role === 'tool' && message.toolCallId === 'parent-participants')) {
+              yield { done: true, finishReason: 'tool_calls', toolCalls: [{ id: 'parent-participants', name: 'subagent_participants', args: '{}', index: 0 }] }
+              return
+            }
+          }
           if (failParentOnce) {
             failParentOnce = false
             const admission = messages.find(message => message.role === 'tool' && message.toolName === 'subagent_start')
@@ -144,12 +156,12 @@ afterAll(async () => {
   fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 })
 })
 
-function chatRequest(sessionId: string, message: string, collaborators: Array<{ agentId?: string; resumeRunId?: string }>, signal?: AbortSignal) {
+function chatRequest(sessionId: string, message: string, collaborators: Array<{ agentId?: string; resumeRunId?: string; task?: string }>, signal?: AbortSignal) {
   return fetch(baseUrl + '/chat', { method: 'POST', headers: { 'content-type': 'application/json',
     'x-aether-tool-profile': 'general', 'x-aether-run-lifetime': 'durable' }, signal,
     body: JSON.stringify({ sessionId, agentId: main.id, model: 'main-fixture', message, collaborators, memoryScope: 'off', workspacePaths: [fixture] }) })
 }
-async function chat(sessionId: string, message: string, collaborators: Array<{ agentId?: string; resumeRunId?: string }>) {
+async function chat(sessionId: string, message: string, collaborators: Array<{ agentId?: string; resumeRunId?: string; task?: string }>) {
   const response = await chatRequest(sessionId, message, collaborators)
   return { status: response.status, body: await response.text() }
 }
@@ -178,8 +190,11 @@ describe('explicit custom Agent collaboration through real chat', () => {
     expect(childCalls[0].options?.tools?.map(tool => tool.name)).not.toContain('subagent_followup')
     expect(childCalls[0].options?.tools?.map(tool => tool.name)).not.toContain('ask_user')
     const parentCall = modelCalls.find(call => call.model === 'main-fixture')!
-    const { ownedCollaborationTools } = await import('../../../../tools/subagent/index.js')
-    expect(parentCall.options?.tools?.map(tool => tool.name).sort()).toEqual(['plan_update', ...ownedCollaborationTools.map(tool => tool.name)].sort())
+    expect(parentCall.options?.tools?.map(tool => tool.name).sort()).toEqual(['load_tools', 'plan_update', 'subagent_directory', 'subagent_followup', 'subagent_wait'].sort())
+    const loadedParent = modelCalls.find(call => call.model === 'main-fixture' && call.options?.tools?.some(tool => tool.name === 'subagent_participants'))!
+    expect(loadedParent.messages.find(message => message.role === 'tool' && message.toolCallId === 'load-parent-participants')?.metadata?.success).toBe(true)
+    expect(modelCalls.some(call => call.model === 'main-fixture' && call.messages.some(message =>
+      message.role === 'tool' && message.toolCallId === 'parent-participants' && message.metadata?.success))).toBe(true)
     expect(parentCall.messages.some(message => message.role === 'tool' && message.toolName === 'subagent_start'
       && JSON.parse(String(message.content)).state === 'admitted')).toBe(true)
     const { getSubagentStore } = await import('../../../../core/subagent/store.js')
@@ -209,6 +224,25 @@ describe('explicit custom Agent collaboration through real chat', () => {
     expect((childResults[1].metadata?.subagent as SubagentRun).childSessionId).toBe(after[0].childSessionId)
     await agentStore.update(frontend.id, tenantId, { name: frontend.name, systemPrompt: frontend.systemPrompt, model: frontend.model, allowedTools: frontend.allowedTools })
   }, 30_000)
+
+  it('responds normally to punctuation without launching or resuming the selected child', async () => {
+    const sessionId = 'punctuation-collaboration'
+    const { getSubagentStore } = await import('../../../../core/subagent/store.js')
+    const first = await chat(sessionId, '建立可继续的协作上下文。', [{ agentId: frontend.id }])
+    expect(first.status).toBe(200)
+    const before = await getSubagentStore().listRunsForParent(tenantId, sessionId)
+    expect(before).toHaveLength(1)
+    const childCallsBefore = modelCalls.filter(call => call.model === 'frontend-fixture').length
+    const response = await chat(sessionId, '!', [{ resumeRunId: before[0].runId, task: '!' }])
+    expect(response.status).toBe(200)
+    expect(response.body).toContain('MAIN_SUMMARY')
+    expect(response.body).not.toContain('[System Error:')
+    expect(await getSubagentStore().listRunsForParent(tenantId, sessionId)).toEqual(before)
+    expect(modelCalls.filter(call => call.model === 'frontend-fixture')).toHaveLength(childCallsBefore)
+    expect(modelCalls.filter(call => call.model === 'main-fixture').at(-1)?.options?.systemPrompt).toContain('未启动或续跑子代理')
+    expect((await chat('punctuation-new-selection', '!', [{ agentId: frontend.id }])).status).toBe(200)
+    expect(await getSubagentStore().listRunsForParent(tenantId, 'punctuation-new-selection')).toEqual([])
+  }, 20_000)
 
   it('invalid Agent selections are rejected before binding, root admission, user history or model generation', async () => {
     const sessionId = 'invalid-collaboration'
@@ -245,7 +279,10 @@ describe('explicit custom Agent collaboration through real chat', () => {
     const sessionId = 'preparation-failure-collaboration'
     const broken = await agentStore.create(tenantId, { name: '暂不可用 Agent', model: 'frontend-fixture', skills: [], mcpServers: [], knowledgeBases: [], allowedTools: ['catalog_fixture_failure'] })
     slowChildStarted = false
-    const pending = chat(sessionId, '缓慢任务：其他 Agent 继续工作。', [{ agentId: broken.id }, { agentId: frontend.id }])
+    const pending = chat(sessionId, '缓慢任务：其他 Agent 继续工作。', [
+      { agentId: broken.id, task: '检查该 Agent 的目录准备情况' },
+      { agentId: frontend.id, task: '缓慢任务：独立检查前端资料' },
+    ])
     await vi.waitFor(() => expect(slowChildStarted).toBe(true), { timeout: 10_000 })
     const releaseSibling = waitForChild!
     const { getSubagentStore } = await import('../../../../core/subagent/store.js')
@@ -366,7 +403,8 @@ describe('explicit custom Agent collaboration through real chat', () => {
       expect(fs.existsSync(path.join(fixture, 'outside-boundary.txt'))).toBe(false)
       const { getSubagentStore } = await import('../../../../core/subagent/store.js')
       expect(child.continuation).toEqual({ readOnly: false })
-      expect((await getSubagentStore().getRun(tenantId, child.runId))?.continuation?.workspacePaths).toEqual([project])
+      const { captureSubagentWorkspace } = await import('../../../../tools/subagent/workspace-scope.js')
+      expect((await getSubagentStore().getRun(tenantId, child.runId))?.continuation?.workspacePaths).toEqual(captureSubagentWorkspace(parent).roots)
     } finally { clearSecurityMode(parent.tenantId, parent.sessionId) }
   }, 15_000)
 })

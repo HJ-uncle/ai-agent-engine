@@ -1,4 +1,5 @@
 import { applyThinkingPreference } from './thinking.js'
+import { requestContextMessages } from './request-context.js'
 import { observeRequest, observeStreamRequest, anthropicUsage, anthropicUsageSnapshot, anthropicUsageFromSnapshot, prepareRequestContext,
   type AnthropicUsageSnapshot } from './request-attempt.js'
 import Anthropic from '@anthropic-ai/sdk'
@@ -337,7 +338,7 @@ export class AnthropicAdapter implements LLMAdapter {
     }
 
     const anthropicMessages = mergeAdjacentRoles(
-      messages
+      requestContextMessages(messages, options?.requestContext)
         .map((m) => messageToAnthropic(m, validToolUseIds, validToolResultIds, this.supportsVision))
         .filter((m): m is AnthropicMessageParam => m !== null),
     )
@@ -477,7 +478,7 @@ export class AnthropicAdapter implements LLMAdapter {
       }
     }
     const anthropicMessages = mergeAdjacentRoles(
-      messages
+      requestContextMessages(messages, options?.requestContext)
         .map((m) => messageToAnthropic(m, validToolUseIds, validToolResultIds, this.supportsVision))
         .filter((m): m is AnthropicMessageParam => m !== null),
     )

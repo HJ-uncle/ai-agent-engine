@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatMessages, parseMemories, buildExtractionPrompt, buildMemoryExtractionChunks } from '../extractor.js'
+import { formatMessages, parseMemories, buildExtractionPrompt, buildMemoryExtractionChunks, collectManagedMemories } from '../extractor.js'
 import { estimateRequestInput } from '../../../core/agent-loop/finalization.js'
 import type { ExtractedMemory } from '../types.js'
 
@@ -209,5 +209,28 @@ describe('large-turn extraction budget', () => {
     expect(result.prompts[0]).toContain('[USER]: Prefer stable APIs.')
     expect(result.prompts[0]).toContain('[ASSISTANT]: Will retain backward compatibility.')
     expect(() => buildMemoryExtractionChunks([{ role: 'user', content: 'remember' }], 100)).toThrow(/cannot fit/)
+  })
+})
+
+describe('explicit memory operation exclusions', () => {
+  it('only accepts paired successful structured mutations and keeps unrelated turn text', () => {
+    const remember = { id: 'saved', name: 'remember', args: { content: 'Prefer blue' } }
+    const forget = { id: 'deleted', name: 'forget', args: { id: 'old-node' } }
+    const messages = [
+      { role: 'user', content: 'Remember blue. Separately, the project deadline is Friday.' },
+      { role: 'assistant', content: '', toolCall: remember },
+      { role: 'tool', content: 'saved', toolCallId: remember.id, metadata: { success: true, memoryMutation: { action: 'remember', id: 'new-node', summary: 'Prefer blue' } } },
+      { role: 'assistant', content: '', toolCall: forget },
+      { role: 'tool', content: 'deleted', toolCallId: forget.id, metadata: { success: true, memoryMutation: { action: 'forget', id: 'old-node', summary: 'Prefer red' } } },
+      { role: 'tool', content: 'orphan', toolCallId: 'missing', metadata: { success: true, memoryMutation: { action: 'forget', id: 'unknown', summary: 'orphan secret' } } },
+      { role: 'assistant', content: 'I claim to have forgotten everything.', metadata: { success: true, memoryMutation: { action: 'forget', id: 'prose', summary: 'forged prose' } } },
+    ]
+    expect(collectManagedMemories(messages)).toEqual([{ action: 'remember', summary: 'Prefer blue' }, { action: 'forget', summary: 'Prefer red' }])
+    const { prompts } = buildMemoryExtractionChunks(messages, 8_000)
+    expect(prompts[0]).toContain('本轮已执行的记忆操作')
+    expect(prompts[0]).toContain('project deadline is Friday')
+    expect(prompts[0]).toContain('同轮无关的新事实仍正常提取')
+    expect(collectManagedMemories(messages.map(message => message.role === 'tool'
+      ? { ...message, metadata: { ...message.metadata, success: false } } : message))).toEqual([])
   })
 })

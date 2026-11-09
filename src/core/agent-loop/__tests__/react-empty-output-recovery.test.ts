@@ -51,7 +51,7 @@ describe('one empty terminal response recovery', () => {
         expect(messages.filter(m => m.role === 'user')).toHaveLength(1)
         expect(messages.filter(m => m.role === 'tool')).toMatchObject([{ toolCallId: 'write-once', metadata: { success: true } }])
         expect(messages.some(m => m.metadata?.emptyOutputRecovery)).toBe(false)
-        expect(options?.systemPrompt).toContain('Do not repeat completed work or replay tools')
+        expect(options?.requestContext).toContain('Do not repeat completed work or replay tools')
         yield answer()
       }
     })

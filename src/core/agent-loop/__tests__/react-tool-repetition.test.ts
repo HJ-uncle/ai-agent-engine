@@ -58,7 +58,7 @@ function fixture(calls: ToolCall[], profile: 'general' | 'code' = 'code') {
   return { ctx, history, requests, outcomes, llm, run }
 }
 
-const hasNotice = (request: { options: LLMAdapterOptions }) => request.options.systemPrompt?.includes(READONLY_REPETITION_PROMPT) ?? false
+const hasNotice = (request: { options: LLMAdapterOptions }) => request.options.requestContext?.includes(READONLY_REPETITION_PROMPT) ?? false
 
 describe('ReAct request-local query cycle recovery', () => {
   it.each(['code', 'general'] as const)('injects safe budgeted guidance for %s and removes it after new evidence without persisting it', async profile => {
@@ -69,8 +69,10 @@ describe('ReAct request-local query cycle recovery', () => {
     const corrected = f.requests[4]
     expect(corrected.options.systemPrompt).not.toContain('private/project')
     expect(corrected.options.systemPrompt).not.toContain('TOOL_OUTPUT_ATTACK')
+    expect(corrected.options.requestContext).not.toContain('private/project')
+    expect(corrected.options.requestContext).not.toContain('TOOL_OUTPUT_ATTACK')
     expect(corrected.options.tools?.map(tool => tool.name)).toEqual([...readonlyNames, 'write_file'])
-    expect(corrected.options.requestInputTokenEstimate).toBe(estimateRequestInput(corrected.messages, corrected.options.systemPrompt, f.ctx.tools.list()))
+    expect(corrected.options.requestInputTokenEstimate).toBe(estimateRequestInput(corrected.messages, corrected.options.systemPrompt, f.ctx.tools.list(), corrected.options.requestContext))
     expect(corrected.options.requestInputTokenEstimate).toBeGreaterThan(estimateRequestInput(corrected.messages, undefined, f.ctx.tools.list()))
     expect(corrected.options.requestInputTokenEstimate! + corrected.options.maxTokens!).toBeLessThanOrEqual(f.ctx.modelCaps!.contextWindow!)
     expect(f.history.filter(message => message.role === 'user')).toHaveLength(1)
@@ -91,7 +93,7 @@ describe('ReAct request-local query cycle recovery', () => {
     expect(f.history.filter(message => message.role === 'tool')).toHaveLength(80)
     expect(f.requests.slice(2).every(request => request.messages.filter(message => message.toolCall).length === 2)).toBe(true)
     expect(f.requests.at(-1)!.messages.filter(message => message.role === 'tool')).toHaveLength(2)
-    expect(f.requests.at(-1)!.options.systemPrompt).toContain('78 older redundant successful read-only call/result pairs')
+    expect(f.requests.at(-1)!.options.requestContext).toContain('78 older redundant successful read-only call/result pairs')
     expect(f.outcomes).toEqual([expect.objectContaining({ status: 'succeeded', stopReason: 'completed' })])
   })
 
@@ -164,8 +166,9 @@ describe('request projection transport and safe diagnostics', () => {
     await f.run(adapter)
     expect(payloads).toHaveLength(5)
     const last = payloads.at(-1)!
-    expect(last.system).toContain(READONLY_REPETITION_PROMPT)
-    expect(last.system).toContain('2 older redundant successful read-only call/result pairs')
+    expect(last.system).not.toContain(READONLY_REPETITION_PROMPT)
+    expect(JSON.stringify(last.messages.at(-1))).toContain(READONLY_REPETITION_PROMPT)
+    expect(JSON.stringify(last.messages.at(-1))).toContain('2 older redundant successful read-only call/result pairs')
     const blocks = last.messages.flatMap(message => message.content)
     expect(blocks.filter(block => block.type === 'tool_use').map(block => block.id)).toEqual(['wire-3', 'wire-4'])
     expect(blocks.filter(block => block.type === 'tool_result').map(block => block.tool_use_id)).toEqual(['wire-3', 'wire-4'])
@@ -179,10 +182,10 @@ describe('request projection transport and safe diagnostics', () => {
     const f = fixture(Array.from({ length: 12 }, (_, index) => query(index % 2 ? 'B' : 'A')), 'general')
     await f.run()
     for (const request of f.requests) {
-      expect(request.options.requestInputTokenEstimate).toBe(estimateRequestInput(request.messages, request.options.systemPrompt, f.ctx.tools.list()))
+      expect(request.options.requestInputTokenEstimate).toBe(estimateRequestInput(request.messages, request.options.systemPrompt, f.ctx.tools.list(), request.options.requestContext))
       expect(request.options.requestInputTokenEstimate! + request.options.maxTokens!).toBeLessThanOrEqual(f.ctx.modelCaps!.contextWindow!)
     }
-    expect(f.requests.at(-1)!.options.systemPrompt).toContain('10 older redundant successful read-only call/result pairs')
+    expect(f.requests.at(-1)!.options.requestContext).toContain('10 older redundant successful read-only call/result pairs')
     expect(f.ctx.history.compress).not.toHaveBeenCalled()
     expect(f.history.filter(message => message.role === 'tool')).toHaveLength(12)
   })

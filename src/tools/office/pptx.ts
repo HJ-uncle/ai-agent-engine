@@ -29,12 +29,21 @@ export async function createPptx(input: PptxInput): Promise<Buffer> {
   deck.author = input.author === undefined ? 'Aether' : text(input.author, 'author', 200, false)
   deck.theme = { headFontFace: 'Microsoft YaHei', bodyFontFace: 'Microsoft YaHei' }
   for (const [index, source] of input.slides.entries()) {
-    if (!source || typeof source !== 'object') fail('无效幻灯片')
-    const title = text(source.title, `第 ${index + 1} 页标题`, 100)
-    if (units(title) > 94 || /[\r\n]/.test(title)) fail('标题过长，请拆分页面')
+    const page = `第 ${index + 1} 页`
+    if (!source || typeof source !== 'object') fail(`${page}无效幻灯片`)
+    const title = text(source.title, `${page}标题`, 100)
+    if (units(title) > 94) fail(`${page}标题过长：宽度 ${units(title)}/94（非 Latin-1 字符计 2，其余计 1）；请缩短标题或拆分页面`)
+    if (/[\r\n]/.test(title)) fail(`${page}标题不支持换行；请拆分页面`)
     const bullets = source.bullets === undefined ? [] : source.bullets
-    if (!Array.isArray(bullets) || bullets.length > (source.table ? 2 : 6)) fail('每页最多 6 条要点；含表格时最多 2 条')
-    for (const bullet of bullets) if (units(text(bullet, '要点', 160)) > 140 || /[\r\n]/.test(bullet)) fail('单条要点过长，请拆分页面')
+    const maxBullets = source.table ? 2 : 6
+    if (!Array.isArray(bullets)) fail(`${page}要点必须为数组`)
+    if (bullets.length > maxBullets) fail(`${page}${source.table ? '含表格，' : ''}要点数量 ${bullets.length}/${maxBullets}，最多 ${maxBullets} 条；请减少要点或拆分页面`)
+    for (const [bulletIndex, bullet] of bullets.entries()) {
+      const location = `${page}第 ${bulletIndex + 1} 条要点`
+      const content = text(bullet, location, 160)
+      if (units(content) > 140) fail(`${location}过长：宽度 ${units(content)}/140（非 Latin-1 字符计 2，其余计 1）；请缩短要点或拆分页面`)
+      if (/[\r\n]/.test(content)) fail(`${location}不支持换行；请拆成独立要点或页面`)
+    }
     const slide = deck.addSlide()
     slide.background = { color: 'FFFFFF' }
     slide.addShape(deck.ShapeType.rect, { x: 0, y: 0, w: 0.16, h: 7.5, fill: { color: '3268AA' }, line: { color: '3268AA' } })
@@ -45,7 +54,11 @@ export async function createPptx(input: PptxInput): Promise<Buffer> {
     })
     if (source.table) {
       const { headers, rows } = source.table
-      if (!Array.isArray(headers) || !headers.length || headers.length > 6 || !Array.isArray(rows) || rows.length > (bullets.length ? 5 : 8)) fail('表格最多 6 列、8 行；含要点时最多 5 行')
+      if (!Array.isArray(headers)) fail(`${page}表格表头必须为数组`)
+      if (!headers.length || headers.length > 6) fail(`${page}表格列数 ${headers.length}/6，需要 1–6 列`)
+      if (!Array.isArray(rows)) fail(`${page}表格数据行必须为数组`)
+      const maxRows = bullets.length ? 5 : 8
+      if (rows.length > maxRows) fail(`${page}表格${bullets.length ? '含要点，' : ''}数据行数 ${rows.length}/${maxRows}，最多 ${maxRows} 行（不含表头）；请减少数据行或拆分页面`)
       const maxUnits = Math.floor(100 / headers.length)
       const cell = (value: unknown, row: number, column: number): string => {
         const location = `第 ${index + 1} 页表格第 ${row + 1} 行第 ${column + 1} 列（表头为第 1 行）`
@@ -57,14 +70,16 @@ export async function createPptx(input: PptxInput): Promise<Buffer> {
       }
       const tableRows: Parameters<typeof slide.addTable>[0] = [headers.map((value, column) => ({ text: cell(value, 0, column), options: { bold: true, fill: { color: 'E8EEF5' }, color: '17243B' } }))]
       for (const [rowIndex, row] of rows.entries()) {
-        if (!Array.isArray(row) || row.length !== headers.length) fail('每行单元格数量必须与表头一致')
+        const location = `${page}表格第 ${rowIndex + 2} 行（表头为第 1 行）`
+        if (!Array.isArray(row)) fail(`${location}必须为数组，单元格数量应为 ${headers.length}`)
+        if (row.length !== headers.length) fail(`${location}单元格数量 ${row.length}/${headers.length}，必须与表头一致`)
         tableRows.push(row.map((value, column) => ({ text: cell(value, rowIndex + 1, column) })))
       }
       slide.addTable(tableRows, { x: 0.7, y: 1.7 + bullets.length * 0.79, w: 11.95, rowH: 0.48,
         autoPage: false, fontSize: 15, color: '27364B', border: { type: 'solid', pt: 0.5, color: 'CBD5E1' },
         margin: 0.1, valign: 'middle', colW: Array(headers.length).fill(11.95 / headers.length) })
     }
-    if (source.notes !== undefined) slide.addNotes(text(source.notes, 'notes', 4000, false))
+    if (source.notes !== undefined) slide.addNotes(text(source.notes, `${page}备注 notes`, 4000, false))
     slide.addText(`Aether · ${index + 1} / ${input.slides.length}`, { x: 0.7, y: 7.02, w: 11.95, h: 0.2, fontSize: 9, color: '687487', align: 'right', margin: 0 })
   }
   const output = await deck.write({ outputType: 'nodebuffer', compression: true })

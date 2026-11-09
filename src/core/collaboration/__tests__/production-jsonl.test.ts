@@ -71,8 +71,27 @@ async function child(key = 'dispatch-one') {
   return { ...admitted, input, target: 'child:' + admitted.mutation.header.childSessionId }
 }
 async function mail(body = 'Peer evidence', key: string = randomUUID()) {
-  const sender = await child()
-  return runtime.send(sender.producer, { recipientParticipantId: 'root:' + rootRunId, message: body, requestKey: key })
+  const input = { tenantId: scope.tenantId, rootSessionId: scope.sessionId, parentSessionId: scope.sessionId,
+    parentConversationId: turnId, parentMessageId: 'peer-dispatch:' + key, parentToolCallId: 'peer-call:' + key,
+    task: 'Send peer evidence to the parent.', description: key, modelId: 'scripted-only',
+    continuation: { readOnly: true, systemPrompt: '', toolNames: [], workspacePaths: [] } }
+  await ctx.history.append((await readAdmissionSeed(db, scope, rootRunId)).message, scope)
+  await raw.append({ id: input.parentMessageId, role: 'assistant', content: '',
+    toolCall: { id: input.parentToolCallId, name: 'subagent_start', args: { task: input.task } }, conversationId: turnId }, scope)
+  let accepted!: Awaited<ReturnType<CollaborationRuntime['send']>>
+  const started = await new SubagentRunner(agents).start(input, ctx, async execution => {
+    const target = context(createConversationHistory(), execution.executionOwner!, execution.snapshot.childSessionId)
+    delete target.userMessageId; target.runId = execution.snapshot.runId; target.runObserver = execution.observer; target.signal = execution.signal
+    installProductionCollaborationBoundary(target)
+    accepted = await runtime.send(owners.producerForExecution(execution.executionOwner!), {
+      recipientParticipantId: 'root:' + rootRunId, message: body, requestKey: key,
+    })
+    await run(input.task, target, { ...llm,
+      stream: vi.fn(async function* () { yield { done: true, content: 'Peer evidence sent.' } }),
+    })
+  })
+  expect((await started.completion).status).toBe('succeeded')
+  return { ...accepted, dispatchId: input.parentMessageId, resultId: 'subagent-result:' + started.runId }
 }
 beforeEach(async () => {
   const old = getDb() as LocalSqliteProcessClient; await closeDb(); await old.whenClosed()
@@ -128,7 +147,10 @@ it('continues for mail accepted during the last provider response before sealing
   expect(calls).toBe(2)
   expect(outcomes).toMatchObject([{ status: 'succeeded' }])
   expect((await runtime.jsonlDeliveryReceipt(producer, acceptedId))?.state).toBe('integrated')
-  await expect(mail('after final fence')).rejects.toMatchObject({ code: 'closed' })
+  // Exercise the sealed root recipient with a still-valid root producer, not
+  // an already completed child's independently closed sender capability.
+  await expect(runtime.send(producer, { recipientParticipantId: 'root:' + rootRunId,
+    message: 'after final fence', requestKey: 'after-final-fence' })).rejects.toMatchObject({ code: 'closed' })
 })
 
 it('the real production creator selects default JSONL through generation/admission wrappers and real ReAct receives peers plus complete current tools', async () => {
@@ -144,9 +166,10 @@ it('the real production creator selects default JSONL through generation/admissi
   expect(llm.stream).toHaveBeenCalledTimes(1)
   const messages = vi.mocked(llm.stream).mock.calls[0][0]
   const one = await runtime.jsonlDeliveryReceipt(producer, first.messageId), two = await runtime.jsonlDeliveryReceipt(producer, second.messageId)
-  expect(messages.map(message => message.id)).toEqual([userId, one!.historyMessageId, 'actual-assistant', 'actual-tool', two!.historyMessageId])
-  expect(messages[2].toolCall).toEqual({ id: 'call-one', name: 'step', args: { exact: 1 } })
-  expect(messages[3]).toMatchObject({ content: 'Complete real tool evidence', toolCallId: 'call-one', toolName: 'step' })
+  expect(messages.map(message => message.id)).toEqual([userId, first.dispatchId, first.resultId, one!.historyMessageId,
+    'actual-assistant', 'actual-tool', second.dispatchId, second.resultId, two!.historyMessageId])
+  expect(messages.find(message => message.id === 'actual-assistant')?.toolCall).toEqual({ id: 'call-one', name: 'step', args: { exact: 1 } })
+  expect(messages.find(message => message.id === 'actual-tool')).toMatchObject({ content: 'Complete real tool evidence', toolCallId: 'call-one', toolName: 'step' })
   expect(physicalRows().filter(row => row.uuid === one!.historyMessageId)).toHaveLength(1)
   expect(outcomes.at(-1)?.status).toBe('succeeded')
 })
@@ -169,7 +192,7 @@ it('losing reservation commit ACK keeps a pending receipt without a peer row and
   expect(await count('collaboration_jsonl_deliveries')).toBe(1); expect(physicalRows().filter(row => row.type === 'user')).toHaveLength(1)
   const reserved = (await observer.execute('SELECT encoded_row,row_hash,row_offset,row_bytes FROM collaboration_jsonl_deliveries')).rows[0]
   expect(JSON.parse(String(reserved.encoded_row)).payload.createdAt).toBe(accepted.acceptedAt)
-  expect((await readAuthenticatedJSONLHistory(ctx.history, scope))!.map(message => message.id)).toEqual([userId])
+  expect((await readAuthenticatedJSONLHistory(ctx.history, scope))!.map(message => message.id)).toEqual([userId, accepted.dispatchId, accepted.resultId])
   vi.spyOn(Date, 'now').mockReturnValue(accepted.acceptedAt + 10_000)
   expect((await runtime.consumeJSONLDelivery(consumer)).receipts).toHaveLength(1)
   expect((await observer.execute('SELECT encoded_row,row_hash,row_offset,row_bytes FROM collaboration_jsonl_deliveries')).rows[0]).toEqual(reserved)
@@ -215,16 +238,16 @@ it.each(['partial-write', 'sync-ACK'] as const)('reconciles %s failure using exa
   })
   await expect(runtime.consumeJSONLDelivery(consumer)).rejects.toThrow(kind === 'partial-write' ? 'lost partial suffix' : 'lost sync ACK')
   expect((await observer.execute('SELECT state FROM collaboration_jsonl_deliveries')).rows[0].state).toBe('pending')
-  expect((await readAuthenticatedJSONLHistory(ctx.history, scope))!.map(message => message.id)).toEqual([userId])
+  expect((await readAuthenticatedJSONLHistory(ctx.history, scope))!.map(message => message.id)).toEqual([userId, accepted.dispatchId, accepted.resultId])
   expect((await runtime.consumeJSONLDelivery(consumer)).receipts).toHaveLength(1)
   const receipt = await runtime.jsonlDeliveryReceipt(producer, accepted.messageId)
   expect(physicalRows().filter(row => row.uuid === receipt!.historyMessageId)).toHaveLength(1)
 })
 
 it.each(['replace-file', 'edit-peer'] as const)('rejects external %s physical mutation before a provider attempt', async kind => {
-  await seed(); await mail('Peer evidence'); await runtime.consumeJSONLDelivery(await bindConsumer())
+  await seed(); await mail('Unique mailbox evidence'); await runtime.consumeJSONLDelivery(await bindConsumer())
   if (kind === 'replace-file') { const replacement = archive() + '.replacement'; fs.copyFileSync(archive(), replacement); fs.renameSync(replacement, archive()) }
-  else fs.writeFileSync(archive(), fs.readFileSync(archive(), 'utf8').replace('Peer evidence', 'Peer evideNce'))
+  else fs.writeFileSync(archive(), fs.readFileSync(archive(), 'utf8').replace('Unique mailbox evidence', 'Unique mailbox evideNce'))
   await run(); expect(llm.stream).not.toHaveBeenCalled(); expect(outcomes.at(-1)?.status).toBe('failed')
 })
 

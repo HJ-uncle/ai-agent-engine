@@ -10,6 +10,8 @@ import type { Tool, AgentContext } from '../core/agent-context/index.js'
 import { trustBuiltinTool } from '../security/tool-policy.js'
 import { isCodeProfileTool, normalizeAllowedTools, normalizeToolName, type ToolProfile } from './tool-profile.js'
 import { isDefaultTool, REMOVED_TOOL_NAMES } from './tool-exposure.js'
+import { compactBuiltinToolDefinition } from './model-tool-definitions.js'
+import { loadToolsTool } from './model-tool-loading.js'
 import { skillsRegistry } from '../skills/index.js'
 import {
   listFilesTool,
@@ -33,6 +35,7 @@ import { todoTools } from './todo/todo-tool.js'
 import { cronTools } from './cron/cron-tool.js'
 import { taskControlTools } from './task/task-tool.js'
 import { subagentTools, readonlySubagentTools, ownedCollaborationTools } from './subagent/index.js'
+import { isCollaboratorDispatch } from '../core/subagent/collaborator-dispatch-identity.js'
 import { webFetchTool } from './web-fetch/index.js'
 import { httpRequestTool } from './http-request/index.js'
 import { searchHistoryTool } from './get-context/search-history-tool.js'
@@ -44,6 +47,7 @@ import { browserTools, BROWSER_READONLY_TOOLS } from './browser/browser-tools.js
 import { workbenchTools } from './workbench/index.js'
 import { deliverFilesTool, reportArtifactsTool } from './results/index.js'
 import type { ExternalSkill } from '../skills/external-loader.js'
+import { loadBuiltinOfficeSkills } from '../skills/builtin-office.js'
 import {
   resolveDefaultAllowedTools,
   runOSMSelfCheck,
@@ -154,9 +158,12 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   const ownedControlNames = new Set([...ownedControls].map(tool => tool.name))
   const registry = new ToolRegistry(tool => {
     if (REMOVED_TOOL_NAMES.has(tool.name)) return false
+    if (tool.name === 'collaborator_dispatch') return !!opts.ownedCollaboration && isCollaboratorDispatch(tool)
     // Planning changes only the current session's durable state. Trust its builtin
     // implementation, rather than a matching extension name, outside business allowlists.
     if (tool.name === 'plan_update') return internalPlanTools.has(tool)
+    // Definition loading reveals only this registry's existing capabilities.
+    if (tool.name === 'load_tools') return tool === loadToolsTool
     // Only these exact builtin implementations can cross the business allowlist.
     if (ownedControlNames.has(tool.name)) return ownedControls.has(tool)
     // Apply this at insertion so built-in skills and late registrations cannot
@@ -174,7 +181,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
 
   /** Helper: register a tool into the registry and track it as builtin */
   const registerBuiltin = (tool: Tool) => {
-    const readOnly = [readFileTool, listFilesTool, globTool, grepTool, searchHistoryTool, officeEnvironmentTool, officeInspectTool,
+    const readOnly = [readFileTool, listFilesTool, globTool, grepTool, searchHistoryTool, officeEnvironmentTool, officeInspectTool, loadToolsTool,
       ...commandJobTools.filter(candidate => candidate.name === 'command_output')].includes(tool)
     const browserReadOnly = browserTools.includes(tool) && BROWSER_READONLY_TOOLS.has(tool.name)
     const workbenchReadOnly = workbenchTools.includes(tool) && tool.name === 'workbench_context'
@@ -183,7 +190,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
     // Observation keeps its readonly batch semantics, while trusted joins and
     // cancellation never hold the ordinary slot needed by child execution.
     const orchestration = subagentTools.includes(tool) && (tool.name === 'subagent_wait' || tool.name === 'subagent_cancel')
-    registry.register(trustBuiltinTool(tool, mode, { orchestration }))
+    registry.register(trustBuiltinTool(tool, mode, { orchestration }), compactBuiltinToolDefinition(tool))
     if (registry.has(tool.name)) builtinTools.push(tool.name)
   }
 
@@ -314,16 +321,26 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
     )
   }
 
+  // Native Office's packaged usage guide is part of the admitted tool contract,
+  // not an external skill grant. This point precedes extension registration, so
+  // a matching extension name cannot opt into the bundled guide. Never restore
+  // a project/global override excluded by the explicit skill bindings.
+  const nativeOfficeVersion = registry.modelToolRegistrationVersion('office_document')
+  if (nativeOfficeVersion !== undefined && !externalSkills.some(skill => skill.name.toLowerCase() === 'aether-office')) {
+    externalSkills.push(...loadBuiltinOfficeSkills().filter(skill => skill.enabled && skill.name.toLowerCase() === 'aether-office'))
+  }
+
   // A bundled Office workflow must not advertise APIs excluded by this profile.
   // External/user skills remain visible: they may have independent implementations.
   if (!registry.has('office_document')) externalSkills = externalSkills.filter(skill => !(skill.builtin && skill.name === 'aether-office'))
 
   createSkillTools(externalSkills, { osmMode: mode, hiddenSkills: osmHiddenSkills }).forEach((tool) => {
-    registry.register(trustBuiltinTool(tool, 'readonly'))
+    registry.register(trustBuiltinTool(tool, 'readonly'), compactBuiltinToolDefinition(tool))
     if (registry.has(tool.name)) skillTools.push(tool.name)
   })
   if (shouldRegister('run_skill_script')) {
-    registry.register(opts.strictSkillBindings ? createBoundSkillScriptTool(externalSkills) : runSkillScriptTool)
+    const scriptTool = opts.strictSkillBindings ? createBoundSkillScriptTool(externalSkills) : runSkillScriptTool
+    registry.register(scriptTool, compactBuiltinToolDefinition(scriptTool))
     if (registry.has(runSkillScriptTool.name)) skillTools.push(runSkillScriptTool.name)
   }
 
@@ -389,6 +406,8 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   if (shouldRegister(deliverFilesTool.name)) registerBuiltin(deliverFilesTool)
   if (shouldRegister(reportArtifactsTool.name)) registerBuiltin(reportArtifactsTool)
 
+  if (registry.modelToolLoadingCandidates().length) registerBuiltin(loadToolsTool)
+
   // ── Superpower 自检 ────────────────────────────────────────────────────
   // 验证 CORE 工具名与 registry 实际注册保持一致，避免 OFF 模式下 Agent
   // 因工具名变更而"静默失去能力"。只在注册最多的完整场景（allowedTools
@@ -408,5 +427,10 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
     mcpTools: registeredNames.filter(name => mcpNames.has(name)),
     skillTools: registeredNames.filter(name => skillNames.has(name)),
   }
-  return { registry, externalSkills, toolCategories }
+  const registryWithSkills = Object.assign(registry, {
+    skillsForPrompt: (): readonly ExternalSkill[] => registry.has('get_skill') ? externalSkills.filter(skill => skill.enabled
+      && (!(skill.builtin && skill.name === 'aether-office') || nativeOfficeVersion !== undefined
+        && registry.modelToolRegistrationVersion('office_document') === nativeOfficeVersion)) : [],
+  })
+  return { registry: registryWithSkills, externalSkills, toolCategories }
 }

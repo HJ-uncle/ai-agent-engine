@@ -77,9 +77,9 @@ it.each([{ allowed: false, trusted: true, advertised: true }, { allowed: true, t
   expect(String(sent.content).includes('"tool":"search_history"')).toBe(allowed && trusted && advertised)
   expect(JSON.stringify(sent)).not.toContain('OLD_PIXELS_MUST_NOT_RETURN')
   expect(cleared.modelInputContent).toBe('OLD_PIXELS_MUST_NOT_RETURN')
-  expect(options!.requestInputTokenEstimate).toBe(estimateRequestInput(request, options?.systemPrompt, options?.tools ?? []))
+  expect(options!.requestInputTokenEstimate).toBe(estimateRequestInput(request, options?.systemPrompt, options?.tools ?? [], options?.requestContext))
   const markerOnly = request.map(message => message === sent ? { ...message, content: CLEARED_TOOL_RESULT, metadata: undefined } : message)
-  expect(options!.requestInputTokenEstimate).toBeGreaterThan(estimateRequestInput(markerOnly, options?.systemPrompt, options?.tools ?? []))
+  expect(options!.requestInputTokenEstimate).toBeGreaterThan(estimateRequestInput(markerOnly, options?.systemPrompt, options?.tools ?? [], options?.requestContext))
 })
 
 it.each(['max_steps', 'budget'] as const)('withdraws archive recovery instructions before %s finalization disables tools', async reason => {
@@ -109,7 +109,7 @@ it.each(['max_steps', 'budget'] as const)('withdraws archive recovery instructio
   expect(String(sent.content)).not.toContain('search_history')
   expect(String(sent.content)).not.toContain('imageArgs')
   expect(JSON.stringify(sent)).not.toContain('data:image')
-  expect(options!.requestInputTokenEstimate).toBe(estimateRequestInput(request, options?.systemPrompt, []))
+  expect(options!.requestInputTokenEstimate).toBe(estimateRequestInput(request, options?.systemPrompt, [], options?.requestContext))
   expect(cleared.modelInputContent).toBe(original.content)
 })
 
@@ -118,6 +118,22 @@ const usage = (frames: string[]) => frames.filter(frame => frame.startsWith('\x0
   .map(frame => JSON.parse(frame.slice('\x00__usage__'.length)))
 
 describe('context snapshots and cumulative input usage', () => {
+  it.each(['mcp', undefined])('attributes tool input to definitions actually sent, ignoring stale catalogue ratios (source=%s)', async source => {
+    const f = fixture()
+    f.ctx.tools.list = () => [{ name: 'visible_tool', description: 'The only visible tool', source, parameters: { type: 'object' } }]
+    f.llm.stream = vi.fn(async function* () {
+      yield { done: true, content: 'Done', promptTokens: 1000, completionTokens: 1 }
+    })
+    const frames = await f.run({ promptBreakdown: { systemPromptTokens: 10, skillTokens: 0,
+      ragTokens: 0, systemToolsTokens: 200, builtinToolsTokens: source === 'mcp' ? 200 : 0,
+      mcpToolsTokens: source === 'mcp' ? 0 : 200 } })
+    const frame = usage(frames).at(-1)
+    expect(source === 'mcp' ? frame.builtinToolsTokens : frame.mcpToolsTokens).toBe(0)
+    expect(source === 'mcp' ? frame.mcpToolsTokens : frame.builtinToolsTokens).toBe(frame.systemToolsTokens)
+    expect(frame.systemToolsTokens).toBeGreaterThan(0)
+    expect(frame.promptTokens).toBe(1000)
+  })
+
   it('publishes the admitted input before a slow provider responds, then corrects it before completion without billing early', async () => {
     const f = fixture()
     f.ctx.modelCaps = { contextWindow: 100_000 }
@@ -369,7 +385,9 @@ describe('D5 provider streaming and partial evidence', () => {
 
     const f = fixture([{ id: 'prior-user', role: 'user', content: 'Run the checks' },
       { id: 'prior-call', role: 'assistant', content: '', toolCall: { id: 'test-command', name: 'execute_cmd', args: { command: 'node' } } }, message])
-    f.ctx.modelCaps = { contextWindow: 2_000 }
+    // Leave room for current system/runtime guidance, while the archived
+    // 40k-token payload would still exceed the window if accidentally restored.
+    f.ctx.modelCaps = { contextWindow: 8_192 }
     await f.run({}, 'Continue using the existing checks.')
     expect(f.ctx.history.compress).not.toHaveBeenCalled()
     expect(f.llm.stream).toHaveBeenCalledTimes(1)
@@ -678,7 +696,7 @@ describe('D5 complete request context admission', () => {
       expect(messages.some(message => message.id === 'old-system' || message.id === 'old-user')).toBe(false)
       expect(messages.filter(message => message.role === 'user').map(message => message.content)).toEqual(['Current isolated request.'])
       expect(options?.systemPrompt).toMatch(/^Follow the explicitly approved current scope\./)
-      expect(options?.systemPrompt).toContain('## 本次模型请求环境')
+      expect(options?.requestContext).toContain('## 本次模型请求环境')
     }
     expect(calls[1][0]).toEqual(expect.arrayContaining([
       expect.objectContaining({ role: 'assistant', toolCallId: 'current-read' }),
@@ -722,7 +740,7 @@ describe('D5 complete request context admission', () => {
     const retentions = vi.mocked(f.ctx.history.compress).mock.calls.map(call => call[2] as { keepRecentTokens: number })
     expect(retentions[1].keepRecentTokens).toBeLessThanOrEqual(retentions[0].keepRecentTokens)
     const [request, options] = vi.mocked(f.llm.stream).mock.calls[0]
-    expect(estimateRequestInput(request, options?.systemPrompt, options?.tools ?? []) + options!.maxTokens!).toBeLessThanOrEqual(6_000)
+    expect(estimateRequestInput(request, options?.systemPrompt, options?.tools ?? [], options?.requestContext) + options!.maxTokens!).toBeLessThanOrEqual(6_000)
     expect(request.some(message => String(message.content).includes('DECISION=43'))).toBe(true)
     expect(f.outcomes.at(-1)).toMatchObject({ status: 'succeeded' })
   })
@@ -776,7 +794,7 @@ describe('D5 complete request context admission', () => {
     const [request, options] = vi.mocked(f.llm.stream).mock.calls[0]
     expect(request.find(message => message.id === 'attachment-turn')?.content).toBe(modelInput)
     expect(f.history.find(message => message.id === 'attachment-turn')?.content).toEqual(display)
-    expect(options!.requestInputTokenEstimate).toBe(estimateRequestInput(request, options?.systemPrompt, options?.tools ?? []))
+    expect(options!.requestInputTokenEstimate).toBe(estimateRequestInput(request, options?.systemPrompt, options?.tools ?? [], options?.requestContext))
     expect(f.outcomes.at(-1)).toMatchObject({ status: 'succeeded' })
   })
 
@@ -881,7 +899,7 @@ describe('thinking Off during finalization', () => {
     expect(requests[1].tools).toEqual([])
     expect(requests[1].thinkingEnabled).toBe(false)
     expect(requests[1].thinkingConfig).toEqual(offConfig)
-    expect(requests[1].systemPrompt).toContain('探索已停止')
+    expect(requests[1].requestContext).toContain('探索已停止')
   })
 })
 

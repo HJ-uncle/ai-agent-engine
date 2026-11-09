@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { pino } from 'pino'
+import Fastify from 'fastify'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import * as database from '../sqlite/db.js'
 import { LocalSqliteProcessClient } from '../sqlite/local-process-client.js'
@@ -22,6 +23,9 @@ import type { LLMAdapter } from '../../core/llm-adapter/types.js'
 import { CurrentTurnProjection, decodeStreamChunk } from '../../core/stream-pipeline/stream-projection.js'
 import { FinalResultStore, TOOL_RESULT_IMAGE_ASSETS } from './index.js'
 import { resultToolImages } from './tool-images.js'
+import { ChangeStore } from '../changes/index.js'
+import { publicSessionHistoryMessages } from '../../api/http/history-projection.js'
+import { conversationRoutes } from '../../api/http/routes/conversation.js'
 
 let dir: string, workspace: string, db: LocalSqliteProcessClient, roots: RootRunStore, root: RootRun
 let service: ExecutionOwners, owner: ExecutionOwner, controller: AbortController, ctx: AgentContext, history: JSONLConversationHistory, store: FinalResultStore, manager: WorkspaceManager
@@ -62,6 +66,13 @@ afterEach(async () => {
   fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 })
 })
 function write(name: string, bytes: string | Buffer = PNG): string { const file = path.join(workspace, name); fs.writeFileSync(file, bytes); return file }
+async function trackedWrite(name: string, content: string, previous: string | null = null, context = ctx) {
+  const file = write(name, content)
+  const change = await new ChangeStore().record(tenant, { sessionId: context.rootSessionId ?? context.sessionId,
+    turnId: context.turnId, runId: context.rootRunId, path: file, kind: 'write', oldContent: previous, newContent: content,
+    ...(context.parentSessionId ? { producerChildSessionId: context.sessionId, producerRunId: context.runId } : {}) })
+  return { file, change }
+}
 async function complete(text = '完成，可以使用。') {
   const result = await store.prepare(ctx, text, root.assistantMessageId)
   if (!result) throw new Error('Missing owned result')
@@ -98,6 +109,169 @@ async function inChild<T>(action: (child: AgentContext) => Promise<T>, readOnly 
   expect(run.status).toBe('succeeded')
   return result
 }
+
+it('withdraws successful rollback assets even when another file conflicts and the answer must remain', async () => {
+  const first = await trackedWrite('reverted.txt', 'withdrawn final bytes')
+  const second = await trackedWrite('conflicted.txt', 'retained final bytes')
+  const [withdrawn, retained] = await store.stage(ctx, [{ path: first.file }, { path: second.file }])
+  await complete()
+  fs.writeFileSync(second.file, 'external user edit')
+  const report = await new ChangeStore().revertBatch(tenant, { sessionId: ctx.sessionId, ids: [first.change.id, second.change.id] })
+  expect(report).toMatchObject({ reverted: 1, conflicts: 1 })
+  expect(fs.existsSync(first.file)).toBe(false)
+  expect(fs.readFileSync(second.file, 'utf8')).toBe('external user edit')
+  const original = await history.getFullHistory(ctx)
+  expect(original[0].metadata?.finalResult.items).toHaveLength(2)
+  const projected = await publicSessionHistoryMessages(tenant, original)
+  expect(projected[0].metadata?.finalResult.items).toEqual([retained])
+  expect(original[0].metadata?.finalResult.items).toHaveLength(2)
+  await expect(new FinalResultStore().readAsset(tenant, ctx.sessionId, root.runId, withdrawn.assetId, history)).rejects.toThrow('withdrawn')
+  expect(Buffer.from((await store.readAsset(tenant, ctx.sessionId, root.runId, retained.assetId, history)).content, 'base64').toString()).toBe('retained final bytes')
+  const retry = await new ChangeStore().revertBatch(tenant, { sessionId: ctx.sessionId, ids: [first.change.id, second.change.id] })
+  expect(retry.results).toContainEqual(expect.objectContaining({ id: first.change.id, status: 'already_reverted' }))
+  expect((await new FinalResultStore().projectHistory(tenant, original))[0].metadata?.finalResult.items).toEqual([retained])
+})
+
+it('does not revoke an earlier delivered version when a later turn restores it', async () => {
+  const first = await trackedWrite('versioned.txt', 'first')
+  const [earlier] = await store.stage(ctx, [{ path: first.file }]); const previous = await complete()
+  await admit()
+  const second = await trackedWrite('versioned.txt', 'second', 'first')
+  const [later] = await store.stage(ctx, [{ path: second.file }]); await complete()
+  await new ChangeStore().revertBatch(tenant, { sessionId: ctx.sessionId, ids: [second.change.id] })
+  expect(fs.readFileSync(second.file, 'utf8')).toBe('first')
+  const projected = await store.projectHistory(tenant, await history.getFullHistory(ctx))
+  expect(projected.map(message => message.metadata?.finalResult.items)).toEqual([[earlier], []])
+  expect(Buffer.from((await store.readAsset(tenant, ctx.sessionId, previous.runId, earlier.assetId, history)).content, 'base64').toString()).toBe('first')
+  await expect(store.readAsset(tenant, ctx.sessionId, root.runId, later.assetId, history)).rejects.toThrow('withdrawn')
+})
+
+it.each([false, true])('withdraws a later no-edit re-delivery of the same producing version (legacy=%s)', async legacy => {
+  const first = await trackedWrite('redelivered.txt', 'same delivered version')
+  const [original] = await store.stage(ctx, [{ path: first.file }]); const previous = await complete()
+  await admit()
+  const [repeated] = await store.stage(ctx, [{ path: first.file }]); await complete()
+  if (legacy) await db.execute('DELETE FROM result_asset_sources')
+  await new ChangeStore().revertBatch(tenant, { sessionId: ctx.sessionId, ids: [first.change.id] })
+  const projected = await store.projectHistory(tenant, await history.getFullHistory(ctx))
+  expect(projected.map(message => message.metadata?.finalResult.items)).toEqual([[], []])
+  await expect(store.readAsset(tenant, ctx.sessionId, previous.runId, original.assetId, history)).rejects.toThrow('withdrawn')
+  await expect(store.readAsset(tenant, ctx.sessionId, root.runId, repeated.assetId, history)).rejects.toThrow('withdrawn')
+})
+
+it('does not attach a manually recreated identical file to a previously withdrawn producing receipt', async () => {
+  const first = await trackedWrite('manual-recreation.txt', 'identical bytes')
+  const [original] = await store.stage(ctx, [{ path: first.file }]); const previous = await complete()
+  await new ChangeStore().revertBatch(tenant, { sessionId: ctx.sessionId, ids: [first.change.id] })
+  await admit()
+  fs.writeFileSync(first.file, 'identical bytes')
+  const [recreated] = await store.stage(ctx, [{ path: first.file }]); await complete()
+  expect((await store.projectHistory(tenant, await history.getFullHistory(ctx))).map(message => message.metadata?.finalResult.items)).toEqual([[], [recreated]])
+  await expect(store.readAsset(tenant, ctx.sessionId, previous.runId, original.assetId, history)).rejects.toThrow('withdrawn')
+  expect((await store.readAsset(tenant, ctx.sessionId, root.runId, recreated.assetId, history)).sha256).toBe(recreated.sha256)
+})
+
+it('binds a re-delivered restored version to its remaining live receipt', async () => {
+  write('restore-and-redeliver.txt', 'A')
+  const b = await trackedWrite('restore-and-redeliver.txt', 'B', 'A')
+  await store.stage(ctx, [{ path: b.file }]); await complete()
+  await admit()
+  const c = await trackedWrite('restore-and-redeliver.txt', 'C', 'B')
+  await store.stage(ctx, [{ path: c.file }]); await complete()
+  await new ChangeStore().revertBatch(tenant, { sessionId: ctx.sessionId, ids: [c.change.id] })
+  expect(fs.readFileSync(b.file, 'utf8')).toBe('B')
+  await admit()
+  const [restored] = await store.stage(ctx, [{ path: b.file }]); await complete()
+  expect((await store.readAsset(tenant, ctx.sessionId, root.runId, restored.assetId, history)).sha256).toBe(restored.sha256)
+  await new ChangeStore().revertBatch(tenant, { sessionId: ctx.sessionId, ids: [b.change.id] })
+  expect(fs.readFileSync(b.file, 'utf8')).toBe('A')
+  await expect(store.readAsset(tenant, ctx.sessionId, root.runId, restored.assetId, history)).rejects.toThrow('withdrawn')
+})
+
+it.each([false, true])('does not revive an old child report when the same child recreates identical bytes (legacy=%s)', async legacy => {
+  const reports = await inChild(async child => {
+    const first = await trackedWrite('same-child-version.txt', 'identical child bytes', null, child)
+    child.currentToolCallId = 'original-report'
+    const original = await store.report(child, [{ path: first.file }])
+    await new ChangeStore().revertBatch(tenant, { sessionId: ctx.sessionId, ids: [first.change.id] })
+    const second = await trackedWrite('same-child-version.txt', 'identical child bytes', null, child)
+    child.currentToolCallId = 'replacement-report'
+    const replacement = await store.report(child, [{ path: second.file }])
+    // Give the legacy manifest a deterministic report-time boundary, without
+    // relying on the filesystem or millisecond timer advancing between writes.
+    await db.execute({ sql: 'UPDATE file_changes SET created_at=100 WHERE id=?', args: [first.change.id] })
+    await db.execute({ sql: 'UPDATE file_changes SET created_at=300 WHERE id=?', args: [second.change.id] })
+    await db.execute({ sql: "UPDATE child_artifact_manifests SET created_at=CASE report_key WHEN 'original-report' THEN 200 ELSE 400 END WHERE run_id=?", args: [original.runId] })
+    return { original, replacement }
+  })
+  if (legacy) await db.execute('DELETE FROM result_asset_sources')
+  const input = (report: typeof reports.original) => ({ childSessionId: report.childSessionId, runId: report.runId, artifactId: report.items[0].assetId })
+  await expect(store.stage(ctx, [input(reports.original)])).rejects.toThrow('withdrawn')
+  const [item] = await store.stage(ctx, [input(reports.replacement)])
+  await complete()
+  expect((await store.readAsset(tenant, ctx.sessionId, root.runId, item.assetId, history)).sha256).toBe(item.sha256)
+})
+
+it('revokes only the rolled back publication when two paths share the same asset bytes', async () => {
+  const first = await trackedWrite('shared-one.txt', 'same immutable bytes')
+  const second = await trackedWrite('shared-two.txt', 'same immutable bytes')
+  const [withdrawn, retained] = await store.stage(ctx, [{ path: first.file }, { path: second.file }]); await complete()
+  expect(withdrawn.sha256).toBe(retained.sha256)
+  await new ChangeStore().revertBatch(tenant, { sessionId: ctx.sessionId, ids: [first.change.id] })
+  await expect(store.readAsset(tenant, ctx.sessionId, root.runId, withdrawn.assetId, history)).rejects.toThrow('withdrawn')
+  expect((await store.readAsset(tenant, ctx.sessionId, root.runId, retained.assetId, history)).totalSize).toBe(retained.size)
+  expect((await store.projectHistory('another-tenant', await history.getFullHistory(ctx)))[0].metadata?.finalResult.items).toHaveLength(2)
+})
+
+it('a new receipt for recreated identical bytes is not revoked by an earlier rollback in the same turn', async () => {
+  const first = await trackedWrite('recreated.txt', 'identical')
+  await new ChangeStore().revertBatch(tenant, { sessionId: ctx.sessionId, ids: [first.change.id] })
+  const second = await trackedWrite('recreated.txt', 'identical')
+  const [item] = await store.stage(ctx, [{ path: second.file }]); await complete()
+  expect((await store.projectHistory(tenant, await history.getFullHistory(ctx)))[0].metadata?.finalResult.items).toEqual([item])
+  expect((await store.readAsset(tenant, ctx.sessionId, root.runId, item.assetId, history)).sha256).toBe(item.sha256)
+})
+
+it('withdraws later adopted child receipts when their producing file version is rolled back', async () => {
+  let changeId = ''
+  const report = await inChild(async child => {
+    const written = await trackedWrite('child-withdrawn.txt', 'child delivery', null, child)
+    changeId = written.change.id
+    return store.report(child, [{ path: written.file }])
+  })
+  await complete('Candidate saved.')
+  await admit()
+  const [item] = await store.stage(ctx, [{ childSessionId: report.childSessionId, runId: report.runId, artifactId: report.items[0].assetId }])
+  await complete()
+  await new ChangeStore().revertBatch(tenant, { sessionId: ctx.sessionId, ids: [changeId] })
+  await expect(store.readAsset(tenant, ctx.sessionId, root.runId, item.assetId, history)).rejects.toThrow('withdrawn')
+  expect((await store.projectHistory(tenant, await history.getFullHistory(ctx))).at(-1)?.metadata?.finalResult.items).toEqual([])
+  await admit()
+  await expect(store.stage(ctx, [{ childSessionId: report.childSessionId, runId: report.runId, artifactId: report.items[0].assetId }])).rejects.toThrow('withdrawn')
+})
+
+it('reloads history, display and archive without rolled back attachments and rejects the old asset URL', async () => {
+  await history.append({ id: root.userMessageId, role: 'user', content: 'Create a report', conversationId: root.turnId }, ctx)
+  const { file, change } = await trackedWrite('http-report.txt', 'published bytes')
+  const [item] = await store.stage(ctx, [{ path: file }]); await complete()
+  await new ChangeStore().revertBatch(tenant, { sessionId: ctx.sessionId, ids: [change.id] })
+  const app = Fastify()
+  app.decorateRequest('authContext', null)
+  app.addHook('onRequest', async request => { Object.assign(request, { authContext: { tenantId: tenant } }) })
+  try {
+    await app.register(conversationRoutes)
+    for (const route of ['history', 'display', 'archive']) {
+      const response = await app.inject({ method: 'GET', url: `/conversation/${route}?sessionId=${ctx.sessionId}` })
+      expect(response.statusCode).toBe(200)
+      const envelope = response.json()
+      expect(envelope.code).toBe(200)
+      const messages = route === 'display' ? envelope.data.messages : envelope.data
+      expect(messages.find((message: { id: string }) => message.id === root.assistantMessageId).metadata.finalResult.items).toEqual([])
+    }
+    const asset = await app.inject({ method: 'GET', url: `/conversation/result-asset?sessionId=${ctx.sessionId}&runId=${root.runId}&assetId=${item.assetId}` })
+    expect(asset.json().code).toBe(40400)
+  } finally { await app.close() }
+})
 
 it('adopts immutable child artifact bytes and truthful producer identity after source changes', async () => {
   const file = write('child-report.txt', 'verified child version')
@@ -255,8 +429,8 @@ it('preserves operator supplied local workspace roots without requiring persiste
 it('preserves exact image bytes after source deletion and store recreation, but not before final success', async () => {
   const file = write('成品.png'), [item] = await store.stage(ctx, [{ path: file }])
   await expect(store.readAsset(tenant, ctx.sessionId, root.runId, item.assetId, history)).rejects.toThrow('not available')
-  fs.unlinkSync(file)
   const result = await complete()
+  fs.unlinkSync(file)
   const restored = new FinalResultStore()
   const read = await restored.readAsset(tenant, ctx.sessionId, root.runId, item.assetId, new JSONLConversationHistory())
   expect(result.items).toEqual([item]); expect(item.sha256).toMatch(/^[a-f0-9]{64}$/)
@@ -270,6 +444,28 @@ it('replaces the entire selection and explicitly clears it instead of accumulati
   expect(replacement.map(item => item.name)).toEqual(['交付.txt'])
   await store.stage(ctx, [])
   expect((await complete()).items).toEqual([])
+})
+
+it('rejects changed direct sources before final publication until the complete list is registered again', async () => {
+  const file = write('accepted-report.txt', 'accepted version')
+  const [first] = await store.stage(ctx, [{ path: file }])
+  fs.writeFileSync(file, 'repaired and revalidated version')
+  expect(await store.stalePaths(ctx)).toEqual([file])
+  await expect(store.prepare(ctx, 'Ready', root.assistantMessageId)).rejects.toMatchObject({ code: 'FINAL_DELIVERY_STALE', paths: [file] })
+  await expect(store.readAsset(tenant, ctx.sessionId, root.runId, first.assetId, history)).rejects.toThrow('not available')
+  const [updated] = await store.stage(ctx, [{ path: file }])
+  expect(updated.sha256).not.toBe(first.sha256)
+  expect(await store.stalePaths(ctx)).toEqual([])
+  expect((await complete()).items).toEqual([updated])
+})
+
+it('a missing draft source requires explicit withdrawal instead of publishing a stale direct-path selection', async () => {
+  const file = write('withdrawn.txt', 'draft')
+  await store.stage(ctx, [{ path: file }])
+  fs.unlinkSync(file)
+  await expect(store.prepare(ctx, 'Ready', root.assistantMessageId)).rejects.toMatchObject({ code: 'FINAL_DELIVERY_STALE' })
+  await store.stage(ctx, [])
+  expect((await complete('No files delivered.')).items).toEqual([])
 })
 
 it('keeps two versions of the same source path in different turns and does not carry files into plain text', async () => {

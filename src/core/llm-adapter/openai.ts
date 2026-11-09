@@ -1,4 +1,6 @@
 import { applyThinkingPreference, isThinkingDisabled, isProtectedThinkingParameter } from './thinking.js'
+import { requestContextMessages } from './request-context.js'
+import { ThinkingTagNormalizer, splitThinkingTagPrefix } from './thinking-tags.js'
 import { observeRequest, observeStreamRequest, openAIUsage, openAIUsageSnapshot, openAIUsageFromSnapshot, prepareRequestContext,
   type OpenAIUsageSnapshot } from './request-attempt.js'
 import { throwIfAborted } from '../utils/abort.js'
@@ -548,9 +550,11 @@ interface ParsedToolCall {
 function normalizeParsedToolArgs(name: string, args: Record<string, unknown>): Record<string, unknown> {
   if (name !== 'write_file') return args
   const normalized = normalizeWriteFileArgs(args)
-  return normalized.ok ? { path: normalized.args.path, data: normalized.args.data,
+  return normalized.ok ? { path: normalized.args.path,
+    ...(normalized.args.copyFrom ? { copyFrom: normalized.args.copyFrom } : { data: normalized.args.data }),
     ...(normalized.args.expectedHash === undefined ? {} : { expectedHash: normalized.args.expectedHash }),
-    ...(normalized.args.createOnly === undefined ? {} : { createOnly: normalized.args.createOnly }) } : args
+    ...(normalized.args.createOnly === undefined ? {} : { createOnly: normalized.args.createOnly }),
+    ...(normalized.args.trailingNewline === undefined ? {} : { trailingNewline: normalized.args.trailingNewline }) } : args
 }
 
 // Parameter-key → tool-name heuristics for when the model emits <function=> with empty name
@@ -560,6 +564,7 @@ const PARAM_TO_TOOL_HEURISTICS: Array<{ keys: string[]; tool: string }> = [
   { keys: ['key'],                  tool: 'recall' },
   { keys: ['path', 'data'],         tool: 'write_file' },
   { keys: ['path', 'content'],      tool: 'write_file' }, // legacy XML emitters
+  { keys: ['path', 'copyFrom'],     tool: 'write_file' },
   { keys: ['path'],                 tool: 'smart_read' },
   { keys: ['query'],                tool: 'search_memory' },
   { keys: ['name'],                 tool: 'get_skill' },
@@ -697,7 +702,7 @@ export class OpenAIAdapter implements LLMAdapter {
   async complete(messages: Message[], options?: LLMAdapterOptions): Promise<LLMResponse> {
     this.assertApiKey()
     options = applyThinkingPreference(options, this.provider, options?.model ?? this.model, this.client.baseURL)
-    const oaiMessages = messagesToOpenAI(messages, this.supportsVision, isThinkingMode(options))
+    const oaiMessages = messagesToOpenAI(requestContextMessages(messages, options?.requestContext), this.supportsVision, isThinkingMode(options))
     if (options?.systemPrompt) {
       oaiMessages.unshift({ role: 'system', content: options.systemPrompt })
     }
@@ -759,7 +764,8 @@ export class OpenAIAdapter implements LLMAdapter {
     }))
 
     // Fallback: Qwen/vLLM may embed tool calls as <tool_call> XML in content
-    const rawContent = message.content ?? ''
+    const normalizedText = splitThinkingTagPrefix(message.content ?? '')
+    const rawContent = normalizedText.content
     if ((!toolCalls || toolCalls.length === 0) && rawContent.includes('<tool_call>')) {
       const xmlCalls = parseXmlToolCalls(rawContent)
       if (xmlCalls.length > 0) {
@@ -772,9 +778,10 @@ export class OpenAIAdapter implements LLMAdapter {
       ? stripToolCallBlocks(rawContent)
       : rawContent
 
-    const reasoningContent = options?.responseThinkingField 
+    const providerReasoning = options?.responseThinkingField
       ? (message as any)[options.responseThinkingField] 
       : (message as any).reasoning_content
+    const reasoningContent = (typeof providerReasoning === 'string' ? providerReasoning : '') + (normalizedText.reasoningContent ?? '') || undefined
 
     // 处理缓存token：在 OpenAI / DeepSeek 协议中，usage.prompt_tokens 已经是总输入 token 数
     //（包含了命中缓存的部分）。之前的代码错误地又加了一次 cached_tokens 导致重复计算。
@@ -795,7 +802,7 @@ export class OpenAIAdapter implements LLMAdapter {
   async *stream(messages: Message[], options?: LLMAdapterOptions): AsyncIterable<LLMStreamChunk> {
     this.assertApiKey()
     options = applyThinkingPreference(options, this.provider, options?.model ?? this.model, this.client.baseURL)
-    const oaiMessages = messagesToOpenAI(messages, this.supportsVision, isThinkingMode(options))
+    const oaiMessages = messagesToOpenAI(requestContextMessages(messages, options?.requestContext), this.supportsVision, isThinkingMode(options))
     if (options?.systemPrompt) {
       oaiMessages.unshift({ role: 'system', content: options.systemPrompt })
     }
@@ -867,6 +874,7 @@ export class OpenAIAdapter implements LLMAdapter {
     let manualUsage: OpenAIUsageSnapshot | undefined
     let manualModel: string | undefined = undefined
     let streamFinishReason: LLMStreamChunk['finishReason']
+    const thinkingTags = new ThinkingTagNormalizer()
 
     // Retry/fallback is centralized in wrappers, with a single delivery boundary.
     const stream = await streamWithParamFallback(
@@ -875,6 +883,7 @@ export class OpenAIAdapter implements LLMAdapter {
       { signal: options?.signal }, requestContext, this.provider,
     )
 
+    try {
     for await (const chunk of stream) {
         // 1. 提取 usage（部分供应商在最后一个 chunk 的顶层或 usage 字段中返回）
         const reason = chunk.choices?.[0]?.finish_reason
@@ -899,11 +908,13 @@ export class OpenAIAdapter implements LLMAdapter {
           (delta as any).reasoning_content ||
           (delta as any).thought ||
           (delta as any).reasoning
+        const text = thinkingTags.push(typeof delta.content === 'string' ? delta.content : '')
+        const reasoningContent = (typeof rContent === 'string' ? rContent : '') + (text.reasoningContent ?? '') || undefined
 
-        if (delta.content || rContent || delta.tool_calls) {
+        if (text.content || reasoningContent || delta.tool_calls) {
           yield {
-            content: delta.content as string,
-            reasoningContent: rContent as string,
+            content: text.content,
+            reasoningContent,
             toolCalls: delta.tool_calls?.map((tc: any) => ({
               id: tc.id,
               // 某些第三方 GPT 兼容 API 返回不完整 chunk，tc.function 可能是 undefined
@@ -916,7 +927,18 @@ export class OpenAIAdapter implements LLMAdapter {
           }
         }
       }
+    } catch (error) {
+      const remainingText = thinkingTags.finish()
+      if (remainingText.content || remainingText.reasoningContent) yield {
+        ...remainingText, done: false, model: manualModel ?? String(params.model),
+      }
+      throw error
+    }
 
+    const remainingText = thinkingTags.finish()
+    if (remainingText.content || remainingText.reasoningContent) yield {
+      ...remainingText, done: false, model: manualModel ?? String(params.model),
+    }
     // 原生 stream 没有 finalMessage()，usage 从 chunk 中累积
     yield {
       done: true,

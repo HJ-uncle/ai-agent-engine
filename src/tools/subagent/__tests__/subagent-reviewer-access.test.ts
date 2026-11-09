@@ -9,10 +9,11 @@ import type { CreateSubagentRun, SubagentRun, SubagentRunHeader } from '../../..
 import type { SubagentExecution } from '../../../core/subagent/runner.js'
 import { createAgentContext } from '../../../core/agent-context/factory.js'
 import { createConversationHistory } from '../../../storage/conversation/factory.js'
-import { executeSubagent, subagentTool } from '../subagent-tool.js'
+import { executeSubagent, subagentStartTool, subagentTool } from '../subagent-tool.js'
 import { ToolRegistry } from '../../../core/tool-registry/index.js'
 import { trustBuiltinTool } from '../../../security/tool-policy.js'
 import { officeInspectTool } from '../../office/index.js'
+import { WorkspaceManager, workspaceManager } from '../../../workspace/index.js'
 
 const captured = vi.hoisted(() => ({ child: undefined as AgentContext | undefined, prior: null as SubagentRun | null, input: undefined as CreateSubagentRun | undefined,
   getRunHeader: vi.fn() }))
@@ -45,9 +46,17 @@ vi.mock('../../../storage/conversation/factory.js', () => ({ createConversationH
 vi.mock('../../../core/project-context.js', () => ({ getProjectContextBlock: () => '' }))
 
 let fixtureDir: string
+let manager: WorkspaceManager
 beforeEach(() => {
   fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-reviewer-access-'))
   vi.stubEnv('WORKSPACE_ROOT', fixtureDir)
+  vi.stubEnv('AUTH_ENABLED', 'true')
+  vi.stubEnv('AETHER_ALLOWED_WORKSPACE_ROOTS', fixtureDir)
+  vi.stubEnv('AETHER_WORKSPACE_BINDINGS_FILE', path.join(fixtureDir, 'bindings.json'))
+  manager = new WorkspaceManager(path.join(fixtureDir, 'scratch'))
+  manager.bind({ tenantId: 'fixture', sessionId: 'parent' }, fixtureDir)
+  vi.spyOn(workspaceManager, 'getPaths').mockImplementation(scope => manager.getPaths(scope))
+  vi.spyOn(workspaceManager, 'bindingReadGuard').mockImplementation((scope, expected) => manager.bindingReadGuard(scope, expected))
   captured.child = undefined
   captured.input = undefined
   captured.prior = null
@@ -60,6 +69,7 @@ beforeEach(() => {
   })
 })
 afterEach(() => {
+  vi.restoreAllMocks()
   vi.unstubAllEnvs()
   if (path.dirname(fixtureDir) !== path.resolve(os.tmpdir()) || !path.basename(fixtureDir).startsWith('aether-reviewer-access-')) throw new Error('Unsafe fixture cleanup path')
   fs.rmSync(fixtureDir, { recursive: true, force: true })
@@ -94,6 +104,33 @@ describe('builtin role identity and permission snapshots', () => {
       logger: pino({ level: 'silent' }), tools, history: createConversationHistory(), modelName: 'fixture' })
   }
 
+  it.each(['', ' \n\t', '!', '！？……', '\u200b\u200d', '👍✨'])('rejects no-task input %j before creating or resuming a child', async task => {
+    for (const tool of [subagentTool, subagentStartTool]) {
+      for (const resume of [{}, { resumeRunId: 'previous' }]) {
+        const result = await tool.execute({ task, ...resume }, parentContext())
+        expect(result).toMatchObject({ success: false })
+        expect(result.output).toContain('实际任务')
+      }
+    }
+    expect(captured.input).toBeUndefined()
+    expect(captured.child).toBeUndefined()
+    expect(captured.getRunHeader).not.toHaveBeenCalled()
+  })
+
+  it.each(['查', '继续', 'Go', 'x', '2'])('keeps short task %j executable', async task => {
+    expect((await subagentTool.execute({ task }, parentContext())).success).toBe(true)
+    expect(captured.input?.task).toBe(task)
+  })
+
+  it('preserves meaningful legacy systemPrompt fallback without overriding a punctuation task', async () => {
+    const parent = parentContext()
+    const rejected = await subagentTool.execute({ task: '!', systemPrompt: 'Inspect the project' }, parent)
+    expect(rejected.success).toBe(false)
+    expect(captured.input).toBeUndefined()
+    expect((await subagentTool.execute({ task: '', systemPrompt: 'Inspect the project' }, parent)).success).toBe(true)
+    expect(captured.input?.task).toBe('Inspect the project')
+  })
+
   it.each(['research', 'executor', 'general'])('snapshots the %s template independently of a configured Agent', async builtinRole => {
     const result = await subagentTool.execute({ task: 'Complete the assigned work', builtinRole }, parentContext())
     expect(result.success).toBe(true)
@@ -123,7 +160,7 @@ describe('builtin role identity and permission snapshots', () => {
       createdAt: 1, updatedAt: 1, usage: {}, toolCalls: [], transcriptRef: 'fixture',
       continuation: { builtinRole: 'research', builtinRoleVersion: 1, readOnly: true, toolNames: ['read_file'],
         systemPrompt: 'Frozen research prompt', workspacePaths: [fixtureDir], projectRoot: fixtureDir } }
-    expect((await subagentTool.execute({ task: 'Follow up', resumeRunId: 'previous' }, parent)).success).toBe(true)
+    expect((await subagentTool.execute({ task: '继续', resumeRunId: 'previous' }, parent)).success).toBe(true)
     expect(captured.input?.continuation).toEqual(captured.prior.continuation)
     expect(captured.input?.resumeFromRunId).toBe('previous')
     expect(captured.child?.tools.has('write_file')).toBe(false)
@@ -183,6 +220,8 @@ describe('subagent continuation tool preserves original capabilities', () => {
     const parent = parentAndPrior()
     const other = { ...parent, sessionId: 'other' }
     expect((await subagentTool.execute({ task: 'next', resumeRunId: 'previous' }, other)).success).toBe(false)
+    const narrower = path.join(fixtureDir, 'narrower'); fs.mkdirSync(narrower)
+    manager.bind(parent, narrower)
     expect((await subagentTool.execute({ task: 'next', resumeRunId: 'previous' }, { ...parent, workspacePaths: [] })).success).toBe(false)
     expect(captured.child).toBeUndefined()
   })

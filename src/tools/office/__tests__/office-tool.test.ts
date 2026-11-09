@@ -78,6 +78,33 @@ describe('native office tool publication and artifact evidence', () => {
     expect(fs.readFileSync(file)).toEqual(original)
   })
 
+  it('reports the later rejected slide without publishing and succeeds when only that slide is corrected', async () => {
+    const presentation = { slides: [
+      { title: 'Keep first slide', bullets: ['Keep first point'] },
+      { title: 'Keep second slide', bullets: ['Keep second point'] },
+      { title: 'Fix third slide', bullets: ['One', 'Two', 'Three'], table: { headers: ['Item'], rows: [['Value']] } },
+    ] }
+    const input = { operation: 'create', path: 'retry.pptx', expectedHash: 'missing', presentation }
+    const rejected = await officeDocumentTool.execute(input, ctx)
+    expect(rejected).toMatchObject({ success: false, error: 'OFFICE_FORMAT_FAILED', metadata: { fileMutationApplied: false } })
+    expect(JSON.parse(rejected.output).message).toContain('第 3 页含表格，要点数量 3/2，最多 2 条')
+    expect(fs.existsSync(path.join(root, 'retry.pptx'))).toBe(false)
+    expect(await store.list(ctx.tenantId, ctx.sessionId)).toHaveLength(0)
+    expect(fs.readdirSync(root).filter(name => name.startsWith('.aether-office-'))).toEqual([])
+
+    presentation.slides[2].bullets = ['One', 'Two']
+    const created = await officeDocumentTool.execute(input, ctx)
+    expect(created).toMatchObject({ success: true, metadata: { format: 'pptx', fileMutationApplied: true, rollbackAvailable: true } })
+    const inspected = await officeDocumentTool.execute({ operation: 'inspect', path: 'retry.pptx' }, ctx)
+    expect(inspected.success).toBe(true)
+    const report = JSON.parse(inspected.output)
+    expect(report.summary.slides).toBe(3)
+    expect(report.content).toContain('Keep first point')
+    expect(report.content).toContain('Keep second point')
+    expect(report.content).toContain('Value')
+    expect(await store.list(ctx.tenantId, ctx.sessionId)).toHaveLength(1)
+  })
+
   it('recalculates cross-sheet formulas through versioned publication and refuses unsupported formulas without mutation', async () => {
     const created = await officeDocumentTool.execute({ operation: 'create', path: 'calc.xlsx', expectedHash: 'missing', workbook: { sheets: [
       { name: 'Costs', columns: [{ header: 'Amount', key: 'v', type: 'number' }], rows: [{ v: 120000 }, { v: { formula: 'A2*0.12' } }] },
