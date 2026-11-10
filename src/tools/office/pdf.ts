@@ -11,16 +11,33 @@ const MAX_PREVIEW_CHARACTERS = 120_000
 function fail(message: string): never { throw new Error(`PDF: ${message}`) }
 
 function inputText(value: unknown, field: string, maximum: number): string {
-  if (typeof value !== 'string' || value.length > maximum || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value)
+  if (typeof value !== 'string' || value.length > maximum
     || Buffer.from(value, 'utf8').toString('utf8') !== value) fail(`${field} 必须是有效且有界的文本`)
-  return value as string
+  const control = /[\u0000-\u0009\u000b\u000c\u000e-\u001f\u007f-\u009f]/.exec(value)
+  if (control) fail(`${field} 含不支持的控制字符 U+${control[0].charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}；请使用普通空格及换行`)
+  return value
 }
 
-// These are known installed CJK faces, not model-selected executable/font paths.
-// A missing font is a capability error: Helvetica cannot silently stand in for Chinese.
+// PDFKit accepting a font only proves that it parses. Its actual selected face
+// must cover the text too; an absent glyph otherwise becomes invisible/NUL text.
+function missingGlyphs(document: PDFKit.PDFDocument, codePoints: number[]): number[] {
+  const selected: unknown = Reflect.get(document, '_font')
+  const face: unknown = selected && typeof selected === 'object' ? Reflect.get(selected, 'font') : undefined
+  if (!face || typeof face !== 'object') fail('PDF_FONT_CHECK_UNAVAILABLE：无法核实实际字体，未生成 PDF')
+  const hasGlyph: unknown = Reflect.get(face, 'hasGlyphForCodePoint')
+  if (typeof hasGlyph === 'function') return codePoints.filter(code => Reflect.apply(hasGlyph, face, [code]) !== true)
+  const glyphName: unknown = Reflect.get(face, 'characterToGlyph')
+  if (typeof glyphName === 'function') return codePoints.filter(code => Reflect.apply(glyphName, face, [code]) === '.notdef')
+  fail('PDF_FONT_CHECK_UNAVAILABLE：当前字体不支持字形检查，未生成 PDF')
+}
+
+// Known installed fonts only, never model-selected executable/font paths. A
+// single face must cover the whole document so measuring and drawing agree.
 function setBodyFont(document: PDFKit.PDFDocument, text: string): void {
-  const unicode = /[^\u0000-\u00ff]/.test(text)
-  if (!unicode) { document.font('Helvetica'); return }
+  const codePoints = [...new Set(Array.from(`${text}\n0123456789 /`.replace(/[\r\n]/g, ''), character => character.codePointAt(0)!))]
+  document.font('Helvetica')
+  let missing = missingGlyphs(document, codePoints)
+  if (!missing.length) return
   const windows = process.env.SystemRoot || 'C:\\Windows'
   const candidates: Array<[string, string | undefined]> = [
     [path.join(windows, 'Fonts', 'msyh.ttc'), 'MicrosoftYaHei'],
@@ -28,12 +45,23 @@ function setBodyFont(document: PDFKit.PDFDocument, text: string): void {
     ['/System/Library/Fonts/PingFang.ttc', 'PingFangSC-Regular'],
     ['/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc', 'NotoSansCJKsc-Regular'],
     ['/usr/share/fonts/truetype/noto/NotoSansSC-Regular.ttf', undefined],
+    [path.join(windows, 'Fonts', 'seguisym.ttf'), undefined],
+    ['/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', undefined],
   ]
+  let loaded = false
   for (const [file, family] of candidates) {
     if (!fs.existsSync(file)) continue
-    try { if (family) document.font(file, family); else document.font(file); return } catch { /* Try only the remaining known faces. */ }
+    try { if (family) document.font(file, family); else document.font(file) } catch { continue }
+    loaded = true
+    const remaining = missingGlyphs(document, codePoints)
+    if (!remaining.length) return
+    if (remaining.length < missing.length) missing = remaining
   }
-  fail('CJK_FONT_UNAVAILABLE：未发现可嵌入的中文字体，未生成乱码 PDF。请由平台配置中文字体。')
+  if (!loaded && /[\u2e80-\u9fff\uf900-\ufaff]/.test(text)) {
+    fail('CJK_FONT_UNAVAILABLE：未发现可嵌入的中文字体，未生成乱码 PDF。请由平台配置中文字体。')
+  }
+  const codes = missing.slice(0, 8).map(code => `U+${code.toString(16).toUpperCase().padStart(4, '0')}`).join('、')
+  fail(`PDF_GLYPH_UNAVAILABLE：未发现能完整显示本文的字体（缺少 ${codes}${missing.length > 8 ? ' 等' : ''}），未生成缺字 PDF。请由平台配置覆盖所需字符的字体。`)
 }
 
 const inlineText = (text: string): string => text.replace(/\*\*([^*]+)\*\*/g, '$1').replace(/`([^`]+)`/g, '$1')
@@ -135,7 +163,7 @@ export async function createPdf(input: PdfInput): Promise<Buffer> {
         document.switchToPage(index)
         const bottom = document.page.margins.bottom
         document.page.margins.bottom = 0
-        document.fontSize(8).fillColor('#687487').text(`Aether · ${index + 1} / ${range.count}`, 54, document.page.height - 35,
+        document.fontSize(8).fillColor('#687487').text(`${index + 1} / ${range.count}`, 54, document.page.height - 35,
           { width: document.page.width - 108, align: 'center', lineBreak: false })
         document.page.margins.bottom = bottom
       }

@@ -31,7 +31,7 @@ const SHEET_STYLE = {
 type CellKind = keyof typeof SHEET_STYLE.formats
 
 function cellKind(column: XlsxColumn, value: Value): CellKind {
-  return column.type ?? (value instanceof Date ? 'date' : 'general')
+  return value instanceof Date ? 'date' : column.type ?? 'general'
 }
 function layoutText(value: Value): string {
   if (value === null) return ''
@@ -628,33 +628,46 @@ function appendSheetStyles(pkg: Package): Record<string, number> {
   if (numFmts.length && Number(numFmts[0].attrs.count) !== formats.length) fail('numFmts 数量无效')
   const ids = formats.map(item => Number(item.attrs.numFmtId))
   if (ids.some(id => !Number.isInteger(id) || id < 0 || id > 65_533) || new Set(ids).size !== ids.length) fail('numFmtId 无效或重复')
-  const dateFormat = Math.max(163, ...ids) + 1, numberFormat = dateFormat + 1
-  const formatsXml = `<${prefix}numFmt numFmtId="${dateFormat}" formatCode="yyyy-mm-dd"/><${prefix}numFmt numFmtId="${numberFormat}" formatCode="#,##0.00;[Red](#,##0.00)"/>`
-  if (numFmts.length) xml = appendChildren(xml, 'numFmts', formatsXml, 2)
+  const dateFormat = Math.max(163, ...ids) + 1
+  const formatsXml = `<${prefix}numFmt numFmtId="${dateFormat}" formatCode="${SHEET_STYLE.formats.date}"/>`
+  if (numFmts.length) xml = appendChildren(xml, 'numFmts', formatsXml, 1)
   else {
     const opening = new RegExp(`<${root.tag}\\b[^>]*>`)
-    xml = xml.replace(opening, matched => `${matched}<${prefix}numFmts count="2">${formatsXml}</${prefix}numFmts>`)
+    xml = xml.replace(opening, matched => `${matched}<${prefix}numFmts count="1">${formatsXml}</${prefix}numFmts>`)
   }
-  const makeFont = (bold: boolean) => `<${prefix}font><${prefix}sz val="${bold ? 11 : 10}"/><${prefix}color rgb="FF243247"/><${prefix}name val="Microsoft YaHei"/>${bold ? `<${prefix}b/>` : ''}</${prefix}font>`
+  const makeFont = (bold: boolean) => `<${prefix}font><${prefix}sz val="${bold ? SHEET_STYLE.headerSize : SHEET_STYLE.bodySize}"/><${prefix}color rgb="${SHEET_STYLE.text}"/><${prefix}name val="${SHEET_STYLE.font}"/>${bold ? `<${prefix}b/>` : ''}</${prefix}font>`
   xml = appendChildren(xml, 'fonts', makeFont(false) + makeFont(true), 2)
-  xml = appendChildren(xml, 'fills', `<${prefix}fill><${prefix}patternFill patternType="none"/></${prefix}fill><${prefix}fill><${prefix}patternFill patternType="solid"><${prefix}fgColor rgb="FFE8EEF5"/><${prefix}bgColor indexed="64"/></${prefix}patternFill></${prefix}fill>`, 2)
-  xml = appendChildren(xml, 'borders', `<${prefix}border><${prefix}left/><${prefix}right/><${prefix}top/><${prefix}bottom style="hair"><${prefix}color rgb="FFDCE3EB"/></${prefix}bottom><${prefix}diagonal/></${prefix}border>`, 1)
-  const kinds = ['header', 'general', 'text', 'number', 'percent', 'date']
-  const formatIds = [0, 0, 49, numberFormat, 10, dateFormat]
-  const xfs = kinds.map((kind, index) => `<${prefix}xf numFmtId="${formatIds[index]}" fontId="${font + (kind === 'header' ? 1 : 0)}" fillId="${fill + (kind === 'header' ? 1 : 0)}" borderId="${border}" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><${prefix}alignment vertical="center" horizontal="${['number', 'percent'].includes(kind) ? 'right' : 'left'}" wrapText="1"/></${prefix}xf>`).join('')
+  const makeFill = (color: string) => `<${prefix}fill><${prefix}patternFill patternType="solid"><${prefix}fgColor rgb="${color}"/></${prefix}patternFill></${prefix}fill>`
+  xml = appendChildren(xml, 'fills', `<${prefix}fill><${prefix}patternFill patternType="none"/></${prefix}fill>${makeFill(SHEET_STYLE.header)}${makeFill(SHEET_STYLE.stripe)}`, 3)
+  xml = appendChildren(xml, 'borders', `<${prefix}border><${prefix}left/><${prefix}right/><${prefix}top/><${prefix}bottom style="hair"><${prefix}color rgb="${SHEET_STYLE.border}"/></${prefix}bottom><${prefix}diagonal/></${prefix}border>`, 1)
+  const bodyKinds = Object.keys(SHEET_STYLE.formats) as CellKind[]
+  const kinds = ['header', ...bodyKinds, ...bodyKinds.map(kind => `${kind}-stripe`)]
+  const formatIds: Record<CellKind, number> = { general: 0, text: 49, number: 0, percent: 10, date: dateFormat }
+  const xfs = kinds.map(kind => {
+    const header = kind === 'header', striped = kind.endsWith('-stripe'), base = (header ? 'general' : kind.replace(/-stripe$/, '')) as CellKind
+    return `<${prefix}xf numFmtId="${formatIds[base]}" fontId="${font + (header ? 1 : 0)}" fillId="${fill + (header ? 1 : striped ? 2 : 0)}" borderId="${border}" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><${prefix}alignment vertical="center" horizontal="${!header && ['number', 'percent'].includes(base) ? 'right' : 'left'}" wrapText="1"/></${prefix}xf>`
+  }).join('')
   xml = appendChildren(xml, 'cellXfs', xfs, kinds.length)
   pkg.entries['xl/styles.xml'] = Buffer.from(xml)
   return Object.fromEntries(kinds.map((kind, index) => [kind, firstStyle + index]))
 }
 
 function newWorksheet(sheet: PreparedSheet, styles: Record<string, number>, date1904: boolean): string {
+  const layout = sheetLayout(sheet)
   const last = `${columnName(sheet.columns.length)}${sheet.rows.length + 1}`
   const encode = (address: string, value: Value, style: number) => encodeCell(address, value,
     { attrs: { s: String(style) }, full: '', tag: 'c', inner: '', index: 0 }, '', date1904)
   const header = sheet.columns.map((column, index) => encode(`${columnName(index + 1)}1`, column.header, styles.header)).join('')
-  const rows = sheet.rows.map((row, index) => `<row r="${index + 2}" ht="23" customHeight="1">${row.map((value, col) => encode(`${columnName(col + 1)}${index + 2}`, value, styles[sheet.columns[col].type ?? (value instanceof Date ? 'date' : 'general')])).join('')}</row>`).join('')
-  const columns = sheet.columns.map((column, index) => `<col min="${index + 1}" max="${index + 1}" width="${column.width ?? Math.min(42, Math.max(12, Array.from(column.header).length * 2 + 3))}" customWidth="1"/>`).join('')
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="${MAIN_NS}"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="A1:${last}"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="23"/><cols>${columns}</cols><sheetData><row r="1" ht="28" customHeight="1">${header}</row>${rows}</sheetData><autoFilter ref="A1:${last}"/><pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/><pageSetup paperSize="9" orientation="${sheet.columns.length > 6 ? 'landscape' : 'portrait'}" fitToWidth="1" fitToHeight="0"/><headerFooter><oddFooter>&amp;L&amp;A&amp;R第 &amp;P 页 / 共 &amp;N 页</oddFooter></headerFooter></worksheet>`
+  const rows = sheet.rows.map((row, index) => `<row r="${index + 2}" ht="${layout.heights[index + 1]}" customHeight="1">${row.map((value, col) => encode(`${columnName(col + 1)}${index + 2}`, value, styles[`${cellKind(sheet.columns[col], value)}${index % 2 ? '-stripe' : ''}`])).join('')}</row>`).join('')
+  const columns = sheet.columns.map((_, index) => `<col min="${index + 1}" max="${index + 1}" width="${layout.widths[index]}" customWidth="1"/>`).join('')
+  const validations = sheet.rows.length ? sheet.columns.flatMap((column, index) => {
+    const validation = columnValidation(column)
+    if (!validation) return []
+    const formulae = validation.formulae.map((value, index) => `<formula${index + 1}>${value instanceof Date ? serialDate(value, date1904) : value}</formula${index + 1}>`).join('')
+    return [`<dataValidation${attributeString({ type: validation.type, operator: 'between', allowBlank: '1', showErrorMessage: '1', errorStyle: validation.errorStyle!, errorTitle: validation.errorTitle!, error: validation.error!, sqref: `${columnName(index + 1)}2:${columnName(index + 1)}${sheet.rows.length + 1}` })}>${formulae}</dataValidation>`]
+  }) : []
+  const validationXml = validations.length ? `<dataValidations count="${validations.length}">${validations.join('')}</dataValidations>` : ''
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="${MAIN_NS}"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="A1:${last}"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="${SHEET_STYLE.bodyHeight}"/><cols>${columns}</cols><sheetData><row r="1" ht="${layout.heights[0]}" customHeight="1">${header}</row>${rows}</sheetData><autoFilter ref="A1:${last}"/>${validationXml}<pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/><pageSetup paperSize="9" orientation="${sheet.columns.length > 6 ? 'landscape' : 'portrait'}" fitToWidth="1" fitToHeight="0"/><headerFooter><oddFooter>&amp;L&amp;A&amp;R第 &amp;P 页 / 共 &amp;N 页</oddFooter></headerFooter></worksheet>`
 }
 
 /** Only the relationship-designated calc-chain part is removed. Never strip

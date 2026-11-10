@@ -16,8 +16,10 @@ describe('DOCX content and inspection audit', () => {
     ['a break inside bold text', '**收件人：项目组  \n日期：2026年11月10日**'],
   ])('preserves an explicit Markdown break from %s', async (_name, markdown) => {
     const buffer = await createDocx({ markdown })
-    const external = await mammoth.extractRawText({ buffer })
-    expect(external.value.trim()).toBe('收件人：项目组\n日期：2026年11月10日')
+    // Mammoth's raw-text extractor intentionally drops line breaks; its HTML
+    // reader verifies that another consumer sees the authored break.
+    const external = await mammoth.convertToHtml({ buffer })
+    expect(external.value.replace(/<br\s*\/?>/g, '\n').replace(/<[^>]+>/g, '')).toBe('收件人：项目组\n日期：2026年11月10日')
     expect(documentXml(buffer).match(/<w:br\b/g)).toHaveLength(1)
     expect((await inspectDocx(buffer)).content).toBe('收件人：项目组\n日期：2026年11月10日')
   })

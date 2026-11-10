@@ -14,6 +14,7 @@ import { readDiff, selectedPatch, mergeState, blame, userName, listAuthors } fro
 import { expectedBinding, withGitBinding, gitLeaseStatus, recoverGitLease } from './git-binding.js'
 import { resolveGitPath, resolveGitCloneSource, gitArguments, gitEnvironment, type GitWorkspace } from './git-workspace.js'
 import { parseGitRemotes } from './git-remotes.js'
+import { listBranchInfos } from './git-branches.js'
 import { fillStatusStats, type StatusStatFile } from './git-status-stats.js'
 
 
@@ -426,8 +427,14 @@ export async function gitRoutes(fastify: FastifyInstance) {
         case 'blame': return success(await blame(run, cwd, relative(request.query.path, 'path')))
         case 'user-name': return success(await userName(run, cwd))
         case 'list-authors': return success(await listAuthors(run, cwd))
-        case 'list-branches': { const branches = (await run(cwd, ['for-each-ref', '--format=%(refname:short)', 'refs/heads'])).split(/\r?\n/).filter(Boolean); return success({ success: true, branches, current: (await run(cwd, ['branch', '--show-current'])).trim() }) }
-        case 'list-remote-branches': { const branches = (await run(cwd, ['for-each-ref', '--format=%(refname:short)', 'refs/remotes'])).split(/\r?\n/).filter(Boolean); return success({ success: true, branches }) }
+        case 'list-branches': {
+          const infos = await listBranchInfos(run, cwd)
+          return success({ success: true, branches: infos.map(({ name }) => name), infos, current: (await run(cwd, ['branch', '--show-current'])).trim() })
+        }
+        case 'list-remote-branches': {
+          const infos = await listBranchInfos(run, cwd, true)
+          return success({ success: true, branches: infos.map(({ name }) => name), infos })
+        }
         // The lane graph consumes children before parents; timestamps alone
         // cannot preserve that contract for merges or machines with clock skew.
         case 'log': {
