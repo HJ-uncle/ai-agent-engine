@@ -2,6 +2,8 @@ import { vi } from 'vitest'
 import { ReActStrategy, truncateToolOutput } from '../react.js'
 import type { AgentContext, Message } from '../../agent-context/index.js'
 import type { LLMAdapter, LLMResponse } from '../../llm-adapter/index.js'
+import { largeNativePng } from '../../utils/__tests__/fixtures/native-image.js'
+import { imageToolFramePayload } from '../../utils/multimodal-context.js'
 
 it('publishes and persists every command file receipt with its original launch identity even on failure', async () => {
   const changes = [
@@ -460,6 +462,28 @@ describe('ReActStrategy', () => {
     expect(compact.length).toBeLessThanOrEqual(1_024)
     expect(JSON.parse(compact)).toMatchObject({ hasDataUrl: false, dataUrlStripped: true })
     expect(JSON.parse(compact).dataUrl).toBeUndefined()
+  })
+
+  it('retains verified document page identity in large-image history and bounded stream receipts', () => {
+    const dataUrl = largeNativePng().url, sha256 = 'a'.repeat(64)
+    const identity = { sessionId: 'work-render-session', path: 'D:/work/review.pptx', sha256,
+      page: 2, pageCount: 8, renderer: 'aether-pptx-to-html-1.1.2' }
+    const fileVersion = { path: identity.path, expectedHash: `sha256:${sha256}`, encoding: 'binary-or-non-utf8', lineEnding: 'none', utf8Bom: false }
+    const raw = JSON.stringify({ ...identity, filename: 'review.pptx · 第 2/8 页', fileVersion,
+      expectedHash: fileVersion.expectedHash, mimeType: 'image/png', dataUrl, hasDataUrl: true, unrelatedLog: 'x'.repeat(200_000) })
+    const compact = JSON.parse(truncateToolOutput(raw, 4_000))
+    expect(compact).toMatchObject({ ...identity, fileVersion, dataUrl })
+    expect(compact.unrelatedLog).toBeUndefined()
+    const frame = JSON.parse(imageToolFramePayload({ toolCallId: 'render-2', output: JSON.stringify(compact) }, 4_000)!)
+    expect(JSON.parse(frame.output)).toMatchObject({ ...identity, fileVersion, retainedInHistory: true, omittedFromStream: true })
+    expect(JSON.parse(frame.output).dataUrl).toBeUndefined()
+    for (const override of [{ page: 9 }, { sessionId: '' }, { path: 'D:/work/../review.pptx' },
+      { sha256: 'b'.repeat(64) }, { expectedHash: `sha256:${'b'.repeat(64)}` }, { renderer: 'x'.repeat(129) }]) {
+      const invalid = JSON.parse(truncateToolOutput(JSON.stringify({ ...JSON.parse(raw), ...override }), 4_000))
+      expect(invalid.page).toBeUndefined()
+      expect(invalid.sessionId).toBeUndefined()
+      expect(invalid.dataUrl).toBe(dataUrl)
+    }
   })
 
   // ── 7. systemPrompt and temperature are forwarded to LLM ────────────────────

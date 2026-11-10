@@ -70,9 +70,11 @@ describe('Server immutable admission seed', () => {
   })
   it.each(['jsonl', 'sqlite'])('%s projects attachment-only input exactly once and retains only attachment labels', async backend => {
     vi.stubEnv('HISTORY_BACKEND', backend)
-    const root = await create({ message: '', attachments: [{ name: 'original.txt', type: 'text/plain', content: 'PRIVATE_ATTACHMENT_PAYLOAD' }] })
+    const root = await create({ message: '', attachments: [{ name: 'original.txt', type: 'text/plain', content: 'PRIVATE_ATTACHMENT_PAYLOAD',
+      attachmentId: 'stable-document', referenceLabel: '附件1', displayName: '原文.txt', size: 42 }] })
     const seed = await readAdmissionSeed(db, scope, root.runId), history = admissionProjectingHistory(createConversationHistory(), seed.anchor)
-    expect(seed.message.content).toBe(''); expect(seed.message.metadata?.attachments).toEqual([{ name: 'original.txt', type: 'text/plain' }])
+    expect(seed.message.content).toBe(''); expect(seed.message.metadata?.attachments).toEqual([{ name: 'original.txt', type: 'text/plain',
+      attachmentId: 'stable-document', referenceLabel: '附件1', displayName: '原文.txt', size: 42 }])
     expect(seed.seedJson).not.toContain('PRIVATE_ATTACHMENT_PAYLOAD')
     await history.append(seed.message, scope); await history.append(seed.message, scope)
     expect((await history.getFullHistory(scope)).map(message => message.id)).toEqual([root.userMessageId])

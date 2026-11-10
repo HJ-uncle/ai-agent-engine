@@ -538,23 +538,21 @@ export class SQLiteConversationHistory implements ConversationHistory {
   }
 
   /** 硬删除一整轮对话（同一 conversation_id 的所有行） */
-  async deleteByConversationId(conversationId: string, tenantId: string): Promise<number> {
+  async deleteByConversationId(conversationId: string, tenantId: string, sessionId?: string): Promise<number> {
     const db = getDb()
     await ensureUsageArchive(db)
     await ensureSQLiteDeliverySchema(db)
-    const before = await db.execute({
-      sql: `SELECT COUNT(*) as cnt FROM conversations WHERE conversation_id = ? AND tenant_id = ?`,
-      args: [conversationId, tenantId],
-    })
+    const filter = `conversation_id=? AND tenant_id=?${sessionId === undefined ? '' : ' AND session_id=?'}`
+    const args = sessionId === undefined ? [conversationId, tenantId] : [conversationId, tenantId, sessionId]
+    const before = await db.execute({ sql: `SELECT COUNT(*) as cnt FROM conversations WHERE ${filter}`, args })
     const count = Number(before.rows[0]?.['cnt'] ?? 0)
     await db.batch([...invalidateSQLiteDeliveryStatements({
-      sql: `SELECT tenant_id,session_id FROM conversations WHERE tenant_id=? AND conversation_id=?
-        UNION SELECT tenant_id,session_id FROM conversation_usage_archive WHERE tenant_id=? AND conversation_id=?`,
-      args: [tenantId, conversationId, tenantId, conversationId],
+      sql: `SELECT tenant_id,session_id FROM conversations WHERE ${filter}
+        UNION SELECT tenant_id,session_id FROM conversation_usage_archive WHERE ${filter}`,
+      args: [...args, ...args],
     }), {
-      sql: `DELETE FROM conversations WHERE conversation_id = ? AND tenant_id = ?`,
-      args: [conversationId, tenantId],
-    }, { sql: 'DELETE FROM conversation_usage_archive WHERE conversation_id=? AND tenant_id=?', args: [conversationId, tenantId] }], 'write')
+      sql: `DELETE FROM conversations WHERE ${filter}`, args,
+    }, { sql: `DELETE FROM conversation_usage_archive WHERE ${filter}`, args }], 'write')
     return count
   }
 

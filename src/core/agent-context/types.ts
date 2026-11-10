@@ -173,7 +173,7 @@ export interface ConversationHistory {
   /** 删除某个 ID 之后的所有消息（用于回滚） */
   deleteMessagesAfterId(dbId: number, sessionId: string, tenantId: string): Promise<void>
   /** 删除一整轮（该 conversation_id 的所有行），返回删除条数 */
-  deleteByConversationId(conversationId: string, tenantId: string): Promise<number>
+  deleteByConversationId(conversationId: string, tenantId: string, sessionId?: string): Promise<number>
   /** Exact message lookup, including archived evidence; a supplied sessionId confines reads to that tenant/session. */
   getMessageById(messageId: string, tenantId: string, sessionId?: string): Promise<(Message & { conversationId?: string; dbId: number }) | null>
   /** 按 conversationId 查询整轮消息 */

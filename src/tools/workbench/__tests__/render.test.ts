@@ -59,9 +59,10 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 })
 })
 function receipt(command: WorkbenchCommand, changes: Record<string, unknown> = {}) {
+  const format = String(command.args.format ?? path.extname(String(command.args.path)).slice(1).toLowerCase())
   return { success: true, output: JSON.stringify({ path: command.args.path, sha256: command.args.expectedHash,
     page: command.args.page, pageCount: 2, sessionId: command.sessionId,
-    renderer: 'aether-pptx-to-html-1.1.2', dataUrl, width: 960, height: 540, ...changes }) }
+    renderer: format === 'pptx' ? 'aether-pptx-to-html-1.1.2' : `aether-${format}-preview-1.0.0`, format, dataUrl, width: 960, height: 540, ...changes }) }
 }
 
 describe('workbench_render file and execution identity', () => {
@@ -123,6 +124,19 @@ describe('workbench_render file and execution identity', () => {
     expect(submit(receipt(command))).toBe(true)
     expect(imageToolPayload((await pending).output)?.dataUrl).toBe(dataUrl)
   })
+  it.each(['docx', 'xlsx', 'pdf'] as const)('routes %s through the same version-pinned render contract', async format => {
+    const target = path.join(root, `fixture.${format}`), bytes = Buffer.from(`fixture-${format}`)
+    fs.writeFileSync(target, bytes)
+    const targetHash = createHash('sha256').update(bytes).digest('hex')
+    const bridge = create(), client = bridge.register(identity, ctx.sessionId, ['artifact.render'])
+    vi.spyOn(workbenchBridge, 'execute').mockImplementation((action, args, context) => bridge.execute(action, args, context))
+    const pending = workbenchRenderTool.execute({ path: target }, ctx)
+    let command: WorkbenchCommand | undefined
+    await vi.waitFor(async () => { [command] = await bridge.poll(identity, client.clientId, client.clientToken); expect(command).toBeDefined() })
+    expect(command!.args).toMatchObject({ path: target, format, expectedHash: targetHash })
+    bridge.result(identity, client.clientId, client.clientToken, command!.requestId, command!.execution, receipt(command!))
+    expect(await pending).toMatchObject({ success: true })
+  })
   it('revokes a delivered page request on cancellation and rejects its late result', async () => {
     const bridge = create(), client = bridge.register(identity, ctx.sessionId, ['artifact.render']), controller = new AbortController()
     const pending = bridge.execute('artifact.render', { path: file, page: 1, expectedHash: hash }, { ...ctx, signal: controller.signal })
@@ -140,7 +154,7 @@ it.each(['openai', 'deepseek', 'anthropic'] as const)('%s receives original page
   const pending = workbenchRenderTool.execute({ path: file, page: 2, expectedHash: 'sha256:' + hash }, ctx)
   let command: WorkbenchCommand | undefined
   await vi.waitFor(async () => { [command] = await bridge.poll(identity, client.clientId, client.clientToken); expect(command).toBeDefined() })
-  expect(command!.args).toEqual({ path: file, page: 2, expectedHash: hash })
+  expect(command!.args).toEqual({ path: file, page: 2, expectedHash: hash, format: 'pptx' })
   bridge.result(identity, client.clientId, client.clientToken, command!.requestId, command!.execution, receipt(command!))
   const result = await pending
   expect(result.success).toBe(true)

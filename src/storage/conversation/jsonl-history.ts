@@ -1452,13 +1452,14 @@ export class JSONLConversationHistory implements ConversationHistory {
     this.invalidate(ctx)
   }
 
-  async deleteByConversationId(conversationId: string, tenantId: string): Promise<number> {
+  async deleteByConversationId(conversationId: string, tenantId: string, sessionId?: string): Promise<number> {
     const dir = this.tenantPath(tenantId)
     let count = 0
     if (!fs.existsSync(dir)) return 0
     for (const name of fs.readdirSync(dir)) {
       if (!name.endsWith('.jsonl')) continue
       const ctx: Ctx = { tenantId, sessionId: name.slice(0, -'.jsonl'.length) }
+      if (sessionId !== undefined && ctx.sessionId !== sessionId) continue
       let matchingMessages = 0
       await this.scanArchive(ctx, { limit: 0 }, message => {
         if ((message as Message & { conversationId?: string }).conversationId === conversationId) matchingMessages++

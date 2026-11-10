@@ -41,6 +41,25 @@ async function seed(history: SQLiteConversationHistory) {
 }
 
 describe('SQLite retained billing archive', () => {
+  it('scopes compacted turn deletion and billing to one session when a turn ID is reused', async () => {
+    const history = new SQLiteConversationHistory()
+    const other = { ...ctx, sessionId: 'other-billing-session' }
+    await history.append({ id: 'owned-user', role: 'user', content: 'owned', conversationId: 'shared-turn' }, ctx)
+    await history.append(call('owned-answer', 'shared-turn', 10), ctx)
+    await history.append({ id: 'kept-user', role: 'user', content: 'next', conversationId: 'later' }, ctx)
+    await history.append(call('kept-answer', 'later', 20), ctx)
+    await history.append({ id: 'other-user', role: 'user', content: 'other', conversationId: 'shared-turn' }, other)
+    await history.append(call('other-answer', 'shared-turn', 30), other)
+    await history.compress(ctx, async () => 'compacted', 2)
+    expect((await history.getFullHistory(ctx)).map(message => message.id)).not.toContain('owned-answer')
+
+    await history.deleteByConversationId('shared-turn', ctx.tenantId, ctx.sessionId)
+
+    expect(await history.getSessionUsage(ctx)).toMatchObject({ totalTokens: 22 })
+    expect((await history.getFullHistory(other)).map(message => message.id)).toEqual(['other-user', 'other-answer'])
+    expect(await history.getSessionUsage(other)).toMatchObject({ totalTokens: 32 })
+  })
+
   it('keeps billed orphan prefixes through history cleanup and JSONL migration', async () => {
     const history = new SQLiteConversationHistory()
     await history.append(call('orphan', 'orphan-turn', 10), ctx)

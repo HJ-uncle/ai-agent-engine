@@ -1,6 +1,8 @@
 import ExcelJS from 'exceljs'
 import path from 'node:path'
 import { readOfficeZip, writeOfficeZip, decodeXml, encodeXml } from './office-zip.js'
+import { attachXlsxCharts, refreshXlsxChartCaches, unresolvedXlsxChartReferences, validateXlsxCharts, type XlsxChart } from './xlsx-charts.js'
+export type { XlsxChart } from './xlsx-charts.js'
 
 export interface XlsxColumn {
   header: string
@@ -9,7 +11,7 @@ export interface XlsxColumn {
   width?: number
 }
 export interface XlsxInput {
-  sheets: Array<{ name: string; columns: XlsxColumn[]; rows: Array<Record<string, unknown>> }>
+  sheets: Array<{ name: string; columns: XlsxColumn[]; rows: Array<Record<string, unknown>>; charts?: XlsxChart[] }>
 }
 export interface XlsxEdit { sheet: string; cell: string; value: unknown }
 
@@ -21,7 +23,7 @@ type Value = Scalar | Date | { formula: string }
 interface XmlElement { full: string; tag: string; attrs: Record<string, string>; inner: string; index: number }
 interface Sheet { name: string; file: string; xml: string; cells: Map<string, XmlElement> }
 interface Package { entries: Record<string, Uint8Array>; workbook: string; sheets: Sheet[]; strings: string[]; date1904: boolean; dateStyles: Set<number> }
-interface PreparedSheet { name: string; columns: XlsxColumn[]; rows: Value[][] }
+interface PreparedSheet { name: string; columns: XlsxColumn[]; rows: Value[][]; charts?: XlsxChart[] }
 
 const SHEET_STYLE = {
   font: 'Microsoft YaHei', text: 'FF243247', border: 'FFDCE3EB', header: 'FFE8EEF5', stripe: 'FFF7F9FC',
@@ -351,7 +353,7 @@ function prepareSheets(input: XlsxInput): PreparedSheet[] {
       if (!record(row) || Object.keys(row).some(key => !keys.has(key))) fail('数据行须为对象，且不能包含未声明的列 key')
       return raw.columns.map(column => valueFor(row[column.key], column.type))
     })
-    prepared.push({ name: raw.name, columns: raw.columns, rows })
+    prepared.push({ name: raw.name, columns: raw.columns, rows, charts: validateXlsxCharts(raw.charts, raw.columns, rows.length) })
   }
   return prepared
 }
@@ -392,6 +394,7 @@ export async function createXlsx(input: XlsxInput): Promise<Buffer> {
   }
   const pkg = packageFrom(Buffer.from(await workbook.xlsx.writeBuffer()))
   refreshFormulaCaches(pkg)
+  attachXlsxCharts(pkg.entries, prepared.map((sheet, index) => ({ ...sheet, file: pkg.sheets[index].file })))
   return writeOfficeZip(pkg.entries)
 }
 
@@ -452,8 +455,12 @@ export async function inspectXlsx(buffer: Buffer): Promise<{ format: 'xlsx'; con
   if (formulaTextCells) warnings.push(`${formulaTextCells} 个以 = 开头的文本单元格不是公式，不会计算；位置（列出 ${formulaTextLocations.length}/${formulaTextCells}）：${formulaTextLocations.join('、') || '超出诊断长度上限'}。如需计算，请显式写入 {formula: "..."}；若为文字示例可保持原样。原文本未更改，未自动执行，也不计入 formulas / formulaCaches / pendingFormulas。`)
   if (formulas) warnings.push('公式缓存是文件中保存的值；只有 SUM/AVERAGE/MIN/MAX/COUNT 的同表简单引用在生成/编辑时尝试本地求值，其他受支持公式请使用 office_document 的 recalculate 操作在 Aether 内重算；不支持的公式会明确拒绝。')
   if (pendingFormulas) warnings.push(`${pendingFormulas} 个公式没有有效缓存，当前结果为待重算，不能视为已完成计算。`)
+  const charts = Object.keys(pkg.entries).filter(file => /^xl\/charts\/[^/]+\.xml$/i.test(file)).length
+  if (charts) warnings.push(`文件含 ${charts} 个原生图表；图表引用工作表数据，文字检查不验证画面。未重算的公式可能使图表暂缺数据点。`)
+  const unresolvedChartReferences = unresolvedXlsxChartReferences(pkg.entries)
+  if (unresolvedChartReferences) warnings.push(`${unresolvedChartReferences} 个图表引用使用命名范围、外部链接或超出当前支持范围，编辑/重算保留其原缓存但不更新，不能声称这些图表数据已同步。`)
   if (Object.keys(pkg.entries).some(file => /vbaProject\.bin$|pivotTables\/|externalLinks\//i.test(file))) warnings.push('文件含宏、数据透视或外部链接等复杂内容；读取不执行这些内容，编辑只支持明确单元格局部更新。')
-  return { format: 'xlsx', content: lines.join('\n'), summary: { sheets: pkg.sheets.length, cells, formulas, formulaCaches, pendingFormulas, errorCells, formulaErrorCells, date1904: pkg.date1904, previewCells: shown, previewTruncated: shown < cells || shortenedCells > 0, calculation: elements(pkg.workbook, 'calcPr')[0]?.attrs.calcMode ?? 'unspecified' }, warnings }
+  return { format: 'xlsx', content: lines.join('\n'), summary: { sheets: pkg.sheets.length, cells, charts, formulas, formulaCaches, pendingFormulas, errorCells, formulaErrorCells, date1904: pkg.date1904, previewCells: shown, previewTruncated: shown < cells || shortenedCells > 0, calculation: elements(pkg.workbook, 'calcPr')[0]?.attrs.calcMode ?? 'unspecified' }, warnings }
 }
 
 function encodeCell(address: string, value: Value, existing: XmlElement | undefined, prefix: string, date1904: boolean): string {
@@ -581,6 +588,7 @@ export async function editXlsx(buffer: Buffer, edits: XlsxEdit[]): Promise<Buffe
   for (const [sheet, changes] of grouped) { patchSheet(sheet, changes, pkg.date1904); pkg.entries[sheet.file] = Buffer.from(sheet.xml) }
   const updated = packageFrom(writeOfficeZip(pkg.entries))
   refreshFormulaCaches(updated)
+  refreshXlsxChartCaches(updated.entries)
   return writeOfficeZip(updated.entries)
 }
 
@@ -758,6 +766,7 @@ export async function appendXlsxSheets(buffer: Buffer, input: XlsxInput): Promis
   refreshFormulaCaches(addition)
   Object.assign(pkg.entries, addition.entries)
   removeAppendCalcChains(pkg)
+  attachXlsxCharts(pkg.entries, prepared.map((sheet, index) => ({ ...sheet, file: newSheets[index].file })))
   const output = writeOfficeZip(pkg.entries)
   packageFrom(output)
   return output

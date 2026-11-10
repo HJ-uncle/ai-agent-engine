@@ -85,10 +85,12 @@ describe('WQ2 user root admission and database namespace', () => {
     missing.admission = { ...selector, requestKey: 'missing-field', bodyDigest: userAdmissionDigest(missing, transport, selector) }
     expect(() => prepared(missing)).toThrow('ADMISSION_REQUIRES_SESSION_AND_MESSAGE')
     expect(() => prepared(body('invalid-file', '', null, { attachments: [{ name: '' }] }))).toThrow('INVALID_ADMISSION_ATTACHMENT')
-    const upload = body('only-file', '', null, { attachments: [{ name: '.ae/attachments/fixture.txt', type: 'text/plain', content: 'NOT_IN_LABEL' }] })
+    const upload = body('only-file', '', null, { attachments: [{ name: '.ae/attachments/fixture.txt', type: 'text/plain', content: 'NOT_IN_LABEL',
+      attachmentId: 'stable-document', referenceLabel: '附件2', displayName: '原文.txt', size: 42 }] })
     const accepted = await admit(sa, upload)
     const seed = await readAdmissionSeed(b, scope, accepted.run.runId)
-    expect(seed.message).toMatchObject({ content: '', metadata: { attachments: [{ name: '.ae/attachments/fixture.txt', type: 'text/plain' }] } })
+    expect(seed.message).toMatchObject({ content: '', metadata: { attachments: [{ name: '.ae/attachments/fixture.txt', type: 'text/plain',
+      attachmentId: 'stable-document', referenceLabel: '附件2', displayName: '原文.txt', size: 42 }] } })
     expect(seed.seedJson).not.toContain('NOT_IN_LABEL')
     expect((await admit(sb, upload)).receipt).toEqual(accepted.receipt)
     expect(await counts()).toEqual({ root_runs: 1, user_root_admissions: 1, user_root_admission_seeds: 1 })

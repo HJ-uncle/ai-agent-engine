@@ -14,8 +14,10 @@ import { createPptx, editPptx, inspectPptx, type PptxEdit } from './pptx.js'
 import { presentationSchema as presentation, presentationJsonSchema, type PptxInput } from './pptx-schema.js'
 import { pptxImagePaths, inspectPptxImage, MAX_PPTX_IMAGE_BYTES, MAX_PPTX_ASSET_BYTES } from './pptx-design.js'
 import { recalculateXlsx } from './recalculate.js'
+import { xlsxChartSchema, xlsxChartJsonSchema } from './xlsx-chart-schema.js'
 import { MAX_OFFICE_FILE_BYTES } from './office-zip.js'
 import { officeFailure, officeReceipt, type OfficeInspection } from './output.js'
+import { formatOfficeArgumentIssues } from './argument-diagnostics.js'
 
 const text = z.string().max(32_000)
 const formula = z.object({ formula: z.string().min(1).max(2000) }).strict()
@@ -31,6 +33,7 @@ const workbook = z.object({ sheets: z.array(z.object({
   columns: z.array(z.object({ header: z.string().min(1).max(255), key: z.string().min(1).max(128),
     type: z.enum(['text', 'number', 'date', 'percent']).optional(), width: z.number().min(8).max(80).optional() }).strict()).min(1).max(100),
   rows: z.array(z.record(z.string().min(1).max(128), cell)).max(10_000),
+  charts: z.array(xlsxChartSchema).max(8).optional(),
 }).strict()).min(1).max(12) }).strict().superRefine((value, ctx) => {
   let count = 0
   const names = new Set<string>()
@@ -168,6 +171,7 @@ export const officeDocumentTool: Tool = {
       workbook: { type: 'object', additionalProperties: false, description: 'Excel create 或 append_sheets 新表：columns.header 写第1行，rows 从第2行开始；要求精确单元格时用 edit 的 sheet/cell/value 定点校正、null清除多余单元格，再 recalculate/inspect，不重复创建文档。短表能完整输出时一次create；大表/新增表用append_sheets，每次1–4张，不重复提交已有表。', properties: { sheets: { type: 'array', minItems: 1, maxItems: 12,
         items: { type: 'object', additionalProperties: false, properties: {
           name: { type: 'string', minLength: 1, maxLength: 31 },
+          charts: { type: 'array', maxItems: 8, items: xlsxChartJsonSchema },
           columns: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'object', additionalProperties: false, properties: {
             header: { type: 'string', minLength: 1, maxLength: 255 }, key: { type: 'string', minLength: 1, maxLength: 128 },
             type: { type: 'string', enum: ['text', 'number', 'date', 'percent'] }, width: { type: 'number', minimum: 8, maximum: 80 },
@@ -203,7 +207,7 @@ export const officeDocumentTool: Tool = {
       { requiredOutputChars: result.requiredChars, outputLimit, warnings: inspection.warnings })
     if (!boundedInput(raw)) return failure('OFFICE_INPUT_TOO_LARGE', 'Office arguments must fit within 2 MiB of text, 220000 values and bounded nesting.')
     const parsed = argumentsSchema.safeParse(raw)
-    if (!parsed.success) return failure('OFFICE_INVALID_ARGUMENTS', parsed.error.issues.slice(0, 5).map(issue => `${issue.path.join('.') || 'arguments'}: ${issue.message}`).join('; '))
+    if (!parsed.success) return failure('OFFICE_INVALID_ARGUMENTS', formatOfficeArgumentIssues(parsed.error.issues))
     const args: Arguments = parsed.data
     if (args.operation === 'inspect' && (args.contentOffset ?? 0) > 0 && !args.expectedHash) return failure('OFFICE_INSPECT_VERSION_REQUIRED', 'Continue inspection with the previous page expectedHash so pages cannot mix file versions.')
     const extension = path.extname(args.path).toLowerCase()

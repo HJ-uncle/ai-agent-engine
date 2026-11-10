@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url'
 import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads'
 import type { WorkBook } from 'xlsx'
 import { decodeXml, encodeXml, MAX_OFFICE_FILE_BYTES, readOfficeZip, writeOfficeZip } from './office-zip.js'
+import { refreshXlsxChartCaches } from './xlsx-charts.js'
 
 export const XLSX_RECALCULATION_FUNCTIONS = ['SUM', 'AVERAGE', 'MIN', 'MAX', 'COUNT', 'COUNTA', 'IF', 'IFERROR', 'ROUND', 'SUMIF', 'COUNTIF', 'ABS', 'AND', 'OR', 'DATE', 'TEXT'] as const
 export const XLSX_RECALCULATION_LIMITS = Object.freeze({ timeoutMs: 10_000, queueTimeoutMs: 15_000, maxWorkers: 2, maxQueued: 8,
@@ -405,7 +406,11 @@ async function calculateInWorker(bytes: Buffer): Promise<Buffer> {
       formulas.push({ sheet: item.attrs.name, file, address, cell, formula, ...validated })
     }
   }
-  if (!formulas.length) return Buffer.from(bytes)
+  if (!formulas.length) {
+    if (!Object.keys(entries).some(file => /^xl\/charts\/[^/]+\.xml$/i.test(file))) return Buffer.from(bytes)
+    refreshXlsxChartCaches(entries)
+    return writeOfficeZip(entries)
+  }
   rejectCycles(formulas)
   const xlsx = await import('xlsx')
   const book = xlsx.read(bytes, { type: 'buffer', cellFormula: true, cellDates: false, cellText: false, cellNF: false, sheetStubs: true })
@@ -454,6 +459,7 @@ async function calculateInWorker(bytes: Buffer): Promise<Buffer> {
     const updated = source.replace(new RegExp(`<(${ns}c)\\b[^>]*?(?:\\/\\s*>|>[\\s\\S]*?<\\/\\1\\s*>)`, 'g'), cell => replacementsForFile.get(cell) ?? cell)
     entries[file] = Buffer.from(updated, 'utf8')
   }
+  refreshXlsxChartCaches(entries)
   return writeOfficeZip(entries)
 }
 

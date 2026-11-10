@@ -17,6 +17,20 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs() })
 
 describe('one-source system prompt assembly', () => {
+  it('uses a neutral download encoding example without implying a delivery directory', () => {
+    const sessionId = '会话 &#+%()'
+    const prompt = buildWorkspaceDownloadPrompt(sessionId, 'cards')
+    const link = prompt.match(/\]\((\/api\/v1\/workspace\/file\/download\?[^)]+)\)/)?.[1]
+    expect(link).toBeDefined()
+    const url = new URL(link!, 'http://localhost')
+    expect(url.searchParams.get('sessionId')).toBe(sessionId)
+    expect(url.searchParams.get('path')).toBe('资料/项目说明 初稿.docx')
+    expect(prompt).toContain('no required folder convention')
+    expect(prompt).toContain('URLSearchParams encodes each value once')
+    expect(prompt).toContain('不再列同文件的Markdown下载链接')
+    expect(prompt).not.toMatch(/finance\/deliverables|v001|bound root company/)
+  })
+
   it('preserves custom instructions and keeps changing memory after the stable system/history prefix', () => {
     const base = 'User identity\r\n# Rules\nKeep my literal {{placeholder}} and RAG-looking text.'
     const rag = '\n\nRAG-looking text'
@@ -90,7 +104,8 @@ describe('one-source system prompt assembly', () => {
   it('keeps real calls and inter-agent/Office contracts after explicitly loading authorized definitions', async () => {
     const { registry } = await createToolRegistry({ toolProfile: 'general', allowedMcpServers: [], memoryScopes: ['session'] })
     const catalogue = registry.listForModel?.() ?? registry.list()
-    expect(catalogue.filter(tool => tool.name !== 'load_tools')).toHaveLength(64)
+    expect(catalogue.filter(tool => tool.name !== 'load_tools')).toHaveLength(65)
+    expect(catalogue.filter(tool => tool.name === 'workbench_render')).toHaveLength(1)
     const initial = registry.listForRequest?.() ?? catalogue
     expect(initial.some(tool => tool.name === 'load_tools')).toBe(true)
     expect(initial.some(tool => tool.name === 'office_document')).toBe(false)
@@ -147,8 +162,8 @@ describe('one-source system prompt assembly', () => {
     // This local estimate includes complete Office/collaboration rules after
     // explicitly loading all authorized definitions. It is neither provider
     // input total nor the first request; actual receipts separately check the
-    // user's <10K first-request target. The complete strategy currently estimates
-    // ~5046 tokens; this fixed bound does not alter runtime budgets.
+    // user's <10K first-request target. This fixed ceiling does not alter
+    // runtime budgets and must not grow merely to accommodate repeated guidance.
     expect(estimateTokens(system)).toBeLessThan(5200)
   })
 })

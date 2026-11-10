@@ -35,6 +35,27 @@ export function imageVersionDescription(value: unknown): string {
   return version ? '\nFile version: ' + JSON.stringify(version) : ''
 }
 
+/** Page identity must survive both text and stream budgets; a display filename
+ * cannot safely reconnect screenshots of the same document after replay. */
+export function imageDocumentPage(value: unknown): {
+  sessionId: string; path: string; sha256: string; page: number; pageCount: number; renderer: string
+} | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  const version = imageFileVersion(record.fileVersion)
+  if (typeof record.sessionId !== 'string' || !record.sessionId || record.sessionId.length > 128 ||
+    typeof record.path !== 'string' || !/^(?:[a-z]:[\\/]|[\\/])/i.test(record.path) || record.path.length > 4096 ||
+    record.path.split(/[\\/]/).some(part => part === '.' || part === '..') ||
+    typeof record.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(record.sha256) ||
+    typeof record.page !== 'number' || !Number.isInteger(record.page) || record.page < 1 ||
+    typeof record.pageCount !== 'number' || !Number.isInteger(record.pageCount) || record.pageCount < record.page || record.pageCount > 100 ||
+    typeof record.renderer !== 'string' || !record.renderer || record.renderer.length > 128 ||
+    !version || version.path.replace(/\\/g, '/') !== record.path.replace(/\\/g, '/') || version.expectedHash !== `sha256:${record.sha256}` ||
+    record.expectedHash !== undefined && record.expectedHash !== record.sha256 && record.expectedHash !== `sha256:${record.sha256}`) return undefined
+  return { sessionId: record.sessionId, path: record.path, sha256: record.sha256,
+    page: record.page, pageCount: record.pageCount, renderer: record.renderer }
+}
+
 function nativeImage(part: unknown): ImageIdentity | undefined {
   if (!part || typeof part !== 'object') return undefined
   const block = part as Record<string, any>
@@ -78,6 +99,7 @@ export function imageToolFramePayload(frame: Record<string, unknown>, maxBytes: 
     ? frame.metadata as Record<string, unknown> : {}
   const bounded: Record<string, unknown> = { ...frame, output: JSON.stringify({ filename: image.filename, mimeType: image.mimeType, size: image.size,
     description: image.description, fileVersion: imageFileVersion(image.fileVersion),
+    ...imageDocumentPage(image),
     hasDataUrl: false, dataUrlStripped: true, retainedInHistory: true, omittedFromStream: true }),
     metadata: { ...metadata, imageOutputRecovery: { source: 'durable-history', reason: 'stream-byte-budget', originalFrameBytes } } }
   delete bounded.outputPreview

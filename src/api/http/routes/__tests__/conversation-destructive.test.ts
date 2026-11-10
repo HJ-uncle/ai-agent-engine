@@ -10,12 +10,14 @@ import { rootRunStore, type RootRun } from '../../../../storage/root-runs/index.
 import { createConversationHistory } from '../../../../storage/conversation/factory.js'
 import { bindHistoryGeneration, withHistoryLock } from '../../../../storage/conversation/serialization.js'
 import { conversationRoutes } from '../conversation.js'
+import type { Message } from '../../../../core/agent-context/types.js'
 
 const mocks = vi.hoisted(() => ({
   abort: vi.fn(),
   stop: vi.fn(),
   cancelChildren: vi.fn(),
   listChildren: vi.fn(),
+  listChildSessions: vi.fn(),
   deleteChildren: vi.fn(),
   deleteAllChildren: vi.fn(),
 }))
@@ -28,6 +30,7 @@ vi.mock('../../../../core/subagent/runner.js', () => ({
 vi.mock('../../../../core/subagent/store.js', () => ({
   getSubagentStore: () => ({
     listRunsForParent: mocks.listChildren,
+    listChildSessionIds: mocks.listChildSessions,
     deleteRuns: mocks.deleteChildren,
     deleteRunsForParent: mocks.deleteAllChildren,
   }),
@@ -63,6 +66,7 @@ beforeEach(async () => {
   })
   mocks.cancelChildren.mockResolvedValue(undefined)
   mocks.listChildren.mockResolvedValue([])
+  mocks.listChildSessions.mockResolvedValue([])
   mocks.deleteChildren.mockResolvedValue(undefined)
   mocks.deleteAllChildren.mockResolvedValue(undefined)
   history = createConversationHistory()
@@ -96,6 +100,9 @@ async function seedTurn(targetSession = sessionId): Promise<RootRun> {
   return run
 }
 
+type StoredMessage = Message & { conversationId?: string }
+const appendTurn = (message: StoredMessage, context = ctx) => history.append(message, context)
+
 function deferred() {
   let resolve!: () => void
   const promise = new Promise<void>(done => { resolve = done })
@@ -103,6 +110,86 @@ function deferred() {
 }
 
 describe('destructive conversation routes', () => {
+  it('deletes compacted turn archives and child dispatches without touching another session with the same turn ID', async () => {
+    const run = await seedTurn()
+    await appendTurn({ id: 'archived-dispatch', role: 'assistant', content: '', conversationId: run.turnId,
+      toolCall: { id: 'dispatch-tool', name: 'subagent', args: {} }, usage: { totalTokens: 640257 } }, ctx)
+    await appendTurn({ id: 'dispatch-result', role: 'tool', content: 'accepted', conversationId: run.turnId, toolCallId: 'dispatch-tool' }, ctx)
+    await appendTurn({ id: run.assistantMessageId, role: 'assistant', content: 'completed', conversationId: run.turnId }, ctx)
+    const child = { runId: 'archived-child', parentMessageId: 'archived-dispatch', parentConversationId: run.turnId, childSessionId: 'archived-child-session' }
+    mocks.listChildren.mockResolvedValue([child])
+    await history.append({ id: 'child-answer', role: 'assistant', content: 'old child output' }, { tenantId, sessionId: child.childSessionId })
+    const other = { tenantId, sessionId: 'other-session' }
+    await appendTurn({ id: 'other-question', role: 'user', content: 'unrelated', conversationId: run.turnId }, other)
+    await appendTurn({ id: 'other-answer', role: 'assistant', content: 'keep this', conversationId: run.turnId, usage: { totalTokens: 12 } }, other)
+    await history.compress(ctx, async () => 'compacted evidence', 1)
+    expect((await history.getFullHistory(ctx)).map(message => message.id)).not.toContain('archived-dispatch')
+    expect(await history.getSessionUsage(ctx)).toMatchObject({ totalTokens: 640257 })
+
+    const response = await app.inject({ method: 'DELETE', url: `/conversation/turns/${run.turnId}?sessionId=${sessionId}` })
+
+    expect(response.json()).toMatchObject({ code: 200, data: { success: true, removed: 4 } })
+    expect(mocks.deleteChildren).toHaveBeenCalledWith(tenantId, [child.runId])
+    expect(await history.getFullHistory({ tenantId, sessionId: child.childSessionId })).toEqual([])
+    expect((await history.getArchive!(ctx)).messages.filter(message => (message as StoredMessage).conversationId === run.turnId)).toEqual([])
+    expect((await history.getDisplayHistory!(ctx, { limit: 2 })).turns).toEqual([])
+    expect((await history.getSessionUsage(ctx)).totalTokens ?? 0).toBe(0)
+    expect((await history.getFullHistory(other)).map(message => message.id)).toEqual(['other-question', 'other-answer'])
+    expect(await history.getSessionUsage(other)).toMatchObject({ totalTokens: 12 })
+  })
+
+  it('truncation removes children by their deleted root turn even when no dispatch is in the projection', async () => {
+    const retained = await seedTurn(), removed = await seedTurn()
+    const children = [
+      { runId: 'kept-child', parentMessageId: 'hidden-kept-dispatch', parentConversationId: retained.turnId, childSessionId: 'kept-child-session' },
+      { runId: 'removed-child', parentMessageId: 'hidden-removed-dispatch', parentConversationId: removed.turnId, childSessionId: 'removed-child-session' },
+    ]
+    mocks.listChildren.mockResolvedValue(children)
+    for (const child of children) await history.append({ id: child.runId + '-answer', role: 'assistant', content: 'child answer' }, { tenantId, sessionId: child.childSessionId })
+
+    const response = await app.inject({ method: 'POST', url: '/conversation/truncate', payload: { sessionId, messageId: removed.userMessageId } })
+
+    expect(response.json()).toMatchObject({ code: 200, data: { success: true } })
+    expect(mocks.deleteChildren).toHaveBeenCalledWith(tenantId, ['removed-child'])
+    expect(await history.getFullHistory({ tenantId, sessionId: 'removed-child-session' })).toEqual([])
+    expect((await history.getFullHistory({ tenantId, sessionId: 'kept-child-session' })).map(message => message.id)).toEqual(['kept-child-answer'])
+    expect((await history.getFullHistory(ctx)).map(message => message.id)).toEqual([retained.userMessageId])
+  })
+
+  it('truncating a supplement preserves earlier children in the same root turn', async () => {
+    const run = await seedTurn()
+    await appendTurn({ id: 'before-dispatch', role: 'assistant', content: '', conversationId: run.turnId }, ctx)
+    await appendTurn({ id: 'supplement', role: 'user', content: 'revised request', conversationId: run.turnId }, ctx)
+    await appendTurn({ id: 'after-dispatch', role: 'assistant', content: '', conversationId: run.turnId }, ctx)
+    mocks.listChildren.mockResolvedValue([
+      { runId: 'before-child', parentMessageId: 'before-dispatch', parentConversationId: run.turnId, childSessionId: 'before-child-session' },
+      { runId: 'after-child', parentMessageId: 'after-dispatch', parentConversationId: run.turnId, childSessionId: 'after-child-session' },
+    ])
+
+    const response = await app.inject({ method: 'POST', url: '/conversation/truncate', payload: { sessionId, messageId: 'supplement' } })
+
+    expect(response.json()).toMatchObject({ code: 200, data: { success: true } })
+    expect(mocks.deleteChildren).toHaveBeenCalledWith(tenantId, ['after-child'])
+    expect((await history.getFullHistory(ctx)).map(message => message.id)).toEqual([run.userMessageId, 'before-dispatch'])
+  })
+
+  it('keeps a reused child transcript when a surviving invocation still references it', async () => {
+    const retained = await seedTurn(), removed = await seedTurn()
+    const childSessionId = 'shared-child-session'
+    mocks.listChildren.mockResolvedValue([
+      { runId: 'prior-child', parentMessageId: 'prior-dispatch', parentConversationId: retained.turnId, childSessionId },
+      { runId: 'resumed-child', parentMessageId: 'resumed-dispatch', parentConversationId: removed.turnId, childSessionId },
+    ])
+    mocks.listChildSessions.mockResolvedValue([childSessionId])
+    await history.append({ id: 'reusable-context', role: 'assistant', content: 'prior invocation context' }, { tenantId, sessionId: childSessionId })
+
+    const response = await app.inject({ method: 'POST', url: '/conversation/truncate', payload: { sessionId, messageId: removed.userMessageId } })
+
+    expect(response.json()).toMatchObject({ code: 200, data: { success: true } })
+    expect(mocks.deleteChildren).toHaveBeenCalledWith(tenantId, ['resumed-child'])
+    expect((await history.getFullHistory({ tenantId, sessionId: childSessionId })).map(message => message.id)).toEqual(['reusable-context'])
+  })
+
   it('deletes the pending root with its turn so the old approval can never be claimed', async () => {
     const run = await rootRunStore.create(tenantId, sessionId, 'fixture-model', [], {})
     const message = { id: run.userMessageId, role: 'user' as const, content: 'run command', conversationId: run.turnId }

@@ -7,6 +7,24 @@ export interface OfficeInspection {
   warnings: string[]
 }
 
+/**
+ * The native Office writers validate package structure and extracted content,
+ * but they do not invoke a page/sheet renderer. Keep this limitation in the
+ * receipt itself so a successful write cannot be mistaken for visual QA.
+ */
+export function visualValidationLimitations(format: OfficeInspection['format']): string[] {
+  switch (format) {
+    case 'docx':
+      return ['未执行页面渲染；正文/结构检查不验证分页、溢出、图片及页眉页脚。']
+    case 'xlsx':
+      return ['未执行工作表渲染；单元格/公式结构检查不验证列宽、换行、图表及可见错误。']
+    case 'pptx':
+      return ['未执行逐页渲染；正文/结构检查不验证幻灯片布局，需另用 workbench_render。']
+    case 'pdf':
+      return ['未执行页面图像渲染；文本/页数检查不验证版式、裁切及字形位置。']
+  }
+}
+
 export interface OfficeContentPage {
   offset?: number
   limit?: number
@@ -47,6 +65,7 @@ export function officeReceipt(file: string, hash: string, bytes: number, inspect
         unit: 'utf16', scope: inspection.format === 'xlsx' ? 'stored-cell-text-preview' : 'main-document-text',
         sourceTruncated, documentComplete: false } : undefined,
       validation: 'structure-checked', visualValidation: 'not-performed',
+      visualValidationLimitations: visualValidationLimitations(inspection.format),
       ...(noChange ? { noChange: true } : {}),
     }), contentTruncated: truncated }
   }

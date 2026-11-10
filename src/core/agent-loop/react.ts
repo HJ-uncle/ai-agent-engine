@@ -30,7 +30,7 @@ import { estimateModelHistoryTokens, estimateModelMessageTokens, modelMessageCon
 import { createHash } from 'node:crypto'
 import { browserOutputFramePayload, browserOutputPresentation } from '../utils/browser-output.js'
 import { DEFAULT_PUBLICATION_MAX_BYTES } from '../stream-pipeline/publication-queue.js'
-import { imageFileVersion, imageToolFramePayload, imageToolPayload, MAX_NATIVE_IMAGE_BASE64_CHARS } from '../utils/multimodal-context.js'
+import { imageDocumentPage, imageFileVersion, imageToolFramePayload, imageToolPayload, MAX_NATIVE_IMAGE_BASE64_CHARS } from '../utils/multimodal-context.js'
 import { captureFileEvidence, clearedToolModelContent, isClearedToolMessage, TOOL_FILE_EVIDENCE_KEY, CLEARED_TOOL_EVIDENCE_KEY, CLEARED_TOOL_RESULT } from '../utils/tool-evidence.js'
 import { buildRuntimeCapabilitiesContext, RUNTIME_CAPABILITIES_GUIDANCE } from '../runtime-capabilities.js'
 import { prepareCodegraphRequestContext } from '../codegraph-prompt.js'
@@ -88,6 +88,7 @@ export function truncateToolOutput(output: string, maxChars: number = getToolOut
             dataUrl: record.dataUrl,
             hasDataUrl: true,
             fileVersion: imageFileVersion(record.fileVersion),
+            ...imageDocumentPage(record),
           })
         }
         if (typeof record.dataUrl === 'string' || record.hasDataUrl === true) {

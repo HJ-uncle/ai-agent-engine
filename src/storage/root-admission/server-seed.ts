@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { attachmentHistoryMetadata } from '../../core/attachment-input.js'
 import type { Client, Transaction } from '@libsql/client'
 import type { Message } from '../../core/agent-context/types.js'
 import type { RootRun } from '../root-runs/index.js'
@@ -30,7 +31,8 @@ export function prepareServerAdmissionInput(request: Record<string, unknown>): P
   delete metadata.attachments
   if (attachments.length) metadata.attachments = attachments.map(attachment => {
     if (!record(attachment) || typeof attachment.name !== 'string' || !attachment.name || attachment.type !== undefined && typeof attachment.type !== 'string') admissionError('INVALID_ADMISSION_ATTACHMENT', 400)
-    return { name: attachment.name, ...(attachment.type !== undefined ? { type: attachment.type } : {}) }
+    return attachmentHistoryMetadata({ ...attachment, name: attachment.name,
+      ...(typeof attachment.type === 'string' ? { type: attachment.type } : {}) })
   })
   return JSON.parse(canonicalAdmissionBody({ content: request.message, metadata })) as PreparedServerInput
 }

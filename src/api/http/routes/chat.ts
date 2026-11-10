@@ -1,3 +1,4 @@
+import { attachmentDescription, attachmentHistoryMetadata, type ChatAttachmentInput } from '../../../core/attachment-input.js'
 // TODO: LLM response caching is not implemented for streaming (SSE) endpoints.
 // For non-streaming complete() calls, a cache layer could be added here keyed on
 // (message, sessionId, systemPrompt) to avoid redundant LLM roundtrips.
@@ -98,7 +99,7 @@ interface ChatBody {
    * （图片走视觉 image_url / OCR，文本走 smart_read）。
    * `type` 为 MIME，仅作提示；`content`/`encoding` 保留给内联上传场景。
    */
-  attachments?: Array<{ name: string; content?: string; type?: string; encoding?: 'utf-8' | 'base64' }>
+  attachments?: ChatAttachmentInput[]
   ragTopK?: number
   /**
    * 请求级模型覆盖（可选）
@@ -1326,7 +1327,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
 
     const officeExecutionPrompt = buildOfficeExecutionPrompt(toolProfile, registry, externalSkills)
     const attachmentPrompt = attachments?.length
-      ? '\n\n## 本次消息已附带以下文件\n' + attachments.map(a => '- ' + a.name).join('\n') + visionCapabilityNote : ''
+      ? '\n\n## 本次消息已附带以下文件\n' + attachments.map(a => '- ' + attachmentDescription(a)).join('\n') + visionCapabilityNote : ''
     const { fullSystemPrompt, pureSystemPrompt, requestContext: memoryRequestContext } = buildChatSystemPrompts({
       base: baseSystemPrompt, rag: ragPrompt, memory: memoryRecallBlock, modelName: currentModelName,
       inlineMemories: inlineMemoriesBlock, contextWindow: effectiveContextWindow(modelCaps.contextWindow),
@@ -1481,7 +1482,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
           await publishObserved(() => streamBus.publish('\x00__user_message__' + JSON.stringify({ id: rootRun.userMessageId, role: 'user', content: message,
             conversationId: rootRun.turnId, createdAt: rootRun.createdAt,
             metadata: { ...requestedMetadata, rootRunId: rootRun.runId, turnId: rootRun.turnId,
-              attachments: attachments?.map(item => ({ name: item.name, type: item.type })) } })))
+              attachments: attachments?.map(attachmentHistoryMetadata) } })))
         }
         const started = await withHistoryLock(tenantId, async () => {
           const current = await rootRunStore.get(tenantId, rootRun.runId)
@@ -1627,7 +1628,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
           reasoningEffort: effectiveReasoningEffort,
           displayContent: admittedInputContent ?? (keyedAdmission ? keyedAdmission.userContent : message || null),
           metadata: { ...requestedMetadata,
-            attachments: attachments?.map(item => ({ name: item.name, type: item.type })) },
+            attachments: attachments?.map(attachmentHistoryMetadata) },
         })
         const pipeline = createPipeline([])
 

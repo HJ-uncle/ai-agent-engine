@@ -25,6 +25,21 @@ const key = (identity: WorkbenchIdentity, sessionId: string) => JSON.stringify([
 const failure = (code: string, output: string, operationPerformed: boolean | 'unknown' = false): ToolResult =>
   ({ success: false, output, metadata: { code, operationPerformed } })
 
+type OfficeRenderFormat = 'docx' | 'xlsx' | 'pptx' | 'pdf'
+function formatForPath(value: unknown): OfficeRenderFormat | undefined {
+  if (typeof value !== 'string') return undefined
+  const extension = /\.([^.]+)$/i.exec(value)?.[1]?.toLowerCase()
+  return extension === 'docx' || extension === 'xlsx' || extension === 'pptx' || extension === 'pdf'
+    ? extension : undefined
+}
+function rendererMatchesFormat(value: unknown, format: OfficeRenderFormat): boolean {
+  if (typeof value !== 'string') return false
+  // Keep the old PPTX renderer receipt valid while accepting the shared Aether
+  // preview renderer used for all four native Office formats.
+  if (format === 'pptx' && value === 'aether-pptx-to-html-1.1.2') return true
+  return new RegExp(`^aether-${format}-(?:preview|to-html)-[0-9]+\\.[0-9]+\\.[0-9]+$`).test(value)
+}
+
 /** The model can request a UI action; only a live, same-session client receipt proves execution. */
 export class WorkbenchBridge {
   private clients = new Map<string, Client>()
@@ -93,16 +108,19 @@ export class WorkbenchBridge {
       try {
         data = JSON.parse(result.output)
         if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Invalid receipt')
-      } catch { throw new WorkbenchBridgeError(400, '幻灯片画面回执无效。') }
+      } catch { throw new WorkbenchBridgeError(400, '办公文件画面回执无效。') }
       const png = typeof data.dataUrl === 'string' ? /^data:image\/png;base64,([A-Za-z0-9+/]+={0,2})$/.exec(data.dataUrl) : null
       const bytes = png && png[1].length <= 6 * 1024 * 1024 ? Buffer.from(png[1], 'base64') : null
-      if (data.path !== pending.command.args.path || data.sha256 !== pending.command.args.expectedHash || data.page !== pending.command.args.page ||
-        data.sessionId !== pending.command.sessionId || data.renderer !== 'aether-pptx-to-html-1.1.2' ||
+      const format = formatForPath(pending.command.args.path)
+      if (!format || (pending.command.args.format !== undefined && pending.command.args.format !== format) ||
+        data.path !== pending.command.args.path || data.sha256 !== pending.command.args.expectedHash || data.page !== pending.command.args.page ||
+        data.format !== undefined && data.format !== format ||
+        data.sessionId !== pending.command.sessionId || !rendererMatchesFormat(data.renderer, format) ||
         !Number.isInteger(data.pageCount) || Number(data.pageCount) < Number(data.page) || Number(data.pageCount) > 100 ||
         data.width !== 960 || data.height !== 540 || !bytes || bytes.length < 45 ||
         !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) || bytes.readUInt32BE(8) !== 13 ||
         bytes.toString('ascii', 12, 16) !== 'IHDR' || bytes.readUInt32BE(16) !== 960 || bytes.readUInt32BE(20) !== 540)
-        throw new WorkbenchBridgeError(400, '幻灯片画面与请求的会话、文件版本或页码不一致。')
+        throw new WorkbenchBridgeError(400, '办公文件画面与请求的格式、会话、文件版本或页码不一致。')
     } else if (result.output.length > 65536) throw new WorkbenchBridgeError(400, '工作台回执超过范围。')
     pending.settle(result)
     return true

@@ -4,6 +4,7 @@ import type { AgentContext } from '../../../core/agent-context/index.js'
 import { workspaceManager } from '../../../workspace/index.js'
 import { readFileTool } from '../../../tools/file/index.js'
 import { describeImageWithVisionProxy, isVisionProxyConfigured } from '../../../tools/file/vision-proxy.js'
+import { attachmentDescription, type ChatAttachmentInput } from '../../../core/attachment-input.js'
 
 interface ImageUrlPart {
   type: 'image_url'
@@ -131,7 +132,7 @@ export async function autoProcessAttachments(
   ctx: AgentContext,
   message: string | any[] | undefined,
   messageText: string,
-  attachments: { name: string; type?: string }[] | undefined,
+  attachments: ChatAttachmentInput[] | undefined,
   opts: AutoProcessOptions,
 ): Promise<AutoProcessResult> {
   const fileNames: string[] = []
@@ -149,22 +150,29 @@ export async function autoProcessAttachments(
   }
 
   const uniqueNames = [...new Set(fileNames)]
+  const metadata = new Map((attachments ?? []).map(file => [file.name, file]))
   if (uniqueNames.length === 0) {
     return { prompt: messageText || null as any, processedFiles: [], visionInlined: false }
   }
 
-  const imageParts: ImageUrlPart[] = []
+  const imageParts: Array<ImageUrlPart | { type: 'text'; text: string }> = []
   const textBlocks: string[] = []
   const processed: string[] = []
 
   for (const name of uniqueNames) {
+    const description = attachmentDescription(metadata.get(name) ?? { name })
     for (const handler of FILE_HANDLERS) {
       if (!handler.match(name)) continue
       const result = await handler.process(ctx, name, opts)
-      if (!result) break
+      if (!result) {
+        textBlocks.push(`\n\n【${description}】\n附件读取失败，此编号没有对应的图片或文件内容。`)
+        break
+      }
 
-      if (result.imageParts) imageParts.push(...result.imageParts)
-      if (result.text) textBlocks.push(`\n\n【文件 ${name} 内容】\n${result.text}`)
+      // Keep each label adjacent to its actual image. Missing files must never
+      // shift the association between the remaining images and authored labels.
+      if (result.imageParts?.length) imageParts.push({ type: 'text', text: `【${description}】` }, ...result.imageParts)
+      if (result.text) textBlocks.push(`\n\n【${description} 内容】\n${result.text}`)
       processed.push(name)
       break
     }

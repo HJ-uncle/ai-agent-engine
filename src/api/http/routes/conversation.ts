@@ -100,14 +100,21 @@ export async function conversationRoutes(fastify: FastifyInstance) {
   })
   await subagentRoutes(fastify)
 
-  async function removeChildRuns(tenantId: string, sessionId: string, parentMessageIds?: Set<string>): Promise<void> {
-    const runs = (await getSubagentStore().listRunsForParent(tenantId, sessionId)).filter(run => !parentMessageIds || parentMessageIds.has(run.parentMessageId))
-    for (const run of runs) {
-      invalidateSessionHistory(tenantId, run.childSessionId)
-      await history.clear({ tenantId, sessionId: run.childSessionId })
-    }
+  async function removeChildRuns(tenantId: string, sessionId: string, parentMessageIds?: Set<string>, parentTurnIds?: Set<string>): Promise<void> {
+    // Compaction can hide a dispatch from the current message projection. A
+    // complete removed turn still owns its children through the durable ID.
+    const runs = (await getSubagentStore().listRunsForParent(tenantId, sessionId)).filter(run =>
+      !parentMessageIds || parentMessageIds.has(run.parentMessageId) || parentTurnIds?.has(run.parentConversationId))
     if (parentMessageIds) await getSubagentStore().deleteRuns(tenantId, runs.map(run => run.runId))
     else await getSubagentStore().deleteRunsForParent(tenantId, sessionId)
+    // Resuming a child reuses its transcript. Only remove an unreferenced
+    // transcript; a surviving invocation must keep its reusable context.
+    const retainedChildSessions = new Set(await getSubagentStore().listChildSessionIds(tenantId))
+    for (const childSessionId of new Set(runs.map(run => run.childSessionId))) {
+      if (retainedChildSessions.has(childSessionId)) continue
+      invalidateSessionHistory(tenantId, childSessionId)
+      await history.clear({ tenantId, sessionId: childSessionId })
+    }
   }
 
   type TurnMessage = Message & { conversationId?: string }
@@ -346,11 +353,11 @@ export async function conversationRoutes(fastify: FastifyInstance) {
       const messages = (await history.getFullHistory({ tenantId, sessionId }) as TurnMessage[]).filter(message => message.conversationId === conversationId)
       return messages.length ? messages : null
     }, async messages => {
-      await removeChildRuns(tenantId, sessionId, messageIds(messages))
+      await removeChildRuns(tenantId, sessionId, messageIds(messages), new Set([conversationId]))
       await rootRunStore.deleteTurns(tenantId, sessionId, [conversationId])
-      // Delete only the verified session's messages, even if a legacy turn ID was reused.
-      for (const message of messages) if (message.id) await history.deleteMessage(message.id, tenantId)
-      return messages.length
+      // Include compacted archive rows and billing, while keeping another
+      // session safe even if it reused this legacy conversation ID.
+      return history.deleteByConversationId(conversationId, tenantId, sessionId)
     })
     if (removed === null) return reply.code(404).send(fail(40400, 'Turn not found in this session'))
     return reply.code(200).send(success({ success: true, removed }))
@@ -386,14 +393,18 @@ export async function conversationRoutes(fastify: FastifyInstance) {
     }
     const removed = await mutateHistory(tenantId, sessionId, 'History truncated by user',
       () => selectMessages(tenantId, sessionId, messageId, true), async (messages, interruptedTurns) => {
-        const target = await history.getMessageById(messageId, tenantId)
+        const target = await history.getMessageById(messageId, tenantId, sessionId)
         if (!target) return null
         const turnIds = new Set([...interruptedTurns, ...messages.flatMap(message => message.conversationId ? [message.conversationId] : [])])
         // A root may have claimed its identity before its first message was appended.
         const runs = await rootRunStore.list(tenantId, sessionId)
         const targetRun = runs.find(run => run.turnId === messages[0].conversationId)
         if (targetRun) for (const run of runs) if (run.seq >= targetRun.seq) turnIds.add(run.turnId)
-        await removeChildRuns(tenantId, sessionId, messageIds(messages))
+        const completeTurns = new Set(turnIds)
+        // Truncating a supplement does not remove earlier dispatches in its
+        // root turn; only exact removed message anchors select those children.
+        if (targetRun?.userMessageId !== messageId && messages[0].conversationId) completeTurns.delete(messages[0].conversationId)
+        await removeChildRuns(tenantId, sessionId, messageIds(messages), completeTurns)
         await history.deleteMessagesAfterId(target.dbId, sessionId, tenantId)
         await history.deleteMessage(messageId, tenantId)
         await rootRunStore.deleteTurns(tenantId, sessionId, [...turnIds])
