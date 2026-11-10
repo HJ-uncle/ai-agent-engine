@@ -8,7 +8,7 @@ const id = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)
 const auth = z.object({ clientToken: z.string().min(32).max(128) })
 const execution = z.object({ rootSessionId: id, rootRunId: id, ownerRunId: id }).strict()
 const receipt = auth.extend({ requestId: id, execution, result: z.object({
-  success: z.boolean(), output: z.string().max(65536),
+  success: z.boolean(), output: z.string().max(6 * 1024 * 1024 + 16384),
   metadata: z.object({ code: z.string().regex(/^WORKBENCH_[A-Z_]+$/), operationPerformed: z.union([z.boolean(), z.literal('unknown')]) }).strict(),
 }).strict() }).strict()
 const identity = (request: FastifyRequest) => {
@@ -25,7 +25,7 @@ export async function workbenchRoutes(app: FastifyInstance, options: { bridge?: 
     return reply.code(status).send(fail(status, status === 500 ? '工作台请求失败。' : error instanceof Error ? error.message : '无效的工作台请求。'))
   })
   app.post('/workbench/clients', async request => {
-    const body = z.object({ sessionId: id, actions: z.array(z.enum(WORKBENCH_ACTIONS)).max(3) }).strict().parse(request.body)
+    const body = z.object({ sessionId: id, actions: z.array(z.enum(WORKBENCH_ACTIONS)).max(WORKBENCH_ACTIONS.length) }).strict().parse(request.body)
     return success(bridge.register(identity(request), body.sessionId, body.actions))
   })
   app.post<{ Params: { clientId: string } }>('/workbench/clients/:clientId/poll', async request => {
@@ -36,7 +36,7 @@ export async function workbenchRoutes(app: FastifyInstance, options: { bridge?: 
     const body = auth.extend({ requestId: id, execution }).strict().parse(request.body)
     return success({ active: bridge.active(identity(request), id.parse(request.params.clientId), body.clientToken, body.requestId, body.execution) })
   })
-  app.post<{ Params: { clientId: string } }>('/workbench/clients/:clientId/results', async request => {
+  app.post<{ Params: { clientId: string } }>('/workbench/clients/:clientId/results', { bodyLimit: 8 * 1024 * 1024 }, async request => {
     const body = receipt.parse(request.body)
     if (body.result.success && body.result.metadata.operationPerformed !== true) throw new WorkbenchBridgeError(400, '成功回执必须确认操作已执行。')
     return success({ accepted: bridge.result(identity(request), id.parse(request.params.clientId), body.clientToken, body.requestId, body.execution, body.result) })

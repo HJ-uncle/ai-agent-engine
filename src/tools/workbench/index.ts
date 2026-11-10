@@ -3,10 +3,11 @@ import { z } from 'zod'
 import type { Tool } from '../../core/agent-context/index.js'
 import { workspaceManager } from '../../workspace/index.js'
 import { workbenchBridge } from './bridge.js'
+import { workbenchRenderTool } from './render.js'
 
 const openSchema = z.object({ path: z.string().min(1).max(4096), line: z.number().int().positive().optional() }).strict()
 const contextSchema = z.object({ terminalId: z.string().min(1).max(128).optional(), maxLines: z.number().int().min(1).max(200).optional() }).strict()
-export const workbenchTools: Tool[] = [{
+export const workbenchTools: Tool[] = [workbenchRenderTool, {
   name: 'workbench_context', displayName: '读取工作台状态', executionMode: 'readonly',
   description: '读取本会话已开文件、预览格式、终端和连接状态；terminalId指定终端最近输出。用户终端与execute_cmd任务分开；只读，不运行命令/输入按键/扩大权限，未连接返回不可用。',
   parameters: { type: 'object', additionalProperties: false, properties: { terminalId: { type: 'string', minLength: 1, maxLength: 128 }, maxLines: { type: 'integer', minimum: 1, maximum: 200, default: 80 } } },

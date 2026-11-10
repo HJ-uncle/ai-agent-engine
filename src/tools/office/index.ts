@@ -11,6 +11,8 @@ import { createDocx, editDocx, inspectDocx } from './docx.js'
 import { createXlsx, editXlsx, inspectXlsx, appendXlsxSheets } from './xlsx.js'
 import { createPdf, inspectPdf } from './pdf.js'
 import { createPptx, editPptx, inspectPptx, type PptxEdit } from './pptx.js'
+import { presentationSchema as presentation, presentationJsonSchema, type PptxInput } from './pptx-schema.js'
+import { pptxImagePaths, inspectPptxImage, MAX_PPTX_IMAGE_BYTES, MAX_PPTX_ASSET_BYTES } from './pptx-design.js'
 import { recalculateXlsx } from './recalculate.js'
 import { MAX_OFFICE_FILE_BYTES } from './office-zip.js'
 import { officeFailure, officeReceipt, type OfficeInspection } from './output.js'
@@ -45,13 +47,6 @@ const workbook = z.object({ sheets: z.array(z.object({
   if (count > 100_000) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Workbook supports at most 100000 data cells' })
 })
 const filePath = z.string().min(1).max(4096).refine(value => value.trim().length > 0 && !value.includes('\0'), 'Invalid file path')
-const presentation = z.object({ slides: z.array(z.object({
-  title: z.string().min(1).max(100),
-  bullets: z.array(z.string().min(1).max(160)).max(6).optional(),
-  table: z.object({ headers: z.array(z.string().min(1).max(100)).min(1).max(6),
-    rows: z.array(z.array(z.union([z.string().max(100), z.number().finite()])).min(1).max(6)).max(8) }).strict().optional(),
-  notes: z.string().max(3000).optional(),
-}).strict()).min(1).max(40) }).strict()
 // DOCX allows 2 Mi characters of paragraph text plus separators; the package's
 // 500000-element bound keeps their combined preview below 3 Mi UTF-16 units.
 const maxContentOffset = 3 * 1024 * 1024
@@ -110,6 +105,46 @@ function readBoundedVersion(file: string) {
   if (version.content && version.content.byteLength > MAX_OFFICE_FILE_BYTES) throw new Error('Office document exceeds 32 MiB')
   return version
 }
+function readPptxAssets(ctx: AgentContext, presentation: Pick<PptxInput, 'slides'>): Map<string, Buffer> {
+  const assets = new Map<string, Buffer>()
+  let total = 0
+  for (const assetPath of pptxImagePaths(presentation)) {
+    throwIfAborted(ctx.signal)
+    const requested = workspaceManager.resolveSafePath(ctx, assetPath)
+    const canonical = canonicalFilePathSync(requested)
+    workspaceManager.resolveSafePath(ctx, canonical)
+    const descriptor = fs.openSync(canonical, 'r')
+    try {
+      const stat = fs.fstatSync(descriptor)
+      if (!stat.isFile() || !stat.size || stat.size > MAX_PPTX_IMAGE_BYTES) throw new Error('PPTX images require regular nonempty PNG/JPEG files up to 8 MiB')
+      const checkPath = () => {
+        const current = canonicalFilePathSync(workspaceManager.resolveSafePath(ctx, assetPath))
+        workspaceManager.resolveSafePath(ctx, current)
+        const currentStat = fs.statSync(current)
+        if (!samePath(current, canonical) || currentStat.dev !== stat.dev || currentStat.ino !== stat.ino) throw new Error('PPTX image path changed during authorized read')
+      }
+      checkPath()
+      // Bound the actual descriptor read as well as stat: an external writer
+      // must not turn an approved small asset into an unbounded allocation.
+      const buffer = Buffer.alloc(stat.size + 1)
+      let length = 0
+      while (length < buffer.length) {
+        const count = fs.readSync(descriptor, buffer, length, buffer.length - length, length)
+        if (!count) break
+        length += count
+      }
+      const after = fs.fstatSync(descriptor)
+      if (length !== stat.size || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) throw new Error('PPTX image changed during read; retry with a stable image')
+      checkPath()
+      const bytes = buffer.subarray(0, length)
+      inspectPptxImage(bytes)
+      total += bytes.length
+      if (total > MAX_PPTX_ASSET_BYTES) throw new Error('PPTX images exceed 24 MiB in total')
+      assets.set(assetPath, bytes)
+    } finally { fs.closeSync(descriptor) }
+  }
+  return assets
+}
 function inspect(format: OfficeInspection['format'], bytes: Buffer): Promise<Inspection> {
   if (format === 'docx') return inspectDocx(bytes)
   if (format === 'xlsx') return inspectXlsx(bytes)
@@ -129,17 +164,7 @@ export const officeDocumentTool: Tool = {
       contentLimit: { type: 'integer', minimum: 2, maximum: 32000, description: '仅inspect：本页字符上限，仍受输出预算限制。' },
       markdown: { type: 'string', minLength: 1, maxLength: 300000, description: 'Word/PDF create正文：支持标题、段落、列表、表格。' },
       title: { type: 'string', maxLength: 256, description: '仅 DOCX/PDF/PPTX create 可用，Excel 必须省略。可选独立可见标题及文档属性；避免与 Markdown 首标题重复。' }, author: { type: 'string', maxLength: 200, description: '仅 DOCX/PDF/PPTX create 可用，Excel 必须省略。' },
-      presentation: { type: 'object', additionalProperties: false, description: '仅PPTX create：分页的演示内容，过长内容拆成多页，不缩成不可读小字。', properties: {
-        slides: { type: 'array', minItems: 1, maxItems: 40, items: { type: 'object', additionalProperties: false, properties: {
-          title: { type: 'string', minLength: 1, maxLength: 100, description: '单行短标题，最多94个英文字符宽度（中文约47字）。' },
-          bullets: { type: 'array', maxItems: 6, description: '每页最多6条，含表格时最多2条；每条不换行，最多140英文字符宽度（中文约70字）。', items: { type: 'string', minLength: 1, maxLength: 160 } },
-          table: { type: 'object', additionalProperties: false, description: '最多6列、8行；同页有要点时最多5行。单元格不换行，英文字符宽度最多100/列数，中文按2计；长内容拆页。', properties: {
-            headers: { type: 'array', minItems: 1, maxItems: 6, items: { type: 'string', minLength: 1, maxLength: 100 } },
-            rows: { type: 'array', maxItems: 8, items: { type: 'array', minItems: 1, maxItems: 6, items: { anyOf: [{ type: 'string', maxLength: 100 }, { type: 'number' }] } } },
-          }, required: ['headers', 'rows'] },
-          notes: { type: 'string', maxLength: 3000 },
-        }, required: ['title'] } },
-      }, required: ['slides'] },
+      presentation: presentationJsonSchema,
       workbook: { type: 'object', additionalProperties: false, description: 'Excel create 或 append_sheets 新表：columns.header 写第1行，rows 从第2行开始；要求精确单元格时用 edit 的 sheet/cell/value 定点校正、null清除多余单元格，再 recalculate/inspect，不重复创建文档。短表能完整输出时一次create；大表/新增表用append_sheets，每次1–4张，不重复提交已有表。', properties: { sheets: { type: 'array', minItems: 1, maxItems: 12,
         items: { type: 'object', additionalProperties: false, properties: {
           name: { type: 'string', minLength: 1, maxLength: 31 },
@@ -220,7 +245,7 @@ export const officeDocumentTool: Tool = {
           if (args.operation === 'create') {
             if (format === 'docx') generated = await createDocx({ markdown: args.markdown!, title: args.title, author: args.author })
             else if (format === 'pdf') generated = await createPdf({ markdown: args.markdown!, title: args.title, author: args.author })
-            else if (format === 'pptx') generated = await createPptx({ ...args.presentation!, title: args.title, author: args.author })
+            else if (format === 'pptx') generated = await createPptx({ ...args.presentation!, title: args.title, author: args.author }, readPptxAssets(ctx, args.presentation!))
             else generated = await createXlsx(args.workbook!)
           } else if (args.operation === 'append_sheets') generated = await appendXlsxSheets(original.content!, args.workbook)
           else if (args.operation === 'recalculate') generated = await recalculateXlsx(original.content!, ctx.signal)

@@ -1,94 +1,27 @@
-import { createRequire } from 'node:module'
 import path from 'node:path'
 import { decodeXml, encodeXml, readOfficeZip, writeOfficeZip } from './office-zip.js'
 
-export interface PptxSlide { title: string; bullets?: string[]; table?: { headers: string[]; rows: Array<Array<string | number>> }; notes?: string }
-export interface PptxInput { title?: string; author?: string; slides: PptxSlide[] }
+export type { PptxSlide, PptxInput } from './pptx-schema.js'
+import type { PptxInput } from './pptx-schema.js'
+import { generateDesignedPptx, type PptxAssets } from './pptx-design.js'
 export interface PptxEdit { oldText: string; newText: string; slide?: number; textRun?: number; target?: 'notes' }
 const MAX_SLIDES = 40
 const DRAWING = 'http://schemas.openxmlformats.org/drawingml/2006/main'
 const PRESENTATION = 'http://schemas.openxmlformats.org/presentationml/2006/main'
 const RELATIONSHIPS = 'http://schemas.openxmlformats.org/package/2006/relationships'
 const OFFICE_RELATIONSHIPS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
-// 4.0.1 ships a CJS-marked declaration alongside an ESM export. Use its documented
-// CJS entry so NodeNext's constructor type and runtime value agree.
-const PptxGenJS: typeof import('pptxgenjs').default = createRequire(import.meta.url)('pptxgenjs')
 function fail(message: string): never { throw new Error(`PPTX: ${message}`) }
-const units = (text: string): number => Array.from(text).reduce((sum, ch) => sum + (ch.codePointAt(0)! > 255 ? 2 : 1), 0)
 function text(value: unknown, label: string, limit: number, required = true): string {
   if (typeof value !== 'string' || (required && !value.trim()) || value.length > limit) fail(`${label} 文本为空或超过 ${limit} 字符`)
   encodeXml(value as string)
   return value as string
 }
 
-export async function createPptx(input: PptxInput): Promise<Buffer> {
-  if (!input || !Array.isArray(input.slides) || !input.slides.length || input.slides.length > MAX_SLIDES) fail(`需要 1–${MAX_SLIDES} 页`)
-  const deck = new PptxGenJS()
-  deck.layout = 'LAYOUT_WIDE'; deck.subject = 'Aether office document'; deck.company = 'Aether'
-  deck.title = input.title === undefined ? '' : text(input.title, 'title', 256, false)
-  deck.author = input.author === undefined ? 'Aether' : text(input.author, 'author', 200, false)
-  deck.theme = { headFontFace: 'Microsoft YaHei', bodyFontFace: 'Microsoft YaHei' }
-  for (const [index, source] of input.slides.entries()) {
-    const page = `第 ${index + 1} 页`
-    if (!source || typeof source !== 'object') fail(`${page}无效幻灯片`)
-    const title = text(source.title, `${page}标题`, 100)
-    if (units(title) > 94) fail(`${page}标题过长：宽度 ${units(title)}/94（非 Latin-1 字符计 2，其余计 1）；请缩短标题或拆分页面`)
-    if (/[\r\n]/.test(title)) fail(`${page}标题不支持换行；请拆分页面`)
-    const bullets = source.bullets === undefined ? [] : source.bullets
-    const maxBullets = source.table ? 2 : 6
-    if (!Array.isArray(bullets)) fail(`${page}要点必须为数组`)
-    if (bullets.length > maxBullets) fail(`${page}${source.table ? '含表格，' : ''}要点数量 ${bullets.length}/${maxBullets}，最多 ${maxBullets} 条；请减少要点或拆分页面`)
-    for (const [bulletIndex, bullet] of bullets.entries()) {
-      const location = `${page}第 ${bulletIndex + 1} 条要点`
-      const content = text(bullet, location, 160)
-      if (units(content) > 140) fail(`${location}过长：宽度 ${units(content)}/140（非 Latin-1 字符计 2，其余计 1）；请缩短要点或拆分页面`)
-      if (/[\r\n]/.test(content)) fail(`${location}不支持换行；请拆成独立要点或页面`)
-    }
-    const slide = deck.addSlide()
-    slide.background = { color: 'FFFFFF' }
-    slide.addShape(deck.ShapeType.rect, { x: 0, y: 0, w: 0.16, h: 7.5, fill: { color: '3268AA' }, line: { color: '3268AA' } })
-    slide.addText(title, { x: 0.6, y: 0.4, w: 12.1, h: 1.02, fontSize: 28, bold: true, color: '17243B', margin: 0, breakLine: false, valign: 'middle' })
-    for (const [bulletIndex, bullet] of bullets.entries()) slide.addText(bullet, {
-      x: 0.8, y: 1.62 + bulletIndex * 0.79, w: 11.8, h: 0.73, fontSize: 20, color: '27364B',
-      bullet: { indent: 18 }, margin: 0, valign: 'top', paraSpaceAfter: 4,
-    })
-    if (source.table) {
-      const { headers, rows } = source.table
-      if (!Array.isArray(headers)) fail(`${page}表格表头必须为数组`)
-      if (!headers.length || headers.length > 6) fail(`${page}表格列数 ${headers.length}/6，需要 1–6 列`)
-      if (!Array.isArray(rows)) fail(`${page}表格数据行必须为数组`)
-      const maxRows = bullets.length ? 5 : 8
-      if (rows.length > maxRows) fail(`${page}表格${bullets.length ? '含要点，' : ''}数据行数 ${rows.length}/${maxRows}，最多 ${maxRows} 行（不含表头）；请减少数据行或拆分页面`)
-      const maxUnits = Math.floor(100 / headers.length)
-      const cell = (value: unknown, row: number, column: number): string => {
-        const location = `第 ${index + 1} 页表格第 ${row + 1} 行第 ${column + 1} 列（表头为第 1 行）`
-        if (typeof value === 'number' && !Number.isFinite(value)) fail(`${location}数值必须有限`)
-        const content = typeof value === 'number' ? String(value) : text(value, location, 100, false)
-        if (units(content) > maxUnits) fail(`${location}内容过长：宽度 ${units(content)}/${maxUnits}（非 Latin-1 字符计 2，其余计 1）；缩短该格、拆页或减少列数`)
-        if (/[\r\n]/.test(content)) fail(`${location}不支持换行；请拆成独立行或页面`)
-        return content
-      }
-      const tableRows: Parameters<typeof slide.addTable>[0] = [headers.map((value, column) => ({ text: cell(value, 0, column), options: { bold: true, fill: { color: 'E8EEF5' }, color: '17243B' } }))]
-      for (const [rowIndex, row] of rows.entries()) {
-        const location = `${page}表格第 ${rowIndex + 2} 行（表头为第 1 行）`
-        if (!Array.isArray(row)) fail(`${location}必须为数组，单元格数量应为 ${headers.length}`)
-        if (row.length !== headers.length) fail(`${location}单元格数量 ${row.length}/${headers.length}，必须与表头一致`)
-        tableRows.push(row.map((value, column) => ({ text: cell(value, rowIndex + 1, column) })))
-      }
-      slide.addTable(tableRows, { x: 0.7, y: 1.7 + bullets.length * 0.79, w: 11.95, rowH: 0.48,
-        autoPage: false, fontSize: 15, color: '27364B', border: { type: 'solid', pt: 0.5, color: 'CBD5E1' },
-        margin: 0.1, valign: 'middle', colW: Array(headers.length).fill(11.95 / headers.length) })
-    }
-    if (source.notes !== undefined) slide.addNotes(text(source.notes, `${page}备注 notes`, 4000, false))
-    slide.addText(`Aether · ${index + 1} / ${input.slides.length}`, { x: 0.7, y: 7.02, w: 11.95, h: 0.2, fontSize: 9, color: '687487', align: 'right', margin: 0 })
-  }
-  const output = await deck.write({ outputType: 'nodebuffer', compression: true })
-  if (!(output instanceof Uint8Array)) fail('生成器未返回二进制文件')
-  const buffer = Buffer.from(output)
+export async function createPptx(input: PptxInput, assets?: PptxAssets): Promise<Buffer> {
+  const buffer = await generateDesignedPptx(input, assets)
   loadPresentation(buffer)
   return buffer
 }
-
 interface XmlNode { name: string; local: string; namespace: string; attributes: Record<string, string>; namespaces: Record<string, string>; start: number; openEnd: number; closeStart: number; end: number; parent?: XmlNode }
 interface TextRun { node: XmlNode; value: string }
 interface TextPart { name: string; xml: string; runs: TextRun[] }

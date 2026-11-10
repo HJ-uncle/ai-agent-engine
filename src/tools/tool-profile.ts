@@ -21,7 +21,7 @@ export const CODE_BUILTIN_TOOLS: ReadonlySet<string> = new Set([
   'read_file', 'write_file', 'edit_file', 'list_files', 'delete_file', 'create_dir',
   'glob', 'grep', 'execute_cmd', 'code_diagnose', 'codegraph',
   'command_output', 'cancel_command',
-  'workbench_context', 'workbench_open',
+  'workbench_context', 'workbench_open', 'workbench_render',
   'deliver_files',
   'report_artifacts',
   'office_inspect',

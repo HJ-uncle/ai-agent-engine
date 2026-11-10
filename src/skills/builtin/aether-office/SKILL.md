@@ -13,7 +13,7 @@ description: 在Aether内创建和检查真实DOCX、XLSX、PPTX、PDF，编辑W
 
 - **Word**：使用 `get_skill`，参数 `name="aether-office", resource="references/documents.md"`，读取文体、排版与编辑指南。
 - **Excel**：使用 `get_skill`，参数 `name="aether-office", resource="references/spreadsheets.md"`，读取类型、公式与保真编辑指南。
-- **PPT/PDF**：用 `get_skill` 读取 `name="aether-office", resource="references/presentations-pdf.md"`。PPTX用 `presentation.slides`；已有备注先inspect，再用 `target:"notes"` 与 `slide/textRun` 定点edit。PDF用 `markdown`。结构化内容与有限页容量优先，长内容拆页，不缩成无法阅读的小字。
+- **PPT/PDF**：用 `get_skill` 读取 `name="aether-office", resource="references/presentations-pdf.md"`。PPT先规划每页内容与版式，以原生可编辑对象生成，再逐页检查实际画面；参数以工具schema为准。已有PPT支持正文/备注定点edit。PDF用 `markdown` 独立排版。
 - **Excel计算**：生成/编辑后用同文件最新hash执行 `office_document operation="recalculate"`，再inspect核对真实缓存和错误。支持常用公式与跨表引用；不支持的公式、循环、外链明确拒绝，不能硬填结果假冒计算。
 - **环境诊断**：`office_environment({})`仅供只读诊断，不是调用外部程序的建议。需要解释回执时读 `references/environment.md`；内置办公路径不需要先探测Python或COM。
 - 只需聊天文字时直接回答，不强行生成文件；不承诺尚未提供的复杂编辑和转换能力。
@@ -28,7 +28,7 @@ description: 在Aether内创建和检查真实DOCX、XLSX、PPTX、PDF，编辑W
 2. 编辑已有文件先 `inspect`，确认正文/表格和 `warnings`，再用同文件最近一次工具返回的完整 `expectedHash` 调用 `edit`。Excel 分批添加新表使用 `append_sheets`，复用同一版本合同，每次只发新增的 1-4 张表（优先一张），不重发旧表。已经有可信同版本内容时不重复读取。不猜 hash，不根据文件名推断内容。
 3. 哈希不一致代表其他任务或用户已修改。重新检查并基于实际内容调整，不盲目覆盖；多人协作分配不同文件或不同明确片段，仍遵守同一版本合同。
 4. create/edit/append_sheets 成功才代表文件真实发布。工具会做内存生成、ZIP/XML/数据结构检查与原子发布，返回文件路径、大小、版本及改动回执。失败时依据 `fileMutationApplied` 如实说明；参数过长或新表不存在时改为小批 `append_sheets`，禁止为补表删除重建、循环整包重发或绕过 expectedHash。不要把聊天文本、CSV 或 Markdown 改扩展名冒充 Office。
-5. 交付前用 `inspect` 核对实际要求、关键数字及表格结构，并披露 warnings；有可信同版本回执不重复读取。只有具体错误才定点修正并复核受影响部分，通过即停止，不扩大为全项目测试、反复整包生成或无关ZIP/XML检查。编辑可能改变ZIP压缩方式，体积变小本身不证明丢失内容；以结构回执和实际内容为准。`structure-checked` 只证明结构检查；没有实际打开或渲染不能声称做过视觉检查，没有缓存的公式不能声称已算好。
+5. 交付前用 `inspect` 核对实际要求、关键数字及表格结构，并披露 warnings；有可信同版本回执不重复读取。PPT另按格式指南逐页渲染并检查；只有具体错误才修正并复核受影响部分，通过即停止，不扩大为全项目测试、反复整包生成或无关ZIP/XML检查。编辑可能改变ZIP压缩方式，体积变小本身不证明丢失内容。`structure-checked` 只证明结构检查；未看到实际画面不能声称视觉验收，公式无缓存不能声称已算好。
 6. `contentTruncated=true`、`summary.previewTruncated=true` 或外层工具消息中的 `[truncated …]` 都表示只收到部分预览，不能据此声称已读完全文或验完整本工作簿；即使某个内部标记为 false，也必须遵守外层截断提示。定点编辑使用本次实际观察到的唯一文本片段/单元格与同文件版本 hash，不猜测被省略部分。需要验证全貌时，使用现有读取工具实际支持的分段读取或转换方式补齐；没有可用路径就明确披露未完成全貌验证，不忽略截断、不用反复读取同一份预览冒充完整检查。
 7. `office_inspect` 与 `office_document inspect` 使用相同检查合同：Excel 全工作簿最多预览 2000 单元格、单格 600 字符；分页只继续这份预览。已保存错误计数覆盖全部工作表（含隐藏表和预览之外），错误位置只有限列举；没有错误缓存不代表公式已重算或业务正确。不要用 `read_file` 的首表预览推断其他表；目标表内容未出现在预览中时，明确说明未读到，不能以全表诊断替代逐表内容审查。
 

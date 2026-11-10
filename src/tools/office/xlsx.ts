@@ -23,6 +23,79 @@ interface Sheet { name: string; file: string; xml: string; cells: Map<string, Xm
 interface Package { entries: Record<string, Uint8Array>; workbook: string; sheets: Sheet[]; strings: string[]; date1904: boolean; dateStyles: Set<number> }
 interface PreparedSheet { name: string; columns: XlsxColumn[]; rows: Value[][] }
 
+const SHEET_STYLE = {
+  font: 'Microsoft YaHei', text: 'FF243247', border: 'FFDCE3EB', header: 'FFE8EEF5', stripe: 'FFF7F9FC',
+  headerSize: 11, bodySize: 10, headerHeight: 28, bodyHeight: 23, maxRowHeight: 409,
+  formats: { general: 'General', text: '@', number: 'General', percent: '0.00%', date: 'yyyy-mm-dd' },
+} as const
+type CellKind = keyof typeof SHEET_STYLE.formats
+
+function cellKind(column: XlsxColumn, value: Value): CellKind {
+  return column.type ?? (value instanceof Date ? 'date' : 'general')
+}
+function layoutText(value: Value): string {
+  if (value === null) return ''
+  if (value instanceof Date) return value.toISOString().slice(0, 10)
+  // Formula source is not displayed in Excel; reserve space for its saved result.
+  if (typeof value === 'object') return '000000000000'
+  return typeof value === 'boolean' ? String(value).toUpperCase() : String(value)
+}
+function textWidth(text: string): number {
+  let width = 0
+  for (const char of text) width += /\p{Mark}/u.test(char) ? 0 : char === '\t' ? 4 : char.codePointAt(0)! > 255 ? 2 : 1
+  return width
+}
+function wrappedLines(text: string, capacity: number): number {
+  let lines = 0
+  for (const paragraph of text.split(/\r\n|\r|\n/)) {
+    let used = 0
+    lines++
+    for (const token of paragraph.match(/\s+|\S+/g) ?? []) {
+      let width = textWidth(token)
+      if (used && used + width > capacity) { lines++; used = 0 }
+      if (width > capacity) {
+        const complete = Math.ceil(width / capacity) - 1
+        lines += complete; width -= complete * capacity
+      }
+      used += width
+    }
+  }
+  return lines
+}
+/** Both writers use the same content sizing. Excel caps row height, so reject
+ * an unreadable cell instead of silently clipping its saved text at that cap. */
+function sheetLayout(sheet: PreparedSheet): { widths: number[]; heights: number[] } {
+  const widths = sheet.columns.map((column, index) => {
+    if (column.width !== undefined) return column.width
+    let width = Math.max(12, ...column.header.split(/\r\n|\r|\n/).map(line => textWidth(line) + 3))
+    for (const row of sheet.rows) {
+      if (width >= 42) break
+      for (const line of layoutText(row[index]).split(/\r\n|\r|\n/)) width = Math.max(width, textWidth(line) + 3)
+    }
+    return Math.min(42, width)
+  })
+  const heights = [sheet.columns.map(column => column.header), ...sheet.rows].map((row, index) => {
+    const size = index === 0 ? SHEET_STYLE.headerSize : SHEET_STYLE.bodySize
+    let height: number = index === 0 ? SHEET_STYLE.headerHeight : SHEET_STYLE.bodyHeight
+    for (let column = 0; column < row.length; column++) {
+      // Width is in Excel digit units. Leave room for padding and a small font
+      // metric margin; this is conservative sizing, not a pixel render claim.
+      const capacity = Math.max(1, (widths[column] - 3) * 10 / size / 1.1)
+      const required = Math.ceil(wrappedLines(layoutText(row[column]), capacity) * size * 1.4 + 8)
+      if (required > SHEET_STYLE.maxRowHeight) fail(`${sheet.name}!${columnName(column + 1)}${index + 1} 的文字超过 Excel ${SHEET_STYLE.maxRowHeight} 磅行高可显示范围；请加宽列或将内容拆分到多行/文档，未生成裁切文件`)
+      height = Math.max(height, required)
+    }
+    return height
+  })
+  return { widths, heights }
+}
+function columnValidation(column: XlsxColumn): ExcelJS.DataValidation | undefined {
+  const type = column.type === 'text' ? 'textLength' : column.type === 'date' ? 'date' : column.type === 'number' || column.type === 'percent' ? 'decimal' : undefined
+  if (!type) return undefined
+  return { type, operator: 'between', allowBlank: true, showErrorMessage: true, errorStyle: 'stop', errorTitle: '数据类型不符', error: '请按列定义输入文本、有效日期或数值。',
+    formulae: type === 'textLength' ? [0, LIMITS.text] : type === 'date' ? [new Date('1900-01-01T00:00:00Z'), new Date('9999-12-31T00:00:00Z')] : [-1e308, 1e308] }
+}
+
 function fail(message: string): never { throw new Error(`XLSX: ${message}`) }
 function record(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)
@@ -288,6 +361,7 @@ export async function createXlsx(input: XlsxInput): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook()
   workbook.creator = 'Aether'; workbook.created = new Date(); workbook.calcProperties.fullCalcOnLoad = true
   for (const sheet of prepared) {
+    const layout = sheetLayout(sheet)
     const worksheet = workbook.addWorksheet(sheet.name, {
       views: [{ state: 'frozen', ySplit: 1 }],
       pageSetup: { paperSize: 9, orientation: sheet.columns.length > 6 ? 'landscape' : 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
@@ -295,29 +369,26 @@ export async function createXlsx(input: XlsxInput): Promise<Buffer> {
     worksheet.pageSetup.printTitlesRow = '1:1'
     worksheet.pageSetup.margins = { left: .3, right: .3, top: .5, bottom: .5, header: .2, footer: .2 }
     worksheet.headerFooter.oddFooter = '&L&A&R第 &P 页 / 共 &N 页'
-    worksheet.columns = sheet.columns.map((column, index) => ({ header: column.header, key: column.key,
-      width: column.width ?? Math.min(42, Math.max(12, ...[column.header, ...sheet.rows.slice(0, 100).map(row => String(row[index] ?? ''))].map(text => Array.from(text).reduce((count, char) => count + (char.charCodeAt(0) > 255 ? 2 : 1), 0) + 3))) }))
+    worksheet.columns = sheet.columns.map((column, index) => ({ header: column.header, key: column.key, width: layout.widths[index] }))
     for (const values of sheet.rows) worksheet.addRow(values)
     worksheet.autoFilter = { from: 'A1', to: `${columnName(sheet.columns.length)}${sheet.rows.length + 1}` }
     worksheet.pageSetup.printArea = `A1:${columnName(sheet.columns.length)}${sheet.rows.length + 1}`
-    worksheet.eachRow((row, rowNumber) => {
-      row.height = rowNumber === 1 ? 28 : 23
-      row.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
-        const column = sheet.columns[columnNumber - 1]
-        cell.font = { name: 'Microsoft YaHei', size: rowNumber === 1 ? 11 : 10, bold: rowNumber === 1, color: { argb: 'FF243247' } }
-        cell.alignment = { vertical: 'middle', wrapText: true, horizontal: rowNumber === 1 ? 'left' : ['number', 'percent'].includes(column.type ?? '') ? 'right' : 'left' }
-        cell.border = { bottom: { style: 'hair', color: { argb: 'FFDCE3EB' } } }
-        if (rowNumber === 1 || rowNumber % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: rowNumber === 1 ? 'FFE8EEF5' : 'FFF7F9FC' } }
-        if (rowNumber === 1) return
-        if (column.type === 'date' || cell.value instanceof Date) cell.numFmt = 'yyyy-mm-dd'
-        else if (column.type === 'percent') cell.numFmt = '0.00%'
-        else if (column.type === 'number') cell.numFmt = '#,##0.00;[Red](#,##0.00)'
-        else if (column.type === 'text') cell.numFmt = '@'
-        const type = column.type === 'text' ? 'textLength' : column.type === 'date' ? 'date' : column.type === 'number' || column.type === 'percent' ? 'decimal' : undefined
-        // ExcelJS treats date-validation operands as Date inputs, not Excel serial numbers.
-        if (type) cell.dataValidation = { type, operator: 'between', allowBlank: true, showErrorMessage: true, errorStyle: 'stop', errorTitle: '数据类型不符', error: '请按列定义输入文本、有效日期或数值。', formulae: type === 'textLength' ? [0, LIMITS.text] : type === 'date' ? [new Date('1900-01-01T00:00:00Z'), new Date('9999-12-31T00:00:00Z')] : [-1e308, 1e308] }
-      })
-    })
+    for (let rowNumber = 1; rowNumber <= sheet.rows.length + 1; rowNumber++) {
+      const row = worksheet.getRow(rowNumber), header = rowNumber === 1
+      row.height = layout.heights[rowNumber - 1]
+      for (const [index, column] of sheet.columns.entries()) {
+        const cell = row.getCell(index + 1), kind = header ? 'general' : cellKind(column, sheet.rows[rowNumber - 2][index])
+        cell.font = { name: SHEET_STYLE.font, size: header ? SHEET_STYLE.headerSize : SHEET_STYLE.bodySize, bold: header, color: { argb: SHEET_STYLE.text } }
+        cell.alignment = { vertical: 'middle', wrapText: true, horizontal: !header && ['number', 'percent'].includes(kind) ? 'right' : 'left' }
+        cell.border = { bottom: { style: 'hair', color: { argb: SHEET_STYLE.border } } }
+        if (header || rowNumber % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: header ? SHEET_STYLE.header : SHEET_STYLE.stripe } }
+        if (header) continue
+        cell.numFmt = SHEET_STYLE.formats[kind]
+        const validation = columnValidation(column)
+        // ExcelJS treats date-validation operands as Date inputs, not serials.
+        if (validation) cell.dataValidation = validation
+      }
+    }
   }
   const pkg = packageFrom(Buffer.from(await workbook.xlsx.writeBuffer()))
   refreshFormulaCaches(pkg)

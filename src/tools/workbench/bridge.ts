@@ -2,7 +2,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { AgentContext, ToolResult } from '../../core/agent-context/index.js'
 import { browserExecutionIdentity, browserExecutionsMatch, type BrowserExecutionIdentity } from '../../core/browser-execution.js'
 
-export const WORKBENCH_ACTIONS = ['workspace.context', 'artifact.open', 'terminal.read'] as const
+export const WORKBENCH_ACTIONS = ['workspace.context', 'artifact.open', 'terminal.read', 'artifact.render'] as const
 export type WorkbenchAction = typeof WORKBENCH_ACTIONS[number]
 export interface WorkbenchIdentity { tenantId: string; userId?: string }
 export interface WorkbenchCommand {
@@ -88,6 +88,22 @@ export class WorkbenchBridge {
   result(identity: WorkbenchIdentity, id: string, token: string, requestId: string, execution: BrowserExecutionIdentity, result: ToolResult): boolean {
     const pending = this.authorize(identity, id, token).pending.get(requestId)
     if (!pending?.delivered || !browserExecutionsMatch(execution, pending.command.execution)) return false
+    if (pending.command.action === 'artifact.render' && result.success) {
+      let data: Record<string, unknown>
+      try {
+        data = JSON.parse(result.output)
+        if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Invalid receipt')
+      } catch { throw new WorkbenchBridgeError(400, '幻灯片画面回执无效。') }
+      const png = typeof data.dataUrl === 'string' ? /^data:image\/png;base64,([A-Za-z0-9+/]+={0,2})$/.exec(data.dataUrl) : null
+      const bytes = png && png[1].length <= 6 * 1024 * 1024 ? Buffer.from(png[1], 'base64') : null
+      if (data.path !== pending.command.args.path || data.sha256 !== pending.command.args.expectedHash || data.page !== pending.command.args.page ||
+        data.sessionId !== pending.command.sessionId || data.renderer !== 'aether-pptx-to-html-1.1.2' ||
+        !Number.isInteger(data.pageCount) || Number(data.pageCount) < Number(data.page) || Number(data.pageCount) > 100 ||
+        data.width !== 960 || data.height !== 540 || !bytes || bytes.length < 45 ||
+        !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) || bytes.readUInt32BE(8) !== 13 ||
+        bytes.toString('ascii', 12, 16) !== 'IHDR' || bytes.readUInt32BE(16) !== 960 || bytes.readUInt32BE(20) !== 540)
+        throw new WorkbenchBridgeError(400, '幻灯片画面与请求的会话、文件版本或页码不一致。')
+    } else if (result.output.length > 65536) throw new WorkbenchBridgeError(400, '工作台回执超过范围。')
     pending.settle(result)
     return true
   }
@@ -101,7 +117,8 @@ export class WorkbenchBridge {
     if (!client) return Promise.resolve(failure('WORKBENCH_UNAVAILABLE', '所属会话的 Aether 工作台未连接。文件仍可生成并提供真实链接；不要声称已经在客户端打开。'))
     if (!client.actions.includes(action)) return Promise.resolve(failure('WORKBENCH_UNSUPPORTED', '当前工作台未提供此操作，请先调用 workbench_context 查询。'))
     if (client.pending.size >= 8) return Promise.resolve(failure('WORKBENCH_BUSY', '当前工作台已有待处理操作，请等待已有操作回执。'))
-    const command: WorkbenchCommand = { requestId: randomUUID(), sessionId: execution.rootSessionId, execution, action, args, expiresAt: Date.now() + this.options.commandMs }
+    const timeout = action === 'artifact.render' ? Math.max(this.options.commandMs, 60_000) : this.options.commandMs
+    const command: WorkbenchCommand = { requestId: randomUUID(), sessionId: execution.rootSessionId, execution, action, args, expiresAt: Date.now() + timeout }
     return new Promise(resolve => {
       const finish = (result: ToolResult) => {
         if (!client.pending.delete(command.requestId)) return
@@ -109,7 +126,7 @@ export class WorkbenchBridge {
       }
       const pending: Pending = { command, delivered: false, settle: finish }
       const cancel = () => finish(failure('WORKBENCH_CANCELLED', '任务已停止。已投递操作的结果需重新查询，不应盲目重放。', pending.delivered ? 'unknown' : false))
-      const timer = setTimeout(() => finish(failure('WORKBENCH_TIMEOUT', '工作台未及时确认。请读取工作台状态；不要将请求发出当成文件显示成功。', pending.delivered ? 'unknown' : false)), this.options.commandMs)
+      const timer = setTimeout(() => finish(failure('WORKBENCH_TIMEOUT', '工作台未及时确认。请读取工作台状态；不要将请求发出当成文件显示成功。', pending.delivered ? 'unknown' : false)), timeout)
       client.pending.set(command.requestId, pending)
       ctx.signal?.addEventListener('abort', cancel, { once: true })
       if (ctx.signal?.aborted) cancel()

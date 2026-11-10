@@ -1,5 +1,5 @@
 /** A UI declaration is descriptive data, never an execution authority. */
-export const CLIENT_CAPABILITY_ACTIONS = ['artifact.open', 'workspace.context', 'terminal.read'] as const
+export const CLIENT_CAPABILITY_ACTIONS = ['artifact.open', 'workspace.context', 'terminal.read', 'artifact.render'] as const
 export const CLIENT_PREVIEW_FORMATS = [
   'pdf', 'docx', 'xlsx', 'pptx', 'csv', 'tsv', 'md', 'txt', 'json', 'html', 'htm',
   'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'mp4', 'webm',

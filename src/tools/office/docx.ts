@@ -45,6 +45,7 @@ interface DocxPackage {
   xml: string
   elements: XmlElement[]
   paragraphs: DocumentParagraph[]
+  hasFields: boolean
 }
 
 function fail(message: string): never {
@@ -239,14 +240,25 @@ function readPackage(buffer: Buffer): DocxPackage {
       main.elements.some(element => element.attributes['xmlns:w'] !== undefined && element.attributes['xmlns:w'] !== WORD_NAMESPACE)) {
     fail('unsupported or damaged Word document XML; expected transitional w:document/w:body')
   }
-  return { entries, xml: main.xml, elements: main.elements, paragraphs: readParagraphs(main.xml, main.elements) }
+  return {
+    entries, xml: main.xml, elements: main.elements, paragraphs: readParagraphs(main.xml, main.elements),
+    // Page-number fields usually live in footers, outside the editable body.
+    hasFields: [...xmlParts.values()].some(part => part.elements.some(element =>
+      ['w:fldChar', 'w:fldSimple', 'w:instrText'].includes(element.name))),
+  }
 }
 
 function inlineRuns(text: string, overrides: IRunOptions = {}): TextRun[] {
   const runs: TextRun[] = []
   let plain = ''
+  const pushText = (text: string, options: IRunOptions): void => {
+    text.split('\n').forEach((line, index) => {
+      if (index > 0) runs.push(new TextRun({ ...options, break: 1 }))
+      if (line) runs.push(new TextRun({ ...options, text: line }))
+    })
+  }
   const pushPlain = (): void => {
-    if (plain) runs.push(new TextRun({ text: plain, ...overrides }))
+    if (plain) pushText(plain, overrides)
     plain = ''
   }
   for (let index = 0; index < text.length;) {
@@ -261,7 +273,7 @@ function inlineRuns(text: string, overrides: IRunOptions = {}): TextRun[] {
       if (end > index + marker.length) {
         pushPlain()
         const content = text.slice(index + marker.length, end)
-        runs.push(new TextRun({ ...overrides, text: content, ...(marker === '**' ? { bold: true } : { font: 'Consolas', size: 20 }) }))
+        pushText(content, { ...overrides, ...(marker === '**' ? { bold: true } : { font: 'Consolas', size: 20 }) })
         index = end + marker.length
         continue
       }
@@ -300,6 +312,18 @@ function isTableDelimiter(line: string): boolean {
   return line.includes('|') && tableCells(line).every(cell => /^:?-{3,}:?$/.test(cell))
 }
 
+function joinParagraphLines(lines: string[]): string {
+  return lines.map((line, index) => {
+    const text = line.trim()
+    if (index === lines.length - 1) return text
+    // Preserve intentional Markdown line breaks without treating escaped
+    // backslashes or ordinary source wrapping as visible new lines.
+    const backslashBreak = /(?:^|[^\\])(?:\\\\)*\\$/.test(line)
+    const hardBreak = backslashBreak || / {2,}$/.test(line)
+    return (backslashBreak ? text.slice(0, -1) : text) + (hardBreak ? '\n' : ' ')
+  }).join('')
+}
+
 function markdownBlocks(markdown: string): { children: Array<Paragraph | Table>; numbering: Array<{ reference: string; levels: ILevelsOptions[] }> } {
   const lines = markdown.replace(/\r\n?/g, '\n').split('\n')
   const children: Array<Paragraph | Table> = []
@@ -312,8 +336,10 @@ function markdownBlocks(markdown: string): { children: Array<Paragraph | Table>;
     if (children.length >= MAX_BLOCKS) fail(`document exceeds ${MAX_BLOCKS} blocks`)
     const line = lines[index]
     const trimmed = line.trim()
-    if (!trimmed) { activeOrdered = undefined; index += 1; continue }
-    if (/^!\[|^<\/?[A-Za-z!]/.test(trimmed)) fail('Markdown images and raw HTML need a dedicated document template')
+    // A loose Markdown list may contain blank lines between its items.
+    // The next actual block, rather than whitespace, determines list continuity.
+    if (!trimmed) { index += 1; continue }
+    if (/^!\[|^<\/?[A-Za-z!]/.test(trimmed)) fail('Markdown images and raw HTML are unsupported; use text, lists and simple tables')
     const fence = /^(\s*)(`{3,}|~{3,})(.*)$/.exec(line)
     if (fence) {
       activeOrdered = undefined
@@ -335,7 +361,7 @@ function markdownBlocks(markdown: string): { children: Array<Paragraph | Table>;
     if (index + 1 < lines.length && line.includes('|') && isTableDelimiter(lines[index + 1])) {
       activeOrdered = undefined
       const header = tableCells(line)
-      if (header.length > 20) fail('tables with more than 20 columns require a dedicated landscape template')
+      if (header.length > 20) fail('tables support at most 20 columns; split wide tables or move long descriptions into paragraphs')
       const rows = [header]
       index += 2
       while (index < lines.length && lines[index].trim() && lines[index].includes('|')) {
@@ -415,15 +441,15 @@ function markdownBlocks(markdown: string): { children: Array<Paragraph | Table>;
       continue
     }
     // Soft-wrapped Markdown lines form one paragraph, while blank lines separate paragraphs.
-    const paragraph = [trimmed]
+    const paragraph = [line]
     index += 1
     while (index < lines.length && lines[index].trim() &&
         !/^\s*(?:#{1,6}\s|[-+*]\s|\d+[.)、]\s|>|`{3,}|~{3,}|!\[|<\/?[A-Za-z!])/.test(lines[index]) &&
         !(index + 1 < lines.length && lines[index].includes('|') && isTableDelimiter(lines[index + 1]))) {
-      paragraph.push(lines[index].trim())
+      paragraph.push(lines[index])
       index += 1
     }
-    children.push(new Paragraph({ children: inlineRuns(paragraph.join(' ')), widowControl: true }))
+    children.push(new Paragraph({ children: inlineRuns(joinParagraphLines(paragraph)), widowControl: true }))
   }
   return { children, numbering }
 }
@@ -481,13 +507,13 @@ export async function createDocx(options: { markdown: string; title?: string; au
 export async function inspectDocx(buffer: Buffer): Promise<{
   format: 'docx'; content: string; summary: Record<string, number | string | boolean>; warnings: string[]
 }> {
-  const { entries, elements, paragraphs } = readPackage(buffer)
+  const { entries, elements, paragraphs, hasFields } = readPackage(buffer)
   const content = paragraphs.map(paragraph => paragraph.text).filter(Boolean).join('\n\n')
   const images = Object.keys(entries).filter(name => /^word\/media\//i.test(name) && !name.endsWith('/')).length
-  const warnings: string[] = []
+  const warnings: string[] = ['Text inspection does not verify pagination or visual layout.']
   if (images) warnings.push('Image parts are present; this text inspection does not verify their visual contents or page layout.')
-  if (elements.some(element => ['w:fldChar', 'w:fldSimple', 'w:instrText'].includes(element.name))) {
-    warnings.push('Field results are cached document text; fields and page numbers are recalculated by Word/WPS.')
+  if (hasFields) {
+    warnings.push('Fields are present, including possible header/footer page numbers; values may be missing or cached until Word/WPS recalculates them.')
   }
   if (elements.some(element => ['w:ins', 'w:del', 'w:moveFrom', 'w:moveTo'].includes(element.name))) {
     warnings.push('Tracked changes are present; text inspection includes their stored text without accepting or rejecting changes.')

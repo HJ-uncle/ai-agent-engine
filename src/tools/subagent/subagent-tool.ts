@@ -81,7 +81,7 @@ function loadRoleTemplate(role: SubagentRole): string | null {
 const RESEARCH_TOOLS = new Set([
   'load_tools',
   'read_file', 'smart_read', 'list_files', 'glob', 'grep', 'web_fetch',
-  'list_skills', 'get_skill', 'codegraph', 'search_history', 'workbench_context',
+  'list_skills', 'get_skill', 'codegraph', 'search_history', 'workbench_context', 'workbench_render',
   'browser_tabs', 'browser_snapshot', 'browser_screenshot', 'browser_console', 'browser_network', 'browser_network_request',
   'todo_list', 'todo_create', 'todo_update', 'todo_delete', 'plan_update',
   'recall', 'search_memory', 'list_memories',
