@@ -1689,7 +1689,7 @@ export class JSONLConversationHistory implements ConversationHistory {
       const preTokens = estimateModelHistoryTokens(all)
       const splitIdx = compressionSplitIndex(all, keepRecentOrOpts ?? {})
       const maintenance = fs.existsSync(this.dataPath) ? currentHistoryMaintenance(this.projectionDb(), ctx, 'jsonl') : undefined
-      const pinned = maintenance ? maintenancePinnedIds(all, maintenance.anchorId) : new Set<string>()
+      const pinned = maintenance ? await maintenancePinnedIds(all, maintenance) : new Set<string>()
       const older = all.slice(0, splitIdx).filter(message => !pinned.has(message.id ?? ''))
       const recent = all.filter((message, index) => index >= splitIdx || pinned.has(message.id ?? ''))
       if (!older.length) return { preTokens, older, recent, revision: this.fileRevision(state), nextSeq: state.nextSeq,
@@ -1892,7 +1892,7 @@ export class JSONLConversationHistory implements ConversationHistory {
     for (const row of rows) if (row.type === 'update' && roles.get(row.targetUuid) !== 'tool')
         throw new CollaborationError('forbidden', 'Private micro maintenance may only reduce tool output')
     const row = rows[0]
-    const pins = maintenancePinnedIds(snapshot.active, maintenance.anchorId)
+    const pins = await maintenancePinnedIds(snapshot.active, maintenance)
     if (row.type === 'summary' && [...pins].some(id => !row.retainedUuids?.includes(id))) throw new CollaborationError('conflict', 'Summary would remove an admitted input or pending dispatch')
     const encodedRows: string[] = []
     for (const item of rows) encodedRows.push(await this.blobs.encode(item) + '\n')

@@ -14,6 +14,10 @@ import { subagentWaitTool } from '../../../tools/subagent/async-tools.js'
 import { trustBuiltinTool } from '../../../security/tool-policy.js'
 import { clearSecurityMode, setSecurityMode } from '../../../security/policy-engine.js'
 import * as database from '../../../storage/sqlite/db.js'
+vi.mock('../../subagent/dependency-hooks.js', () => ({
+  readHookSnapshot: async () => ({ revision: 0, hooks: [], hasHooks: false, activeHookCount: 0, managedRunIds: [], suppressedRunIds: [] }),
+  takeDependencyWait: () => false,
+}))
 
 const fixture = vi.hoisted(() => ({ waitMany: vi.fn(), waitOne: vi.fn(), projection: vi.fn(), rows: vi.fn(),
   assert: vi.fn(), binding: { kind: 'root', tenantId: 'batch-wait-wire', sessionId: 'parent', rootSessionId: 'parent',

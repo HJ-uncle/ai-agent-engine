@@ -788,7 +788,7 @@ export class SQLiteConversationHistory implements ConversationHistory {
       const allMessages = result.rows.map(rowToMessage)
       const tokensBefore = estimateModelHistoryTokens(allMessages)
       const splitIdx = compressionSplitIndex(allMessages, keepRecent)
-      const pinned = maintenance ? maintenancePinnedIds(allMessages, maintenance.anchorId) : new Set<string>()
+      const pinned = maintenance ? await maintenancePinnedIds(allMessages, maintenance) : new Set<string>()
       const agentIds = Object.hasOwn(result.rows[0] ?? {}, 'agent_id')
         ? new Map(result.rows.map(row => [String(row.message_id ?? ''), row.agent_id])) : undefined
       return { tokensBefore, olderMessages: allMessages.slice(0, splitIdx).filter(message => !pinned.has(message.id ?? '')),

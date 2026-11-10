@@ -26,10 +26,23 @@ export interface SubagentStart {
 export type SubagentWait = { state: 'completed'; run: SubagentRunView } | { state: 'pending'; runId: string; reason?: 'message' }
 export interface SubagentWaitMany { state: 'completed' | 'pending'; runs: SubagentWait[]; reason?: 'message' }
 export interface SubagentWaitOptions { timeoutMs?: number; signal?: AbortSignal }
-interface OwnedCompletion { runner: SubagentRunner; start: SubagentStart }
+export type OwnedSubagentState = { runId: string; state: 'running' }
+  | { runId: string; state: 'joined'; run: SubagentRunView }
+  | { runId: string; state: 'failed'; error: unknown }
+interface OwnedCompletion { runner: SubagentRunner; start: SubagentStart; observation?: OwnedSubagentState }
 // A second runner instance cannot reinterpret readable durable IDs as a new
 // executor. Ephemeral owner keys release the receipts with the canonical root.
 const ownedCompletions = new WeakMap<ExecutionOwner, Map<string, OwnedCompletion>>()
+const ownedChanges = new WeakMap<ExecutionOwner, { revision: number; listeners: Set<() => void> }>()
+function changes(owner: ExecutionOwner) {
+  let value = ownedChanges.get(owner)
+  if (!value) { value = { revision: 0, listeners: new Set() }; ownedChanges.set(owner, value) }
+  return value
+}
+function changed(owner: ExecutionOwner): void {
+  const value = changes(owner); value.revision++
+  for (const listener of [...value.listeners]) listener()
+}
 
 export interface SubagentExecution {
   executionOwner?: ExecutionOwner
@@ -133,7 +146,15 @@ export class SubagentRunner {
     if (parent.executionOwner) {
       let runs = ownedCompletions.get(parent.executionOwner)
       if (!runs) { runs = new Map(); ownedCompletions.set(parent.executionOwner, runs) }
-      runs.set(snapshot.runId, { runner: owned?.runner ?? this, start })
+      const entry: OwnedCompletion = { runner: owned?.runner ?? this, start }
+      runs.set(snapshot.runId, entry)
+      const owner = parent.executionOwner
+      changed(owner)
+      void completion.then(run => {
+        entry.observation = { state: 'joined', runId: run.runId, run }; changed(owner)
+      }, error => {
+        entry.observation = { state: 'failed', runId: snapshot.runId, error }; changed(owner)
+      })
     }
     return start
     } catch (error) { if (service && ticket) service.failChild(ticket, error); throw error }
@@ -156,6 +177,49 @@ export class SubagentRunner {
     await service.collaboration.store.assertProducer(service.db, binding, true)
     service.producerForExecution(parent.executionOwner)
     return owned
+  }
+
+  /** Completion events are hints; every returned snapshot still verifies its live owner. */
+  async observeOwned(parent: AgentContext): Promise<{ revision: number; runs: OwnedSubagentState[] }> {
+    if (!parent.executionOwner) throw new Error('ASYNC_SUBAGENT_REQUIRES_CANONICAL_OWNER')
+    parent.signal?.throwIfAborted()
+    const service = serviceForOwner(parent.executionOwner)
+    const binding = service.collaboration.executionBinding(service.producerForExecution(parent.executionOwner))
+    if (service.db !== this.store.db || binding.kind !== 'root' || binding.sessionId !== parent.sessionId
+      || binding.tenantId !== parent.tenantId || binding.rootRunId !== parent.rootRunId || binding.turnId !== parent.turnId)
+      throw new Error('SUBAGENT_PARENT_AUTHORITY_MISMATCH')
+    await service.collaboration.store.assertProducer(service.db, binding, true)
+    const revision = changes(parent.executionOwner).revision
+    const entries = [...(ownedCompletions.get(parent.executionOwner)?.values() ?? [])]
+    await Promise.all(entries.map(entry => this.ownedCompletion(parent, entry.start.runId)))
+    parent.signal?.throwIfAborted(); service.producerForExecution(parent.executionOwner)
+    return { revision, runs: entries.map(entry => entry.observation ?? { state: 'running', runId: entry.start.runId }) }
+  }
+
+  /** Subscribe before revision check. No timer, model poll or child cancellation. */
+  async waitForOwnedChange(parent: AgentContext, revision: number, signal: AbortSignal): Promise<void> {
+    if (!parent.executionOwner) throw new Error('ASYNC_SUBAGENT_REQUIRES_CANONICAL_OWNER')
+    const service = serviceForOwner(parent.executionOwner)
+    service.producerForExecution(parent.executionOwner)
+    const scope = changes(parent.executionOwner)
+    const signals = [...new Set([parent.signal, signal].filter((item): item is AbortSignal => !!item))]
+    for (const item of signals) item.throwIfAborted()
+    await new Promise<void>((resolve, reject) => {
+      let done = false
+      const listeners = signals.map(item => ({ item, listener: () => finish(item.reason ?? new Error('Observation aborted')) }))
+      const finish = (error?: unknown) => {
+        if (done) return
+        done = true; scope.listeners.delete(wake)
+        for (const item of listeners) item.item.removeEventListener('abort', item.listener)
+        error === undefined ? resolve() : reject(error)
+      }
+      const wake = () => finish()
+      scope.listeners.add(wake)
+      for (const item of listeners) { item.item.addEventListener('abort', item.listener, { once: true }); if (item.item.aborted) item.listener() }
+      if (scope.revision !== revision) wake()
+    })
+    for (const item of signals) item.throwIfAborted()
+    service.producerForExecution(parent.executionOwner)
   }
 
   /** Timeout/abort ends this observation only; it never aborts a shared child executor. */

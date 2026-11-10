@@ -1040,6 +1040,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
     // Shared producers always publish bounded deltas; each viewer negotiates its own conversion.
     ctx.subagentEventVersion = 2
     ctx.emitSubagentEvent = event => publishObserved(() => streamBus.publish('\x00__subagent_event__' + JSON.stringify(event)))
+    ctx.emitRootActivity = run => publishObserved(() => streamBus.publishRunStateOrdered(run))
     ctx.rootSessionId = sessionId
     ctx.resourceScope = { skills: allowedSkills?.length ? allowedSkills : null,
       mcpServers: allowedMcpServers, knowledgeBases: boundKnowledgeBases ?? (toolProfile === 'code' ? [] : null) }

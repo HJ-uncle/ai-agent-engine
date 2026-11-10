@@ -575,6 +575,7 @@ export class ReActStrategy implements LoopStrategy {
     // attachment content, including after a restart or approval continuation.
     let outputContinuation: { messageId: string; suffix: string } | undefined
     let finalTextPrefix = ''
+    let deferredTextPrefix = ''
     let answeredAfterCollaboration = false
     const continuedResponseFingerprints = new Set<string>()
     let toolOutputRecoveryFingerprint: string | undefined
@@ -596,7 +597,7 @@ export class ReActStrategy implements LoopStrategy {
       const projection = await requestHistory(ctx, toolList.some(tool => tool.name === 'search_history'))
       emptyOutputRecoveryUsed ||= projection.emptyRecoveryUsed
       readonlyHistoryPairs = projection.collapsedPairs
-      const messages = childReview.includeResults(projection.messages)
+      const messages = await childReview.prepare(ctx, projection.messages)
       if (!outputContinuation) return messages
       // The full segment is durable and searchable. If compaction covered it,
       // its short suffix also anchors the precise point where generation stopped.
@@ -684,6 +685,8 @@ export class ReActStrategy implements LoopStrategy {
         if (ctx.signal?.aborted) return
       }
 
+      await childReview.waitWhenRequested(ctx)
+
       // Each request uses the current definitions, including registration changes
       // after a tool or continuation, rather than a run-start capability snapshot.
       toolList = ctx.tools.listForRequest?.() ?? ctx.tools.listForModel?.() ?? ctx.tools.list()
@@ -752,7 +755,8 @@ export class ReActStrategy implements LoopStrategy {
         // Successful structured load/call history restores request-local tool
         // definitions after restart without promoting arbitrary message text.
         toolList = ctx.tools.listForRequest?.(current) ?? ctx.tools.listForModel?.() ?? ctx.tools.list()
-        effectiveTools = deliveryCloseout.tools(toolList.filter(tool => tool.name !== 'ask_user' || askUserCount < maxAskUserCount))
+        effectiveTools = deliveryCloseout.tools(toolList.filter(tool => (tool.name !== 'ask_user' || askUserCount < maxAskUserCount)
+          && (tool.name !== 'subagent_wait' || !childReview.usesDependencyHooks)))
         requestEnvironment = buildRuntimeCapabilitiesContext(ctx, effectiveTools)
         requestCodegraphContext = effectiveTools.some(tool => tool.name === 'codegraph') ? codegraphContext : ''
         requestDelegationContext = buildDelegationRequestContext({ list: () => effectiveTools })
@@ -871,7 +875,8 @@ export class ReActStrategy implements LoopStrategy {
               // only when it actually starts the asynchronous summary request.
               compaction ??= { phase: 'running', startedAt: Date.now(), beforeTokens: estimateModelHistoryTokens(messages) }
               await notifyCompaction(compaction)
-              return summarize(source.filter(message => !isReasoningRecoverySegment(message)), evidence)
+              const visibleSource = await childReview.projectForCompaction(ctx, source)
+              return summarize(visibleSource.filter(message => !isReasoningRecoverySegment(message)), evidence)
             },
             { keepRecentTokens, force: true },
           ))
@@ -997,6 +1002,7 @@ export class ReActStrategy implements LoopStrategy {
       ctx.logger.debug({ iteration, toolCount: effectiveTools.length, finalizationReason }, 'Preparing model request')
 
       let providerAttemptStarted = false
+      const dependencyRequestId = uuidv4()
       let requestRecorded = false
       const recordModelDispatch = () => {
         if (requestRecorded) return
@@ -1054,6 +1060,12 @@ export class ReActStrategy implements LoopStrategy {
         contextWindow: llmOptions.contextWindow,
       }
 
+      // A model can emit final-sounding prose before noticing outstanding
+      // dependencies. Hold that candidate until its terminal/control decision.
+      const deferDependencyText = childReview.hasPendingDependencies || Boolean(deferredTextPrefix)
+      const dependencyDraft = (): Pick<Message, 'modelInputContent'> => deferDependencyText && response.content
+        ? { modelInputContent: '[未交付的阶段草稿；尚有依赖等待，完成自述不能代表任务完成]\n' + response.content } : {}
+
       let partialOutput = emittedOutput
       let partialSaved = false
       let streamCompleted = false
@@ -1092,7 +1104,7 @@ export class ReActStrategy implements LoopStrategy {
         const messageId = recoveryIndex !== undefined ? uuidv4() : ctx.assistantMessageId ?? uuidv4()
         const promptTokens = invocationPromptTokens()
         const completionTokens = invocationCompletionTokens()
-        await appendRunHistory({ id: messageId, role: 'assistant', content: response.content,
+        await appendRunHistory({ id: messageId, role: 'assistant', content: deferDependencyText ? '' : response.content, ...dependencyDraft(),
           reasoningContent: response.reasoningContent, modelId: response.model, createdAt: Date.now(),
           tokens: completionTokens, conversationId,
           usage: { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens,
@@ -1211,7 +1223,7 @@ export class ReActStrategy implements LoopStrategy {
           // raw arguments or terminal billing counters already received.
           if (chunk.content) {
             response.content += chunk.content
-            emittedOutput += chunk.content
+            if (!deferDependencyText) emittedOutput += chunk.content
             partialOutput = emittedOutput
           }
           if (chunk.reasoningContent) response.reasoningContent += chunk.reasoningContent
@@ -1256,7 +1268,7 @@ export class ReActStrategy implements LoopStrategy {
           }
           const contextFrame = changedContextFrame()
           if (contextFrame) yield contextFrame
-          if (chunk.content) {
+          if (chunk.content && !deferDependencyText) {
             yield chunk.content
             await ctx.runObserver?.onOutput?.(emittedOutput)
           }
@@ -1559,6 +1571,7 @@ export class ReActStrategy implements LoopStrategy {
         }
         outputReasoningRecovery = true
         finalTextPrefix = ''
+        deferredTextPrefix = ''
         outputContinuation = undefined
         outputToolRecovery = false
         recoveryCallIdentity = true
@@ -1572,7 +1585,7 @@ export class ReActStrategy implements LoopStrategy {
         if (!continuedResponseFingerprints.has(fingerprint)) {
           continuedResponseFingerprints.add(fingerprint)
           const messageId = uuidv4()
-          await appendRunHistory({ id: messageId, role: 'assistant', content: response.content,
+          await appendRunHistory({ id: messageId, role: 'assistant', content: deferDependencyText ? '' : response.content, ...dependencyDraft(),
             reasoningContent: response.reasoningContent, createdAt: Date.now(), tokens: completionTokens,
             usage: currentUsage as unknown as Record<string, number>, modelId: response.model, conversationId,
             metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId, outputContinuation: true,
@@ -1582,6 +1595,7 @@ export class ReActStrategy implements LoopStrategy {
           } as Message, ctx)
           outputContinuation = { messageId, suffix: String(response.content).slice(-2048) }
           finalTextPrefix += String(response.content)
+          if (deferDependencyText) deferredTextPrefix += String(response.content)
           outputToolRecovery = false
           outputReasoningRecovery = false
           yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, ...contextSnapshot() })}`
@@ -1622,6 +1636,7 @@ export class ReActStrategy implements LoopStrategy {
         outputContinuation = undefined
         outputToolRecovery = true
         finalTextPrefix = ''
+        deferredTextPrefix = ''
         outputReasoningRecovery = false
         ctx.logger.info({ iteration, recoveryIndex: toolOutputRecoveryIndex, repeatedSegmentCount: toolOutputRecoveryRepeats, toolCount: response.toolCalls.length },
           'Regenerating tool calls after model output limit')
@@ -1646,9 +1661,18 @@ export class ReActStrategy implements LoopStrategy {
       continuedResponseFingerprints.clear()
       toolOutputRecoveryFingerprint = undefined
       toolOutputRecoveryRepeats = 0
+      if (streamCompleted && !['length', 'error'].includes(response.finishReason)
+        && (response.toolCalls.length > 0 || String(response.content).trim())) {
+        await childReview.commitResponse(ctx, dependencyRequestId)
+      }
       // Register the complete batch before any invocation can start.
       if (response.toolCalls && response.toolCalls.length > 0) {
+        if (deferDependencyText && response.content) {
+          emittedOutput += response.content; yield response.content
+          await ctx.runObserver?.onOutput?.(emittedOutput)
+        }
         finalTextPrefix = ''
+        deferredTextPrefix = ''
         const calls = response.toolCalls as ParsedToolCall[]
         lastUsedToolNames = new Set(calls.map(call => call.name))
         const registered: RegisteredToolCall[] = []
@@ -1857,7 +1881,7 @@ export class ReActStrategy implements LoopStrategy {
         }
         if (!sealed) {
           if (pendingDelegations) delegationCorrectionUsed = true
-          await appendRunHistory({ id: uuidv4(), role: 'assistant', content: response.content || '',
+          await appendRunHistory({ id: uuidv4(), role: 'assistant', content: deferDependencyText ? '' : response.content || '', ...dependencyDraft(),
             reasoningContent: response.reasoningContent, createdAt: Date.now(), tokens: completionTokens,
             usage: currentUsage as unknown as Record<string, number>, modelId: response.model, conversationId,
             metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId, collaborationContinuation: true,
@@ -1865,6 +1889,7 @@ export class ReActStrategy implements LoopStrategy {
               contextUsageProvisional: promptUsageReported && !receivedTerminalChunk, requestInputTokenEstimate },
           } as Message, ctx)
           finalTextPrefix = ''
+          deferredTextPrefix = ''
           answeredAfterCollaboration = true
           yield `\x00__usage__${JSON.stringify({ ...cumulativeUsage, ...contextSnapshot() })}`
           continue
@@ -1872,8 +1897,18 @@ export class ReActStrategy implements LoopStrategy {
       }
 
       // ── 最终回答 ──
-      // 注意：response.content 和 response.reasoningContent 已经在上面的流式循环中通过 yield 输出过了
-      // 此处只需持久化最终结果并发送 usage 帧即可。
+      // Dependency drafts become public only after the final-result gate accepts
+      // them. Ordinary responses have already streamed above.
+      const finalDeferredPrefix = deferDependencyText ? deferredTextPrefix : ''
+      const finalPublicContent = finalDeferredPrefix + (response.content || '')
+      if (deferDependencyText && !ctx.signal?.aborted) {
+        const delivered = finalPublicContent
+        if (delivered) {
+          emittedOutput += delivered; yield delivered
+          await ctx.runObserver?.onOutput?.(emittedOutput)
+        }
+        deferredTextPrefix = ''
+      }
 
       // Yield token usage breakdown as a special __usage__ frame (includes conversationId)
       const messageId = ctx.assistantMessageId ?? uuidv4()
@@ -1882,7 +1917,11 @@ export class ReActStrategy implements LoopStrategy {
       const finalMsg: Message & { conversationId?: string } = {
         id: messageId,
         role: 'assistant',
-        content: finalizationReason ? finalizationNotice + '\n\n' + response.content : response.content || '',
+        content: finalizationReason ? finalizationNotice + '\n\n' + finalPublicContent : finalPublicContent,
+        // The earlier draft already supplies this prefix to the model. Merge
+        // it for public replay without duplicating it in subsequent requests.
+        ...(finalDeferredPrefix ? { modelInputContent: finalizationReason
+          ? finalizationNotice + '\n\n' + (response.content || '') : response.content || '' } : {}),
         metadata: { rootRunId: ctx.rootRunId, turnId: ctx.turnId, usageEstimated, contextUsageEstimated: !promptUsageReported,
           contextUsageProvisional: promptUsageReported && !receivedTerminalChunk, requestInputTokenEstimate,
           ...(finalizationReason ? { partial: true, stopReason: finalizationReason } : {}),

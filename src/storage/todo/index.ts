@@ -2,6 +2,9 @@ import { v4 as uuidv4 } from 'uuid'
 import type { InValue, Row, Transaction } from '@libsql/client'
 import { z } from 'zod'
 import { getDb } from '../sqlite/db.js'
+import type { AgentContext } from '../../core/agent-context/types.js'
+import { dependencyHookAuthority, ensureDependencyHookSchema, publishHookChanges, readPlanWakeConditions, requestDependencyWait, syncPlanDependencyHooks,
+  type DependencyHookAuthority, type WakeWhen } from '../../core/subagent/dependency-hooks.js'
 
 export type TodoStatus = 'pending' | 'in_progress' | 'done' | 'cancelled'
 export type TodoPriority = 'low' | 'medium' | 'high'
@@ -34,8 +37,8 @@ export interface UpdateTodoInput {
   priority?: TodoPriority
   dueAt?: number
 }
-export interface PlanStepInput { id?: string; step: string; status: PlanStatus }
-export interface PlanUpdateInput { plan: PlanStepInput[]; explanation?: string }
+export interface PlanStepInput { id?: string; step: string; status: PlanStatus; wakeWhen?: WakeWhen | null }
+export interface PlanUpdateInput { plan: PlanStepInput[]; explanation?: string; expectedRevision?: number; awaitDependencies?: boolean }
 export interface TaskPlan {
   plan: Array<PlanStepInput & { id: string }>
   explanation?: string
@@ -51,14 +54,23 @@ export class TaskPlanIdentityError extends Error {
     this.name = 'TaskPlanIdentityError'
   }
 }
+export class TaskPlanRevisionError extends Error {
+  readonly code = 'PLAN_REVISION_CONFLICT'
+  constructor(readonly savedPlan: TaskPlan) { super('计划已变化；请基于返回的 revision 和完整计划重试'); this.name = 'TaskPlanRevisionError' }
+}
 
 export const PlanUpdateSchema = z.object({
   plan: z.array(z.object({
     id: z.string().trim().min(1).max(128).optional(),
     step: z.string().trim().min(1).max(240),
     status: z.enum(['pending', 'in_progress', 'completed', 'cancelled']),
+    wakeWhen: z.object({ allSucceeded: z.array(z.string().trim().min(1).max(200)
+      .refine(value => !value.startsWith('task:') || /^task:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value), 'task 引用需要有效 taskKey'))
+      .min(1).max(32).refine(refs => new Set(refs).size === refs.length, '依赖不能重复') }).strict().nullable().optional(),
   }).strict()).max(100),
   explanation: z.string().trim().max(4000).optional(),
+  expectedRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  awaitDependencies: z.boolean().optional(),
 }).strict().superRefine((input, ctx) => {
   const ids = new Set<string>()
   const steps = new Set<string>()
@@ -109,6 +121,7 @@ async function scopedRows(db: Pick<Transaction, 'execute'>, tenantId: string, se
 }
 async function readPlan(db: Pick<Transaction, 'execute'>, tenantId: string, sessionId: string): Promise<TaskPlan> {
   const todos = await scopedRows(db, tenantId, sessionId)
+  const conditions = await readPlanWakeConditions(db, tenantId, sessionId)
   let metadata: Row | undefined
   try {
     const result = await db.execute({ sql: 'SELECT * FROM task_plans WHERE tenant_id=? AND session_id=?', args: [tenantId, sessionId] })
@@ -117,7 +130,7 @@ async function readPlan(db: Pick<Transaction, 'execute'>, tenantId: string, sess
     if (!/no such table:\s*task_plans/i.test(String(error instanceof Error ? error.message : error))) throw error
   }
   return {
-    plan: todos.map(todo => ({ id: todo.id, step: todo.title, status: planStatus(todo.status) })),
+    plan: todos.map(todo => ({ id: todo.id, step: todo.title, status: planStatus(todo.status), ...(conditions.has(todo.id) ? { wakeWhen: conditions.get(todo.id)! } : {}) })),
     explanation: metadata?.explanation == null ? undefined : String(metadata.explanation),
     revision: Number(metadata?.revision ?? 0), updatedAt: Number(metadata?.updated_at ?? 0),
   }
@@ -195,15 +208,29 @@ export class TodoStore {
     } catch (error) { await tx.rollback(); throw error }
   }
 
-  async updatePlan(tenantId: string, sessionId: string, rawInput: unknown): Promise<TaskPlan> {
+  async updatePlan(tenantId: string, sessionId: string, rawInput: unknown, ctx?: AgentContext): Promise<TaskPlan> {
     requireScope(tenantId, sessionId)
     // Parse the whole snapshot before opening a write transaction. Never accept tenant/session from model arguments.
     const input = PlanUpdateSchema.parse(rawInput)
-    const tx = await this.db.transaction('write')
+    const db = this.db
+    await ensureDependencyHookSchema(db)
+    const declaresHooks = input.plan.some(item => item.wakeWhen !== undefined)
+    let authority: DependencyHookAuthority | undefined
+    if (declaresHooks || input.awaitDependencies) {
+      if (!ctx || ctx.tenantId !== tenantId || ctx.sessionId !== sessionId) throw new Error('DEPENDENCY_HOOK_CANONICAL_OWNER_REQUIRED')
+      authority = await dependencyHookAuthority(ctx, db)
+    }
+    const tx = await db.transaction('write')
     try {
       const previous = await readPlan(tx, tenantId, sessionId)
+      if (input.expectedRevision !== undefined && input.expectedRevision !== previous.revision) throw new TaskPlanRevisionError(previous)
+      if (!authority && previous.plan.some(item => item.wakeWhen)) {
+        if (!ctx || ctx.tenantId !== tenantId || ctx.sessionId !== sessionId) throw new Error('DEPENDENCY_HOOK_CANONICAL_OWNER_REQUIRED')
+        authority = await dependencyHookAuthority(ctx, db, tx)
+      }
       const existing = new Map(previous.plan.map(item => [item.id, item]))
       const retained = new Set<string>()
+      const explicit = new Set<string>()
       const plan = input.plan.map(item => {
         let id = item.id
         if (id && !existing.has(id)) throw new TaskPlanIdentityError(`计划步骤「${id}」不属于当前会话或不存在`, previous)
@@ -214,11 +241,19 @@ export class TodoStore {
         }
         if (retained.has(id)) throw new Error('同一计划 id 不能重复引用')
         retained.add(id)
-        return { id, step: item.step, status: item.status }
+        if (item.wakeWhen !== undefined) explicit.add(id)
+        const wakeWhen = item.status === 'cancelled' ? undefined : item.wakeWhen === undefined ? existing.get(id)?.wakeWhen : item.wakeWhen
+        return { id, step: item.step, status: item.status, ...(wakeWhen ? { wakeWhen } : {}) }
       })
       const explanation = input.explanation ?? previous.explanation
       if (JSON.stringify(plan) === JSON.stringify(previous.plan) && explanation === previous.explanation) {
+        if (authority) {
+          const hooks = await syncPlanDependencyHooks(tx, authority, plan, explicit)
+          if (input.awaitDependencies && !hooks.activeHookCount) throw new Error('DEPENDENCY_WAIT_REQUIRES_ACTIVE_HOOK')
+        }
         await tx.commit()
+        if (authority) publishHookChanges(authority)
+        if (input.awaitDependencies) requestDependencyWait(ctx!)
         return previous
       }
       const now = Date.now()
@@ -247,7 +282,13 @@ export class TodoStore {
           ON CONFLICT (tenant_id, session_id) DO UPDATE SET explanation=excluded.explanation, revision=excluded.revision, updated_at=excluded.updated_at`,
         args: [tenantId, sessionId, explanation ?? null, revision, now],
       })
+      if (authority) {
+        const hooks = await syncPlanDependencyHooks(tx, authority, plan, explicit)
+        if (input.awaitDependencies && !hooks.activeHookCount) throw new Error('DEPENDENCY_WAIT_REQUIRES_ACTIVE_HOOK')
+      }
       await tx.commit()
+      if (authority) publishHookChanges(authority)
+      if (input.awaitDependencies) requestDependencyWait(ctx!)
       return { plan, explanation, revision, updatedAt: now }
     } catch (error) { await tx.rollback(); throw error }
   }

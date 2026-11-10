@@ -1,6 +1,6 @@
 import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
 import { z } from 'zod'
-import { TodoStore, TaskPlanIdentityError, type TaskPlan } from '../../storage/todo/index.js'
+import { TodoStore, TaskPlanIdentityError, TaskPlanRevisionError, type TaskPlan } from '../../storage/todo/index.js'
 import { getToolOutputLimit } from '../../core/agent-loop/tool-output-limit.js'
 
 const store = new TodoStore()
@@ -59,16 +59,16 @@ function fitPlanFailure(message: string, code: string, savedPlan: TaskPlan | und
   return { success: false, status: 'failed', output, metadata: { internalControl: 'plan', code, snapshotStatus } }
 }
 async function planFailure(error: unknown, ctx: AgentContext): Promise<ToolResult> {
-  if (!(error instanceof TaskPlanIdentityError) && !(error instanceof z.ZodError)) return failure(error)
+  if (!(error instanceof TaskPlanIdentityError) && !(error instanceof TaskPlanRevisionError) && !(error instanceof z.ZodError)) return failure(error)
   const original = failure(error)
   let savedPlan: TaskPlan | undefined
   let snapshotStatus: SnapshotStatus = 'available'
   try {
     // An identity rejection carries the snapshot validated in its rolled-back transaction;
     // schema rejection opens only a scoped read, never an attempted correction write.
-    savedPlan = error instanceof TaskPlanIdentityError ? error.savedPlan : await store.getPlan(ctx.tenantId, ctx.sessionId)
+    savedPlan = error instanceof TaskPlanIdentityError || error instanceof TaskPlanRevisionError ? error.savedPlan : await store.getPlan(ctx.tenantId, ctx.sessionId)
   } catch { snapshotStatus = 'unavailable' }
-  const code = error instanceof TaskPlanIdentityError ? error.code : 'PLAN_INPUT_INVALID'
+  const code = error instanceof TaskPlanIdentityError || error instanceof TaskPlanRevisionError ? error.code : 'PLAN_INPUT_INVALID'
   return fitPlanFailure(original.output, code, savedPlan, snapshotStatus, ctx)
 }
 
@@ -76,7 +76,7 @@ async function planFailure(error: unknown, ctx: AgentContext): Promise<ToolResul
 export const planTool: Tool = {
   name: 'plan_update',
   displayName: '更新任务计划',
-  description: '引擎内建的静默任务计划控制入口。多实质步骤任务维护计划，简单单步无需创建；completed 仅用于有真实完成依据的步骤，保留仍需展示的已完成步骤。一次提交当前会话完整计划，省略条目会从本会话计划移除；空数组清空。新增步骤每次都省略 id，由引擎生成；既有步骤复用当前会话返回的完整 id，重命名必须传 id，不得猜测或自行生成。status 使用 pending/in_progress/completed/cancelled。仅在任务进度或范围变化时更新，不输出创建/更新日志，不调用命令管理计划。执行结果返回持久化 id，可在断线重试时复用；步骤标题必须唯一。',
+  description: '引擎内建的静默任务计划控制入口。多实质步骤任务维护计划，简单单步无需创建；completed 仅用于有真实完成依据的步骤，保留仍需展示的已完成步骤。一次提交当前会话完整计划，省略条目会从本会话计划移除；空数组清空。新增步骤每次都省略 id，由引擎生成；既有步骤复用当前会话返回的完整 id，重命名必须传 id，不得猜测或自行生成。status 使用 pending/in_progress/completed/cancelled。仅在任务进度或范围变化时更新，不输出创建/更新日志，不调用命令管理计划。执行结果返回持久化 id，可在断线重试时复用；步骤标题必须唯一。依赖子任务时用 wakeWhen.allSucceeded 声明该步骤所需全部 runId 或 task:<taskKey>；条件齐全才唤醒，失败走异常通知；ready只代表可处理，不代表验收或完成。省略wakeWhen保留，null解除。',
   parameters: {
     type: 'object', additionalProperties: false,
     properties: {
@@ -88,15 +88,21 @@ export const planTool: Tool = {
             id: { type: 'string', minLength: 1, maxLength: 128, description: '既有步骤使用当前会话返回的完整 id；新增步骤省略，由引擎生成，不能猜测或自建。' },
             step: { type: 'string', minLength: 1, maxLength: 240 },
             status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'cancelled'] },
+            wakeWhen: { anyOf: [{ type: 'null' }, { type: 'object', additionalProperties: false, required: ['allSucceeded'], properties: {
+              allSucceeded: { type: 'array', minItems: 1, maxItems: 32, uniqueItems: true, items: { type: 'string', minLength: 1, maxLength: 200 },
+                description: '当前根任务确切runId，或task:<taskKey>；全部真实成功后条件满足。' },
+            } }] },
           }, required: ['step', 'status'],
         },
       },
       explanation: { type: 'string', maxLength: 4000, description: '可选的计划变化说明；不要重复普通对话正文。' },
+      expectedRevision: { type: 'integer', minimum: 0, description: '基于最近返回的revision更新；不匹配时整次更新拒绝，避免覆盖新计划。' },
+      awaitDependencies: { type: 'boolean', description: '确无其他可运行工作时设true；须有至少一个有效依赖条件。引擎睡眠等待全部依赖满足、异常或新输入，不轮询；false不触发等待。' },
     }, required: ['plan'],
   },
   async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
     try {
-      const plan = await store.updatePlan(ctx.tenantId, ctx.sessionId, rawArgs)
+      const plan = await store.updatePlan(ctx.tenantId, ctx.sessionId, rawArgs, ctx)
       return { success: true, output: JSON.stringify(plan), metadata: { internalControl: 'plan' } }
     } catch (error) { return planFailure(error, ctx) }
   },

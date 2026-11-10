@@ -2,6 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentContext, Message } from '../../agent-context/types.js'
 import type { LLMAdapter } from '../../llm-adapter/types.js'
 import { ChildResultReview } from '../child-result-review.js'
+// This suite isolates the legacy no-hook join path; hook authority and storage
+// are exercised with real executors/databases in dependency-hooks-integration.
+vi.mock('../../subagent/dependency-hooks.js', () => ({
+  readHookSnapshot: async () => ({ revision: 0, hooks: [], hasHooks: false, activeHookCount: 0, managedRunIds: [], suppressedRunIds: [] }),
+  takeDependencyWait: () => false,
+}))
 import { ReActStrategy } from '../react.js'
 
 const fixture = vi.hoisted(() => ({ rows: vi.fn(), wait: vi.fn(), assert: vi.fn(), binding: {

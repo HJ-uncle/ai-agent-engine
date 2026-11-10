@@ -13,6 +13,28 @@ import { canonicalAdmissionBody } from '../root-admission/index.js'
 export type { CompactionState } from '../../core/subagent/types.js'
 
 export type RootRunStatus = 'running' | 'waiting' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
+export interface RootRunActivity {
+  phase: 'executing' | 'waiting_children'
+  groups: Array<{ id: string; label: string; state: 'waiting' | 'ready' | 'consumed' | 'blocked'; total: number; settled: number; failed: number }>
+}
+
+/** Only bounded progress belongs in public run snapshots; dependency bodies stay in the scheduler. */
+function checkedActivity(value: RootRunActivity): RootRunActivity {
+  if (!value || !['executing', 'waiting_children'].includes(value.phase) || !Array.isArray(value.groups) || value.groups.length > 32)
+    throw new Error('ROOT_ACTIVITY_INVALID')
+  const ids = new Set<string>()
+  const groups = value.groups.map(group => {
+    if (!group || typeof group.id !== 'string' || !group.id.trim() || group.id.length > 240 || ids.has(group.id)
+      || typeof group.label !== 'string' || !group.label.trim() || group.label.length > 240
+      || !['waiting', 'ready', 'consumed', 'blocked'].includes(group.state)
+      || ![group.total, group.settled, group.failed].every(count => Number.isSafeInteger(count) && count >= 0)
+      || group.total < 1 || group.settled > group.total || group.failed > group.settled) throw new Error('ROOT_ACTIVITY_INVALID')
+    ids.add(group.id)
+    return { id: group.id, label: group.label, state: group.state, total: group.total, settled: group.settled, failed: group.failed }
+  })
+  if (value.phase === 'waiting_children' && !groups.length) throw new Error('ROOT_ACTIVITY_INVALID')
+  return { phase: value.phase, groups }
+}
 export interface RootPending {
   requestId: string
   kind: 'ask' | 'permission'
@@ -51,6 +73,7 @@ export interface RootRun {
   seq: number
   version: number
   status: RootRunStatus
+  activity?: RootRunActivity
   modelId: string
   /** Last model that actually delivered output; modelId remains the requested resume configuration. */
   actualModelId?: string
@@ -128,6 +151,7 @@ export class RootRunStore {
         run.status = 'interrupted'; run.stopReason = 'Engine restarted; execution was not resumed'
         run.error = { code: 'ENGINE_RESTARTED', message: run.stopReason, retryable: false }; run.finishedAt = now
       }
+      delete run.activity
       run.updatedAt = now; run.version++
       await withCronWrite(db, async tx => {
         await tx.execute({ sql: 'UPDATE root_runs SET state=? WHERE run_id=?', args: [JSON.stringify(run), String(row.run_id)] })
@@ -156,6 +180,7 @@ export class RootRunStore {
 
   public(run: StoredRun): RootRun {
     const { request, attemptId: _attemptId, requestConfig: _storedConfig, ...result } = run
+    if (result.status !== 'running') delete result.activity
     // Reproject the private request on every read, including old database rows.
     return { ...result, requestConfig: publicRequestConfig(request) }
   }
@@ -303,7 +328,8 @@ export class RootRunStore {
     }
   }
 
-  async update(tenantId: string, runId: string, change: Partial<Omit<RootRun, 'runId' | 'sessionId' | 'turnId' | 'seq' | 'version'>>, expectedAttemptId?: string): Promise<RootRun | null> {
+  async update(tenantId: string, runId: string, change: Partial<Omit<RootRun, 'runId' | 'sessionId' | 'turnId' | 'seq' | 'version' | 'activity'>>, expectedAttemptId?: string): Promise<RootRun | null> {
+    if ('activity' in change) throw new Error('ROOT_ACTIVITY_REQUIRES_OWNER')
     return withHistoryLock(tenantId, async () => {
       const run = await this.get(tenantId, runId)
       if (!run) return null
@@ -315,6 +341,7 @@ export class RootRunStore {
       const previousFinishedAt = run.finishedAt
       const now = Date.now()
       Object.assign(run, change, { updatedAt: now, version: run.version + 1 })
+      if (run.status !== 'running') delete run.activity
       // Post-turn maintenance has its own completion time. Keep the execution
       // outcome's timestamp stable across later compaction/result updates.
       if (!['running', 'waiting'].includes(run.status)) {
@@ -327,6 +354,32 @@ export class RootRunStore {
       })
       return this.public(run)
     })
+  }
+
+  /** Activity is execution-owned state, never a tool receipt or a model turn. */
+  async setActivityOwned(owner: ExecutionOwner, activity: RootRunActivity): Promise<RootRun> {
+    const next = checkedActivity(activity), service = serviceForOwner(owner)
+    const binding = service.record(owner).binding
+    service.assertDispatch(owner)
+    const db = await this.ready()
+    if (service.db !== db) throw new Error('ROOT_ACTIVITY_DATASOURCE_MISMATCH')
+    return withHistoryLock(binding.tenantId, () => withCronWrite(db, async tx => {
+      service.assertDispatch(owner)
+      await service.collaboration.store.assertProducer(tx, binding, true)
+      const result = await tx.execute({ sql: 'SELECT seq,state FROM root_runs WHERE tenant_id=? AND run_id=?', args: [binding.tenantId, binding.rootRunId] })
+      if (!result.rows[0]) throw new Error('ROOT_ACTIVITY_MISSING')
+      const run: StoredRun = { ...JSON.parse(String(result.rows[0].state)), seq: Number(result.rows[0].seq) }
+      if (run.attemptId !== binding.rootAttemptId || run.sessionId !== binding.rootSessionId || run.turnId !== binding.turnId || run.status !== 'running')
+        throw new Error('ROOT_ACTIVITY_STALE_ATTEMPT')
+      service.assertDispatch(owner)
+      if (JSON.stringify(run.activity) === JSON.stringify(next)) return this.public(run)
+      Object.assign(run, { activity: next, version: run.version + 1, updatedAt: Date.now() })
+      await tx.execute({ sql: 'UPDATE root_runs SET state=? WHERE tenant_id=? AND run_id=?', args: [JSON.stringify(run), binding.tenantId, run.runId] })
+      await projectAutomationRoot(tx, binding.tenantId, run)
+      // Cancellation during either write rolls back the entire observation.
+      service.assertDispatch(owner)
+      return this.public(run)
+    }))
   }
 
   /** Drain proof and the exact private attempt are rechecked inside one physical write transaction. */
@@ -352,6 +405,7 @@ export class RootRunStore {
       const status = settlement.cancellationRequested ? 'cancelled' : intent === 'park' ? 'waiting' : change.status
       if (!status || status === 'running' || status === 'waiting' && (!pending || intent !== 'park')) throw new Error('ROOT_SETTLEMENT_INVALID_OUTCOME')
       Object.assign(run, change, { status, version: run.version + 1, updatedAt: Date.now() })
+      delete run.activity
       if (status === 'waiting') run.pending = [...run.pending.filter(item => item.requestId !== pending!.requestId), { ...pending!, status: 'pending' }]
       else run.finishedAt = run.updatedAt
       await tx.execute({ sql: 'UPDATE root_runs SET state=? WHERE tenant_id=? AND run_id=?', args: [JSON.stringify(run), tenantId, runId] })
@@ -408,6 +462,7 @@ export class RootRunStore {
       if (closure.rows[0]?.phase !== 'closed' || closure.rows[0].generation !== record.binding.generation) throw new Error('ROOT_CANCEL_PARK_RECEIPT_UNKNOWN')
       if (run.status === 'cancelled') return this.public(run)
       Object.assign(run, { status: 'cancelled', stopReason: reason, version: run.version + 1, updatedAt: Date.now(), finishedAt: Date.now() })
+      delete run.activity
       await tx.execute({ sql: 'UPDATE root_runs SET state=? WHERE tenant_id=? AND run_id=?', args: [JSON.stringify(run), record.binding.tenantId, run.runId] })
       await projectAutomationRoot(tx, record.binding.tenantId, run)
       return this.public(run)
@@ -445,6 +500,7 @@ export class RootRunStore {
       pending.status = 'answered'; pending.output = output
       Object.assign(stored, { status: 'running', attemptId: randomUUID(), error: undefined, stopReason: undefined,
         updatedAt: Date.now(), version: stored.version + 1 })
+      delete stored.activity
       onPrepared?.(stored.runId, stored.attemptId)
       const db = await this.ready()
       await withCronWrite(db, async tx => {

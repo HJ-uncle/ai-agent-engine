@@ -133,8 +133,8 @@ describe('one-source system prompt assembly', () => {
       assignment: ['实际工作区', '独占文件/接口', '已有事实/来源', '必要约束', '验收与短回报要求', '不广播整套需求'],
       followup: ['运行中补充及完成后继续用subagent_followup', '以新runId的真实结果验收', '旧结果不能代替',
         '暂停/取消后的旧消息不构成重新执行授权'],
-      wait: ['全部委派结果必须在最终交付前收取并验收', 'subagent_wait({runIds:[…],timeoutMs:60000})', '共用期限收齐回传',
-        '不要逐个等待、零超时轮询', '超时只续等pending项', '消息唤醒先处理新需求', '任务完成通知已有结果时复用'],
+      wait: ['plan_update.wakeWhen.allSucceeded', 'subagent_start.taskKey', 'A:[1], B:[2,3]', 'their own group is ready',
+        'failures wake for repair', 'awaitDependencies:true', 'without model polling', 'Reuse supplied results', 'verify all delegated results before final'],
       result: ['子回报仅给结论', '产物路径/版本', '必要证据', '已验/未验与阻碍', '通常一屏内',
         '不贴源码全文', '主Agent抽查关键约束并集成', '不重做已验证工作'],
     }

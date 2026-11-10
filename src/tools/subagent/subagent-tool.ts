@@ -1,5 +1,5 @@
 import type { Tool, AgentContext, ToolResult, IToolRegistry } from '../../core/agent-context/index.js'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
 import fs from 'node:fs'
 import { ReActStrategy } from '../../core/agent-loop/react.js'
@@ -31,6 +31,7 @@ import { workspaceManager } from '../../workspace/index.js'
 import { captureSubagentWorkspace, continuationWorkspacePaths, subagentWorkspaceMatches } from './workspace-scope.js'
 import { withReadonlyCodegraph } from '../codegraph/codegraph-readonly.js'
 import { buildOfficeExecutionPrompt } from '../../core/office-prompt.js'
+import { claimTaskKey, bindTaskKey } from '../../core/subagent/dependency-hooks.js'
 
 /**
  * Subagent 工具
@@ -203,13 +204,18 @@ export const subagentTool: Tool = {
 
 export const subagentStartTool: Tool = {
   ...subagentTool, name: 'subagent_start', displayName: '启动子代理',
-  description: '异步启动子代理，持久接纳后立即返回 runId 和 childSessionId。启动回执不代表完成；使用 subagent_wait 查看实际终态，subagent_cancel 取消。父任务结束前仍等待真实执行和结果落盘。参数与 subagent 相同；子代理禁止递归启动。',
+  description: '异步启动子代理，接纳后返回runId/childSessionId，不代表完成。先用plan_update登记后续步骤wakeWhen依赖；taskKey与task:键绑定，收齐由系统唤醒，无需轮询。subagent_cancel取消；无钩子的旧调用可subagent_wait观察。子代理禁止递归启动。',
+  parameters: { ...subagentTool.parameters, properties: { ...subagentTool.parameters.properties,
+    taskKey: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$', description: '本轮唯一任务键；对应plan_update.wakeWhen.allSucceeded中的task:<key>。重试不能换任务或挪绑到新run。' },
+  } },
   execute: (args, ctx) => executeSubagent(args, ctx, { asynchronous: true }),
 }
 
 /** The authorization flag is server-owned and never accepted from model tool arguments. */
 export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, options: { userDelegated?: boolean; agent?: SubagentContinuationProfile['agent']; asynchronous?: boolean } = {}): Promise<ToolResult> {
     const args = rawArgs !== null && typeof rawArgs === 'object' ? rawArgs as Record<string, unknown> : {}
+    if (args.taskKey !== undefined && (!options.asynchronous || typeof args.taskKey !== 'string'
+      || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(args.taskKey))) return { success: false, output: 'taskKey仅用于异步启动，必须是1–128位字母、数字、点、下划线或横线。' }
     const taskText = typeof args.task === 'string' ? args.task.trim() : ''
     const suppliedPrompt = typeof args.systemPrompt === 'string' ? args.systemPrompt : undefined
     // Preserve the existing recovery for providers that put the complete task in systemPrompt.
@@ -292,6 +298,19 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
       projectRoot: ownedWorkingDirectory ?? ctx.projectRoot, cwd: ownedWorkingDirectory ?? ctx.cwd,
     }
     workspace.assertCurrent()
+    const taskKey = args.taskKey as string | undefined
+    if (taskKey) {
+      const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical)
+        : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)])) : value
+      const fingerprint = createHash('sha256').update(JSON.stringify(canonical(args))).digest('hex')
+      const claim = await claimTaskKey(ctx, taskKey, ctx.currentToolCallId!, fingerprint)
+      if (claim.runId) {
+        const previous = await runner.store.getRunHeader(ctx.tenantId, claim.runId)
+        if (!previous) throw new Error('DEPENDENCY_TASK_RECEIPT_MISSING')
+        const admission = { state: 'admitted', runId: previous.runId, childSessionId: previous.childSessionId, taskKey, reused: true }
+        return { success: true, output: JSON.stringify(admission), metadata: { subagentAdmission: admission } }
+      }
+    }
     const result = await (options.asynchronous ? runner.start.bind(runner) : runner.run.bind(runner))({
       tenantId: ctx.tenantId,
       rootSessionId: ctx.rootSessionId ?? ctx.sessionId,
@@ -420,7 +439,9 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
       } finally { clearSecurityMode(ctx.tenantId, snapshot.childSessionId) }
     })
     if ('completion' in result) {
-      const admission = { state: 'admitted', runId: result.runId, childSessionId: result.childSessionId, admittedSeq: result.admittedSeq }
+      if (taskKey) await bindTaskKey(ctx, taskKey, result.runId)
+      const admission = { state: 'admitted', runId: result.runId, childSessionId: result.childSessionId, admittedSeq: result.admittedSeq,
+        ...(taskKey ? { taskKey } : {}) }
       return { success: true, output: JSON.stringify(admission), metadata: { subagentAdmission: admission } }
     }
     return { success: result.status === 'succeeded', output: outcomeText(result), durationMs: result.durationMs, metadata: { subagent: result } }

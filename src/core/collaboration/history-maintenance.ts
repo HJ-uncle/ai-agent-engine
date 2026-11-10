@@ -48,11 +48,40 @@ export function currentHistoryMaintenance(db: Client, scope: Scope, backend: His
   return lease
 }
 
-/** An unfinished dispatch must remain available for its exact terminal projection. */
-export function maintenancePinnedIds(messages: Message[], anchorId: string): Set<string> {
-  const results = new Set(messages.filter(message => message.role === 'tool').map(message => message.toolCallId))
-  return new Set([anchorId, ...messages.filter(message => message.id && message.role === 'assistant' && message.toolCall
-    && !results.has(message.toolCall.id)).map(message => message.id!)])
+/** Admission is not completion: retain each owned dispatch until its exact terminal projection is acknowledged. */
+export async function maintenancePinnedIds(messages: Message[], lease: HistoryMaintenanceLease): Promise<Set<string>> {
+  await lease.check()
+  const results = new Map<string, string[]>()
+  for (const message of messages) if (message.role === 'tool' && message.toolCallId) {
+    const ids = results.get(message.toolCallId) ?? []
+    if (message.id) ids.push(message.id)
+    results.set(message.toolCallId, ids)
+  }
+  const pinned = new Set(messages.filter(message => message.id === lease.anchorId).map(message => message.id!))
+  for (const message of messages.filter(message => message.id && message.role === 'assistant' && message.toolCall
+    && !results.has(message.toolCall.id))) pinned.add(message.id!)
+  const b = lease.binding
+  const pending = await lease.db.execute({ sql: `SELECT json_extract(COALESCE(d.record,r.snapshot),'$.parentMessageId') AS parent_message_id,r.parent_tool_call_id FROM collaboration_invocations i
+    JOIN subagent_runs r ON r.tenant_id=i.tenant_id AND r.run_id=i.invocation_run_id
+    LEFT JOIN subagent_records d ON d.tenant_id=r.tenant_id AND d.run_id=r.run_id
+    LEFT JOIN subagent_outbox o ON o.tenant_id=r.tenant_id AND o.run_id=r.run_id AND o.seq=r.seq
+    LEFT JOIN subagent_projection_receipts p ON p.tenant_id=o.tenant_id AND p.run_id=o.run_id AND p.seq=o.seq
+    WHERE i.tenant_id=? AND i.root_run_id=? AND i.root_attempt_id=? AND r.parent_session_id=?
+      AND json_extract(COALESCE(d.record,r.snapshot),'$.parentConversationId')=?
+      AND (r.status NOT IN ('succeeded','failed','cancelled','blocked','interrupted') OR COALESCE(o.acknowledged,0)<>1
+        OR p.disposition IS NULL OR p.disposition NOT IN ('appended','duplicate','suppressed') OR p.message_id<>'subagent-result:' || r.run_id)`,
+    args: [b.tenantId,b.rootRunId,b.rootAttemptId,b.sessionId,b.turnId] })
+  const dispatches = new Map(messages.filter(message => message.id && message.role === 'assistant' && message.toolCall)
+    .map(message => [message.id!,message]))
+  for (const row of pending.rows) {
+    const dispatch = dispatches.get(String(row.parent_message_id)), toolCallId = String(row.parent_tool_call_id)
+    // Retention never recreates an explicitly removed or replaced anchor.
+    if (dispatch?.toolCall?.id !== toolCallId) continue
+    pinned.add(dispatch.id!)
+    for (const id of results.get(toolCallId) ?? []) pinned.add(id)
+  }
+  await lease.check()
+  return pinned
 }
 
 /** Only authenticated receipts classify peers; editable metadata never grants this distinction. */

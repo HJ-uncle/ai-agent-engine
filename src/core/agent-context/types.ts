@@ -364,6 +364,7 @@ export interface AgentContext {
   runObserver?: Partial<RunObserver>
   subagentEventVersion?: 2
   emitSubagentEvent?: (event: SubagentWireEvent) => void | Promise<void>
+  emitRootActivity?: (run: import('../../storage/root-runs/index.js').RootRun) => void | Promise<void>
   rootSessionId?: string
   parentSessionId?: string
   parentConversationId?: string
@@ -425,6 +426,7 @@ export interface CreateAgentContextOptions {
   runObserver?: Partial<RunObserver>
   subagentEventVersion?: 2
   emitSubagentEvent?: (event: SubagentWireEvent) => void | Promise<void>
+  emitRootActivity?: (run: import('../../storage/root-runs/index.js').RootRun) => void | Promise<void>
   rootSessionId?: string
   parentSessionId?: string
   parentConversationId?: string
