@@ -26,11 +26,23 @@ interface Package { entries: Record<string, Uint8Array>; workbook: string; sheet
 interface PreparedSheet { name: string; columns: XlsxColumn[]; rows: Value[][]; charts?: XlsxChart[] }
 
 const SHEET_STYLE = {
-  font: 'Microsoft YaHei', text: 'FF243247', border: 'FFDCE3EB', header: 'FFE8EEF5', stripe: 'FFF7F9FC',
-  headerSize: 11, bodySize: 10, headerHeight: 28, bodyHeight: 23, maxRowHeight: 409,
+  font: 'Microsoft YaHei', text: 'FF243247', border: 'FFDCE3EB', header: 'FF243247', headerText: 'FFFFFFFF', stripe: 'FFF7F9FC',
+  headerSize: 11, bodySize: 10, headerHeight: 30, bodyHeight: 23, maxRowHeight: 409,
   formats: { general: 'General', text: '@', number: 'General', percent: '0.00%', date: 'yyyy-mm-dd' },
 } as const
 type CellKind = keyof typeof SHEET_STYLE.formats
+
+function cellAlignment(kind: CellKind, header = false): ExcelJS.Alignment['horizontal'] | undefined {
+  if (header || kind === 'date') return 'center'
+  if (kind === 'number' || kind === 'percent') return 'right'
+  // General cells may contain numbers, text or formulas returning either.
+  // Native automatic alignment follows the value without changing its type.
+  return kind === 'text' ? 'left' : undefined
+}
+function sheetOrientation(widths: number[]): 'landscape' | 'portrait' {
+  // Wide prose columns can need landscape even in a three-column table.
+  return widths.reduce((sum, width) => sum + width * 7 + 5, 0) > 720 ? 'landscape' : 'portrait'
+}
 
 function cellKind(column: XlsxColumn, value: Value): CellKind {
   return value instanceof Date ? 'date' : column.type ?? 'general'
@@ -365,8 +377,8 @@ export async function createXlsx(input: XlsxInput): Promise<Buffer> {
   for (const sheet of prepared) {
     const layout = sheetLayout(sheet)
     const worksheet = workbook.addWorksheet(sheet.name, {
-      views: [{ state: 'frozen', ySplit: 1 }],
-      pageSetup: { paperSize: 9, orientation: sheet.columns.length > 6 ? 'landscape' : 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+      views: [{ state: 'frozen', ySplit: 1, showGridLines: false }],
+      pageSetup: { paperSize: 9, orientation: sheetOrientation(layout.widths), fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
     })
     worksheet.pageSetup.printTitlesRow = '1:1'
     worksheet.pageSetup.margins = { left: .3, right: .3, top: .5, bottom: .5, header: .2, footer: .2 }
@@ -380,8 +392,8 @@ export async function createXlsx(input: XlsxInput): Promise<Buffer> {
       row.height = layout.heights[rowNumber - 1]
       for (const [index, column] of sheet.columns.entries()) {
         const cell = row.getCell(index + 1), kind = header ? 'general' : cellKind(column, sheet.rows[rowNumber - 2][index])
-        cell.font = { name: SHEET_STYLE.font, size: header ? SHEET_STYLE.headerSize : SHEET_STYLE.bodySize, bold: header, color: { argb: SHEET_STYLE.text } }
-        cell.alignment = { vertical: 'middle', wrapText: true, horizontal: !header && ['number', 'percent'].includes(kind) ? 'right' : 'left' }
+        cell.font = { name: SHEET_STYLE.font, size: header ? SHEET_STYLE.headerSize : SHEET_STYLE.bodySize, bold: header, color: { argb: header ? SHEET_STYLE.headerText : SHEET_STYLE.text } }
+        cell.alignment = { vertical: 'middle', wrapText: true, horizontal: cellAlignment(kind, header) }
         cell.border = { bottom: { style: 'hair', color: { argb: SHEET_STYLE.border } } }
         if (header || rowNumber % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: header ? SHEET_STYLE.header : SHEET_STYLE.stripe } }
         if (header) continue
@@ -429,7 +441,7 @@ export async function inspectXlsx(buffer: Buffer): Promise<{ format: 'xlsx'; con
         formulas++
         const hasCache = value !== null
         if (hasCache) formulaCaches++; else pendingFormulas++
-        display = `公式 =${decodeXml(formula.inner) || `[${formula.attrs.t ?? '未知'}公式]`}；${hasCache ? `文件缓存 ${String(value)}（未独立验证）` : '待重算，无有效缓存'}`
+        display = `公式 =${decodeXml(formula.inner) || `[${formula.attrs.t ?? '未知'}公式]`}；${hasCache ? `文件缓存 ${String(value)}（本次 inspect 只读，不执行重算）` : '待重算，无有效缓存'}`
       } else if (typeof value === 'string' && value.startsWith('=')) {
         // A successful write of literal text is not evidence that a check formula ran.
         // Count during the existing bounded traversal, even beyond the content preview.
@@ -643,7 +655,7 @@ function appendSheetStyles(pkg: Package): Record<string, number> {
     const opening = new RegExp(`<${root.tag}\\b[^>]*>`)
     xml = xml.replace(opening, matched => `${matched}<${prefix}numFmts count="1">${formatsXml}</${prefix}numFmts>`)
   }
-  const makeFont = (bold: boolean) => `<${prefix}font><${prefix}sz val="${bold ? SHEET_STYLE.headerSize : SHEET_STYLE.bodySize}"/><${prefix}color rgb="${SHEET_STYLE.text}"/><${prefix}name val="${SHEET_STYLE.font}"/>${bold ? `<${prefix}b/>` : ''}</${prefix}font>`
+  const makeFont = (bold: boolean) => `<${prefix}font><${prefix}sz val="${bold ? SHEET_STYLE.headerSize : SHEET_STYLE.bodySize}"/><${prefix}color rgb="${bold ? SHEET_STYLE.headerText : SHEET_STYLE.text}"/><${prefix}name val="${SHEET_STYLE.font}"/>${bold ? `<${prefix}b/>` : ''}</${prefix}font>`
   xml = appendChildren(xml, 'fonts', makeFont(false) + makeFont(true), 2)
   const makeFill = (color: string) => `<${prefix}fill><${prefix}patternFill patternType="solid"><${prefix}fgColor rgb="${color}"/></${prefix}patternFill></${prefix}fill>`
   xml = appendChildren(xml, 'fills', `<${prefix}fill><${prefix}patternFill patternType="none"/></${prefix}fill>${makeFill(SHEET_STYLE.header)}${makeFill(SHEET_STYLE.stripe)}`, 3)
@@ -653,7 +665,8 @@ function appendSheetStyles(pkg: Package): Record<string, number> {
   const formatIds: Record<CellKind, number> = { general: 0, text: 49, number: 0, percent: 10, date: dateFormat }
   const xfs = kinds.map(kind => {
     const header = kind === 'header', striped = kind.endsWith('-stripe'), base = (header ? 'general' : kind.replace(/-stripe$/, '')) as CellKind
-    return `<${prefix}xf numFmtId="${formatIds[base]}" fontId="${font + (header ? 1 : 0)}" fillId="${fill + (header ? 1 : striped ? 2 : 0)}" borderId="${border}" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><${prefix}alignment vertical="center" horizontal="${!header && ['number', 'percent'].includes(base) ? 'right' : 'left'}" wrapText="1"/></${prefix}xf>`
+    const alignment = cellAlignment(base, header)
+    return `<${prefix}xf numFmtId="${formatIds[base]}" fontId="${font + (header ? 1 : 0)}" fillId="${fill + (header ? 1 : striped ? 2 : 0)}" borderId="${border}" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><${prefix}alignment vertical="center"${alignment ? ` horizontal="${alignment}"` : ''} wrapText="1"/></${prefix}xf>`
   }).join('')
   xml = appendChildren(xml, 'cellXfs', xfs, kinds.length)
   pkg.entries['xl/styles.xml'] = Buffer.from(xml)
@@ -675,7 +688,7 @@ function newWorksheet(sheet: PreparedSheet, styles: Record<string, number>, date
     return [`<dataValidation${attributeString({ type: validation.type, operator: 'between', allowBlank: '1', showErrorMessage: '1', errorStyle: validation.errorStyle!, errorTitle: validation.errorTitle!, error: validation.error!, sqref: `${columnName(index + 1)}2:${columnName(index + 1)}${sheet.rows.length + 1}` })}>${formulae}</dataValidation>`]
   }) : []
   const validationXml = validations.length ? `<dataValidations count="${validations.length}">${validations.join('')}</dataValidations>` : ''
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="${MAIN_NS}"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="A1:${last}"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="${SHEET_STYLE.bodyHeight}"/><cols>${columns}</cols><sheetData><row r="1" ht="${layout.heights[0]}" customHeight="1">${header}</row>${rows}</sheetData><autoFilter ref="A1:${last}"/>${validationXml}<pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/><pageSetup paperSize="9" orientation="${sheet.columns.length > 6 ? 'landscape' : 'portrait'}" fitToWidth="1" fitToHeight="0"/><headerFooter><oddFooter>&amp;L&amp;A&amp;R第 &amp;P 页 / 共 &amp;N 页</oddFooter></headerFooter></worksheet>`
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="${MAIN_NS}"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="A1:${last}"/><sheetViews><sheetView workbookViewId="0" showGridLines="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="${SHEET_STYLE.bodyHeight}"/><cols>${columns}</cols><sheetData><row r="1" ht="${layout.heights[0]}" customHeight="1">${header}</row>${rows}</sheetData><autoFilter ref="A1:${last}"/>${validationXml}<pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/><pageSetup paperSize="9" orientation="${sheetOrientation(layout.widths)}" fitToWidth="1" fitToHeight="0"/><headerFooter><oddFooter>&amp;L&amp;A&amp;R第 &amp;P 页 / 共 &amp;N 页</oddFooter></headerFooter></worksheet>`
 }
 
 /** Only the relationship-designated calc-chain part is removed. Never strip

@@ -104,7 +104,7 @@ describe('one-source system prompt assembly', () => {
   it('keeps real calls and inter-agent/Office contracts after explicitly loading authorized definitions', async () => {
     const { registry } = await createToolRegistry({ toolProfile: 'general', allowedMcpServers: [], memoryScopes: ['session'] })
     const catalogue = registry.listForModel?.() ?? registry.list()
-    expect(catalogue.filter(tool => tool.name !== 'load_tools')).toHaveLength(65)
+    expect(catalogue.filter(tool => tool.name !== 'load_tools')).toHaveLength(66)
     expect(catalogue.filter(tool => tool.name === 'workbench_render')).toHaveLength(1)
     const initial = registry.listForRequest?.() ?? catalogue
     expect(initial.some(tool => tool.name === 'load_tools')).toBe(true)

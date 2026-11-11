@@ -31,7 +31,7 @@ import { createHash } from 'node:crypto'
 import { browserOutputFramePayload, browserOutputPresentation } from '../utils/browser-output.js'
 import { DEFAULT_PUBLICATION_MAX_BYTES } from '../stream-pipeline/publication-queue.js'
 import { imageDocumentPage, imageFileVersion, imageToolFramePayload, imageToolPayload, MAX_NATIVE_IMAGE_BASE64_CHARS } from '../utils/multimodal-context.js'
-import { captureFileEvidence, clearedToolModelContent, isClearedToolMessage, TOOL_FILE_EVIDENCE_KEY, CLEARED_TOOL_EVIDENCE_KEY, CLEARED_TOOL_RESULT } from '../utils/tool-evidence.js'
+import { captureFileEvidence, captureFileBatchEvidence, captureOfficeEvidence, captureScreenshotEvidence, clearedToolModelContent, isClearedToolMessage, TOOL_FILE_EVIDENCE_KEY, TOOL_FILE_BATCH_EVIDENCE_KEY, TOOL_OFFICE_EVIDENCE_KEY, TOOL_SCREENSHOT_EVIDENCE_KEY, CLEARED_TOOL_EVIDENCE_KEY, CLEARED_TOOL_RESULT } from '../utils/tool-evidence.js'
 import { buildRuntimeCapabilitiesContext, RUNTIME_CAPABILITIES_GUIDANCE } from '../runtime-capabilities.js'
 import { prepareCodegraphRequestContext } from '../codegraph-prompt.js'
 import { requestContextMessage } from '../llm-adapter/request-context.js'
@@ -380,10 +380,17 @@ export class ReActStrategy implements LoopStrategy {
     // Reserved evidence fields are minted here, never accepted from extensions.
     delete metadata[CLEARED_TOOL_EVIDENCE_KEY]
     delete metadata[TOOL_FILE_EVIDENCE_KEY]
+    delete metadata[TOOL_FILE_BATCH_EVIDENCE_KEY]
+    delete metadata[TOOL_OFFICE_EVIDENCE_KEY]
+    delete metadata[TOOL_SCREENSHOT_EVIDENCE_KEY]
     delete metadata[TOOL_RESULT_IMAGE_ASSETS]
     if (call.name === 'read_file' && result.success && ctx.tools.executionMode?.(call.name, call.args) === 'readonly') {
       const evidence = captureFileEvidence(result.metadata)
       if (evidence) metadata[TOOL_FILE_EVIDENCE_KEY] = evidence
+    }
+    if (ctx.tools.supportsOfficeEvidence?.(call.name) === true) {
+      const evidence = captureOfficeEvidence(call, result)
+      if (evidence) metadata[TOOL_OFFICE_EVIDENCE_KEY] = evidence
     }
     let failedToPersist = false
     // Code mode gets a larger cap for source and compiler diagnostics, but it
@@ -404,13 +411,22 @@ export class ReActStrategy implements LoopStrategy {
       : estimateTokens(modelInputContent ?? truncated)
     if (result.status !== 'waiting') {
       const subagent = result.metadata?.subagent as { runId?: string } | undefined
+      const resultMessageId = subagent?.runId ? 'subagent-result:' + subagent.runId : `tool-result:${ctx.rootRunId ?? ctx.runId ?? ctx.conversationId ?? ctx.sessionId}:${call.id}`
+      if (call.name === 'read_file' && !outputWasTruncated && ctx.tools.executionMode?.(call.name, call.args) === 'readonly') {
+        const evidence = captureFileBatchEvidence(result, { id: resultMessageId, toolCallId: call.id })
+        if (evidence) metadata[TOOL_FILE_BATCH_EVIDENCE_KEY] = evidence
+      }
+      if (ctx.tools.supportsScreenshotEvidence?.(call.name) === true) {
+        const evidence = captureScreenshotEvidence(result, { id: resultMessageId, toolCallId: call.id })
+        if (evidence) metadata[TOOL_SCREENSHOT_EVIDENCE_KEY] = evidence
+      }
       try {
         if (result.success && outputWasTruncated) {
           const retainedImages = await finalResults.retainToolImages(ctx, call.id, output)
           if (retainedImages.length) metadata[TOOL_RESULT_IMAGE_ASSETS] = retainedImages
         }
         await appendRunHistory({
-          id: subagent?.runId ? 'subagent-result:' + subagent.runId : `tool-result:${ctx.rootRunId ?? ctx.runId ?? ctx.conversationId ?? ctx.sessionId}:${call.id}`,
+          id: resultMessageId,
           role: 'tool', content: truncated, ...(modelInputContent !== undefined ? { modelInputContent } : {}), toolCallId: call.id, toolName: call.name,
           createdAt: Date.now(), tokens, metadata, conversationId: ctx.conversationId,
         } as Message, ctx)

@@ -74,6 +74,7 @@ function cleanSnapshot(source: RecordValue, textLimit: number, labelLimit: numbe
   const originalElements = source.elements as RecordValue[]
   const elements = originalElements.slice(0, 4096).map(element => {
     const clean = fields(element, ['role', 'name', 'value', 'ref'], [], labelLimit)
+    if (typeof element.inViewport === 'boolean') clean.inViewport = element.inViewport
     if (element.bounds === null) clean.bounds = null
     else if (object(element.bounds)) clean.bounds = fields(object(element.bounds), [], ['x', 'y', 'width', 'height'], 0)
     return clean

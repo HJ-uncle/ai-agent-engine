@@ -143,6 +143,8 @@ export function createSubagentToolRegistry(parent: IToolRegistry, readOnly: bool
     unregister: (name) => { names.delete(name); loadedModelTools.delete(name) },
     has: allowed,
     supportsHistoryProjection: name => allowed(name) && parent.supportsHistoryProjection?.(name) === true,
+    supportsOfficeEvidence: name => allowed(name) && parent.supportsOfficeEvidence?.(name) === true,
+    supportsScreenshotEvidence: name => allowed(name) && parent.supportsScreenshotEvidence?.(name) === true,
     skillsForPrompt: () => allowed('get_skill') ? (parent.skillsForPrompt?.() ?? []).filter(skill =>
       !(skill.builtin && skill.name.toLowerCase() === 'aether-office') || allowed('office_document')) : [],
     list: () => definitions(),

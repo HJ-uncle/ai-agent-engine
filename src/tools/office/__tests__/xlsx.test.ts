@@ -131,7 +131,7 @@ describe('unified office XLSX', () => {
     expect(warning).toContain('"客户 \' 注释"!A1')
     expect(warning).not.toContain('!B1')
     expect(inspection.summary).toMatchObject({ formulas: 1, formulaCaches: 1, pendingFormulas: 0 })
-    expect(inspection.content).toContain('文件缓存 =SUM(B2:B3)（未独立验证）')
+    expect(inspection.content).toContain('文件缓存 =SUM(B2:B3)（本次 inspect 只读，不执行重算）')
     expect(bytes).toEqual(before)
   })
 
@@ -156,7 +156,9 @@ describe('unified office XLSX', () => {
   it('patches only intended cells while preserving styles, metadata and untouched package parts', async () => {
     const input = basic()
     input.sheets.push({ name: '保留中文', columns: [{ key: 'data', header: '其他数据' }], rows: [{ data: '不应丢失' }] })
-    const entries = readOfficeZip(await createXlsx(input))
+    const originalBook = await reopen(await createXlsx(input))
+    originalBook.getWorksheet('季度预算')!.getCell('B2').numFmt = '#,##0.00;[Red](#,##0.00)'
+    const entries = readOfficeZip(Buffer.from(await originalBook.xlsx.writeBuffer()))
     entries['customXml/item1.xml'] = Buffer.from('<root><metadata>保留自定义扩展</metadata></root>')
     entries['xl/media/opaque.bin'] = Buffer.from([0, 1, 2, 255, 7, 8])
     const original = writeOfficeZip(entries), originalDigest = createHash('sha256').update(original).digest('hex')
@@ -327,7 +329,10 @@ describe('unified office XLSX', () => {
 
   it('discloses cell text preview truncation while retaining the complete file value', async () => {
     const fullText = '办公长段落'.repeat(200)
-    const bytes = await createXlsx({ sheets: [{ name: '长文本', columns: [{ header: '原文', key: 'text' }], rows: [{ text: fullText }] }] })
+    // Inspect must handle imported long cells even when our writer rejects their layout.
+    const imported = new ExcelJS.Workbook(), sheet = imported.addWorksheet('长文本')
+    sheet.addRow(['原文']); sheet.addRow([fullText])
+    const bytes = Buffer.from(await imported.xlsx.writeBuffer())
     const inspection = await inspectXlsx(bytes)
     expect(inspection.summary.previewTruncated).toBe(true)
     expect(inspection.warnings.join('\n')).toContain('仅预览前 600 字符')

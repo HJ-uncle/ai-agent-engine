@@ -75,6 +75,16 @@ export class ToolRegistry implements IToolRegistry {
     return Boolean(tool && ['write_file', 'office_document', 'search_history'].includes(name) && isTrustedBuiltinTool(tool))
   }
 
+  supportsOfficeEvidence(name: string): boolean {
+    const tool = this.tools.get(name)
+    return Boolean(tool && ['office_document', 'office_inspect', 'workbench_render'].includes(name) && isTrustedBuiltinTool(tool))
+  }
+
+  supportsScreenshotEvidence(name: string): boolean {
+    const tool = this.tools.get(name)
+    return Boolean(tool && name === 'browser_save_screenshot' && isTrustedBuiltinTool(tool))
+  }
+
   modelToolRegistrationVersion(name: string): number | undefined { return this.registrationVersions.get(name) }
 
   async execute(name: string, args: unknown, ctx: AgentContext): Promise<ToolResult> {

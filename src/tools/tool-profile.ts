@@ -30,7 +30,7 @@ export const CODE_BUILTIN_TOOLS: ReadonlySet<string> = new Set([
   'plan_update', 'todo_list', 'todo_create', 'todo_update', 'todo_delete',
   'list_skills', 'get_skill', 'run_skill_script',
   'web_fetch', 'http_request', 'ask_user', 'search_history',
-  'browser_tabs', 'browser_open', 'browser_navigate', 'browser_snapshot', 'browser_screenshot',
+  'browser_tabs', 'browser_open', 'browser_navigate', 'browser_snapshot', 'browser_screenshot', 'browser_save_screenshot',
   'browser_click', 'browser_fill', 'browser_scroll', 'browser_press_key', 'browser_wait',
   'browser_console', 'browser_network', 'browser_network_request', 'browser_set_viewport', 'browser_close',
 ])

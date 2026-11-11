@@ -23,7 +23,7 @@ const groups: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['Subagents', ['subagent', 'subagent_start', 'subagent_directory', 'subagent_followup', 'subagent_send', 'subagent_wait', 'subagent_cancel', 'subagent_participants', 'subagent_inbox', 'subagent_request_input', 'subagent_read_result']],
   ['Web/history', ['web_fetch', 'http_request', 'search_history']],
   ['Code', ['code_diagnose', 'codegraph']],
-  ['Browser', ['browser_tabs', 'browser_open', 'browser_navigate', 'browser_snapshot', 'browser_screenshot', 'browser_click', 'browser_fill', 'browser_scroll', 'browser_press_key', 'browser_wait', 'browser_console', 'browser_network', 'browser_network_request', 'browser_set_viewport', 'browser_close']],
+  ['Browser', ['browser_tabs', 'browser_open', 'browser_navigate', 'browser_snapshot', 'browser_screenshot', 'browser_save_screenshot', 'browser_click', 'browser_fill', 'browser_scroll', 'browser_press_key', 'browser_wait', 'browser_console', 'browser_network', 'browser_network_request', 'browser_set_viewport', 'browser_close']],
   ['Workbench/results', ['workbench_context', 'workbench_open', 'workbench_render', 'deliver_files', 'report_artifacts']],
   ['Agent configuration', ['agent_list', 'agent_get', 'agent_create', 'agent_do_create', 'agent_update', 'agent_do_update', 'agent_delete', 'agent_do_delete']],
   ['Legacy jobs', ['task_list', 'task_status', 'task_cancel']],

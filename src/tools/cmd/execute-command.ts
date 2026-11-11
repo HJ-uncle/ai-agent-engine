@@ -8,6 +8,7 @@ import { workspaceManager } from '../../workspace/index.js'
 import { commandLooksLikeShellLine, createCommandLaunchPlan } from '../../core/command-jobs/launch-plan.js'
 import { createCommandChangeObserver } from './command-change-observer.js'
 import { commandChangeSummary } from './command-change-summary.js'
+import { createCommandEnvironment } from './command-environment.js'
 
 export interface CMDToolOptions { timeoutMs?: number; allowedCommands?: string[] }
 interface CommandArgs { command: string; args?: string[]; cwd?: string; timeoutMs?: number; background?: boolean }
@@ -89,9 +90,7 @@ export const cmdTool: Tool = {
       runId: ctx.rootRunId, ownerRunId: ctx.runId, turnId: ctx.turnId ?? ctx.parentConversationId ?? ctx.conversationId, toolCallId: ctx.currentToolCallId,
       command, args, cwd, background, timeoutMs: timeout, signal: ctx.signal,
       observeChanges: job => createCommandChangeObserver(ctx, cwd, job),
-      env: mode === 'full-access' ? { ...process.env } : {
-        PATH: process.env.PATH, PATHEXT: process.env.PATHEXT, HOME: cwd, SystemRoot: process.env.SystemRoot, COMSPEC: process.env.COMSPEC,
-      },
+      env: createCommandEnvironment(mode, cwd),
     })
     if (background) return { success: launched.status === 'running' || launched.status === 'succeeded',
       output: JSON.stringify({ jobId: launched.jobId, status: launched.status, message: launched.status === 'running' ? 'Command started; read command_output for progress and exit status.' : launched.error?.message }),

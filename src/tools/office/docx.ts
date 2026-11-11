@@ -2,10 +2,11 @@ import { TextDecoder } from 'node:util'
 import {
   AlignmentType, BorderStyle, Document, Footer, HeadingLevel, LevelFormat,
   Packer, PageNumber, Paragraph, ShadingType, Table, TableCell, TableLayoutType,
-  TableRow, TextRun, WidthType,
+  TableRow, TextRun, WidthType, VerticalAlign,
   type ILevelsOptions, type IRunOptions,
 } from 'docx'
 import { decodeXml, encodeXml, readOfficeZip, writeOfficeZip } from './office-zip.js'
+import { documentBodyWithoutRepeatedTitle, documentColumnWidths, DOCUMENT_TABLE_STYLE } from './document-layout.js'
 
 const MAIN_PART = 'word/document.xml'
 const WORD_NAMESPACE = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
@@ -14,8 +15,8 @@ const MAX_TEXT_CHARACTERS = 2 * 1024 * 1024
 const MAX_BLOCKS = 6000
 const MAX_TABLE_CELLS = 20_000
 const MAX_EDIT_COUNT = 100
-const FONT_BODY = { ascii: 'Aptos', hAnsi: 'Aptos', eastAsia: '宋体' }
-const FONT_HEADING = { ascii: 'Aptos Display', hAnsi: 'Aptos Display', eastAsia: '黑体' }
+const FONT_BODY = { ascii: 'Aptos', hAnsi: 'Aptos', eastAsia: 'Microsoft YaHei' }
+const FONT_HEADING = { ascii: 'Aptos Display', hAnsi: 'Aptos Display', eastAsia: 'Microsoft YaHei' }
 
 interface XmlElement {
   name: string
@@ -372,19 +373,22 @@ function markdownBlocks(markdown: string): { children: Array<Paragraph | Table>;
       }
       tableCellCount += rows.length * header.length
       if (tableCellCount > MAX_TABLE_CELLS) fail(`document exceeds ${MAX_TABLE_CELLS} table cells`)
-      const border = { style: BorderStyle.SINGLE, size: 4, color: 'D1D1D6' }
+      const border = { style: BorderStyle.SINGLE, size: 4, color: DOCUMENT_TABLE_STYLE.border }
+      const widths = documentColumnWidths(rows, 9026).map(Math.round)
+      widths[widths.length - 1] += 9026 - widths.reduce((sum, width) => sum + width, 0)
       children.push(new Table({
-        width: { size: 100, type: WidthType.PERCENTAGE }, layout: TableLayoutType.FIXED,
-        columnWidths: header.map(() => Math.floor(9026 / header.length)),
+        width: { size: 9026, type: WidthType.DXA }, layout: TableLayoutType.FIXED,
+        columnWidths: widths,
         borders: { top: border, bottom: border, left: border, right: border, insideHorizontal: border, insideVertical: border },
         rows: rows.map((row, rowIndex) => new TableRow({
           tableHeader: rowIndex === 0, cantSplit: true,
-          children: row.map(text => new TableCell({
-            width: { size: 100 / header.length, type: WidthType.PERCENTAGE },
-            margins: { top: 100, bottom: 100, left: 120, right: 120 },
-            shading: rowIndex === 0 ? { fill: 'F0F2F5', type: ShadingType.CLEAR } : undefined,
+          children: row.map((text, column) => new TableCell({
+            width: { size: widths[column], type: WidthType.DXA }, verticalAlign: VerticalAlign.CENTER,
+            margins: { top: 120, bottom: 120, left: 140, right: 140 },
+            shading: { fill: rowIndex === 0 ? DOCUMENT_TABLE_STYLE.header : rowIndex % 2 === 0 ? DOCUMENT_TABLE_STYLE.stripe : 'FFFFFF', type: ShadingType.CLEAR },
             children: [new Paragraph({
-              children: inlineRuns(text, { bold: rowIndex === 0, size: 21 }),
+              children: inlineRuns(text, { bold: rowIndex === 0, size: 21, color: rowIndex === 0 ? DOCUMENT_TABLE_STYLE.headerText : DOCUMENT_TABLE_STYLE.text }),
+              alignment: rowIndex > 0 && /^[+-]?[\d,.]+%?$/.test(text) ? AlignmentType.RIGHT : AlignmentType.LEFT,
               spacing: { before: 0, after: 0, line: 300 }, keepNext: rowIndex === 0, widowControl: true,
             })],
           })),
@@ -461,29 +465,29 @@ export async function createDocx(options: { markdown: string; title?: string; au
   assertXmlCharacters(options.markdown, 'Markdown')
   if (options.title !== undefined) assertXmlCharacters(options.title, 'Title')
   if (options.author !== undefined) assertXmlCharacters(options.author, 'Author')
-  const { children, numbering } = markdownBlocks(options.markdown)
-  if (!children.length) fail('Markdown contains no document content')
+  const { children, numbering } = markdownBlocks(documentBodyWithoutRepeatedTitle(options.markdown, options.title))
+  if (!children.length && !options.title?.trim()) fail('Markdown contains no document content')
   if (options.title?.trim()) {
     children.unshift(new Paragraph({
-      children: inlineRuns(options.title.trim(), { font: FONT_HEADING, size: 36, bold: true }),
-      heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER,
+      children: inlineRuns(options.title.trim(), { font: FONT_HEADING, size: 44, bold: true, color: '000000' }),
+      heading: HeadingLevel.TITLE, alignment: AlignmentType.LEFT,
       spacing: { before: 0, after: 360 }, keepNext: true, keepLines: true,
     }))
   }
-  const headingStyle = (size: number) => ({
-    run: { font: FONT_HEADING, size, bold: true, color: '1D1D1F' },
-    paragraph: { spacing: { before: 300, after: 140, line: 340 }, keepNext: true, keepLines: true },
+  const headingStyle = (size: number, before = 260) => ({
+    run: { font: FONT_HEADING, size, bold: true, color: '000000' },
+    paragraph: { spacing: { before, after: 120, line: 320 }, keepNext: true, keepLines: true },
   })
   const document = new Document({
     creator: options.author?.trim() || 'Aether', title: options.title?.trim(),
     description: 'Created with the Aether office document workflow',
     styles: { default: {
       document: {
-        run: { font: FONT_BODY, size: 24, color: '1D1D1F', language: { value: 'zh-CN', eastAsia: 'zh-CN' } },
-        paragraph: { spacing: { after: 160, line: 360 } },
+        run: { font: FONT_BODY, size: 22, color: '27364B', language: { value: 'zh-CN', eastAsia: 'zh-CN' } },
+        paragraph: { spacing: { after: 140, line: 340 } },
       },
-      heading1: headingStyle(32), heading2: headingStyle(28), heading3: headingStyle(26),
-      heading4: headingStyle(24), heading5: headingStyle(24), heading6: headingStyle(24),
+      heading1: headingStyle(32, 360), heading2: headingStyle(28), heading3: headingStyle(25),
+      heading4: headingStyle(23), heading5: headingStyle(22), heading6: headingStyle(22),
     } },
     numbering: { config: numbering },
     sections: [{

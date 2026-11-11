@@ -7,22 +7,13 @@ description: 在Aether内创建和检查真实DOCX、XLSX、PPTX、PDF，编辑W
 
 使用 `office_document` 原生创建和检查 `.docx` / `.xlsx` / `.pptx` / `.pdf`；Word、Excel及PPTX支持定点编辑，XLSX支持内置 `recalculate`。只读审查优先 `office_inspect`，参数仅为 `path`、可选 `expectedHash/contentOffset/contentLimit`。不传 `operation` 或写入字段；只读子代理也可使用。这些操作使用随引擎发布的库，不需要Python、shell、pip、WPS、Office COM、LibreOffice或外部办公应用。已有 `read_file` 继续读取其他支持的资料。
 
-原格式文件直接在Aether资源标签预览；本地HTML使用内置浏览器打开，不启动本地HTTP服务。遇到缺项明确记录平台能力限制，不能转而驱动用户的办公应用。环境诊断发现已安装软件不构成调用授权。PDF为Aether独立排版生成，不得称为Word/PPT原版式导出；复杂原文档转换尚未提供时如实说明。
-
-## 能力边界与交付提示
-
-- **DOCX**：支持 Markdown 基础内容生成、正文段落内唯一文本替换和结构/正文检查；不提供原生全编辑（不能用 `edit` 新增或删除段落、表格行列、批注、修订或复杂版式）。`inspect` 只读正文和结构，`layoutVerified=false` 或同义 warning 表示没有完成分页与视觉验收；需要模型看画面时可用 `workbench_render` 逐区段检查 Aether 预览。
-- **XLSX**：支持 `.xlsx` 的定点单元格编辑、追加新表、有限公式域的内置 `recalculate` 和原生基础图表；不等同完整 Excel 计算或编辑能力。宏、数据透视、外链、共享/数组公式和超出支持范围的图表结构会保留、告警或拒绝；预览有单元格/字符上限，`recalculate` 成功也不代表业务口径或画面已验收。
-- **PDF**：只支持 Markdown 独立排版创建和文本/页数检查；不提供任意文字定点编辑、AcroForm 填写、DOCX/PPTX 原版式转换。可用 `workbench_render` 逐页查看 Aether PDF.js 画面，但这不等于外部 PDF 阅读器的原生视觉验收。
-- **PPTX**：支持原生可编辑对象创建、正文/备注定点替换和结构检查；逐页视觉检查仅通过另行调用 `workbench_render` 完成，截图成功本身也不等于视觉验收。没有可用渲染客户端或视觉模型时，交付状态应明确写为“视觉验收未完成”。
-
-任何成功回执只证明文件已原子发布并通过工具提供的结构检查。交付摘要要分别记录内容/结构检查、公式重算和视觉验收状态；未执行的步骤必须明确写出，不得把 `structure-checked`、文本预览或 `visualValidation: "not-performed"` 描述成“已验收”。
+原格式文件直接在Aether资源标签预览；静态HTML可用内置浏览器直接打开。为PPT获取真实产品截图可按项目现有命令运行页面，按演示指南保存素材。遇到缺项明确记录平台能力限制，不能转而驱动用户的办公应用。环境诊断发现已安装软件不构成调用授权。PDF为Aether独立排版生成，不得称为Word/PPT原版式导出；复杂原文档转换尚未提供时如实说明。
 
 ## 按需选择
 
 - **Word**：使用 `get_skill`，参数 `name="aether-office", resource="references/documents.md"`，读取文体、排版与编辑指南。
 - **Excel**：使用 `get_skill`，参数 `name="aether-office", resource="references/spreadsheets.md"`，读取类型、公式与保真编辑指南。
-- **PPT/PDF**：用 `get_skill` 读取 `name="aether-office", resource="references/presentations-pdf.md"`。Office/PDF 需要视觉证据时用 `workbench_render`，PPT按内容设计构图，利用相关真实素材，逐页审查视觉表达；无裁切不等于设计合格。已有PPT支持正文/备注定点edit。PDF用 `markdown` 独立排版。
+- **PPT/PDF**：用 `get_skill` 读取 `name="aether-office", resource="references/presentations-pdf.md"`。PPT按内容设计构图，利用相关真实素材，逐页审查视觉表达；无裁切不等于设计合格。已有PPT支持正文/备注定点edit。PDF用 `markdown` 独立排版。
 - **Excel计算**：生成/编辑后用同文件最新hash执行 `office_document operation="recalculate"`，再inspect核对真实缓存和错误。支持常用公式与跨表引用；不支持的公式、循环、外链明确拒绝，不能硬填结果假冒计算。
 - **环境诊断**：`office_environment({})`仅供只读诊断，不是调用外部程序的建议。需要解释回执时读 `references/environment.md`；内置办公路径不需要先探测Python或COM。
 - 只需聊天文字时直接回答，不强行生成文件；不承诺尚未提供的复杂编辑和转换能力。
@@ -37,7 +28,7 @@ description: 在Aether内创建和检查真实DOCX、XLSX、PPTX、PDF，编辑W
 2. 编辑已有文件先 `inspect`，确认正文/表格和 `warnings`，再用同文件最近一次工具返回的完整 `expectedHash` 调用 `edit`。Excel 分批添加新表使用 `append_sheets`，复用同一版本合同，每次只发新增的 1-4 张表（优先一张），不重发旧表。已经有可信同版本内容时不重复读取。不猜 hash，不根据文件名推断内容。
 3. 哈希不一致代表其他任务或用户已修改。重新检查并基于实际内容调整，不盲目覆盖；多人协作分配不同文件或不同明确片段，仍遵守同一版本合同。
 4. create/edit/append_sheets 成功才代表文件真实发布。工具会做内存生成、ZIP/XML/数据结构检查与原子发布，返回文件路径、大小、版本及改动回执。失败时依据 `fileMutationApplied` 如实说明；参数过长或新表不存在时改为小批 `append_sheets`，禁止为补表删除重建、循环整包重发或绕过 expectedHash。不要把聊天文本、CSV 或 Markdown 改扩展名冒充 Office。
-5. 交付前用 `inspect` 核对实际要求、关键数字及表格结构，并披露 warnings；有可信同版本回执不重复读取。需要视觉证据时，对 DOCX/XLSX/PPTX/PDF 使用 `workbench_render` 按返回的 `pageCount` 逐区段、逐表、逐页检查；只有具体错误才修正并复核受影响部分，通过即停止，不扩大为全项目测试、反复整包生成或无关ZIP/XML检查。编辑可能改变ZIP压缩方式，体积变小本身不证明丢失内容。`structure-checked` 只证明结构检查；未看到实际画面不能声称视觉验收，公式无缓存不能声称已算好。
+5. 交付前用 `inspect` 核对实际要求、关键数字及表格结构，并披露 warnings；有可信同版本回执不重复读取。版式用 `workbench_render` 检查全部页面/内容区域，按返回 `pageCount` 继续；DOCX/XLSX内容区域不等同原生打印页。PPT按格式指南检查视觉表达。只有具体错误才修正并复核受影响部分，通过即停止，不扩大为全项目测试、反复整包生成或无关ZIP/XML检查。编辑可能改变ZIP压缩方式，体积变小本身不证明丢失内容。`structure-checked` 只证明结构检查；未看到实际画面不能声称视觉验收，公式无缓存不能声称已算好。
 6. `contentTruncated=true`、`summary.previewTruncated=true` 或外层工具消息中的 `[truncated …]` 都表示只收到部分预览，不能据此声称已读完全文或验完整本工作簿；即使某个内部标记为 false，也必须遵守外层截断提示。定点编辑使用本次实际观察到的唯一文本片段/单元格与同文件版本 hash，不猜测被省略部分。需要验证全貌时，使用现有读取工具实际支持的分段读取或转换方式补齐；没有可用路径就明确披露未完成全貌验证，不忽略截断、不用反复读取同一份预览冒充完整检查。
 7. `office_inspect` 与 `office_document inspect` 使用相同检查合同：Excel 全工作簿最多预览 2000 单元格、单格 600 字符；分页只继续这份预览。已保存错误计数覆盖全部工作表（含隐藏表和预览之外），错误位置只有限列举；没有错误缓存不代表公式已重算或业务正确。不要用 `read_file` 的首表预览推断其他表；目标表内容未出现在预览中时，明确说明未读到，不能以全表诊断替代逐表内容审查。
 

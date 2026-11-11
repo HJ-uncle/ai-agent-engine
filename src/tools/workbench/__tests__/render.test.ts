@@ -11,6 +11,7 @@ import type { AgentContext, Message } from '../../../core/agent-context/index.js
 import { ToolRegistry } from '../../../core/tool-registry/registry.js'
 import { truncateToolOutput } from '../../../core/agent-loop/react.js'
 import { imageToolPayload } from '../../../core/utils/multimodal-context.js'
+import { captureOfficeEvidence } from '../../../core/utils/tool-evidence.js'
 import { createLLMAdapter } from '../../../core/llm-adapter/factory.js'
 import { WorkbenchBridge, workbenchBridge, type WorkbenchCommand } from '../bridge.js'
 import { workbenchRenderTool } from '../render.js'
@@ -66,6 +67,27 @@ function receipt(command: WorkbenchCommand, changes: Record<string, unknown> = {
 }
 
 describe('workbench_render file and execution identity', () => {
+  it('keeps verified short receipts when a render envelope exceeds the evidence parser budget', async () => {
+    const bridge = create(), client = bridge.register(identity, ctx.sessionId, ['artifact.render'])
+    vi.spyOn(workbenchBridge, 'execute').mockImplementation((action, args, context) => bridge.execute(action, args, context))
+    const args = { path: file, page: 2, expectedHash: 'sha256:' + hash }
+    const pending = workbenchRenderTool.execute(args, ctx)
+    let command: WorkbenchCommand | undefined
+    await vi.waitFor(async () => { [command] = await bridge.poll(identity, client.clientId, client.clientToken); expect(command).toBeDefined() })
+    // Pixels are capped at 6 MiB base64 by the bridge; ancillary client fields
+    // can still make an envelope larger. They must not erase the trusted receipt.
+    bridge.result(identity, client.clientId, client.clientToken, command!.requestId, command!.execution,
+      receipt(command!, { ignoredClientField: 'PRIVATE_PADDING'.repeat(600_000) }))
+    const result = await pending
+    expect(result.success).toBe(true)
+    expect(result.output.length).toBeGreaterThan(7 * 1024 * 1024)
+    const captured = captureOfficeEvidence({ name: 'workbench_render', args }, result)
+    expect(captured).toMatchObject({ success: true, operation: 'render', evidenceScope: 'tool-receipt',
+      files: [{ path: file, expectedHash: 'sha256:' + hash, page: 2, pageCount: 2, format: 'pptx', unit: 'page' }] })
+    expect(JSON.stringify(captured)).not.toContain('PRIVATE_PADDING')
+    expect(JSON.stringify(captured)).not.toContain(dataUrl)
+  })
+
   it('does not ask the client to render for a model without vision', async () => {
     const dispatch = vi.spyOn(workbenchBridge, 'execute')
     expect(await workbenchRenderTool.execute({ path: file }, { ...ctx, modelCaps: { vision: false } }))

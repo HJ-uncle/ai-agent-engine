@@ -278,19 +278,26 @@ function installDomainGuards(calculate: Calculator, functions: Record<string, un
     const rangeValues = flatten(range), sumValues = flatten(sums)
     const shape = (value: unknown): string => Array.isArray(value) ? JSON.stringify(value.map(row => Array.isArray(row) ? row.length : 0)) : 'scalar'
     if (rangeValues.length !== sumValues.length || shape(range) !== shape(sums)) fail('SUMIF ranges must have the same explicit shape; implicit range expansion is unsupported')
-    if (rangeValues.some(value => value === null || value === undefined)) fail('SUMIF blank criteria cells are outside the current calculation contract')
+    const blank = (value: unknown): boolean => value === null || value === undefined
+    const hasBlankCriteriaCells = rangeValues.some(blank)
+    if (rangeValues.some(value => value instanceof Error || typeof value === 'number' && !Number.isFinite(value))) fail('SUMIF range contains an error or nonfinite number')
     if (sumValues.some(value => value instanceof Error || typeof value === 'number' && !Number.isFinite(value))) fail('SUMIF sum_range contains an error or nonfinite number')
     const numericSums = sumValues.map(value => typeof value === 'number' ? value : 0)
     const numericCriteria = typeof criteria === 'number' && Number.isFinite(criteria)
       || typeof criteria === 'string' && /^(?:<>|<=|>=|=|<|>)?-?(?:\d+(?:\.\d*)?|\.\d+)$/.test(criteria)
     if (numericCriteria) {
+      if (hasBlankCriteriaCells) fail('SUMIF numeric criteria with blank range cells are outside the current calculation contract')
       if (rangeValues.some(value => value !== null && value !== undefined && (typeof value !== 'number' || !Number.isFinite(value)))) fail('SUMIF numeric criteria require a numeric range')
       return call('SUMIF', [range, criteria, numericSums])
     }
-    if (typeof criteria !== 'string' || criteria.length > 256 || rangeValues.some(value => typeof value !== 'string')) fail('SUMIF text criteria require a bounded text criterion and text range')
+    if (typeof criteria !== 'string' || criteria.length > 256 || rangeValues.some(value => !blank(value) && typeof value !== 'string')) fail('SUMIF text criteria require a bounded text criterion and text range')
     const parsed = /^(<>|=)?([\s\S]*)$/.exec(criteria)!
     if (!parsed || /^[<>]/.test(parsed[2])) fail('SUMIF ordered text comparison is unsupported')
     const negative = parsed[1] === '<>', pattern = [...parsed[2]]
+    // Reserved empty rows cannot match a nonempty positive text criterion.
+    // Zero/empty/negative criteria have distinct coercion rules; keep those
+    // unsupported combinations explicit instead of pretending missing data is 0.
+    if (hasBlankCriteriaCells && (negative || pattern.length === 0)) fail('SUMIF empty or negative criteria with blank range cells are outside the current calculation contract')
     let source = '^'
     const literal = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     for (let index = 0; index < pattern.length; index++) {
@@ -300,7 +307,7 @@ function installDomainGuards(calculate: Calculator, functions: Record<string, un
     }
     const match = new RegExp(`${source}$`, 'iu')
     // Adapt Excel's case-insensitive wildcard criterion to an equality mask; the mature library still performs SUMIF.
-    const mask = rangeValues.map(value => match.test(value as string) !== negative ? 1 : 0)
+    const mask = rangeValues.map(value => !blank(value) && match.test(value as string) !== negative ? 1 : 0)
     return call('SUMIF', [mask, 1, numericSums])
   }
   guards.COUNTIF = (...args) => {

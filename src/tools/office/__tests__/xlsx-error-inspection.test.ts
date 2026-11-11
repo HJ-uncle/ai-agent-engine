@@ -43,7 +43,7 @@ describe('office saved error diagnostics', () => {
     sheet.getCell('A1').value = { formula: '1+1', result: 999 }
     const result = await inspectXlsx(Buffer.from(await book.xlsx.writeBuffer()))
     expect(result.summary).toMatchObject({ errorCells: 0, formulaErrorCells: 0, formulaCaches: 1 })
-    expect(result.content).toContain('文件缓存 999（未独立验证）')
+    expect(result.content).toContain('文件缓存 999（本次 inspect 只读，不执行重算）')
     expect(result.warnings.join('\n')).not.toContain('已保存的错误单元格')
   })
 })

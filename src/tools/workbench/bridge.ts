@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { AgentContext, ToolResult } from '../../core/agent-context/index.js'
 import { browserExecutionIdentity, browserExecutionsMatch, type BrowserExecutionIdentity } from '../../core/browser-execution.js'
+import { validateXlsxPreviewMetadata } from './xlsx-preview-navigation.js'
 
 export const WORKBENCH_ACTIONS = ['workspace.context', 'artifact.open', 'terminal.read', 'artifact.render'] as const
 export type WorkbenchAction = typeof WORKBENCH_ACTIONS[number]
@@ -121,6 +122,10 @@ export class WorkbenchBridge {
         !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) || bytes.readUInt32BE(8) !== 13 ||
         bytes.toString('ascii', 12, 16) !== 'IHDR' || bytes.readUInt32BE(16) !== 960 || bytes.readUInt32BE(20) !== 540)
         throw new WorkbenchBridgeError(400, '办公文件画面与请求的格式、会话、文件版本或页码不一致。')
+      if (format === 'xlsx') {
+        try { validateXlsxPreviewMetadata(data, Number(data.page), Number(data.pageCount)) }
+        catch { throw new WorkbenchBridgeError(400, 'XLSX 预览目录与当前区域不一致。') }
+      }
     } else if (result.output.length > 65536) throw new WorkbenchBridgeError(400, '工作台回执超过范围。')
     pending.settle(result)
     return true

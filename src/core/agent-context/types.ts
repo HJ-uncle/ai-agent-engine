@@ -315,6 +315,10 @@ export interface IToolRegistry {
   modelToolRegistrationVersion?(name: string): number | undefined
   /** Trusted builtins that support recoverable, request-only write argument projection. */
   supportsHistoryProjection?(name: string): boolean
+  /** Only authenticated builtins may mint compact Office receipts for archived results. */
+  supportsOfficeEvidence?(name: string): boolean
+  /** Saved screenshot receipts require the exact builtin implementation. */
+  supportsScreenshotEvidence?(name: string): boolean
   /** Already-resolved, admitted skill descriptions; never rebuild from global discovery in children. */
   skillsForPrompt?(): readonly import('../../skills/external-loader.js').ExternalSkill[]
   execute(name: string, args: unknown, ctx: AgentContext): Promise<ToolResult>

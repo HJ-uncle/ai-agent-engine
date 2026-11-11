@@ -18,7 +18,7 @@ function withoutDescriptions(value: unknown): unknown {
 const wire = (definitions: ReturnType<ToolRegistry['list']>) => definitions.map(({ name, description, parameters }) => ({
   type: 'function', function: { name, description, parameters },
 }))
-const defaultNames = 'read_file write_file edit_file list_files delete_file create_dir office_document office_inspect office_environment execute_cmd command_output cancel_command ask_user remember recall list_memories forget link_memories list_skills get_skill run_skill_script glob grep plan_update cron_list cron_preview cron_create cron_update cron_delete subagent subagent_start subagent_send subagent_wait subagent_cancel subagent_participants subagent_inbox subagent_read_result subagent_directory subagent_followup subagent_request_input web_fetch http_request search_history code_diagnose codegraph browser_tabs browser_open browser_navigate browser_snapshot browser_screenshot browser_click browser_fill browser_scroll browser_press_key browser_wait browser_console browser_network browser_network_request browser_set_viewport browser_close workbench_context workbench_open deliver_files report_artifacts'.split(' ')
+const defaultNames = 'read_file write_file edit_file list_files delete_file create_dir office_document office_inspect office_environment execute_cmd command_output cancel_command ask_user remember recall list_memories forget link_memories list_skills get_skill run_skill_script glob grep plan_update cron_list cron_preview cron_create cron_update cron_delete subagent subagent_start subagent_send subagent_wait subagent_cancel subagent_participants subagent_inbox subagent_read_result subagent_directory subagent_followup subagent_request_input web_fetch http_request search_history code_diagnose codegraph browser_tabs browser_open browser_navigate browser_snapshot browser_screenshot browser_click browser_fill browser_scroll browser_press_key browser_wait browser_console browser_network browser_network_request browser_set_viewport browser_close browser_save_screenshot workbench_render workbench_context workbench_open deliver_files report_artifacts'.split(' ')
 
 vi.mock('../../storage/mcp/mcp-config.js', () => ({ listServers: () => [] }))
 
@@ -51,7 +51,7 @@ describe('compact builtin model definitions', () => {
     const compact = registry.listForModel()
     expect(original.map(tool => tool.name)).toEqual([...defaultNames, 'load_tools'])
     expect(compact.map(tool => tool.name)).toEqual([...defaultNames, 'load_tools'])
-    expect(compact).toHaveLength(65)
+    expect(compact).toHaveLength(defaultNames.length + 1)
     expect(withoutDescriptions(compact)).toEqual(withoutDescriptions(original))
     expect(JSON.stringify(registry.list())).toBe(before)
     expect(compact.filter((tool, index) => tool.description !== original[index].description).length).toBeGreaterThan(30)
@@ -131,6 +131,7 @@ describe('compact builtin model definitions', () => {
     expect(office.parameters.properties?.workbook.description).toContain('columns.header occupies row 1; rows start at row 2')
     expect(office.parameters.properties?.workbook.description).toContain('edit with sheet/cell/value')
     expect(office.parameters.properties?.workbook.description).toContain('do not create duplicate documents')
+    expect(office.parameters).toHaveProperty('properties.workbook.properties.sheets.items.properties.columns.maxItems', 100)
     const contracts: Record<string, string[]> = {
   "read_file": [
     "exact path",
@@ -169,7 +170,7 @@ describe('compact builtin model definitions', () => {
     "preserving the original",
     "PDF only create/inspect",
     "append_sheets",
-    "one sheet at a time",
+    "append only new sheets in bounded batches",
     "circular/external",
     "never fake",
     "2000 cells, 600 chars/cell",
@@ -178,8 +179,7 @@ describe('compact builtin model definitions', () => {
     "missing",
     "UTF-16",
     "editable=true",
-    "notes",
-    "100/columns"
+    "notes"
   ],
   "office_inspect": [
     "warnings/expectedHash/documentComplete",

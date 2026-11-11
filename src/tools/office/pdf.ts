@@ -3,6 +3,7 @@ import path from 'node:path'
 import PDFDocument from 'pdfkit'
 import { PDFParse } from 'pdf-parse'
 import { MAX_OFFICE_FILE_BYTES } from './office-zip.js'
+import { documentBodyWithoutRepeatedTitle, documentColumnWidths, DOCUMENT_TABLE_STYLE } from './document-layout.js'
 
 export interface PdfInput { markdown: string; title?: string; author?: string }
 const MAX_INPUT_BYTES = 256 * 1024
@@ -69,7 +70,7 @@ function tableCells(line: string): string[] {
   return line.trim().slice(1, -1).split(/(?<!\\)\|/).map(cell => inlineText(cell.trim().replace(/\\\|/g, '|')))
 }
 
-function drawTable(document: PDFKit.PDFDocument, headers: string[], rows: string[][]): void {
+function tableLayout(document: PDFKit.PDFDocument, headers: string[], rows: string[][]) {
   if (!headers.length || headers.length > 6 || rows.length > 200) fail('表格最多 6 列、200 行；请拆分表格')
   if (headers.some(header => !header.trim())) fail('表头不能为空')
   for (const row of [headers, ...rows]) {
@@ -77,23 +78,47 @@ function drawTable(document: PDFKit.PDFDocument, headers: string[], rows: string
     if (row.some(value => value.length > 500)) fail('表格单元格超过 500 字符，请拆分内容')
   }
   const left = document.page.margins.left, width = document.page.width - left - document.page.margins.right
-  const columnWidth = width / headers.length, padding = 7, innerWidth = columnWidth - padding * 2
+  const widths = documentColumnWidths([headers, ...rows], width), padding = 8
+  const measure = (value: string, index: number) => document.heightOfString(value || ' ', {
+    width: widths[index] - padding * 2, lineGap: 3, paragraphGap: 0,
+  })
   const height = (row: string[], header: boolean): number => {
     document.fontSize(header ? 10.5 : 10)
-    return Math.max(28, ...row.map(cell => document.heightOfString(cell || ' ', { width: innerWidth, lineGap: 2 }) + padding * 2))
+    return Math.max(30, ...row.map((cell, index) => measure(cell, index) + padding * 2))
   }
   const headerHeight = height(headers, true), rowHeights = rows.map(row => height(row, false))
   const usable = document.page.height - document.page.margins.top - document.page.margins.bottom
   if (headerHeight > usable / 3 || rowHeights.some(value => value + headerHeight > usable)) fail('表格单行内容超过单页可用区域，请拆分行或缩短单元格')
+  return { left, widths, padding, measure, headerHeight, rowHeights }
+}
+
+function markdownTableAt(lines: string[], line: number): { headers: string[]; rows: string[][]; next: number } | undefined {
+  if (!/^\s*\|.*\|\s*$/.test(lines[line] ?? '') || !/^\s*\|.*\|\s*$/.test(lines[line + 1] ?? '')) return undefined
+  const separator = tableCells(lines[line + 1])
+  if (!separator.every(cell => /^:?-{3,}:?$/.test(cell))) return undefined
+  const headers = tableCells(lines[line]), rows: string[][] = []
+  if (separator.length !== headers.length) fail('表格分隔行列数与表头不一致')
+  line += 2
+  while (line < lines.length && /^\s*\|.*\|\s*$/.test(lines[line])) rows.push(tableCells(lines[line++]))
+  return { headers, rows, next: line }
+}
+
+function drawTable(document: PDFKit.PDFDocument, headers: string[], rows: string[][]): void {
+  const { left, widths, padding, measure, headerHeight, rowHeights } = tableLayout(document, headers, rows)
   let y = document.y
+  let rowsOnPage = 0
   const bottom = () => document.page.height - document.page.margins.bottom
   const draw = (row: string[], rowHeight: number, header: boolean, stripe: boolean) => {
+    let x = left
     for (const [index, value] of row.entries()) {
-      const x = left + index * columnWidth
+      const columnWidth = widths[index]
       document.save().lineWidth(0.5).rect(x, y, columnWidth, rowHeight)
-        .fillAndStroke(header ? '#E8EEF5' : stripe ? '#F7F9FC' : '#FFFFFF', '#CBD5E1').restore()
-      document.fontSize(header ? 10.5 : 10).fillColor(header ? '#17243B' : '#27364B').text(value, x + padding, y + padding,
-        { width: innerWidth, lineGap: 2, align: !header && /^[+-]?[\d,.]+%?$/.test(value) ? 'right' : 'left' })
+        .fillAndStroke(header ? `#${DOCUMENT_TABLE_STYLE.header}` : stripe ? `#${DOCUMENT_TABLE_STYLE.stripe}` : '#FFFFFF', `#${DOCUMENT_TABLE_STYLE.border}`).restore()
+      document.fontSize(header ? 10.5 : 10).fillColor(`#${header ? DOCUMENT_TABLE_STYLE.headerText : DOCUMENT_TABLE_STYLE.text}`)
+      const textHeight = measure(value, index)
+      document.text(value, x + padding, y + Math.max(padding, (rowHeight - textHeight) / 2),
+        { width: columnWidth - padding * 2, lineGap: 3, paragraphGap: 0, align: !header && /^[+-]?[\d,.]+%?$/.test(value) ? 'right' : 'left' })
+      x += columnWidth
     }
     y += rowHeight
     document.x = left; document.y = y
@@ -101,10 +126,52 @@ function drawTable(document: PDFKit.PDFDocument, headers: string[], rows: string
   if (y + headerHeight + (rowHeights[0] ?? 0) > bottom()) { document.addPage(); y = document.y }
   draw(headers, headerHeight, true, false)
   for (const [index, row] of rows.entries()) {
-    if (y + rowHeights[index] > bottom()) { document.addPage(); y = document.y; draw(headers, headerHeight, true, false) }
+    // Avoid a final page containing only the last data row. Move the final pair
+    // only after this table has already drawn a row here, so a heading and its
+    // first row stay together. Oversized pairs keep normal row-by-row paging.
+    const tailHeight = index === rows.length - 2 ? rowHeights[index] + rowHeights[index + 1] : 0
+    const keepTailTogether = rowsOnPage > 0 && tailHeight > 0 && y + tailHeight > bottom()
+      && headerHeight + tailHeight <= bottom() - document.page.margins.top
+    if (y + rowHeights[index] > bottom() || keepTailTogether) {
+      document.addPage(); y = document.y; rowsOnPage = 0; draw(headers, headerHeight, true, false)
+    }
     draw(row, rowHeights[index], false, index % 2 === 1)
+    rowsOnPage++
   }
   document.x = left; document.y = y + 10
+}
+
+function headingGroupHeight(document: PDFKit.PDFDocument, lines: string[], start: number, width: number): number {
+  const usable = document.page.height - document.page.margins.top - document.page.margins.bottom
+  let height = 0, next = start
+  while (next < lines.length) {
+    const heading = /^(#{1,6})\s+(.+)$/.exec(lines[next])
+    if (!heading) break
+    document.fontSize(Math.max(11.5, 20 - heading[1].length * 2))
+    if (next !== start || document.y > document.page.margins.top) height += 10
+    height += document.heightOfString(inlineText(heading[2]), { width, lineGap: 4, paragraphGap: 8 })
+    // An oversized heading chain cannot fit as a unit. Bound the lookahead and
+    // let normal pagination proceed without inserting an empty first page.
+    if (height > usable) return height
+    next++
+    while (next < lines.length && !lines[next].trim()) { height += 6; next++ }
+    if (/^(#{1,6})\s+(.+)$/.test(lines[next] ?? '')) continue
+    const table = markdownTableAt(lines, next)
+    if (table) {
+      const layout = tableLayout(document, table.headers, table.rows)
+      return height + layout.headerHeight + (layout.rowHeights[0] ?? 0)
+    }
+    if (next < lines.length) {
+      document.fontSize(11)
+      const lineHeight = document.currentLineHeight(true) + 4
+      const paragraphHeight = document.heightOfString(inlineText(lines[next]), { width, lineGap: 4, paragraphGap: 4 })
+      // Keep short paragraphs whole; longer prose needs two visible lines after
+      // the entire heading chain, not a fixed allowance consumed by subheads.
+      height += paragraphHeight <= lineHeight * 3 + 4 + 0.01 ? paragraphHeight : lineHeight * 2
+    }
+    break
+  }
+  return height
 }
 
 /** Native searchable PDF creation; this is not DOCX/PPTX source-format conversion. */
@@ -130,33 +197,34 @@ export async function createPdf(input: PdfInput): Promise<Buffer> {
     document.on('end', () => { if (!failed) resolve(Buffer.concat(chunks)) })
     try {
       setBodyFont(document, `${title}\n${markdown}`)
-      if (title) { document.fontSize(22).fillColor('#17243B').text(title, { lineGap: 5 }); document.moveDown(0.8) }
-      const lines = markdown.replace(/\r\n?/g, '\n').split('\n')
+      if (title) { document.fontSize(22).fillColor('#000000').text(title, { lineGap: 5 }); document.y += 18 }
+      const textWidth = document.page.width - document.page.margins.left - document.page.margins.right
+      const lines = documentBodyWithoutRepeatedTitle(markdown, title).replace(/\r\n?/g, '\n').split('\n')
       for (let line = 0; line < lines.length; line++) {
         const raw = lines[line]
-        if (!raw.trim()) { document.moveDown(0.4); continue }
-        if (/^\s*\|.*\|\s*$/.test(raw) && line + 1 < lines.length && /^\s*\|.*\|\s*$/.test(lines[line + 1])) {
-          const separator = tableCells(lines[line + 1])
-          if (separator.every(cell => /^:?-{3,}:?$/.test(cell))) {
-            const headers = tableCells(raw), rows: string[][] = []
-            if (separator.length !== headers.length) fail('表格分隔行列数与表头不一致')
-            line += 2
-            while (line < lines.length && /^\s*\|.*\|\s*$/.test(lines[line])) rows.push(tableCells(lines[line++]))
-            line--
-            drawTable(document, headers, rows)
-            continue
-          }
+        if (!raw.trim()) { document.y += 6; continue }
+        const table = markdownTableAt(lines, line)
+        if (table) {
+          line = table.next - 1
+          drawTable(document, table.headers, table.rows)
+          continue
         }
         const heading = /^(#{1,6})\s+(.+)$/.exec(raw)
         // A conservative Markdown subset preserves source text; unsupported syntax
         // remains visible rather than disappearing during a lossy HTML conversion.
         const text = inlineText(heading ? heading[2] : raw)
-        const fontSize = heading ? Math.max(12, 21 - heading[1].length * 2) : 10.5
-        document.fontSize(fontSize).fillColor(heading ? '#17243B' : '#27364B')
-        const lineHeight = document.heightOfString(text, { width: 487, lineGap: 4 })
-        if (heading && document.y + lineHeight + 35 > document.page.height - 58) document.addPage()
-        document.text(text, { lineGap: 4, paragraphGap: heading ? 6 : 3 })
-        if (heading) document.moveDown(0.2)
+        const fontSize = heading ? Math.max(11.5, 20 - heading[1].length * 2) : 11
+        document.fontSize(fontSize).fillColor(heading ? '#000000' : `#${DOCUMENT_TABLE_STYLE.text}`)
+        if (heading) {
+          const groupHeight = headingGroupHeight(document, lines, line, textWidth)
+          document.fontSize(fontSize)
+          const bottom = document.page.height - document.page.margins.bottom
+          // A chain longer than a full page must flow naturally; moving every
+          // remaining oversized suffix would otherwise create one page per heading.
+          if (groupHeight <= bottom - document.page.margins.top && document.y > document.page.margins.top && document.y + groupHeight > bottom) document.addPage()
+        }
+        if (heading && document.y > document.page.margins.top) document.y += 10
+        document.text(text, { width: textWidth, lineGap: 4, paragraphGap: heading ? 8 : 4 })
       }
       const range = document.bufferedPageRange()
       for (let index = range.start; index < range.start + range.count; index++) {

@@ -10,6 +10,7 @@ import { ToolRegistry } from '../../../core/tool-registry/registry.js'
 import { clearSecurityMode, setSecurityMode } from '../../../security/policy-engine.js'
 import { trustBuiltinTool } from '../../../security/tool-policy.js'
 import { hashFileContent } from '../../../shared/file-version.js'
+import { captureOfficeEvidence } from '../../../core/utils/tool-evidence.js'
 import { createSubagentToolRegistry } from '../../subagent/subagent-tool.js'
 import { officeDocumentTool, officeInspectTool } from '../index.js'
 import * as docx from '../docx.js'
@@ -52,6 +53,23 @@ const batch = (files: Array<Record<string, unknown>>, target = ctx) => officeIns
 const batchMetadata = (result: ToolResult) => result.metadata!.files as Array<Record<string, unknown>>
 
 describe('Office batch inspection', () => {
+  it('captures bounded provenance from actual batch receipts including a failed file', async () => {
+    const first = await word('receipt', 'Native Office evidence. '.repeat(30))
+    const args = { files: [{ path: first.file, contentLimit: 50 }, { path: path.join(root, 'missing.docx') }] }
+    const result = await officeInspectTool.execute(args, ctx)
+    const parsed = receipt(result), page = parsed.files[0].output.contentPage
+    expect(result.success).toBe(false)
+    const captured = captureOfficeEvidence({ name: 'office_inspect', args }, result)
+    expect(captured).toMatchObject({ operation: 'inspect', success: false, code: 'OFFICE_BATCH_PARTIAL_FAILURE',
+      evidenceScope: 'tool-receipt', files: [
+        { success: true, path: fs.realpathSync.native(first.file), expectedHash: hashFileContent(first.bytes),
+          returnedRange: [page.offset, page.offset + page.returnedChars], nextOffset: page.nextOffset, sourceTruncated: false },
+        { success: false, requestPath: args.files[1].path, code: 'OFFICE_FILE_MISSING' },
+      ] })
+    expect(JSON.stringify(captured)).not.toContain('Native Office evidence')
+    expect(fs.readFileSync(first.file)).toEqual(first.bytes)
+  })
+
   it('keeps ordered real Word/Excel/PPT/PDF receipts, warnings, versions and truthful preview metadata', async () => {
     const first = await word('说明', '短正文'), sheet = path.join(root, '台账.xlsx'), slides = path.join(root, '汇报.pptx'), pdfPath = path.join(root, '副本.pdf')
     const xlsx = await createXlsx({ sheets: [{ name: '数据', columns: [{ key: 'v', header: '值' }], rows: [{ v: 12 }, { v: { formula: 'SUM(A2:A2)' } }] }] })

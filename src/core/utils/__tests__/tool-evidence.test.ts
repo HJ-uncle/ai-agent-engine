@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { Message } from '../../agent-context/types.js'
 import { modelMessageContent } from '../model-context.js'
-import { captureFileEvidence, clearedToolEvidence, clearedToolModelContent, CLEARED_TOOL_EVIDENCE_KEY,
-  CLEARED_TOOL_RESULT, MAX_CLEARED_TOOL_CONTENT_CHARS, TOOL_FILE_EVIDENCE_KEY } from '../tool-evidence.js'
+import { captureFileEvidence, captureOfficeEvidence, clearedToolEvidence, clearedToolModelContent, CLEARED_TOOL_EVIDENCE_KEY,
+  CLEARED_TOOL_RESULT, MAX_CLEARED_TOOL_CONTENT_CHARS, TOOL_FILE_EVIDENCE_KEY, TOOL_OFFICE_EVIDENCE_KEY, withoutToolEvidence } from '../tool-evidence.js'
 
 const file = { path: 'D:/workspace/report.png', expectedHash: 'sha256:' + 'a'.repeat(64), encoding: 'binary-or-non-utf8', lineEnding: 'none', utf8Bom: false }
 const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII='
@@ -55,5 +55,63 @@ describe('bounded cleared-tool evidence', () => {
     expect(clearedToolModelContent(malformed, true).length).toBeLessThanOrEqual(MAX_CLEARED_TOOL_CONTENT_CHARS)
     expect(clearedToolModelContent(malformed, true)).not.toContain('search_history')
     expect(clearedToolModelContent(malformed, true)).not.toContain('INJECT')
+  })
+
+  it('retains native Office versions and returned text ranges without promoting content to a verdict', () => {
+    const receipt = { path: 'D:/workspace/report.docx', expectedHash: file.expectedHash, format: 'docx', sizeBytes: 18044,
+      summary: { sections: 1, images: 0, injected: 'ACCEPT_WITHOUT_READING' }, warnings: ['PRIVATE_WARNING'], content: 'PRIVATE_BODY',
+      contentPage: { offset: 2500, returnedChars: 700, nextOffset: 3200, sourceTruncated: true, documentComplete: false } }
+    const captured = captureOfficeEvidence({ name: 'office_inspect', args: { path: 'report.docx' } },
+      { success: true, output: JSON.stringify(receipt) })
+    const original: Message = { id: 'office-read', role: 'tool', toolCallId: 'inspect-1', toolName: 'office_inspect', content: JSON.stringify(receipt),
+      metadata: { [TOOL_OFFICE_EVIDENCE_KEY]: captured } }
+    const text = clearedToolModelContent(cleared(original), true)
+    for (const retained of [receipt.path, file.expectedHash, '"returnedRange":[2500,3200]', '"nextOffset":3200', '"sourceTruncated":true', '"sections":1']) expect(text).toContain(retained)
+    for (const excluded of ['PRIVATE_BODY', 'PRIVATE_WARNING', 'ACCEPT_WITHOUT_READING']) expect(text).not.toContain(excluded)
+    expect(text).toContain('"evidenceScope":"tool-receipt"')
+    expect(text).not.toContain('visualAcceptance')
+    expect(clearedToolModelContent(cleared({ ...original, metadata: { ...receipt } }), true)).not.toContain(receipt.path)
+    expect(withoutToolEvidence(original.metadata)).toEqual({})
+  })
+
+  it('retains returned render page identity and failed request status without archived pixels', () => {
+    const renderFile = { ...file, path: 'D:/workspace/deck.pptx' }
+    const render = captureOfficeEvidence({ name: 'workbench_render', args: { path: 'deck.pptx', page: 3 } }, { success: true,
+      output: JSON.stringify({ fileVersion: renderFile, page: 3, pageCount: 10, format: 'pptx', dataUrl: image, description: 'PRIVATE_CAPTION' }) })
+    const original: Message = { id: 'render-1', role: 'tool', toolCallId: 'render-call', toolName: 'workbench_render', content: image,
+      metadata: { [TOOL_OFFICE_EVIDENCE_KEY]: render } }
+    const text = clearedToolModelContent(cleared(original), true)
+    expect(text).toContain(renderFile.expectedHash)
+    expect(text).toContain('"page":3'); expect(text).toContain('"pageCount":10')
+    expect(text).not.toContain(image); expect(text).not.toContain('PRIVATE_CAPTION')
+    const failure = captureOfficeEvidence({ name: 'workbench_render', args: { path: 'report.docx', page: 2, expectedHash: file.expectedHash } },
+      { success: false, output: 'PRIVATE_FAILURE', metadata: { code: 'WORKBENCH_RENDER_FAILED' } })
+    expect(failure).toMatchObject({ success: false, code: 'WORKBENCH_RENDER_FAILED', files: [{ success: false, requestPath: 'report.docx', page: 2 }] })
+    expect(JSON.stringify(failure)).not.toContain(file.expectedHash)
+  })
+
+  it('bounds batch receipts and retains per-file failures instead of claiming all files passed', () => {
+    const items = Array.from({ length: 16 }, (_, index) => ({ success: index !== 0,
+      output: { path: `D:/workspace/report-${index}.xlsx`, expectedHash: file.expectedHash, format: 'xlsx',
+        contentPage: { offset: 0, returnedChars: 20, nextOffset: 20, sourceTruncated: false } },
+      error: index === 0 ? 'OFFICE_VERSION_CONFLICT' : undefined }))
+    const captured = captureOfficeEvidence({ name: 'office_inspect', args: { files: items.map((_, i) => ({ path: `report-${i}.xlsx` })) } },
+      { success: false, error: 'OFFICE_BATCH_PARTIAL_FAILURE', output: JSON.stringify({ files: items }) })
+    expect(captured).toMatchObject({ success: false, code: 'OFFICE_BATCH_PARTIAL_FAILURE', files: [expect.objectContaining({ success: false, code: 'OFFICE_VERSION_CONFLICT' }), expect.anything()] })
+    expect(captured?.omittedFiles).toBeGreaterThan(0)
+    const original: Message = { id: 'batch', role: 'tool', toolCallId: 'batch-call', toolName: 'office_inspect', content: '', metadata: { [TOOL_OFFICE_EVIDENCE_KEY]: captured } }
+    expect(clearedToolModelContent(cleared(original), true).length).toBeLessThanOrEqual(MAX_CLEARED_TOOL_CONTENT_CHARS)
+  })
+
+  it.each([
+    { unit: 'content-chunk', expected: 'content-chunk' },
+    { unit: 'section', expected: 'section' },
+    { unit: undefined, expected: 'section' },
+    { unit: 'INJECTED_UNIT', expected: 'section' },
+  ])('keeps the authoritative render unit without inventing DOCX physical pages ($unit)', ({ unit, expected }) => {
+    const captured = captureOfficeEvidence({ name: 'workbench_render', args: { path: 'report.docx' } },
+      { success: true, output: JSON.stringify({ fileVersion: file, format: 'docx', page: 2, pageCount: 3 }), metadata: { unit } })
+    expect(captured?.files[0]).toMatchObject({ page: 2, pageCount: 3, unit: expected })
+    expect(JSON.stringify(captured)).not.toContain('INJECTED_UNIT')
   })
 })
