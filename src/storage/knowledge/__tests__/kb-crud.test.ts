@@ -1,11 +1,13 @@
-import { createClient, type Client } from '@libsql/client'
+import type { Client } from '@libsql/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import * as database from '../../sqlite/db.js'
 import { createKnowledgeBase, addDocument, getDocument, listKnowledgeBases, searchChunks, updateDocument, deleteKnowledgeBase, splitIntoChunks } from '../kb-repo.js'
+import { knowledgeFixture } from './fixture.js'
 
 let db: Client
-beforeEach(() => { db = createClient({ url: 'file::memory:' }); vi.spyOn(database, 'getDb').mockReturnValue(db) })
-afterEach(() => { db.close(); vi.restoreAllMocks() })
+let fixture: ReturnType<typeof knowledgeFixture>
+beforeEach(() => { fixture = knowledgeFixture(); db = fixture.db; vi.spyOn(database, 'getDb').mockReturnValue(db) })
+afterEach(async () => { await fixture.close(); vi.restoreAllMocks() })
 
 it('creates tenant-scoped bases and atomically indexes editable documents', async () => {
   const base = await createKnowledgeBase('tenant-a', '产品资料', '说明')

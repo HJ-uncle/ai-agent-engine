@@ -46,7 +46,7 @@ export class CronService {
     }
     if(agentId && !await new SQLiteAgentStore().getById(agentId,tenantId))throw new CronValidationError('Agent is unavailable in this tenant',400,'CRON_AGENT_UNAVAILABLE')
   }
-  async create(tenantId:string,raw:unknown,defaults:{sessionId?:string}={}):Promise<CronJob>{
+  async prepareCreate(tenantId:string,raw:unknown,defaults:{sessionId?:string}={}):Promise<CreateCronJobInput>{
     const value=input(raw,true) as CreateCronJobInput
     // A paused configuration cannot dispatch. Keep its save path available when
     // execution is unsupported, matching the editor's explicit paused workflow.
@@ -56,9 +56,12 @@ export class CronService {
     const configuration=value.configuration??normalizeCronConfiguration({version:2,schedule:{kind:'legacy',expression:value.cronExpr,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone},
       target:{kind:'session',sessionId:value.sessionId},notificationPolicy:'all_runs',toolProfile:'general'})
     await this.validateTarget(tenantId,configuration,value.agentId)
-    return this.store.create(tenantId,{...value,configuration})
+    return {...value,configuration}
   }
-  async update(tenantId:string,id:string,raw:unknown):Promise<CronJob|null>{
+  async create(tenantId:string,raw:unknown,defaults:{sessionId?:string}={},preparedId?:string,signal?:AbortSignal):Promise<CronJob>{
+    return this.store.create(tenantId,await this.prepareCreate(tenantId,raw,defaults),preparedId,signal)
+  }
+  async prepareUpdate(tenantId:string,id:string,raw:unknown):Promise<UpdateCronJobInput|null>{
     const value=input(raw,false) as UpdateCronJobInput
     const existing=await this.store.getById(id,tenantId)
     if(!existing)return null
@@ -79,11 +82,15 @@ export class CronService {
     if(value.configuration!==undefined || value.enabled===true || value.agentId!==undefined || value.sessionId!==undefined)
       await this.validateTarget(tenantId,configuration,value.agentId!==undefined?value.agentId:existing.agentId)
     // Bind the validated target to this revision; a concurrent edit must be reviewed again.
-    return this.store.update(id,tenantId,{...value,expectedRevision:existing.revision})
+    return {...value,expectedRevision:existing.revision}
+  }
+  async update(tenantId:string,id:string,raw:unknown,signal?:AbortSignal):Promise<CronJob|null>{
+    const prepared=await this.prepareUpdate(tenantId,id,raw)
+    return prepared ? this.store.update(id,tenantId,prepared,signal) : null
   }
   async list(tenantId:string):Promise<CronJob[]>{return this.store.list(tenantId)}
   async get(tenantId:string,id:string):Promise<CronJob|null>{return this.store.getById(id,tenantId)}
-  async delete(tenantId:string,id:string):Promise<boolean>{return this.store.delete(id,tenantId)}
+  async delete(tenantId:string,id:string,expectedRevision?:number,signal?:AbortSignal):Promise<boolean>{return this.store.delete(id,tenantId,expectedRevision,signal)}
   preview(raw:unknown){
     if(!record(raw)||Object.keys(raw).some(key=>!['schedule','after','count'].includes(key)))throw new CronValidationError('Invalid schedule preview body')
     return previewCronSchedule(raw.schedule as Parameters<typeof previewCronSchedule>[0],raw.after as number|undefined,raw.count as number|undefined)

@@ -3,12 +3,14 @@ import type { Client } from '@libsql/client'
 import { getDb, getDbEpoch } from '../sqlite/db.js'
 import { withHistoryLock, isSessionHistoryMutating, isSessionHistoryCompressing, waitForSessionHistoryCompression } from '../conversation/serialization.js'
 import type { CompactionState } from '../../core/subagent/types.js'
+import type { PendingAction } from '../../core/agent-context/types.js'
 import { ensureCronRunSchema, withCronWrite, validateAutomationAdmission, bindAutomationRoot, projectAutomationRoot, type AutomationAdmission } from '../cron/runs.js'
 import { getExecutionOwners, serviceForOwner, type DrainEvidence, type ExecutionOwner } from '../../core/collaboration/execution-owner.js'
 import type { CollaborationBinding } from '../../core/collaboration/types.js'
 import { ensureUserAdmissionSchema, readDatabaseNamespace, lookupUserAdmission, assertAdmissionPredecessor, bindUserAdmission, type PreparedUserAdmission, type UserAdmissionReceipt, type UserAdmissionSelector } from '../root-admission/index.js'
 import { bindServerAdmissionSeed, ensureServerAdmissionSchema, prepareServerAdmissionInput, readServerAdmissionSeed, type ServerAdmissionReceipt } from '../root-admission/server-seed.js'
 import { canonicalAdmissionBody } from '../root-admission/index.js'
+import { ensureSessionToolkitsSchema, persistSessionToolkits } from '../session/toolkits.js'
 
 export type { CompactionState } from '../../core/subagent/types.js'
 
@@ -42,7 +44,7 @@ export interface RootPending {
   toolName: string
   args: Record<string, unknown>
   messageId?: string
-  pendingAction?: Record<string, unknown>
+  pendingAction?: PendingAction
   question?: string
   description?: string
   options?: unknown[]
@@ -62,6 +64,7 @@ export interface RootRunRequestConfig {
   mcpServers?: string[]
   knowledgeBases?: string[]
   memoryScope?: 'off' | 'global' | 'session'
+  toolkits?: string[]
 }
 export interface RootRun {
   schemaVersion: 1
@@ -100,7 +103,7 @@ const recovered = new WeakMap<Client, Promise<void>>()
 export function resumableRequest(request: Record<string, unknown>): Record<string, unknown> {
   const allowed = ['automationRunId', 'cronJobId', 'cronTimeoutSeconds', 'agentId', 'systemPrompt', 'maxAskUserCount', 'thinkingMode', 'inheritContext', 'workspacePaths',
     'model', 'subagentModel', 'utilityModel', 'modelBaseUrl', 'modelProvider', 'capabilities', 'skills', 'mcpServers',
-    'knowledgeBases', 'memoryScope', 'allowedTools', 'inlineSkills', 'inlineAgents', 'inlineAgent', 'inlineKnowledgeBases', 'ragTopK', 'metadata', 'toolProfile']
+    'knowledgeBases', 'memoryScope', 'allowedTools', 'toolkits', 'inlineSkills', 'inlineAgents', 'inlineAgent', 'inlineKnowledgeBases', 'ragTopK', 'metadata', 'toolProfile']
   const clean = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map(clean)
     if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([key]) =>
@@ -115,7 +118,7 @@ export function publicRequestConfig(request: Record<string, unknown>): RootRunRe
   for (const key of ['automationRunId', 'cronJobId', 'agentId', 'subagentModel', 'utilityModel'] as const) {
     if (typeof request[key] === 'string') config[key] = request[key]
   }
-  for (const key of ['skills', 'mcpServers', 'knowledgeBases'] as const) {
+  for (const key of ['skills', 'mcpServers', 'knowledgeBases', 'toolkits'] as const) {
     const value = request[key]
     if (Array.isArray(value) && value.every(id => typeof id === 'string')) config[key] = [...value]
   }
@@ -171,6 +174,7 @@ export class RootRunStore {
         await db.execute('CREATE INDEX IF NOT EXISTS root_runs_session ON root_runs(tenant_id, session_id, seq)')
         await ensureUserAdmissionSchema(db)
         await ensureServerAdmissionSchema(db)
+        await ensureSessionToolkitsSchema(db)
       })()
       schemas.set(db, promise)
     }
@@ -231,6 +235,7 @@ export class RootRunStore {
         const result = await tx.execute({ sql: 'INSERT INTO root_runs(tenant_id,session_id,run_id,turn_id,state) VALUES(?,?,?,?,?) RETURNING seq',
           args: [tenantId, sessionId, run.runId, run.turnId, JSON.stringify(run)] })
         run.seq = Number(result.rows[0].seq)
+        await persistSessionToolkits(tx, tenantId, sessionId, request)
         if (claim && automation) await bindAutomationRoot(tx, claim, run, automation)
         if (serverInput) {
           run.serverAdmissionReceipt = await bindServerAdmissionSeed(tx, tenantId, serverInput, run, claim)
@@ -307,6 +312,7 @@ export class RootRunStore {
             onPrepared?.(run.runId, run.attemptId)
             const row = await tx.execute({ sql: 'INSERT INTO root_runs(tenant_id,session_id,run_id,turn_id,state) VALUES(?,?,?,?,?) RETURNING seq', args: [tenantId, admission.sessionId, run.runId, run.turnId, JSON.stringify(run)] })
             run.seq = Number(row.rows[0].seq)
+            await persistSessionToolkits(tx, tenantId, admission.sessionId, request)
             const receipt = await bindUserAdmission(tx, tenantId, admission, run)
             run.admissionReceipt = receipt
             await tx.execute({ sql: 'UPDATE root_runs SET state=? WHERE tenant_id=? AND run_id=?', args: [JSON.stringify(run), tenantId, run.runId] })

@@ -28,6 +28,15 @@ let fixture:string,db:LocalSqliteProcessClient,store:CronStore,service:CronServi
 let app:ReturnType<typeof Fastify>
 const legacy={name:'Legacy automation',cronExpr:'* * * * *',message:'Synthetic task',sessionId:'session',enabled:false}
 const configuration={version:2 as const,schedule:{kind:'interval' as const,everyMinutes:90,anchorAt:Date.parse('2026-10-13T09:00:00Z')},target:{kind:'standalone' as const},notificationPolicy:'all_runs' as const,toolProfile:'general' as const}
+async function approve(name:string,args:Record<string,unknown>){
+  const ctx={tenantId:'default',sessionId:'current-session',currentToolCallId:'cron-mutation'} as AgentContext
+  const tool=cronTools.find(tool=>tool.name===name)!
+  const waiting=await tool.execute(args,ctx)
+  expect(waiting).toMatchObject({status:'waiting',needsConfirmation:true})
+  return tool.execute(args,{...ctx,approvedToolCallId:ctx.currentToolCallId,resumeToolCall:{
+    toolCall:{id:ctx.currentToolCallId!,name,args},decision:'approved',pendingAction:waiting.pendingAction,
+  }})
+}
 beforeEach(async()=>{
   fixture=fs.mkdtempSync(path.join(os.tmpdir(),'aether-cron-configuration-'))
   app=Fastify()
@@ -139,8 +148,7 @@ describe('Shared Cron service, HTTP and AI tool contract',()=>{
     const denied=await app.inject({method:'POST',url:'/cron/'+job.id+'/enable'})
     expect(denied.json().code).toBe(40900)
     expect((await store.getById(job.id,'default'))?.revision).toBe(2)
-    const ctx={tenantId:'default',sessionId:'current-session'} as AgentContext
-    const tool=await cronTools.find(tool=>tool.name==='cron_create')!.execute({name:'AI paused',message:'Synthetic',configuration,enabled:false},ctx)
+    const tool=await approve('cron_create',{name:'AI paused',message:'Synthetic',configuration,enabled:false})
     expect(tool.success).toBe(true);expect(JSON.parse(String(tool.output)).job.enabled).toBe(false)
     expect(await store.listEnabled()).toEqual([])
     expect((await db.execute('SELECT * FROM cron_runs')).rows).toHaveLength(0)
@@ -177,14 +185,14 @@ describe('Shared Cron service, HTTP and AI tool contract',()=>{
   })
   it('uses the same create/preview/update validation, exact IDs and typed receipt body',async()=>{
     await up29(db)
-    const ctx={tenantId:'default',sessionId:'current-session'} as AgentContext
-    const created=await cronTools.find(tool=>tool.name==='cron_create')!.execute({name:'Created by AI',message:'Synthetic',configuration},ctx)
+    const ctx={tenantId:'default',sessionId:'current-session',currentToolCallId:'cron-mutation'} as AgentContext
+    const created=await approve('cron_create',{name:'Created by AI',message:'Synthetic',configuration})
     expect(created.success).toBe(true)
     const body=JSON.parse(String(created.output));expect(body.automationReceipt).toMatchObject({kind:'automation',schemaVersion:2,operation:'created',jobId:body.job.id})
     const current=await app.inject('/cron/'+body.job.id);expect(current.json().data.configuration).toEqual(configuration)
     const prefix=await cronTools.find(tool=>tool.name==='cron_update')!.execute({id:body.job.id.slice(0,8),name:'Wrong'},ctx)
     expect(prefix.success).toBe(false);expect((await store.getById(body.job.id,'default'))?.name).toBe('Created by AI')
-    const pause=await cronTools.find(tool=>tool.name==='cron_update')!.execute({id:body.job.id,enabled:false},ctx)
+    const pause=await approve('cron_update',{id:body.job.id,enabled:false})
     expect(JSON.parse(String(pause.output)).automationReceipt.operation).toBe('disabled')
     const preview=await app.inject({method:'POST',url:'/cron/preview',payload:{schedule:configuration.schedule,after:configuration.schedule.anchorAt,count:3}})
     expect(preview.json().data.occurrences).toEqual([1,2,3].map(index=>configuration.schedule.anchorAt+index*90*60000))

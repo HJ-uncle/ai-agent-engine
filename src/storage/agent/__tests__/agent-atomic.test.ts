@@ -10,6 +10,7 @@ import { LocalSqliteProcessClient } from '../../sqlite/local-process-client.js'
 import { up as migrateAgents } from '../../sqlite/migrations/004_add_agents.js'
 import { up as migrateTools } from '../../sqlite/migrations/008_add_agent_allowed_tools.js'
 import { SQLiteAgentStore, type Agent, type CreateAgentInput } from '../index.js'
+import { agentConfigurationRevision } from '../configuration.js'
 
 const selection = vi.hoisted(() => ({ getDb: vi.fn<() => Client>() }))
 vi.mock('../../sqlite/db.js', () => ({ getDb: selection.getDb }))
@@ -142,6 +143,35 @@ afterEach(async () => {
 })
 
 describe('atomic Agent configuration', () => {
+  it('serializes same-name creates across independent connections without a false success', async () => {
+    const { a, b } = await setup()
+    const barrier = gate(), attempted = deferred()
+    const writer = hookClient(a, { after: async sql => { if (sql.startsWith('INSERT INTO agents ')) await barrier.hold() } })
+    const first = run(writer, () => store.create('tenant', input('A')))
+    await barrier.entered
+    const second = run(hookClient(b, { begin: async () => attempted.resolve() }), () => store.create('tenant', { ...input('B'), name: 'A' }))
+    const rejection = expect(second).rejects.toThrow('同名 Agent')
+    await attempted.promise
+    barrier.release()
+    await first
+    await rejection
+    expect((await run(a, () => store.list('tenant'))).map(profile)).toEqual([input('A')])
+    await expect(run(b, () => store.create('other', input('A')))).resolves.toMatchObject({ name: 'A', tenantId: 'other' })
+  })
+
+  it('checks approved revisions inside update and delete transactions, including bindings changed in the same second', async () => {
+    const { a, b } = await setup()
+    const old = await run(a, () => store.create('tenant', input('A')))
+    const revision = agentConfigurationRevision(old)
+    await b.execute('INSERT INTO agent_allowed_tools(agent_id, tool_name) VALUES (?, ?)', [old.id, 'extra'])
+    expect((await byId(b, old.id))?.updatedAt).toBe(old.updatedAt)
+    await expect(run(a, () => store.update(old.id, 'tenant', { name: 'Stale' }, revision))).rejects.toThrow('预览后已改变')
+    await expect(run(a, () => store.delete(old.id, 'tenant', revision))).rejects.toThrow('预览后已改变')
+    const current = await byId(b, old.id)
+    expect(current?.name).toBe('A')
+    await expect(run(a, () => store.delete(old.id, 'tenant', agentConfigurationRevision(current!)))).resolves.toBe(true)
+  })
+
   it('updates second-resolution updatedAt for each explicit resource-only change, including empty arrays', async () => {
     const { a } = await setup()
     const old = await run(a, () => store.create('tenant', input('A')))

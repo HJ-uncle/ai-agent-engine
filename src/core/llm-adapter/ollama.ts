@@ -6,7 +6,7 @@ import type { LLMAdapter, LLMResponse, LLMAdapterOptions, LLMStreamChunk } from 
 import type { Message } from '../agent-context/index.js'
 import { estimateTokens } from '../utils/tokens.js'
 import { modelMessageContent } from '../utils/model-context.js'
-import { imageToolPayload, imageVersionDescription } from '../utils/multimodal-context.js'
+import { imageDimensionsDescription, imageToolPayload, imageVersionDescription } from '../utils/multimodal-context.js'
 
 interface OllamaMessage {
   role: string
@@ -32,7 +32,7 @@ export class OllamaAdapter implements LLMAdapter {
       // from another model must not become megabytes of base64 prompt text.
       const unavailable = 'Image pixels were not sent: this Ollama adapter does not implement vision input.'
       const image = msg.role === 'tool' ? imageToolPayload(msg.content) : undefined
-      const content = image ? unavailable + imageVersionDescription(image.fileVersion)
+      const content = image ? unavailable + imageDimensionsDescription(image) + imageVersionDescription(image.fileVersion)
         : typeof msg.content === 'string' ? msg.content
         : msg.content.map(part => part?.type === 'image' || part?.type === 'image_url'
           ? unavailable : part?.type === 'text' ? String(part.text ?? '') : JSON.stringify(part)).join('\n')

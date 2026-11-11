@@ -1,6 +1,7 @@
 import { getDb } from '../sqlite/db.js'
 import { v4 as uuidv4 } from 'uuid'
 import type { Client, InValue, Transaction } from '@libsql/client'
+import { AgentConfigurationConflict, agentConfigurationRevision } from './configuration.js'
 
 export interface Agent {
   id: string
@@ -24,6 +25,7 @@ export type UpdateAgentInput = Partial<CreateAgentInput>
 export class SQLiteAgentStore {
   async create(tenantId: string, input: CreateAgentInput): Promise<Agent> {
     return this.transaction('write', async db => {
+      await this.assertAvailableName(db, tenantId, input.name)
       const id = uuidv4()
 
       await db.execute({
@@ -161,12 +163,14 @@ export class SQLiteAgentStore {
     })
   }
 
-  async update(id: string, tenantId: string, input: UpdateAgentInput): Promise<Agent | null> {
+  async update(id: string, tenantId: string, input: UpdateAgentInput, expectedRevision?: string): Promise<Agent | null> {
     return this.transaction('write', async db => {
       // BEGIN IMMEDIATE protects the existence check and partial update together.
       // No relation can be overwritten from a profile read before another writer.
       const current = await this.readById(db, id, tenantId)
       if (!current) return null
+      this.assertRevision(current, expectedRevision)
+      if (input.name !== undefined) await this.assertAvailableName(db, tenantId, input.name, id)
 
       // Update main table fields if provided
       const fields = []
@@ -195,14 +199,32 @@ export class SQLiteAgentStore {
     })
   }
 
-  async delete(id: string, tenantId: string): Promise<boolean> {
+  async delete(id: string, tenantId: string, expectedRevision?: string): Promise<boolean> {
     return this.transaction('write', async db => {
+      if (expectedRevision !== undefined) {
+        const current = await this.readById(db, id, tenantId)
+        if (!current) return false
+        this.assertRevision(current, expectedRevision)
+      }
       const result = await db.execute({
         sql: `DELETE FROM agents WHERE id = ? AND tenant_id = ?`,
         args: [id, tenantId]
       })
       return result.rowsAffected > 0
     })
+  }
+
+  private assertRevision(current: Agent, expectedRevision?: string): void {
+    if (expectedRevision !== undefined && agentConfigurationRevision(current) !== expectedRevision) {
+      throw new AgentConfigurationConflict('Agent 配置在预览后已改变，未执行操作；请重新查看配置并确认')
+    }
+  }
+
+  private async assertAvailableName(db: Pick<Client, 'execute'>, tenantId: string, name: string, ownId?: string): Promise<void> {
+    const collisions = await db.execute({ sql: 'SELECT id FROM agents WHERE tenant_id = ? AND name = ?', args: [tenantId, name] })
+    if (collisions.rows.some(row => String(row['id']) !== ownId)) {
+      throw new AgentConfigurationConflict(`已存在同名 Agent "${name}"；请明确更新现有 ID 或使用其他名称`)
+    }
   }
 
   private async updateRelations(db: Transaction, id: string, input: UpdateAgentInput) {

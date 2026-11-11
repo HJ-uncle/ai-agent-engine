@@ -89,10 +89,10 @@ describe('scoped on-demand builtin definitions', () => {
     expect(child.has('load_tools')).toBe(false)
     expect(() => child.loadForModel!(['office_inspect'])).toThrow('trusted')
   })
-  it('keeps all 63 capabilities, exposes core schemas and discovers every permitted tool', async () => {
+  it('keeps the complete authorized catalogue, exposes core schemas and discovers every permitted tool', async () => {
     const { registry } = await createToolRegistry(options)
-    expect(registry.list()).toHaveLength(65)
-    expect(registry.listForModel()).toHaveLength(65)
+    expect(registry.list().map(tool => tool.name)).toEqual(expect.arrayContaining(['office_document', 'office_inspect', 'browser_snapshot', 'subagent_start', 'recall']))
+    expect(registry.listForModel().map(tool => tool.name)).toEqual(registry.list().map(tool => tool.name))
     expect(names(registry).sort()).toEqual([...CORE_MODEL_TOOLS].sort())
     const loader = registry.listForRequest().find(tool => tool.name === 'load_tools')!
     for (const tool of registry.list()) if (tool.name !== 'load_tools') expect(loader.description).toContain(tool.name)

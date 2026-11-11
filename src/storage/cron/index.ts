@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid'
 import { getDb } from '../sqlite/db.js'
 import { withCronWrite } from './runs.js'
+import { throwIfAborted } from '../../core/utils/abort.js'
 import { CronValidationError, localCronTimeZone, normalizeCronConfiguration, nextOccurrence, type CronConfigurationV2 } from '../../scheduler/cron-schedule.js'
 
 export const DEFAULT_CRON_TIMEOUT_SECONDS = 0
@@ -67,16 +68,17 @@ export function cronJobFromRow(row:Record<string,unknown>):CronJob {
 }
 export class CronStore {
   private get db(){return getDb()}
-  async create(tenantId:string,input:CreateCronJobInput):Promise<CronJob> {
+  async create(tenantId:string,input:CreateCronJobInput,preparedId?:string,signal?:AbortSignal):Promise<CronJob> {
+    throwIfAborted(signal)
     validateCronFields(input)
     const name=requiredText(input.name,'name'),message=requiredText(input.message,'message'),configuration=configurationForCreate(input)
-    const id=uuidv4(),now=Date.now(),enabled=input.enabled!==false,legacy=legacyColumns(configuration)
+    const id=preparedId??uuidv4(),now=Date.now(),enabled=input.enabled!==false,legacy=legacyColumns(configuration)
     const next=enabled?nextOccurrence(configuration.schedule,now):null
     await withCronWrite(this.db,async tx=>{
       await tx.execute({sql:`INSERT INTO cron_jobs (id,tenant_id,name,description,cron_expr,message,session_id,agent_id,thinking_mode,timeout_seconds,enabled,created_at,updated_at,configuration_json,revision,schedule_revision,next_run_at)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?)`,args:[id,tenantId,name,input.description??null,legacy.cronExpr,message,legacy.sessionId,input.agentId??null,
         input.thinkingMode==null?null:JSON.stringify(input.thinkingMode),input.timeoutSeconds??null,enabled?1:0,now,now,JSON.stringify(configuration),next]})
-    })
+    },signal)
     return (await this.getById(id,tenantId))!
   }
   async getById(id:string,tenantId:string):Promise<CronJob|null>{
@@ -85,7 +87,8 @@ export class CronStore {
   }
   async list(tenantId:string):Promise<CronJob[]>{return (await this.db.execute({sql:'SELECT * FROM cron_jobs WHERE tenant_id=? ORDER BY created_at DESC',args:[tenantId]})).rows.map(cronJobFromRow)}
   async listEnabled():Promise<CronJob[]>{return (await this.db.execute('SELECT * FROM cron_jobs WHERE enabled=1')).rows.map(cronJobFromRow)}
-  async update(id:string,tenantId:string,input:UpdateCronJobInput):Promise<CronJob|null>{
+  async update(id:string,tenantId:string,input:UpdateCronJobInput,signal?:AbortSignal):Promise<CronJob|null>{
+    throwIfAborted(signal)
     validateCronFields(input)
     if(input.expectedRevision!==undefined && (!Number.isSafeInteger(input.expectedRevision)||input.expectedRevision<1))throw new CronValidationError('expectedRevision must be a positive integer')
     return withCronWrite(this.db,async tx=>{
@@ -103,16 +106,27 @@ export class CronStore {
       const enabled=input.enabled??job.enabled,scheduleChanged=JSON.stringify(configuration.schedule)!==JSON.stringify(job.configuration.schedule),enableChanged=enabled!==job.enabled
       const next=(scheduleChanged||enableChanged)?(enabled?nextOccurrence(configuration.schedule,Date.now()):null):(job.nextRunAt??null)
       const legacy=legacyColumns(configuration),thinking=input.thinkingMode!==undefined?input.thinkingMode:job.thinkingMode
+      throwIfAborted(signal)
       await tx.execute({sql:`UPDATE cron_jobs SET name=?,description=?,cron_expr=?,message=?,session_id=?,agent_id=?,thinking_mode=?,timeout_seconds=?,enabled=?,updated_at=?,configuration_json=?,revision=?,schedule_revision=?,next_run_at=? WHERE id=? AND tenant_id=?`,args:[
         input.name?.trim()??job.name,input.description!==undefined?input.description:job.description??null,legacy.cronExpr,input.message?.trim()??job.message,legacy.sessionId,
         input.agentId!==undefined?input.agentId:job.agentId??null,thinking==null?null:JSON.stringify(thinking),input.timeoutSeconds!==undefined?input.timeoutSeconds:job.timeoutSeconds??null,
         enabled?1:0,Date.now(),JSON.stringify(configuration),job.revision+1,job.scheduleRevision+(scheduleChanged||enableChanged?1:0),next,id,tenantId]})
       const updated=await tx.execute({sql:'SELECT * FROM cron_jobs WHERE id=? AND tenant_id=?',args:[id,tenantId]})
       return cronJobFromRow(updated.rows[0])
-    })
+    },signal)
   }
   async updateRuntime(id:string,lastRunAt:number,nextRunAt?:number|null):Promise<void>{
     await this.db.execute({sql:'UPDATE cron_jobs SET last_run_at=?,next_run_at=?,updated_at=? WHERE id=?',args:[lastRunAt,nextRunAt??null,Date.now(),id]})
   }
-  async delete(id:string,tenantId:string):Promise<boolean>{return withCronWrite(this.db,async tx=>(await tx.execute({sql:'DELETE FROM cron_jobs WHERE id=? AND tenant_id=?',args:[id,tenantId]})).rowsAffected>0)}
+  async delete(id:string,tenantId:string,expectedRevision?:number,signal?:AbortSignal):Promise<boolean>{
+    return withCronWrite(this.db,async tx=>{
+      if(expectedRevision!==undefined){
+        const result=await tx.execute({sql:'SELECT revision FROM cron_jobs WHERE id=? AND tenant_id=?',args:[id,tenantId]})
+        if(!result.rows[0])return false
+        if(Number(result.rows[0].revision)!==expectedRevision)throw new CronValidationError('Automation was modified; reload before deleting',409,'CRON_REVISION_CONFLICT')
+      }
+      throwIfAborted(signal)
+      return (await tx.execute({sql:'DELETE FROM cron_jobs WHERE id=? AND tenant_id=?',args:[id,tenantId]})).rowsAffected>0
+    },signal)
+  }
 }

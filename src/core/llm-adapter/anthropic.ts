@@ -9,7 +9,7 @@ import type { LLMAdapter, LLMResponse, LLMAdapterOptions, LLMStreamChunk, LLMStr
 import type { Message, Tool } from '../agent-context/index.js'
 import { estimateTokens } from '../utils/tokens.js'
 import { modelMessageContent } from '../utils/model-context.js'
-import { imageToolPayload, imageVersionDescription } from '../utils/multimodal-context.js'
+import { imageDimensionsDescription, imageToolPayload, imageVersionDescription } from '../utils/multimodal-context.js'
 import { browserSnapshotImageText } from '../utils/browser-output.js'
 import { isFailedBrowserMessage } from '../utils/browser-failure.js'
 
@@ -151,7 +151,7 @@ function messageToAnthropic(
           const browserText = browserSnapshotImageText(parsed)
           // 如果是 smart_read 的图片 JSON 结果，转换成多模态格式
           toolContent = supportsVision ? [
-            { type: 'text', text: `图片文件 ${parsed.filename} 已读取：${typeof parsed.description === 'string' ? '\n' + parsed.description.slice(0, 1024) : ''}${imageVersionDescription(parsed.fileVersion)}${browserText ? '\n' + browserText : ''}` },
+            { type: 'text', text: `图片文件 ${parsed.filename} 已读取：${typeof parsed.description === 'string' ? '\n' + parsed.description.slice(0, 1024) : ''}${imageDimensionsDescription(parsed)}${imageVersionDescription(parsed.fileVersion)}${browserText ? '\n' + browserText : ''}` },
             { 
               type: 'image', 
               source: { 
@@ -160,7 +160,7 @@ function messageToAnthropic(
                 data: parsed.dataUrl.replace(/^data:.*;base64,/, '') 
               } 
             }
-          ] : `Image pixels were not sent: vision is disabled for the selected model.${imageVersionDescription(parsed.fileVersion)}${browserText ? '\n' + browserText : ''}`
+          ] : `Image pixels were not sent: vision is disabled for the selected model.${imageDimensionsDescription(parsed)}${imageVersionDescription(parsed.fileVersion)}${browserText ? '\n' + browserText : ''}`
         } else if (parsed.dataUrlStripped) {
           toolContent = parsed.hasDataUrl === false
             ? `图片文件 ${parsed.filename || 'image'} 已读取，但图像内容未写入上下文。需要像素级检查时请改用 OCR 或较小图片。`

@@ -12,6 +12,9 @@ import { isCodeProfileTool, normalizeAllowedTools, normalizeToolName, type ToolP
 import { isDefaultTool, REMOVED_TOOL_NAMES } from './tool-exposure.js'
 import { compactBuiltinToolDefinition } from './model-tool-definitions.js'
 import { loadToolsTool } from './model-tool-loading.js'
+import { assertToolkitPermissions, normalizeToolkits, toolkitToolNames, MANAGEMENT_TOOL_NAMES } from './toolkits.js'
+import { createSkillManagementTools } from './skill/management-tools.js'
+import { createKnowledgeManagementTools } from './knowledge/management-tools.js'
 import { skillsRegistry } from '../skills/index.js'
 import {
   listFilesTool,
@@ -67,6 +70,10 @@ export interface RegistryFactoryOptions {
   workspaceRoot?: string
   /** general preserves service capabilities; code selects the IDE's executable programming tools. */
   toolProfile?: ToolProfile
+  /** Explicit root-session capability selections; never inherited by child registries. */
+  toolkits?: readonly string[]
+  /** Server-resolved bound Agent ceiling, before legacy request-level overrides. */
+  toolkitAllowedTools?: readonly string[] | null
   /** Configuration screens need selectable tools; execution defaults stay lean. Never accept this from chat input. */
   toolExposure?: 'runtime' | 'catalogue'
   /** Server-only: verified explicit collaborators require controls for their existing owned executions. */
@@ -149,6 +156,14 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   throwIfAborted(opts.signal)
   const profile = opts.toolProfile ?? 'general'
   const explicitAllowedTools = normalizeAllowedTools(opts.allowedTools)
+  const managementCeiling = normalizeAllowedTools(opts.toolkitAllowedTools)
+  const toolkits = normalizeToolkits(opts.toolkits, profile) ?? []
+  assertToolkitPermissions(toolkits, opts.toolkitAllowedTools, explicitAllowedTools)
+  const toolkitNames = new Set(toolkitToolNames(toolkits))
+  const agentTools = createAgentTools(opts.inlineAgents ?? [])
+  const skillManagementTools = createSkillManagementTools()
+  const knowledgeManagementTools = createKnowledgeManagementTools()
+  const managementImplementations = new Set([...agentTools, ...skillManagementTools, ...knowledgeManagementTools, ...cronTools])
   const defaultExposure = opts.toolExposure !== 'catalogue' && explicitAllowedTools === undefined
   const memoryTools = createMemoryTools()
   const memoryEnabled = effectiveMemoryScopes({ ...opts, toolProfile: profile }).length > 0
@@ -157,6 +172,8 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   const ownedControls = new Set(opts.ownedCollaboration ? ownedCollaborationTools : [])
   const ownedControlNames = new Set([...ownedControls].map(tool => tool.name))
   const registry = new ToolRegistry(tool => {
+    if (MANAGEMENT_TOOL_NAMES.has(tool.name) && !managementImplementations.has(tool)) return false
+    if (MANAGEMENT_TOOL_NAMES.has(tool.name) && managementCeiling && !managementCeiling.includes(tool.name)) return false
     if (REMOVED_TOOL_NAMES.has(tool.name)) return false
     if (tool.name === 'collaborator_dispatch') return !!opts.ownedCollaboration && isCollaboratorDispatch(tool)
     // Planning changes only the current session's durable state. Trust its builtin
@@ -168,7 +185,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
     if (ownedControlNames.has(tool.name)) return ownedControls.has(tool)
     // Apply this at insertion so built-in skills and late registrations cannot
     // accidentally restore optional legacy/service tools to ordinary runs.
-    if (defaultExposure && !isDefaultTool(tool.name)) return false
+    if (defaultExposure && !isDefaultTool(tool.name) && !toolkitNames.has(tool.name)) return false
     return profile === 'code'
       ? (isCodeProfileTool(tool as Tool & { source?: string }) || (memoryEnabled && memoryImplementations.has(tool))) &&
         (explicitAllowedTools === undefined || explicitAllowedTools.includes(tool.name))
@@ -214,7 +231,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   //   ON  → 全量工具（undefined，走现有全注册逻辑）
   //   OFF → 仅核心工具（安全省 token）
   // Code capabilities are independent of OSM; an explicit list may only narrow the profile.
-  let effectiveAllowedTools = profile === 'code'
+  let effectiveAllowedTools = profile === 'code' || opts.toolExposure === 'catalogue'
     ? explicitAllowedTools
     : normalizeAllowedTools(resolveDefaultAllowedTools(opts.allowedTools))
 
@@ -237,6 +254,9 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   }
 
   const shouldRegister = (toolName: string): boolean => {
+    // OSM is a default methodology/tool selection, not an explicit toolkit opt-in.
+    // The registry insertion gate still enforces profile and Agent/request ceilings.
+    if (toolkitNames.has(toolName)) return true
     if (toolName === 'plan_update') return true
     if (ownedControlNames.has(toolName)) return true
     // undefined / null = 未配置，加载全部工具
@@ -389,9 +409,12 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   throwIfAborted(opts.signal)
 
   // 17. Agent 系统工具 - 按 allowedTools 过滤；注入 inlineAgents 供查询
-  createAgentTools(opts.inlineAgents ?? []).forEach(t => {
+  agentTools.forEach(t => {
     if (shouldRegister(t.name)) registerBuiltin(t)
   })
+  for (const tool of [...skillManagementTools, ...knowledgeManagementTools]) {
+    if (shouldRegister(tool.name)) registerBuiltin(tool)
+  }
 
   // 18. 代码诊断工具（LSP：tsc + eslint），用于 AI 自动检查/修复代码
   if (shouldRegister('code_diagnose')) registerBuiltin(lspDiagnoseTool)
@@ -407,6 +430,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   if (shouldRegister(reportArtifactsTool.name)) registerBuiltin(reportArtifactsTool)
 
   if (registry.modelToolLoadingCandidates().length) registerBuiltin(loadToolsTool)
+  if (toolkitNames.size) registry.loadForModel([...toolkitNames])
 
   // ── Superpower 自检 ────────────────────────────────────────────────────
   // 验证 CORE 工具名与 registry 实际注册保持一致，避免 OFF 模式下 Agent

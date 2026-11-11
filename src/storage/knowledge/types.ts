@@ -1,5 +1,7 @@
 export interface KnowledgeBase {
   id: string
+  /** Monotonic version, including changes to documents in this base. */
+  revision: number
   tenantId: string
   name: string
   description: string
@@ -10,6 +12,7 @@ export interface KnowledgeBase {
 
 export interface KBDocument {
   id: string
+  revision: number
   tenantId: string
   knowledgeBaseId: string | null
   filename: string

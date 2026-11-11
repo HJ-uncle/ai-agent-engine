@@ -6,7 +6,7 @@ import { IMAGE_MIME_TYPES } from '../constants.js'
 import { isVisionModelAvailable } from '../utils.js'
 import { extractTextWithOCR } from '../ocr.js'
 import { describeImageWithVisionProxy, isVisionProxyConfigured } from '../vision-proxy.js'
-import { MAX_NATIVE_IMAGE_BYTES } from '../../../core/utils/multimodal-context.js'
+import { imageDimensionsFromHeader, MAX_NATIVE_IMAGE_BYTES } from '../../../core/utils/multimodal-context.js'
 
 export class ImageHandler implements FileHandler {
   extensions = Object.keys(IMAGE_MIME_TYPES)
@@ -79,6 +79,7 @@ export class ImageHandler implements FileHandler {
         filename: path.basename(filePath),
         mimeType,
         size: buffer.length,
+        ...imageDimensionsFromHeader(buffer),
         dataUrl,
         hasDataUrl: true as const
       }

@@ -9,6 +9,35 @@ type ImageIdentity = { url: string; mimeType?: string; lowDetail?: boolean }
 export const MAX_NATIVE_IMAGE_BYTES = 9 * 1024 * 1024
 export const MAX_NATIVE_IMAGE_BASE64_CHARS = 12 * 1024 * 1024
 
+export interface ImageDimensions { width: number; height: number }
+
+/** Header facts avoid a second shell read just to size a slide image. This is
+ * not pixel decoding or proof that the complete image renders correctly. */
+export function imageDimensionsFromHeader(header: Buffer): ImageDimensions | undefined {
+  let width = 0, height = 0
+  if (header.length >= 33 && header.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+    && header.readUInt32BE(8) === 13 && header.toString('ascii', 12, 16) === 'IHDR') {
+    width = header.readUInt32BE(16); height = header.readUInt32BE(20)
+  } else if (header.length >= 13 && /^GIF8[79]a$/.test(header.toString('ascii', 0, 6))) {
+    width = header.readUInt16LE(6); height = header.readUInt16LE(8)
+  }
+  return imageDimensions({ width, height })
+}
+
+/** Keep only the bounded numeric pair through text and stream budgets. */
+export function imageDimensions(value: unknown): ImageDimensions | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const { width, height } = value as Record<string, unknown>
+  return typeof width === 'number' && Number.isSafeInteger(width) && width > 0 && width <= 0x7fffffff
+    && typeof height === 'number' && Number.isSafeInteger(height) && height > 0 && height <= 0x7fffffff
+    ? { width, height } : undefined
+}
+
+export function imageDimensionsDescription(value: unknown): string {
+  const dimensions = imageDimensions(value)
+  return dimensions ? `\nImage dimensions: ${dimensions.width} × ${dimensions.height} px (source header).` : ''
+}
+
 export interface ImageFileVersion {
   path: string
   expectedHash: string
@@ -98,7 +127,7 @@ export function imageToolFramePayload(frame: Record<string, unknown>, maxBytes: 
   const metadata = frame.metadata && typeof frame.metadata === 'object' && !Array.isArray(frame.metadata)
     ? frame.metadata as Record<string, unknown> : {}
   const bounded: Record<string, unknown> = { ...frame, output: JSON.stringify({ filename: image.filename, mimeType: image.mimeType, size: image.size,
-    description: image.description, fileVersion: imageFileVersion(image.fileVersion),
+    description: image.description, ...imageDimensions(image), fileVersion: imageFileVersion(image.fileVersion),
     ...imageDocumentPage(image),
     hasDataUrl: false, dataUrlStripped: true, retainedInHistory: true, omittedFromStream: true }),
     metadata: { ...metadata, imageOutputRecovery: { source: 'durable-history', reason: 'stream-byte-budget', originalFrameBytes } } }
@@ -114,17 +143,12 @@ function imageAllowance(image: ImageIdentity): number {
   if (match) {
     // Header-only decoding never expands the complete image in memory.
     const header = Buffer.from(image.url.slice(match[0].length, match[0].length + 64), 'base64')
-    let width = 0, height = 0
-    if (header.length >= 24 && header.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
-      width = header.readUInt32BE(16); height = header.readUInt32BE(20)
-    } else if (header.length >= 10 && /^GIF8[79]a$/.test(header.toString('ascii', 0, 6))) {
-      width = header.readUInt16LE(6); height = header.readUInt16LE(8)
-    }
-    if (width > 0 && height > 0) {
+    const dimensions = imageDimensionsFromHeader(header)
+    if (dimensions) {
       // Conservative image-patch allowance, independent from encoded bytes.
       // Upstream vision models resize large images; reserve more than common
       // 28/32-pixel patch and Claude image-token formulas, up to 16K per image.
-      return Math.min(16_384, Math.max(512, Math.ceil(width * height / 256) + 512))
+      return Math.min(16_384, Math.max(512, Math.ceil(dimensions.width * dimensions.height / 256) + 512))
     }
   }
   // JPEG/WebP/remote images have no cheap universal header/resize contract.

@@ -18,6 +18,7 @@ import { resolveOSMMode, OSM_MODE_CONFIG } from '../../core/osm.js'
 import { CODE_AGENT_HANDOFF_PROMPT } from '../../core/code-agent-prompt.js'
 import { normalizeAllowedTools } from '../tool-profile.js'
 import { REMOVED_TOOL_NAMES } from '../tool-exposure.js'
+import { MANAGEMENT_TOOL_NAMES } from '../toolkits.js'
 import { compactBuiltinToolDefinition } from '../model-tool-definitions.js'
 import { loadModelTools, selectRequestTools } from '../model-tool-loading.js'
 import { throwIfAborted } from '../../core/utils/abort.js'
@@ -89,7 +90,10 @@ const RESEARCH_TOOLS = new Set([
 ])
 
 const RECURSIVE_TOOLS = new Set(['subagent', 'subagent_start', 'subagent_followup', 'spawn_agent', 'start_agent'])
-const ROOT_ONLY_TOOLS = new Set(['ask_user', 'deliver_files', 'collaborator_dispatch'])
+const ROOT_ONLY_TOOLS = new Set(['ask_user', 'deliver_files', 'collaborator_dispatch',
+  ...MANAGEMENT_TOOL_NAMES,
+  'agent_list', 'agent_get', 'agent_create', 'agent_do_create',
+  'agent_update', 'agent_do_update', 'agent_delete', 'agent_do_delete'])
 const READONLY_CODEGRAPH_ACTIONS = ['status', 'search', 'callers', 'callees', 'impact', 'files'] as const
 
 function readonlyActionDenied(name: string, args: unknown): ToolResult | undefined {

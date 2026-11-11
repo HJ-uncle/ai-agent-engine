@@ -36,6 +36,8 @@ import type { ConflictStrategy, SkillScope } from '../../../skills/import-pipeli
 import { skillsRegistry } from '../../../skills/skills-registry.js'
 import { getSkillContent } from '../../../skills/external-loader.js'
 import { logger } from '../../../observability/index.js'
+import { hashFileContent } from '../../../shared/file-version.js'
+import { SkillManagementService, skillContentSchema, skillHashSchema, skillManagementFailure, skillManagementId } from '../../../skills/management-service.js'
 
 const CHUNK_SIZE = 2 * 1024 * 1024 // 分片目标大小（前端切分参考，后端不强制）
 
@@ -50,6 +52,7 @@ const CreateSkillSchema = z.object({
   content: z.string().min(1, 'SKILL.md 正文不能为空').max(100_000, '正文过长（≤100000 字符）'),
   scope: z.enum(['project', 'global']).optional().default('project'),
   overwrite: z.boolean().optional().default(false),
+  expectedHash: skillHashSchema.optional(),
   projectRoot: z.string().max(4096).optional(),
 })
 const MAX_PACKAGE_SIZE = parseInt(process.env.SKILL_IMPORT_MAX_MB ?? '20', 10) * 1024 * 1024
@@ -119,8 +122,7 @@ function matchesSkill(skill: { name: string; id?: string; skillMdPath: string },
 }
 
 function managementSkillId(skill: { skillMdPath: string }): string {
-  const identity = process.platform === 'win32' ? skill.skillMdPath.toLowerCase() : skill.skillMdPath
-  return `skill-${createHash('sha256').update(identity).digest('hex').slice(0, 32)}`
+  return skillManagementId(skill.skillMdPath)
 }
 
 /** 分片暂存目录 */
@@ -236,6 +238,10 @@ function toDto(rec: Awaited<ReturnType<typeof skillImportStore.get>>) {
 }
 
 export async function skillImportRoutes(fastify: FastifyInstance) {
+  const management = new SkillManagementService()
+  const managementContext = (request: FastifyRequest, projectRoot?: string) => ({
+    tenantId: getAuth(request).tenantId, projectRoot, principal: (request as any).authContext,
+  })
   // 全部路由要求 admin / skill-manager 角色（AUTH_ENABLED=false 时守卫自动放行）
   fastify.addHook('preHandler', requireRoles(...SKILL_IMPORT_ROLES))
 
@@ -315,8 +321,24 @@ export async function skillImportRoutes(fastify: FastifyInstance) {
       scope: skill.scope ?? 'project',
       dir,
       content,
+      hash: hashFileContent(content),
       files,
     }))
+  })
+
+  // Edit only the main document: scripts, references, assets and plugin.json
+  // remain in place, and a stale editor cannot replace a newer revision.
+  fastify.put<{ Params: { name: string }; Querystring: { path?: string; scope?: SkillScope } }>('/skills/:name', async (request, reply) => {
+    try {
+      const input = z.object({ content: skillContentSchema, expectedHash: skillHashSchema }).strict().parse(request.body)
+      const context = managementContext(request, workspaceQuery(request))
+      const operation = management.prepareChange(context, 'update', { id: request.params.name, scope: skillScopeQuery(request), ...input })
+      const result = await management.apply(context, operation)
+      return reply.code(200).send(success({ ...result.skill, resourceChange: result.resourceChange }))
+    } catch (error) {
+      const { code, message } = skillManagementFailure(error)
+      return reply.code(200).send(fail(code, message))
+    }
   })
 
   // ── 删除技能（按定义层删除目录 + 版本备份）────────────────────────────────
@@ -410,39 +432,20 @@ export async function skillImportRoutes(fastify: FastifyInstance) {
       const firstError = result.error.errors[0]
       return reply.code(200).send(fail(40001, `参数验证失败：${firstError.message}`))
     }
-    const { name, description, content, scope, overwrite, projectRoot: requestedRoot } = result.data
-
-    let projectRoot: string | undefined
-    try { projectRoot = parseProjectRoot(requestedRoot) } catch (error) { return reply.code(200).send(fail(40001, (error as Error).message)) }
-    const root = workspaceSkillsRoot(projectRoot, scope)
-    const skillDir = path.join(root, name)
-
+    const { name, description, content, scope, overwrite, expectedHash, projectRoot: requestedRoot } = result.data
     try {
-      if (fs.existsSync(skillDir)) {
-        if (!overwrite) {
-          return reply.code(200).send(fail(40900, `技能 "${name}" 已存在于${scope === 'global' ? '全局层' : '项目层'}，可选择覆盖`))
-        }
-        // 覆盖前备份现有目录（与导入管线的版本化策略一致：<root>/.versions/<name>/<ts>）
-        const ts = new Date().toISOString().replace(/[:.]/g, '-')
-        const backupDir = path.join(root, '.versions', name, ts)
-        fs.mkdirSync(path.dirname(backupDir), { recursive: true })
-        fs.renameSync(skillDir, backupDir)
-      }
-
-      fs.mkdirSync(skillDir, { recursive: true })
-      // description 单行化，防止 frontmatter 注入
+      const context = managementContext(request, parseProjectRoot(requestedRoot))
       const desc = description.replace(/\r?\n/g, ' ').trim()
-      const md = `---\nname: ${name}\ndescription: ${desc}\n---\n\n${content.trim()}\n`
-      fs.writeFileSync(path.join(skillDir, 'SKILL.md'), md, 'utf-8')
-    } catch (err: any) {
-      logger.error({ err, skillDir }, 'skill-create: failed to write')
-      return reply.code(200).send(fail(50000, `创建失败：${err instanceof Error ? err.message : String(err)}`))
+      const operation = overwrite
+        ? management.prepareChange(context, 'update', { id: name, scope, expectedHash, content: `---\nname: ${name}\ndescription: ${desc}\n---\n\n${content.trim()}\n` })
+        : management.prepareCreate(context, { name, description: desc, content, scope })
+      const applied = await management.apply(context, operation)
+      return reply.code(200).send(success({ name, scope, dir: applied.skill!.dir, id: applied.skill!.id,
+        hash: applied.skill!.hash, resourceChange: applied.resourceChange }, `技能 "${name}" ${overwrite ? '更新' : '创建'}成功`))
+    } catch (error) {
+      const { code, message } = skillManagementFailure(error)
+      return reply.code(200).send(fail(code, message))
     }
-
-    skillsRegistry.ensureGlobalLayer()
-    skillsRegistry.reload()
-    logger.info({ name, scope, dir: skillDir }, 'skill created manually')
-    return reply.code(200).send(success({ name, scope, dir: skillDir }, `技能 "${name}" 创建成功`))
   })
 
   // ── 直传导入（≤5MB）────────────────────────────────────────────────────────

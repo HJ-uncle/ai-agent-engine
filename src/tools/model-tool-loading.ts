@@ -1,4 +1,5 @@
 import type { IToolRegistry, Message, Tool } from '../core/agent-context/types.js'
+import { SKILL_MANAGEMENT_TOOLS, KNOWLEDGE_MANAGEMENT_TOOLS, AUTOMATION_TOOLS } from './toolkits.js'
 
 type Definition = ReturnType<IToolRegistry['list']>[number]
 /** Exposure only, never execution permission. All other trusted builtins remain discoverable. */
@@ -19,13 +20,15 @@ const groups: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['Planning/questions', ['plan_update', 'ask_user', 'todo_list', 'todo_create', 'todo_update', 'todo_delete']],
   ['Skills', ['list_skills', 'get_skill', 'run_skill_script']],
   ['Memory', ['remember', 'recall', 'list_memories', 'forget', 'link_memories', 'search_memory']],
-  ['Automation', ['cron_list', 'cron_preview', 'cron_create', 'cron_update', 'cron_delete']],
+  ['Automation', AUTOMATION_TOOLS],
+  ['Skill management', SKILL_MANAGEMENT_TOOLS],
+  ['Knowledge management', KNOWLEDGE_MANAGEMENT_TOOLS],
   ['Subagents', ['subagent', 'subagent_start', 'subagent_directory', 'subagent_followup', 'subagent_send', 'subagent_wait', 'subagent_cancel', 'subagent_participants', 'subagent_inbox', 'subagent_request_input', 'subagent_read_result']],
   ['Web/history', ['web_fetch', 'http_request', 'search_history']],
   ['Code', ['code_diagnose', 'codegraph']],
   ['Browser', ['browser_tabs', 'browser_open', 'browser_navigate', 'browser_snapshot', 'browser_screenshot', 'browser_save_screenshot', 'browser_click', 'browser_fill', 'browser_scroll', 'browser_press_key', 'browser_wait', 'browser_console', 'browser_network', 'browser_network_request', 'browser_set_viewport', 'browser_close']],
   ['Workbench/results', ['workbench_context', 'workbench_open', 'workbench_render', 'deliver_files', 'report_artifacts']],
-  ['Agent configuration', ['agent_list', 'agent_get', 'agent_create', 'agent_do_create', 'agent_update', 'agent_do_update', 'agent_delete', 'agent_do_delete']],
+  ['Agent configuration', ['agent_list', 'agent_get', 'agent_create', 'agent_update', 'agent_delete']],
   ['Legacy jobs', ['task_list', 'task_status', 'task_cancel']],
 ]
 

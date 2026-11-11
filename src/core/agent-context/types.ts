@@ -94,6 +94,8 @@ export interface ResumeToolCall {
   messageId?: string
   decision: 'approved' | 'rejected' | 'answered'
   output?: string
+  /** Frozen operation preview from the accepted durable permission request. */
+  pendingAction?: PendingAction
 }
 
 export class ToolError extends Error {
@@ -345,6 +347,10 @@ export interface AgentContext {
   browserAuthority?: import('../browser-authority.js').BrowserHostAuthority
   /** Native host routing uses server authentication; never accept this from model/user args. */
   browserPrincipal?: Readonly<BrowserPrincipal>
+  /** Current authenticated root actor; never copied into child contexts or model arguments. */
+  managementPrincipal?: Readonly<AuthContext>
+  /** Bound Agent's original knowledge permissions; request/RAG selections cannot widen this management ceiling. */
+  managementKnowledgeScope?: readonly string[] | null
   /** Request-resolved resource ceiling for ordinary model-created children; explicit user-selected collaborators use their own bindings. */
   resourceScope?: { skills?: readonly string[] | null; mcpServers?: readonly string[] | null; knowledgeBases?: readonly string[] | null }
   rootRunId?: string
@@ -410,6 +416,8 @@ export interface CreateAgentContextOptions {
   commitPending?: (pending: Pending) => void | Promise<void>
   browserAuthority?: import('../browser-authority.js').BrowserHostAuthority
   browserPrincipal?: Readonly<BrowserPrincipal>
+  managementPrincipal?: Readonly<AuthContext>
+  managementKnowledgeScope?: readonly string[] | null
   rootRunId?: string
   turnId?: string
   userMessageId?: string

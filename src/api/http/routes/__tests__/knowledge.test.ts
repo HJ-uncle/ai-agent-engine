@@ -1,15 +1,18 @@
 import Fastify, { type FastifyInstance, type HTTPMethods } from 'fastify'
-import { createClient, type Client } from '@libsql/client'
+import type { Client } from '@libsql/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as database from '../../../../storage/sqlite/db.js'
 import { knowledgeRoutes } from '../knowledge.js'
+import { knowledgeFixture } from '../../../../storage/knowledge/__tests__/fixture.js'
 
 let db: Client
+let fixture: ReturnType<typeof knowledgeFixture>
 let app: FastifyInstance
 let activeTenant = 'tenant-a'
 
 beforeEach(async () => {
-  db = createClient({ url: 'file::memory:' })
+  fixture = knowledgeFixture()
+  db = fixture.db
   vi.spyOn(database, 'getDb').mockImplementation(() => db)
   activeTenant = 'tenant-a'
   app = Fastify()
@@ -22,7 +25,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await app.close()
-  db.close()
+  await fixture.close()
   vi.restoreAllMocks()
 })
 

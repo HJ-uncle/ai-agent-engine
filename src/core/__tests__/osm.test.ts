@@ -352,7 +352,7 @@ describe('OSM / runOSMSelfCheck', () => {
   it('真实规范名注册且可选工具全部缺席时不产生缺失或别名误报', () => {
     const names = new Set([
       'read_file', 'write_file', 'edit_file', 'office_document', 'office_environment', 'list_files', 'create_dir',
-      'ask_user', 'remember', 'recall',
+      'ask_user', 'remember', 'recall', 'deliver_files',
       'list_skills', 'get_skill', 'run_skill_script', 'grep', 'glob', 'execute_cmd',
     ])
     const registry = { has: (name: string) => names.has(name), list: () => [...names].map(name => ({ name })) }

@@ -8,6 +8,7 @@ import { getRequestToolProfile } from '../../tool-profile.js'
 const fixtures = vi.hoisted(() => ({ factory: vi.fn(), getAgent: vi.fn(), projectDirectory: vi.fn() }))
 vi.mock('../../../../workspace/index.js', () => ({ workspaceManager: { resolveProjectDirectory: fixtures.projectDirectory } }))
 vi.mock('../../../../tools/registry-factory.js', () => ({ createToolRegistry: fixtures.factory }))
+vi.mock('../../../../core/agent-management.js', () => ({ recommendedAgentTools: async () => ['read_file', 'list_skills'] }))
 vi.mock('../../../../skills/index.js', () => ({ skillsRegistry: { getSkills: () => [] } }))
 vi.mock('../../../../storage/agent/index.js', () => ({
   SQLiteAgentStore: class { getById(...args: unknown[]) { return fixtures.getAgent(...args) } },

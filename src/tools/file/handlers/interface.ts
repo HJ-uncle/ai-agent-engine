@@ -12,7 +12,7 @@ export interface ReadResult {
   type: string
   data: any
   /** Set by the image handler itself, never inferred from ordinary file JSON. */
-  image?: { filename: string; mimeType: string; size: number; dataUrl: string; hasDataUrl: true }
+  image?: { filename: string; mimeType: string; size: number; width?: number; height?: number; dataUrl: string; hasDataUrl: true }
   raw?: string
   content?: string // 用于向 AI 展示的文本内容
 }

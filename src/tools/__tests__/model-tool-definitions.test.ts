@@ -49,9 +49,10 @@ describe('compact builtin model definitions', () => {
     const original = registry.list()
     const before = JSON.stringify(original)
     const compact = registry.listForModel()
-    expect(original.map(tool => tool.name)).toEqual([...defaultNames, 'load_tools'])
-    expect(compact.map(tool => tool.name)).toEqual([...defaultNames, 'load_tools'])
-    expect(compact).toHaveLength(defaultNames.length + 1)
+    const expectedNames = [...defaultNames.filter(name => !name.startsWith('cron_')), 'load_tools']
+    expect(original.map(tool => tool.name)).toEqual(expectedNames)
+    expect(compact.map(tool => tool.name)).toEqual(expectedNames)
+    expect(compact).toHaveLength(expectedNames.length)
     expect(withoutDescriptions(compact)).toEqual(withoutDescriptions(original))
     expect(JSON.stringify(registry.list())).toBe(before)
     expect(compact.filter((tool, index) => tool.description !== original[index].description).length).toBeGreaterThan(30)
@@ -115,7 +116,7 @@ describe('compact builtin model definitions', () => {
   })
 
   it('keeps invocation semantics that JSON Schema alone cannot express', async () => {
-    const { registry } = await createToolRegistry({ allowedMcpServers: [], memoryScopes: ['global', 'session'] })
+    const { registry } = await createToolRegistry({ allowedMcpServers: [], memoryScopes: ['global', 'session'], toolkits: ['automation'] })
     const byName = new Map(registry.listForModel().map(tool => [tool.name, JSON.stringify(tool)]))
     for (const name of ['read_file', 'write_file', 'edit_file']) {
       expect(byName.get(name)).toContain('trailing newline')

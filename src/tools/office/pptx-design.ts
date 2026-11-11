@@ -77,12 +77,19 @@ function textHeight(value: string, width: number, size: number): number {
   const lines = value.split(/\r\n|\r|\n/).reduce((sum, line) => sum + Math.max(1, Math.ceil(units(line) / capacity)), 0)
   return lines * size * 1.3 / 72
 }
-function assertFits(value: string, box: Box, size: number, label: string): void {
+function assertFits(value: string, box: Box, size: number, label: string, elementPath?: string): void {
   encodeXml(value)
   if (!value.trim()) fail(`${label}文本为空`)
   // Conservative glyph/line bounds reject dense content rather than silently
   // shrinking text. This is a preflight estimate, never a visual-QA claim.
-  if (textHeight(value, box.w, size) > box.h + 1 / 72) fail(`${label}文本超出布局容量；请缩短内容、增大文本框或拆分页面`)
+  const height = textHeight(value, box.w, size)
+  if (height > box.h + 1 / 72) {
+    if (elementPath) {
+      const required = (Math.ceil(height * 1000) / 1000).toFixed(3)
+      fail(`${label} ${elementPath}.text: 文本超出布局容量，${size}pt，当前 w=${box.w.toFixed(3)}、h=${box.h.toFixed(3)} 英寸，按当前宽度测量需 h=${required}；可将 ${elementPath}.h 至少设为 ${required}，增高前须核对相邻元素与画布边界；也可增大宽度或拆页`)
+    }
+    fail(`${label}文本超出布局容量；请缩短内容、增大文本框或拆分页面`)
+  }
 }
 type Table = NonNullable<PptxSlide['table']>
 type TableMeasurement = { widths: number[]; values: (string | number)[][]; rowHeights: number[]; cellHeights: number[][]; height: number }
@@ -173,8 +180,8 @@ export async function generateDesignedPptx(input: PptxInput, assets: PptxAssets 
     const foreground = source.background ? contrastingColor(background, theme.foreground, theme.background) : theme.foreground
     const sectionForeground = source.background ? foreground : theme.background
     slide.background = { color: background }
-    const txt = (value: string, box: Box, fontSize: number, options: TextOptions = {}) => {
-      assertBox(box, label); assertFits(value, box, fontSize, label)
+    const txt = (value: string, box: Box, fontSize: number, options: TextOptions = {}, elementPath?: string) => {
+      assertBox(box, label); assertFits(value, box, fontSize, label, elementPath)
       slide.addText(value, { ...box, fontSize, fontFace: theme.fontFace, color: foreground, margin: 0, valign: 'top', breakLine: false, ...options })
     }
     const shape = (box: Box, fill: string, kind: 'rect' | 'ellipse' | 'line' = 'rect', line = fill) => {
@@ -290,8 +297,8 @@ export async function generateDesignedPptx(input: PptxInput, assets: PptxAssets 
         if (step.body?.trim()) txt(step.body, { x: x + 0.12, y: top + 2.5, w: width - 0.24, h: bottom - top - 2.5 }, 16, { align: 'center' })
       })
     } else {
-      for (const element of source.elements!) {
-        if (element.type === 'text') txt(element.text, element, element.fontSize ?? 22, { bold: element.bold, color: element.color ?? foreground, align: element.align })
+      for (const [elementIndex, element] of source.elements!.entries()) {
+        if (element.type === 'text') txt(element.text, element, element.fontSize ?? 22, { bold: element.bold, color: element.color ?? foreground, align: element.align }, `presentation.slides.${index}.elements.${elementIndex}`)
         else if (element.type === 'image') picture(element.path, element, element.fit)
         else if (element.type === 'chart') drawChart(element.chart, element)
         else if (element.type === 'table') drawTable(element.table, element)

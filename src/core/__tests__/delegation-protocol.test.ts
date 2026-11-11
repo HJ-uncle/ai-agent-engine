@@ -6,6 +6,15 @@ const registry = (...names: string[]) => ({ list: () => names.map(name => ({
 })) })
 
 describe('early delegation guidance respects the executable scope', () => {
+  it('distinguishes persistent configuration from task workers and guides Work toolkit selection', () => {
+    const prompt = buildExecutionProtocol(registry('read_file', 'load_tools', 'subagent_start'))
+    expect(prompt).toContain('agent_* manages persistent Agent configuration; subagent_* runs tasks, never substitutes')
+    expect(prompt).toContain('@ → 工具包 → Agent 管理')
+    expect(prompt).toContain('Toolkit selection is not write approval')
+    expect(buildExecutionProtocol(registry('read_file'), 'code')).not.toContain('Agent 管理')
+    expect(buildExecutionProtocol(registry())).not.toContain('Agent 管理')
+  })
+
   it.each(['general', 'code'] as const)('makes a broad %s investigation decide ownership before detailed exploration', profile => {
     const prompt = buildExecutionProtocol(registry('read_file', 'load_tools', 'subagent_start', 'subagent_directory'), profile)
     const decision = prompt.indexOf('Delegate useful independent work early')

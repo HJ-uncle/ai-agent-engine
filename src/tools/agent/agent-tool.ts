@@ -1,11 +1,12 @@
-import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
-import { SQLiteAgentStore } from '../../storage/agent/index.js'
-import type { CreateAgentInput } from '../../storage/agent/index.js'
+import { z } from 'zod'
+import type { Tool, AgentContext, ToolResult, PendingAction } from '../../core/agent-context/index.js'
+import { normalizeToolName } from '../tool-profile.js'
+import {
+  AgentManagementService, AgentManagementError, agentIdSchema, agentManagementFailure,
+  type AgentMutation, type PreparedAgentMutation,
+} from '../../core/agent-management.js'
 
-/**
- * 客户端透传的内联 Agent 记录（请求级；无需在 AE 引擎本地 DB 中注册）。
- * 字段对齐 agent-engine SQLiteAgentStore 返回的 Agent 结构。
- */
+/** Request-scoped, read-only client records. Local tenant records take precedence by ID. */
 export interface InlineAgent {
   id: string
   name: string
@@ -18,379 +19,144 @@ export interface InlineAgent {
   allowedTools?: string[]
 }
 
-const store = new SQLiteAgentStore()
-
-// ── 共享参数定义（避免重复声明，节省 tool schema tokens）──────────────────────
+const service = new AgentManagementService()
 const AGENT_CONFIG_PROPS = {
-  name: { type: 'string' as const },
-  description: { type: 'string' as const },
-  model: { type: 'string' as const },
-  temperature: { type: 'number' as const },
-  systemPrompt: { type: 'string' as const },
-  skills: { type: 'array' as const, items: { type: 'string' as const } },
-  mcpServers: { type: 'array' as const, items: { type: 'string' as const } },
-  knowledgeBases: { type: 'array' as const, items: { type: 'string' as const } },
-  allowedTools: { type: 'array' as const, items: { type: 'string' as const } },
+  name: { type: 'string', minLength: 1 },
+  description: { type: 'string' },
+  model: { type: 'string' },
+  temperature: { type: 'number', minimum: 0, maximum: 2 },
+  systemPrompt: { type: 'string' },
+  skills: { type: 'array', items: { type: 'string' } },
+  mcpServers: { type: 'array', items: { type: 'string' } },
+  knowledgeBases: { type: 'array', items: { type: 'string' } },
+  allowedTools: { type: 'array', items: { type: 'string' }, description: '创建时省略使用推荐工具；[] 禁用业务工具；更新时省略保持不变。' },
+}
+const idProperties = { id: { type: 'string', description: 'agent_list 返回的完整 ID；不接受名称或 ID 前缀。' } }
+const labels = { create: '创建', update: '更新', delete: '删除' }
+
+function failure(error: unknown): ToolResult {
+  const { code, message } = agentManagementFailure(error)
+  return { success: false, status: 'failed', output: message, error: message, metadata: { code } }
 }
 
-/**
- * 创建 Agent 系统工具，注入客户端透传的 inline agents。
- *
- * agent_list / agent_get 将合并：
- *   1. AE 引擎本地 DB agents（当前 tenant）
- *   2. inlineAgents（来自用户端透传的用户 agent 列表）
- *
- * 增删改操作（agent_create / agent_update / agent_delete）仍写入本地 DB；
- * inline agents 为只读，不参与写操作。
- *
- * @param inlineAgents - 客户端透传的 agent 列表（可选）
- */
-export function createAgentTools(inlineAgents: InlineAgent[] = []): Tool[] {
+function approvedOperation(name: string, action: AgentMutation, args: unknown, ctx: AgentContext): PreparedAgentMutation | undefined {
+  if (!ctx.currentToolCallId || ctx.currentToolCallId !== ctx.approvedToolCallId) return undefined
+  const resume = ctx.resumeToolCall
+  const pending = resume?.pendingAction
+  if (resume?.decision !== 'approved' || resume.toolCall.id !== ctx.currentToolCallId || resume.toolCall.name !== name
+    || JSON.stringify(args) !== JSON.stringify(resume.toolCall.args)
+    || pending?.type !== `agent_${action}`) {
+    throw new Error('缺少该工具调用的有效确认记录，请重新发起操作')
+  }
+  const operation = pending.operation as PreparedAgentMutation | undefined
+  if (!operation || operation.version !== 1 || operation.action !== action || operation.tenantId !== ctx.tenantId) {
+    throw new Error('Agent 确认记录无效，请重新发起操作')
+  }
+  return operation
+}
+
+async function prepare(action: AgentMutation, args: Record<string, unknown>, ctx: AgentContext, manager: AgentManagementService): Promise<PreparedAgentMutation> {
+  if (action === 'create') return manager.prepareCreate(ctx.tenantId, args)
+  const { id, ...input } = args
+  if (action === 'update') return manager.prepareUpdate(ctx.tenantId, id, input)
+  z.object({ id: agentIdSchema }).strict().parse(args)
+  return manager.prepareDelete(ctx.tenantId, id)
+}
+
+function preview(operation: PreparedAgentMutation): ToolResult {
+  const config = operation.action === 'create' ? operation.input
+    : operation.action === 'update' ? { id: operation.id, before: operation.before, changes: operation.input,
+        after: { ...operation.before, ...operation.input } }
+      : { id: operation.id, agent: operation.before }
+  const text = `Agent ${labels[operation.action]}确认\n\n${JSON.stringify(config, null, 2)}\n\n确认后执行以上配置。`
+  return { success: false, status: 'waiting', needsConfirmation: true, output: text,
+    pendingAction: { type: `agent_${operation.action}`, operation, reason: text } }
+}
+
+function mutationTool(action: AgentMutation, manager: AgentManagementService): Tool {
+  const name = `agent_${action}`
+  const preflight = async (raw: unknown, ctx: AgentContext): Promise<ToolResult | undefined> => {
+    try {
+      // A recovered legacy call may retain old args, but only its authenticated
+      // frozen operation can execute. New calls use the canonical strict schema.
+      if (approvedOperation(name, action, raw, ctx)) return undefined
+      return preview(await prepare(action, z.record(z.unknown()).parse(raw), ctx, manager))
+    } catch (error) { return failure(error) }
+  }
+  return {
+    name, displayName: `${labels[action]} Agent`,
+    description: `${labels[action]}持久化 Agent 配置。展示具体配置并等待用户确认，批准后自动恢复原调用；不要另调 ask_user 或 do_*。`,
+    parameters: { type: 'object', properties: {
+      ...(action === 'create' ? {} : idProperties),
+      ...(action === 'delete' ? {} : AGENT_CONFIG_PROPS),
+    }, required: action === 'create' ? ['name'] : ['id'], additionalProperties: false },
+    preflight,
+    async execute(raw, ctx) {
+      const blocked = await preflight(raw, ctx)
+      if (blocked) return blocked
+      try {
+        const operation = approvedOperation(name, action, raw, ctx)!
+        const agentChange = await manager.apply(operation)
+        return { success: true, status: 'succeeded',
+          output: JSON.stringify({ message: `Agent ${labels[action]}成功`, agentChange }),
+          metadata: { agentChange } }
+      } catch (error) { return failure(error) }
+    },
+  }
+}
+
+export function createAgentTools(inlineAgents: InlineAgent[] = [], manager: AgentManagementService = service): Tool[] {
+  const all = async (tenantId: string) => {
+    const local = await manager.list(tenantId)
+    const localIds = new Set(local.map(agent => agent.id))
+    return { localIds, agents: [...local, ...inlineAgents.filter(agent => !localIds.has(agent.id))] }
+  }
   return [
     {
-      name: 'agent_list',
-      displayName: '列出 Agent',
-      description: '列出所有 Agent',
-      parameters: {
-        type: 'object',
-        properties: {
-          search: { type: 'string' },
-        },
-        required: [],
-      },
-      async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
-        const { search } = rawArgs as { search?: string }
+      name: 'agent_list', displayName: '列出 Agent', description: '列出 Agent 与完整 ID，可按名称搜索。',
+      parameters: { type: 'object', properties: { search: { type: 'string' } }, required: [], additionalProperties: false },
+      async execute(raw, ctx) {
         try {
-          const dbAgents = await store.list(ctx.tenantId)
-          // 合并 inlineAgents，按 id 去重（本地 DB 优先）
-          const dbIds = new Set(dbAgents.map(a => a.id))
-          const mergedInline = inlineAgents.filter(a => !dbIds.has(a.id))
-          const allAgents: Array<{ id: string; name: string; description?: string; skills?: string[] }> = [
-            ...dbAgents,
-            ...mergedInline
-          ]
-          let filtered = allAgents
-          if (search) {
-            filtered = allAgents.filter(a => a.name.toLowerCase().includes(search.toLowerCase()))
-          }
-          if (filtered.length === 0) {
-            return { success: true, output: '暂无 Agent' }
-          }
-          const lines = filtered.map(a => {
-            const skills = (a.skills ?? []).length > 0 ? ` [技能: ${(a.skills ?? []).join(', ')}]` : ''
-            const desc = a.description ? ` - ${a.description}` : ''
-            const source = dbIds.has(a.id) ? '' : ' [客户端]'
-            return `[${a.id}] **${a.name}**${desc}${skills}${source}`
-          })
-          return { success: true, output: `共 ${filtered.length} 个 Agent:\n\n${lines.join('\n')}` }
-        } catch (err) {
-          return { success: false, output: `列出 Agent 失败: ${String(err)}` }
-        }
+          const { search } = z.object({ search: z.string().optional() }).strict().parse(raw)
+          const { agents, localIds } = await all(ctx.tenantId)
+          const filtered = search ? agents.filter(agent => agent.name.toLowerCase().includes(search.toLowerCase())) : agents
+          return { success: true, output: filtered.length ? JSON.stringify(filtered.map(agent => ({ id: agent.id, name: agent.name,
+            description: agent.description, readonly: !localIds.has(agent.id) }))) : '暂无 Agent' }
+        } catch (error) { return failure(error) }
       },
     },
     {
-      name: 'agent_get',
-      displayName: '查看 Agent 详情',
-      description: '查看 Agent 配置',
-      parameters: {
-        type: 'object',
-        properties: {
-          id: { type: 'string' },
-        },
-        required: ['id'],
-      },
-      async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
-        const { id } = rawArgs as { id: string }
+      name: 'agent_get', displayName: '查看 Agent 详情', description: '按完整 ID 查看 Agent 配置、工具权限和资源绑定。',
+      parameters: { type: 'object', properties: idProperties, required: ['id'], additionalProperties: false },
+      async execute(raw, ctx) {
         try {
-          const dbAgents = await store.list(ctx.tenantId)
-          const dbAgent = dbAgents.find(a => a.id === id || a.id.startsWith(id))
-          const agent = dbAgent ?? inlineAgents.find(a => a.id === id || a.id.startsWith(id))
-          if (!agent) {
-            return { success: false, output: `Agent "${id}" 不存在` }
-          }
-          const isInline = !dbAgent
-          const lines = [
-            `**ID**: ${agent.id}`,
-            `**名称**: ${agent.name}`,
-            `**描述**: ${agent.description || '(无)'}`,
-            `**模型**: ${agent.model || '(默认)'}`,
-            ...(isInline ? [] : [`**Temperature**: ${'temperature' in agent ? (agent as any).temperature ?? 0.7 : 0.7}`]),
-            `**技能**: ${(agent.skills ?? []).length > 0 ? (agent.skills ?? []).join(', ') : '(无)'}`,
-            `**MCP Servers**: ${(agent.mcpServers ?? []).length > 0 ? (agent.mcpServers ?? []).join(', ') : '(无)'}`,
-            `**知识库**: ${(agent.knowledgeBases ?? []).length > 0 ? (agent.knowledgeBases ?? []).join(', ') : '(无)'}`,
-            `**System Prompt**: ${agent.systemPrompt || '(无)'}`,
-            ...(isInline ? ['**来源**: 用户端透传'] : [
-              `**创建时间**: ${new Date((agent as any).createdAt).toLocaleString('zh-CN')}`,
-              `**更新时间**: ${new Date((agent as any).updatedAt).toLocaleString('zh-CN')}`,
-            ]),
-          ]
-          return { success: true, output: lines.join('\n') }
-        } catch (err) {
-          return { success: false, output: `查看 Agent 详情失败: ${String(err)}` }
-        }
+          const { id } = z.object({ id: agentIdSchema }).strict().parse(raw)
+          const { agents, localIds } = await all(ctx.tenantId)
+          const agent = agents.find(candidate => candidate.id === id)
+          if (!agent) return failure(new AgentManagementError(40400, `Agent "${id}" 不存在；请使用 agent_list 返回的完整 ID`))
+          return { success: true, output: JSON.stringify({ ...agent, readonly: !localIds.has(id),
+            allowedTools: agent.allowedTools ?? null,
+            toolPermission: agent.allowedTools == null ? 'runtime_default' : agent.allowedTools.length ? 'explicit' : 'business_tools_disabled',
+          }) }
+        } catch (error) { return failure(error) }
       },
     },
-    {
-      name: 'agent_create',
-      displayName: '创建 Agent',
-      description: '创建 Agent 并预览，需 ask_user 确认后调 agent_do_create',
-      parameters: {
-        type: 'object',
-        properties: AGENT_CONFIG_PROPS,
-        required: ['name'],
-      },
-      async execute(rawArgs: unknown, _ctx: AgentContext): Promise<ToolResult> {
-        const input = rawArgs as Partial<CreateAgentInput>
-        if (!input.name) {
-          return { success: false, output: 'Agent 名称不能为空' }
-        }
-        try {
-          const preview = {
-            name: input.name || '',
-            description: input.description || '',
-            model: input.model || '',
-            temperature: input.temperature ?? 0.7,
-            systemPrompt: input.systemPrompt || '',
-            skills: input.skills || [],
-            mcpServers: input.mcpServers || [],
-            knowledgeBases: input.knowledgeBases || [],
-            allowedTools: input.allowedTools || [],
-          }
-          return {
-            success: true,
-            output: `📋 Agent 创建预览\n\n配置如下：\n\`\`\`json\n${JSON.stringify(preview, null, 2)}\n\`\`\`\n\n请先调用 ask_user 工具请求用户确认。`,
-            pendingAction: {
-              type: 'agent_create',
-              input: preview,
-            },
-          }
-        } catch (err) {
-          return { success: false, output: `创建 Agent 失败: ${String(err)}` }
-        }
-      },
-    },
-    {
-      name: 'agent_do_create',
-      displayName: '执行创建 Agent',
-      description: '用户确认后执行创建，参数同 agent_create 加 confirmed',
-      parameters: {
-        type: 'object',
-        properties: {
-          confirmed: { type: 'boolean' },
-          ...AGENT_CONFIG_PROPS,
-        },
-        required: ['confirmed', 'name'],
-      },
-      async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
-        const args = rawArgs as any
-        if (!args.confirmed) {
-          return { success: false, output: '用户未确认创建 Agent 操作已取消' }
-        }
-        try {
-          const existingAgents = await store.list(ctx.tenantId)
-          const existingAgent = existingAgents.find((a: any) => a.name === args.name)
-          if (existingAgent) {
-            return {
-              success: true,
-              output: `⚠️ 已存在名为 "${args.name}" 的 Agent，无需重复创建。\n\nAgent 详细信息：\nID: ${existingAgent.id}\n描述: ${existingAgent.description || '无'}\n技能: ${(existingAgent.skills || []).join(', ') || '无'}`
-            }
-          }
-          const agent = await store.create(ctx.tenantId, {
-            name: args.name,
-            description: args.description,
-            model: args.model,
-            temperature: args.temperature,
-            systemPrompt: args.systemPrompt,
-            skills: args.skills || [],
-            mcpServers: args.mcpServers || [],
-            knowledgeBases: args.knowledgeBases || [],
-            allowedTools: args.allowedTools || [],
-          })
-          return { success: true, output: `✅ Agent "${agent.name}" 创建成功 (ID: ${agent.id})` }
-        } catch (err) {
-          return { success: false, output: `创建 Agent 失败: ${String(err)}` }
-        }
-      },
-    },
-    {
-      name: 'agent_update',
-      displayName: '更新 Agent',
-      description: '更新 Agent 配置，需 ask_user 确认后调 agent_do_update',
-      parameters: {
-        type: 'object',
-        properties: {
-          id: { type: 'string' },
-          ...AGENT_CONFIG_PROPS,
-        },
-        required: ['id'],
-      },
-      async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
-        const { id, ...updates } = rawArgs as any
-        if (!id) {
-          return { success: false, output: 'Agent ID 不能为空' }
-        }
-        try {
-          const agents = await store.list(ctx.tenantId)
-          const existing = agents.find(a => a.id === id || a.id.startsWith(id))
-          if (!existing) {
-            return { success: false, output: `Agent "${id}" 不存在` }
-          }
-          return {
-            success: true,
-            output: `📋 Agent 更新预览\n\n即将更新 **${existing.name}** (${existing.id}...)，变更如下：\n\`\`\`json\n${JSON.stringify(updates, null, 2)}\n\`\`\`\n\n请先调用 ask_user 工具请求用户确认。`,
-            pendingAction: {
-              type: 'agent_update',
-              id: existing.id,
-              originalName: existing.name,
-              input: updates,
-            },
-          }
-        } catch (err) {
-          return { success: false, output: `更新 Agent 失败: ${String(err)}` }
-        }
-      },
-    },
-    {
-      name: 'agent_do_update',
-      displayName: '执行更新 Agent',
-      description: '用户确认后执行更新，参数同 agent_update 加 confirmed',
-      parameters: {
-        type: 'object',
-        properties: {
-          confirmed: { type: 'boolean' },
-          id: { type: 'string' },
-          ...AGENT_CONFIG_PROPS,
-        },
-        required: ['confirmed', 'id'],
-      },
-      async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
-        const args = rawArgs as any
-        if (!args.confirmed) {
-          return { success: false, output: '用户未确认更新 Agent 操作已取消' }
-        }
-        try {
-          const updates: Record<string, unknown> = {}
-          if (args.name !== undefined) updates.name = args.name
-          if (args.description !== undefined) updates.description = args.description
-          if (args.model !== undefined) updates.model = args.model
-          if (args.temperature !== undefined) updates.temperature = args.temperature
-          if (args.systemPrompt !== undefined) updates.systemPrompt = args.systemPrompt
-          if (args.skills !== undefined) updates.skills = args.skills
-          if (args.mcpServers !== undefined) updates.mcpServers = args.mcpServers
-          if (args.knowledgeBases !== undefined) updates.knowledgeBases = args.knowledgeBases
-          if (args.allowedTools !== undefined) updates.allowedTools = args.allowedTools
-          const updated = await store.update(args.id, ctx.tenantId, updates)
-          if (!updated) {
-            return { success: false, output: 'Agent 不存在或更新失败' }
-          }
-          return { success: true, output: `✅ Agent "${updated.name}" 更新成功` }
-        } catch (err) {
-          return { success: false, output: `更新 Agent 失败: ${String(err)}` }
-        }
-      },
-    },
-    {
-      name: 'agent_delete',
-      displayName: '删除 Agent',
-      description: '删除 Agent（不可恢复），需 ask_user 确认后调 agent_do_delete',
-      parameters: {
-        type: 'object',
-        properties: {
-          id: { type: 'string' },
-        },
-        required: ['id'],
-      },
-      async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
-        const { id } = rawArgs as { id: string }
-        if (!id) {
-          return { success: false, output: 'Agent ID 不能为空' }
-        }
-        try {
-          const agents = await store.list(ctx.tenantId)
-          const existing = agents.find(a => a.id === id || a.id.startsWith(id))
-          if (!existing) {
-            return { success: false, output: `Agent "${id}" 不存在` }
-          }
-          return {
-            success: true,
-            output: `⚠️ 删除确认\n\n确定要删除 Agent **${existing.name}** (${existing.id}...) 吗？\n\n此操作不可恢复！\n\n请先调用 ask_user 工具请求用户确认。`,
-            pendingAction: {
-              type: 'agent_delete',
-              id: existing.id,
-              agentName: existing.name,
-            },
-          }
-        } catch (err) {
-          return { success: false, output: `删除 Agent 失败: ${String(err)}` }
-        }
-      },
-    },
-    {
-      name: 'agent_do_delete',
-      displayName: '执行删除 Agent',
-      description: '用户确认后执行删除',
-      parameters: {
-        type: 'object',
-        properties: {
-          confirmed: { type: 'boolean' },
-          id: { type: 'string' },
-          agentName: { type: 'string' },
-        },
-        required: ['confirmed', 'id'],
-      },
-      async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
-        const args = rawArgs as any
-        if (!args.confirmed) {
-          return { success: false, output: '用户未确认删除 Agent 操作已取消' }
-        }
-        try {
-          await store.delete(args.id, ctx.tenantId)
-          return { success: true, output: `🗑️ Agent "${args.agentName}" 已删除` }
-        } catch (err) {
-          return { success: false, output: `删除 Agent 失败: ${String(err)}` }
-        }
-      },
-    },
+    ...(['create', 'update', 'delete'] as const).map(action => mutationTool(action, manager)),
   ]
 }
 
-/**
- * 默认导出：不带 inline agents 的工具列表（向后兼容）。
- * 新代码应使用 createAgentTools(inlineAgents) 工厂方法。
- */
-export const agentTools: Tool[] = createAgentTools([])
+export const agentTools = createAgentTools()
 
-export async function executePendingAgentAction(
-  action: { type: string; id?: string; input?: any; agentName?: string },
-  ctx: AgentContext
-): Promise<ToolResult> {
-  try {
-    switch (action.type) {
-      case 'agent_create': {
-        const agent = await store.create(ctx.tenantId, {
-          ...action.input,
-          skills: action.input.skills || [],
-          mcpServers: action.input.mcpServers || [],
-          knowledgeBases: action.input.knowledgeBases || [],
-          allowedTools: action.input.allowedTools || [],
-        })
-        return { success: true, output: `✅ Agent "${agent.name}" 创建成功 (ID: ${agent.id})` }
-      }
-      case 'agent_update': {
-        const updated = await store.update(action.id!, ctx.tenantId, action.input)
-        if (!updated) {
-          return { success: false, output: 'Agent 不存在或更新失败' }
-        }
-        return { success: true, output: `✅ Agent "${updated.name}" 更新成功` }
-      }
-      case 'agent_delete': {
-        await store.delete(action.id!, ctx.tenantId)
-        return { success: true, output: `🗑️ Agent "${action.agentName}" 已删除` }
-      }
-      default:
-        return { success: false, output: `未知操作类型: ${action.type}` }
-    }
-  } catch (err) {
-    return { success: false, output: `操作失败: ${String(err)}` }
+/** Legacy entry point must use the same durable, server-authenticated approval as every tool. */
+export async function executePendingAgentAction(action: PendingAction, ctx: AgentContext): Promise<ToolResult> {
+  const resume = ctx.resumeToolCall
+  if (!resume?.pendingAction || JSON.stringify(action) !== JSON.stringify(resume.pendingAction)) {
+    return failure(new Error('请通过原工具调用的用户确认流程执行 Agent 操作'))
   }
+  const name = normalizeToolName(resume.toolCall.name)
+  const tool = agentTools.find(candidate => candidate.name === name)
+  if (!tool || !/^agent_(?:create|update|delete)$/.test(tool.name)) {
+    return failure(new Error('Agent 确认记录与操作不匹配'))
+  }
+  return tool.execute(resume.toolCall.args, { ...ctx, resumeToolCall: { ...resume, toolCall: { ...resume.toolCall, name } } })
 }

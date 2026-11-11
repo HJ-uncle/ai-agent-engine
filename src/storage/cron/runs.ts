@@ -4,6 +4,7 @@ import { getDb } from '../sqlite/db.js'
 import { cronJobFromRow, type CronJob, type CronThinkingMode } from './index.js'
 import type { CronConfigurationV2 } from '../../scheduler/cron-schedule.js'
 import type { RootRun } from '../root-runs/index.js'
+import { throwIfAborted } from '../../core/utils/abort.js'
 
 export type CronRunStatus = 'claimed' | 'running' | 'waiting' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted' | 'skipped'
 export interface CronRunSnapshot {
@@ -52,12 +53,14 @@ export function ensureCronRunSchema(db: Client): Promise<void> {
   return pending
 }
 
-export async function withCronWrite<T>(db: Client, action: (tx: Transaction) => Promise<T>): Promise<T> {
+export async function withCronWrite<T>(db: Client, action: (tx: Transaction) => Promise<T>, signal?: AbortSignal): Promise<T> {
+  throwIfAborted(signal)
   await ensureCronRunSchema(db)
   const previous = writes.get(db) ?? Promise.resolve()
   const next = previous.catch(() => undefined).then(async () => {
+    throwIfAborted(signal)
     const tx = await db.transaction('write')
-    try { const result = await action(tx); await tx.commit(); return result }
+    try { throwIfAborted(signal); const result = await action(tx); throwIfAborted(signal); await tx.commit(); return result }
     catch (error) { await tx.rollback().catch(() => undefined); throw error }
     finally { tx.close() }
   })

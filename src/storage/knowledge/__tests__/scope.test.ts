@@ -1,12 +1,14 @@
-import { createClient, type Client } from '@libsql/client'
+import type { Client } from '@libsql/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import * as database from '../../sqlite/db.js'
 import { up } from '../../sqlite/migrations/001_initial.js'
 import { addDocument, searchChunks } from '../kb-repo.js'
+import { knowledgeFixture } from './fixture.js'
 
 let db: Client
-beforeEach(async () => { db = createClient({ url: 'file::memory:' }); vi.spyOn(database, 'getDb').mockReturnValue(db); await up(db) })
-afterEach(() => { db.close(); vi.restoreAllMocks() })
+let fixture: ReturnType<typeof knowledgeFixture>
+beforeEach(async () => { fixture = knowledgeFixture(); db = fixture.db; vi.spyOn(database, 'getDb').mockReturnValue(db); await up(db) })
+afterEach(async () => { await fixture.close(); vi.restoreAllMocks() })
 
 it.each(['needle', '关键约束'])('filters document bindings inside retrieval before the limit for %s', async term => {
   for (let index = 0; index < 7; index++) await addDocument('tenant', `unbound-${index}.txt`, 'text/plain', term)

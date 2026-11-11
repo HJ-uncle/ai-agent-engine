@@ -65,7 +65,7 @@ describe('D3 batch side effects and terminal evidence', () => {
     const f = fixture([call('native-png', 'read_file')])
     const png = Buffer.alloc(900_000)
     Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(png)
-    png.write('IHDR', 12, 'ascii'); png.writeUInt32BE(400, 16); png.writeUInt32BE(400, 20)
+    png.writeUInt32BE(13, 8); png.write('IHDR', 12, 'ascii'); png.writeUInt32BE(400, 16); png.writeUInt32BE(400, 20)
     const dataUrl = 'data:image/png;base64,' + png.toString('base64')
     f.ctx.tools.execute = vi.fn(async () => ({ success: true, output: JSON.stringify({ filename: 'layout.png', mimeType: 'image/png', size: png.length, dataUrl, hasDataUrl: true }) }))
     if (failStorage) {

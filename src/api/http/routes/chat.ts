@@ -26,6 +26,9 @@ import { buildOfficeExecutionPrompt } from '../../../core/office-prompt.js'
 import { buildWorkspaceDownloadPrompt } from '../../../core/workspace-download-prompt.js'
 import { getRequestToolProfile, getRequestRunLifetime } from '../tool-profile.js'
 import { createToolRegistry } from '../../../tools/registry-factory.js'
+import { assertToolkitPermissions, normalizeToolkits, TOOLKIT_IDS } from '../../../tools/toolkits.js'
+import { normalizeToolName } from '../../../tools/tool-profile.js'
+import { getSessionToolkits } from '../../../storage/session/toolkits.js'
 import { resolveOSMMode } from '../../../core/osm.js'
 import { success, fail } from '../response.js'
 import { withHistoryLock, isSessionHistoryMutating } from '../../../storage/conversation/serialization.js'
@@ -78,6 +81,8 @@ interface ChatBody {
   sessionId?: string
   /** Per-conversation memory policy. Omitted means the stored session policy/default. */
   memoryScope?: MemoryMode
+  /** Root-session opt-in tools. Omitted inherits the saved selection; [] disables it. */
+  toolkits?: string[]
   agentId?: string
   systemPrompt?: string
   maxAskUserCount?: number
@@ -601,6 +606,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
           mcpServers: { type: 'array' },
           knowledgeBases: { type: 'array' },
           allowedTools: { type: 'array' },
+          toolkits: { type: 'array', maxItems: TOOLKIT_IDS.length, uniqueItems: true, items: { type: 'string', enum: [...TOOLKIT_IDS] } },
           inlineSkills: { type: 'array' },
           inlineMcpServers: { type: 'array' },
           inlineAgents: { type: 'array' },
@@ -617,6 +623,8 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
   }, async (request, reply) => {
     const subagentProtocol = getRequestSubagentProtocol(request)
     const toolProfile = getRequestToolProfile(request)
+    try { normalizeToolkits(request.body.toolkits, toolProfile) }
+    catch (error) { return reply.code(400).send(fail(40001, (error as Error).message)) }
     const runLifetime = getRequestRunLifetime(request)
     const keyedAdmission = prepareUserAdmission(request.body as unknown as Record<string, unknown>, { toolProfile, runLifetime, subagentProtocol })
     const requestId = uuidv4()
@@ -741,6 +749,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
       mcpServers: requestedMcpServers, 
       knowledgeBases: requestedKnowledgeBases, 
       allowedTools: requestedAllowedTools, 
+      toolkits: requestedToolkits,
       inlineSkills: requestedInlineSkills, 
       inlineMcpServers: requestedInlineMcpServers, 
       inlineAgents: requestedInlineAgents,
@@ -754,6 +763,10 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
     // Get tenant from auth context (set by auth middleware)
     const tenantId = getTenantId(request)
     const reqLogger = createRequestLogger(requestId, tenantId, sessionId)
+    // A parked run keeps its admitted selection; a later UI choice cannot grant
+    // old pending work new capabilities. Automations never inherit this UI opt-in.
+    const selectedToolkits = normalizeToolkits(requestedToolkits, toolProfile)
+      ?? (resumeRecord || request.body.automationRunId || toolProfile !== 'general' ? [] : await getSessionToolkits(tenantId, sessionId))
 
     // A fresh legacy request may update the session override. A parked run's
     // saved selector is historical, so replay must preserve any newer choice.
@@ -796,9 +809,15 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
     let allowedSkills: string[] | null = null
     let allowedMcpServers: string[] | null = null
     let boundKnowledgeBases: string[] | null = null
+    // Knowledge management is constrained by the stored Agent binding even when
+    // the request deliberately overrides the legacy RAG retrieval selection.
+    let managementKnowledgeScope: readonly string[] | null = null
     let allowedTools: string[] | null = null
+    let toolkitAllowedTools: string[] | null = null
 
     if (effectiveAgentId) {
+      toolkitAllowedTools = []
+      managementKnowledgeScope = []
       const agent = await agentStore.getById(effectiveAgentId, tenantId)
       if (agent) {
         effectiveAgentName = agent.name
@@ -808,11 +827,13 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
         allowedSkills = agent.skills
         allowedMcpServers = agent.mcpServers
         boundKnowledgeBases = agent.knowledgeBases
+        managementKnowledgeScope = Object.freeze([...agent.knowledgeBases])
         // allowedTools 语义：
         //   undefined / null = 未配置 Agent，加载全部工具
         //   []              = Agent 明确未选择任何工具，禁用全部
         //   ['tool_a', ...] = 只允许指定工具
         allowedTools = agent.allowedTools
+        toolkitAllowedTools = agent.allowedTools
       } else {
         reqLogger.warn({ agentId }, 'Agent not found, falling back to defaults')
       }
@@ -854,6 +875,8 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
       allowedTools = requestedAllowedTools
       reqLogger.info({ count: requestedAllowedTools.length }, 'Request-level allowedTools whitelist applied')
     }
+    try { assertToolkitPermissions(selectedToolkits, toolkitAllowedTools, allowedTools) }
+    catch (error) { return reply.code(403).send(fail(40301, (error as Error).message)) }
 
     // ── 租户专属默认身份注入 ────────────────────────────────────────────────────
     // 如果租户配置了专属默认身份（default_identity），则将其前置到系统提示词中。
@@ -933,6 +956,8 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
       prepared = await createToolRegistry({
         signal: abortController.signal,
         toolProfile,
+        toolkits: selectedToolkits,
+        toolkitAllowedTools,
         ownedCollaboration: selectedCollaborators.length > 0,
         securityContext: { tenantId, sessionId, toolProfile },
         memoryScope: effectiveMemoryScope,
@@ -1022,6 +1047,8 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
       clientCapabilities: normalizeClientCapabilities(request.body.clientCapabilities),
       browserAuthority: browserAuthorityFromRequest(request),
       browserPrincipal: browserPrincipalFromAuth((request as FastifyRequest & { authContext?: AuthContext }).authContext),
+      managementPrincipal: (request as FastifyRequest & { authContext?: AuthContext }).authContext,
+      managementKnowledgeScope,
       toolProfile,
       memoryScope: effectiveMemoryScope,
       memoryScopes: effectiveMemoryScopes,
@@ -1390,12 +1417,12 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
           resumedPending = accepted.pending
         } else if (keyedAdmission) {
           const accepted = await rootRunStore.createUserAdmission(tenantId, resolvedModel ?? ctx.modelName ?? '', workspacePaths ?? [],
-            { ...request.body, toolProfile } as unknown as Record<string, unknown>, keyedAdmission, abortController.signal, registerRootPreparation)
+            { ...request.body, toolProfile, toolkits: selectedToolkits } as unknown as Record<string, unknown>, keyedAdmission, abortController.signal, registerRootPreparation)
           rootRun = accepted.run
           if (accepted.duplicate) return 'duplicate' as const
         } else {
           rootRun = await rootRunStore.create(tenantId, sessionId, resolvedModel ?? ctx.modelName ?? '', workspacePaths ?? [],
-            { ...request.body, toolProfile } as unknown as Record<string, unknown>,
+            { ...request.body, toolProfile, toolkits: selectedToolkits } as unknown as Record<string, unknown>,
             request.body.automationRunId ? { runId: request.body.automationRunId, dispatchRequest: automationDispatchRequest,
               effectiveAgentId: effectiveAgentId ?? undefined, effectiveAgentName } : undefined, abortController.signal, registerRootPreparation)
         }
@@ -1423,8 +1450,11 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
           installProductionCollaborationBoundary(ctx)
         }
         if (resumedPending) {
-          ctx.resumeToolCall = { toolCall: { id: resumedPending.toolCallId, name: resumedPending.toolName, args: resumedPending.args },
-            messageId: resumedPending.messageId ?? '', decision: resumedPending.kind === 'permission' ? (resumedPending.output === 'approved' ? 'approved' : 'rejected') : 'answered', output: resumedPending.output }
+          // Validate the original pending identity above; only execution maps old
+          // names to canonical tools. Stored receipts keep their original identity.
+          ctx.resumeToolCall = { toolCall: { id: resumedPending.toolCallId, name: normalizeToolName(resumedPending.toolName), args: resumedPending.args },
+            messageId: resumedPending.messageId ?? '', decision: resumedPending.kind === 'permission' ? (resumedPending.output === 'approved' ? 'approved' : 'rejected') : 'answered', output: resumedPending.output,
+            pendingAction: resumedPending.pendingAction }
         }
         ctx.onPending = pending => { pendingCandidate = structuredClone(pending) }
         ctx.commitPending = async pending => {

@@ -1,12 +1,15 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { getRequestToolProfile } from '../tool-profile.js'
 import { createToolRegistry } from '../../../tools/registry-factory.js'
-import { paginateArray } from '../response.js'
+import { paginateArray, success } from '../response.js'
 import { skillsRegistry } from '../../../skills/index.js'
 import { SQLiteAgentStore } from '../../../storage/agent/index.js'
 import { workspaceManager } from '../../../workspace/index.js'
 import { toolSource } from '../../../core/runtime-capabilities.js'
-import { isDefaultTool } from '../../../tools/tool-exposure.js'
+import { recommendedAgentTools } from '../../../core/agent-management.js'
+import { SessionStore } from '../../../storage/session/index.js'
+import { TOOLKIT_CATALOGUE, assertToolkitPermissions } from '../../../tools/toolkits.js'
+import type { AuthContext } from '../../../auth/types.js'
 
 interface ToolQuery { current?: number; pageSize?: number; agentId?: string; path?: string }
 
@@ -24,6 +27,28 @@ function catalogueWorkspaceRoot(request: FastifyRequest<{ Querystring: ToolQuery
 
 export async function toolRoutes(fastify: FastifyInstance) {
   const agentStore = new SQLiteAgentStore()
+
+  fastify.get<{ Querystring: ToolQuery & { sessionId?: string } }>('/toolkits', async (request, reply) => {
+    if (getRequestToolProfile(request) !== 'general') return reply.send(success({ toolkits: [] }))
+    const auth = (request as FastifyRequest & { authContext?: AuthContext }).authContext
+    const tenantId = auth?.tenantId ?? 'default'
+    if (request.query.path) catalogueWorkspaceRoot(request, tenantId)
+    const binding = request.query.sessionId ? await new SessionStore().getBinding(request.query.sessionId, tenantId) : undefined
+    const agentId = binding ? binding.agentId : request.query.agentId
+    const agent = agentId ? await agentStore.getById(agentId, tenantId) : undefined
+    const canManageSkills = process.env.AUTH_ENABLED === 'false' && (!auth || auth.method === 'none') ||
+      auth?.roles?.some(role => role === 'admin' || role === 'skill-manager') === true
+    return reply.send(success({ toolkits: TOOLKIT_CATALOGUE.map(toolkit => {
+      let reason: string | undefined
+      if (agentId && !agent) reason = '绑定的 Agent 已不可用，请重新选择'
+      else {
+        try { assertToolkitPermissions([toolkit.id], agent?.allowedTools) }
+        catch (error) { reason = error instanceof Error ? error.message : String(error) }
+      }
+      if (!reason && toolkit.id === 'skill-management' && !canManageSkills) reason = '需要技能管理权限'
+      return { ...toolkit, available: !reason, ...(reason ? { reason } : {}) }
+    }) }))
+  })
 
   // 获取所有工具列表（包括系统工具和技能工具）
   fastify.get<{ Querystring: ToolQuery }>('/tools', async (request, reply) => {
@@ -44,6 +69,7 @@ export async function toolRoutes(fastify: FastifyInstance) {
       }
     }
 
+    const defaultTools = new Set(await recommendedAgentTools(toolProfile))
     const { registry } = await createToolRegistry({ toolProfile, allowedTools, allowedSkills, allowedMcpServers, workspaceRoot,
       ...(!agentId ? { toolExposure: 'catalogue' as const } : {}) })
     const toolsList = registry.list().map(t => ({
@@ -52,7 +78,7 @@ export async function toolRoutes(fastify: FastifyInstance) {
       description: t.description,
       parameters: t.parameters,
       source: toolSource(t),
-      defaultEnabled: isDefaultTool(t.name),
+      defaultEnabled: defaultTools.has(t.name),
       ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
     }))
     return reply.code(200).send(paginateArray(toolsList, current, pageSize))
@@ -79,6 +105,7 @@ export async function toolRoutes(fastify: FastifyInstance) {
       }
     }
 
+    const defaultTools = new Set(await recommendedAgentTools(toolProfile))
     const { registry } = await createToolRegistry({ toolProfile, allowedTools, allowedSkills, allowedMcpServers, workspaceRoot,
       ...(!agentId ? { toolExposure: 'catalogue' as const } : {}) })
     const toolsList = registry.list()
@@ -89,7 +116,7 @@ export async function toolRoutes(fastify: FastifyInstance) {
         description: t.description,
         parameters: t.parameters,
         source: toolSource(t),
-        defaultEnabled: isDefaultTool(t.name),
+        defaultEnabled: defaultTools.has(t.name),
         ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
       }))
     return reply.code(200).send(paginateArray(toolsList, current, pageSize))

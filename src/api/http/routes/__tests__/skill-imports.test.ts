@@ -16,7 +16,9 @@ import { zipSync, strToU8 } from 'fflate'
 vi.mock('../../../../scheduler/cron-scheduler.js', () => ({ cronScheduler: { start: vi.fn(), stop: vi.fn() } }))
 
 // 独立的临时数据目录与技能目录（避免污染开发库/真实技能）
-const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-import-api-'))
+// Keep fs.watch and canonical management writes on the same Windows spelling;
+// mixed 8.3/long paths can trigger a libuv fs-event assertion.
+const TMP = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'skill-import-api-')))
 const ORIGINAL_GLOBAL_DIR = process.env.AETHER_GLOBAL_DIR
 const ORIGINAL_DATA_DIR = process.env.DATA_DIR ?? path.join(TMP, 'data')
 process.env.DATA_DIR = path.join(TMP, 'data')
@@ -28,6 +30,7 @@ process.env.AUTH_ENABLED = 'false'
 
 const { buildServer } = await import('../../server.js')
 const { initDb, closeDb } = await import('../../../../storage/sqlite/db.js')
+const { skillsRegistry } = await import('../../../../skills/skills-registry.js')
 
 const SKILL_MD = (name: string) =>
   strToU8(`---\nname: ${name}\ndescription: test\n---\n\n# ${name}\n`)
@@ -76,6 +79,7 @@ describe('Skill Import API', () => {
 
   afterAll(async () => {
     await app?.close()
+    skillsRegistry.stop()
     closeDb()
     // Windows 下 Temp 目录可能被杀软/索引服务长期锁定（EPERM）：
     // 清理只是卫生操作，失败不应让全绿的套件标红；目录在 %TEMP% 下

@@ -13,6 +13,7 @@ import { skillsRegistry } from '../../skills/index.js'
 import { clearSecurityMode, setSecurityMode } from '../../security/policy-engine.js'
 import { logger } from '../../observability/index.js'
 import { createPptx } from '../office/pptx.js'
+import { AGENT_MANAGEMENT_TOOLS, MANAGEMENT_TOOL_NAMES, TOOLKIT_IDS, toolkitToolNames, isAgentManagementTool, normalizeToolkits } from '../toolkits.js'
 
 const external = vi.hoisted(() => ({ tools: [] as Array<Tool & { source?: string }> }))
 vi.mock('../../storage/mcp/mcp-config.js', () => ({ listServers: () => [] }))
@@ -45,6 +46,81 @@ beforeEach(() => {
 afterEach(() => { clearSecurityMode(context.tenantId, context.sessionId); vi.restoreAllMocks(); vi.unstubAllEnvs() })
 
 describe('executable tool profiles', () => {
+  it.each(['off', 'balanced'])('loads the explicit Work toolkit initially without widening defaults under OSM %s', async mode => {
+    vi.stubEnv('OSM_MODE', mode)
+    const plain = (await createToolRegistry({ allowedMcpServers: [] })).registry
+    const enabled = (await createToolRegistry({ allowedMcpServers: [], toolkits: ['agent-management'] })).registry
+    expect(enabled.list().map(tool => tool.name).filter(name => !isAgentManagementTool(name)))
+      .toEqual(plain.list().map(tool => tool.name))
+    const offered = enabled.listForRequest().map(tool => tool.name)
+    expect(offered.filter(isAgentManagementTool)).toEqual(AGENT_MANAGEMENT_TOOLS)
+    expect(enabled.listForRequest([]).map(tool => tool.name)).toEqual(offered)
+    const reconstructed = (await createToolRegistry({ allowedMcpServers: [], toolkits: ['agent-management'] })).registry
+    expect(reconstructed.listForRequest([])).toEqual(enabled.listForRequest([]))
+    const disabled = (await createToolRegistry({ allowedMcpServers: [], toolkits: [] })).registry
+    expect(disabled.list()).toEqual(plain.list())
+  })
+
+  it('rejects unavailable toolkit IDs, Code use, and either request or bound Agent ceilings', async () => {
+    for (const raw of ['agent-management', null, ['unknown'], ['agent-management', 'agent-management']])
+      expect(() => normalizeToolkits(raw)).toThrow('toolkits')
+    await expect(createToolRegistry({ toolProfile: 'code', toolkits: ['agent-management'] })).rejects.toThrow('Work')
+    await expect(createToolRegistry({ toolkits: ['agent-management'], allowedTools: [] })).rejects.toThrow('白名单')
+    await expect(createToolRegistry({ toolkits: ['agent-management'], allowedTools: [...AGENT_MANAGEMENT_TOOLS], toolkitAllowedTools: ['read_file'] })).rejects.toThrow('白名单')
+    const permitted = (await createToolRegistry({ toolkits: ['agent-management'], allowedTools: [...AGENT_MANAGEMENT_TOOLS], toolkitAllowedTools: [...AGENT_MANAGEMENT_TOOLS] })).registry
+    expect(permitted.listForRequest().map(tool => tool.name)).toEqual(expect.arrayContaining([...AGENT_MANAGEMENT_TOOLS]))
+  })
+
+  it('combines independent packages in stable order without leaking management into children or defaults', async () => {
+    const { registry } = await createToolRegistry({ toolkits: [...TOOLKIT_IDS].reverse(), allowedMcpServers: [] })
+    const names = toolkitToolNames(TOOLKIT_IDS)
+    expect(normalizeToolkits([...TOOLKIT_IDS].reverse())).toEqual(TOOLKIT_IDS)
+    for (const name of names) expect(registry.listForRequest().some(tool => tool.name === name), name).toBe(true)
+    expect(new Set(names).size).toBe(names.length)
+    const child = createSubagentToolRegistry(registry, false)
+    for (const name of names) {
+      expect(child.has(name), name).toBe(false)
+      registry.register(tool(name, 'skill'))
+      expect(registry.list().find(candidate => candidate.name === name)?.description, name).not.toBe('Fixture tool')
+    }
+    const reduced = (await createToolRegistry({ toolkits: ['skill-management'], allowedMcpServers: [] })).registry
+    expect(reduced.has('skill_update')).toBe(true)
+    expect(reduced.has('knowledge_create')).toBe(false)
+    expect(reduced.has('cron_create')).toBe(false)
+    expect(reduced.has('agent_create')).toBe(false)
+  })
+
+  it.each([true, false])('does not inherit root management tools or loaders into children (readOnly=%s)', async readOnly => {
+    const parent = (await createToolRegistry({ toolkits: ['agent-management'], allowedMcpServers: [] })).registry
+    const child = createSubagentToolRegistry(parent, readOnly)
+    for (const name of AGENT_MANAGEMENT_TOOLS) expect(child.has(name), name).toBe(false)
+    expect(() => child.loadForModel!(['agent_do_delete'])).toThrow('unavailable')
+    expect(child.listForRequest!().every(tool => !isAgentManagementTool(tool.name))).toBe(true)
+  })
+
+  it('does not admit an extension impersonating an enabled toolkit builtin', async () => {
+    const registry = (await createToolRegistry({ toolkits: ['agent-management'], allowedMcpServers: [] })).registry
+    registry.unregister('agent_delete')
+    registry.register(tool('agent_delete', 'skill'))
+    expect(registry.has('agent_delete')).toBe(false)
+    registry.register(tool('agent_do_delete', 'skill'))
+    expect(registry.has('agent_do_delete')).toBe(false)
+  })
+
+  it('merges legacy Agent permissions into five canonical capabilities without exposing executable aliases', async () => {
+    const legacy = ['agent_list', 'agent_get', 'agent_do_create', 'agent_do_update', 'agent_do_delete']
+    const registry = (await createToolRegistry({ toolkits: ['agent-management'], allowedTools: [...legacy, 'agent_create'],
+      toolkitAllowedTools: legacy, allowedMcpServers: [] })).registry
+    expect(normalizeAllowedTools([...legacy, 'agent_create'])).toEqual(AGENT_MANAGEMENT_TOOLS)
+    expect(registry.list().filter(tool => tool.name.startsWith('agent_')).map(tool => tool.name)).toEqual(AGENT_MANAGEMENT_TOOLS)
+    expect(registry.listForRequest().filter(tool => tool.name.startsWith('agent_')).map(tool => tool.name)).toEqual(AGENT_MANAGEMENT_TOOLS)
+    expect(registry.listForRequest().find(tool => tool.name === 'load_tools')?.description).not.toContain('agent_do_')
+    for (const name of legacy.filter(name => name.startsWith('agent_do_'))) {
+      expect(registry.has(name)).toBe(false)
+      expect(() => registry.loadForModel([name])).toThrow('unavailable')
+      await expect(registry.execute(name, {}, context)).rejects.toBeInstanceOf(ToolNotFoundError)
+    }
+  })
   it('pairs only the actual native Office tool with its bundled guide under strict empty external bindings', async () => {
     vi.mocked(skillsRegistry.getSkills).mockReturnValue([
       { name: 'aether-office', description: 'UNSELECTED_EXTERNAL_OVERRIDE', skillMdPath: '', inlineContent: 'UNSELECTED_EXTERNAL_OVERRIDE', order: 0, enabled: true },
@@ -234,12 +310,12 @@ describe('executable tool profiles', () => {
     const code = await createToolRegistry({ toolProfile: 'code' })
     const second = await createToolRegistry({ toolProfile: 'general' })
     expect(first.registry.list().map(item => item.name)).toEqual(second.registry.list().map(item => item.name))
-    expect(first.registry.has('cron_create')).toBe(true)
-    expect(second.registry.has('cron_create')).toBe(true)
+    expect(first.registry.has('cron_create')).toBe(false)
+    expect(second.registry.has('cron_create')).toBe(false)
     expect(code.registry.has('cron_create')).toBe(false)
     code.registry.register(tool('cron_create'))
     await expect(code.registry.execute('cron_create', {}, context)).rejects.toBeInstanceOf(ToolNotFoundError)
-    expect(first.registry.has('cron_create')).toBe(true)
+    expect(first.registry.has('cron_create')).toBe(false)
     expectExactCategories(first)
     expectExactCategories(code)
     expectExactCategories(second)
@@ -377,7 +453,7 @@ describe('lean execution defaults and selectable compatibility catalogue', () =>
     const catalogue = await createToolRegistry({ ...options, toolExposure: 'catalogue' })
     const later = await createToolRegistry(options)
     expect(later.registry.list()).toEqual(normal.registry.list())
-    const optional = Object.keys(OPTIONAL_TOOL_EXPOSURES).filter(name => toolProfile === 'general' || CODE_BUILTIN_TOOLS.has(name))
+    const optional = [...new Set([...Object.keys(OPTIONAL_TOOL_EXPOSURES), ...MANAGEMENT_TOOL_NAMES])].filter(name => toolProfile === 'general' || CODE_BUILTIN_TOOLS.has(name))
     expect(catalogue.registry.list().length - normal.registry.list().length).toBe(optional.length)
     for (const name of optional) {
       expect(catalogue.registry.has(name), name).toBe(true)

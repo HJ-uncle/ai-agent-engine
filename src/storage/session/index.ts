@@ -1,4 +1,5 @@
 import { getDb } from '../sqlite/db.js'
+import { clearSessionToolkits } from './toolkits.js'
 
 /**
  * SessionStore：管理会话与 Agent 的绑定关系。
@@ -58,6 +59,7 @@ export class SessionStore {
    * 清除会话绑定（删除会话历史时同步调用，允许重新选择 Agent）。
    */
   async clearBinding(sessionId: string, tenantId: string): Promise<void> {
+    await clearSessionToolkits(tenantId, sessionId, this.db)
     await this.db.execute({
       sql: `DELETE FROM sessions WHERE session_id = ? AND tenant_id = ?`,
       args: [sessionId, tenantId],

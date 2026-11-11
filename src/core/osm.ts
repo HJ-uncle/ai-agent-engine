@@ -72,8 +72,7 @@ export const OSM_ONLY_TOOLS: ReadonlySet<string> = new Set([
   // 后台任务控制
   'task_list', 'task_cancel', 'task_status',
   // Agent 管理
-  'agent_list', 'agent_get', 'agent_create', 'agent_do_create',
-  'agent_update', 'agent_do_update', 'agent_delete', 'agent_do_delete',
+  'agent_list', 'agent_get', 'agent_create', 'agent_update', 'agent_delete',
   // LSP 诊断
   'code_diagnose',
 ])

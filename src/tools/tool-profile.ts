@@ -6,6 +6,9 @@ export type ToolProfile = 'general' | 'code'
 const LEGACY_TOOL_NAMES: Readonly<Record<string, string>> = {
   run_command: 'execute_cmd',
   smart_read: 'read_file',
+  agent_do_create: 'agent_create',
+  agent_do_update: 'agent_update',
+  agent_do_delete: 'agent_delete',
 }
 
 /** Normalize configuration names, without registering aliases that could bypass profile checks. */
@@ -43,6 +46,6 @@ const GENERAL_SERVICE_TOOLS: ReadonlySet<string> = new Set([
 /** Extension namespaces may add configured tools, but cannot impersonate excluded builtins or old aliases. */
 export function isCodeProfileTool(tool: { name: string; source?: string }): boolean {
   const name = tool.name
-  if (REMOVED_TOOL_NAMES.has(name) || normalizeToolName(name) !== name || GENERAL_SERVICE_TOOLS.has(name) || /^(?:cron|agent|task)_/.test(name)) return false
+  if (REMOVED_TOOL_NAMES.has(name) || normalizeToolName(name) !== name || GENERAL_SERVICE_TOOLS.has(name) || /^(?:cron|agent|task|skill|knowledge)_/.test(name)) return false
   return CODE_BUILTIN_TOOLS.has(name) || tool.source === 'skill' || name.startsWith('mcp_')
 }
