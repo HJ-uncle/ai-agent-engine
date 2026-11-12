@@ -1,6 +1,7 @@
 /** Held evidence/commit/ACK barriers and real isolated WAL verify publication order, budgets and executor isolation. */
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BoundedPublicationQueue } from '../publication-queue.js'
 import { busToIterable, StreamBus, type StreamBusOptions } from '../stream-bus.js'
@@ -236,7 +237,8 @@ describe('parent publisher and signed lease against actual SQLite WAL', () => {
   let directory: string, a: LocalSqliteProcessClient, b: LocalSqliteProcessClient, store: SubagentStore,
     authority: ParentPublicationAuthority, bus: StreamBus
   const parent = { tenantId: 'synthetic-publication', parentSessionId: 'parent', rootSessionId: 'root', parentTurnId: 'turn', rootRunId: 'root-run', attemptId: 'attempt' }
-  const fixtureRoot = path.resolve(process.cwd(), 'publication-fixtures')
+  const outputRoot = fileURLToPath(new URL('../../../../.e2e-tmp/ordered-publication/', import.meta.url))
+  const fixtureRoot = path.join(outputRoot, 'fixtures')
   const fixtureReceipts: Array<{ directory: string; closed: boolean; removed: boolean }> = []
   async function child(id: string, tokens = 80) {
     const input: CreateSubagentRun = { ...parent, runId: id, parentConversationId: parent.parentTurnId, parentMessageId: 'message-' + id,
@@ -264,7 +266,7 @@ describe('parent publisher and signed lease against actual SQLite WAL', () => {
     if (path.dirname(target) !== fixtureRoot || !path.basename(target).startsWith('owned-')) throw new Error('Unsafe fixture cleanup')
     fs.rmSync(target, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     fixtureReceipts.at(-1)!.removed = !fs.existsSync(target)
-    fs.writeFileSync(path.resolve(process.cwd(), 'publication-fixture-receipts.json'), JSON.stringify(fixtureReceipts, null, 2) + '\n')
+    fs.writeFileSync(path.join(outputRoot, 'publication-fixture-receipts.json'), JSON.stringify(fixtureReceipts, null, 2) + '\n')
   })
   it('does not commit one ordinary SQLite transaction per text token and snapshots exact parent E', async () => {
     const spy = vi.spyOn(a, 'transaction')

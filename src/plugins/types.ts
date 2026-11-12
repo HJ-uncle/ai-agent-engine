@@ -1,3 +1,4 @@
+import type { PluginContributions } from './contributions.js'
 export interface PluginToolManifest {
   name: string
   description: string
@@ -14,6 +15,7 @@ export interface PluginManifest {
   description: string
   runtime: 'node'
   tools: PluginToolManifest[]
+  contributes?: PluginContributions
 }
 
 export interface PluginRevision { revision: number; hash: string; createdAt: number; publishedAt?: number }

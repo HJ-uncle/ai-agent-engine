@@ -88,6 +88,7 @@ HTTP 目录为 `GET /plugins/project/templates`，完整工程为 `GET /plugins/
 | `markdown-report` | 生成文档产物 | 报告内容、相对文件路径 |
 | `time-calculator` | 确定性 UTC 时间运算 | 跨日、负偏移、闰日 |
 | `currency-converter` | 货币换算与原生操作表单，用户提供汇率 | 指定汇率、小数进位、日元取整、零金额 |
+| `desktop-timer` | 自定义 HTML、导航、会话工作区标签、宿主服务 | 确定性截止时间、停止；桌面打开期间完成通知 |
 
 在引擎仓库中：
 
@@ -124,7 +125,7 @@ AI 先调用 `plugin_get_template` 发现模板和理解协议。需求匹配时
 
 ## 发布后直接操作
 
-已发布并启用的工具插件在插件列表点击即可打开原生操作页，开发配置通过单独的编辑入口进入。操作页按发布清单的 `inputSchema` 生成字段，不运行包内任意 HTML：`title` 为字段标签，`description` 为说明，`enum` 提供选项，`required`、`minimum` 等约束输入。复杂数组/对象可以通过高级 JSON 参数填写。作者应提供中文标题、有限选项和确定性示例，避免用户手写完整协议。
+已发布并启用的工具插件在插件列表点击即可打开原生操作页，开发配置通过单独的编辑入口进入。原生操作页按发布清单的 `inputSchema` 生成字段：`title` 为字段标签，`description` 为说明，`enum` 提供选项，`required`、`minimum` 等约束输入。复杂数组/对象可以通过高级 JSON 参数填写。作者应提供中文标题、有限选项和确定性示例，避免用户手写完整协议。需要自定义页面时通过 `manifest.contributes.pages` 声明包内 `.html`，由独立沙箱 iframe 与受限 bridge 承载，详见 [插件前端贡献协议](plugin-ui-contributions.md)。
 
 首次打开 `GET /plugins/runtime/apps/:id?revision=N`，可省略 revision 以获取当前发布修订；返回固定 revision/hash、manifest、合法示例和执行许可，不返回源码与本机路径。提交使用 `POST /plugins/runtime/apps/:id/invoke`，必须传 `{revision,tool,args}`，每次重新验证发布、启用和快照内容；更新发布不会替换已打开页面的版本。结果和产物在操作页预览，不写入工作区。安全模式阻止未受约束的插件执行，客户端不能通过请求指定模式来绕过。
 
@@ -132,6 +133,6 @@ AI 先调用 `plugin_get_template` 发现模板和理解协议。需求匹配时
 
 ## 尚未提供的扩展契约
 
-这一版提供宿主原生操作表单及固定版本调用接口；尚未提供作者自定义 HTML/React 页面、Client slots、持久状态 API、`activate/dispose` 常驻生命周期、后台调度或配置/secret 服务。时间计算模板不能冒充「点击开始、后台到时提醒」的定时器。
+这一版提供宿主原生操作表单、固定版本调用、自定义沙箱 HTML、导航/工作区标签及宿主服务状态。`desktop-timer` 模板展示页面关闭后由宿主继续计时、完成通知的流程；它要求桌面应用保持打开，停用/升级/连接切换会清理计时。
 
-交互型插件需要单独定义 Host/Client 入口、可调用权限、配置、状态、事件、清理和重启恢复协议，再实现宿主。独立 HTML 是文件产物；管理页能编辑代码也不等于插件有自己的操作页面。这些能力不能仅靠添加模板伪造。
+目前不提供作者任意宿主 React 导入、持久状态 API、插件自定义 `activate/dispose` 常驻 Node 生命周期、跨重启服务恢复、关闭应用后的后台调度或配置/secret 服务。独立 HTML 文件产物不等同于 `contributes.pages` 的应用内页面，时间计算模板也不等同于计时服务。能力目录、页面 bridge 与生命周期限制由模板 API 同源返回，作者不得宣称未提供的能力。

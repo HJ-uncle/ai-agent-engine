@@ -10,6 +10,7 @@ import type { AgentContext, Tool } from '../../core/agent-context/types.js'
 import { pluginRoutes } from '../../api/http/routes/plugins.js'
 import { createToolRegistry } from '../../tools/registry-factory.js'
 import { getPluginTemplate, listPluginTemplates, PLUGIN_TEMPLATE_PROTOCOL } from '../templates.js'
+import { PLUGIN_CONTRIBUTION_CATALOGUE } from '../contributions.js'
 import { createPluginManagementTools } from '../management-tools.js'
 import { PluginService, validatePluginInput } from '../service.js'
 import { runPlugin } from '../runtime.js'
@@ -37,13 +38,14 @@ afterEach(() => {
 describe('standard plugin project templates', () => {
   it('returns discoverable summaries and independent complete projects with explicit product boundaries', () => {
     const summaries = listPluginTemplates()
-    expect(summaries.map(item => item.id)).toEqual(['json-tool', 'markdown-report', 'time-calculator', 'currency-converter'])
+    expect(summaries.map(item => item.id)).toEqual(['json-tool', 'markdown-report', 'time-calculator', 'currency-converter', 'desktop-timer'])
     expect(summaries.every(item => !Object.hasOwn(item, 'files'))).toBe(true)
     for (const { id } of summaries) {
       const template = getPluginTemplate(id)
-      expect(Object.keys(template.files).sort()).toEqual(['README.md', 'aether-plugin.json', 'examples/cases.json', 'main.mjs', 'package.json', 'scripts/test.mjs'])
+      expect(Object.keys(template.files).sort()).toEqual(['README.md', 'aether-plugin.json', 'examples/cases.json', 'main.mjs', 'package.json', 'scripts/test.mjs', ...(id === 'desktop-timer' ? ['ui/index.html'] : [])])
       expect(JSON.parse(template.files['aether-plugin.json'])).toEqual(template.manifest)
-      expect(template.protocol.ui).toContain('不支持')
+      expect(template.protocol.ui).toContain('manifest.contributes')
+      expect(template.contributions).toEqual(PLUGIN_CONTRIBUTION_CATALOGUE)
       expect(template.protocol.background).toContain('完成即退出')
       expect(() => validatePluginInput(template)).not.toThrow()
     }
@@ -54,7 +56,7 @@ describe('standard plugin project templates', () => {
     expect(() => getPluginTemplate('../outside')).toThrow('插件模板不存在')
   })
 
-  it.each(['json-tool', 'markdown-report', 'time-calculator', 'currency-converter'])('executes every deterministic example through the actual Node protocol: %s', async id => {
+  it.each(['json-tool', 'markdown-report', 'time-calculator', 'currency-converter', 'desktop-timer'])('executes every deterministic example through the actual Node protocol: %s', async id => {
     const template = getPluginTemplate(id)
     const record = await service.create('default', template)
     const snapshot = await service.snapshot('default', record.id, 1, { allowDraft: true })
@@ -119,7 +121,7 @@ describe('standard plugin project templates', () => {
     expect(tool.preflight).toBeUndefined()
     const list = await tool.execute({}, ctx)
     expect(list.success).toBe(true)
-    expect(JSON.parse(list.output)).toEqual({ templates: listPluginTemplates(), protocol: PLUGIN_TEMPLATE_PROTOCOL })
+    expect(JSON.parse(list.output)).toEqual({ templates: listPluginTemplates(), protocol: PLUGIN_TEMPLATE_PROTOCOL, contributions: PLUGIN_CONTRIBUTION_CATALOGUE })
     const detail = await tool.execute({ id: 'markdown-report' }, ctx)
     expect(JSON.parse(detail.output).template).toEqual(getPluginTemplate('markdown-report'))
     expect((await tool.execute({ id: 'missing' }, ctx)).success).toBe(false)

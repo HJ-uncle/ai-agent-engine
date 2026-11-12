@@ -8,6 +8,7 @@ import { runPlugin } from '../../../plugins/runtime.js'
 import { getPluginTemplate, listPluginTemplates, PLUGIN_TEMPLATE_PROTOCOL } from '../../../plugins/templates.js'
 import { exportPluginArchive } from '../../../plugins/project.js'
 import { getPluginApplication, invokePluginApplication } from '../../../plugins/application.js'
+import { PLUGIN_CONTRIBUTION_CATALOGUE } from '../../../plugins/contributions.js'
 import { PluginError } from '../../../plugins/types.js'
 import type { CreatePluginInput, UpdatePluginInput } from '../../../plugins/types.js'
 import type { AuthContext } from '../../../auth/types.js'
@@ -27,7 +28,7 @@ export async function pluginRoutes(app: FastifyInstance) {
   app.get('/plugins', async request => success({ plugins: (await service.list(tenant(request))).map(pluginSummary) }))
   // Three segments preserve every valid plugin ID (including "templates" and
   // "project") at /plugins/:id without reserving or migrating existing IDs.
-  app.get('/plugins/project/templates', async request => { tenant(request); return success({ templates: listPluginTemplates(), protocol: PLUGIN_TEMPLATE_PROTOCOL }) })
+  app.get('/plugins/project/templates', async request => { tenant(request); return success({ templates: listPluginTemplates(), protocol: PLUGIN_TEMPLATE_PROTOCOL, contributions: PLUGIN_CONTRIBUTION_CATALOGUE }) })
   app.get('/plugins/project/templates/:id', async request => { tenant(request); return success({ template: getPluginTemplate(pluginId(request)) }) })
   app.get('/plugins/runtime/apps/:id', async request => {
     const tid = tenant(request), id = pluginId(request)

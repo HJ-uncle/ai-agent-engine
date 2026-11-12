@@ -6,6 +6,7 @@ import { compilePluginSchema } from './schema.js'
 import { withFileLocks } from '../shared/file-version.js'
 import { PluginError, type CreatePluginInput, type PluginManifest, type PluginRecord, type PluginSnapshot, type UpdatePluginInput } from './types.js'
 import { describePluginRecord, type DescribedPluginRecord } from './metadata.js'
+import { pluginContributionsSchema } from './contributions.js'
 
 const MAX_FILES = 100, MAX_FILE_BYTES = 1024 * 1024, MAX_SOURCE_BYTES = 8 * 1024 * 1024
 const MAX_INSTALLED_FILES = 20_000, MAX_INSTALLED_BYTES = 128 * 1024 * 1024
@@ -20,6 +21,7 @@ const manifestSchema = z.object({
   tools: z.array(z.object({ name: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/, '本地工具名使用 1–32 位小写字母、数字和下划线（_），首位为字母，例如 convert_currency；不要填写 plugin_ 前缀或连字符'),
     description: z.string().trim().min(1).max(4000), inputSchema: z.record(z.unknown()),
     entry: z.string().max(300), }).strict()).min(1).max(32),
+  contributes: pluginContributionsSchema.optional(),
 }).strict()
 
 export interface PreparedPluginDependencies { directory: string }
@@ -76,6 +78,31 @@ export function validatePluginInput(input: CreatePluginInput): CreatePluginInput
     try { validatePluginPath(tool.entry) } catch (error) { if (error instanceof PluginError) fail(error.code, `${field}.entry: ${error.message}；请指向 files 中的相对 .mjs 路径`); throw error }
     if (!tool.entry.endsWith('.mjs') || !Object.hasOwn(input.files, tool.entry)) fail('PLUGIN_ENTRY', `${field}.entry: ${JSON.stringify(tool.entry)} 必须指向 files 中已有的 .mjs 文件；请同时提交入口源码`)
     try { compilePluginSchema(tool.inputSchema) } catch (error) { if (error instanceof PluginError) fail(error.code, `${field}.inputSchema: ${error.message}`); throw error }
+  }
+  const contributions = manifest.contributes
+  if (contributions) {
+    const pages = new Set((contributions.pages ?? []).map(page => page.id)), tools = new Set(manifest.tools.map(tool => tool.name))
+    for (const [name, entries] of Object.entries(contributions)) {
+      if (new Set(entries.map(entry => entry.id)).size !== entries.length) fail('PLUGIN_MANIFEST', `manifest.contributes.${name}: 标识重复`)
+    }
+    const assertTool = (name: string | undefined): void => { if (name && !tools.has(name)) fail('PLUGIN_MANIFEST', `manifest.contributes: 工具 ${name} 不存在`) }
+    for (const page of contributions.pages ?? []) {
+      if (page.kind === 'tool') assertTool(page.tool)
+      else {
+        validatePluginPath(page.entry)
+        if (!page.entry.endsWith('.html') || typeof input.files[page.entry] !== 'string' || Buffer.byteLength(input.files[page.entry]) > 512 * 1024)
+          fail('PLUGIN_MANIFEST', 'manifest.contributes.pages: webview entry 必须是包内不超过 512 KiB 的自包含 HTML')
+        if (new Set(page.tools).size !== page.tools.length) fail('PLUGIN_MANIFEST', 'manifest.contributes.pages: tools 不可重复')
+        page.tools.forEach(assertTool)
+      }
+    }
+    for (const target of [...contributions.navigation ?? [], ...contributions.workspaceTabs ?? [], ...contributions.services ?? []]) {
+      if (target.page && !pages.has(target.page)) fail('PLUGIN_MANIFEST', `manifest.contributes: 页面 ${target.page} 不存在`)
+    }
+    for (const entry of contributions.services ?? []) {
+      assertTool(entry.tool); assertTool(entry.stopTool); assertTool(entry.statusTool)
+      if (entry.args && Buffer.byteLength(JSON.stringify(entry.args)) > 64 * 1024) fail('PLUGIN_MANIFEST', 'manifest.contributes.services: 默认参数超过 64 KiB')
+    }
   }
   // Management APIs edit the validated manifest. Keep its project-file mirror in
   // sync so exporting an edited template cannot silently restore an older one.

@@ -10,6 +10,7 @@ import { pluginSummary } from './catalogue.js'
 import { extensionPolicy } from '../security/tool-policy.js'
 import type { CreatePluginInput } from './types.js'
 import { getPluginTemplate, listPluginTemplates, PLUGIN_TEMPLATE_PROTOCOL } from './templates.js'
+import { PLUGIN_CONTRIBUTION_CATALOGUE, PLUGIN_CONTRIBUTION_JSON_SCHEMA } from './contributions.js'
 import { validatePluginArguments } from './schema.js'
 import { resolvePluginCreateInput } from './create-input.js'
 
@@ -21,6 +22,7 @@ const manifest: JSONSchema = { type: 'object', additionalProperties: false,
     apiVersion: { type: 'integer', enum: [1] }, id,
     name: { type: 'string', minLength: 1, maxLength: 120 }, version: { type: 'string', minLength: 1, maxLength: 64 },
     description: { type: 'string', minLength: 1, maxLength: 2000 }, runtime: { type: 'string', enum: ['node'] },
+    contributes: PLUGIN_CONTRIBUTION_JSON_SCHEMA,
     tools: { type: 'array', minItems: 1, maxItems: 32, items: { type: 'object', additionalProperties: false,
       required: ['name', 'description', 'inputSchema', 'entry'], properties: {
         name: { type: 'string', minLength: 1, maxLength: 32, pattern: '^[a-z][a-z0-9_]{0,31}$', description: '本地工具名，例如 convert_currency；不填全局plugin_前缀。' },
@@ -49,7 +51,7 @@ function ok(value: unknown): ToolResult { return { success: true, output: JSON.s
 export function createPluginManagementTools(service = new PluginService()): Tool[] {
   const importer = new PluginImporter(service)
   const specs: Array<{ name: string; title: string; description: string; required: string[]; properties: Record<string, JSONSchema> }> = [
-    { name: 'plugin_create', title: '创建插件', description: '创建可编辑插件草稿。匹配内置模板的需求优先使用 {templateId,id,name?,description?}，例如 {templateId:"currency-converter",id:"my-currency",name:"货币换算器"}；宿主直接复制已验证的完整工程，保留算法和测试，不要复录或重写源码。templateId 是已知模板ID，id 是新插件ID，两者独立；不允许同时提交 manifest/files，不会对未知模板静默回退。先用 plugin_get_template 发现模板和理解协议；只有模板不适用、需要自定义实现时才提交完整 {manifest,files}。随后 plugin_test 验收再 plugin_publish。已有完整本地工程时优先 plugin_import_preview({type:"local",path}) → plugin_import_install。返回精确 globalToolNames/toolNameMap；草稿 selectionId=null，发布后才可选。已发布插件可打开原生操作页；不支持作者自定义HTML页面或常驻后台。', required: [], properties: {
+    { name: 'plugin_create', title: '创建插件', description: '创建可编辑插件草稿。匹配内置模板的需求优先使用 {templateId,id,name?,description?}，例如 {templateId:"currency-converter",id:"my-currency",name:"货币换算器"}；宿主直接复制已验证的完整工程，保留算法和测试，不要复录或重写源码。templateId 是已知模板ID，id 是新插件ID，两者独立；不允许同时提交 manifest/files，不会对未知模板静默回退。先用 plugin_get_template 发现模板和理解协议；只有模板不适用、需要自定义实现时才提交完整 {manifest,files}。随后 plugin_test 验收再 plugin_publish。已有完整本地工程时优先 plugin_import_preview({type:"local",path}) → plugin_import_install。返回精确 globalToolNames/toolNameMap；草稿 selectionId=null，发布后才可选。manifest.contributes 可声明导航、工作区标签、自定义HTML页面及宿主服务；完整能力目录与bridge协议由 plugin_get_template 返回。服务可在页面关闭后继续显示状态，仅在桌面仍打开时调度完成，不支持跨重启后台提醒。', required: [], properties: {
       templateId: { type: 'string', enum: listPluginTemplates().map(template => template.id), description: '从 plugin_get_template 发现的内置模板ID。填写后宿主复制完整实现，无需且禁止传manifest/files；与新插件id不同。' },
       id: { ...id, description: '模板创建时必填的新插件ID，与templateId独立，例如 my-currency；仅小写字母、数字、单连字符。' },
       name: { type: 'string', minLength: 1, maxLength: 120, description: '模板创建时可选的新插件显示名称；省略则沿用模板名称。' },
@@ -138,9 +140,9 @@ export function createPluginManagementTools(service = new PluginService()): Tool
     },
   }))
   return [
-    { name: 'plugin_get_template', displayName: '插件工程模板', description: '只读发现标准插件模板、完整工程与真实运行协议。无 id 时列出模板；传 id 返回完整 manifest、files、README 和确定性测试案例。创建前调用以理解模板；需求匹配时随后调用 plugin_create({templateId:本模板id,id:新插件id,name?,description?})，由宿主直接复用工程，不必复录源码。已发布插件可打开按inputSchema生成的原生操作页；不支持作者自定义HTML页面或后台提醒。',
-      parameters: { type: 'object', properties: { id: { type: 'string', description: '模板 ID：json-tool、markdown-report、time-calculator、currency-converter；省略则列出。' } }, additionalProperties: false },
-      async execute(raw, ctx) { try { authorize(ctx); const input = z.object({ id: z.string().optional() }).strict().parse(raw ?? {}); return ok(input.id === undefined ? { templates: listPluginTemplates(), protocol: PLUGIN_TEMPLATE_PROTOCOL } : { template: getPluginTemplate(input.id) }) } catch (error) { return failure(error) } } },
+    { name: 'plugin_get_template', displayName: '插件工程模板', description: '只读发现标准插件模板、完整工程、manifest.contributes能力目录与bridge协议。无 id 时列出模板；传 id 返回完整 manifest、files、README 和确定性测试案例。创建前调用以理解模板；需求匹配时随后调用 plugin_create({templateId:本模板id,id:新插件id,name?,description?})，由宿主直接复用工程，不必复录源码。支持自动参数操作页、沙箱HTML、导航、工作区标签及宿主服务。desktop-timer展示自定义页面和页面关闭后仍可运行的倒计时；不支持跨重启后台提醒。',
+      parameters: { type: 'object', properties: { id: { type: 'string', description: '模板 ID：json-tool、markdown-report、time-calculator、currency-converter、desktop-timer；省略则列出。' } }, additionalProperties: false },
+      async execute(raw, ctx) { try { authorize(ctx); const input = z.object({ id: z.string().optional() }).strict().parse(raw ?? {}); return ok(input.id === undefined ? { templates: listPluginTemplates(), protocol: PLUGIN_TEMPLATE_PROTOCOL, contributions: PLUGIN_CONTRIBUTION_CATALOGUE } : { template: getPluginTemplate(input.id) }) } catch (error) { return failure(error) } } },
     { name: 'plugin_list', displayName: '插件目录', description: '列出本租户插件，包括草稿、停用插件和发布版本；返回准确 globalToolNames/toolNameMap、selectionId 与 publishedSelectionId。selectionId 只对应当前已发布修订，草稿为null。发布不会自动扩大当前请求的工具范围。', parameters: { type: 'object', properties: {}, additionalProperties: false },
       async execute(_raw, ctx) { try { authorize(ctx); return ok({ plugins: (await service.list(ctx.tenantId)).map(pluginSummary) }) } catch (error) { return failure(error) } } },
     { name: 'plugin_get', displayName: '插件详情', description: '读取插件完整清单、源码、版本和准确 globalToolNames/toolNameMap，编辑前调用。selectionId 对应当前已发布修订，未发布草稿为null；publishedSelectionId 可指向仍可用的旧发布版。', parameters: { type: 'object', properties: { id }, required: ['id'], additionalProperties: false },

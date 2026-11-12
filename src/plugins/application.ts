@@ -14,6 +14,7 @@ export interface PluginApplication {
   manifest: PluginManifest
   examples: PluginApplicationExample[]
   execution: { allowed: boolean; reason?: string }
+  uiDocuments?: Record<string, string>
 }
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -50,14 +51,16 @@ function examples(snapshot: PluginSnapshot): PluginApplicationExample[] {
   return result
 }
 
-/** A view only exposes metadata from a sealed published revision, not plugin source or machine paths. */
+/** Only sealed published metadata and explicitly declared HTML documents reach the UI, without host paths or executable Node source. */
 export async function getPluginApplication(service: PluginService, tenantId: string, id: string, revision?: number): Promise<PluginApplication> {
   const record = await service.get(tenantId, id)
   const pinned = revision ?? record.publishedRevision
   if (!pinned) throw new PluginError('PLUGIN_UNPUBLISHED', '请先发布并启用插件后再打开使用', 409)
   const snapshot = await service.snapshot(tenantId, id, pinned)
+  const documents = Object.fromEntries((snapshot.manifest.contributes?.pages ?? []).flatMap(page => page.kind === 'webview' ? [[page.id, snapshot.files[page.entry]]] : []))
   return { id, name: snapshot.manifest.name, description: snapshot.manifest.description, revision: snapshot.revision,
-    hash: snapshot.hash, manifest: snapshot.manifest, examples: examples(snapshot), execution: invocationPolicy() }
+    hash: snapshot.hash, manifest: snapshot.manifest, examples: examples(snapshot), execution: invocationPolicy(),
+    ...(Object.keys(documents).length ? { uiDocuments: documents } : {}) }
 }
 
 /** User-operated execution stays pinned; it does not register tools in any agent session or write returned artifacts. */

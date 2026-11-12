@@ -1,5 +1,6 @@
 import { PluginError, type PluginArtifact, type PluginManifest } from './types.js'
 import { pluginProjectPackage, pluginProjectRunner } from './project-runner.js'
+import { PLUGIN_CONTRIBUTION_CATALOGUE } from './contributions.js'
 
 /** The authoring contract is shared by AI tools, HTTP clients and the project CLI. */
 export const PLUGIN_TEMPLATE_PROTOCOL = Object.freeze({
@@ -13,8 +14,8 @@ export const PLUGIN_TEMPLATE_PROTOCOL = Object.freeze({
   files: '标准工程包含 aether-plugin.json、main.mjs、README.md、examples/cases.json、package.json、scripts/test.mjs；清单是唯一配置来源。只使用 Node 内置库和包内文件，不自动安装依赖。',
   examples: 'examples/cases.json 使用 {cases:[{name,tool,args,expected}]}；expected 精确匹配 result。独立 npm test 验证业务断言，不替代宿主 inputSchema、产物路径/大小校验；通过后仍需引擎 check/test 或管理页测试，再发布。',
   authoring: '基于最接近的模板做必要修改，复用已有且经过验证的实现与边界用例，不要为了改名称或添加展示字段重写核心算法。测试除常规输入外还需覆盖该业务的精度、零值、非法输入和范围边界；实际没有执行的案例不得宣称通过。',
-  ui: '发布并启用后，用户可从插件列表打开原生操作页。宿主按 inputSchema 生成输入字段和运行按钮，展示真实工具结果；使用 title、description、enum、required、minimum 等标准 Schema 提供清楚的标签、选项与校验。不要把“可操作”擅自降级为只能聊天调用。当前不支持作者自定义 HTML/React 页面或侧栏；需要自由布局时必须说明这一边界，不得用独立 HTML 产物冒充应用内插件页面。',
-  background: '每次调用启动独立 Node 进程，完成即退出；不提供常驻状态、后台提醒、定时任务或宿主 activation/dispose 生命周期。时间模板只计算时间。',
+  ui: '发布并启用后，宿主加载 manifest.contributes 中声明的 pages/navigation/workspaceTabs/services。tool 页面按 inputSchema 生成原生表单；webview 页面加载包内自包含 HTML，运行于 sandbox=allow-scripts 的不透明源 iframe，禁止网络、任意 Electron IPC 与宿主 React 导入。自定义 UI 通过 window.aetherPlugin 调用当前页面 tools 白名单、读取上下文和服务状态。不要用独立 HTML 产物冒充应用内插件页面。',
+  background: '每次工具调用启动独立 Node 进程，完成即退出。contributes.services 绑定 tool/stopTool/statusTool，宿主保留服务状态与 completesAt 截止时间并在桌面打开时通知；停用、版本替换、连接切换会卸载并清理。当前不提供关闭应用后的后台进程、系统闹钟或跨重启服务恢复；不要宣称支持这些能力。',
 } as const)
 
 export interface PluginTemplateSummary { id: string; name: string; description: string }
@@ -22,6 +23,7 @@ export interface PluginTemplate extends PluginTemplateSummary {
   manifest: PluginManifest
   files: Record<string, string>
   protocol: typeof PLUGIN_TEMPLATE_PROTOCOL
+  contributions?: typeof PLUGIN_CONTRIBUTION_CATALOGUE
 }
 interface ExampleCase { name: string; tool: string; args: Record<string, unknown>; expected: unknown; artifacts?: PluginArtifact[] }
 
@@ -49,7 +51,7 @@ function entry(tool: string, body: string): string {
 function template(summary: PluginTemplateSummary, manifest: PluginManifest, source: string, cases: ExampleCase[], notes: string): PluginTemplate {
   const readme = `# ${manifest.name}\n\n${summary.description}\n\n${notes}\n\n## 工程文件\n\n- aether-plugin.json：apiVersion 1 清单。\n- main.mjs：Node ESM 工具入口。\n- examples/cases.json：确定性输入与 expected 结果，可选 artifacts 精确断言。\n- package.json、scripts/test.mjs：只依赖 Node 内置库的独立测试，不需要 npm install。\n\n## 协议\n\n${Object.values(PLUGIN_TEMPLATE_PROTOCOL).filter(value => typeof value === 'string').join('\n\n')}\n\n## 本地验证与交付\n\n独立工程可用 Node 22+ 在任何目录运行：\n\n\`\`\`powershell\ncd ./my-plugin\nnpm test\n\`\`\`\n\n在引擎仓库执行（路径按实际工程替换；ZIP 输出在工程之外）：\n\n\`\`\`powershell\nnpx tsx scripts/plugin-project.ts check ./my-plugin\nnpx tsx scripts/plugin-project.ts test ./my-plugin\nnpx tsx scripts/plugin-project.ts pack ./my-plugin ./my-plugin.zip\n\`\`\`\n\nAI 可先调用 plugin_get_template 发现模板并理解协议。需求匹配时使用 plugin_create({templateId:模板ID,id:新插件ID,name?,description?})，由宿主直接生成完整工程，保留已验证算法和案例，不需要复录源码。只有模板不适用时才提交完整 manifest/files；已有本地工程通过导入流程安装。再用 plugin_test 验证，并按产品批准流程发布。多用例优先通过 plugin_test 的 cases 一次测试，不并行触发多个确认；必须检查业务 result，不得发布只打印诊断日志的版本。手动创建可使用项目 CLI 初始化或在插件管理页选择模板。\n`
   return { ...summary, manifest, files: { 'aether-plugin.json': JSON.stringify(manifest, null, 2) + '\n', 'main.mjs': source,
-    'README.md': readme, 'examples/cases.json': JSON.stringify({ cases }, null, 2) + '\n', 'package.json': pluginProjectPackage(manifest), 'scripts/test.mjs': pluginProjectRunner }, protocol: PLUGIN_TEMPLATE_PROTOCOL }
+    'README.md': readme, 'examples/cases.json': JSON.stringify({ cases }, null, 2) + '\n', 'package.json': pluginProjectPackage(manifest), 'scripts/test.mjs': pluginProjectRunner }, protocol: PLUGIN_TEMPLATE_PROTOCOL, contributions: PLUGIN_CONTRIBUTION_CATALOGUE }
 }
 
 const templates: PluginTemplate[] = [
@@ -158,6 +160,43 @@ process.stdout.write(JSON.stringify({ result }) + '\n')
     { name: '零金额', tool: 'convert', args: { amount: 0, from: 'USD', to: 'CNY', rate: 7.28 }, expected: { amount: 0, from: 'USD', to: 'CNY', rate: 7.28, converted: 0, formatted: '0.00 CNY', rateSource: 'provided', note: '汇率由用户提供，未获取实时行情。' } },
   ], '发布后从插件列表打开即可操作。title 是原生字段标签，enum 提供币种选项，required 标记必填。汇率必须明确由用户提供，不把示例数字说成实时汇率；联网汇率需要额外实现真实数据源、时间和失败处理。\n\n请保留本模板的十进制整数乘法与四舍五入算法、同币种汇率必须为1的校验，以及安全金额范围校验。浮点乘法后加 Number.EPSILON 不能保证金额精度，例如 1.005 × 3 必须得到 3.02。复用模板并保留全部业务案例；如增加反向汇率或展示文本，不要替换已验证的计算核心。还需实际验证同币种rate=2、金额1e12且rate=1e6会报错，不要把错误结果包装成成功。'),
 ]
+
+const timer = template({ id: 'desktop-timer', name: '桌面计时器', description: '自定义插件页面、导航、会话标签与服务托盘的完整示例。' }, {
+  apiVersion: 1, id: 'my-desktop-timer', name: '计时器', version: '1.0.0', description: '在应用打开期间倒计时，完成后显示服务通知。', runtime: 'node',
+  tools: [
+    { name: 'start_timer', description: '校验倒计时并返回宿主需要保留的截止时间。', entry: 'main.mjs', inputSchema: { type: 'object', properties: { seconds: { type: 'integer', title: '秒数', minimum: 1, maximum: 86400 }, now: { type: 'integer', minimum: 0, maximum: 8640000000000000 } }, required: ['seconds', 'now'], additionalProperties: false } },
+    { name: 'stop_timer', description: '停止当前倒计时。', entry: 'main.mjs', inputSchema: { type: 'object', properties: {}, additionalProperties: false } },
+  ],
+  contributes: {
+    pages: [{ id: 'timer', title: '计时器', kind: 'webview', entry: 'ui/index.html', tools: [] }],
+    navigation: [{ id: 'timer', title: '计时器', page: 'timer', icon: 'clock-outline', order: 80 }],
+    workspaceTabs: [{ id: 'timer', title: '计时器', page: 'timer', icon: 'clock-outline', scope: 'session', when: { session: true } }],
+    services: [{ id: 'countdown', title: '计时器', tool: 'start_timer', stopTool: 'stop_timer', page: 'timer' }],
+  },
+}, String.raw`try {
+  let raw = ''; for await (const chunk of process.stdin) raw += chunk
+  const { tool, args } = JSON.parse(raw)
+  if (tool === 'stop_timer') console.log(JSON.stringify({ result: { status: 'stopped', detail: '已停止' } }))
+  else if (tool === 'start_timer') {
+    if (!Number.isSafeInteger(args.seconds) || args.seconds < 1 || args.seconds > 86400 || !Number.isSafeInteger(args.now) || args.now < 0) throw new Error('计时参数无效')
+    console.log(JSON.stringify({ result: { status: 'running', detail: args.seconds + ' 秒倒计时', completesAt: args.now + args.seconds * 1000 } }))
+  } else throw new Error('Unknown tool')
+} catch (error) { console.error(error.message); process.exitCode = 1 }
+`, [
+  { name: '开始一分钟', tool: 'start_timer', args: { seconds: 60, now: 1000 }, expected: { status: 'running', detail: '60 秒倒计时', completesAt: 61000 } },
+  { name: '停止', tool: 'stop_timer', args: {}, expected: { status: 'stopped', detail: '已停止' } },
+], '这是可运行的自定义 HTML 页面与宿主服务示例。window.aetherPlugin 是唯一宿主桥；服务由宿主保留而不是依赖页面挂载。应用退出、切换引擎、停用插件或替换发布版本会结束本次服务，不提供跨重启系统提醒。')
+timer.files['ui/index.html'] = String.raw`<style>
+body{padding:28px;box-sizing:border-box;background:Canvas;color:CanvasText}main{max-width:560px;margin:auto}h1{font-size:24px;letter-spacing:-.4px;margin:0 0 8px}p{opacity:.65;margin:0 0 28px}form{display:flex;gap:10px;align-items:end}label{display:flex;flex-direction:column;gap:7px;flex:1}input,button{min-height:34px;border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:7px;padding:0 12px;background:Canvas;color:CanvasText}button[type=submit]{background:Highlight;color:HighlightText;border-color:transparent}output{display:block;font-size:42px;font-variant-numeric:tabular-nums;margin:32px 0 10px}small{opacity:.65}button:disabled{opacity:.45}@media(max-width:420px){form{flex-wrap:wrap}}
+</style><main><h1>计时器</h1><p>应用打开期间计时。离开此页面，计时仍会继续。</p><form id="timer"><label>秒数<input id="seconds" type="number" min="1" max="86400" value="60" required></label><button type="submit">开始</button><button id="stop" type="button">停止</button></form><output id="state" aria-live="polite">就绪</output><small id="detail"></small></main><script>
+const state=document.getElementById('state'), detail=document.getElementById('detail'), start=document.querySelector('[type=submit]'), stop=document.getElementById('stop');
+const labels={idle:'就绪',waiting:'正在启动…',running:'计时中',completed:'时间到',stopped:'已停止',error:'未能完成'};
+function render(services){const service=services.find(item=>item.id.includes(':countdown'));if(!service)return;state.textContent=labels[service.status]||service.status;detail.textContent=service.detail||'';stop.disabled=!['running','waiting'].includes(service.status)}
+aetherPlugin.services.subscribe(render);aetherPlugin.services.get().then(render).catch(error=>{detail.textContent=error.message});
+document.getElementById('timer').addEventListener('submit',async event=>{event.preventDefault();start.disabled=true;try{render(await aetherPlugin.services.start('countdown',{seconds:Number(document.getElementById('seconds').value),now:Date.now()}))}catch(error){state.textContent='未能启动';detail.textContent=error.message}finally{start.disabled=false}});
+stop.addEventListener('click',async()=>{try{render(await aetherPlugin.services.stop('countdown'))}catch(error){detail.textContent=error.message}});
+</script>`
+templates.push(timer)
 
 export function listPluginTemplates(): PluginTemplateSummary[] {
   return templates.map(({ id, name, description }) => ({ id, name, description }))

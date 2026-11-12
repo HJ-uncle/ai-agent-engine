@@ -1,6 +1,7 @@
 /** Real isolated WAL connections verify frozen publication/usage, atomic failure and bounded SQL recovery. */
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { InStatement, Transaction } from '@libsql/client'
 import { LocalSqliteProcessClient } from '../../../storage/sqlite/local-process-client.js'
@@ -10,6 +11,8 @@ import { admitPublishedChild, advancePublicationBoundary, capturePublishedFence,
 import type { CreateSubagentRun } from '../types.js'
 
 const scope: PublicationScope = { tenantId:'synthetic-tenant', parentSessionId:'parent', rootSessionId:'root', parentTurnId:'current-turn', rootRunId:'root-run', attemptId:'attempt-1', streamId:'stream-1' }
+const outputRoot = fileURLToPath(new URL('../../../../.e2e-tmp/child-recovery-authority/', import.meta.url))
+const fixtureRoot = path.join(outputRoot, 'fixtures')
 let dir: string, a: LocalSqliteProcessClient, b: LocalSqliteProcessClient, sa: SubagentStore, sb: SubagentStore
 const fixtures: {path:string;cleaned:boolean}[]=[]
 function input(runId:string,turnId=scope.parentTurnId,extra:Partial<CreateSubagentRun>={}):CreateSubagentRun { return { ...scope,parentConversationId:turnId,runId,parentToolCallId:'delegate-'+runId,parentMessageId:'dispatch-'+runId,childSessionId:'child-'+runId,modelId:'synthetic-only',task:'No model invocation',description:'Scalar contract',...extra } }
@@ -26,7 +29,6 @@ async function usage(store:SubagentStore,runId:string,tokens:number,invocationId
   if(!mutation)throw new Error('Missing synthetic run'); return mutation.header
 }
 beforeEach(async()=>{
-  const fixtureRoot=path.resolve(process.cwd(),'child-recovery-fixtures')
   fs.mkdirSync(fixtureRoot,{recursive:true});dir=fs.mkdtempSync(path.join(fixtureRoot,'owned-'))
   fixtures.push({path:dir,cleaned:false})
   const url='file:'+path.join(dir,'fixture.db').replaceAll('\\','/')
@@ -38,10 +40,10 @@ beforeEach(async()=>{
 })
 afterEach(async()=>{
   vi.restoreAllMocks();a.close();b.close();await Promise.all([a.whenClosed(),b.whenClosed()])
-  const resolved=path.resolve(dir),root=path.resolve(process.cwd(),'child-recovery-fixtures')
-  if(path.dirname(resolved)!==root||!path.basename(resolved).startsWith('owned-'))throw new Error('Unsafe fixture cleanup')
+  const resolved=path.resolve(dir)
+  if(path.dirname(resolved)!==fixtureRoot||!path.basename(resolved).startsWith('owned-'))throw new Error('Unsafe fixture cleanup')
   fs.rmSync(resolved,{recursive:true,force:true,maxRetries:10,retryDelay:100});fixtures.at(-1)!.cleaned=!fs.existsSync(resolved)
-  fs.writeFileSync(path.resolve(process.cwd(),'child-recovery.fixtures.json'),JSON.stringify({fixtures},null,2))
+  fs.writeFileSync(path.join(outputRoot,'child-recovery.fixtures.json'),JSON.stringify({fixtures},null,2))
 })
 
 describe('authoritative child usage and exact published prefix P1',()=>{
@@ -232,7 +234,7 @@ describe('authoritative child usage and exact published prefix P1',()=>{
     expect(count).toBe(10000);expect(pages).toBe(50);expect(maxRows).toBe(201);expect(maxBytes).toBeLessThanOrEqual(256*1024)
     expect(full).not.toHaveBeenCalled();expect(views).not.toHaveBeenCalled()
     expect(await tx(a,'read',q=>readLiveChildUsage(q,fence))).toEqual({totalTokens:expected,count:10000,unknown:0,finishedAt:10000})
-    fs.writeFileSync(path.resolve(process.cwd(),'child-recovery.metrics.json'),JSON.stringify({publishedCount:count,pages,limit:200,maxRows,maxBytes,fullHelperCalls:0},null,2))
+    fs.writeFileSync(path.join(outputRoot,'child-recovery.metrics.json'),JSON.stringify({publishedCount:count,pages,limit:200,maxRows,maxBytes,fullHelperCalls:0},null,2))
   },30000)
   it('reopens a fresh database process and recovers the exact old fences after later commits',async()=>{
     await create('one');const old=await usage(sa,'one',80);await admit(1,'one',old.lastSeq)

@@ -2,6 +2,8 @@
 
 日期：2026-11-12
 
+实施说明：下文保留调研时的结构与方案，旧目录和组件名不再代表当前代码。重构后的单界面目录、实际插件挂载点和扩展约定见 [前端结构](../../../aether-code/docs/frontend-architecture.md)，可用的外部插件清单、HTML bridge 与服务生命周期见 [插件前端贡献协议](../plugin-ui-contributions.md)。
+
 本方案基于 `D:\dev\aether-code` 的 Workbench、Work、Chat、成果、编辑器、终端、设置和插件管理源码，以及 DeepSeek Harness 的 112 个客户端 Slot 契约。目标是让插件进入宿主组件树时有稳定的 UI 契约，同时保持苹果式极简 UI、统一焦点管理和可卸载生命周期。
 
 ## 结论
