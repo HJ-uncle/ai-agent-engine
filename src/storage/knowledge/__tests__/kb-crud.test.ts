@@ -1,7 +1,7 @@
 import type { Client } from '@libsql/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import * as database from '../../sqlite/db.js'
-import { createKnowledgeBase, addDocument, getDocument, listKnowledgeBases, searchChunks, updateDocument, deleteKnowledgeBase, splitIntoChunks } from '../kb-repo.js'
+import { createKnowledgeBase, addDocument, getDocument, getDocumentMetadata, listKnowledgeBases, searchChunks, updateDocument, deleteKnowledgeBase, splitIntoChunks } from '../kb-repo.js'
 import { knowledgeFixture } from './fixture.js'
 
 let db: Client
@@ -29,6 +29,17 @@ it('deleting a base removes its documents and search index without crossing tena
   expect(await deleteKnowledgeBase('tenant-a', a.id)).toBe(true)
   expect(await searchChunks('tenant-a', 'needle')).toEqual([])
   expect((await searchChunks('tenant-b', 'needle')).length).toBe(1)
+})
+
+it('reads tenant-scoped catalogue metadata without materializing stored or legacy document content', async () => {
+  const base = await createKnowledgeBase('tenant-a', 'catalogue')
+  const doc = await addDocument('tenant-a', 'large.txt', 'text/plain', 'private body '.repeat(1000), base.id)
+  expect(await getDocumentMetadata('tenant-a', doc.id)).toEqual(expect.objectContaining({ id: doc.id, filename: 'large.txt', knowledgeBaseId: base.id, contentExact: true }))
+  expect(await getDocumentMetadata('tenant-a', doc.id)).not.toHaveProperty('content')
+  expect(await getDocumentMetadata('tenant-b', doc.id)).toBeNull()
+  await db.execute({ sql: 'UPDATE documents SET content=NULL WHERE id=?', args: [doc.id] })
+  expect(await getDocumentMetadata('tenant-a', doc.id)).toEqual(expect.objectContaining({ id: doc.id, contentExact: false }))
+  expect(await getDocumentMetadata('tenant-a', doc.id)).not.toHaveProperty('content')
 })
 
 it('bounds CJK and zero-overlap chunking without dropping a preceding short word', () => {

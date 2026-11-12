@@ -14,7 +14,11 @@ import { compactBuiltinToolDefinition } from './model-tool-definitions.js'
 import { loadToolsTool } from './model-tool-loading.js'
 import { assertToolkitPermissions, normalizeToolkits, toolkitToolNames, MANAGEMENT_TOOL_NAMES } from './toolkits.js'
 import { createSkillManagementTools } from './skill/management-tools.js'
-import { createKnowledgeManagementTools } from './knowledge/management-tools.js'
+import { createKnowledgeManagementTools, createKnowledgeReadTools } from './knowledge/management-tools.js'
+import { createMcpManagementTools } from './mcp/management-tools.js'
+import { createPluginManagementTools } from '../plugins/management-tools.js'
+import { createSelectedPluginTools } from '../plugins/catalogue.js'
+import { bindPluginRegistry } from '../plugins/identity.js'
 import { skillsRegistry } from '../skills/index.js'
 import {
   listFilesTool,
@@ -74,6 +78,8 @@ export interface RegistryFactoryOptions {
   toolkits?: readonly string[]
   /** Server-resolved bound Agent ceiling, before legacy request-level overrides. */
   toolkitAllowedTools?: readonly string[] | null
+  /** Server-resolved data selection. Grants only trusted readers for these resources, like attached content. */
+  knowledgeReadScope?: readonly string[] | null
   /** Configuration screens need selectable tools; execution defaults stay lean. Never accept this from chat input. */
   toolExposure?: 'runtime' | 'catalogue'
   /** Server-only: verified explicit collaborators require controls for their existing owned executions. */
@@ -160,10 +166,18 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   const toolkits = normalizeToolkits(opts.toolkits, profile) ?? []
   assertToolkitPermissions(toolkits, opts.toolkitAllowedTools, explicitAllowedTools)
   const toolkitNames = new Set(toolkitToolNames(toolkits))
+  const selectedPluginTools = await createSelectedPluginTools(opts.securityContext?.tenantId ?? 'default', toolkits, [opts.toolkitAllowedTools, explicitAllowedTools])
+  for (const tool of selectedPluginTools) toolkitNames.add(tool.name)
   const agentTools = createAgentTools(opts.inlineAgents ?? [])
   const skillManagementTools = createSkillManagementTools()
   const knowledgeManagementTools = createKnowledgeManagementTools()
-  const managementImplementations = new Set([...agentTools, ...skillManagementTools, ...knowledgeManagementTools, ...cronTools])
+  const knowledgeReadTools = profile === 'general' && opts.knowledgeReadScope?.length ? createKnowledgeReadTools(opts.knowledgeReadScope) : []
+  const knowledgeReaders = new Set(knowledgeReadTools)
+  const knowledgeReaderNames = new Set(knowledgeReadTools.map(tool => tool.name))
+  const pluginManagementTools = createPluginManagementTools()
+  const mcpManagementTools = createMcpManagementTools()
+  const managementImplementations = new Set([...agentTools, ...skillManagementTools, ...knowledgeManagementTools, ...knowledgeReadTools, ...pluginManagementTools, ...mcpManagementTools, ...cronTools])
+  const pluginImplementations = new Set(selectedPluginTools)
   const defaultExposure = opts.toolExposure !== 'catalogue' && explicitAllowedTools === undefined
   const memoryTools = createMemoryTools()
   const memoryEnabled = effectiveMemoryScopes({ ...opts, toolProfile: profile }).length > 0
@@ -172,7 +186,11 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   const ownedControls = new Set(opts.ownedCollaboration ? ownedCollaborationTools : [])
   const ownedControlNames = new Set([...ownedControls].map(tool => tool.name))
   const registry = new ToolRegistry(tool => {
+    if ((tool.source === 'plugin' || tool.name.startsWith('plugin_')) && !pluginImplementations.has(tool) && !managementImplementations.has(tool)) return false
     if (MANAGEMENT_TOOL_NAMES.has(tool.name) && !managementImplementations.has(tool)) return false
+    // A structured resource selection grants data access, independently of the
+    // configuration-management package. Never grant a same-named extension.
+    if (knowledgeReaders.has(tool)) return true
     if (MANAGEMENT_TOOL_NAMES.has(tool.name) && managementCeiling && !managementCeiling.includes(tool.name)) return false
     if (REMOVED_TOOL_NAMES.has(tool.name)) return false
     if (tool.name === 'collaborator_dispatch') return !!opts.ownedCollaboration && isCollaboratorDispatch(tool)
@@ -203,7 +221,8 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
     const browserReadOnly = browserTools.includes(tool) && BROWSER_READONLY_TOOLS.has(tool.name)
     const workbenchReadOnly = workbenchTools.includes(tool) && tool.name === 'workbench_context'
     const mode = tool.name === 'subagent' && subagentTools.includes(tool) ? 'subagent'
-      : readOnly || browserReadOnly || workbenchReadOnly || readonlySubagentTools.includes(tool) ? 'readonly' : 'serial'
+      : readOnly || browserReadOnly || workbenchReadOnly || knowledgeReaders.has(tool) || readonlySubagentTools.includes(tool)
+        || pluginManagementTools.includes(tool) && tool.name === 'plugin_get_template' ? 'readonly' : 'serial'
     // Observation keeps its readonly batch semantics, while trusted joins and
     // cancellation never hold the ordinary slot needed by child execution.
     const orchestration = subagentTools.includes(tool) && (tool.name === 'subagent_wait' || tool.name === 'subagent_cancel')
@@ -412,9 +431,11 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   agentTools.forEach(t => {
     if (shouldRegister(t.name)) registerBuiltin(t)
   })
-  for (const tool of [...skillManagementTools, ...knowledgeManagementTools]) {
+  for (const tool of [...skillManagementTools, ...knowledgeManagementTools.filter(tool => !knowledgeReaderNames.has(tool.name)), ...pluginManagementTools, ...mcpManagementTools]) {
     if (shouldRegister(tool.name)) registerBuiltin(tool)
   }
+  knowledgeReadTools.forEach(registerBuiltin)
+  for (const tool of selectedPluginTools) registry.register(tool, { description: tool.description, parameters: tool.parameters })
 
   // 18. 代码诊断工具（LSP：tsc + eslint），用于 AI 自动检查/修复代码
   if (shouldRegister('code_diagnose')) registerBuiltin(lspDiagnoseTool)
@@ -431,6 +452,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
 
   if (registry.modelToolLoadingCandidates().length) registerBuiltin(loadToolsTool)
   if (toolkitNames.size) registry.loadForModel([...toolkitNames])
+  if (knowledgeReaderNames.size) registry.loadForModel([...knowledgeReaderNames])
 
   // ── Superpower 自检 ────────────────────────────────────────────────────
   // 验证 CORE 工具名与 registry 实际注册保持一致，避免 OFF 模式下 Agent
@@ -456,5 +478,6 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
       && (!(skill.builtin && skill.name === 'aether-office') || nativeOfficeVersion !== undefined
         && registry.modelToolRegistrationVersion('office_document') === nativeOfficeVersion)) : [],
   })
+  bindPluginRegistry(registryWithSkills, selectedPluginTools)
   return { registry: registryWithSkills, externalSkills, toolCategories }
 }

@@ -10,6 +10,7 @@ vi.mock('../../../../workspace/index.js', () => ({ workspaceManager: { resolvePr
 vi.mock('../../../../tools/registry-factory.js', () => ({ createToolRegistry: fixtures.factory }))
 vi.mock('../../../../core/agent-management.js', () => ({ recommendedAgentTools: async () => ['read_file', 'list_skills'] }))
 vi.mock('../../../../skills/index.js', () => ({ skillsRegistry: { getSkills: () => [] } }))
+vi.mock('../../../../plugins/catalogue.js', () => ({ pluginCatalogue: async () => [], pluginToolDefinitions: async () => [] }))
 vi.mock('../../../../storage/agent/index.js', () => ({
   SQLiteAgentStore: class { getById(...args: unknown[]) { return fixtures.getAgent(...args) } },
 }))

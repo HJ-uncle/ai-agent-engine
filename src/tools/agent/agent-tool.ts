@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import type { Tool, AgentContext, ToolResult, PendingAction } from '../../core/agent-context/index.js'
 import { normalizeToolName } from '../tool-profile.js'
+import { workspaceManager } from '../../workspace/index.js'
+import { skillsRegistry } from '../../skills/index.js'
 import {
   AgentManagementService, AgentManagementError, agentIdSchema, agentManagementFailure,
   type AgentMutation, type PreparedAgentMutation,
@@ -26,7 +28,7 @@ const AGENT_CONFIG_PROPS = {
   model: { type: 'string' },
   temperature: { type: 'number', minimum: 0, maximum: 2 },
   systemPrompt: { type: 'string' },
-  skills: { type: 'array', items: { type: 'string' } },
+  skills: { type: 'array', items: { type: 'string' }, description: '技能执行标识数组：使用 skill_list/skill_get/skill_create 返回的 executionId 或技能名称，不能使用 skill- 开头的管理 hash ID。项目技能在对应工作区使用。' },
   mcpServers: { type: 'array', items: { type: 'string' } },
   knowledgeBases: { type: 'array', items: { type: 'string' } },
   allowedTools: { type: 'array', items: { type: 'string' }, description: '创建时省略使用推荐工具；[] 禁用业务工具；更新时省略保持不变。' },
@@ -56,6 +58,18 @@ function approvedOperation(name: string, action: AgentMutation, args: unknown, c
 }
 
 async function prepare(action: AgentMutation, args: Record<string, unknown>, ctx: AgentContext, manager: AgentManagementService): Promise<PreparedAgentMutation> {
+  if (action !== 'delete' && Array.isArray(args.skills)) {
+    const hashIds = args.skills.filter((value): value is string => typeof value === 'string' && /^skill-[a-f0-9]{32}$/.test(value))
+    if (hashIds.length) {
+      // A manifest may legitimately choose a hash-shaped runtime ID. Reject only
+      // values that cannot bind in this workspace; never infer a grant from the
+      // management identity or silently save an unusable reference.
+      const skills = skillsRegistry.getSkills(workspaceManager.getWorkingDirectory(ctx))
+      const invalid = hashIds.filter(id => !skills.some(skill => skill.id === id || skill.name === id))
+      if (invalid.length) throw new AgentManagementError(40001,
+        'skills 需要执行标识：请使用 skill_list/skill_get/skill_create 返回的 executionId 或技能名称，不能使用管理 hash ID：' + invalid.join(', '))
+    }
+  }
   if (action === 'create') return manager.prepareCreate(ctx.tenantId, args)
   const { id, ...input } = args
   if (action === 'update') return manager.prepareUpdate(ctx.tenantId, id, input)

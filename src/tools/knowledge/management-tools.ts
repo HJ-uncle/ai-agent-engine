@@ -194,13 +194,66 @@ const baseProperties = { name: stringProperty, description: stringProperty }
 const documentProperties = { filename: stringProperty, content: stringProperty, contentType: stringProperty, knowledgeBaseId: { type: ['string', 'null'] } }
 const pageProperties = { offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 100 } }
 function parameters(properties: Record<string, JSONSchema>, required: string[] = []): JSONSchema { return { type: 'object', properties, required, additionalProperties: false } }
-function readTool(name: string, displayName: string, description: string, parameters: JSONSchema, execute: (raw: unknown, ctx: AgentContext) => Promise<unknown>): Tool {
-  return { name, displayName, description, parameters, executionMode: 'readonly', async execute(raw, ctx) {
-    try { assertAuthority(ctx); return { success: true, output: JSON.stringify(await execute(raw, ctx)) } }
-    catch (error) { const message = error instanceof Error ? error.message : String(error); return { success: false, status: 'failed', output: message, error: message, metadata: { code: error instanceof KnowledgeError ? error.code : 40001 } } }
+type ReadAccess = 'management' | 'selected-resources'
+const readScopeGuidance = 'Knowledge IDs refer to knowledge bases or documents, not workspace files. Use the knowledge tools within the selected scope; do not inspect application databases to bypass access restrictions.'
+function readContext(ctx: AgentContext, access: ReadAccess, scopeCeiling?: readonly string[]): AgentContext {
+  if (access === 'management') { assertAuthority(ctx); return ctx }
+  throwIfAborted(ctx.signal)
+  if (!ctx.tenantId) throw new KnowledgeError('Knowledge reading requires the current tenant context', 40300)
+  if (!scopes(ctx)?.length) throw new KnowledgeError('No knowledge base or document is selected for reading. Select a knowledge resource through the resource picker before reading it.', 40300)
+  // An explicit user resource selection grants reading, independently of the
+  // bound Agent's management ceiling. Intersect the current selection with the
+  // immutable registration-time read ceiling, preserving base/document hierarchy.
+  // Mutation tools never receive this view.
+  return { ...ctx, managementKnowledgeScope: scopeCeiling ?? null }
+}
+function readTool(access: ReadAccess, scopeCeiling: readonly string[] | undefined, name: string, displayName: string, description: string, parameters: JSONSchema, execute: (raw: unknown, ctx: AgentContext) => Promise<unknown>): Tool {
+  const resourceRead = access === 'selected-resources'
+  const accessMetadata = (ctx: AgentContext) => ({ knowledgeScope: { mode: 'read-only', resourceIds: [...(scopes(ctx) ?? [])] } })
+  return { name, displayName, description: description + (resourceRead ? ' Read-only access to the explicitly selected knowledge resources; knowledge IDs are not file paths.' : ''), parameters, executionMode: 'readonly', async execute(raw, ctx) {
+    try { return { success: true, output: JSON.stringify(await execute(raw, readContext(ctx, access, scopeCeiling))), ...(resourceRead ? { metadata: accessMetadata(ctx) } : {}) } }
+    catch (error) {
+      const message = (error instanceof Error ? error.message : String(error)) + (resourceRead ? ` ${readScopeGuidance}` : '')
+      return { success: false, status: 'failed', output: message, error: message,
+        metadata: { code: error instanceof KnowledgeError ? error.code : 40001, ...(resourceRead ? accessMetadata(ctx) : {}) } }
+    }
   } }
 }
 function page<T>(items: T[], offset: number, limit: number) { return { items: items.slice(offset, offset + limit), total: items.length, offset, limit, hasMore: offset + limit < items.length } }
+
+function knowledgeReadTools(access: ReadAccess, scopeCeiling?: readonly string[]): Tool[] {
+  return [
+    readTool(access, scopeCeiling, 'knowledge_list', '列出知识库', 'List tenant knowledge bases within current explicit bindings.', parameters({ ...pageProperties, search: stringProperty }), async (raw, ctx) => {
+      const input = z.object({ ...pagination, search: text('search', 200, true).optional() }).strict().parse(raw)
+      const found = (await repository.listKnowledgeBases(ctx.tenantId)).filter(base => baseAllowed(ctx, base.id) && (!input.search || base.name.toLowerCase().includes(input.search.toLowerCase())))
+      return page(found, input.offset, input.limit)
+    }),
+    readTool(access, scopeCeiling, 'knowledge_get', '查看知识库', 'Read a knowledge base and its current revision.', parameters(idProperties, ['id']), async (raw, ctx) => requireBase(ctx, schemas.delete.parse(raw).id)),
+    readTool(access, scopeCeiling, 'knowledge_documents', '列出知识文档', 'List document metadata in the allowed knowledge scope.', parameters({ ...pageProperties, knowledgeBaseId: stringProperty }), async (raw, ctx) => {
+      const input = z.object({ ...pagination, knowledgeBaseId: id.optional() }).strict().parse(raw)
+      if (input.knowledgeBaseId) await requireBase(ctx, input.knowledgeBaseId)
+      return page((await repository.listDocuments(ctx.tenantId, input.knowledgeBaseId)).filter(document => documentAllowed(ctx, document)), input.offset, input.limit)
+    }),
+    readTool(access, scopeCeiling, 'knowledge_document_get', '读取知识文档', 'Read document metadata and a bounded content slice. Continue from nextOffset when hasMore is true.', parameters({ ...idProperties, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 64000 } }, ['id']), async (raw, ctx) => {
+      const input = z.object({ id, offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(64000).default(16000) }).strict().parse(raw)
+      const document = await requireDocument(ctx, input.id)
+      const nextOffset = Math.min(document.content.length, input.offset + input.limit)
+      return { ...documentSummary(document), content: document.content.slice(input.offset, nextOffset), contentLength: document.content.length, offset: input.offset, nextOffset, hasMore: nextOffset < document.content.length }
+    }),
+    readTool(access, scopeCeiling, 'knowledge_search', '搜索知识库', 'Search indexed knowledge using FTS and multilingual text matching, restricted before limiting results.', parameters({ query: stringProperty, limit: { type: 'integer', minimum: 1, maximum: 100 }, knowledgeBaseIds: { type: 'array', items: stringProperty, maxItems: 100 } }, ['query']), async (raw, ctx) => {
+      const input = z.object({ query: text('query', MAX_KNOWLEDGE_QUERY_LENGTH), limit: z.number().int().min(1).max(100).default(5), knowledgeBaseIds: z.array(id).max(100).optional() }).strict().parse(raw)
+      if (input.knowledgeBaseIds && scopes(ctx)) for (const scope of input.knowledgeBaseIds) {
+        if (!scopes(ctx)!.includes(scope)) await requireDocument(ctx, scope)
+      }
+      return repository.searchChunks(ctx.tenantId, input.query, input.limit, input.knowledgeBaseIds ?? scopes(ctx), ctx.managementKnowledgeScope ?? undefined)
+    }),
+  ]
+}
+
+/** Reading selected knowledge does not grant any persistent management capability. */
+export function createKnowledgeReadTools(scopeCeiling?: readonly string[] | null): Tool[] {
+  return knowledgeReadTools('selected-resources', scopeCeiling == null ? undefined : [...scopeCeiling])
+}
 
 export function createKnowledgeManagementTools(): Tool[] {
   const mutations: Array<[Action, string, string, JSONSchema]> = [
@@ -212,30 +265,7 @@ export function createKnowledgeManagementTools(): Tool[] {
     ['document_delete', '删除知识文档', 'Delete a knowledge document and its search index.', parameters(idProperties, ['id'])],
   ]
   return [
-    readTool('knowledge_list', '列出知识库', 'List tenant knowledge bases within current explicit bindings.', parameters({ ...pageProperties, search: stringProperty }), async (raw, ctx) => {
-      const input = z.object({ ...pagination, search: text('search', 200, true).optional() }).strict().parse(raw)
-      const found = (await repository.listKnowledgeBases(ctx.tenantId)).filter(base => baseAllowed(ctx, base.id) && (!input.search || base.name.toLowerCase().includes(input.search.toLowerCase())))
-      return page(found, input.offset, input.limit)
-    }),
-    readTool('knowledge_get', '查看知识库', 'Read a knowledge base and its current revision.', parameters(idProperties, ['id']), async (raw, ctx) => requireBase(ctx, schemas.delete.parse(raw).id)),
-    readTool('knowledge_documents', '列出知识文档', 'List document metadata in the allowed knowledge scope.', parameters({ ...pageProperties, knowledgeBaseId: stringProperty }), async (raw, ctx) => {
-      const input = z.object({ ...pagination, knowledgeBaseId: id.optional() }).strict().parse(raw)
-      if (input.knowledgeBaseId) await requireBase(ctx, input.knowledgeBaseId)
-      return page((await repository.listDocuments(ctx.tenantId, input.knowledgeBaseId)).filter(document => documentAllowed(ctx, document)), input.offset, input.limit)
-    }),
-    readTool('knowledge_document_get', '读取知识文档', 'Read document metadata and a bounded content slice. Continue from nextOffset when hasMore is true.', parameters({ ...idProperties, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 64000 } }, ['id']), async (raw, ctx) => {
-      const input = z.object({ id, offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(64000).default(16000) }).strict().parse(raw)
-      const document = await requireDocument(ctx, input.id)
-      const nextOffset = Math.min(document.content.length, input.offset + input.limit)
-      return { ...documentSummary(document), content: document.content.slice(input.offset, nextOffset), contentLength: document.content.length, offset: input.offset, nextOffset, hasMore: nextOffset < document.content.length }
-    }),
-    readTool('knowledge_search', '搜索知识库', 'Search indexed knowledge using FTS and multilingual text matching, restricted before limiting results.', parameters({ query: stringProperty, limit: { type: 'integer', minimum: 1, maximum: 100 }, knowledgeBaseIds: { type: 'array', items: stringProperty, maxItems: 100 } }, ['query']), async (raw, ctx) => {
-      const input = z.object({ query: text('query', MAX_KNOWLEDGE_QUERY_LENGTH), limit: z.number().int().min(1).max(100).default(5), knowledgeBaseIds: z.array(id).max(100).optional() }).strict().parse(raw)
-      if (input.knowledgeBaseIds && scopes(ctx)) for (const scope of input.knowledgeBaseIds) {
-        if (!scopes(ctx)!.includes(scope)) await requireDocument(ctx, scope)
-      }
-      return repository.searchChunks(ctx.tenantId, input.query, input.limit, input.knowledgeBaseIds ?? scopes(ctx), ctx.managementKnowledgeScope ?? undefined)
-    }),
+    ...knowledgeReadTools('management'),
     ...mutations.map(([action, displayName, description, schema]) => createApprovedMutationTool<Operation>({ name: `knowledge_${action}`, displayName, description, parameters: schema,
       prepare: (raw, ctx) => prepare(action, raw, ctx), preview,
       apply: (operation, ctx) => { if (operation.action !== action) throw new KnowledgeError('Approval action mismatch', 40300); return apply(operation, ctx) },

@@ -20,6 +20,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import fs from 'node:fs'
 import path from 'node:path'
 import { projectDataPath } from '../../../core/project-storage.js'
+import { isOsmSkillVisible, resolveOSMMode } from '../../../core/osm.js'
 import { projectSkillRoots, withProjectSkillDeletion } from '../../../skills/project-skills.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
@@ -246,7 +247,7 @@ export async function skillImportRoutes(fastify: FastifyInstance) {
   fastify.addHook('preHandler', requireRoles(...SKILL_IMPORT_ROLES))
 
   // ── 技能列表 ────────────────────────────────────────────────────────────────
-  fastify.get<{ Querystring: { reload?: string; path?: string; scope?: SkillScope; all?: string } }>('/skills', async (request, reply) => {
+  fastify.get<{ Querystring: { reload?: string; path?: string; scope?: SkillScope; all?: string; available?: string } }>('/skills', async (request, reply) => {
     // 全局层目录可能在启动后才创建（首次全局导入）：动态探测采纳
     skillsRegistry.ensureGlobalLayer()
     // ?reload=1：强制重扫磁盘（NFS 等共享卷上 fs.watch 可能不触发时的兜底）
@@ -254,7 +255,12 @@ export async function skillImportRoutes(fastify: FastifyInstance) {
     let projectRoot: string | undefined
     let scope: SkillRouteScope
     try { projectRoot = workspaceQuery(request); scope = skillScopeQuery(request) } catch (error) { return reply.code(200).send(fail(40001, (error as Error).message)) }
-    const list = request.query.all === '1'
+    // Pickers use the runtime's effective catalog; management keeps hidden and disabled entries.
+    const availableOnly = request.query.available === '1'
+    const mode = resolveOSMMode()
+    const list = availableOnly
+      ? skillsRegistry.getSkills(projectRoot).filter((skill) => (!scope || skill.scope === scope) && isOsmSkillVisible(skill.name, mode))
+      : request.query.all === '1'
       ? [...skillsRegistry.getAllSkillsByScope(projectRoot, 'global'), ...skillsRegistry.getAllSkillsByScope(projectRoot, 'project')]
         .filter((skill, index, all) => all.findIndex((candidate) => managementSkillId(candidate) === managementSkillId(skill)) === index)
       : managementSkills(projectRoot, scope)
@@ -263,7 +269,8 @@ export async function skillImportRoutes(fastify: FastifyInstance) {
       // 如实上报：registry 实际启用的全局层路径（未启用为 null）
       globalRoot: skillsRegistry.globalRootPath,
       list: list.map((s) => ({
-        id: managementSkillId(s),
+        // Composer selections are sent as allowedSkills, which matches runtime IDs/names.
+        id: availableOnly ? s.id ?? s.name : managementSkillId(s),
         name: s.name,
         description: s.description,
         enabled: s.enabled,

@@ -9,6 +9,7 @@ import { memoryRoutes } from './routes/memory.js'
 import { conversationRoutes } from './routes/conversation.js'
 import { taskRoutes } from './routes/tasks.js'
 import { toolRoutes } from './routes/tools.js'
+import { pluginRoutes } from './routes/plugins.js'
 import { metricsRoutes } from './routes/metrics.js'
 import { mcpRoutes } from './routes/mcp.js'
 import { knowledgeRoutes } from './routes/knowledge.js'
@@ -120,6 +121,7 @@ export async function buildServer(startup: RequestAuthenticationStartup = {}) {
     await api.register(conversationRoutes)
     await api.register(taskRoutes)
     await api.register(toolRoutes)
+    await api.register(pluginRoutes)
     await api.register(mcpRoutes)
     await api.register(knowledgeRoutes)
     await api.register(messagesRoutes)

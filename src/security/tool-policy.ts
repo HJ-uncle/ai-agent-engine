@@ -30,7 +30,7 @@ export function extensionPolicy(ctx: Pick<AgentContext, 'tenantId' | 'sessionId'
 
 export async function preflightTool(tool: Tool, args: unknown, ctx: AgentContext): Promise<ToolResult | undefined> {
   const source = (tool as Tool & { source?: string }).source
-  if (!trustedModes.has(tool) && (source === 'skill' || source === 'mcp' || tool.name.startsWith('mcp_'))) {
+  if (!trustedModes.has(tool) && (source === 'skill' || source === 'mcp' || source === 'plugin' || tool.name.startsWith('mcp_'))) {
     const denied = extensionPolicy(ctx)
     if (denied) return denied
   }

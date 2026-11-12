@@ -10,7 +10,7 @@ import { getSubagentRunner } from '../../core/subagent/runner.js'
 import { hasSubagentTaskContent } from '../../core/subagent/task-content.js'
 import { isTerminalRun, outcomeText, type SubagentContinuationProfile } from '../../core/subagent/types.js'
 import { SQLiteAgentStore } from '../../storage/agent/index.js'
-import { searchChunks } from '../../storage/knowledge/kb-repo.js'
+import { getDocumentMetadata, searchChunks } from '../../storage/knowledge/kb-repo.js'
 import { getProjectContextBlock } from '../../core/project-context.js'
 import { getSecurityMode, setSecurityMode, clearSecurityMode } from '../../security/policy-engine.js'
 import { skillsRegistry, buildSkillsSystemPrompt } from '../../skills/index.js'
@@ -18,7 +18,7 @@ import { resolveOSMMode, OSM_MODE_CONFIG } from '../../core/osm.js'
 import { CODE_AGENT_HANDOFF_PROMPT } from '../../core/code-agent-prompt.js'
 import { normalizeAllowedTools } from '../tool-profile.js'
 import { REMOVED_TOOL_NAMES } from '../tool-exposure.js'
-import { MANAGEMENT_TOOL_NAMES } from '../toolkits.js'
+import { KNOWLEDGE_READ_TOOLS, MANAGEMENT_TOOL_NAMES } from '../toolkits.js'
 import { compactBuiltinToolDefinition } from '../model-tool-definitions.js'
 import { loadModelTools, selectRequestTools } from '../model-tool-loading.js'
 import { throwIfAborted } from '../../core/utils/abort.js'
@@ -33,6 +33,8 @@ import { captureSubagentWorkspace, continuationWorkspacePaths, subagentWorkspace
 import { withReadonlyCodegraph } from '../codegraph/codegraph-readonly.js'
 import { buildOfficeExecutionPrompt } from '../../core/office-prompt.js'
 import { claimTaskKey, bindTaskKey } from '../../core/subagent/dependency-hooks.js'
+import { inheritPluginRegistryBindings, pluginRegistryBindings } from '../../plugins/identity.js'
+import { restorePluginBindings, withPluginTools } from '../../plugins/continuation.js'
 
 /**
  * Subagent 工具
@@ -95,6 +97,30 @@ const ROOT_ONLY_TOOLS = new Set(['ask_user', 'deliver_files', 'collaborator_disp
   'agent_list', 'agent_get', 'agent_create', 'agent_do_create',
   'agent_update', 'agent_do_update', 'agent_delete', 'agent_do_delete'])
 const READONLY_CODEGRAPH_ACTIONS = ['status', 'search', 'callers', 'callees', 'impact', 'files'] as const
+const KNOWLEDGE_READ_NAMES: ReadonlySet<string> = new Set(KNOWLEDGE_READ_TOOLS)
+
+function trustedKnowledgeRead(parent: IToolRegistry, name: string): boolean {
+  return KNOWLEDGE_READ_NAMES.has(name) && parent.executionMode?.(name, {}) === 'readonly'
+}
+
+function childRootToolAllowed(parent: IToolRegistry, name: string): boolean {
+  // Management reads share names with selected-resource reads, but only the
+  // trusted readonly implementations may cross the root management boundary.
+  return !ROOT_ONLY_TOOLS.has(name) || trustedKnowledgeRead(parent, name)
+}
+
+/** A base includes its documents; an individual document never grants its base or siblings. */
+async function intersectKnowledgeScope(tenantId: string, selected: readonly string[], ceiling?: readonly string[] | null): Promise<string[]> {
+  if (!selected.length || !ceiling?.length) return []
+  const left = new Set(selected), right = new Set(ceiling)
+  const result = new Set(selected.filter(id => right.has(id)))
+  const unmatched = [...new Set([...selected, ...ceiling])].filter(id => !result.has(id))
+  const documents = await Promise.all(unmatched.map(id => getDocumentMetadata(tenantId, id)))
+  for (const document of documents) if (document
+    && (left.has(document.id) || document.knowledgeBaseId !== null && left.has(document.knowledgeBaseId))
+    && (right.has(document.id) || document.knowledgeBaseId !== null && right.has(document.knowledgeBaseId))) result.add(document.id)
+  return [...result]
+}
 
 function readonlyActionDenied(name: string, args: unknown): ToolResult | undefined {
   if (name !== 'codegraph') return undefined
@@ -108,7 +134,7 @@ function readonlyChildTool(parent: IToolRegistry, name: string): boolean {
   if (name === 'load_tools') return parent.hasModelToolLoader?.() === true
   // Environment discovery starts Python/PowerShell probes, so only document
   // inspection belongs to a research role that promises no command execution.
-  return RESEARCH_TOOLS.has(name) || name === officeInspectTool.name
+  return RESEARCH_TOOLS.has(name) || trustedKnowledgeRead(parent, name) || name === officeInspectTool.name
     && parent.executionMode?.(name, {}) === 'readonly'
 }
 
@@ -121,13 +147,18 @@ export function createSubagentToolRegistry(parent: IToolRegistry, readOnly: bool
     .filter(tool => tool.name !== 'plan_update' && !REMOVED_TOOL_NAMES.has(tool.name)), ...(forModel ? internalPlan.listForModel() : internalPlan.list())]
   // list() contains public definitions, so implementation identity is unavailable;
   // only the parent's trusted readonly policy admits this diagnostic to research.
-  const names = new Set(catalog().filter((tool) => !RECURSIVE_TOOLS.has(tool.name) && !ROOT_ONLY_TOOLS.has(tool.name)
+  const trustedPlugins = pluginRegistryBindings(parent)
+  const trustedPluginNames = new Set(trustedPlugins.flatMap(binding => binding.toolNames))
+  const names = new Set(catalog().filter((tool) => !RECURSIVE_TOOLS.has(tool.name) && childRootToolAllowed(parent, tool.name)
+    && (!tool.name.startsWith('plugin_') || trustedPluginNames.has(tool.name))
     && (!readOnly || readonlyChildTool(parent, tool.name))).map((tool) => tool.name))
   const owner = (name: string) => name === 'plan_update' ? internalPlan : parent
   const loadedModelTools = new Set<string>()
   const registrationVersions = new Map([...names].map(name => [name, owner(name).modelToolRegistrationVersion?.(name)]))
   const invalidatedModelHistory = new Set<string>()
-  const allowed = (name: string) => names.has(name) && owner(name).has(name) && (!readOnly || readonlyChildTool(parent, name))
+  const allowed = (name: string) => names.has(name) && owner(name).has(name) && childRootToolAllowed(parent, name) && (!readOnly || readonlyChildTool(parent, name))
+    && (!name.startsWith('plugin_') || pluginRegistryBindings(parent).some(current => current.toolNames.includes(name)
+      && trustedPlugins.some(original => original.tenantId === current.tenantId && original.id === current.id && original.revision === current.revision && original.hash === current.hash && original.toolNames.includes(name))))
   const synchronizeLoading = () => {
     for (const name of names) {
       const version = owner(name).modelToolRegistrationVersion?.(name)
@@ -142,7 +173,7 @@ export function createSubagentToolRegistry(parent: IToolRegistry, readOnly: bool
       action: { type: 'string', enum: [...READONLY_CODEGRAPH_ACTIONS], description: '仅查询已有索引。' } } },
   } : tool)
   const loadingCandidates = () => { synchronizeLoading(); return (parent.modelToolLoadingCandidates?.() ?? []).filter(allowed) }
-  return {
+  const view: IToolRegistry = {
     register: () => { throw new Error('Child tool capability snapshot is immutable') },
     unregister: (name) => { names.delete(name); loadedModelTools.delete(name) },
     has: allowed,
@@ -179,6 +210,11 @@ export function createSubagentToolRegistry(parent: IToolRegistry, readOnly: bool
         : owner(name).execute(name, args, ctx)
     },
   }
+  // Selected resources must be readable from the first child request, rather
+  // than requiring a load-only turn to discover the same inherited capability.
+  for (const name of KNOWLEDGE_READ_TOOLS) if (allowed(name)) loadedModelTools.add(name)
+  inheritPluginRegistryBindings(view, parent)
+  return view
 }
 
 export async function cancelSubagent(tenantId: string, sessionId: string, toolCallId: string, reason = 'user_cancelled'): Promise<boolean> {
@@ -279,16 +315,45 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
       rolePrompt,
       taskText ? suppliedPrompt : undefined,
     ].filter(Boolean).join('\n\n')
-    const inheritedTools = createSubagentToolRegistry(ctx.tools, readOnly)
+    // A current, server-validated @Agent selection may use that Agent's own
+    // bindings. A saved delegation flag alone never renews resource authority.
+    const delegatedKnowledgeAgent = options.userDelegated === true && configuredAgent
+      ? options.agent ?? (saved ? await new SQLiteAgentStore().getById(configuredAgent.id, ctx.tenantId) : configuredAgent)
+      : undefined
+    const currentKnowledgeDelegation = !!delegatedKnowledgeAgent && delegatedKnowledgeAgent.id === configuredAgent?.id
+    const authorizedKnowledgeScope = async () => {
+      const parentScope = [...(ctx.resourceScope?.knowledgeBases ?? [])]
+      return configuredAgent
+        ? currentKnowledgeDelegation ? [...delegatedKnowledgeAgent!.knowledgeBases]
+          : intersectKnowledgeScope(ctx.tenantId, configuredAgent.knowledgeBases, parentScope)
+        : parentScope
+    }
+    const availableKnowledgeScope = await authorizedKnowledgeScope()
+    const knowledgeReadScope = saved
+      ? await intersectKnowledgeScope(ctx.tenantId, saved.knowledgeReadScope ?? [], availableKnowledgeScope)
+      : availableKnowledgeScope
+    const inheritedKnowledgeTools = knowledgeReadScope.length ? KNOWLEDGE_READ_TOOLS.filter(name =>
+      currentKnowledgeDelegation || trustedKnowledgeRead(ctx.tools, name)) : []
+    let inheritedTools = createSubagentToolRegistry(ctx.tools, readOnly)
+    const parentPluginBindings = pluginRegistryBindings(ctx.tools)
+    const parentPluginNames = new Set(parentPluginBindings.flatMap(binding => binding.toolNames))
     // Lifecycle controls require a real execution owner and confer no file,
     // command or extension access. Freeze them only for newly admitted children.
     const ownedControlNames = ctx.executionOwner ? (await import('./index.js')).ownedCollaborationTools
       .map(tool => tool.name).filter(name => !RECURSIVE_TOOLS.has(name) && !ROOT_ONLY_TOOLS.has(name)
         && (!readOnly || readonlyChildTool(ctx.tools, name))) : []
     const plannedToolNames = configuredAgent
-      ? [...new Set([...(normalizeAllowedTools(configuredAgent.allowedTools) ?? []).filter(name => !RECURSIVE_TOOLS.has(name) && !ROOT_ONLY_TOOLS.has(name)
-        && (!readOnly || readonlyChildTool(ctx.tools, name)) && (userDelegated || ctx.tools.has(name))), ...ownedControlNames, 'plan_update'])]
+      ? [...new Set([...(normalizeAllowedTools(configuredAgent.allowedTools) ?? []).filter(name => !RECURSIVE_TOOLS.has(name) && childRootToolAllowed(ctx.tools, name)
+        && (!readOnly || readonlyChildTool(ctx.tools, name)) && (userDelegated || ctx.tools.has(name))
+        && (!name.startsWith('plugin_') || parentPluginNames.has(name))), ...inheritedKnowledgeTools, ...ownedControlNames, 'plan_update'])]
       : inheritedTools.list().map(tool => tool.name)
+    const pluginToolkits = saved?.pluginToolkits ?? parentPluginBindings.map(binding => ({ ...binding,
+      toolNames: binding.toolNames.filter(name => plannedToolNames.includes(name)) })).filter(binding => binding.toolNames.length)
+    if (saved && saved.toolNames.some(name => name.startsWith('plugin_') && !saved.pluginToolkits?.some(binding => binding.toolNames.includes(name)))) return { success: false, output: '旧子代理未保存插件版本，无法安全恢复；请重新创建子代理，不能按同名工具替换代码。' }
+    let frozenPluginTools: Tool[]
+    try { frozenPluginTools = await restorePluginBindings(ctx.tenantId, pluginToolkits, ctx.tools, saved?.toolNames ?? plannedToolNames) }
+    catch (error) { return { success: false, output: error instanceof Error ? error.message : String(error), metadata: { blocked: true, code: 'PLUGIN_CONTINUATION_NOT_AVAILABLE' } } }
+    if (frozenPluginTools.length) inheritedTools = createSubagentToolRegistry(withPluginTools(ctx.tools, frozenPluginTools), readOnly)
     // An authenticated session's selected workspace comes from its persisted
     // binding. Request paths may be absent or stale after reconnect, so freeze
     // the effective parent directory before constructing a real owned child.
@@ -300,7 +365,7 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
         systemPrompt: configuredAgent.systemPrompt, model: configuredAgent.model, temperature: configuredAgent.temperature,
         skills: [...configuredAgent.skills], mcpServers: [...configuredAgent.mcpServers],
         knowledgeBases: [...configuredAgent.knowledgeBases], allowedTools: [...configuredAgent.allowedTools] } } : {}),
-      toolNames: plannedToolNames, workspacePaths: workspace.roots,
+      toolNames: plannedToolNames, knowledgeReadScope: [...knowledgeReadScope], ...(pluginToolkits.length ? { pluginToolkits } : {}), workspacePaths: workspace.roots,
       projectRoot: ownedWorkingDirectory ?? ctx.projectRoot, cwd: ownedWorkingDirectory ?? ctx.cwd,
     }
     workspace.assertCurrent()
@@ -333,6 +398,9 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
       try {
       let resourcePrompt = ''
       let childTools = inheritedTools
+      // Async admission can wait before execution. Recheck the current parent
+      // selection and intersect it with the durable admission-time snapshot.
+      const selectedKnowledge = await intersectKnowledgeScope(ctx.tenantId, continuation.knowledgeReadScope ?? [], await authorizedKnowledgeScope())
       if (configuredAgent) {
         // Discovery belongs to the durable child's lifecycle as well, so slow/failing
         // catalogs always have the real Agent identity and a persisted terminal state.
@@ -341,7 +409,6 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
         const intersect = (selected: readonly string[], ceiling?: readonly string[] | null) =>
           userDelegated || ceiling == null ? [...selected] : selected.filter(value => ceiling.includes(value))
         const selectedSkills = intersect(configuredAgent.skills, ctx.resourceScope?.skills)
-        const selectedKnowledge = intersect(configuredAgent.knowledgeBases, ctx.resourceScope?.knowledgeBases)
         const selectedMcp = intersect(configuredAgent.mcpServers, ctx.resourceScope?.mcpServers).filter(id =>
           userDelegated || ctx.tools.list().some(tool => tool.name.startsWith(`mcp_${id}_`) && continuation.toolNames.includes(tool.name)))
         const prepared = await createToolRegistry({
@@ -354,12 +421,13 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
         memoryScopes: ctx.memoryScopes,
           allowedSkills: selectedSkills,
           strictSkillBindings: true,
+          knowledgeReadScope: selectedKnowledge,
           // MCP stdio initialization may itself execute code. Safe mode must not
           // start an extension merely to discover a tool that would later be denied.
           allowedMcpServers: safeMode || readOnly ? [] : selectedMcp,
           allowedTools: continuation.toolNames,
         })
-        childTools = createSubagentToolRegistry(prepared.registry, readOnly)
+        childTools = createSubagentToolRegistry(withPluginTools(prepared.registry, frozenPluginTools), readOnly)
         if (!userDelegated) for (const tool of childTools.list()) if (tool.name !== 'plan_update' && !ctx.tools.has(tool.name)
           && !ownedControlNames.includes(tool.name)) childTools.unregister(tool.name)
         if (safeMode && configuredAgent.mcpServers.length) resourcePrompt += '\n\n安全模式下未连接绑定的 MCP 扩展；需要这些能力时如实说明限制。'
@@ -369,6 +437,10 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
           if (chunks.length) resourcePrompt += '\n\n## 绑定知识库参考\n' + chunks.map((chunk, index) => `[${index + 1}] ${chunk.filename}\n${chunk.content}`).join('\n\n')
         }
       }
+      for (const name of KNOWLEDGE_READ_TOOLS) if (!selectedKnowledge.length
+        || !currentKnowledgeDelegation && !trustedKnowledgeRead(ctx.tools, name)) childTools.unregister(name)
+      if (selectedKnowledge.length && KNOWLEDGE_READ_TOOLS.some(name => childTools.has(name))) resourcePrompt += '\n\n## 已授权只读知识资源\n'
+        + JSON.stringify(selectedKnowledge) + '\n这些是知识库或文档 ID，不是工作区文件路径。可以直接调用知识读取工具，先查看知识库/文档目录，再按需读取正文或搜索；未命中参考片段不代表知识库为空。不得通过应用数据库绕过读取范围。'
       // Old continuation snapshots retain business permissions; the newly builtin
       // session plan is available without expanding any file, command or extension access.
       for (const tool of childTools.list()) if (tool.name !== 'plan_update' && !continuation.toolNames.includes(tool.name)) childTools.unregister(tool.name)
@@ -400,6 +472,7 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
         projectRoot: workspace.snapshot.root,
         cwd: workspace.snapshot.root,
         tools: childTools,
+        resourceScope: { knowledgeBases: selectedKnowledge },
         history: createConversationHistory(),
         logger: ctx.logger.child({ runId: snapshot.runId, subSessionId: snapshot.childSessionId }),
         tokenBudget: subagentTokenBudget,

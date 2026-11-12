@@ -36,9 +36,37 @@ afterEach(() => {
 })
 
 describe('Skill management service', () => {
+  it.each(['LF', 'BOM/CRLF'])('creates one header from a complete document with identical metadata (%s)', async format => {
+    const body = '# Instructions\n\nPreserve this separator:\n\n---\n\nAnd this text.'
+    const content = format === 'LF' ? main('example', body) : '\uFEFF' + main('example', body).replace(/\n/g, '\r\n')
+    const pending = service.prepareCreate(context, { name: 'example', description: 'Test skill', content })
+    const expected = main('example', format === 'LF' ? body : body.replace(/\n/g, '\r\n'))
+    expect(pending.content).toBe(expected)
+    const created = await service.apply(context, pending)
+    expect(created.skill?.content).toBe(expected)
+    expect(fs.readFileSync(path.join(skillDir(), 'SKILL.md'), 'utf8')).toBe(expected)
+  })
+
+  it.each([
+    main('other'),
+    main().replace('description: Test skill', 'description: Different description'),
+    main().replace('description: Test skill', 'description: Test skill\nallowed-tools: read_file'),
+    main().replace('name: example', 'name: example\nname: example'),
+    '---\nname: example\ndescription: Test skill',
+    main('example', main()),
+  ])('rejects conflicting, extra or ambiguous metadata without creating files', content => {
+    expect(() => service.prepareCreate(context, { name: 'example', description: 'Test skill', content })).toThrow(/正文|frontmatter/)
+    expect(fs.existsSync(skillDir())).toBe(false)
+  })
+
+  it('rejects a header-only document instead of creating an empty skill', () => {
+    expect(() => service.prepareCreate(context, { name: 'example', description: 'Test skill', content: main('example', '') })).toThrow()
+    expect(fs.existsSync(skillDir())).toBe(false)
+  })
+
   it('creates, reads, edits, disables and deletes the selected persistent skill', async () => {
     const created = await seed()
-    expect(created).toMatchObject({ name: 'example', scope: 'project', enabled: true, dir: skillDir() })
+    expect(created).toMatchObject({ name: 'example', executionId: 'example', scope: 'project', enabled: true, dir: skillDir() })
     expect(created.id).toMatch(/^skill-[a-f0-9]{32}$/)
     expect(service.list(context)).toHaveLength(1)
     const updated = await service.apply(context, service.prepareChange(context, 'update', {
@@ -56,12 +84,13 @@ describe('Skill management service', () => {
   it('updates a custom main file without changing plugin.json, scripts or images', async () => {
     const dir = skillDir()
     fs.mkdirSync(path.join(dir, 'references'), { recursive: true })
-    const manifest = JSON.stringify({ name: 'example', description: 'Manifest description', main: 'references/main.md', extra: { keep: true } })
+    const manifest = JSON.stringify({ id: 'custom-runtime-id', name: 'example', description: 'Manifest description', main: 'references/main.md', extra: { keep: true } })
     fs.writeFileSync(path.join(dir, 'plugin.json'), manifest)
     fs.writeFileSync(path.join(dir, 'references', 'main.md'), main())
     fs.writeFileSync(path.join(dir, 'script.py'), 'print("preserved")')
     fs.writeFileSync(path.join(dir, 'image.png'), Buffer.from([0, 1, 2, 255]))
     const before = service.get(context, 'example')
+    expect(before.executionId).toBe('custom-runtime-id')
     const result = await service.apply(context, service.prepareChange(context, 'update', {
       id: before.id, expectedHash: before.hash, content: main('example', 'edited'),
     }))

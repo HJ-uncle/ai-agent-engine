@@ -1,5 +1,5 @@
 import type { IToolRegistry, Message, Tool } from '../core/agent-context/types.js'
-import { SKILL_MANAGEMENT_TOOLS, KNOWLEDGE_MANAGEMENT_TOOLS, AUTOMATION_TOOLS } from './toolkits.js'
+import { SKILL_MANAGEMENT_TOOLS, KNOWLEDGE_MANAGEMENT_TOOLS, KNOWLEDGE_READ_TOOLS, AUTOMATION_TOOLS, MCP_MANAGEMENT_TOOLS } from './toolkits.js'
 
 type Definition = ReturnType<IToolRegistry['list']>[number]
 /** Exposure only, never execution permission. All other trusted builtins remain discoverable. */
@@ -22,7 +22,9 @@ const groups: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['Memory', ['remember', 'recall', 'list_memories', 'forget', 'link_memories', 'search_memory']],
   ['Automation', AUTOMATION_TOOLS],
   ['Skill management', SKILL_MANAGEMENT_TOOLS],
+  ['Knowledge', KNOWLEDGE_READ_TOOLS],
   ['Knowledge management', KNOWLEDGE_MANAGEMENT_TOOLS],
+  ['MCP management', MCP_MANAGEMENT_TOOLS],
   ['Subagents', ['subagent', 'subagent_start', 'subagent_directory', 'subagent_followup', 'subagent_send', 'subagent_wait', 'subagent_cancel', 'subagent_participants', 'subagent_inbox', 'subagent_request_input', 'subagent_read_result']],
   ['Web/history', ['web_fetch', 'http_request', 'search_history']],
   ['Code', ['code_diagnose', 'codegraph']],

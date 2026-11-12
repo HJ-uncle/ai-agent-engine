@@ -10,7 +10,7 @@ import { workspaceManager } from '../../workspace/index.js'
 import { getDb } from '../sqlite/db.js'
 import { rootRunStore } from '../root-runs/index.js'
 import { withHistoryLock } from '../conversation/serialization.js'
-import { IMAGE_MIME_TYPES } from '../../tools/file/constants.js'
+import { resultAssetIsBinary, resultAssetMimeType } from './content-type.js'
 import { resultImageExtension, resultToolImages } from './tool-images.js'
 import { SubagentStore } from '../../core/subagent/store.js'
 import type { CollaborationBinding } from '../../core/collaboration/types.js'
@@ -18,15 +18,6 @@ import { canonicalFilePathSync } from '../../shared/file-version.js'
 
 const digest = (value: string | Buffer): string => createHash('sha256').update(value).digest('hex')
 const schemas = new WeakMap<Client, Promise<void>>()
-const MIME: Record<string, string> = {
-  ...IMAGE_MIME_TYPES, '.svg': 'image/svg+xml', '.avif': 'image/avif', '.ico': 'image/x-icon',
-  '.pdf': 'application/pdf', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  '.txt': 'text/plain', '.md': 'text/markdown', '.csv': 'text/csv', '.tsv': 'text/tab-separated-values',
-  '.html': 'text/html', '.htm': 'text/html', '.json': 'application/json', '.zip': 'application/zip',
-  '.mp4': 'video/mp4', '.webm': 'video/webm', '.mp3': 'audio/mpeg', '.wav': 'audio/wav',
-}
 
 export type ChildArtifactFileInput = { path: string; name?: string; expectedHash?: string }
 export type ChildArtifactInput = { childSessionId: string; runId: string; artifactId: string; name?: string }
@@ -266,7 +257,7 @@ export class FinalResultStore {
     } finally { await handle.close() }
     const hash = digest(bytes)
     if (input.expectedHash !== undefined && input.expectedHash !== `sha256:${hash}`) throw new Error('Artifact file version changed before reporting')
-    const mimeType = MIME[path.extname(canonical).toLowerCase()] ?? 'application/octet-stream'
+    const mimeType = resultAssetMimeType(canonical, bytes)
     const assetId = randomUUID()
     const item: FinalResultItem = { id: assetId, assetId, name, path: canonical, mimeType, size: bytes.length, sha256: hash, kind: mimeType.startsWith('image/') ? 'image' : 'file' }
     return { bytes, item, sourceChangeId: trackSource ? await this.sourceForFile(ctx, item) : null }
@@ -528,7 +519,7 @@ export class FinalResultStore {
     // A concurrent history deletion or run replacement must not complete an old read.
     const current = await authorize()
     if (current.item.sha256 !== item.sha256) throw new Error('Result asset changed during reading')
-    return { path: item.path, content: bytes.toString('base64'), isBinary: item.kind === 'image' || bytes.includes(0) || !/^(?:text\/|application\/json$)/.test(item.mimeType), totalSize: bytes.length, tooLarge: false, truncated: false, mimeType: item.mimeType, encoding: 'base64', sha256: item.sha256 }
+    return { path: item.path, content: bytes.toString('base64'), isBinary: resultAssetIsBinary(bytes, item.path, item.mimeType, item.kind), totalSize: bytes.length, tooLarge: false, truncated: false, mimeType: item.mimeType, encoding: 'base64', sha256: item.sha256 }
   }
 }
 

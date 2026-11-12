@@ -5,11 +5,12 @@ import path from 'node:path'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { LLMAdapter } from '../../../../core/llm-adapter/types.js'
-import { AGENT_MANAGEMENT_TOOLS, KNOWLEDGE_MANAGEMENT_TOOLS, TOOLKIT_IDS, toolkitToolNames } from '../../../../tools/toolkits.js'
+import { AGENT_MANAGEMENT_TOOLS, KNOWLEDGE_MANAGEMENT_TOOLS, KNOWLEDGE_READ_TOOLS, TOOLKIT_IDS, toolkitToolNames } from '../../../../tools/toolkits.js'
 
 let fixture: string, app: FastifyInstance, baseUrl: string, restrictedAgentId: string
 let closeDatabase: (() => Promise<void>) | undefined
 const offered: string[][] = []
+const modelInputs: string[] = []
 let nextToolCall: { id: string; name: string; args: Record<string, unknown> } | undefined
 const tenantId = 'toolkit-http-fixture'
 
@@ -18,7 +19,7 @@ beforeAll(async () => {
   for (const [key, value] of Object.entries({ DATA_DIR: path.join(fixture, 'agent.db'), WORKSPACE_ROOT: path.join(fixture, 'scratch'),
     HISTORY_BACKEND: 'jsonl', MEMORY_DB_PATH: path.join(fixture, 'memory.db'), AETHER_GLOBAL_DIR: path.join(fixture, 'global'),
     SKILLS_ROOT: path.join(fixture, 'skills'), OSM_MODE: 'off', AUTH_ENABLED: 'false', LOG_LEVEL: 'silent', QA_LOG_ENABLED: 'false',
-    AGENT_TOTAL_TOKEN_LIMIT: '', DEFAULT_SECURITY_MODE: 'standard' })) vi.stubEnv(key, value)
+    MCP_CONFIG_PATH: '', AGENT_TOTAL_TOKEN_LIMIT: '', DEFAULT_SECURITY_MODE: 'standard' })) vi.stubEnv(key, value)
   const database = await import('../../../../storage/sqlite/db.js')
   await database.initDb()
   closeDatabase = async () => {
@@ -40,6 +41,7 @@ beforeAll(async () => {
       complete: async () => { throw new Error('Unexpected model transport') },
       async *stream(_messages, options) {
         offered.push(options?.tools?.map(tool => tool.name) ?? [])
+        modelInputs.push(JSON.stringify({ messages: _messages, systemPrompt: options?.systemPrompt, requestContext: options?.requestContext }))
         if (nextToolCall) {
           const call = nextToolCall
           nextToolCall = undefined
@@ -70,8 +72,8 @@ afterAll(async () => {
   fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 })
 })
 
-async function chat(sessionId: string, fields: Record<string, unknown> = {}, profile = 'general') {
-  const response = await fetch(baseUrl + '/chat', { method: 'POST', headers: { 'content-type': 'application/json', 'x-aether-tool-profile': profile },
+async function chat(sessionId: string, fields: Record<string, unknown> = {}, profile = 'general', tenant = tenantId) {
+  const response = await fetch(baseUrl + '/chat', { method: 'POST', headers: { 'content-type': 'application/json', 'x-aether-tool-profile': profile, 'x-test-tenant': tenant },
     body: JSON.stringify({ sessionId, message: '请回答当前问题', model: 'toolkit-fixture', workspacePaths: [fixture], ...fields }) })
   return { status: response.status, body: await response.text() }
 }
@@ -83,7 +85,10 @@ describe('Work session toolkit admission', () => {
   it('discovers server packages and persists independent selections through real HTTP admission', async () => {
     const catalogue = await (await fetch(baseUrl + '/toolkits')).json() as { data: { toolkits: Array<{ id: string; available: boolean }> } }
     expect(catalogue.data.toolkits.map(item => item.id)).toEqual(TOOLKIT_IDS)
-    expect(catalogue.data.toolkits.every(item => item.available)).toBe(true)
+    expect(catalogue.data.toolkits.filter(item => item.id !== 'mcp-management').every(item => item.available)).toBe(true)
+    expect(catalogue.data.toolkits.find(item => item.id === 'mcp-management')?.available).toBe(false)
+    const local = await (await fetch(baseUrl + '/toolkits', { headers: { 'x-test-tenant': 'default' } })).json() as typeof catalogue
+    expect(local.data.toolkits.find(item => item.id === 'mcp-management')?.available).toBe(true)
     const code = await (await fetch(baseUrl + '/toolkits', { headers: { 'x-aether-tool-profile': 'code' } })).json() as typeof catalogue
     expect(code.data.toolkits).toEqual([])
     const restricted = await (await fetch(baseUrl + '/toolkits?agentId=' + restrictedAgentId)).json() as typeof catalogue
@@ -98,6 +103,34 @@ describe('Work session toolkit admission', () => {
     expect(offered.at(-1)).not.toContain('agent_create')
     expect((await chat('multi-package')).body).toContain('TOOLKIT_MODEL_RESULT')
     expect(await selection('multi-package')).toEqual(remaining)
+  }, 30_000)
+
+  it('admits MCP management in the local tenant, approves one disabled config and rejects shared config access from other tenants', async () => {
+    const sessionId = 'mcp-http-approval', name = 'mcp_server_create'
+    const args = { id: 'http-managed', name: 'HTTP managed MCP', transportType: 'http', url: 'https://example.invalid/mcp', scope: 'project' }
+    nextToolCall = { id: 'mcp-create', name, args }
+    const waiting = await chat(sessionId, { toolkits: ['mcp-management'] }, 'general', 'default')
+    const { rootRunStore } = await import('../../../../storage/root-runs/index.js')
+    const run = (await rootRunStore.list('default', sessionId)).at(-1)!
+    expect(run.status, waiting.body.split('\n').filter(line => /"toolResult"/.test(line)).join('\n')).toBe('waiting')
+    const { listServers } = await import('../../../../storage/mcp/mcp-config.js')
+    expect(listServers(fixture, 'project')).toEqual([])
+    const pending = run.pending[0]
+    const response = { runId: run.runId, requestId: pending.requestId, toolCallId: pending.toolCallId, name: pending.toolName, output: 'approved' }
+    const resumed = await chat(sessionId, { toolkits: [], toolResponse: response }, 'general', 'default')
+    expect(resumed.body).toContain('resourceChange')
+    expect((await rootRunStore.get('default', run.runId))?.status).toBe('succeeded')
+    expect((await chat(sessionId, { toolResponse: response }, 'general', 'default')).status).toBe(200)
+    expect(listServers(fixture, 'project')).toEqual([expect.objectContaining({ id: args.id, name: args.name, enabled: false })])
+
+    nextToolCall = { id: 'mcp-other-tenant', name: 'mcp_server_list', args: {} }
+    const rejected = await chat('mcp-tenant-denied', { toolkits: ['mcp-management'] })
+    const result = rejected.body.split('\n').filter(line => line.startsWith('data: {')).map(line => JSON.parse(line.slice(6)))
+      .find(frame => frame.toolResult?.toolCallId === 'mcp-other-tenant')?.toolResult
+    expect(result).toMatchObject({ success: false })
+    expect(result.output).not.toContain(args.name)
+    expect(result.output).not.toContain(args.url)
+    expect(await selection(sessionId, 'default')).toEqual(['mcp-management'])
   }, 30_000)
 
   it.each([
@@ -163,7 +196,7 @@ describe('Work session toolkit admission', () => {
     if (!changed) expect((await repository.getDocument(tenantId, documents[0].id))?.content).toBe(original)
   }, 30_000)
 
-  it('does not expand a bound Agent knowledge management ceiling through request resources', async () => {
+  it('grants reading selected knowledge while keeping the bound Agent mutation ceiling', async () => {
     const repository = await import('../../../../storage/knowledge/kb-repo.js')
     const allowed = await repository.createKnowledgeBase(tenantId, 'Allowed management')
     const blocked = await repository.createKnowledgeBase(tenantId, 'Blocked management')
@@ -185,8 +218,55 @@ describe('Work session toolkit admission', () => {
     const searched = await chat(sessionId, fields)
     const result = searched.body.split('\n').filter(line => line.startsWith('data: {')).map(line => JSON.parse(line.slice(6)))
       .find(frame => frame.toolResult?.toolCallId === 'restricted-search')
-    expect(result?.toolResult).toMatchObject({ success: true, output: '[]' })
+    expect(result?.toolResult.success).toBe(true)
+    expect(JSON.parse(result?.toolResult.output)).toEqual([expect.objectContaining({ knowledgeBaseId: blocked.id, content: 'Restricted management marker' })])
   }, 30_000)
+
+  it('reads an explicitly selected knowledge base in ordinary Work even when the Agent has no configured knowledge', async () => {
+    const repository = await import('../../../../storage/knowledge/kb-repo.js')
+    const base = await repository.createKnowledgeBase(tenantId, '笑话集')
+    const document = await repository.addDocument(tenantId, '笑话.txt', 'text/plain', '一个只在知识库里的笑话。', base.id)
+    const other = await repository.createKnowledgeBase(tenantId, 'Unselected confidential library')
+    const { SQLiteAgentStore } = await import('../../../../storage/agent/index.js')
+    const agent = await new SQLiteAgentStore().create(tenantId, { name: '普通阅读助手', skills: [], mcpServers: [], knowledgeBases: [], allowedTools: ['read_file'] })
+    const sessionId = 'ordinary-reference-reader'
+    const fields = { agentId: agent.id, toolkits: [], knowledgeBases: [base.id],
+      message: `/kb:${base.id} 再看看\n<!--aether-refs:${JSON.stringify([{ t: 'kb', p: base.id, d: '笑话集', s: 0, e: 40 }])}-->` }
+    nextToolCall = { id: 'list-selected', name: 'knowledge_documents', args: { knowledgeBaseId: base.id } }
+    const listing = await chat(sessionId, fields)
+    expect(listing.status).toBe(200)
+    expect(listing.body).toContain('笑话.txt')
+    for (const name of KNOWLEDGE_READ_TOOLS) expect(offered.at(-1)).toContain(name)
+    expect(offered.at(-1)).not.toContain('knowledge_create')
+    expect(offered.at(-1)).not.toContain('knowledge_delete')
+    expect(await selection(sessionId)).toEqual([])
+    const prompt = modelInputs.at(-2)!
+    expect(prompt).toContain('本轮结构化选择的资料')
+    expect(prompt).toContain('笑话集')
+    expect(prompt).toContain('knowledge_document_get')
+    expect(prompt).not.toContain(other.name)
+    expect(JSON.parse(prompt).systemPrompt).not.toContain('本轮结构化选择的资料')
+    expect(JSON.parse(prompt).requestContext).toContain('本轮结构化选择的资料')
+    nextToolCall = { id: 'read-selected', name: 'knowledge_document_get', args: { id: document.id } }
+    const reading = await chat(sessionId, fields)
+    expect(reading.body).toContain('一个只在知识库里的笑话。')
+    expect(reading.body).toContain('read-only')
+    nextToolCall = { id: 'reject-unselected', name: 'knowledge_get', args: { id: other.id } }
+    const rejected = await chat(sessionId, fields)
+    expect(rejected.body).toContain('outside the explicitly bound resource scope')
+    expect(rejected.body).not.toContain(other.name)
+    expect((await chat(sessionId, { agentId: agent.id, toolkits: [], knowledgeBases: [] })).status).toBe(200)
+    for (const name of KNOWLEDGE_READ_TOOLS) expect(offered.at(-1)).not.toContain(name)
+    // History metadata and arbitrary request booleans cannot manufacture a read grant.
+    expect((await chat('forged-knowledge-grant', { message: fields.message, knowledgeReadScope: [base.id] })).status).toBe(200)
+    for (const name of KNOWLEDGE_READ_TOOLS) expect(offered.at(-1)).not.toContain(name)
+  }, 30_000)
+
+  it.each([[['']], [['same', 'same']], [Array.from({ length: 101 }, (_, i) => 'id-' + i)]])('rejects malformed or excessive knowledge selections before execution', async knowledgeBases => {
+    const count = offered.length
+    expect((await chat('invalid-knowledge-selection', { knowledgeBases })).status).toBe(400)
+    expect(offered).toHaveLength(count)
+  })
 
   it('defaults off, enables all schemas immediately, inherits omitted selections, and closes explicitly', async () => {
     expect(await selection('ordinary')).toEqual([])

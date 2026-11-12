@@ -418,6 +418,7 @@ export interface CreateAgentContextOptions {
   browserPrincipal?: Readonly<BrowserPrincipal>
   managementPrincipal?: Readonly<AuthContext>
   managementKnowledgeScope?: readonly string[] | null
+  resourceScope?: AgentContext['resourceScope']
   rootRunId?: string
   turnId?: string
   userMessageId?: string

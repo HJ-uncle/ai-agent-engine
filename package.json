@@ -43,6 +43,7 @@
     "@fastify/websocket": "^11.2.0",
     "@formulajs/formulajs": "4.5.6",
     "@libsql/client": "^0.17.3",
+    "ajv": "8.17.1",
     "docx": "^9.7.0",
     "exceljs": "^4.4.0",
     "fastify": "^5",

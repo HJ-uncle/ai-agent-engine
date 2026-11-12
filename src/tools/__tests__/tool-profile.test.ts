@@ -13,7 +13,8 @@ import { skillsRegistry } from '../../skills/index.js'
 import { clearSecurityMode, setSecurityMode } from '../../security/policy-engine.js'
 import { logger } from '../../observability/index.js'
 import { createPptx } from '../office/pptx.js'
-import { AGENT_MANAGEMENT_TOOLS, MANAGEMENT_TOOL_NAMES, TOOLKIT_IDS, toolkitToolNames, isAgentManagementTool, normalizeToolkits } from '../toolkits.js'
+import { AGENT_MANAGEMENT_TOOLS, MCP_MANAGEMENT_TOOLS, KNOWLEDGE_READ_TOOLS, MANAGEMENT_TOOL_NAMES, TOOLKIT_IDS, toolkitToolNames, isAgentManagementTool, normalizeToolkits } from '../toolkits.js'
+import { toolSource } from '../../core/runtime-capabilities.js'
 
 const external = vi.hoisted(() => ({ tools: [] as Array<Tool & { source?: string }> }))
 vi.mock('../../storage/mcp/mcp-config.js', () => ({ listServers: () => [] }))
@@ -46,6 +47,26 @@ beforeEach(() => {
 afterEach(() => { clearSecurityMode(context.tenantId, context.sessionId); vi.restoreAllMocks(); vi.unstubAllEnvs() })
 
 describe('executable tool profiles', () => {
+  it.each([undefined, [], ['read_file']])('provides only trusted reading capabilities for selected knowledge with business allowlist %j', async allowedTools => {
+    const options = { allowedTools, allowedMcpServers: [], toolkitAllowedTools: [] }
+    const normal = (await createToolRegistry(options)).registry
+    const selected = await createToolRegistry({ ...options, knowledgeReadScope: ['selected-base'] })
+    const reading = selected.registry
+    for (const name of KNOWLEDGE_READ_TOOLS) {
+      expect(normal.has(name)).toBe(false)
+      expect(reading.listForRequest().map(tool => tool.name)).toContain(name)
+      expect(reading.executionMode(name, {})).toBe('readonly')
+      const impostor = tool(name, 'skill')
+      reading.register(impostor)
+      expect(reading.list().find(tool => tool.name === name)?.description).not.toBe('Fixture tool')
+    }
+    for (const name of ['knowledge_create', 'knowledge_delete', 'knowledge_import', 'knowledge_document_update']) expect(reading.has(name)).toBe(false)
+    const empty = (await createToolRegistry({ ...options, knowledgeReadScope: [] })).registry
+    const code = (await createToolRegistry({ ...options, toolProfile: 'code', knowledgeReadScope: ['selected-base'] })).registry
+    for (const name of KNOWLEDGE_READ_TOOLS) { expect(empty.has(name)).toBe(false); expect(code.has(name)).toBe(false) }
+    expectExactCategories(selected)
+  })
+
   it.each(['off', 'balanced'])('loads the explicit Work toolkit initially without widening defaults under OSM %s', async mode => {
     vi.stubEnv('OSM_MODE', mode)
     const plain = (await createToolRegistry({ allowedMcpServers: [] })).registry
@@ -105,6 +126,29 @@ describe('executable tool profiles', () => {
     expect(registry.has('agent_delete')).toBe(false)
     registry.register(tool('agent_do_delete', 'skill'))
     expect(registry.has('agent_do_delete')).toBe(false)
+  })
+
+  it('keeps MCP administration builtin and opt-in without blocking ordinary MCP tools in Code', async () => {
+    external.tools = [tool('mcp_fixture_query', 'mcp'), tool('mcp_server_get', 'mcp')]
+    const options = { inlineMcpServers: mcpServers }
+    const normal = await createToolRegistry(options)
+    const enabled = await createToolRegistry({ ...options, toolkits: ['mcp-management'] })
+    const code = await createToolRegistry({ ...options, toolProfile: 'code', allowedTools: [...MCP_MANAGEMENT_TOOLS, 'mcp_fixture_query'] })
+    const restricted = await createToolRegistry({ ...options, toolkitAllowedTools: [], allowedTools: [...MCP_MANAGEMENT_TOOLS] })
+    for (const name of MCP_MANAGEMENT_TOOLS) {
+      expect(normal.registry.has(name), name).toBe(false)
+      expect(restricted.registry.has(name), name).toBe(false)
+      expect(code.registry.has(name), name).toBe(false)
+      const definition = enabled.registry.listForRequest().find(candidate => candidate.name === name)!
+      expect(toolSource(definition)).toBe('builtin')
+      expect(enabled.toolCategories.builtinTools).toContain(name)
+      expect(enabled.toolCategories.mcpTools).not.toContain(name)
+    }
+    expect(code.registry.has('mcp_fixture_query')).toBe(true)
+    for (const readOnly of [true, false]) {
+      const child = createSubagentToolRegistry(enabled.registry, readOnly)
+      for (const name of MCP_MANAGEMENT_TOOLS) expect(child.has(name)).toBe(false)
+    }
   })
 
   it('merges legacy Agent permissions into five canonical capabilities without exposing executable aliases', async () => {

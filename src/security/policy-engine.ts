@@ -45,7 +45,7 @@ const VALID_SECURITY_MODES: readonly SecurityMode[] = ['safe', 'standard', 'full
  * defaultSecurityMode 字段在启动时注入）；未设置采用 'standard'。
  * 显式配置但拼写错误时仍回退 'safe'，避免错误配置悄悄放宽策略。
  */
-function resolveDefaultSecurityMode(): SecurityMode {
+export function getDefaultSecurityMode(): SecurityMode {
   const raw = process.env.DEFAULT_SECURITY_MODE
   if (raw === undefined) return 'standard'
   if (raw && (VALID_SECURITY_MODES as readonly string[]).includes(raw)) {
@@ -55,7 +55,7 @@ function resolveDefaultSecurityMode(): SecurityMode {
 }
 
 export function getSecurityMode(tenantId: string, sessionId: string): SecurityMode {
-  return sessionSecurityModes.get(sessionKey(tenantId, sessionId)) ?? resolveDefaultSecurityMode()
+  return sessionSecurityModes.get(sessionKey(tenantId, sessionId)) ?? getDefaultSecurityMode()
 }
 
 export function setSecurityMode(tenantId: string, sessionId: string, mode: SecurityMode): void {

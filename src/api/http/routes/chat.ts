@@ -56,6 +56,7 @@ import { registerChildRecoveryPages, checkedChildEnvelope, childProjectionRefere
 import { requireChildRecovery } from '../../../core/subagent/child-usage-authority.js'
 
 import { buildChatSystemPrompts } from '../../../core/chat-system-prompt.js'
+import { buildKnowledgeReadContext, knowledgeSearchQuery } from '../../../core/knowledge-context.js'
 import { prependBootstrapToSystemPrompt } from '../../../core/osm-bootstrap.js'
 import { getProjectContextBlock } from '../../../core/project-context.js'
 import { SQLiteAgentStore } from '../../../storage/agent/index.js'
@@ -604,9 +605,9 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
           capabilities: { type: 'object' },
           skills: { type: 'array' },
           mcpServers: { type: 'array' },
-          knowledgeBases: { type: 'array' },
+          knowledgeBases: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 128 }, maxItems: 100, uniqueItems: true },
           allowedTools: { type: 'array' },
-          toolkits: { type: 'array', maxItems: TOOLKIT_IDS.length, uniqueItems: true, items: { type: 'string', enum: [...TOOLKIT_IDS] } },
+          toolkits: { type: 'array', maxItems: 32, uniqueItems: true, items: { type: 'string', maxLength: 80 } },
           inlineSkills: { type: 'array' },
           inlineMcpServers: { type: 'array' },
           inlineAgents: { type: 'array' },
@@ -958,6 +959,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
         toolProfile,
         toolkits: selectedToolkits,
         toolkitAllowedTools,
+        knowledgeReadScope: boundKnowledgeBases,
         ownedCollaboration: selectedCollaborators.length > 0,
         securityContext: { tenantId, sessionId, toolProfile },
         memoryScope: effectiveMemoryScope,
@@ -1105,7 +1107,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
       if (lines.length > 0) {
         inlineKbBlock =
           '\n\n## 客户端可用知识库（Client Knowledge Bases）\n' +
-          '以下是客户端项目中可访问的知识库文档列表（仅元数据；具体内容由客户端 RAG 检索后注入）：\n' +
+          '以下是客户端提供的知识资料目录（仅元数据；已选资料由引擎检索，目录和原文通过知识工具读取；目录本身不代表已读取正文）：\n' +
           lines.join('\n')
         reqLogger.info({ count: lines.length }, 'Inline KB index injected into systemPrompt')
       }
@@ -1128,6 +1130,8 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
       reqLogger.info('Project context (AE.md) injected into systemPrompt')
     }
 
+    const knowledgeReadBlock = toolProfile === 'general'
+      ? await buildKnowledgeReadContext(tenantId, boundKnowledgeBases, registry.has('knowledge_document_get')) : ''
     const baseSystemPrompt = prependBootstrapToSystemPrompt(
       [effectiveSystemPrompt, skillsPrompt, projectContextBlock].filter(Boolean).join('\n\n')
         + inlineKbBlock,
@@ -1146,7 +1150,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
       return ''
     }
 
-    const plainTextQuery = extractPlainText(message)
+    const plainTextQuery = knowledgeSearchQuery(extractPlainText(message))
 
     const currentModelName = effectiveModel ?? process.env.LLM_PRIMARY_MODEL ?? process.env.LLM_MODEL ?? '当前配置 of AI'
     
@@ -1647,7 +1651,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
           takeDelegatedTools: collaboration.takeDelegatedTools,
           hasPendingDelegations: collaboration.hasPendingDelegations,
           systemPrompt: strategySystemPrompt || undefined,
-          requestContext: memoryRequestContext || undefined,
+          requestContext: [memoryRequestContext, knowledgeReadBlock].filter(Boolean).join('\n\n') || undefined,
           temperature: effectiveTemperature,
           unboundedCode: toolProfile === 'code',
           conversationId,

@@ -3,6 +3,7 @@ import { SQLiteAgentStore, type Agent, type CreateAgentInput, type UpdateAgentIn
 import { AgentConfigurationConflict, agentConfigurationRevision } from '../storage/agent/configuration.js'
 import { isDefaultTool } from '../tools/tool-exposure.js'
 import { normalizeToolName, type ToolProfile } from '../tools/tool-profile.js'
+import { PLUGIN_MANAGEMENT_TOOLS } from '../tools/toolkits.js'
 
 const names = z.array(z.string().trim().min(1)).transform(values => [...new Set(values)])
 export const agentIdSchema = z.string().trim().min(1, 'Agent ID 不能为空')
@@ -69,11 +70,21 @@ export class AgentManagementService {
     if (collision) throw new AgentManagementError(40900, `已存在同名 Agent "${name}" (${collision.id})；请明确更新该 ID 或使用其他名称`)
   }
 
+  private async assertPluginTools(tenantId: string, names?: readonly string[]): Promise<void> {
+    const pluginNames = names?.filter(name => name.startsWith('plugin_') && !(PLUGIN_MANAGEMENT_TOOLS as readonly string[]).includes(name)) ?? []
+    if (!pluginNames.length) return
+    const { pluginToolDefinitions } = await import('../plugins/catalogue.js')
+    const available = new Set((await pluginToolDefinitions(tenantId)).map(tool => tool.name))
+    const missing = pluginNames.filter(name => !available.has(name))
+    if (missing.length) throw new AgentManagementError(40001, '插件工具不存在于当前租户的已发布插件中：' + missing.join(', '))
+  }
+
   async prepareCreate(tenantId: string, rawInput: unknown): Promise<PreparedAgentMutation & { action: 'create' }> {
     const parsed = agentConfigurationSchema.parse(rawInput)
     await this.assertAvailableName(tenantId, parsed.name)
     const input: CreateAgentInput = { ...parsed, skills: parsed.skills ?? [], mcpServers: parsed.mcpServers ?? [],
       knowledgeBases: parsed.knowledgeBases ?? [], allowedTools: parsed.allowedTools ?? await this.defaults() }
+    await this.assertPluginTools(tenantId, input.allowedTools)
     return { version: 1, action: 'create', tenantId, input }
   }
 
@@ -81,6 +92,7 @@ export class AgentManagementService {
     const input = agentUpdateSchema.parse(rawInput)
     const before = await this.get(tenantId, rawId)
     if (input.name !== undefined) await this.assertAvailableName(tenantId, input.name, before.id)
+    await this.assertPluginTools(tenantId, input.allowedTools)
     return { version: 1, action: 'update', tenantId, id: before.id, input, before, revision: agentConfigurationRevision(before) }
   }
 
@@ -91,10 +103,12 @@ export class AgentManagementService {
 
   async apply(operation: PreparedAgentMutation): Promise<AgentChange> {
     if (operation.action === 'create') {
+      await this.assertPluginTools(operation.tenantId, operation.input.allowedTools)
       const agent = await this.store.create(operation.tenantId, operation.input)
       return { action: 'create', id: agent.id, agent }
     }
     if (operation.action === 'update') {
+      await this.assertPluginTools(operation.tenantId, operation.input.allowedTools)
       const agent = await this.store.update(operation.id, operation.tenantId, operation.input, operation.revision)
       if (!agent) throw new AgentManagementError(40400, 'Agent 不存在，未执行更新')
       return { action: 'update', id: agent.id, agent }

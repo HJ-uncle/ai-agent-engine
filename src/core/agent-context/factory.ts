@@ -5,6 +5,7 @@ import type { AgentContext, CreateAgentContextOptions } from './types.js'
 import { resolveOSMMode, OSM_MODE_CONFIG } from '../osm.js'
 import { bindHistoryGeneration } from '../../storage/conversation/serialization.js'
 import { assertOwnedDispatch } from '../collaboration/execution-owner.js'
+import { inheritPluginRegistryBindings } from '../../plugins/identity.js'
 
 export function createAgentContext(options: CreateAgentContextOptions): AgentContext {
   const tenantId = options.tenantId ?? 'default'
@@ -55,6 +56,20 @@ export function createAgentContext(options: CreateAgentContextOptions): AgentCon
     ? (options.tokenBudget as number)
     : undefined
 
+  const tools = new Proxy(options.tools, {
+    get(target, property) {
+      if (property === 'execute') return (name: string, args: unknown, ctx: AgentContext) => {
+        assertOwnedDispatch(ctx.executionOwner)
+        return target.execute(name, args, ctx)
+      }
+      if (property === 'preflight' && target.preflight) return (name: string, args: unknown, ctx: AgentContext) => {
+        assertOwnedDispatch(ctx.executionOwner)
+        return target.preflight!(name, args, ctx)
+      }
+      return Reflect.get(target, property, target)
+    },
+  })
+  inheritPluginRegistryBindings(tools, options.tools)
   return {
     ...options,
     tenantId,
@@ -64,19 +79,7 @@ export function createAgentContext(options: CreateAgentContextOptions): AgentCon
     projectRoot,
     cwd,
     workspacePaths: options.workspacePaths,
-    tools: new Proxy(options.tools, {
-      get(target, property) {
-        if (property === 'execute') return (name: string, args: unknown, ctx: AgentContext) => {
-          assertOwnedDispatch(ctx.executionOwner)
-          return target.execute(name, args, ctx)
-        }
-        if (property === 'preflight' && target.preflight) return (name: string, args: unknown, ctx: AgentContext) => {
-          assertOwnedDispatch(ctx.executionOwner)
-          return target.preflight!(name, args, ctx)
-        }
-        return Reflect.get(target, property, target)
-      },
-    }),
+    tools,
     history: bindHistoryGeneration(options.history, tenantId, options.sessionId),
     logger: options.logger.child({ tenantId, sessionId: options.sessionId }),
     tokenBudget,

@@ -10,6 +10,9 @@ import { recommendedAgentTools } from '../../../core/agent-management.js'
 import { SessionStore } from '../../../storage/session/index.js'
 import { TOOLKIT_CATALOGUE, assertToolkitPermissions } from '../../../tools/toolkits.js'
 import type { AuthContext } from '../../../auth/types.js'
+import { pluginCatalogue, pluginToolDefinitions } from '../../../plugins/catalogue.js'
+import { assertPluginManagementAccess } from '../../../plugins/access.js'
+import { assertMcpManagementAccess } from '../../../storage/mcp/management-service.js'
 
 interface ToolQuery { current?: number; pageSize?: number; agentId?: string; path?: string }
 
@@ -38,7 +41,7 @@ export async function toolRoutes(fastify: FastifyInstance) {
     const agent = agentId ? await agentStore.getById(agentId, tenantId) : undefined
     const canManageSkills = process.env.AUTH_ENABLED === 'false' && (!auth || auth.method === 'none') ||
       auth?.roles?.some(role => role === 'admin' || role === 'skill-manager') === true
-    return reply.send(success({ toolkits: TOOLKIT_CATALOGUE.map(toolkit => {
+    const builtin = TOOLKIT_CATALOGUE.map(toolkit => {
       let reason: string | undefined
       if (agentId && !agent) reason = '绑定的 Agent 已不可用，请重新选择'
       else {
@@ -46,8 +49,18 @@ export async function toolRoutes(fastify: FastifyInstance) {
         catch (error) { reason = error instanceof Error ? error.message : String(error) }
       }
       if (!reason && toolkit.id === 'skill-management' && !canManageSkills) reason = '需要技能管理权限'
+      if (!reason && toolkit.id === 'plugin-management') {
+        try { assertPluginManagementAccess(tenantId, auth) }
+        catch (error) { reason = error instanceof Error ? error.message : String(error) }
+      }
+      if (!reason && toolkit.id === 'mcp-management') {
+        try { assertMcpManagementAccess(tenantId, auth) }
+        catch (error) { reason = error instanceof Error ? error.message : String(error) }
+      }
       return { ...toolkit, available: !reason, ...(reason ? { reason } : {}) }
-    }) }))
+    })
+    const plugins = await pluginCatalogue(tenantId, [agent?.allowedTools])
+    return reply.send(success({ toolkits: [...builtin, ...plugins.map(plugin => agentId && !agent ? { ...plugin, available: false, reason: '绑定的 Agent 已不可用，请重新选择' } : plugin)] }))
   })
 
   // 获取所有工具列表（包括系统工具和技能工具）
@@ -60,9 +73,11 @@ export async function toolRoutes(fastify: FastifyInstance) {
     let allowedTools: string[] | null = null
     let allowedSkills: string[] | null = null
     let allowedMcpServers: string[] | null = null
+    let agentAvailable = !agentId
     if (agentId) {
       const agent = await agentStore.getById(agentId, tenantId)
       if (agent) {
+        agentAvailable = true
         allowedTools = agent.allowedTools
         allowedSkills = agent.skills
         allowedMcpServers = agent.mcpServers
@@ -72,7 +87,8 @@ export async function toolRoutes(fastify: FastifyInstance) {
     const defaultTools = new Set(await recommendedAgentTools(toolProfile))
     const { registry } = await createToolRegistry({ toolProfile, allowedTools, allowedSkills, allowedMcpServers, workspaceRoot,
       ...(!agentId ? { toolExposure: 'catalogue' as const } : {}) })
-    const toolsList = registry.list().map(t => ({
+    const pluginDefinitions = toolProfile === 'general' && agentAvailable ? await pluginToolDefinitions(tenantId, allowedTools) : []
+    const toolsList = [...registry.list(), ...pluginDefinitions].map(t => ({
       name: t.name,
       displayName: t.displayName,
       description: t.description,
@@ -96,9 +112,11 @@ export async function toolRoutes(fastify: FastifyInstance) {
     let allowedTools: string[] | null = null
     let allowedSkills: string[] | null = null
     let allowedMcpServers: string[] | null = null
+    let agentAvailable = !agentId
     if (agentId) {
       const agent = await agentStore.getById(agentId, tenantId)
       if (agent) {
+        agentAvailable = true
         allowedTools = agent.allowedTools
         allowedSkills = agent.skills
         allowedMcpServers = agent.mcpServers
@@ -108,7 +126,8 @@ export async function toolRoutes(fastify: FastifyInstance) {
     const defaultTools = new Set(await recommendedAgentTools(toolProfile))
     const { registry } = await createToolRegistry({ toolProfile, allowedTools, allowedSkills, allowedMcpServers, workspaceRoot,
       ...(!agentId ? { toolExposure: 'catalogue' as const } : {}) })
-    const toolsList = registry.list()
+    const pluginDefinitions = toolProfile === 'general' && agentAvailable ? await pluginToolDefinitions(tenantId, allowedTools) : []
+    const toolsList = [...registry.list(), ...pluginDefinitions]
       .filter(t => toolSource(t) !== 'skill')
       .map(t => ({
         name: t.name,

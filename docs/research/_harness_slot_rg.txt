@@ -1,0 +1,197 @@
+packages/client\ui-approval\src\client\index.ts:95:    children: { 'conversation.approval.detail': { kind: 'single', scope: 'session' } },
+packages/client\ui-approval\src\client\contract\slots.ts:41:      children: { 'conversation.approval.detail': { kind: 'single'; scope: 'session' } }
+packages/client\ui-context-menu\src\client\index.ts:40:    'contextMenu.icon': { kind: 'keyed'; scope: 'root'; inline: true; owner: { icon: ContextMenuIcon } }
+packages/client\ui-context-menu\src\client\index.ts:42:    'contextMenu.content': { kind: 'keyed'; scope: 'root'; owner: { target: ContextMenuTarget; dismiss: () => void } }
+packages/client\ui-context-menu\src\client\index.ts:173:      'contextMenu.content': { kind: 'keyed', scope: 'root' },
+packages/client\ui-context-menu\src\client\index.ts:174:      'contextMenu.icon': { kind: 'keyed', scope: 'root', inline: true },
+packages/client\ui-tool\src\client\tool\toolviews\read-image-row.tsx:61:        children: { 'tool.call.images': { kind: 'single', scope: 'session' } },
+packages/client\ui-model-selection\src\client\index.ts:176:        'conversation.input.model.label': { kind: 'single', scope: 'session', inline: true },
+packages/client\ui-model-selection\src\client\index.ts:177:        'conversation.input.model.options': { kind: 'list', scope: 'session' },
+packages/client\ui-workspace\src\client\index.ts:324:        'sidebar.workspaces.directoryFlow': { kind: 'single', scope: 'root' },
+packages/client\ui-workspace\src\client\index.ts:325:        'sidebar.workspaces.session.row.action': { kind: 'list', scope: 'root' },
+packages/client\ui-workspace\src\client\index.ts:326:        'sidebar.session.row.leading': { kind: 'list', scope: 'root', inline: true },
+packages/client\ui-workspace\src\client\index.ts:327:        'sidebar.session.row.trailing': { kind: 'list', scope: 'root', inline: true },
+packages/client\ui-workspace\src\client\index.ts:328:        'sidebar.session.row.hover': { kind: 'list', scope: 'root' },
+packages/client\ui-workspace\src\client\index.ts:360:      children: { 'workspace.toast': { kind: 'keyed', scope: 'root' } },
+packages/client\ui-workspace\src\client\index.ts:366:      children: { 'conversation.hero.workspace.directoryFlow': { kind: 'single', scope: 'root' } },
+packages/client\ui-workspace\src\client\contract\slots.ts:137:    'conversation.hero.workspace.directoryFlow': { kind: 'single'; scope: 'root'; owner: DirectoryFlowOwnerProps }
+packages/client\ui-workspace\src\client\contract\slots.ts:139:    'sidebar.workspaces.directoryFlow': { kind: 'single'; scope: 'root'; owner: DirectoryFlowOwnerProps }
+packages/client\ui-workspace\src\client\contract\slots.ts:149:    'sidebar.session.row.leading': { kind: 'list'; scope: 'root'; inline: true; owner: SessionRowScheduleOwnerProps }
+packages/client\ui-workspace\src\client\contract\slots.ts:158:    'sidebar.session.row.trailing': { kind: 'list'; scope: 'root'; inline: true; owner: SessionRowTrailingOwnerProps }
+packages/client\ui-workspace\src\client\contract\slots.ts:163:    'sidebar.session.row.hover': { kind: 'list'; scope: 'root'; owner: SessionRowScheduleOwnerProps }
+packages/client\ui-workspace\src\client\contract\slots.ts:212:    'sidebar.workspaces.session.row.action': { kind: 'list'; scope: 'root'; owner: SessionRowOwnerProps }
+packages/client\ui-sidebar\src\client\index.ts:91:      children: { 'sidebar.panellist': { kind: 'list', scope: 'root' } },
+packages/client\ui-sidebar\src\client\index.ts:97:        'sidebar.brand.mark': { kind: 'single', scope: 'root' },
+packages/client\ui-sidebar\src\client\index.ts:98:        'sidebar.brand.name': { kind: 'single', scope: 'root' },
+packages/client\ui-sidebar\src\client\index.ts:99:        'sidebar.toggle.badge': { kind: 'single', scope: 'root' },
+packages/client\ui-sidebar\src\client\index.ts:100:        'sidebar.panellist.actions': { kind: 'list', scope: 'root' },
+packages/client\ui-sidebar\src\client\index.ts:101:        'sidebar.workspaces': { kind: 'single', scope: 'root', inject: SIDEBAR_SECTION_INJECT },
+packages/client\ui-sidebar\src\client\index.ts:102:        'sidebar.settings': { kind: 'single', scope: 'root' },
+packages/client\ui-sidebar\src\client\index.ts:103:        'sidebar.footer.action': { kind: 'list', scope: 'root' },
+packages/client\ui-sidebar\src\client\contract\slots.ts:26:      children: { 'sidebar.panellist': { kind: 'list'; scope: 'root' } }
+packages/client\ui-sidebar\src\client\contract\slots.ts:31:    'sidebar.toggle.badge': { kind: 'single'; scope: 'root'; owner: Record<never, never> }
+packages/client\ui-sidebar\src\client\contract\slots.ts:37:    'sidebar.brand.mark': { kind: 'single'; scope: 'root'; owner: SidebarBrandMarkOwnerProps }
+packages/client\ui-sidebar\src\client\contract\slots.ts:42:    'sidebar.brand.name': { kind: 'single'; scope: 'root'; owner: SidebarBrandNameOwnerProps }
+packages/client\ui-sidebar\src\client\contract\slots.ts:47:    'sidebar.panellist': { kind: 'list'; scope: 'root'; owner: SidebarPanelIconOwnerProps }
+packages/client\ui-sidebar\src\client\contract\slots.ts:49:    'sidebar.panellist.actions': { kind: 'list'; scope: 'root'; owner: SidebarPanelActionsOwnerProps }
+packages/client\ui-sidebar\src\client\contract\slots.ts:70:    'sidebar.settings': { kind: 'single'; scope: 'root'; owner: SidebarSettingsOwnerProps }
+packages/client\ui-sidebar\src\client\contract\slots.ts:75:    'sidebar.footer.action': { kind: 'list'; scope: 'root'; owner: SidebarFooterActionOwnerProps }
+packages/client\ui-plugin-manager\src\client\slot-contract.ts:118:    'plugins.add.actions': { kind: 'list'; scope: 'root'; owner: PluginAddActionsProps }
+packages/client\ui-plugin-manager\src\client\slot-contract.ts:124:    'plugins.tab': { kind: 'list'; scope: 'root'; owner: PluginTabProps }
+packages/client\ui-plugin-manager\src\client\slot-contract.ts:126:    'plugins.bundle.activation': { kind: 'keyed'; scope: 'root'; owner: PluginActivationOwnerProps }
+packages/client\ui-plugin-manager\src\client\slot-contract.ts:136:    'plugins.item': { kind: 'list'; scope: 'root'; owner: PluginConfigViewProps }
+packages/client\ui-plugin-manager\src\client\slot-contract.ts:142:    'plugins.bundle.config': { kind: 'keyed'; scope: 'root'; owner: PluginConfigViewProps }
+packages/client\ui-plugin-manager\src\client\slot-contract.ts:150:    'plugins.row.config': { kind: 'keyed'; scope: 'root'; owner: PluginConfigViewProps }
+packages/client\ui-plugin-manager\src\client\slot-contract.ts:156:    'plugins.detail.actions': { kind: 'list'; scope: 'root'; owner: PluginDetailProps }
+packages/client\ui-plugin-manager\src\client\slot-contract.ts:161:    'plugins.detail.badge': { kind: 'list'; scope: 'root'; owner: PluginDetailProps }
+packages/client\ui-plugin-manager\src\client\slot-contract.ts:168:    'plugins.detail.section': { kind: 'list'; scope: 'root'; owner: PluginDetailProps }
+packages/client\ui-conversation\src\client\apply.ts:171:      'conversation.user.text.node': { kind: 'keyed', scope: 'session', inline: true },
+packages/client\ui-conversation\src\client\apply.ts:339:      'conversation.header': { kind: 'single', scope: 'session-maybe' },
+packages/client\ui-conversation\src\client\apply.ts:348:      'conversation.session': { kind: 'single', scope: 'session' },
+packages/client\ui-conversation\src\client\apply.ts:349:      'conversation.composer': { kind: 'chain', scope: 'session' },
+packages/client\ui-conversation\src\client\apply.ts:350:      'conversation.composer.bar': { kind: 'single', scope: 'session-maybe' },
+packages/client\ui-conversation\src\client\apply.ts:351:      'conversation.input.dock': { kind: 'list', scope: 'session' },
+packages/client\ui-conversation\src\client\apply.ts:352:      'conversation.hero.frame': { kind: 'hoc', scope: 'root' },
+packages/client\ui-conversation\src\client\apply.ts:353:      'conversation.hero.brand.mark': { kind: 'single', scope: 'root' },
+packages/client\ui-conversation\src\client\apply.ts:354:      'conversation.hero.workspace': { kind: 'single', scope: 'root' },
+packages/client\ui-conversation\src\client\apply.ts:355:      'conversation.hero.agentPreset': { kind: 'single', scope: 'session-maybe' },
+packages/client\ui-conversation\src\client\apply.ts:356:      'conversation.hero.options': { kind: 'list', scope: 'session' },
+packages/client\ui-conversation\src\client\apply.ts:398:      'conversation.view': { kind: 'list', scope: 'session' },
+packages/client\ui-conversation\src\client\apply.ts:436:      'conversation.header.leading': { kind: 'single', scope: 'root' },
+packages/client\ui-conversation\src\client\apply.ts:437:      'conversation.session.header': { kind: 'single', scope: 'session' },
+packages/client\ui-conversation\src\client\apply.ts:445:      'conversation.session.header.lineage': { kind: 'single', scope: 'session' },
+packages/client\ui-conversation\src\client\apply.ts:446:      'conversation.session.header.actions': { kind: 'list', scope: 'session' },
+packages/client\ui-conversation\src\client\apply.ts:447:      'conversation.session.header.utilities': { kind: 'list', scope: 'session' },
+packages/client\ui-conversation\src\client\apply.ts:448:      'conversation.session.header.corner': { kind: 'single', scope: 'session' },
+packages/client\ui-conversation\src\client\apply.ts:449:      'conversation.session.header.views.actions': { kind: 'list', scope: 'root' },
+packages/client\ui-conversation\src\client\apply.ts:467:      'conversation.input.attachments': { kind: 'single', scope: 'session-maybe' },
+packages/client\ui-conversation\src\client\apply.ts:468:      'conversation.input.overlay': { kind: 'list', scope: 'session' },
+packages/client\ui-conversation\src\client\apply.ts:469:      'conversation.input.permission': { kind: 'single', scope: 'session' },
+packages/client\ui-conversation\src\client\apply.ts:470:      'conversation.input.left': { kind: 'list', scope: 'session' },
+packages/client\ui-conversation\src\client\apply.ts:471:      'conversation.input.plan': { kind: 'single', scope: 'session' },
+packages/client\ui-conversation\src\client\apply.ts:472:      'conversation.input.right': { kind: 'list', scope: 'session' },
+packages/client\ui-conversation\src\client\apply.ts:473:      'conversation.input.model': { kind: 'single', scope: 'session' },
+packages/client\ui-conversation\src\client\apply.ts:474:      'conversation.input.activity': { kind: 'single', scope: 'session' },
+packages/client\ui-conversation\src\client\apply.ts:475:      'conversation.composer.dock': { kind: 'list', scope: 'session' },
+packages/client\ui-conversation\src\client\apply.ts:584:      children: { 'main.conversation': { kind: 'single', scope: 'session-maybe' } },
+packages/client\ui-deliverables\src\client\index.ts:70:      children: { 'deliverables.file.actions': { kind: 'list', scope: 'session' } },
+packages/client\ui-deliverables\src\client\index.ts:93:      children: { 'deliverables.review.file.actions': { kind: 'list', scope: 'session' } },
+packages/client\ui-chat\src\client\contract\slots.ts:416:      children: { 'conversation.chat.user.images': { kind: 'single'; scope: 'session' } }
+packages/client\ui-chat\src\client\contract\slots.ts:428:    'conversation.chat.text-interaction': { kind: 'keyed'; scope: 'session'; owner: TextInteractionSurface }
+packages/client\ui-chat\src\client\contract\slots.ts:467:    'conversation.chat.message.images': { kind: 'single'; scope: 'session'; owner: MessageImagesOwnerProps }
+packages/client\ui-chat\src\client\contract\slots.ts:469:    'conversation.chat.user.images': { kind: 'single'; scope: 'session'; owner: MessageImagesOwnerProps }
+packages/client\ui-chat\src\client\contract\slots.ts:475:    'conversation.chat.commandview': { kind: 'keyed'; scope: 'session'; owner: CommandRowOwnerProps }
+packages/client\ui-chat\src\client\contract\slots.ts:481:    'conversation.chat.reasoning.body': { kind: 'single'; scope: 'session'; owner: ReasoningBodyOwnerProps }
+packages/client\ui-chat\src\client\contract\slots.ts:487:    'conversation.chat.turnTail': { kind: 'list'; scope: 'session'; owner: TurnTailOwnerProps }
+packages/client\ui-chat\src\client\contract\slots.ts:493:    'conversation.chat.assistant-actions': { kind: 'list'; scope: 'session'; owner: AssistantActionOwnerProps }
+packages/client\ui-chat\src\client\contract\slots.ts:501:    'shell.quota-notice': { kind: 'chain'; scope: 'root'; owner: QuotaNoticeOwnerProps }
+packages/client\ui-plugin-manager\src\client\index.ts:139:          'plugins.add.actions': { kind: 'list', scope: 'root' },
+packages/client\ui-plugin-manager\src\client\index.ts:140:          'plugins.tab': { kind: 'list', scope: 'root' },
+packages/client\ui-plugin-manager\src\client\index.ts:141:          'plugins.item': { kind: 'list', scope: 'root' },
+packages/client\ui-plugin-manager\src\client\index.ts:142:          'plugins.bundle.activation': { kind: 'keyed', scope: 'root' },
+packages/client\ui-plugin-manager\src\client\index.ts:143:          'plugins.bundle.config': { kind: 'keyed', scope: 'root' },
+packages/client\ui-plugin-manager\src\client\index.ts:144:          'plugins.row.config': { kind: 'keyed', scope: 'root' },
+packages/client\ui-plugin-manager\src\client\index.ts:145:          'plugins.detail.actions': { kind: 'list', scope: 'root' },
+packages/client\ui-plugin-manager\src\client\index.ts:146:          'plugins.detail.badge': { kind: 'list', scope: 'root' },
+packages/client\ui-plugin-manager\src\client\index.ts:147:          'plugins.detail.section': { kind: 'list', scope: 'root' },
+packages/client\ui-layout\src\client\index.ts:70:    'sidebar': { kind: 'single'; scope: 'root'; owner: SidebarOwnerProps }
+packages/client\ui-layout\src\client\index.ts:75:    'main': { kind: 'keyed'; scope: 'root' }
+packages/client\ui-layout\src\client\index.ts:89:    'rightbar': { kind: 'single'; scope: 'root'; owner: RightbarOwnerProps }
+packages/client\ui-layout\src\client\index.ts:96:    'shell.bottom': { kind: 'single'; scope: 'root' }
+packages/client\ui-layout\src\client\index.ts:107:    'shell.overlay': { kind: 'list'; scope: 'root' }
+packages/client\ui-layout\src\client\index.ts:121:    'shell.leading': { kind: 'single'; scope: 'root' }
+packages/client\ui-layout\src\client\index.ts:196:        'sidebar': { kind: 'single', scope: 'root' },
+packages/client\ui-layout\src\client\index.ts:197:        'main': { kind: 'keyed', scope: 'root' },
+packages/client\ui-layout\src\client\index.ts:198:        'rightbar': { kind: 'single', scope: 'root' },
+packages/client\ui-layout\src\client\index.ts:199:        'shell.bottom': { kind: 'single', scope: 'root' },
+packages/client\ui-layout\src\client\index.ts:200:        'shell.overlay': { kind: 'list', scope: 'root' },
+packages/client\ui-layout\src\client\index.ts:201:        'shell.leading': { kind: 'single', scope: 'root' },
+packages/client\ui-user-questions\src\client\index.ts:390:      children: { 'conversation.plan-review.actions': { kind: 'list', scope: 'session' } },
+packages/client\ui-user-questions\src\client\contract\slots.ts:21:    'conversation.plan-review.actions': { kind: 'list'; scope: 'session'; owner: { review: PlanReview; requestKey: PendingQuestion['key'] } }
+packages/client\ui-tool\src\client\contract\slots.ts:41:    'tool.call.images': { kind: 'single'; scope: 'session'; owner: ToolImagesOwnerProps }
+packages/client\ui-tool\src\client\apply.ts:41:      'tool.call.toolview': { kind: 'keyed', scope: 'session' },
+packages/client\ui-renderer\src\client\registry.ts:44:    'root': { kind: 'single'; scope: 'root'; owner: RootOwnerProps }
+packages/client\ui-conversation\src\client\contract\slots.ts:207:        'conversation.user.text.node': { kind: 'keyed'; scope: 'session'; inline: true }
+packages/client\ui-conversation\src\client\contract\slots.ts:229:    'main.conversation': { kind: 'single'; scope: 'session-maybe' }
+packages/client\ui-conversation\src\client\contract\slots.ts:237:    'conversation.header': { kind: 'single'; scope: 'session-maybe' }
+packages/client\ui-conversation\src\client\contract\slots.ts:283:    'conversation.session.header.views.actions': { kind: 'list'; scope: 'root'; owner: ConversationViewActionsOwnerProps }
+packages/client\ui-conversation\src\client\contract\slots.ts:285:    'conversation.view': { kind: 'list'; scope: 'session'; owner: ConvViewOwnerProps }
+packages/client\ui-conversation\src\client\contract\slots.ts:290:    'conversation.composer': { kind: 'chain'; scope: 'session'; owner: ComposerChainProps }
+packages/client\ui-conversation\src\client\contract\slots.ts:292:    'conversation.hero.workspace': { kind: 'single'; scope: 'root'; owner: EmptyWorkspaceOwnerProps }
+packages/client\ui-conversation\src\client\contract\slots.ts:294:    'conversation.hero.frame': { kind: 'hoc'; scope: 'root'; owner: HeroFrameOwnerProps }
+packages/client\ui-conversation\src\client\contract\slots.ts:296:    'conversation.hero.brand.mark': { kind: 'single'; scope: 'root'; owner: HeroBrandMarkOwnerProps }
+packages/client\ui-conversation\src\client\contract\slots.ts:298:    'conversation.hero.agentPreset': { kind: 'single'; scope: 'session-maybe'; owner: HeroAgentPresetOwnerProps }
+packages/client\ui-conversation\src\client\contract\slots.ts:300:    'conversation.hero.options': { kind: 'list'; scope: 'session' }
+packages/client\ui-conversation\src\client\contract\slots.ts:305:    'conversation.input.dock': { kind: 'list'; scope: 'session'; owner: InputZone }
+packages/client\ui-conversation\src\client\contract\slots.ts:310:    'conversation.input.overlay': { kind: 'list'; scope: 'session' }
+packages/client\ui-conversation\src\client\contract\slots.ts:315:    'conversation.composer.dock': { kind: 'list'; scope: 'session' }
+packages/client\ui-conversation\src\client\contract\slots.ts:320:    'conversation.input.left': { kind: 'list'; scope: 'session' }
+packages/client\ui-conversation\src\client\contract\slots.ts:325:    'conversation.input.right': { kind: 'list'; scope: 'session' }
+packages/client\ui-conversation\src\client\contract\slots.ts:331:    'conversation.input.activity': { kind: 'single'; scope: 'session'; owner: InputActivityOwnerProps }
+packages/client\ui-conversation\src\client\contract\slots.ts:336:    'conversation.composer.bar': { kind: 'single'; scope: 'session-maybe'; owner: ComposerBarOwnerProps }
+packages/client\ui-conversation\src\client\contract\slots.ts:350:    'conversation.input.plan': { kind: 'single'; scope: 'session'; owner: InputControlOwnerProps }
+packages/client\ui-conversation\src\client\contract\slots.ts:355:    'conversation.input.permission': { kind: 'single'; scope: 'session'; owner: InputControlOwnerProps }
+packages/client\ui-conversation\src\client\contract\slots.ts:362:    'conversation.input.model': { kind: 'single'; scope: 'session'; owner: InputControlOwnerProps }
+packages/client\ui-conversation\src\client\contract\slots.ts:371:        'conversation.session': { kind: 'single'; scope: 'session' }
+packages/client\ui-conversation\src\client\contract\slots.ts:372:        'conversation.composer': { kind: 'chain'; scope: 'session' }
+packages/client\ui-conversation\src\client\contract\slots.ts:373:        'conversation.composer.bar': { kind: 'single'; scope: 'session-maybe' }
+packages/client\ui-conversation\src\client\contract\slots.ts:374:        'conversation.input.dock': { kind: 'list'; scope: 'session' }
+packages/client\ui-conversation\src\client\contract\slots.ts:375:        'conversation.hero.frame': { kind: 'hoc'; scope: 'root' }
+packages/client\ui-conversation\src\client\contract\slots.ts:376:        'conversation.hero.brand.mark': { kind: 'single'; scope: 'root' }
+packages/client\ui-conversation\src\client\contract\slots.ts:377:        'conversation.hero.workspace': { kind: 'single'; scope: 'root' }
+packages/client\ui-conversation\src\client\contract\slots.ts:378:        'conversation.hero.agentPreset': { kind: 'single'; scope: 'session-maybe' }
+packages/client\ui-conversation\src\client\contract\slots.ts:379:        'conversation.hero.options': { kind: 'list'; scope: 'session' }
+packages/client\ui-settings-plugins\src\client\index.ts:83:    children: { 'settings.plugins.tab': { kind: 'list', scope: 'root' } },
+packages/client\ui-settings\src\client\contract\slots.ts:17:    'settings.launcher': { kind: 'single'; scope: 'root'; owner: SettingsLauncherOwnerProps }
+packages/client\ui-settings\src\client\contract\slots.ts:27:    'settings.trigger': { kind: 'single'; scope: 'root'; owner: SettingsTriggerOwnerProps }
+packages/client\ui-settings\src\client\contract\slots.ts:33:    'settings.header': { kind: 'single'; scope: 'root'; owner: SettingsHeaderOwnerProps }
+packages/client\ui-settings\src\client\contract\slots.ts:39:    'settings.action': { kind: 'list'; scope: 'root'; owner: SettingsHeaderOwnerProps }
+packages/client\ui-settings\src\client\contract\slots.ts:45:    'settings.close': { kind: 'single'; scope: 'root'; owner: SettingsHeaderOwnerProps }
+packages/client\ui-settings\src\client\contract\slots.ts:57:    'settings.section': { kind: 'list'; scope: 'root'; owner: SettingsSectionOwnerProps }
+packages/client\ui-settings\src\client\contract\slots.ts:65:    'settings.section.icon': { kind: 'list'; scope: 'root'; inline: true; owner: SettingsSectionIconOwnerProps }
+packages/client\ui-settings\src\client\contract\slots.ts:74:    'settings.plugins.tab': { kind: 'list'; scope: 'root'; owner: SettingsPluginsTabOwnerProps }
+packages/client\ui-settings\src\client\contract\slots.ts:85:    'settings.onboarding': { kind: 'list'; scope: 'root'; owner: SettingsOnboardingOwnerProps }
+packages/client\ui-settings\src\client\contract\slots.ts:100:    'settings.general.item': { kind: 'list'; scope: 'root'; owner: SettingsGeneralItemOwnerProps }
+packages/client\ui-subagent\src\client\sidebar-chat\index.tsx:42:    'sidebar.chat.conversation': { kind: 'single'; scope: 'session' }
+packages/client\ui-subagent\src\client\sidebar-chat\index.tsx:194:    children: { 'sidebar.chat.conversation': { kind: 'single', scope: 'session' } },
+packages/client\ui-subagent\src\client\index.ts:92:      children: { 'conversation.session.header.actions.subagent.footer': { kind: 'list', scope: 'session' } },
+packages/client\ui-trajectory\src\client\trajectory-contract.ts:103:    'conversation.trajectory.images': { kind: 'single'; scope: 'session'; owner: MessageImagesOwnerProps }
+packages/client\ui-settings-general\src\client\index.ts:237:          'settings.launcher': { kind: 'single', scope: 'root' },
+packages/client\ui-settings-general\src\client\index.ts:238:          'settings.trigger': { kind: 'single', scope: 'root' },
+packages/client\ui-settings-general\src\client\index.ts:239:          'settings.header': { kind: 'single', scope: 'root' },
+packages/client\ui-settings-general\src\client\index.ts:240:          'settings.action': { kind: 'list', scope: 'root' },
+packages/client\ui-settings-general\src\client\index.ts:241:          'settings.close': { kind: 'single', scope: 'root' },
+packages/client\ui-settings-general\src\client\index.ts:242:          'settings.section': { kind: 'list', scope: 'root' },
+packages/client\ui-settings-general\src\client\index.ts:243:          'settings.section.icon': { kind: 'list', scope: 'root', inline: true },
+packages/client\ui-settings-general\src\client\index.ts:244:          'settings.onboarding': { kind: 'list', scope: 'root' },
+packages/client\ui-settings-general\src\client\index.ts:272:    children: { 'settings.general.item': { kind: 'list', scope: 'root' } },
+packages/client\ui-trajectory\src\client\index.ts:86:    children: { 'conversation.trajectory.images': { kind: 'single', scope: 'session' } },
+packages/client\ui-settings-models\src\client\index.ts:143:      'settings.models.provider-card': { kind: 'keyed', scope: 'root' },
+packages/client\ui-settings-models\src\client\index.ts:144:      'settings.models.footer': { kind: 'list', scope: 'root' },
+packages/client\ui-settings-models\src\client\index.ts:156:    children: { 'settings.models.sign-in': { kind: 'single', scope: 'root' } },
+packages/client\ui-chat\src\client\chat\register-node-renderers.ts:43:    children: { 'conversation.chat.user.before': { kind: 'chain', scope: 'session' } },
+packages/client\ui-chat\src\client\chat\register-node-renderers.ts:61:      'conversation.chat.reasoning.body': { kind: 'single', scope: 'session' },
+packages/client\ui-chat\src\client\chat\register-node-renderers.ts:62:      'conversation.chat.message.images': { kind: 'single', scope: 'session' },
+packages/client\ui-chat\src\client\chat\register-node-renderers.ts:74:    children: { 'conversation.chat.commandview': { kind: 'keyed', scope: 'session' } },
+packages/client\ui-chat\src\client\chat\register-node-renderers.ts:94:      'conversation.chat.turnTail': { kind: 'list', scope: 'session' },
+packages/client\ui-chat\src\client\chat\register-node-renderers.ts:95:      'conversation.chat.assistant-actions': { kind: 'list', scope: 'session' },
+packages/client\ui-chat\src\client\apply.ts:179:    children: { 'conversation.chat.user.images': { kind: 'single', scope: 'session' } },
+packages/client\ui-chat\src\client\apply.ts:227:      'conversation.chat.node': { kind: 'keyed', scope: 'session', inject: CHAT_NODE_INJECT },
+packages/client\ui-chat\src\client\apply.ts:244:        'conversation.chat.flow': { kind: 'single', scope: 'session', inject: CHAT_FLOW_INJECT },
+packages/client\ui-chat\src\client\apply.ts:245:        'conversation.chat.text-interaction': { kind: 'keyed', scope: 'session' },
+packages/client\ui-chat\src\client\apply.ts:323:    children: { 'shell.quota-notice': { kind: 'chain', scope: 'root' } },
+packages/client\ui-sidebar-right\src\client\index.ts:161:    children: { 'sidebar.right.tab.menu.item': { kind: 'list', scope: 'session' } },
+packages/client\ui-sidebar-right\src\client\index.ts:236:        children: { 'rightbar.session': { kind: 'single', scope: 'session' } },
+packages/client\ui-sidebar-right\src\client\index.ts:246:          'sidebar.right.pane.tab': { kind: 'keyed', scope: 'session', inject: { hooks: { tabInfo: tabInfoFactory } } },
+packages/client\ui-sidebar-right\src\client\index.ts:247:          'sidebar.right.pane.tab.title': { kind: 'keyed', scope: 'session', inject: { hooks: { tabInfo: tabInfoFactory } } },
+packages/client\ui-sidebar-right\src\client\index.ts:295:        'sidebar.right.tab.guide.actions': { kind: 'list', scope: 'root' },
+packages/client\ui-sidebar-right\src\client\contract\slots.ts:91:    'sidebar.right.tab.guide.actions': { kind: 'list'; scope: 'root'; owner: SidebarRightGuideActionsOwnerProps }
+packages/client\ui-sidebar-right\src\client\contract\slots.ts:105:    'sidebar.right.tab.menu.item': { kind: 'list'; scope: 'session'; owner: SidebarRightTabMenuOwnerProps }
+packages/client\ui-settings-models\src\client\slot-contract.ts:33:    'settings.models.provider-card': { kind: 'keyed'; scope: 'root'; owner: ProviderCardExtrasOwnerProps }
+packages/client\ui-settings-models\src\client\slot-contract.ts:35:    'settings.models.sign-in': { kind: 'single'; scope: 'root'; owner: { complete: () => void; useApiKey: () => void } }
+packages/client\ui-settings-models\src\client\slot-contract.ts:40:    'settings.models.footer': { kind: 'list'; scope: 'root'; owner: ModelsFooterOwnerProps }
+packages/client\ui-sidebar-files\src\client\index.ts:167:      children: { 'sidebar.right.tab.files.actions': { kind: 'list', scope: 'session' } },
+packages/client\ui-sidebar-documentpreview\src\client\index.ts:108:        'sidebar.right.tab.document': { kind: 'keyed', scope: 'session', inject: { hooks: { tabInfo: documentTabInfoFactory } } },
+packages/client\ui-sidebar-documentpreview\src\client\index.ts:109:        'sidebar.right.tab.document.actions': { kind: 'list', scope: 'session' },
+packages/client\ui-sidebar-documentpreview\src\client\index.ts:110:        'sidebar.right.tab.document.unpreviewable': { kind: 'list', scope: 'session' },
+packages/client\ui-sidebar-documentpreview\src\client\index.ts:111:        'sidebar.right.tab.document.action': { kind: 'keyed', scope: 'session', inject: { hooks: { tabInfo: documentTabInfoFactory } } },

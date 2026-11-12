@@ -172,6 +172,13 @@ export async function listDocuments(tenantId: string, knowledgeBaseId?: string):
   return result.rows.map(row => docRow(row as Record<string, unknown>, undefined, Boolean(row.content_exact)) as KBDocument)
 }
 export async function getDocument(tenantId: string, id: string): Promise<KBDocumentDetail | null> { await ensureSchema(); return readDocument(getKnowledgeDb(), tenantId, id) }
+/** Catalogue and authorization checks must not materialize document bodies or legacy chunks. */
+export async function getDocumentMetadata(tenantId: string, id: string): Promise<KBDocument | null> {
+  await ensureSchema()
+  const result = await getKnowledgeDb().execute({ sql: 'SELECT id,tenant_id,knowledge_base_id,filename,content_type,content IS NOT NULL AS content_exact,chunk_count,created_at,updated_at,revision FROM documents WHERE id=? AND tenant_id=?', args: [id, tenantId] })
+  const row = result.rows[0]
+  return row ? docRow(row as Record<string, unknown>, undefined, Boolean(row.content_exact)) as KBDocument : null
+}
 export async function updateDocument(tenantId: string, id: string, patch: DocumentPatch, expectedRevision?: number, signal?: AbortSignal): Promise<KBDocumentDetail | null> {
   return writeTransaction(async db => {
     const old = await readDocument(db, tenantId, id)

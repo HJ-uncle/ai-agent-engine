@@ -108,9 +108,27 @@ function frontmatter(content: string): Record<string, string> {
     return match ? [[match[1], match[2].trim()]] : []
   }))
 }
+function creationBody(input: z.infer<typeof skillCreateSchema>): string {
+  const body = input.content.trim()
+  if (!/^---(?:\r?\n|$)/.test(body)) return body
+  // Models sometimes send a complete SKILL.md despite the body-only schema.
+  // Only remove a redundant, identical header; never discard extra metadata.
+  const header = body.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)
+  const lines = header?.[1].split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+  const expected = new Set([`name: ${input.name}`, `description: ${input.description}`])
+  if (!header || !lines || lines.length !== 2 || new Set(lines).size !== 2 || !lines.every(line => expected.has(line)))
+    throw new SkillManagementError(40001, 'skill_create 的 content 仅需 Markdown 正文，name 和 description 会自动生成。frontmatter 含冲突或额外元数据时请移除头部后重试；如需额外元数据，创建后用 skill_update 提交完整文档。')
+  const stripped = body.slice(header[0].length).trim()
+  if (/^---(?:\r?\n|$)/.test(stripped))
+    throw new SkillManagementError(40001, 'skill_create 的 content 含重复 frontmatter，请仅提交 Markdown 正文')
+  return skillContentSchema.parse(stripped)
+}
 interface Layer { scope: SkillScope; root: string; anchor: string; configPath: string; projectRoot?: string }
 export interface ManagedSkill {
-  id: string; name: string; description: string; enabled: boolean; scope: SkillScope; dir: string
+  id: string
+  /** Runtime binding identity, distinct from the path-scoped management ID. */
+  executionId: string
+  name: string; description: string; enabled: boolean; scope: SkillScope; dir: string
   content: string; hash: string; files: Array<{ path: string; size: number }>
 }
 interface ResolvedSkill extends ManagedSkill { layer: Layer; file: string; manifestPath: string; revision: string }
@@ -211,7 +229,7 @@ export class SkillManagementService {
         if (seen.has(key) || layer.scope === 'project' && layer.configPath !== path.join(layer.root, 'skills.config.json') && deleted.has(name.toLowerCase())) continue
         seen.add(key)
         const enabled = config.defaults?.[entry.name]?.enabled ?? ownConfig.defaults?.[entry.name]?.enabled ?? manifest.enabled ?? true
-        result.push({ id: skillManagementId(file), name, description: String(manifest.description ?? meta.description ?? `Skill: ${name}`),
+        result.push({ id: skillManagementId(file), executionId: String(manifest.id ?? entry.name), name, description: String(manifest.description ?? meta.description ?? `Skill: ${name}`),
           enabled: enabled !== false, scope: layer.scope, dir, content, hash: hashFileContent(raw), files: [],
           layer, file, manifestPath: plugin, revision: revision(file, dir, layer) })
       }
@@ -221,7 +239,7 @@ export class SkillManagementService {
 
   list(context: SkillManagementContext, scope?: SkillScope, search?: string): Array<Omit<ManagedSkill, 'content' | 'files'>> {
     return this.scan(context, scope).filter(skill => !search || (skill.name + ' ' + skill.description).toLowerCase().includes(search.toLowerCase()))
-      .map(({ id, name, description, enabled, scope, dir, hash }) => ({ id, name, description, enabled, scope, dir, hash }))
+      .map(({ id, executionId, name, description, enabled, scope, dir, hash }) => ({ id, executionId, name, description, enabled, scope, dir, hash }))
   }
   private resolve(context: SkillManagementContext, key: string, scope?: SkillScope): ResolvedSkill {
     const skills = this.scan(context, scope)
@@ -234,8 +252,8 @@ export class SkillManagementService {
   }
   get(context: SkillManagementContext, key: string, scope?: SkillScope): ManagedSkill {
     const skill = this.resolve(context, skillKeySchema.parse(key), scope)
-    const { id, name, description, enabled, dir, content, hash } = skill
-    return { id, name, description, enabled, scope: skill.scope, dir, content, hash, files: tree(dir, skill.layer.anchor).files }
+    const { id, executionId, name, description, enabled, dir, content, hash } = skill
+    return { id, executionId, name, description, enabled, scope: skill.scope, dir, content, hash, files: tree(dir, skill.layer.anchor).files }
   }
 
   prepareCreate(context: SkillManagementContext, raw: unknown): PreparedSkillMutation {
@@ -245,7 +263,7 @@ export class SkillManagementService {
     const root = layer.scope === 'project' ? path.dirname(layer.configPath) : layer.root
     const dir = safePath(layer.anchor, path.join(root, input.name)), file = path.join(dir, 'SKILL.md')
     if (fs.existsSync(dir)) throw new SkillManagementError(40900, '技能目录已存在；请读取后使用 skill_update')
-    const content = `---\nname: ${input.name}\ndescription: ${input.description}\n---\n\n${input.content.trim()}\n`
+    const content = `---\nname: ${input.name}\ndescription: ${input.description}\n---\n\n${creationBody(input)}\n`
     return { version: 1, tenantId: context.tenantId, action: 'create', scope: layer.scope, projectRoot: context.projectRoot,
       root, anchor: layer.anchor, configPath: layer.configPath, file, dir, id: skillManagementId(file), name: input.name,
       expectedHash: 'missing', revision: revision(file, dir, layer), content }

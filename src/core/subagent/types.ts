@@ -54,6 +54,10 @@ export interface SubagentContinuationProfile {
   readOnly: boolean
   systemPrompt: string
   toolNames: string[]
+  /** Frozen explicit knowledge read scope; follow-ups may only narrow it under current authorization. */
+  knowledgeReadScope?: string[]
+  /** Server-verified immutable plugin code; names alone cannot recover an implementation. */
+  pluginToolkits?: import('../../plugins/identity.js').PluginToolkitBinding[]
   workspacePaths: string[]
   projectRoot?: string
   cwd?: string

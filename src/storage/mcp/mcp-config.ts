@@ -45,14 +45,14 @@ interface MCPConfigFile {
 }
 
 /** Explicit deployment paths stay authoritative; generated project config lives in .ae. */
-function resolveConfigPath(projectRoot?: string): string {
+export function resolveConfigPath(projectRoot?: string): string {
   return process.env.MCP_CONFIG_PATH
     ? path.resolve(process.env.MCP_CONFIG_PATH)
     : projectDataPath(projectRoot ?? process.cwd(), 'mcp.json')
 }
 
 /** Read legacy files only until the first canonical write, including an empty config after deletion. */
-function resolveConfigReadPath(projectRoot?: string): string {
+export function resolveConfigReadPath(projectRoot?: string): string {
   if (process.env.MCP_CONFIG_PATH) return resolveConfigPath(projectRoot)
   const root = projectRoot ?? process.cwd()
   const candidates = [...projectDataReadPaths(root, 'mcp.json'), path.resolve(root, 'mcp.config.json')]
@@ -60,7 +60,7 @@ function resolveConfigReadPath(projectRoot?: string): string {
 }
 
 /** 用户级（全局）MCP 配置路径 */
-function resolveGlobalConfigPath(): string {
+export function resolveGlobalConfigPath(): string {
   const globalDir = process.env.AETHER_GLOBAL_DIR
     ? path.resolve(process.env.AETHER_GLOBAL_DIR)
     : path.join(os.homedir(), '.aether')

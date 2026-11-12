@@ -8,8 +8,8 @@ import { browserExecutionIdentity } from './browser-execution.js'
 import { workspaceManager } from '../workspace/index.js'
 
 export type RegisteredTool = ReturnType<IToolRegistry['list']>[number]
-export function toolSource(tool: RegisteredTool): 'builtin' | 'mcp' | 'skill' {
-  return tool.source === 'mcp' || tool.name.startsWith('mcp_') ? 'mcp' : tool.source === 'skill' ? 'skill' : 'builtin'
+export function toolSource(tool: RegisteredTool): 'builtin' | 'mcp' | 'skill' | 'plugin' {
+  return tool.source === 'builtin' ? 'builtin' : tool.source === 'plugin' ? 'plugin' : tool.source === 'mcp' || tool.name.startsWith('mcp_') ? 'mcp' : tool.source === 'skill' ? 'skill' : 'builtin'
 }
 
 export function buildRuntimeCapabilities(ctx: AgentContext, workspacePaths = workspaceManager.getPaths(ctx), tools: readonly RegisteredTool[] = ctx.tools.list()) {

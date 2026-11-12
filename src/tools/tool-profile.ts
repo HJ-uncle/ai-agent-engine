@@ -46,6 +46,6 @@ const GENERAL_SERVICE_TOOLS: ReadonlySet<string> = new Set([
 /** Extension namespaces may add configured tools, but cannot impersonate excluded builtins or old aliases. */
 export function isCodeProfileTool(tool: { name: string; source?: string }): boolean {
   const name = tool.name
-  if (REMOVED_TOOL_NAMES.has(name) || normalizeToolName(name) !== name || GENERAL_SERVICE_TOOLS.has(name) || /^(?:cron|agent|task|skill|knowledge)_/.test(name)) return false
+  if (REMOVED_TOOL_NAMES.has(name) || normalizeToolName(name) !== name || GENERAL_SERVICE_TOOLS.has(name) || /^(?:cron|agent|task|skill|knowledge)_/.test(name) || /^mcp_server_(?:list|get|create|update|set_enabled|delete|test)$/.test(name)) return false
   return CODE_BUILTIN_TOOLS.has(name) || tool.source === 'skill' || name.startsWith('mcp_')
 }
