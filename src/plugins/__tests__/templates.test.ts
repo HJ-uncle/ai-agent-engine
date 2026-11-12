@@ -1,5 +1,4 @@
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
@@ -17,10 +16,12 @@ import { runPlugin } from '../runtime.js'
 import { setSecurityMode, clearSecurityMode } from '../../security/policy-engine.js'
 
 let root: string, service: PluginService
+const scratch = path.resolve('.e2e-tmp/plugin-templates')
 const ctx = { tenantId: 'default', sessionId: 'template-tests' } as AgentContext
 
 beforeEach(() => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-templates-'))
+  fs.mkdirSync(scratch, { recursive: true })
+  root = fs.mkdtempSync(path.join(scratch, 'run-'))
   vi.stubEnv('DATA_DIR', path.join(root, 'state', 'agent.db'))
   vi.stubEnv('AUTH_ENABLED', 'false')
   vi.stubEnv('OSM_MODE', 'off')
@@ -31,7 +32,7 @@ afterEach(() => {
   vi.restoreAllMocks(); vi.unstubAllEnvs()
   clearSecurityMode(ctx.tenantId, ctx.sessionId)
   const resolved = path.resolve(root)
-  if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !path.basename(resolved).startsWith('plugin-templates-')) throw new Error('Unsafe template fixture cleanup')
+  if (path.dirname(resolved) !== scratch || !path.basename(resolved).startsWith('run-') || fs.lstatSync(resolved).isSymbolicLink()) throw new Error('Unsafe template fixture cleanup')
   fs.rmSync(resolved, { recursive: true, force: true, maxRetries: 3, retryDelay: 30 })
 })
 
@@ -121,9 +122,13 @@ describe('standard plugin project templates', () => {
     expect(tool.preflight).toBeUndefined()
     const list = await tool.execute({}, ctx)
     expect(list.success).toBe(true)
-    expect(JSON.parse(list.output)).toEqual({ templates: listPluginTemplates(), protocol: PLUGIN_TEMPLATE_PROTOCOL, contributions: PLUGIN_CONTRIBUTION_CATALOGUE })
+    expect(list.output.length).toBeLessThanOrEqual(4000)
+    expect(JSON.parse(list.output)).toMatchObject({ mode: 'overview', templateCount: listPluginTemplates().length })
+    expect(JSON.parse(list.output).protocolFields).toContain('uiBridge')
     const detail = await tool.execute({ id: 'markdown-report' }, ctx)
-    expect(JSON.parse(detail.output).template).toEqual(getPluginTemplate('markdown-report'))
+    expect(JSON.parse(detail.output)).toMatchObject({ mode: 'overview', id: 'markdown-report', fileCount: Object.keys(getPluginTemplate('markdown-report').files).length })
+    const protocol = await tool.execute({ protocol: 'uiBridge' }, ctx)
+    expect(JSON.parse(protocol.output).content).toBe(PLUGIN_TEMPLATE_PROTOCOL.uiBridge)
     expect((await tool.execute({ id: 'missing' }, ctx)).success).toBe(false)
     expect((await tool.execute({ id: 'json-tool', extra: true }, ctx)).success).toBe(false)
     expect((await tool.execute({}, { ...ctx, parentSessionId: 'parent' })).success).toBe(false)

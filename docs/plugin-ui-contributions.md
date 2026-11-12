@@ -41,7 +41,11 @@
 const context = await aetherPlugin.context()
 // {sessionId, workspacePath, engineReady, pluginId, revision}
 const output = await aetherPlugin.invoke('local_tool', { value: 1 })
+// output = {result,artifacts,stderr,durationMs,plugin:{id,revision,hash}}
+renderResult(output.result) // 业务数据在 result 中，不能直接将 output 当作业务对象。
 await aetherPlugin.navigate('another-local-page')
+const saved = await aetherPlugin.download({ fileName: 'report.json', content: JSON.stringify(output.result, null, 2), encoding: 'utf8' })
+// {saved:boolean,bytes?:number}; 用户在原生保存对话框中选位置或取消。
 
 const snapshots = await aetherPlugin.services.get()
 await aetherPlugin.services.start('countdown', { seconds: 60 })
@@ -50,7 +54,9 @@ await aetherPlugin.services.refresh('countdown') // 需要 statusTool
 const unsubscribe = aetherPlugin.services.subscribe(renderSnapshots)
 ```
 
-`invoke` 只能调用此页面 `tools` 白名单中的本地工具。服务操作只接受同插件声明的服务 ID，并检查当前会话/工作区条件。每页最多 8 个并发请求，单次参数最多 256 KiB；请求按窗口来源、随机 channel 和当前插件实例验证。停用、修订替换或切换引擎后，旧页面与延迟回执失效。服务快照仅包含当前插件和当前会话可见数据；初始化使用 `get()`，后续用 `subscribe()`。
+`invoke` 只能调用此页面 `tools` 白名单中的本地工具。服务操作只接受同插件声明的服务 ID，并检查当前会话/工作区条件。每页最多 8 个并发请求，普通请求参数最多 256 KiB；请求按窗口来源、随机 channel 和当前插件实例验证。停用、修订替换或切换引擎后，旧页面与延迟回执失效。服务快照仅包含当前插件和当前会话可见数据；初始化使用 `get()`，后续用 `subscribe()`。
+
+`download` 为用户点击导出提供原生保存入口，支持 UTF-8 文本与标准 Base64 二进制，解码后上限 16 MiB。`fileName` 只能是单文件名，禁止路径、控制字符、Windows 设备名和备用数据流；实际路径由用户在保存对话框选择，不返回给插件。每窗口只允许一个保存流程，保存前再次验证文档未关闭或被替换。取消返回 `{saved:false}`，不会写盘。图片可在 iframe 内用 Canvas 缩放、裁剪后直接导出，避免将大图塞进工具调用参数。此能力需要包含 download bridge 的新版 Aether 宿主；不要用被沙箱阻止的 `<a download>` 代替。
 
 ## 服务结果与生命周期
 

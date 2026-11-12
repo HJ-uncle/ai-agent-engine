@@ -90,8 +90,13 @@ export function validatePluginInput(input: CreatePluginInput): CreatePluginInput
       if (page.kind === 'tool') assertTool(page.tool)
       else {
         validatePluginPath(page.entry)
-        if (!page.entry.endsWith('.html') || typeof input.files[page.entry] !== 'string' || Buffer.byteLength(input.files[page.entry]) > 512 * 1024)
-          fail('PLUGIN_MANIFEST', 'manifest.contributes.pages: webview entry 必须是包内不超过 512 KiB 的自包含 HTML')
+        const field = `manifest.contributes.pages[${JSON.stringify(page.id)}].entry`
+        if (!page.entry.endsWith('.html')) fail('PLUGIN_MANIFEST', `${field}: ${JSON.stringify(page.entry)} 必须指向包内 .html 文件`)
+        const html = input.files[page.entry]
+        if (typeof html !== 'string') fail('PLUGIN_MANIFEST', `${field}: files 中缺少 ${JSON.stringify(page.entry)}；请同时提交该页面的完整 HTML 源码`)
+        if (!html.trim()) fail('PLUGIN_MANIFEST', `${field}: ${JSON.stringify(page.entry)} 为空；请提供可运行的自包含 HTML 页面`)
+        const bytes = Buffer.byteLength(html)
+        if (bytes > 512 * 1024) fail('PLUGIN_MANIFEST', `${field}: ${JSON.stringify(page.entry)} 实际为 ${bytes} 字节，超过 512 KiB（524288 字节）上限`)
         if (new Set(page.tools).size !== page.tools.length) fail('PLUGIN_MANIFEST', 'manifest.contributes.pages: tools 不可重复')
         page.tools.forEach(assertTool)
       }

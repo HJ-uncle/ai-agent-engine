@@ -2,17 +2,20 @@ import { z } from 'zod'
 import { isDeepStrictEqual } from 'node:util'
 import type { AgentContext, Tool, ToolResult, JSONSchema } from '../core/agent-context/types.js'
 import { createApprovedMutationTool } from '../tools/management/approved-mutation.js'
-import { PluginService, validatePluginId, validatePluginInput } from './service.js'
+import { PluginService, validatePluginId } from './service.js'
 import { PluginImporter, type PluginImportInput } from './importer.js'
 import { runPlugin } from './runtime.js'
 import { assertPluginManagementAccess } from './access.js'
 import { pluginSummary } from './catalogue.js'
 import { extensionPolicy } from '../security/tool-policy.js'
-import type { CreatePluginInput } from './types.js'
-import { getPluginTemplate, listPluginTemplates, PLUGIN_TEMPLATE_PROTOCOL } from './templates.js'
-import { PLUGIN_CONTRIBUTION_CATALOGUE, PLUGIN_CONTRIBUTION_JSON_SCHEMA } from './contributions.js'
+import type { CreatePluginInput, PluginRecord } from './types.js'
+import { listPluginTemplates } from './templates.js'
+import { PLUGIN_CONTRIBUTION_JSON_SCHEMA } from './contributions.js'
 import { validatePluginArguments } from './schema.js'
 import { resolvePluginCreateInput } from './create-input.js'
+import { resolvePluginUpdateInput } from './update-input.js'
+import { pluginReadProperties, pluginReadFailure, readManagedPlugin, readPluginTemplate } from './read-tools.js'
+import { hasCompactPluginMutationResult, pluginMutationPreview, pluginMutationResult } from './mutation-receipts.js'
 
 const id: JSONSchema = { type: 'string', minLength: 1, maxLength: 48, pattern: '^(?!.*--)[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$',
   description: '插件 ID；已有插件沿用 plugin_list 返回值。仅小写字母、数字、单连字符，最多48位；例如 currency-converter，不能用 currency_converter。' }
@@ -58,7 +61,13 @@ export function createPluginManagementTools(service = new PluginService()): Tool
       description: { type: 'string', minLength: 1, maxLength: 2000, description: '模板创建时可选的插件说明，不改变模板功能或实现。' },
       manifest, files,
     } },
-    { name: 'plugin_update', title: '编辑插件', description: '读取 plugin_get 后提交完整清单和源码，产生新版本；已有发布版继续运行。', required: ['id', 'manifest', 'files', 'expectedRevision'], properties: { id, manifest, files, expectedRevision } },
+    { name: 'plugin_update', title: '编辑插件', description: '编辑插件并产生新版本，已有发布版继续运行。先读取 plugin_get 获取当前 expectedRevision。默认 fileMode:"replace" 必须提交完整 manifest/files，未提交的文件会移除。推荐局部修改显式使用 fileMode:"merge"：files 仅提供新增/修改文件的完整源码，未列文件保留；manifest 可省略沿用当前完整清单，deleteFiles 可列出要删除的已有路径。id、expectedRevision、files 始终必填。merge 拒绝空操作、删除/写入同路径和版本冲突。审批前将增量解析并校验为完整源码快照，批准后只执行该快照；审批期间插件变化会拒绝，不会重新合并。', required: ['id', 'files', 'expectedRevision'], properties: {
+      id, expectedRevision,
+      fileMode: { type: 'string', enum: ['replace', 'merge'], description: '省略为 replace（完整替换，必须提供manifest）；merge 仅编辑显式列出的文件，可省略manifest。' },
+      manifest: { ...manifest, description: manifest.description + ' replace 模式必填；merge 模式省略时沿用读取修订的完整清单，提供时仍必须是完整清单。' },
+      files: { ...files, description: files.description + ' replace 为完整工程；merge 为新增/修改文件，每个值仍是该文件完整内容，不能传补丁片段。' },
+      deleteFiles: { type: 'array', maxItems: 100, uniqueItems: true, items: { type: 'string', minLength: 1, maxLength: 300 }, description: '仅merge可用。要删除的已有包内相对路径，使用准确大小写；不得与files中的写入路径重复。删除后完整工程仍须有效。' },
+    } },
     { name: 'plugin_publish', title: '发布插件', description: '发布当前草稿并启用，返回精确 selectionId、globalToolNames 与 toolNameMap。发布后用户可从插件列表打开操作页，按参数字段直接使用。发布前用 plugin_test 验收；发布不会把工具自动加入当前聊天请求范围，也不能靠 load_tools 扩权。用户通过 @ 选择返回的 selectionId 后，后续请求才可调用这些工具；当前管理会话继续用 plugin_test 测试。', required: ['id', 'expectedRevision'], properties: { id, expectedRevision } },
     { name: 'plugin_set_enabled', title: '启停插件', description: '启停已发布插件。停用立即阻止后续调用。', required: ['id', 'enabled'], properties: { id, enabled: { type: 'boolean' } } },
     { name: 'plugin_delete', title: '删除插件', description: '移除插件目录与版本；不删除用户工作区产物。', required: ['id'], properties: { id } },
@@ -78,10 +87,10 @@ export function createPluginManagementTools(service = new PluginService()): Tool
       authorize(ctx)
       let input = z.record(z.unknown()).parse(raw)
       if (spec.name === 'plugin_create') input = resolvePluginCreateInput(input) as unknown as Record<string, unknown>
-      if (spec.name === 'plugin_update') validatePluginInput(input as unknown as CreatePluginInput)
       if (spec.name === 'plugin_test' || spec.name === 'plugin_import_install') { const denied = extensionPolicy(ctx); if (denied) throw new Error(denied.output) }
       const record = spec.name === 'plugin_create' || spec.name === 'plugin_import_install' ? undefined : await service.get(ctx.tenantId, validatePluginId(input.id))
       if ((spec.name === 'plugin_update' || spec.name === 'plugin_publish') && record?.revision !== input.expectedRevision) throw new Error('插件版本已变化，请重新读取')
+      if (spec.name === 'plugin_update') input = resolvePluginUpdateInput(input, record!) as unknown as Record<string, unknown>
       if (spec.name === 'plugin_set_enabled') z.boolean().parse(input.enabled)
       if (spec.name === 'plugin_test') {
         input.revision = z.number().int().positive().parse(input.revision ?? record?.revision)
@@ -93,10 +102,14 @@ export function createPluginManagementTools(service = new PluginService()): Tool
         }
       }
       const job = spec.name === 'plugin_import_install' ? await importer.getImport(ctx.tenantId, z.string().parse(input.jobId)) : undefined
+      const preview = pluginMutationPreview(spec.name, spec.title, input, record,
+        spec.name === 'plugin_create' || spec.name === 'plugin_update' ? input as unknown as CreatePluginInput : undefined, ctx)
       return { version: 1 as const, tenantId: ctx.tenantId, action: spec.name, input: JSON.parse(JSON.stringify(input)) as Record<string, unknown>,
         ...(record ? { expectedRevision: record.revision, expectedUpdatedAt: record.updatedAt } : {}),
+        ...(preview === undefined ? {} : { preview }),
         ...(job ? { source: job.source, requirements: job.requirements } : {}) }
     },
+    preview: operation => operation.preview ?? operation,
     async apply(operation, ctx) {
       authorize(ctx)
       if (operation.action !== spec.name) throw new Error('插件批准操作不匹配')
@@ -136,17 +149,18 @@ export function createPluginManagementTools(service = new PluginService()): Tool
         }
       }
       const resourceChange = spec.name === 'plugin_test' ? undefined : { kind: 'plugin', action: spec.name.slice(7), id: (result as { id?: string })?.id ?? input.id }
-      return { ...ok(result), ...(resourceChange ? { metadata: { resourceChange } } : {}) }
+      const response = hasCompactPluginMutationResult(spec.name) ? pluginMutationResult(spec.name, result as PluginRecord, ctx) : ok(result)
+      return { ...response, ...(resourceChange ? { metadata: { ...response.metadata, resourceChange } } : {}) }
     },
   }))
   return [
-    { name: 'plugin_get_template', displayName: '插件工程模板', description: '只读发现标准插件模板、完整工程、manifest.contributes能力目录与bridge协议。无 id 时列出模板；传 id 返回完整 manifest、files、README 和确定性测试案例。创建前调用以理解模板；需求匹配时随后调用 plugin_create({templateId:本模板id,id:新插件id,name?,description?})，由宿主直接复用工程，不必复录源码。支持自动参数操作页、沙箱HTML、导航、工作区标签及宿主服务。desktop-timer展示自定义页面和页面关闭后仍可运行的倒计时；不支持跨重启后台提醒。',
-      parameters: { type: 'object', properties: { id: { type: 'string', description: '模板 ID：json-tool、markdown-report、time-calculator、currency-converter、desktop-timer；省略则列出。' } }, additionalProperties: false },
-      async execute(raw, ctx) { try { authorize(ctx); const input = z.object({ id: z.string().optional() }).strict().parse(raw ?? {}); return ok(input.id === undefined ? { templates: listPluginTemplates(), protocol: PLUGIN_TEMPLATE_PROTOCOL, contributions: PLUGIN_CONTRIBUTION_CATALOGUE } : { template: getPluginTemplate(input.id) }) } catch (error) { return failure(error) } } },
+    { name: 'plugin_get_template', displayName: '插件工程模板', description: '只读发现标准模板和真实工程协议；大结果返回紧凑目录，不截断源码。无id发现模板，传id读模板；用section:manifest读精确清单JSON，section:file+file读原始源码，section:protocol+protocol读uiBridge/uiTheme/download等单字段，section:contributions读完整能力目录。分页返回content/offset/nextOffset/totalChars/revision，连续拼接content至nextOffset=null，续读携带同一revision；不要猜未读取的协议或源码。匹配模板时用plugin_create({templateId:模板id,id:新插件id})由宿主复用完整工程，不必复录。desktop-timer不支持跨重启提醒。',
+      parameters: { type: 'object', properties: { id: { type: 'string', description: '模板 ID：json-tool、markdown-report、time-calculator、currency-converter、desktop-timer；省略则发现模板及读取公共协议。' }, ...pluginReadProperties }, additionalProperties: false },
+      async execute(raw, ctx) { try { authorize(ctx); return readPluginTemplate(raw, ctx) } catch (error) { return pluginReadFailure(error, ctx) } } },
     { name: 'plugin_list', displayName: '插件目录', description: '列出本租户插件，包括草稿、停用插件和发布版本；返回准确 globalToolNames/toolNameMap、selectionId 与 publishedSelectionId。selectionId 只对应当前已发布修订，草稿为null。发布不会自动扩大当前请求的工具范围。', parameters: { type: 'object', properties: {}, additionalProperties: false },
       async execute(_raw, ctx) { try { authorize(ctx); return ok({ plugins: (await service.list(ctx.tenantId)).map(pluginSummary) }) } catch (error) { return failure(error) } } },
-    { name: 'plugin_get', displayName: '插件详情', description: '读取插件完整清单、源码、版本和准确 globalToolNames/toolNameMap，编辑前调用。selectionId 对应当前已发布修订，未发布草稿为null；publishedSelectionId 可指向仍可用的旧发布版。', parameters: { type: 'object', properties: { id }, required: ['id'], additionalProperties: false },
-      async execute(raw, ctx) { try { authorize(ctx); return ok(await service.get(ctx.tenantId, validatePluginId((raw as { id?: unknown })?.id))) } catch (error) { return failure(error) } } },
+    { name: 'plugin_get', displayName: '插件详情', description: '只读本租户插件；大结果返回文件目录与读取提示。编辑前用section:manifest读精确清单JSON、section:file+file读所需原始源码、section:metadata读准确globalToolNames/toolNameMap和发布选择ID。每页返回content/offset/nextOffset/totalChars/revision；连续拼接content至nextOffset=null，续读固定revision，版本变化明确报错。不能把目录当完整源码重写。section:protocol+protocol可读uiBridge/uiTheme/download等协议。小结果保持完整详情。', parameters: { type: 'object', properties: { id, ...pluginReadProperties }, required: ['id'], additionalProperties: false },
+      async execute(raw, ctx) { try { authorize(ctx); return await readManagedPlugin(service, raw, ctx) } catch (error) { return pluginReadFailure(error, ctx) } } },
     { name: 'plugin_import_preview', displayName: '预览插件导入', description: '检查原生插件或GitHub Remark插件，不执行插件。支持 {type:"local",path}、{type:"zip",path或base64}、{type:"github",repository:"https://github.com/owner/repo",ref?,subdirectory?,format:"native"或"remark"}；原生包需要 aether-plugin.json。已生成本地工程时，传工程绝对路径预览后用 plugin_import_install(jobId) 安装，避免逐个读回并复录源码；随后 plugin_test、plugin_publish。返回jobId用于安装。',
       parameters: { type: 'object', required: ['type'], properties: { type: { type: 'string', enum: ['local', 'zip', 'github'] }, path: { type: 'string' }, base64: { type: 'string' }, repository: { type: 'string' }, ref: { type: 'string' }, subdirectory: { type: 'string' }, format: { type: 'string', enum: ['native', 'remark'] } } },
       async execute(raw, ctx) { try { authorize(ctx); const job = await importer.previewImport(ctx.tenantId, raw as PluginImportInput, ctx.signal); const { files: _files, ...summary } = job; return ok(summary) } catch (error) { return failure(error) } } },

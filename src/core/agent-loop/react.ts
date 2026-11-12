@@ -30,6 +30,7 @@ import { estimateModelHistoryTokens, estimateModelMessageTokens, modelMessageCon
 import { createHash } from 'node:crypto'
 import { browserOutputFramePayload, browserOutputPresentation } from '../utils/browser-output.js'
 import { DEFAULT_PUBLICATION_MAX_BYTES } from '../stream-pipeline/publication-queue.js'
+import { pendingWireFrames, publicPending } from '../stream-pipeline/public-pending.js'
 import { imageDimensions, imageDocumentPage, imageFileVersion, imageToolFramePayload, imageToolPayload, MAX_NATIVE_IMAGE_BASE64_CHARS } from '../utils/multimodal-context.js'
 import { captureFileEvidence, captureFileBatchEvidence, captureOfficeEvidence, captureScreenshotEvidence, clearedToolModelContent, isClearedToolMessage, TOOL_FILE_EVIDENCE_KEY, TOOL_FILE_BATCH_EVIDENCE_KEY, TOOL_OFFICE_EVIDENCE_KEY, TOOL_SCREENSHOT_EVIDENCE_KEY, CLEARED_TOOL_EVIDENCE_KEY, CLEARED_TOOL_RESULT } from '../utils/tool-evidence.js'
 import { buildRuntimeCapabilitiesContext, RUNTIME_CAPABILITIES_GUIDANCE } from '../runtime-capabilities.js'
@@ -1779,12 +1780,9 @@ export class ReActStrategy implements LoopStrategy {
           // Only now are every sibling result and its history anchor durable.
           // Parking before this point allows an answer to race old tool receipts.
           await ctx.commitPending?.(pending)
-          yield `\x00__ask_user__${JSON.stringify({ ...pending.args, question: pending.question,
-            options: pending.options, toolCallId: pending.toolCallId, requestId: pending.requestId })}`
-          yield `\x00__permission_request__${JSON.stringify({ ...pending, sessionId: ctx.sessionId,
-            description: pending.question, rootRunId: ctx.rootRunId, turnId: ctx.turnId })}`
+          yield* pendingWireFrames(pending, ctx)
           await ctx.runObserver?.onOutcome?.({ status: 'blocked', stopReason: pending.kind === 'ask' ? 'needs_user' : 'permission',
-            error: { retryable: false, code: pending.kind === 'ask' ? 'NEEDS_USER' : 'PERMISSION_REQUIRED', message: pending.question ?? 'User input required' } })
+            error: { retryable: false, code: pending.kind === 'ask' ? 'NEEDS_USER' : 'PERMISSION_REQUIRED', message: publicPending(pending).question ?? 'User input required' } })
           return
         }
         if (ctx.parentSessionId && ctx.runId) {

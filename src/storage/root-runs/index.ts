@@ -11,6 +11,7 @@ import { ensureUserAdmissionSchema, readDatabaseNamespace, lookupUserAdmission, 
 import { bindServerAdmissionSeed, ensureServerAdmissionSchema, prepareServerAdmissionInput, readServerAdmissionSeed, type ServerAdmissionReceipt } from '../root-admission/server-seed.js'
 import { canonicalAdmissionBody } from '../root-admission/index.js'
 import { ensureSessionToolkitsSchema, persistSessionToolkits } from '../session/toolkits.js'
+import { publicPending, publicPermissionText } from '../../core/stream-pipeline/public-pending.js'
 
 export type { CompactionState } from '../../core/subagent/types.js'
 
@@ -186,7 +187,9 @@ export class RootRunStore {
     const { request, attemptId: _attemptId, requestConfig: _storedConfig, ...result } = run
     if (result.status !== 'running') delete result.activity
     // Reproject the private request on every read, including old database rows.
-    return { ...result, requestConfig: publicRequestConfig(request) }
+    return { ...result, pending: result.pending.map(publicPending),
+      ...(result.error?.code === 'PERMISSION_REQUIRED' ? { error: { ...result.error, message: publicPermissionText(result.error.message) } } : {}),
+      requestConfig: publicRequestConfig(request) }
   }
 
   async list(tenantId: string, sessionId: string): Promise<RootRun[]> {

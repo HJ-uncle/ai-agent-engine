@@ -2,7 +2,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { unzipSync } from 'fflate'
+import { readPluginZip } from './zip.js'
+export { readPluginZip } from './zip.js'
 import { stopCommandProcessTree } from '../core/command-jobs/process-tree.js'
 import { validatePluginInput, type PluginService } from './service.js'
 import { PluginError, type PluginManifest, type PluginRecord } from './types.js'
@@ -61,52 +62,6 @@ async function rejectLinks(filename: string): Promise<void> {
 function jsonObject(value: string, label: string): Record<string, any> {
   try { const result = JSON.parse(value); if (!result || typeof result !== 'object' || Array.isArray(result)) return fail(`${label} must be an object`); return result }
   catch { return fail(`${label} is invalid JSON`) }
-}
-
-/** Inspect the ZIP directory before allocating expanded buffers. No archive path is written to disk. */
-export function readPluginZip(input: Uint8Array): Record<string, Uint8Array> {
-  if (input.length < 22 || input.length > MAX_ARCHIVE) return fail('Plugin ZIP is invalid or exceeds 32 MiB')
-  const bytes = Buffer.from(input.buffer, input.byteOffset, input.byteLength)
-  let end = -1
-  for (let offset = bytes.length - 22; offset >= Math.max(0, bytes.length - 65557); offset--) {
-    if (bytes.readUInt32LE(offset) === 0x06054b50 && offset + 22 + bytes.readUInt16LE(offset + 20) === bytes.length) { end = offset; break }
-  }
-  if (end < 0) return fail('Invalid plugin ZIP directory')
-  const count = bytes.readUInt16LE(end + 10), directory = bytes.readUInt32LE(end + 16), size = bytes.readUInt32LE(end + 12)
-  if (!count || count > 4096 || bytes.readUInt16LE(end + 4) || bytes.readUInt16LE(end + 6) || bytes.readUInt16LE(end + 8) !== count || directory + size !== end) return fail('Unsupported plugin ZIP directory')
-  const entries = new Map<string, { size: number; compressed: number; method: number }>()
-  const names = new Set<string>(), ranges: { start: number; end: number }[] = []
-  let cursor = directory, expanded = 0
-  for (let index = 0; index < count; index++) {
-    if (cursor + 46 > end || bytes.readUInt32LE(cursor) !== 0x02014b50) return fail('Invalid plugin ZIP entry')
-    const flags = bytes.readUInt16LE(cursor + 8), method = bytes.readUInt16LE(cursor + 10)
-    const compressed = bytes.readUInt32LE(cursor + 20), length = bytes.readUInt32LE(cursor + 24)
-    const nameLength = bytes.readUInt16LE(cursor + 28), extraLength = bytes.readUInt16LE(cursor + 30), commentLength = bytes.readUInt16LE(cursor + 32)
-    const local = bytes.readUInt32LE(cursor + 42), next = cursor + 46 + nameLength + extraLength + commentLength
-    if (next > end || !nameLength || flags & 1 || ![0, 8].includes(method) || bytes.readUInt16LE(cursor + 34) || ((bytes.readUInt32LE(cursor + 38) >>> 16) & 0xf000) === 0xa000) return fail('Encrypted, linked or unsupported plugin ZIP entry')
-    const nameBytes = bytes.subarray(cursor + 46, cursor + 46 + nameLength), name = UTF8.decode(nameBytes)
-    safeName(name.replace(/\/$/, ''))
-    if (names.has(name.toLowerCase())) return fail('Duplicate plugin ZIP entry')
-    names.add(name.toLowerCase())
-    expanded += length
-    if (length > MAX_EXPANDED || compressed > MAX_ARCHIVE || expanded > MAX_EXPANDED || (method === 0 && length !== compressed)) return fail('Plugin ZIP exceeds extraction limits')
-    if (local + 30 > directory || bytes.readUInt32LE(local) !== 0x04034b50 || bytes.readUInt16LE(local + 6) !== flags || bytes.readUInt16LE(local + 8) !== method) return fail('Plugin ZIP local header mismatch')
-    const localNameLength = bytes.readUInt16LE(local + 26), data = local + 30 + localNameLength + bytes.readUInt16LE(local + 28)
-    if (data + compressed > directory || !bytes.subarray(local + 30, local + 30 + localNameLength).equals(nameBytes)) return fail('Invalid plugin ZIP data boundary')
-    if (!(flags & 8) && (bytes.readUInt32LE(local + 18) !== compressed || bytes.readUInt32LE(local + 22) !== length || bytes.readUInt32LE(local + 14) !== bytes.readUInt32LE(cursor + 16))) return fail('Plugin ZIP metadata mismatch')
-    ranges.push({ start: local, end: data + compressed })
-    entries.set(name, { size: length, compressed, method }); cursor = next
-  }
-  if (cursor !== end) return fail('Invalid plugin ZIP trailer')
-  ranges.sort((a, b) => a.start - b.start)
-  if (ranges.some((entry, index) => index > 0 && entry.start < ranges[index - 1].end)) return fail('Overlapping plugin ZIP entries')
-  const output = unzipSync(input, { filter: item => {
-    const entry = entries.get(item.name)
-    if (!entry || item.originalSize !== entry.size || item.size !== entry.compressed || item.compression !== entry.method) return fail('Plugin ZIP metadata changed')
-    return !item.name.endsWith('/')
-  } })
-  for (const [name, content] of Object.entries(output)) if (content.length !== entries.get(name)?.size) return fail('Plugin ZIP length mismatch')
-  return output
 }
 
 async function boundedFile(filename: string, max = MAX_FILE): Promise<Buffer> {
@@ -251,7 +206,7 @@ export class PluginImporter {
         if (Boolean(input.path) === Boolean(input.base64)) return fail('Provide exactly one ZIP path or base64 payload')
         let bytes: Buffer
         if (input.path) { if (typeof input.path !== 'string' || !path.isAbsolute(input.path) || (await fs.lstat(input.path)).isSymbolicLink()) return fail('ZIP path must be an absolute regular file'); bytes = await boundedFile(input.path, MAX_ARCHIVE); job.source.path = input.path }
-        else { if (typeof input.base64 !== 'string' || input.base64.length > Math.ceil(MAX_ARCHIVE / 3) * 4 || !/^(?:[A-Za-z\d+/]{4})*(?:[A-Za-z\d+/]{2}==|[A-Za-z\d+/]{3}=)?$/.test(input.base64)) return fail('Invalid ZIP base64 payload'); bytes = Buffer.from(input.base64, 'base64') }
+        else { if (typeof input.base64 !== 'string' || input.base64.length > Math.ceil(MAX_ARCHIVE / 3) * 4 || input.base64.length % 4 !== 0 || !/^[A-Za-z\d+/]*={0,2}$/.test(input.base64)) return fail('Invalid ZIP base64 payload'); bytes = Buffer.from(input.base64, 'base64') }
         all = readPluginZip(bytes); job.source.archiveSha256 = digest(bytes)
         if (!all['aether-plugin.json'] && !all['package.json']) { const roots = new Set(Object.keys(all).map(name => name.split('/')[0])); if (roots.size === 1 && Object.keys(all).every(name => name.includes('/'))) prefix = [...roots][0] + '/' }
       } else {

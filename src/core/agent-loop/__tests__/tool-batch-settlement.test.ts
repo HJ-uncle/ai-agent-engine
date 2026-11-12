@@ -125,6 +125,29 @@ describe('D3 batch side effects and terminal evidence', () => {
     expect(frames.join('')).toContain('[Error: Synthetic park receipt unknown]')
     expect(f.ctx.tools.execute).not.toHaveBeenCalled()
   })
+  it('parks complete approval authority before publishing bounded permission frames through the real ReAct loop', async () => {
+    const source = 'SOURCE_FOR_APPROVAL '.repeat(3000)
+    const f = fixture([{ id: 'large-approval', name: 'plugin_update', args: { id: 'plugin', files: { 'main.mjs': source } } }])
+    const pendingAction = { type: 'plugin_update', reason: '确认内容🙂'.repeat(100000), operation: { input: { files: { 'main.mjs': source }, retained: 'sealed'.repeat(200000) } } }
+    f.ctx.tools.preflight = vi.fn(async () => ({ success: false, output: 'Approval required', needsConfirmation: true, pendingAction }))
+    let committed: Pending | undefined
+    f.ctx.commitPending = async pending => { committed = structuredClone(pending) }
+    const frames = await f.run()
+    expect(committed?.pendingAction).toEqual(pendingAction)
+    expect(committed?.args.files).toEqual({ 'main.mjs': source })
+    expect(Buffer.byteLength(JSON.stringify(committed))).toBeGreaterThan(1024 * 1024)
+    const permissions = frames.filter(frame => frame.startsWith('\x00__permission_request__') || frame.startsWith('\x00__ask_user__'))
+    expect(permissions).toHaveLength(2)
+    expect(permissions.join('')).not.toContain('pendingAction')
+    expect(permissions.join('')).not.toContain('SOURCE_FOR_APPROVAL')
+    expect(permissions.join('')).toContain('展示摘要')
+    const bus = new StreamBus(new AbortController())
+    for (const frame of frames) await bus.publish(frame)
+    await bus.endOrdered()
+    expect(bus.snapshot().publicationRecovery).toBeUndefined()
+    expect(f.outcomes.at(-1)).toMatchObject({ status: 'blocked', stopReason: 'permission' })
+    expect(f.ctx.tools.execute).not.toHaveBeenCalled()
+  })
   it('keeps the complete tool result in Code mode instead of applying the chat truncation cap', async () => {
     const f = fixture([call('large', 'read_file')])
     const content = 'source line\n'.repeat(1_000)

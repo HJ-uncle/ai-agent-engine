@@ -1,5 +1,4 @@
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { Ajv } from 'ajv'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -12,16 +11,29 @@ import * as templates from '../templates.js'
 import type { CreatePluginInput, PluginRecord } from '../types.js'
 
 let root: string, service: PluginService
+const fixtures = path.resolve('.e2e-tmp/plugin-template-create-tests')
 const ctx = { tenantId: 'default', sessionId: 'template-create' } as AgentContext
 beforeEach(() => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-template-create-'))
+  fs.mkdirSync(fixtures, { recursive: true })
+  root = fs.mkdtempSync(path.join(fixtures, 'case-'))
   service = new PluginService(path.join(root, 'plugins'))
   vi.stubEnv('AUTH_ENABLED', 'false')
 })
 afterEach(() => {
   vi.restoreAllMocks(); vi.unstubAllEnvs()
-  if (path.dirname(root) !== path.resolve(os.tmpdir()) || !path.basename(root).startsWith('plugin-template-create-')) throw new Error('Unsafe template fixture cleanup')
-  fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  if (path.dirname(root) !== fixtures || !path.basename(root).startsWith('case-')) throw new Error('Unsafe template fixture cleanup')
+  function removeOwned(directory: string): void {
+    if (fs.lstatSync(directory).isSymbolicLink()) throw new Error('Refusing linked template fixture cleanup')
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name)
+      if (fs.lstatSync(file).isSymbolicLink()) throw new Error('Refusing linked template fixture cleanup')
+      if (entry.isDirectory()) removeOwned(file); else fs.unlinkSync(file)
+    }
+    if (fs.readdirSync(directory).length) throw new Error('Template fixture directory is not empty')
+    fs.rmdirSync(directory)
+  }
+  removeOwned(root)
+  if (!fs.readdirSync(fixtures).length) fs.rmdirSync(fixtures)
 })
 
 async function prepare(tool: Tool, args: Record<string, unknown>) {
@@ -111,7 +123,8 @@ describe('approved template creation', () => {
     const created = JSON.parse(result.output)
     expect(created).toMatchObject({ id: 'precise-currency', enabled: false, revision: 1, selectionId: null,
       globalToolNames: ['plugin_precise_currency_convert'], toolNameMap: { convert: 'plugin_precise_currency_convert' } })
-    expect(created.files['main.mjs']).toBe(approvedSource)
+    expect(created).not.toHaveProperty('files')
+    expect((await service.get('default', created.id)).files['main.mjs']).toBe(approvedSource)
     const snapshot = await service.snapshot('default', created.id, 1, { allowDraft: true })
     const exact = await runPlugin(snapshot, 'convert', { amount: 1.005, from: 'USD', to: 'CNY', rate: 3 })
     expect(exact.result).toMatchObject({ converted: 3.02, formatted: '3.02 CNY' })

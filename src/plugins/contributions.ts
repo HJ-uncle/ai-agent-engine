@@ -44,6 +44,10 @@ export const PLUGIN_CONTRIBUTION_CATALOGUE = {
   renderers: ['tool', 'webview'], scopes: ['global', 'session'],
   conditions: ['session', 'workspace', 'engineReady'],
   schema: PLUGIN_CONTRIBUTION_JSON_SCHEMA,
-  webview: { entry: 'Package-relative self-contained .html file', bridge: ['context', 'invoke', 'navigate', 'service.start', 'service.stop', 'service.status', 'service.get'], network: false, hostIPC: false },
+  webview: { entry: 'Package-relative self-contained .html file', bridge: ['context', 'invoke', 'navigate', 'download', 'service.start', 'service.stop', 'service.status', 'service.get'],
+    context: '{sessionId:string|null,workspacePath:string|null,engineReady:boolean,pluginId:string,revision:number}',
+    invoke: { input: '(localToolName,args)', output: '{result,artifacts,stderr,durationMs,plugin:{id,revision,hash}}', businessResult: 'response.result' },
+    themeTokens: ['--bg-app', '--bg-surface', '--bg-elevated', '--bg-input', '--bg-hover', '--bg-active', '--fg', '--fg-strong', '--fg-muted', '--fg-faint', '--accent', '--accent-hover', '--accent-fg', '--accent-soft', '--border', '--border-strong'],
+    download: { input: '{fileName:string,content:string,encoding?:"utf8"|"base64"}', output: '{saved:boolean,bytes?:number}', maxBytes: 16777216, nativeSaveDialog: true }, network: false, hostIPC: false },
   services: { actions: ['tool', 'stopTool', 'statusTool'], result: { status: ['idle', 'running', 'waiting', 'completed', 'stopped', 'error'], detail: 'string', completesAt: 'optional Unix milliseconds; host notifies while the desktop is open' } },
 } as const

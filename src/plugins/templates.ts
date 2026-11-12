@@ -14,7 +14,11 @@ export const PLUGIN_TEMPLATE_PROTOCOL = Object.freeze({
   files: '标准工程包含 aether-plugin.json、main.mjs、README.md、examples/cases.json、package.json、scripts/test.mjs；清单是唯一配置来源。只使用 Node 内置库和包内文件，不自动安装依赖。',
   examples: 'examples/cases.json 使用 {cases:[{name,tool,args,expected}]}；expected 精确匹配 result。独立 npm test 验证业务断言，不替代宿主 inputSchema、产物路径/大小校验；通过后仍需引擎 check/test 或管理页测试，再发布。',
   authoring: '基于最接近的模板做必要修改，复用已有且经过验证的实现与边界用例，不要为了改名称或添加展示字段重写核心算法。测试除常规输入外还需覆盖该业务的精度、零值、非法输入和范围边界；实际没有执行的案例不得宣称通过。',
-  ui: '发布并启用后，宿主加载 manifest.contributes 中声明的 pages/navigation/workspaceTabs/services。tool 页面按 inputSchema 生成原生表单；webview 页面加载包内自包含 HTML，运行于 sandbox=allow-scripts 的不透明源 iframe，禁止网络、任意 Electron IPC 与宿主 React 导入。自定义 UI 通过 window.aetherPlugin 调用当前页面 tools 白名单、读取上下文和服务状态。不要用独立 HTML 产物冒充应用内插件页面。',
+  ui: '发布并启用后，宿主加载 manifest.contributes 中声明的 pages/navigation/workspaceTabs/services。tool 页面按 inputSchema 生成原生表单；webview 页面加载包内自包含 HTML，运行于 sandbox="allow-scripts allow-forms" 的不透明源 iframe，禁止网络、表单导航、任意 Electron IPC 与宿主 React 导入。自定义 UI 通过 window.aetherPlugin 调用当前页面 tools 白名单、读取上下文和服务状态。不要用独立 HTML 产物冒充应用内插件页面。',
+  download: '自定义页面使用 await aetherPlugin.download({fileName:"report.json",content:"...",encoding:"utf8"})，encoding 可为 utf8（默认）或 base64。用户点击导出后由宿主显示原生保存对话框，返回 {saved:boolean,bytes?:number}，不返回本机路径。fileName 必须是单文件名，不含路径，解码后最多 16 MiB；图片可在 iframe 本地 Canvas 处理后 base64 导出，无需传给 Node 工具。不要使用被沙箱禁止的 a[download] 或网络上传代替。',
+  uiBridge: 'await aetherPlugin.invoke(tool,args) 返回完整调用回执 {result,artifacts,stderr,durationMs,plugin:{id,revision,hash}}；业务结果位于 receipt.result，不能直接把回执当业务结果。await aetherPlugin.context() 返回扁平 {sessionId:string|null,workspacePath:string|null,engineReady:boolean,pluginId:string,revision:number}，没有 session/workspace 嵌套对象。context 仅提供当前页面上下文，invoke 不会自动填充工具的 root/workspace 参数，页面应显式传入。',
+  uiTheme: '页面应使用宿主实际提供的 CSS 变量：--bg-app、--bg-surface、--bg-elevated、--bg-input、--bg-hover、--bg-active、--fg、--fg-strong、--fg-muted、--fg-faint、--accent、--accent-hover、--accent-fg、--accent-soft、--border、--border-strong。color-scheme 与 data-appearance 自动随宿主 light/dark 更新。不要猜测 --background、--foreground、--primary 等其他框架变量。',
+  limits: '每次 Node 工具调用的整份 JSON 输入默认最多 256 KiB，输出最多 2 MiB，最多 16 个 artifacts 且解码内容合计最多 2 MiB；不能用 inputSchema.maxLength 扩大宿主限制。页面应检查实际 UTF-8 输入大小并显示明确范围，或分批处理。自定义页面 download 是独立的用户保存通道，解码后最大 16 MiB，不等于工具输入限制。',
   background: '每次工具调用启动独立 Node 进程，完成即退出。contributes.services 绑定 tool/stopTool/statusTool，宿主保留服务状态与 completesAt 截止时间并在桌面打开时通知；停用、版本替换、连接切换会卸载并清理。当前不提供关闭应用后的后台进程、系统闹钟或跨重启服务恢复；不要宣称支持这些能力。',
 } as const)
 

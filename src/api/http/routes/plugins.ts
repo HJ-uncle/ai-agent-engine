@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { PluginService } from '../../../plugins/service.js'
 import { PluginImporter, type PluginImportInput } from '../../../plugins/importer.js'
+import { previewPluginImportBatch, type PluginBatchImportInput } from '../../../plugins/batch-import.js'
 import { assertPluginManagementAccess } from '../../../plugins/access.js'
 import { pluginSummary } from '../../../plugins/catalogue.js'
 import { runPlugin } from '../../../plugins/runtime.js'
@@ -90,6 +91,14 @@ export async function pluginRoutes(app: FastifyInstance) {
       if (preparedError.jobId && ['failed', 'cancelled'].includes(preparedError.importStatus ?? '')) return fail(preparedError.statusCode ?? 50000, preparedError.message, { import: { jobId: preparedError.jobId, status: preparedError.importStatus, error: preparedError.message } })
       throw error
     }
+  })
+  app.post('/plugins/imports/preview-batch', { bodyLimit: 32 * 1024 * 1024 }, async (request, reply) => {
+    const tid = tenant(request), abort = new AbortController()
+    const onAbort = () => abort.abort()
+    const onClose = () => { if (!reply.raw.writableEnded) abort.abort() }
+    request.raw.once('aborted', onAbort); reply.raw.once('close', onClose)
+    try { return success(await previewPluginImportBatch(importer, tid, request.body as PluginBatchImportInput, abort.signal)) }
+    finally { request.raw.off('aborted', onAbort); reply.raw.off('close', onClose) }
   })
   app.get('/plugins/imports/:jobId', async request => {
     const { files: _files, ...job } = await importer.getImport(tenant(request), jobId(request))
