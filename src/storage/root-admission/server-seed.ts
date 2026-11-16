@@ -6,10 +6,11 @@ import type { RootRun } from '../root-runs/index.js'
 import type { CronAutomationRun } from '../cron/runs.js'
 import type { AdmissionSeed } from './projection.js'
 import { admissionError, canonicalAdmissionBody, readDatabaseNamespace, type EngineDatabaseNamespace } from './index.js'
+import { markedPluginRootProvenance, readPluginRootProvenance, type PluginRootProvenance } from './plugin-owner.js'
 
 type Query = Pick<Client, 'execute'>
 type Scope = { tenantId: string; sessionId: string }
-interface PreparedServerInput { content: Message['content']; metadata: Record<string, unknown> }
+interface PreparedServerInput { content: Message['content']; metadata: Record<string, unknown>; pluginOwner?: Readonly<PluginRootProvenance> }
 export interface ServerAdmissionReceipt {
   protocolVersion: 1
   authority: 'server-root-admission'
@@ -18,6 +19,7 @@ export interface ServerAdmissionReceipt {
   userMessageId: string; assistantMessageId: string; attemptId: string
   rootVersion: number; rootSequence: number; acceptedAt: number; userSeedDigest: string
   provenance: { kind: 'legacy-chat' } | { kind: 'cron'; runId: string; jobId: string; jobRevision: number; scheduleRevision: number }
+    | ({ kind: 'plugin-agent' } & PluginRootProvenance)
 }
 const schemas = new WeakMap<Client, Promise<void>>()
 const digest = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -34,7 +36,8 @@ export function prepareServerAdmissionInput(request: Record<string, unknown>): P
     return attachmentHistoryMetadata({ ...attachment, name: attachment.name,
       ...(typeof attachment.type === 'string' ? { type: attachment.type } : {}) })
   })
-  return JSON.parse(canonicalAdmissionBody({ content: request.message, metadata })) as PreparedServerInput
+  const pluginOwner = markedPluginRootProvenance(request)
+  return JSON.parse(canonicalAdmissionBody({ content: request.message, metadata, ...(pluginOwner ? { pluginOwner } : {}) })) as PreparedServerInput
 }
 export function ensureServerAdmissionSchema(db: Client): Promise<void> {
   let pending = schemas.get(db)
@@ -54,6 +57,7 @@ export function ensureServerAdmissionSchema(db: Client): Promise<void> {
 export async function bindServerAdmissionSeed(tx: Transaction, tenantId: string, input: PreparedServerInput,
   run: RootRun & { attemptId: string }, automation: CronAutomationRun | null): Promise<ServerAdmissionReceipt> {
   if (automation && canonicalAdmissionBody(input.content) !== canonicalAdmissionBody(automation.snapshot.message)) admissionError('AUTOMATION_ADMISSION_SEED_CONFLICT')
+  if (automation && input.pluginOwner) admissionError('PLUGIN_ROOT_OWNER_CONFLICT')
   const message = { id: run.userMessageId, role: 'user' as const, content: input.content, createdAt: run.createdAt,
     conversationId: run.turnId, metadata: { ...input.metadata, rootRunId: run.runId, turnId: run.turnId } }
   const seedJson = JSON.stringify(message)
@@ -61,7 +65,8 @@ export async function bindServerAdmissionSeed(tx: Transaction, tenantId: string,
     tenantId, sessionId: run.sessionId, rootRunId: run.runId, turnId: run.turnId, userMessageId: run.userMessageId,
     assistantMessageId: run.assistantMessageId, attemptId: run.attemptId, rootVersion: run.version, rootSequence: run.seq, acceptedAt: run.createdAt,
     userSeedDigest: digest(seedJson), provenance: automation ? { kind: 'cron', runId: automation.id, jobId: automation.jobId,
-      jobRevision: automation.jobRevision, scheduleRevision: automation.scheduleRevision } : { kind: 'legacy-chat' } }
+      jobRevision: automation.jobRevision, scheduleRevision: automation.scheduleRevision }
+      : input.pluginOwner ? { kind: 'plugin-agent', ...input.pluginOwner } : { kind: 'legacy-chat' } }
   await tx.execute({ sql: 'INSERT INTO server_root_admission_seeds VALUES(?,?,?,?,?,?,?,NULL)',
     args: [tenantId, run.sessionId, run.runId, run.userMessageId, run.assistantMessageId, seedJson, JSON.stringify(receipt)] })
   return receipt
@@ -70,7 +75,7 @@ export async function bindServerAdmissionSeed(tx: Transaction, tenantId: string,
 export async function readServerAdmissionSeed(query: Query, scope: Scope, rootRunId: string): Promise<AdmissionSeed> {
   const rootRow = (await query.execute({ sql: 'SELECT state FROM root_runs WHERE tenant_id=? AND session_id=? AND run_id=?', args: [scope.tenantId, scope.sessionId, rootRunId] })).rows[0]
   if (!rootRow) admissionError('ADMISSION_SEED_UNAVAILABLE', 503)
-  let root: RootRun & { attemptId: string }
+  let root: RootRun & { attemptId: string; request: Record<string, unknown> }
   try { root = JSON.parse(String(rootRow.state)) as typeof root } catch { admissionError('ADMISSION_SEED_CORRUPT', 503) }
   // Existing readable legacy IDs are deliberately insufficient; never backfill them on a read.
   if (root!.admissionReceipt || !root!.serverAdmissionReceipt) admissionError('ADMISSION_SEED_UNAVAILABLE', 503)
@@ -88,7 +93,12 @@ export async function readServerAdmissionSeed(query: Query, scope: Scope, rootRu
       || message.metadata?.rootRunId !== rootRunId || message.metadata?.turnId !== root!.turnId
       || message.createdAt !== receipt.acceptedAt || receipt.acceptedAt !== root!.createdAt
       || !receipt.attemptId || receipt.rootVersion !== 1 || receipt.rootVersion > root!.version || !Number.isSafeInteger(receipt.rootSequence) || receipt.rootSequence < 1 || receipt.rootSequence !== root!.seq
-      || !['legacy-chat', 'cron'].includes(receipt.provenance.kind)) throw new Error('Invalid server seed')
+      || !['legacy-chat', 'cron', 'plugin-agent'].includes(receipt.provenance.kind)) throw new Error('Invalid server seed')
+    const pluginOwner = readPluginRootProvenance(root!.request)
+    if (receipt.provenance.kind === 'plugin-agent') {
+      const { kind: _kind, ...owner } = receipt.provenance
+      if (!pluginOwner || canonicalAdmissionBody(pluginOwner) !== canonicalAdmissionBody(owner)) throw new Error('Invalid plugin root ownership')
+    } else if (pluginOwner) throw new Error('Missing plugin root ownership')
     if (receipt.provenance.kind === 'cron') {
       const occurrence = (await query.execute({ sql: 'SELECT job_id,job_revision,schedule_revision,root_run_id,snapshot_json FROM cron_runs WHERE tenant_id=? AND id=?', args: [scope.tenantId, receipt.provenance.runId] })).rows[0]
       if (!occurrence || occurrence.root_run_id !== rootRunId || occurrence.job_id !== receipt.provenance.jobId

@@ -1,4 +1,5 @@
 import type { IToolRegistry, Tool } from '../core/agent-context/types.js'
+import { inheritPluginAgentRegistryAuthority } from './agent-registry-authority.js'
 
 export interface PluginToolIdentity { tenantId: string; id: string; revision: number; hash: string }
 /** Server-persisted code identity, separate from model-visible tool definitions. */
@@ -31,6 +32,7 @@ export function pluginRegistryBindings(registry: IToolRegistry): PluginToolkitBi
 }
 /** Carry trusted identities across server-built permission views; never hydrate them from client definitions. */
 export function inheritPluginRegistryBindings(target: IToolRegistry, ...parents: IToolRegistry[]): void {
+  inheritPluginAgentRegistryAuthority(target, ...parents)
   const bindings = new Map<string, PluginToolIdentity & { registrationVersion?: number }>()
   for (const parent of parents) for (const group of pluginRegistryBindings(parent)) for (const name of group.toolNames) {
     if (target.has(name)) bindings.set(name, { tenantId: group.tenantId, id: group.id, revision: group.revision, hash: group.hash, registrationVersion: target.modelToolRegistrationVersion?.(name) })

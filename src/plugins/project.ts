@@ -9,7 +9,6 @@ import { getPluginTemplate } from './templates.js'
 import { pluginProjectPackage } from './project-runner.js'
 import { PluginError, type CreatePluginInput, type PluginManifest, type PluginSnapshot } from './types.js'
 
-const MAX_BYTES = 8 * 1024 * 1024
 const utf8 = new TextDecoder('utf-8', { fatal: true })
 
 function noLinks(filename: string): void {
@@ -26,7 +25,6 @@ export function readPluginProject(directory: string): CreatePluginInput {
   const root = path.resolve(directory)
   noLinks(root)
   const files: Record<string, string> = Object.create(null)
-  let bytes = 0, count = 0
   const visit = (folder: string, prefix: string): void => {
     for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
       if (entry.name === '.git') continue
@@ -34,9 +32,8 @@ export function readPluginProject(directory: string): CreatePluginInput {
       validatePluginPath(relative)
       const filename = path.join(folder, entry.name), stat = fs.lstatSync(filename)
       if (stat.isSymbolicLink()) throw new PluginError('PLUGIN_LINK', '插件工程不接受符号链接或目录联接')
-      if (++count > 300) throw new PluginError('PLUGIN_LIMIT', '插件工程文件或目录过多')
       if (stat.isDirectory()) { visit(filename, relative + '/'); continue }
-      if (!stat.isFile() || stat.size > 1024 * 1024 || (bytes += stat.size) > MAX_BYTES) throw new PluginError('PLUGIN_LIMIT', '插件工程超过大小限制或含非常规文件')
+      if (!stat.isFile()) throw new PluginError('PLUGIN_FILES', '插件工程只能包含普通文件')
       const data = fs.readFileSync(filename)
       if (data.byteLength !== stat.size) throw new PluginError('PLUGIN_CONFLICT', '读取期间工程文件发生变化，请重试')
       files[relative] = utf8.decode(data)
@@ -57,12 +54,17 @@ export function pluginProjectFiles(input: CreatePluginInput): Record<string, str
 }
 
 export function createPluginProject(directory: string, templateId: string, id?: string): CreatePluginInput {
+  const template = getPluginTemplate(templateId)
+  const input = { manifest: { ...template.manifest, ...(id ? { id } : {}) }, files: template.files }
+  return writePluginProject(directory, { ...input, files: { ...input.files, 'package.json': pluginProjectPackage(input.manifest) } })
+}
+
+/** Materialize a validated, already approved source snapshot without rereading templates. */
+export function writePluginProject(directory: string, input: CreatePluginInput): CreatePluginInput {
   const root = path.resolve(directory)
   noLinks(root)
   if (fs.existsSync(root)) throw new PluginError('PLUGIN_EXISTS', '目标目录已存在；创建工程不会覆盖现有文件', 409)
-  const template = getPluginTemplate(templateId)
-  const input = { manifest: { ...template.manifest, ...(id ? { id } : {}) }, files: template.files }
-  const files = pluginProjectFiles({ ...input, files: { ...input.files, 'package.json': pluginProjectPackage(input.manifest) } })
+  const files = pluginProjectFiles(input)
   fs.mkdirSync(root, { recursive: true })
   for (const [relative, content] of Object.entries(files)) {
     const filename = path.join(root, relative)
@@ -93,7 +95,7 @@ export function pluginProjectCases(input: CreatePluginInput): PluginProjectCase[
   if (!text) throw new PluginError('PLUGIN_TEST_CASES', '工程缺少 examples/cases.json，无法验证业务结果')
   let value: unknown
   try { value = JSON.parse(text) } catch { throw new PluginError('PLUGIN_TEST_CASES', 'examples/cases.json 不是有效 JSON') }
-  if (!isObject(value) || !Array.isArray(value.cases) || !value.cases.length || value.cases.length > 50) throw new PluginError('PLUGIN_TEST_CASES', 'examples/cases.json 需要 1–50 个 cases')
+  if (!isObject(value) || !Array.isArray(value.cases) || !value.cases.length) throw new PluginError('PLUGIN_TEST_CASES', 'examples/cases.json 需要非空 cases 数组')
   return value.cases.map(item => {
     if (!isObject(item) || typeof item.name !== 'string' || !item.name.trim() || typeof item.tool !== 'string' || !input.manifest.tools.some(tool => tool.name === item.tool) || !isObject(item.args) || !Object.hasOwn(item, 'expected')) throw new PluginError('PLUGIN_TEST_CASES', '每个用例需要 name、有效 tool、args 和 expected')
     return item as unknown as PluginProjectCase

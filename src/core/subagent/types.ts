@@ -32,6 +32,12 @@ export interface SubagentToolCall {
 }
 
 export interface SubagentContinuationProfile {
+  /** Plugin-owned identity and explicit mounts; omitted scopes preserve the original SDK capability scope. */
+  pluginAgent?: import('../../plugins/capability-contract.js').PluginAgentConfiguration
+  /** Server-created independent root; never a model-supplied execution identity. */
+  pluginRootRunId?: string
+  pluginRootAttemptId?: string
+  pluginResponseRequestId?: string
   /** Frozen custom-Agent configuration; a follow-up must keep the same identity and permissions. */
   agent?: {
     id: string
@@ -76,6 +82,10 @@ export interface SubagentRun extends Partial<SubagentResultMetadata> {
   parentToolName?: 'subagent' | 'subagent_start'
   childSessionId: string
   resumeFromRunId?: string
+  /** A continuation resumes the same task without manufacturing another user input. */
+  continuationMode?: 'continue' | 'followup'
+  /** Stable logical task grouping; parentConversationId still belongs to the current owner. */
+  taskTurnId?: string
   agentId?: string
   agentName?: string
   continuation?: SubagentContinuationProfile
@@ -189,9 +199,18 @@ export type CreateSubagentRun = Pick<SubagentRun, 'tenantId' | 'rootSessionId' |
   runId?: string
   childSessionId?: string
   resumeFromRunId?: string
+  continuationMode?: 'continue' | 'followup'
   agentId?: string
   agentName?: string
   continuation?: SubagentContinuationProfile
+}
+
+/** Small durable reference only: the delegated task body remains in conversation history. */
+export interface DelegatedInputAnchor {
+  inputRunId: string
+  messageId: string
+  turnId: string
+  contentHash: string
 }
 
 export type RunOutcome = {

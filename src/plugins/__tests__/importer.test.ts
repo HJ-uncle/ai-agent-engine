@@ -1,20 +1,26 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { zipSync, strToU8 } from 'fflate'
 import { PluginImporter, readPluginZip } from '../importer.js'
 import { PluginService } from '../service.js'
 import type { PluginManifest } from '../types.js'
+import { validatePluginArguments } from '../schema.js'
 
 const manifest: PluginManifest = { apiVersion: 1, id: 'import-test', name: 'Import test', version: '1.0.0', description: 'A test plugin', runtime: 'node', tools: [{ name: 'echo', description: 'Echo input', inputSchema: { type: 'object' }, entry: 'main.mjs' }] }
 const contents = { 'aether-plugin.json': JSON.stringify(manifest), 'main.mjs': 'throw new Error("IMPORT_MUST_NOT_EXECUTE")\n' }
 const archive = (files: Record<string, string>): string => Buffer.from(zipSync(Object.fromEntries(Object.entries(files).map(([name, content]) => [name, strToU8(content)])))).toString('base64')
+const fixtures = path.resolve('.e2e-tmp/plugin-importer')
 
 describe('plugin importer', () => {
   let temporary: string, service: PluginService, importer: PluginImporter
-  beforeEach(async () => { temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'aether-import-')); service = new PluginService(path.join(temporary, 'plugins')); importer = new PluginImporter(service) })
-  afterEach(async () => { vi.unstubAllGlobals(); await fs.rm(temporary, { recursive: true, force: true }) })
+  beforeEach(async () => { await fs.mkdir(fixtures, { recursive: true }); temporary = await fs.mkdtemp(path.join(fixtures, 'case-')); service = new PluginService(path.join(temporary, 'plugins')); importer = new PluginImporter(service) })
+  afterEach(async () => {
+    vi.unstubAllGlobals()
+    if (path.dirname(temporary) !== fixtures || (await fs.lstat(temporary)).isSymbolicLink()) throw new Error('Unsafe importer fixture cleanup')
+    await fs.rm(temporary, { recursive: true, force: true })
+    if (!(await fs.readdir(fixtures)).length) await fs.rmdir(fixtures)
+  })
 
   it('stages ZIP sources without executing them, then installs a disabled draft and persists its job', async () => {
     const job = await importer.previewImport('tenant-a', { type: 'zip', base64: archive(contents) })
@@ -147,6 +153,7 @@ describe('plugin importer', () => {
     }) })
     expect(job.manifest?.id).toBe('remark-fixture')
     expect(job.source.format).toBe('remark')
+    expect(() => validatePluginArguments(job.manifest!.tools[0].inputSchema, { markdown: 'x'.repeat(1_000_001) })).not.toThrow()
     expect(job.requirements?.[0]).toMatchObject({ type: 'npm', scripts: 'disabled', packages: { unified: '11.0.5' } })
     expect(job.files.map(file => file.path)).toContain('vendor/lib/index.js')
     expect(job.files.map(file => file.path)).toContain('vendor/LICENSE.txt')
@@ -163,11 +170,11 @@ describe('plugin ZIP limits', () => {
     expect(() => readPluginZip(Buffer.from(archive({ '../escape.mjs': 'bad' }), 'base64'))).toThrow(/path/)
     expect(() => readPluginZip(Buffer.from(archive({ 'Main.mjs': 'one', 'main.mjs': 'two' }), 'base64'))).toThrow(/Duplicate/)
   })
-  it('rejects declared ZIP bombs and Unix symlink entries', () => {
+  it('rejects mismatched expanded sizes and Unix symlink entries', () => {
     const original = Buffer.from(archive({ 'main.mjs': 'small' }), 'base64'), bomb = Buffer.from(original)
     const central = bomb.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]))
     bomb.writeUInt32LE(65 * 1024 * 1024, central + 24)
-    expect(() => readPluginZip(bomb)).toThrow(/limits/)
+    expect(() => readPluginZip(bomb)).toThrow(/metadata/)
     const linked = Buffer.from(original)
     linked.writeUInt32LE((0xa1ff << 16) >>> 0, central + 38)
     expect(() => readPluginZip(linked)).toThrow(/linked/)

@@ -11,6 +11,7 @@ import type { AuthContext } from '../../auth/types.js'
 import { browserAuthorityFromTrustedState, type BrowserHostAuthority } from '../../core/browser-authority.js'
 import { getRuntimeIdentity } from '../../runtime/identity.js'
 import { controllerSubject, type ControllerSubject } from '../../core/collaboration/controller-origin.js'
+import { INTERNAL_CONTINUATION_HEADER, resolveInternalContinuation } from './internal-continuation.js'
 
 // White listed paths that do not require login state (reserved for future JWT)
 // Also we bypass header checks for standard health checks to avoid breaking internal ops
@@ -104,6 +105,15 @@ export async function loggingMiddleware(request: FastifyRequest, reply: FastifyR
  */
 export async function authMiddlewareHook(request: FastifyRequest, reply: FastifyReply) {
   const pathname = request.url.split('?', 1)[0]
+  // Engine-owned source-change continuations reuse the authenticated principal
+  // captured when the original request was admitted. The capability is
+  // process-local and short-lived; it does not bypass the route's tenant/run
+  // identity checks.
+  const continuation = resolveInternalContinuation(request.headers[INTERNAL_CONTINUATION_HEADER])
+  if (continuation) {
+    ;(request as any).authContext = continuation
+    return
+  }
   // Browser redirects cannot carry the desktop instance header. The callback requires
   // its single-use state and only persists a pending identity; it never returns credentials.
   if (isExternalAccountCallback(request.method, pathname)) return

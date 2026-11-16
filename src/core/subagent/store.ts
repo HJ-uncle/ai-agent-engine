@@ -3,6 +3,7 @@ import type { Client, Transaction } from '@libsql/client'
 import { getDb } from '../../storage/sqlite/db.js'
 import { getSubagentPayloadFiles } from './payload-files.js'
 import { SubagentPayloadCodec } from './payload-codec.js'
+import { pluginContinuationFor } from './plugin-continuation.js'
 import { checkedResultMetadata, resultMetadata, resultPreview, resultStorageReference, SUBAGENT_RESULT_PAGE_BYTES, utf8Prefix, type SubagentResultMetadata, type SubagentResultPage } from './result.js'
 import { up } from '../../storage/sqlite/migrations/019_subagent_runs.js'
 import { ensureSubagentDeltaSchema } from './durable-schema.js'
@@ -13,7 +14,7 @@ import { appendDiscoveryLifecycle, ensureParentDiscovery, readDiscoveryPage, res
 import { projectSubagentRunView, summarizeSubagentCompaction, summarizeSubagentTool } from './view.js'
 import { isTaskPlanControl } from '../task-plan/control.js'
 import { interruptControllerInvocation } from '../collaboration/controller-origin.js'
-import { isTerminalRun, type CreateSubagentRun, type RunInvocationUsage, type RunStatus, type SubagentEvent, type SubagentRun, type SubagentRunHeader, type SubagentMutation, type SubagentRunView, type SubagentToolCall, type SubagentToolSummary, type SubagentDeltaEvent, type SubagentIdentity, type SubagentWireEvent } from './types.js'
+import { isTerminalRun, type CreateSubagentRun, type DelegatedInputAnchor, type RunInvocationUsage, type RunStatus, type SubagentEvent, type SubagentRun, type SubagentRunHeader, type SubagentMutation, type SubagentRunView, type SubagentToolCall, type SubagentToolSummary, type SubagentDeltaEvent, type SubagentIdentity, type SubagentWireEvent } from './types.js'
 
 type RunPatch = Partial<Pick<SubagentRun, 'status' | 'startedAt' | 'finishedAt' | 'durationMs' | 'stopReason' | 'error' | 'resultSummary' | 'partialOutput' | 'compaction' | 'usage' | 'toolCalls' | 'modelId' | 'externalEffectStatus' | keyof SubagentResultMetadata>>
 type PatchSource = RunPatch | ((current: SubagentRun) => RunPatch)
@@ -363,6 +364,56 @@ export class SubagentStore {
     return rows.rows[0] ? this.getRunHeader(tenantId, String(rows.rows[0].run_id), fullRecord) : null
   }
 
+  async delegatedInputAnchor(tenantId: string, runId: string): Promise<DelegatedInputAnchor | null> {
+    await this.ready()
+    const rows = await this.db.execute({ sql: 'SELECT anchor FROM subagent_delegated_inputs WHERE tenant_id=? AND run_id=?', args: [tenantId, runId] })
+    return rows.rows[0] ? parse<DelegatedInputAnchor>(rows.rows[0].anchor) : null
+  }
+
+  /** Called only after a private history boundary verifies the actual input. */
+  async recordDelegatedInputAnchor(tenantId: string, runId: string, anchor: DelegatedInputAnchor): Promise<void> {
+    await this.write(async tx => {
+      const run = await this.readHeader(tx, tenantId, runId, undefined, true)
+      if (!run || run.continuationMode === 'continue' || anchor.inputRunId !== run.runId || anchor.turnId !== run.parentConversationId
+        || anchor.contentHash !== createHash('sha256').update(run.task).digest('hex') || !anchor.messageId)
+        throw new Error('SUBAGENT_INPUT_IDENTITY_MISMATCH')
+      const prior = await tx.execute({ sql: 'SELECT anchor FROM subagent_delegated_inputs WHERE tenant_id=? AND run_id=?', args: [tenantId, runId] })
+      if (prior.rows[0]) {
+        if (JSON.stringify(parse(prior.rows[0].anchor)) !== JSON.stringify(anchor)) throw new Error('SUBAGENT_INPUT_IDENTITY_CHANGED')
+        return
+      }
+      await tx.execute({ sql: 'INSERT INTO subagent_delegated_inputs VALUES (?,?,?)', args: [tenantId, runId, JSON.stringify(anchor)] })
+    })
+  }
+
+  private async resumedTask(tx: Transaction, input: CreateSubagentRun) {
+    if (input.continuationMode !== undefined && !['continue', 'followup'].includes(input.continuationMode)) throw new Error('SUBAGENT_RESUME_UNAVAILABLE: 无效续接方式。')
+    if (!input.resumeFromRunId) {
+      if (input.continuationMode) throw new Error('SUBAGENT_RESUME_UNAVAILABLE: 续接方式需要原执行。')
+      return { childSessionId: input.childSessionId ?? `subagent-${randomUUID()}`, continuation: input.continuation,
+        taskTurnId: input.parentConversationId, continuationMode: undefined, anchor: undefined }
+    }
+    const prior = await this.readHeader(tx, input.tenantId, input.resumeFromRunId, undefined, true)
+    if (!prior || prior.parentSessionId !== input.parentSessionId || prior.rootSessionId !== input.rootSessionId) throw new Error('SUBAGENT_RESUME_NOT_OWNED: 子代理不属于当前父任务。')
+    if (!prior.continuation) throw new Error('SUBAGENT_RESUME_UNAVAILABLE: 旧记录缺少续跑权限信息。')
+    if (!isTerminalRun(prior.status)) throw new Error('SUBAGENT_RESUME_BUSY: 子代理仍在执行。')
+    const active = await tx.execute({ sql: "SELECT 1 FROM subagent_runs WHERE tenant_id=? AND child_session_id=? AND status IN ('queued','running','cancelling') LIMIT 1", args: [input.tenantId, prior.childSessionId] })
+    if (active.rows.length) throw new Error('SUBAGENT_RESUME_BUSY: 同一子代理已有正在执行的任务。')
+    const latest = await tx.execute({ sql: 'SELECT run_id FROM subagent_runs WHERE tenant_id=? AND parent_session_id=? AND child_session_id=? ORDER BY rowid DESC LIMIT 1', args: [input.tenantId, input.parentSessionId, prior.childSessionId] })
+    if (latest.rows[0]?.run_id !== prior.runId) throw new Error('SUBAGENT_RESUME_STALE: 子代理已有更新的执行，请从最新执行继续。')
+    const continuationMode = input.continuationMode ?? 'followup'
+    let anchor: DelegatedInputAnchor | undefined
+    if (continuationMode === 'continue') {
+      if (input.task !== prior.task) throw new Error('SUBAGENT_INPUT_IDENTITY_CHANGED: 同任务继续不能替换原任务。')
+      const rows = await tx.execute({ sql: 'SELECT anchor FROM subagent_delegated_inputs WHERE tenant_id=? AND run_id=?', args: [input.tenantId, prior.runId] })
+      if (!rows.rows[0]) throw new Error('SUBAGENT_INPUT_UNAVAILABLE: 原委托输入尚未持久确认，不能无输入续接。')
+      anchor = parse<DelegatedInputAnchor>(rows.rows[0].anchor)
+      if (anchor.contentHash !== createHash('sha256').update(prior.task).digest('hex')) throw new Error('SUBAGENT_INPUT_IDENTITY_CHANGED')
+    }
+    return { childSessionId: prior.childSessionId, continuation: pluginContinuationFor(input, prior), continuationMode,
+      taskTurnId: continuationMode === 'continue' ? prior.taskTurnId ?? prior.parentConversationId : input.parentConversationId, anchor }
+  }
+
   /** Selection needs one immutable profile, never every historical tool body. */
   async latestAgentHeader(tenantId: string, parentSessionId: string, agentId: string, fullRecord = false): Promise<SubagentRunHeader | null> {
     await this.ready()
@@ -579,23 +630,14 @@ export class SubagentStore {
         return { header, view, event }
       }
       const now = Date.now()
-      let childSessionId = input.childSessionId ?? `subagent-${randomUUID()}`
-      let continuation = input.continuation
-      if (input.resumeFromRunId) {
-        const prior = await this.readHeader(tx, input.tenantId, input.resumeFromRunId, undefined, true)
-        if (!prior || prior.parentSessionId !== input.parentSessionId || prior.rootSessionId !== input.rootSessionId) throw new Error('SUBAGENT_RESUME_NOT_OWNED: 子代理不属于当前父任务。')
-        if (!prior.continuation) throw new Error('SUBAGENT_RESUME_UNAVAILABLE: 旧记录缺少续跑权限信息。')
-        if (!isTerminalRun(prior.status)) throw new Error('SUBAGENT_RESUME_BUSY: 子代理仍在执行。')
-        const active = await tx.execute({ sql: "SELECT 1 FROM subagent_runs WHERE tenant_id=? AND child_session_id=? AND status IN ('queued','running','cancelling') LIMIT 1", args: [input.tenantId, prior.childSessionId] })
-        if (active.rows.length) throw new Error('SUBAGENT_RESUME_BUSY: 同一子代理已有正在执行的任务。')
-        childSessionId = prior.childSessionId; continuation = prior.continuation
-      }
-      const header: SubagentRunHeader = { ...input, continuation, agentId: continuation?.agent?.id ?? input.agentId, agentName: continuation?.agent?.name ?? input.agentName,
+      const { childSessionId, continuation, continuationMode, taskTurnId, anchor } = await this.resumedTask(tx, input)
+      const header: SubagentRunHeader = { ...input, continuation, continuationMode, taskTurnId, agentId: continuation?.agent?.id ?? input.agentId, agentName: continuation?.agent?.name ?? input.agentName,
         schemaVersion: 1, runId: input.runId ?? randomUUID(), childSessionId, status: 'queued', lastSeq: 1, createdAt: now, updatedAt: now, usage: {}, transcriptRef: `session:${childSessionId}`,
         toolCount: 0, activeToolCount: 0, nonPlanToolCount: 0 }
       const record = Object.fromEntries(Object.entries(header).filter(([key]) => !stateKeys.includes(key as typeof stateKeys[number]) && key !== 'toolCount' && key !== 'activeToolCount' && key !== 'nonPlanToolCount'))
       await tx.execute({ sql: 'INSERT INTO subagent_runs(tenant_id,run_id,parent_session_id,parent_tool_call_id,child_session_id,status,seq,created_at,updated_at,snapshot) VALUES (?,?,?,?,?,?,?,?,?,?)', args: [header.tenantId, header.runId, header.parentSessionId, header.parentToolCallId, header.childSessionId, header.status, 1, now, now, '{}'] })
       await tx.execute({ sql: 'INSERT INTO subagent_records(tenant_id,run_id,record) VALUES (?,?,?)', args: [header.tenantId, header.runId, JSON.stringify(record)] })
+      if (anchor) await tx.execute({ sql: 'INSERT INTO subagent_delegated_inputs VALUES (?,?,?)', args: [header.tenantId, header.runId, JSON.stringify(anchor)] })
       await admit?.(tx, header, { created: true })
       return this.persistDelta(tx, 'created', null, header)
     })
@@ -753,20 +795,9 @@ export class SubagentStore {
         return { schemaVersion: 1, kind: 'created', runId: run.runId, seq: run.lastSeq, snapshot: run }
       }
       const now = Date.now()
-      let childSessionId = input.childSessionId ?? `subagent-${randomUUID()}`
-      let continuation = input.continuation
-      if (input.resumeFromRunId) {
-        const prior = await this.readHeader(tx, input.tenantId, input.resumeFromRunId, undefined, true)
-        if (!prior || prior.parentSessionId !== input.parentSessionId || prior.rootSessionId !== input.rootSessionId) throw new Error('SUBAGENT_RESUME_NOT_OWNED: 子代理不属于当前父任务。')
-        if (!prior.continuation) throw new Error('SUBAGENT_RESUME_UNAVAILABLE: 旧记录缺少续跑权限信息。')
-        if (!isTerminalRun(prior.status)) throw new Error('SUBAGENT_RESUME_BUSY: 子代理仍在执行。')
-        const active = await tx.execute({ sql: "SELECT run_id FROM subagent_runs WHERE tenant_id=? AND child_session_id=? AND status IN ('queued','running','cancelling') LIMIT 1", args: [input.tenantId, prior.childSessionId] })
-        if (active.rows.length) throw new Error('SUBAGENT_RESUME_BUSY: 同一子代理已有正在执行的任务。')
-        childSessionId = prior.childSessionId
-        continuation = prior.continuation
-      }
+      const { childSessionId, continuation, continuationMode, taskTurnId, anchor } = await this.resumedTask(tx, input)
       const run: SubagentRun = {
-        ...input, continuation,
+        ...input, continuation, continuationMode, taskTurnId,
         agentId: continuation?.agent?.id ?? input.agentId,
         agentName: continuation?.agent?.name ?? input.agentName,
         schemaVersion: 1, runId: input.runId ?? randomUUID(), childSessionId,
@@ -777,6 +808,7 @@ export class SubagentStore {
         sql: `INSERT INTO subagent_runs (tenant_id,run_id,parent_session_id,parent_tool_call_id,child_session_id,status,seq,created_at,updated_at,snapshot) VALUES (?,?,?,?,?,?,?,?,?,?)`,
         args: [run.tenantId, run.runId, run.parentSessionId, run.parentToolCallId, run.childSessionId, run.status, run.lastSeq, now, now, JSON.stringify(run)],
       })
+      if (anchor) await tx.execute({ sql: 'INSERT INTO subagent_delegated_inputs VALUES (?,?,?)', args: [run.tenantId, run.runId, JSON.stringify(anchor)] })
       return this.persist(tx, 'created', run)
     })
   }
@@ -979,7 +1011,7 @@ export class SubagentStore {
   async deleteRunsForParent(tenantId: string, parentSessionId: string): Promise<void> {
     await this.write(async (tx) => {
       // The caller cancels and joins active runners first, so no late terminal write can resurrect this tree.
-      for (const table of ['subagent_usage_invocations', 'subagent_outbox', 'subagent_events', 'subagent_tool_versions', 'subagent_tools', 'subagent_checkpoints', 'subagent_records']) {
+      for (const table of ['subagent_usage_invocations', 'subagent_outbox', 'subagent_events', 'subagent_tool_versions', 'subagent_tools', 'subagent_checkpoints', 'subagent_delegated_inputs', 'subagent_records']) {
         await tx.execute({ sql: `DELETE FROM ${table} WHERE tenant_id=? AND run_id IN (SELECT run_id FROM subagent_runs WHERE tenant_id=? AND parent_session_id=?)`, args: [tenantId, tenantId, parentSessionId] })
       }
       await tx.execute({ sql: 'DELETE FROM subagent_runs WHERE tenant_id=? AND parent_session_id=?', args: [tenantId, parentSessionId] })
@@ -1004,7 +1036,7 @@ export class SubagentStore {
         await tx.execute({ sql: "DELETE FROM subagent_followup_admissions WHERE tenant_id=? AND json_extract(record,'$.resumeFromRunId')=?", args: [tenantId, runId] })
         if (hasChildArtifacts) await tx.execute({ sql: 'DELETE FROM child_artifact_manifests WHERE tenant_id=? AND run_id=?', args: [tenantId, runId] })
         await tombstoneDiscoveryRun(tx, tenantId, runId)
-        for (const table of ['subagent_usage_invocations', 'subagent_outbox', 'subagent_events', 'subagent_tool_versions', 'subagent_tools', 'subagent_checkpoints', 'subagent_records', 'subagent_runs']) {
+        for (const table of ['subagent_usage_invocations', 'subagent_outbox', 'subagent_events', 'subagent_tool_versions', 'subagent_tools', 'subagent_checkpoints', 'subagent_delegated_inputs', 'subagent_records', 'subagent_runs']) {
           await tx.execute({ sql: `DELETE FROM ${table} WHERE tenant_id=? AND run_id=?`, args: [tenantId, runId] })
         }
       }
@@ -1055,7 +1087,7 @@ export class SubagentStore {
     const events: SubagentWireEvent[] = []
     for (const row of result.rows) {
       const mutation = await this.appendHeader(String(row.tenant_id), String(row.run_id), 'finished', (current) => ({
-        status: 'interrupted', stopReason: 'engine_restarted', finishedAt: Date.now(),
+        status: 'interrupted', stopReason: current.status === 'cancelling' && current.stopReason ? current.stopReason : 'engine_restarted', finishedAt: Date.now(),
         durationMs: current.startedAt ? Date.now() - current.startedAt : 0,
         error: { code: 'ENGINE_RESTARTED', message: '引擎重启，任务执行状态未知，未自动重跑。', retryable: false },
         usage: { ...current.usage, unknown: true },

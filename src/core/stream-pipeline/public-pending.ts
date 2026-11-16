@@ -8,7 +8,12 @@ export interface PendingDisplaySummary {
   originalArgsBytes?: number
   omittedArgumentKeys?: number
 }
-type DisplayPending = Omit<Pending, 'pendingAction'> & { description?: string; displaySummary?: PendingDisplaySummary }
+type DisplayPending = Omit<Pending, 'pendingAction'> & {
+  description?: string
+  displaySummary?: PendingDisplaySummary
+  /** Bounded wait state for the source guard; never includes the sealed action. */
+  sourceChangeWait?: Record<string, unknown>
+}
 const bytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value) ?? 'null', 'utf8')
 
 /** Explicitly labeled UTF-8 bounded display text; never changes the sealed text. */
@@ -50,6 +55,24 @@ export function publicPending(pending: Pending & { description?: string }): Disp
   const args = displayArgs(pending.args, answered ? 2048 : 12288)
   const summary: PendingDisplaySummary = { source: 'durable_approval', fields: [] }
   const projected: DisplayPending = { ...display, args: args.args }
+  const wait = pending.pendingAction?.type === 'source_change' && pending.pendingAction.wait
+  const waitRecord = wait && typeof wait === 'object' ? wait as Record<string, unknown> : undefined
+  if (waitRecord && waitRecord.mode === 'external-writer' &&
+    Number.isFinite(waitRecord.startedAt) && Number.isFinite(waitRecord.pollMs) && Number.isFinite(waitRecord.stableWindowMs) &&
+    Array.isArray(waitRecord.blockers)) {
+    projected.sourceChangeWait = {
+      mode: 'external-writer', startedAt: Number(waitRecord.startedAt), pollMs: Number(waitRecord.pollMs),
+      stableWindowMs: Number(waitRecord.stableWindowMs), blockers: waitRecord.blockers.slice(0, 16).map((blocker: unknown) => {
+        if (!blocker || typeof blocker !== 'object') return {}
+        const result: Record<string, unknown> = {}
+        for (const key of ['kind', 'id', 'sessionId', 'ownerSessionId', 'runId', 'ownerRunId', 'jobId', 'cwd', 'status']) {
+          const value = (blocker as Record<string, unknown>)[key]
+          if (typeof value === 'string' && value.length <= 512) result[key] = value
+        }
+        return result
+      })
+    }
+  }
   if (args.originalArgsBytes !== undefined) {
     summary.fields.push('args'); summary.originalArgsBytes = args.originalArgsBytes
     if (args.omittedArgumentKeys) summary.omittedArgumentKeys = args.omittedArgumentKeys

@@ -8,11 +8,23 @@ import { withHistoryLock } from '../../../storage/conversation/serialization.js'
 import { success } from '../response.js'
 import { getRequestToolProfile, getRequestRunLifetime } from '../tool-profile.js'
 import { getRequestSubagentProtocol } from '../chat-subagent-protocol.js'
+import { controllerSubjectFromRequest } from '../middleware.js'
 
 /** Uses the same trusted middleware actor as /chat; body/query tenant fields are never authority. */
 const tenantFrom = (request: FastifyRequest) => (request as FastifyRequest & { authContext?: AuthContext }).authContext?.tenantId ?? 'default'
 interface ReceiptBody { sessionId: string; namespace: { id: string; generation: string }; requestKey: string; bodyDigest: string }
 export async function registerUserAdmissionRoutes(app: FastifyInstance, roots: RootRunStore, history: ConversationHistory): Promise<void> {
+  app.post<{ Body: ReceiptBody }>('/chat/continuation/receipt', { schema: { body: {
+    type: 'object', required: ['sessionId', 'namespace', 'requestKey', 'bodyDigest'], additionalProperties: false,
+    properties: { sessionId: { type: 'string', minLength: 1, maxLength: 256 }, requestKey: { type: 'string', minLength: 1, maxLength: 256 },
+      bodyDigest: { type: 'string', pattern: '^[a-f0-9]{64}$' }, namespace: { type: 'object', additionalProperties: false, required: ['id', 'generation'],
+        properties: { id: { type: 'string', minLength: 1, maxLength: 256 }, generation: { type: 'string', minLength: 1, maxLength: 256 } } } },
+  } } }, async request => {
+    const { sessionId, requestKey, bodyDigest } = request.body, namespace = validateNamespace(request.body.namespace)
+    const accepted = await roots.findContinuation(tenantFrom(request), sessionId, { namespace, requestKey, bodyDigest }, controllerSubjectFromRequest(request))
+    return success(accepted ? { protocolVersion: 1, status: 'accepted' as const, receipt: accepted.receipt, run: accepted.run }
+      : { protocolVersion: 1, status: 'absent' as const, namespace, sessionId, requestKey })
+  })
   app.get<{ Querystring: { sessionId: string } }>('/chat/admission/context', { schema: { querystring: {
     type: 'object', required: ['sessionId'], additionalProperties: false, properties: { sessionId: { type: 'string', minLength: 1, maxLength: 256 } },
   } } }, async request => {

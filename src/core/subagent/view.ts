@@ -157,9 +157,10 @@ export function projectSubagentRunView(input: SubagentRun | SubagentRunView, bud
   if (!input || !['1', '2'].includes(String(input.schemaVersion)) || !integer(input.lastSeq)) throw new Error('Invalid subagent view version or sequence')
   if (input.schemaVersion === 2 && (input.view !== 'summary' || !checkedCoverage(input))) throw new Error('Invalid subagent coverage')
   for (const key of identityKeys) if (typeof input[key] !== 'string' || Buffer.byteLength(input[key], 'utf8') > 4096) throw new Error(`Invalid subagent identity: ${key}`)
-  for (const key of ['resumeFromRunId', 'agentId', 'modelId', 'transcriptRef'] as const)
+  for (const key of ['resumeFromRunId', 'taskTurnId', 'agentId', 'modelId', 'transcriptRef'] as const)
     if (input[key] !== undefined && (typeof input[key] !== 'string' || Buffer.byteLength(input[key], 'utf8') > 4096)) throw new Error(`Invalid subagent reference: ${key}`)
   if (input.parentToolName !== undefined && !['subagent', 'subagent_start'].includes(input.parentToolName)) throw new Error('Invalid subagent parent tool mode')
+  if (input.continuationMode !== undefined && !['continue', 'followup'].includes(input.continuationMode)) throw new Error('Invalid subagent continuation mode')
   if (!Array.isArray(input.toolCalls)) throw new Error('Invalid subagent tools')
   if (!['queued', 'running', 'cancelling', 'succeeded', 'failed', 'cancelled', 'blocked', 'interrupted'].includes(input.status)) throw new Error('Invalid subagent status')
   for (const key of usageKeys) {
@@ -217,6 +218,8 @@ export function projectSubagentRunView(input: SubagentRun | SubagentRunView, bud
     parentMessageId: input.parentMessageId, parentToolCallId: input.parentToolCallId, childSessionId: input.childSessionId,
     ...(input.parentToolName === undefined ? {} : { parentToolName: input.parentToolName }),
     ...(input.resumeFromRunId === undefined ? {} : { resumeFromRunId: input.resumeFromRunId }),
+    ...(input.taskTurnId === undefined ? {} : { taskTurnId: input.taskTurnId }),
+    ...(input.continuationMode === undefined ? {} : { continuationMode: input.continuationMode }),
     ...(input.agentId === undefined ? {} : { agentId: input.agentId }),
     ...(input.agentName === undefined ? {} : { agentName: clip(input.agentName, 512) }),
     ...(input.continuation ? { continuation: { readOnly: input.continuation.readOnly,

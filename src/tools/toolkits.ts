@@ -11,7 +11,7 @@ export const KNOWLEDGE_MANAGEMENT_TOOLS = ['knowledge_list', 'knowledge_get', 'k
   'knowledge_documents', 'knowledge_document_get', 'knowledge_import', 'knowledge_document_update', 'knowledge_document_delete', 'knowledge_search'] as const
 export const AUTOMATION_TOOLS = ['cron_capabilities', 'cron_list', 'cron_preview', 'cron_create', 'cron_update', 'cron_delete'] as const
 export const MCP_MANAGEMENT_TOOLS = ['mcp_server_list', 'mcp_server_get', 'mcp_server_create', 'mcp_server_update', 'mcp_server_set_enabled', 'mcp_server_delete', 'mcp_server_test'] as const
-export const PLUGIN_MANAGEMENT_TOOLS = ['plugin_get_template', 'plugin_list', 'plugin_get', 'plugin_create', 'plugin_update', 'plugin_publish', 'plugin_set_enabled', 'plugin_delete', 'plugin_test', 'plugin_import_preview', 'plugin_import_install'] as const
+export const PLUGIN_MANAGEMENT_TOOLS = ['plugin_get_template', 'plugin_scaffold', 'plugin_list', 'plugin_get', 'plugin_create', 'plugin_update', 'plugin_publish', 'plugin_set_enabled', 'plugin_delete', 'plugin_test', 'plugin_import_preview', 'plugin_import_install'] as const
 export const TOOLKIT_CATALOGUE = [
   { id: 'agent-management', name: 'Agent 管理', description: '创建和管理 Agent', toolNames: AGENT_MANAGEMENT_TOOLS },
   { id: 'skill-management', name: 'Skill 管理', description: '保存和管理工作方法', toolNames: SKILL_MANAGEMENT_TOOLS },

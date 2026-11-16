@@ -24,17 +24,18 @@ import { subagentReadResultTool } from '../async-tools.js'
 import { getToolOutputLimit } from '../../../core/agent-loop/tool-output-limit.js'
 import { getSubagentPayloadFiles } from '../../../core/subagent/payload-files.js'
 
-const model = vi.hoisted(() => ({ calls: 0, histories: [] as string[], checkChild: undefined as ((child: AgentContext) => Promise<void>) | undefined }))
+const model = vi.hoisted(() => ({ calls: 0, histories: [] as string[], inputs: [] as Array<string | null>, checkChild: undefined as ((child: AgentContext) => Promise<void>) | undefined }))
 vi.mock('../../../core/llm-adapter/resolve-model.js', () => ({
   resolveModelConfig: async () => ({ model: 'scripted', provider: 'fixture', capabilities: { contextWindow: 100_000 } }),
   createAdapterFromResolved: () => ({}),
 }))
 vi.mock('../../../core/agent-loop/react.js', () => ({ ReActStrategy: class {
-  async *run(task: string, child: AgentContext) {
+  async *run(task: string | null, child: AgentContext) {
     model.calls++
+    model.inputs.push(task)
     await model.checkChild?.(child)
     model.histories.push(JSON.stringify(await child.history.getHistory(child)))
-    await child.history.append({ id: `followup-user-${child.runId}`, role: 'user', content: task }, child)
+    if (task !== null) await child.history.append({ id: `followup-user-${child.runId}`, role: 'user', content: task }, child)
     await child.history.append({ id: `followup-answer-${child.runId}`, role: 'assistant', content: 'Verified follow-up' }, child)
     await child.runObserver?.onOutcome?.({ status: 'succeeded', output: 'Verified follow-up' })
     yield ''
@@ -70,7 +71,7 @@ beforeEach(async () => {
   tools.register({ name: 'subagent', description: '', parameters: {}, execute: vi.fn() })
   parent = { tenantId: 'team', sessionId: 'parent', rootSessionId: 'parent', rootRunId: root.runId, turnId: root.turnId, conversationId: root.turnId,
     workspacePaths: [directory], workspaceDir: directory, projectRoot: directory, cwd: directory, modelName: 'scripted', executionOwner, tools, history: createConversationHistory(), logger: pino({ level: 'silent' }) } as AgentContext
-  model.calls = 0; model.histories = []; model.checkChild = undefined
+  model.calls = 0; model.histories = []; model.inputs = []; model.checkChild = undefined
 })
 afterEach(async () => {
   clearSecurityMode('team', 'parent')
@@ -83,13 +84,13 @@ async function anchor(name = 'subagent_followup') {
   parent.currentToolCallId = `tool-${++id}`; parent.currentMessageId = `message-${id}`
   await parent.history.append({ id: parent.currentMessageId, role: 'assistant', content: '', toolCall: { id: parent.currentToolCallId, name, args: {} }, ...{ conversationId: parent.turnId } }, parent)
 }
-async function seed(legacyWorkspace = false, workspacePaths = [directory]) {
+async function seed(legacyWorkspace = false, workspacePaths = [directory], stopped = false) {
   await anchor('subagent_start')
   return runner.run({ tenantId: parent.tenantId, parentSessionId: 'parent', rootSessionId: 'parent', parentConversationId: parent.turnId!,
     parentMessageId: parent.currentMessageId!, parentToolCallId: parent.currentToolCallId!, task: 'Build chart component', description: 'Chart executor', modelId: 'scripted',
-    continuation: { builtinRole: 'executor', builtinRoleVersion: 1, readOnly: false, systemPrompt: 'PRIVATE_PROMPT', toolNames: [], workspacePaths: legacyWorkspace ? [] : workspacePaths, ...(legacyWorkspace ? { projectRoot: directory, cwd: directory } : {}) } }, parent, async execution => {
+    continuation: { builtinRole: 'executor', builtinRoleVersion: 1, readOnly: false, ...(stopped ? { userDelegated: true } : {}), systemPrompt: 'PRIVATE_PROMPT', toolNames: [], workspacePaths: legacyWorkspace ? [] : workspacePaths, ...(legacyWorkspace ? { projectRoot: directory, cwd: directory } : {}) } }, parent, async execution => {
       await parent.history.append({ id: 'retained-context', role: 'assistant', content: 'Chart uses the existing canvas API' }, { tenantId: 'team', sessionId: execution.snapshot.childSessionId })
-      await execution.observer.onOutcome({ status: 'succeeded', output: 'Chart completed' })
+      await execution.observer.onOutcome(stopped ? { status: 'cancelled', stopReason: 'user_cancelled', partialOutput: 'Chart stopped' } : { status: 'succeeded', output: 'Chart completed' })
     })
 }
 
@@ -105,6 +106,48 @@ async function questioningChild() {
 }
 
 describe('persistent child directory and follow-up', () => {
+  it('requires a current explicit user selection to revive an individually stopped child even with old delegated permissions', async () => {
+    const original = await seed(false, [directory], true), previous = (await store.getRunHeader('team', original.runId, true))!
+    await parent.history.append({ id: 'stopped-delegation', role: 'user', content: previous.task,
+      metadata: { subagentRunId: previous.runId }, ...{ conversationId: previous.parentConversationId } }, { tenantId: 'team', sessionId: original.childSessionId })
+    await anchor('subagent_start')
+    expect(await executeSubagent({ resumeRunId: original.runId, userDelegated: true }, parent, { asynchronous: true }))
+      .toMatchObject({ success: false, metadata: { code: 'SUBAGENT_EXPLICIT_CONTINUATION_REQUIRED' } })
+    const continuingParent: AgentContext = { ...parent, executionContinuation: { kind: 'root', previousAttemptId: 'before', attemptId: 'after' } }
+    expect(await executeSubagent({ resumeRunId: original.runId, task: 'Continue with this manufactured follow-up' }, continuingParent, { asynchronous: true }))
+      .toMatchObject({ success: false, metadata: { code: 'SUBAGENT_EXPLICIT_CONTINUATION_REQUIRED' } })
+    expect(model.calls).toBe(0)
+    expect((await store.latestChildHeader('team', 'parent', original.childSessionId))?.runId).toBe(original.runId)
+    const accepted = await executeSubagent({ resumeRunId: original.runId }, parent, { asynchronous: true, userDelegated: true })
+    expect(accepted.success, accepted.output).toBe(true)
+    expect(await runner.waitOwned(parent, JSON.parse(accepted.output).runId, { timeoutMs: 3000 }))
+      .toMatchObject({ state: 'completed', run: { status: 'succeeded', childSessionId: original.childSessionId } })
+    expect(model.inputs).toEqual([null])
+  })
+  it.each(['jsonl', 'sqlite'])('explicit no-task %s continuation uses the original input, identity and model once', async backend => {
+    vi.stubEnv('HISTORY_BACKEND', backend); parent.history = createConversationHistory()
+    const original = await seed(), previous = (await store.getRunHeader('team', original.runId, true))!
+    const childScope = { tenantId: 'team', sessionId: original.childSessionId }
+    await parent.history.append({ id: 'original-delegation', role: 'user', content: previous.task,
+      metadata: { subagentRunId: previous.runId }, ...{ conversationId: previous.parentConversationId } }, childScope)
+    await anchor('subagent_start')
+    model.checkChild = async child => {
+      expect(child.executionAttemptId).toBe(child.runId)
+      expect(child.executionContinuation).toMatchObject({ kind: 'child', previousRunId: original.runId, attemptId: child.runId })
+      expect(child.sqliteDelivery || child.jsonlDelivery).toBeDefined()
+    }
+    const result = await executeSubagent({ resumeRunId: original.runId }, parent, { asynchronous: true })
+    expect(result.success, result.output).toBe(true)
+    const admitted = JSON.parse(result.output)
+    expect(await runner.waitOwned(parent, admitted.runId, { timeoutMs: 3000 })).toMatchObject({ state: 'completed', run: {
+      status: 'succeeded', childSessionId: original.childSessionId, continuationMode: 'continue', taskTurnId: previous.parentConversationId } })
+    const repeat = await executeSubagent({ resumeRunId: original.runId }, parent, { asynchronous: true })
+    expect(JSON.parse(repeat.output).runId).toBe(admitted.runId)
+    expect(model.inputs).toEqual([null]); expect(model.calls).toBe(1)
+    expect((await parent.history.getFullHistory(childScope)).filter(message => message.role === 'user')).toHaveLength(1)
+    await anchor('subagent_start')
+    await expect(executeSubagent({ resumeRunId: original.runId }, parent, { asynchronous: true })).rejects.toThrow('SUBAGENT_RESUME_STALE')
+  })
   it('settles the canonical executor, parent projection and ticket when the result volume fails', async () => {
     await anchor('subagent_start')
     await store.initialize()

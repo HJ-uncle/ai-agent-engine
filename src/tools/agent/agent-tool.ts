@@ -3,6 +3,7 @@ import type { Tool, AgentContext, ToolResult, PendingAction } from '../../core/a
 import { normalizeToolName } from '../tool-profile.js'
 import { workspaceManager } from '../../workspace/index.js'
 import { skillsRegistry } from '../../skills/index.js'
+import { createApprovedMutationTool } from '../management/approved-mutation.js'
 import {
   AgentManagementService, AgentManagementError, agentIdSchema, agentManagementFailure,
   type AgentMutation, type PreparedAgentMutation,
@@ -41,22 +42,6 @@ function failure(error: unknown): ToolResult {
   return { success: false, status: 'failed', output: message, error: message, metadata: { code } }
 }
 
-function approvedOperation(name: string, action: AgentMutation, args: unknown, ctx: AgentContext): PreparedAgentMutation | undefined {
-  if (!ctx.currentToolCallId || ctx.currentToolCallId !== ctx.approvedToolCallId) return undefined
-  const resume = ctx.resumeToolCall
-  const pending = resume?.pendingAction
-  if (resume?.decision !== 'approved' || resume.toolCall.id !== ctx.currentToolCallId || resume.toolCall.name !== name
-    || JSON.stringify(args) !== JSON.stringify(resume.toolCall.args)
-    || pending?.type !== `agent_${action}`) {
-    throw new Error('缺少该工具调用的有效确认记录，请重新发起操作')
-  }
-  const operation = pending.operation as PreparedAgentMutation | undefined
-  if (!operation || operation.version !== 1 || operation.action !== action || operation.tenantId !== ctx.tenantId) {
-    throw new Error('Agent 确认记录无效，请重新发起操作')
-  }
-  return operation
-}
-
 async function prepare(action: AgentMutation, args: Record<string, unknown>, ctx: AgentContext, manager: AgentManagementService): Promise<PreparedAgentMutation> {
   if (action !== 'delete' && Array.isArray(args.skills)) {
     const hashIds = args.skills.filter((value): value is string => typeof value === 'string' && /^skill-[a-f0-9]{32}$/.test(value))
@@ -77,46 +62,33 @@ async function prepare(action: AgentMutation, args: Record<string, unknown>, ctx
   return manager.prepareDelete(ctx.tenantId, id)
 }
 
-function preview(operation: PreparedAgentMutation): ToolResult {
-  const config = operation.action === 'create' ? operation.input
+function preview(operation: PreparedAgentMutation): unknown {
+  return operation.action === 'create' ? operation.input
     : operation.action === 'update' ? { id: operation.id, before: operation.before, changes: operation.input,
         after: { ...operation.before, ...operation.input } }
       : { id: operation.id, agent: operation.before }
-  const text = `Agent ${labels[operation.action]}确认\n\n${JSON.stringify(config, null, 2)}\n\n确认后执行以上配置。`
-  return { success: false, status: 'waiting', needsConfirmation: true, output: text,
-    pendingAction: { type: `agent_${operation.action}`, operation, reason: text } }
 }
 
 function mutationTool(action: AgentMutation, manager: AgentManagementService): Tool {
   const name = `agent_${action}`
-  const preflight = async (raw: unknown, ctx: AgentContext): Promise<ToolResult | undefined> => {
-    try {
-      // A recovered legacy call may retain old args, but only its authenticated
-      // frozen operation can execute. New calls use the canonical strict schema.
-      if (approvedOperation(name, action, raw, ctx)) return undefined
-      return preview(await prepare(action, z.record(z.unknown()).parse(raw), ctx, manager))
-    } catch (error) { return failure(error) }
-  }
-  return {
+  return createApprovedMutationTool<PreparedAgentMutation>({
     name, displayName: `${labels[action]} Agent`,
-    description: `${labels[action]}持久化 Agent 配置。展示具体配置并等待用户确认，批准后自动恢复原调用；不要另调 ask_user 或 do_*。`,
+    description: `${labels[action]}持久化 Agent 配置。不要另调 do_*。`,
     parameters: { type: 'object', properties: {
       ...(action === 'create' ? {} : idProperties),
       ...(action === 'delete' ? {} : AGENT_CONFIG_PROPS),
     }, required: action === 'create' ? ['name'] : ['id'], additionalProperties: false },
-    preflight,
-    async execute(raw, ctx) {
-      const blocked = await preflight(raw, ctx)
-      if (blocked) return blocked
-      try {
-        const operation = approvedOperation(name, action, raw, ctx)!
-        const agentChange = await manager.apply(operation)
-        return { success: true, status: 'succeeded',
-          output: JSON.stringify({ message: `Agent ${labels[action]}成功`, agentChange }),
-          metadata: { agentChange } }
-      } catch (error) { return failure(error) }
+    prepare: (raw, ctx) => prepare(action, z.record(z.unknown()).parse(raw), ctx, manager),
+    confirmationText: operation => `Agent ${labels[operation.action]}确认\n\n${JSON.stringify(preview(operation), null, 2)}\n\n确认后执行以上配置。`,
+    failure,
+    async apply(operation) {
+      if (operation.action !== action) throw new Error('Agent 确认记录无效，请重新发起操作')
+      const agentChange = await manager.apply(operation)
+      return { success: true, status: 'succeeded',
+        output: JSON.stringify({ message: `Agent ${labels[action]}成功`, agentChange }),
+        metadata: { agentChange } }
     },
-  }
+  })
 }
 
 export function createAgentTools(inlineAgents: InlineAgent[] = [], manager: AgentManagementService = service): Tool[] {

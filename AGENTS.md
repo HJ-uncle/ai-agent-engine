@@ -1,5 +1,12 @@
 # 工程约定
 
+## 插件公开文档同步
+
+- 插件的公开 API 参考以同级前端仓库 `../aether-code/docs/plugin-api/content/*.html` 为唯一内容源；导航为 `pages.mjs`，不要新增平行的 Markdown API 文档。
+- 新增、优化或删除插件能力、接口、权限、事件、挂载语义、参数、返回、限制与开发流程，必须同一变更同步 HTML 参考和例子，并核对前端实际承载范围。内部实现说明仍可保留于维护者文档，不能混入公开站点。
+- 在前端仓库运行 `npm run docs:check`、`npm run docs:test`。变更受监控源码后，必须人工交叉审阅再运行 `npm run docs:review`；不得自动接受快照来跳过审阅。即使仅优化内部实现，也需确认公开行为未变。
+- 引擎旧诊断入口 `scripts/diagnostics/check-plugin-reference.ts` 转交 HTML 项目检查；不再读取旧 Markdown。源码目录可用 `AETHER_ENGINE_SOURCE_DIR` 指定，所有诊断产物仍归仓库内 `.e2e-tmp/`。
+
 ## 测试文件与运行产物
 
 - 保持仓库根目录整洁，不在根目录新增专项测试配置、临时调试脚本、测试结果 JSON、日志、截图或测试数据库。

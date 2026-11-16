@@ -74,13 +74,16 @@ export class CurrentTurnProjection {
   private sequence = 0
   private textTail?: { key: string; field: 'content' | 'thinking' }
   private _truncated = false
+  private replayingSegmentedProjection = false
 
   constructor(initial: StreamEnvelope[] = [], watermarks: SubagentWatermark[] = [], truncated = false,
     readonly childSequenceSource: ChildSequenceSource = 'legacy-memory') {
     this.childSequences = childSequenceSource === 'legacy-memory' ? new Map<string, number>() : undefined
     this._truncated = truncated
     for (const watermark of watermarks) this.recordChildSequence(watermark.runId, watermark.seq)
+    this.replayingSegmentedProjection = initial.some(payload => payload.assistantSegment !== undefined)
     for (const payload of initial) this.apply(payload)
+    this.replayingSegmentedProjection = false
   }
 
   private recordChildSequence(runId: unknown, seq: unknown): void {
@@ -184,12 +187,23 @@ export class CurrentTurnProjection {
       return
     }
     if (field === 'run' && data) {
+      // The current run slot is replaced in place. Keep independent attempt
+      // boundaries so a cold projection never assigns old text to a new attempt.
+      const attemptId = identity(data, 'attemptId'), runId = identity(data, 'runId')
+      const turnId = identity(data, 'turnId'), messageId = identity(data, 'assistantMessageId')
+      if (!this.replayingSegmentedProjection && attemptId && runId && turnId && messageId) {
+        const segmentKey = `assistantSegment:${runId}:${attemptId}`
+        if (!this.slots.has(segmentKey)) this.applyField('assistantSegment', {
+          runId, turnId, attemptId, messageId, createdAt: data.startedAt ?? data.updatedAt ?? data.createdAt,
+        })
+      }
       const terminal = typeof data.status === 'string' && !['running', 'waiting'].includes(data.status)
       const pending = Array.isArray(data.pending) ? data.pending : []
       const answered = new Set(pending.map(record).filter(item => item?.status === 'answered').map(item => identity(item, 'toolCallId', 'requestId')))
       for (const slot of this.slots.values()) if (slot.kind === 'tool' && (terminal || answered.has(slot.id))) slot.pending = undefined
     }
     const discriminator = field === 'fileChange' ? identity(data, 'id', 'changeId')
+      : field === 'assistantSegment' ? `${identity(data, 'runId') ?? ''}:${identity(data, 'attemptId') ?? ''}`
       : field === 'subagentEvent' ? identity(data, 'runId') ?? identity(record(data?.snapshot), 'runId')
         : field === 'messageBlock' ? identity(data, 'messageId', 'id')
           : field === 'userMessage' ? identity(data, 'id')

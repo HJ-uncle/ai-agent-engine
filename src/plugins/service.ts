@@ -1,15 +1,17 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
+import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
 import { compilePluginSchema } from './schema.js'
 import { withFileLocks } from '../shared/file-version.js'
 import { PluginError, type CreatePluginInput, type PluginManifest, type PluginRecord, type PluginSnapshot, type UpdatePluginInput } from './types.js'
 import { describePluginRecord, type DescribedPluginRecord } from './metadata.js'
 import { pluginContributionsSchema } from './contributions.js'
+import { validateNativePluginDocument } from './native-ui.js'
+import { notifyPluginChanged } from './change-events.js'
+import { normalizePluginCapabilityRequests, pluginCapabilityIdSchema, type PluginCapabilityId, PLUGIN_CAPABILITIES } from './capabilities.js'
 
-const MAX_FILES = 100, MAX_FILE_BYTES = 1024 * 1024, MAX_SOURCE_BYTES = 8 * 1024 * 1024
-const MAX_INSTALLED_FILES = 20_000, MAX_INSTALLED_BYTES = 128 * 1024 * 1024
 const allowedExtensions = new Set(['.mjs', '.js', '.cjs', '.json', '.md', '.txt', '.svg', '.html', '.css', '.yaml', '.yml', '.csv'])
 const forbiddenSegments = new Set(['node_modules', '.git', '.staging', '.versions', '__proto__', 'prototype', 'constructor'])
 const idRule = '插件 ID 使用 1–48 位小写字母、数字和单连字符（-），首尾为字母或数字；不能使用下划线或连续连字符，例如 currency-converter'
@@ -20,11 +22,18 @@ const manifestSchema = z.object({
   description: z.string().trim().min(1).max(2000), runtime: z.literal('node'),
   tools: z.array(z.object({ name: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/, '本地工具名使用 1–32 位小写字母、数字和下划线（_），首位为字母，例如 convert_currency；不要填写 plugin_ 前缀或连字符'),
     description: z.string().trim().min(1).max(4000), inputSchema: z.record(z.unknown()),
-    entry: z.string().max(300), }).strict()).min(1).max(32),
+    entry: z.string().max(300), }).strict()).min(1),
   contributes: pluginContributionsSchema.optional(),
+  permissions: z.object({ requested: z.array(pluginCapabilityIdSchema).max(PLUGIN_CAPABILITIES.length) }).strict().optional(),
 }).strict()
 
 export interface PreparedPluginDependencies { directory: string }
+export interface PublishedPluginMetadata {
+  id: string
+  enabled: boolean
+  revision: number
+  manifest: PluginManifest
+}
 function fail(code: string, message: string, status = 400): never { throw new PluginError(code, message, status) }
 function object(value: unknown): value is Record<string, unknown> { return Boolean(value && typeof value === 'object' && !Array.isArray(value)) }
 function canonical(value: unknown): string {
@@ -58,19 +67,20 @@ export function validatePluginInput(input: CreatePluginInput): CreatePluginInput
   const parsed = manifestSchema.safeParse(input?.manifest)
   if (!parsed.success) fail('PLUGIN_MANIFEST', parsed.error.issues.slice(0, 5).map(manifestIssue).join('\n'))
   const manifest = parsed.data as PluginManifest
+  if (manifest.permissions) {
+    const requested = normalizePluginCapabilityRequests(manifest.permissions)
+    manifest.permissions = { requested }
+  }
   if (manifest.id.includes('--')) fail('PLUGIN_ID', `manifest.id: ${idRule}`)
   if (new Set(manifest.tools.map(tool => tool.name)).size !== manifest.tools.length) fail('PLUGIN_MANIFEST', 'manifest.tools: 本地工具名称重复；请为每个工具指定唯一 name')
-  if (!object(input.files) || !Object.keys(input.files).length || Object.keys(input.files).length > MAX_FILES) fail('PLUGIN_FILES', `files: 需要 1-${MAX_FILES} 个相对路径到完整 UTF-8 源码的映射；已有本地工程可用 plugin_import_preview({type:"local",path}) 导入`)
-  const names = new Set<string>(); let total = 0
+  if (!object(input.files) || !Object.keys(input.files).length) fail('PLUGIN_FILES', 'files: 需要相对路径到完整 UTF-8 源码的非空映射；已有本地工程可用 plugin_import_preview({type:"local",path}) 导入')
+  const names = new Set<string>()
   for (const [file, content] of Object.entries(input.files)) {
     const field = `files[${JSON.stringify(file)}]`
     try { validatePluginPath(file) } catch (error) { if (error instanceof PluginError) fail(error.code, `${field}: ${error.message}；请使用包内相对路径，例如 tools/convert.mjs`); throw error }
-    if (!allowedExtensions.has(path.posix.extname(file).toLowerCase()) || typeof content !== 'string' || content.includes('\0')) fail('PLUGIN_FILES', `${field}: 需要受支持文件类型的 UTF-8 文本（按扩展名判断），不能传对象、数组或二进制内容`)
+    if ((!allowedExtensions.has(path.posix.extname(file).toLowerCase()) && !file.endsWith('.d.ts')) || typeof content !== 'string' || content.includes('\0')) fail('PLUGIN_FILES', `${field}: 需要受支持文件类型的 UTF-8 文本（按扩展名判断），不能传对象、数组或二进制内容`)
     if (names.has(file.toLowerCase())) fail('PLUGIN_FILES', `${field}: 文件路径大小写冲突；请保留一个唯一拼写`)
     names.add(file.toLowerCase())
-    const bytes = Buffer.byteLength(content)
-    total += bytes
-    if (bytes > MAX_FILE_BYTES || total > MAX_SOURCE_BYTES) fail('PLUGIN_LIMIT', `${field}: 插件源码超过单文件 1 MiB 或合计 8 MiB 限制；请拆分或减少文件内容`)
   }
   for (const [index, tool] of manifest.tools.entries()) {
     const field = `manifest.tools[${index}]`
@@ -82,6 +92,7 @@ export function validatePluginInput(input: CreatePluginInput): CreatePluginInput
   const contributions = manifest.contributes
   if (contributions) {
     const pages = new Set((contributions.pages ?? []).map(page => page.id)), tools = new Set(manifest.tools.map(tool => tool.name))
+    const commands = new Set((contributions.commands ?? []).map(command => command.id))
     for (const [name, entries] of Object.entries(contributions)) {
       if (new Set(entries.map(entry => entry.id)).size !== entries.length) fail('PLUGIN_MANIFEST', `manifest.contributes.${name}: 标识重复`)
     }
@@ -91,29 +102,35 @@ export function validatePluginInput(input: CreatePluginInput): CreatePluginInput
       else {
         validatePluginPath(page.entry)
         const field = `manifest.contributes.pages[${JSON.stringify(page.id)}].entry`
-        if (!page.entry.endsWith('.html')) fail('PLUGIN_MANIFEST', `${field}: ${JSON.stringify(page.entry)} 必须指向包内 .html 文件`)
+        const extension = page.kind === 'native' ? '.json' : '.html'
+        if (!page.entry.endsWith(extension)) fail('PLUGIN_MANIFEST', `${field}: ${JSON.stringify(page.entry)} 必须指向包内 ${extension} 文件`)
         const html = input.files[page.entry]
         if (typeof html !== 'string') fail('PLUGIN_MANIFEST', `${field}: files 中缺少 ${JSON.stringify(page.entry)}；请同时提交该页面的完整 HTML 源码`)
         if (!html.trim()) fail('PLUGIN_MANIFEST', `${field}: ${JSON.stringify(page.entry)} 为空；请提供可运行的自包含 HTML 页面`)
-        const bytes = Buffer.byteLength(html)
-        if (bytes > 512 * 1024) fail('PLUGIN_MANIFEST', `${field}: ${JSON.stringify(page.entry)} 实际为 ${bytes} 字节，超过 512 KiB（524288 字节）上限`)
-        if (new Set(page.tools).size !== page.tools.length) fail('PLUGIN_MANIFEST', 'manifest.contributes.pages: tools 不可重复')
-        page.tools.forEach(assertTool)
+        if (new Set(page.tools ?? []).size !== (page.tools ?? []).length) fail('PLUGIN_MANIFEST', 'manifest.contributes.pages: tools 不可重复')
+        page.tools?.forEach(assertTool)
+        if (page.kind === 'native') validateNativePluginDocument(html, new Set(page.tools ?? []), commands)
       }
     }
-    for (const target of [...contributions.navigation ?? [], ...contributions.workspaceTabs ?? [], ...contributions.services ?? []]) {
+    for (const target of [...contributions.navigation ?? [], ...contributions.workspaceTabs ?? [], ...contributions.services ?? [], ...contributions.commands ?? [], ...contributions.views ?? [], ...contributions.settings ?? []]) {
       if (target.page && !pages.has(target.page)) fail('PLUGIN_MANIFEST', `manifest.contributes: 页面 ${target.page} 不存在`)
     }
+    for (const target of [...contributions.menus ?? [], ...contributions.statusBar ?? []]) if (!commands.has(target.command)) fail('PLUGIN_MANIFEST', 'manifest.contributes: 命令不存在 ' + target.command)
+    for (const entry of [...contributions.commands ?? [], ...contributions.hooks ?? [], ...contributions.background ?? []]) {
+      assertTool(entry.tool)
+    }
+    if (contributions.hooks?.length && !manifest.permissions?.requested.includes('events.subscribe')) fail('PLUGIN_MANIFEST', 'hooks 需要声明 events.subscribe 权限')
+    if (contributions.background?.length && !manifest.permissions?.requested.includes('background.run')) fail('PLUGIN_MANIFEST', 'background 需要声明 background.run 权限')
+    if (contributions.background?.some(entry => entry.scope === 'session' || entry.when?.session === true || entry.when?.workspace === true)) fail('PLUGIN_MANIFEST', '后台任务独立于会话，不能要求会话或工作区条件')
     for (const entry of contributions.services ?? []) {
       assertTool(entry.tool); assertTool(entry.stopTool); assertTool(entry.statusTool)
-      if (entry.args && Buffer.byteLength(JSON.stringify(entry.args)) > 64 * 1024) fail('PLUGIN_MANIFEST', 'manifest.contributes.services: 默认参数超过 64 KiB')
     }
   }
   // Management APIs edit the validated manifest. Keep its project-file mirror in
   // sync so exporting an edited template cannot silently restore an older one.
   const files = structuredClone(input.files)
   if (Object.hasOwn(files, 'aether-plugin.json')) files['aether-plugin.json'] = JSON.stringify(manifest, null, 2) + '\n'
-  if (input.source !== undefined && (!object(input.source) || Buffer.byteLength(canonical(input.source)) > 32 * 1024)) fail('PLUGIN_SOURCE', '无效的插件来源信息')
+  if (input.source !== undefined && !object(input.source)) fail('PLUGIN_SOURCE', '无效的插件来源信息')
   return { manifest, files, ...(input.source === undefined ? {} : { source: structuredClone(input.source) }) }
 }
 function contained(root: string, target: string): boolean {
@@ -132,13 +149,34 @@ function noLinks(file: string): void {
 function readJson<T>(file: string): T {
   noLinks(file)
   const stat = fs.lstatSync(file)
-  if (!stat.isFile() || stat.size > MAX_SOURCE_BYTES * 3) fail('PLUGIN_STORAGE', '插件记录无效或过大')
+  if (!stat.isFile()) fail('PLUGIN_STORAGE', '插件记录必须是普通文件')
   return JSON.parse(fs.readFileSync(file, 'utf8')) as T
 }
-function atomicJson(file: string, value: unknown): void {
+const WINDOWS_RENAME_DELAYS = [20, 40, 80, 160, 320] as const
+const WINDOWS_RENAME_TRANSIENT_ERRORS = new Set(['EPERM', 'EBUSY', 'EACCES'])
+/**
+ * Windows scanners can briefly hold a just-written file/directory without
+ * FILE_SHARE_DELETE. Keep the atomic rename and mutation lock, yielding for at
+ * most 620 ms. Never delete/copy the destination as a fallback. The guard runs
+ * again after every wait so a newly appeared revision is never replaced.
+ */
+async function atomicRename(source: string, target: string, guard: () => void): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    guard()
+    try { fs.renameSync(source, target); return }
+    catch (error) {
+      if (process.platform !== 'win32' || !WINDOWS_RENAME_TRANSIENT_ERRORS.has((error as NodeJS.ErrnoException).code ?? '') || attempt >= WINDOWS_RENAME_DELAYS.length) throw error
+      await delay(WINDOWS_RENAME_DELAYS[attempt])
+    }
+  }
+}
+async function atomicJson(file: string, value: unknown): Promise<void> {
   noLinks(file)
   const temporary = file + '.' + randomUUID() + '.tmp'
-  try { fs.writeFileSync(temporary, JSON.stringify(value), { flag: 'wx' }); fs.renameSync(temporary, file) }
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(value), { flag: 'wx' })
+    await atomicRename(temporary, file, () => { noLinks(temporary); noLinks(file) })
+  }
   finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary) }
 }
 /** Hash actual executable bytes, including installed dependencies, rather than their package names. */
@@ -152,9 +190,12 @@ function tree(directory: string): { hash: string; files: number; bytes: number }
       if (entry.isDirectory()) { walk(file); continue }
       if (!entry.isFile()) fail('PLUGIN_FILES', '插件包只接受普通文件')
       const stat = fs.statSync(file); bytes += stat.size; files++
-      if (files > MAX_INSTALLED_FILES || bytes > MAX_INSTALLED_BYTES || stat.size > 16 * 1024 * 1024) fail('PLUGIN_LIMIT', '插件依赖超过安装大小限制')
       const relative = path.relative(directory, file).replace(/\\/g, '/')
-      hash.update(JSON.stringify([relative, stat.size])); hash.update(fs.readFileSync(file))
+      hash.update(JSON.stringify([relative, stat.size]))
+      // Hash installed assets in fixed buffers; package size does not multiply heap use.
+      const fd = fs.openSync(file, 'r'), buffer = Buffer.allocUnsafe(64 * 1024)
+      try { let length: number; while ((length = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0) hash.update(buffer.subarray(0, length)) }
+      finally { fs.closeSync(fd) }
     }
   }
   walk(directory)
@@ -183,14 +224,56 @@ export class PluginService {
     if (record.id !== id || !Number.isSafeInteger(record.revision) || record.revision < 1) fail('PLUGIN_STORAGE', '插件记录损坏')
     return record
   }
+  /** Tenant identity is metadata only, needed to restore authorized background work without a renderer. */
+  async listTenantIds(): Promise<string[]> {
+    noLinks(this.rootDir)
+    if (!fs.existsSync(this.rootDir)) return []
+    return fs.readdirSync(this.rootDir, { withFileTypes: true }).filter(entry => entry.isDirectory() && /^tenant-[a-f0-9]{64}$/.test(entry.name)).flatMap(entry => {
+      const file = path.join(this.rootDir, entry.name, '.tenant.json')
+      if (!fs.existsSync(file)) return []
+      try {
+        const value = readJson<{ tenantId: string }>(file)
+        return typeof value.tenantId === 'string' && this.tenant(value.tenantId) === path.dirname(file) ? [value.tenantId] : []
+      } catch { return [] }
+    })
+  }
+  async getBackgroundState(tenantId: string): Promise<unknown> {
+    const file = path.join(this.tenant(tenantId), '.background.json')
+    return fs.existsSync(file) ? readJson<unknown>(file) : { version: 1, tasks: [] }
+  }
+  async setBackgroundState(tenantId: string, value: unknown): Promise<void> {
+    const directory = this.tenant(tenantId); fs.mkdirSync(directory, { recursive: true })
+    await atomicJson(path.join(directory, '.tenant.json'), { tenantId })
+    await atomicJson(path.join(directory, '.background.json'), value)
+  }
   async list(tenantId: string): Promise<DescribedPluginRecord[]> {
     const directory = this.tenant(tenantId)
     if (!fs.existsSync(directory)) return []
-    return fs.readdirSync(directory, { withFileTypes: true }).filter(entry => entry.isDirectory() && !entry.name.startsWith('.'))
+    // A first installation may yield while Windows releases a staging handle.
+    // record.json is its commit marker; never expose the incomplete directory.
+    return fs.readdirSync(directory, { withFileTypes: true }).filter(entry => entry.isDirectory() && !entry.name.startsWith('.') && fs.existsSync(path.join(directory, entry.name, 'record.json')))
       .map(entry => describePluginRecord(this.record(tenantId, entry.name))).sort((a, b) => b.updatedAt - a.updatedAt)
   }
+  /** Discovery does not authorize execution. Do not hash every installed file just to render a menu. */
+  async listPublishedMetadata(tenantId: string): Promise<PublishedPluginMetadata[]> {
+    const records = await this.list(tenantId)
+    return records.filter(record => record.publishedRevision).map(record => {
+      const revision = record.publishedRevision!
+      const expected = record.revisions.find(item => item.revision === revision)
+      if (!Number.isSafeInteger(revision) || revision < 1 || expected?.publishedAt === undefined)
+        fail('PLUGIN_REVISION', '已发布插件版本不存在', 409)
+      if (revision === record.revision) return { id: record.id, enabled: record.enabled, revision, manifest: record.manifest }
+      // Draft labels/schemas must never replace the still-published tool definitions.
+      const file = path.join(this.directory(tenantId, record.id), 'revisions', String(revision), 'snapshot.json')
+      const saved = readJson<{ manifest: PluginManifest; hash: string; treeHash: string; revision: number }>(file)
+      if (saved.revision !== revision || saved.manifest?.id !== record.id ||
+        saved.hash !== expected.hash || `sha256:${digest(canonical({ manifest: saved.manifest, treeHash: saved.treeHash }))}` !== saved.hash)
+        fail('PLUGIN_TAMPERED', '插件版本元数据已变化，拒绝加载', 409)
+      return { id: record.id, enabled: record.enabled, revision, manifest: saved.manifest }
+    })
+  }
   async get(tenantId: string, id: string): Promise<DescribedPluginRecord> { return describePluginRecord(this.record(tenantId, id)) }
-  private createRevision(directory: string, input: CreatePluginInput, revision: number, dependencies?: PreparedPluginDependencies): { hash: string; createdAt: number } {
+  private async createRevision(directory: string, input: CreatePluginInput, revision: number, dependencies?: PreparedPluginDependencies): Promise<{ hash: string; createdAt: number }> {
     noLinks(directory)
     const revisions = path.join(directory, 'revisions'), target = path.join(revisions, String(revision))
     fs.mkdirSync(revisions, { recursive: true })
@@ -207,17 +290,18 @@ export class PluginService {
         const modules = path.join(prepared, 'node_modules'), lockfile = path.join(prepared, 'package-lock.json')
         if (!fs.existsSync(modules) || !fs.existsSync(lockfile)) fail('PLUGIN_DEPENDENCIES', '依赖安装目录缺少 node_modules 或 package-lock.json')
         tree(modules); noLinks(lockfile)
-        if (!fs.lstatSync(lockfile).isFile() || fs.statSync(lockfile).size > 4 * 1024 * 1024) fail('PLUGIN_DEPENDENCIES', '依赖锁文件无效')
+        if (!fs.lstatSync(lockfile).isFile()) fail('PLUGIN_DEPENDENCIES', '依赖锁文件无效')
         fs.cpSync(modules, path.join(filesDirectory, 'node_modules'), { recursive: true, dereference: false, errorOnExist: true, force: false })
         if (Object.hasOwn(input.files, 'package-lock.json') && fs.readFileSync(lockfile, 'utf8') !== input.files['package-lock.json']) fail('PLUGIN_DEPENDENCIES', '依赖锁文件与源码记录不一致')
         fs.copyFileSync(lockfile, path.join(filesDirectory, 'package-lock.json'))
       }
       const installed = tree(filesDirectory), createdAt = Date.now()
       const hash = `sha256:${digest(canonical({ manifest: input.manifest, treeHash: installed.hash }))}`
-      atomicJson(path.join(staging, 'snapshot.json'), { manifest: input.manifest, files: input.files, revision, hash, treeHash: installed.hash })
-      noLinks(target)
-      if (fs.existsSync(target)) fail('PLUGIN_REVISION', '插件版本已存在', 409)
-      fs.renameSync(staging, target)
+      await atomicJson(path.join(staging, 'snapshot.json'), { manifest: input.manifest, files: input.files, revision, hash, treeHash: installed.hash })
+      await atomicRename(staging, target, () => {
+        noLinks(staging); noLinks(target)
+        if (fs.existsSync(target)) fail('PLUGIN_REVISION', '插件版本已存在', 409)
+      })
       return { hash, createdAt }
     } finally {
       if (fs.existsSync(staging)) { if (!contained(revisions, staging)) fail('PLUGIN_PATH', '无效临时目录'); fs.rmSync(staging, { recursive: true, force: true }) }
@@ -230,11 +314,14 @@ export class PluginService {
       if (fs.existsSync(directory)) fail('PLUGIN_EXISTS', 'manifest.id: 插件 ID 已存在；请先 plugin_get 读取并用 plugin_update 编辑，或选择新的插件 ID', 409)
       fs.mkdirSync(directory, { recursive: true })
       try {
-        const installed = this.createRevision(directory, input, 1, dependencies)
+        const installed = await this.createRevision(directory, input, 1, dependencies)
         const record: PluginRecord = { id: input.manifest.id, name: input.manifest.name, description: input.manifest.description,
           enabled: false, revision: 1, manifest: input.manifest, files: input.files, revisions: [{ revision: 1, ...installed }],
+          permissionGrants: [],
           ...(input.source === undefined ? {} : { source: input.source }), createdAt: installed.createdAt, updatedAt: installed.createdAt }
-        atomicJson(path.join(directory, 'record.json'), record)
+        await atomicJson(path.join(directory, 'record.json'), record)
+        await atomicJson(path.join(this.tenant(tenantId), '.tenant.json'), { tenantId })
+        notifyPluginChanged(this.rootDir, tenantId, record.id)
         return describePluginRecord(record)
       } catch (error) { noLinks(directory); if (contained(this.tenant(tenantId), directory)) fs.rmSync(directory, { recursive: true, force: true }); throw error }
     })
@@ -253,11 +340,11 @@ export class PluginService {
       }
       const revisions = path.join(directory, 'revisions')
       const revision = Math.max(previous.revision, ...fs.readdirSync(revisions).filter(name => /^\d+$/.test(name)).map(Number)) + 1
-      const installed = this.createRevision(directory, input, revision, dependencies)
+      const installed = await this.createRevision(directory, input, revision, dependencies)
       const record: PluginRecord = { ...previous, name: input.manifest.name, description: input.manifest.description,
         manifest: input.manifest, files: input.files, revision, revisions: [...previous.revisions, { revision, ...installed }],
         ...(input.source === undefined ? {} : { source: input.source }), updatedAt: installed.createdAt }
-      atomicJson(path.join(directory, 'record.json'), record); return describePluginRecord(record)
+      await atomicJson(path.join(directory, 'record.json'), record); notifyPluginChanged(this.rootDir, tenantId, id); return describePluginRecord(record)
     })
   }
   async publish(tenantId: string, id: string, expectedRevision: number): Promise<DescribedPluginRecord> {
@@ -277,11 +364,41 @@ export class PluginService {
       return { ...record, enabled }
     })
   }
+  async setPermissionGrants(tenantId: string, id: string, grants: PluginCapabilityId[], expectedRevision?: number): Promise<DescribedPluginRecord> {
+    const unique = [...new Set(grants)]
+    if (unique.some(value => !pluginCapabilityIdSchema.safeParse(value).success)) fail('PLUGIN_PERMISSION', '包含未知插件权限')
+    return this.change(tenantId, id, async record => {
+      if (expectedRevision !== undefined && expectedRevision !== record.revision) fail('PLUGIN_CONFLICT', '插件版本已变化，请重新检查后操作', 409)
+      const requested = new Set(record.manifest.permissions?.requested ?? [])
+      if (unique.some(capability => !requested.has(capability))) fail('PLUGIN_PERMISSION', '只能授予清单中已声明的权限；请先更新插件权限请求')
+      return { ...record, permissionGrants: unique, permissionRevision: record.revision }
+    })
+  }
+  async getSettings(tenantId: string, id: string): Promise<Record<string, unknown>> {
+    this.record(tenantId, id)
+    const file = path.join(this.directory(tenantId, id), 'settings.json')
+    return fs.existsSync(file) ? readJson<Record<string, unknown>>(file) : {}
+  }
+  async setAgentDisabledTools(tenantId: string, id: string, tools: string[], expectedRevision?: number): Promise<DescribedPluginRecord> {
+    const parsed = z.array(z.string().min(1)).parse(tools)
+    return this.change(tenantId, id, async record => {
+      if (expectedRevision !== undefined && expectedRevision !== record.revision) fail('PLUGIN_CONFLICT', '插件版本已变化，请刷新后操作', 409)
+      return { ...record, agentDisabledTools: [...new Set(parsed)] }
+    })
+  }
+  async setSettings(tenantId: string, id: string, value: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const file = path.join(this.directory(tenantId, id), 'settings.json')
+    return withFileLocks([path.join(this.directory(tenantId, id), 'record.json')], async () => {
+      this.record(tenantId, id); await atomicJson(file, value); return value
+    })
+  }
   private async change(tenantId: string, id: string, action: (record: PluginRecord) => Promise<PluginRecord>): Promise<DescribedPluginRecord> {
     const directory = this.directory(tenantId, id)
     return withFileLocks([path.join(directory, 'record.json')], async () => {
       const next = await action(this.record(tenantId, id)); next.updatedAt = Date.now()
-      atomicJson(path.join(directory, 'record.json'), next); return describePluginRecord(next)
+      await atomicJson(path.join(directory, 'record.json'), next)
+      await atomicJson(path.join(this.tenant(tenantId), '.tenant.json'), { tenantId })
+      notifyPluginChanged(this.rootDir, tenantId, id); return describePluginRecord(next)
     })
   }
   async remove(tenantId: string, id: string, expectedRevision?: number): Promise<void> {
@@ -292,6 +409,7 @@ export class PluginService {
       noLinks(directory)
       if (!contained(this.tenant(tenantId), directory)) fail('PLUGIN_PATH', '插件目录越界')
       fs.rmSync(directory, { recursive: true, force: false })
+      notifyPluginChanged(this.rootDir, tenantId, id)
     })
   }
   private readSnapshot(tenantId: string, id: string, revision: number): PluginSnapshot {

@@ -11,6 +11,7 @@ import { CronRunStore } from '../../cron/runs.js'
 import { createConversationHistory } from '../../conversation/factory.js'
 import { admissionProjectingHistory, projectTerminalAdmissionUsers, readAdmissionSeed } from '../projection.js'
 import { prepareUserAdmission, userAdmissionDigest } from '../index.js'
+import { markPluginRootRequest, readPluginRootProvenance } from '../plugin-owner.js'
 
 const scope = { tenantId: 'default', sessionId: 'server-seed' }
 let directory: string, db: LocalSqliteProcessClient, roots: RootRunStore
@@ -59,6 +60,37 @@ async function cronClaim() {
 }
 
 describe('Server immutable admission seed', () => {
+  it('ignores JSON ownership claims and atomically binds only host-marked plugin ownership', async () => {
+    const owner = { pluginId: 'local-plugin', revision: 3, boundSessionId: 'user-session' }
+    const forged = await create({ message: 'Client input', pluginAgentOwner: owner })
+    expect(readPluginRootProvenance((await roots.get(scope.tenantId, forged.runId))!.request)).toBeUndefined()
+    expect(JSON.parse((await readAdmissionSeed(db, scope, forged.runId)).receiptJson).provenance).toEqual({ kind: 'legacy-chat' })
+    await roots.update(scope.tenantId, forged.runId, { status: 'succeeded' })
+    const request = markPluginRootRequest({ message: 'Plugin input', pluginAgentOwner: { ...owner, revision: 99 } }, owner)
+    owner.revision = 99
+    const fault = lostAck(), root = await create(request, fault.roots)
+    expect(fault.faults).toBe(1)
+    const stored = (await roots.get(scope.tenantId, root.runId))!, captured = { ...owner, revision: 3 }
+    expect(readPluginRootProvenance(stored.request)).toEqual(captured)
+    expect(JSON.parse((await readAdmissionSeed(db, scope, root.runId)).receiptJson).provenance).toEqual({ kind: 'plugin-agent', ...captured })
+    expect(root).not.toHaveProperty('request')
+    await roots.update(scope.tenantId, root.runId, { status: 'succeeded' })
+    const copied = await create({ ...request })
+    expect(readPluginRootProvenance((await roots.get(scope.tenantId, copied.runId))!.request)).toBeUndefined()
+  })
+
+  it('retains plugin ownership after reopening and rejects root/seed owner disagreement', async () => {
+    const owner = { pluginId: 'plugin-owner', revision: 1, boundSessionId: 'bound' }
+    const root = await create(markPluginRootRequest({ message: 'Persistent plugin task' }, owner))
+    await roots.update(scope.tenantId, root.runId, { status: 'waiting' })
+    expect((await db.closeWithReceipt()).healthy).toBe(true)
+    db = new LocalSqliteProcessClient({ url: 'file:' + path.join(directory, 'fixture.db').replaceAll('\\', '/') })
+    roots = new RootRunStore(() => db)
+    expect(readPluginRootProvenance((await roots.get(scope.tenantId, root.runId))!.request)).toEqual(owner)
+    expect(JSON.parse((await readAdmissionSeed(db, scope, root.runId)).receiptJson).provenance).toEqual({ kind: 'plugin-agent', ...owner })
+    await db.execute({ sql: "UPDATE root_runs SET state=json_set(state,'$.request.pluginAgentOwner.revision',2) WHERE run_id=?", args: [root.runId] })
+    await expect(readAdmissionSeed(db, scope, root.runId)).rejects.toThrow('ADMISSION_SEED_CORRUPT')
+  })
   it('captures nested input before the first await and commits exact IDs with separate server authority', async () => {
     const request = { message: [{ type: 'text', text: 'Original immutable task' }], metadata: { label: { value: 'original' } } }
     const pending = create(request); request.message[0].text = 'mutated'; request.metadata.label.value = 'mutated'

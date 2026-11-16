@@ -74,11 +74,13 @@ console.log(JSON.stringify({ result: { count: [...args.text].length } }))
 
 独立进程用于隔离故障和限制生命周期，**不是操作系统沙箱**，插件代码仍以运行引擎的用户权限执行。因此安全模式拒绝未受约束的插件执行。默认限制包含 4 个并发进程/租户、60 秒、256 KiB 输入、2 MiB stdout、256 KiB stderr、128 MiB V8 堆；这些不是操作系统级总内存配额。
 
-插件不继承 API key、NODE_OPTIONS、代理凭据等完整环境。原生插件不自动安装 npm 依赖，目前没有插件 secret 配置页、通用 MCP/Cordis 执行适配、市场自动更新或关闭应用后的后台调度。受支持格式和限制必须以实际运行回执为准。
+插件不继承 API key、NODE_OPTIONS、代理凭据等完整环境。原生插件不自动安装 npm 依赖，目前没有插件 secret 配置页、通用 MCP/Cordis 执行适配或市场自动更新。`background` 声明及授权可启用持久周期任务；窗口关闭到托盘后继续运行，真正退出后下次启动恢复。受支持格式和完整接口见 [插件开发者文档](../../aether-code/docs/plugin-api/dist/index.html)。
 
 ## API 与验证
 
 手动页面与 AI 共用 PluginService。`/api/v1/plugins` 提供 CRUD，`/:id/publish` 发布，`/:id/test` 测试；`/plugins/imports/preview`、`/:jobId/install`、查询与取消组成导入流程。会话目录由 `/api/v1/toolkits` 返回。
+
+`GET /api/v1/plugins/runtime/changes` 提供经过相同管理鉴权的 SSE 目录通知。初连发送 `{pluginCatalogueChange:{kind:"plugin",action:"refresh",id:"*"}}`；同一存储根与租户的 PluginService 变更发送 `action:"update"` 和插件 ID，覆盖桌面、AI、子代理和后台操作。客户端收到通知后读取当前目录，重连的首帧补齐断线期间的变化；此流不使用聊天游标，也不传插件源码或会话内容。15 秒注释心跳不读取磁盘，慢连接合并通知并限制积压；断连和服务器关闭释放监听与计时器。
 
 本地无认证部署支持本机用户管理；启用认证的远端部署要求 `admin` 或 `plugin-manager`。结构化工具包选择是授权入口，历史文本中出现 `@` 标签不授予工具。
 

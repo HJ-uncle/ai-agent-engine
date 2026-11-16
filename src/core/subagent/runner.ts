@@ -8,6 +8,7 @@ import { SubagentPool } from './pool.js'
 import { configuredSubagentConcurrency } from './concurrency.js'
 import { getSubagentStore, SubagentStore } from './store.js'
 import { resultPreview, type SubagentResultMetadata } from './result.js'
+import { emitAgentLifecycleEvent } from '../runtime-events.js'
 import { isTerminalRun, type CreateSubagentRun, type RunError, type RunObserver, type RunOutcome,
   type SubagentMutation, type SubagentRunHeader, type SubagentRunView } from './types.js'
 
@@ -439,6 +440,8 @@ export class SubagentRunner {
       if (!started) {
         if (!controller.signal.aborted) controller.abort(new Error('Run no longer queued'))
       } else {
+        emitAgentLifecycleEvent({ tenantId, sessionId: initial.rootSessionId, type: 'agent.started', payload: { kind: 'subagent', runId,
+          status: 'running', childSessionId: initial.childSessionId, parentSessionId: initial.parentSessionId, rootSessionId: initial.rootSessionId, agentId: initial.agentId } })
         await emit(started)
         const configuredChildLimit = Infinity
         if (parent.requestBudget && (Number.isFinite(parent.requestBudget.limit) || Number.isFinite(configuredChildLimit))) {
@@ -513,6 +516,10 @@ export class SubagentRunner {
         if (!finished) throw error
       }
       if (!finished) throw new Error('SUBAGENT_FINISH_ACK_UNKNOWN')
+      emitAgentLifecycleEvent({ tenantId, sessionId: initial.rootSessionId,
+        type: finished.header.status === 'succeeded' ? 'agent.completed' : finished.header.status === 'cancelled' ? 'agent.cancelled' : 'agent.failed',
+        payload: { kind: 'subagent', runId, status: finished.header.status, childSessionId: initial.childSessionId,
+          parentSessionId: initial.parentSessionId, rootSessionId: initial.rootSessionId, agentId: initial.agentId } })
       await emit(finished)
       if (!executionOwner) try {
         const { projectPendingSubagents } = await import('./projection.js')

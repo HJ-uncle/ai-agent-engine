@@ -8,6 +8,7 @@ import { CollaborationError, type CollaborationBinding, type CollaborationPage, 
   type CollaborationPhase, type CollaborationReceipt, type CollaborationRootScope } from './types.js'
 import { collaborationReceipt, projectCollaborationReceipts } from './receipt-projection.js'
 import { notifyInbox, subscribeInbox } from './inbox-signal.js'
+import { authenticatedControllerOrigin } from './controller-origin.js'
 
 type Query = Pick<Client, 'execute'> | Pick<Transaction, 'execute'>
 const writeTails = new WeakMap<Client, Promise<unknown>>()
@@ -260,6 +261,26 @@ export class CollaborationStore {
           AND d.root_run_id=m.root_run_id AND d.root_attempt_id=m.root_attempt_id AND d.message_id=m.message_id
           AND d.state IN ('integrated','suppressed')) LIMIT 1`, args: [...scopeArgs(binding), binding.participantId] })
     return pending.rows.length > 0
+  }
+
+  /** Read-only steering probe. Peer text is never authority to defer tools, and
+   * a JSONL reservation is still pending until its physical delivery commits. */
+  async hasPendingControllerInput(binding: CollaborationBinding): Promise<boolean> {
+    return this.read(async tx => {
+      await this.assertProducer(tx, binding)
+      const rows = await tx.execute({ sql: `SELECT m.* FROM collaboration_messages m
+        WHERE m.tenant_id=? AND m.root_run_id=? AND m.root_attempt_id=? AND m.recipient_participant_id=? AND m.state='queued'
+          AND (substr(m.sender_participant_id,1,11)='controller:' OR substr(m.sender_invocation_run_id,1,14)='controllerinv:'
+            OR EXISTS (SELECT 1 FROM collaboration_controller_origins o WHERE o.tenant_id=m.tenant_id
+              AND o.root_run_id=m.root_run_id AND o.root_attempt_id=m.root_attempt_id AND o.message_id=m.message_id))
+          AND NOT EXISTS (SELECT 1 FROM collaboration_deliveries d WHERE d.tenant_id=m.tenant_id
+            AND d.root_run_id=m.root_run_id AND d.root_attempt_id=m.root_attempt_id AND d.message_id=m.message_id)
+          AND NOT EXISTS (SELECT 1 FROM collaboration_jsonl_deliveries d WHERE d.tenant_id=m.tenant_id
+            AND d.root_run_id=m.root_run_id AND d.root_attempt_id=m.root_attempt_id AND d.message_id=m.message_id
+            AND d.state IN ('integrated','suppressed')) ORDER BY m.seq LIMIT 1`, args: [...scopeArgs(binding), binding.participantId] })
+      for (const row of rows.rows) await authenticatedControllerOrigin(tx, binding, row, binding.invocationRunId)
+      return rows.rows.length > 0
+    })
   }
 
   async waitForInput(binding: CollaborationBinding, signal: AbortSignal): Promise<void> {

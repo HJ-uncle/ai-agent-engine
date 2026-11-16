@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import fs from 'node:fs'
+import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import type { AgentContext, Tool, ToolResult, JSONSchema } from '../core/agent-context/types.js'
 import { createApprovedMutationTool } from '../tools/management/approved-mutation.js'
@@ -8,14 +10,19 @@ import { runPlugin } from './runtime.js'
 import { assertPluginManagementAccess } from './access.js'
 import { pluginSummary } from './catalogue.js'
 import { extensionPolicy } from '../security/tool-policy.js'
-import type { CreatePluginInput, PluginRecord } from './types.js'
+import { PluginError, type CreatePluginInput, type PluginRecord, type PluginSnapshot } from './types.js'
+import { pluginProjectCases, writePluginProject } from './project.js'
 import { listPluginTemplates } from './templates.js'
 import { PLUGIN_CONTRIBUTION_JSON_SCHEMA } from './contributions.js'
+import { PLUGIN_CAPABILITY_JSON_SCHEMA } from './capabilities.js'
 import { validatePluginArguments } from './schema.js'
 import { resolvePluginCreateInput } from './create-input.js'
 import { resolvePluginUpdateInput } from './update-input.js'
 import { pluginReadProperties, pluginReadFailure, readManagedPlugin, readPluginTemplate } from './read-tools.js'
 import { hasCompactPluginMutationResult, pluginMutationPreview, pluginMutationResult } from './mutation-receipts.js'
+import { withTemporaryPluginSnapshot } from './temporary-snapshot.js'
+import { getToolOutputLimit } from '../core/agent-loop/tool-output-limit.js'
+import { workspaceManager } from '../workspace/index.js'
 
 const id: JSONSchema = { type: 'string', minLength: 1, maxLength: 48, pattern: '^(?!.*--)[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$',
   description: '插件 ID；已有插件沿用 plugin_list 返回值。仅小写字母、数字、单连字符，最多48位；例如 currency-converter，不能用 currency_converter。' }
@@ -26,7 +33,8 @@ const manifest: JSONSchema = { type: 'object', additionalProperties: false,
     name: { type: 'string', minLength: 1, maxLength: 120 }, version: { type: 'string', minLength: 1, maxLength: 64 },
     description: { type: 'string', minLength: 1, maxLength: 2000 }, runtime: { type: 'string', enum: ['node'] },
     contributes: PLUGIN_CONTRIBUTION_JSON_SCHEMA,
-    tools: { type: 'array', minItems: 1, maxItems: 32, items: { type: 'object', additionalProperties: false,
+    permissions: PLUGIN_CAPABILITY_JSON_SCHEMA,
+    tools: { type: 'array', minItems: 1, items: { type: 'object', additionalProperties: false,
       required: ['name', 'description', 'inputSchema', 'entry'], properties: {
         name: { type: 'string', minLength: 1, maxLength: 32, pattern: '^[a-z][a-z0-9_]{0,31}$', description: '本地工具名，例如 convert_currency；不填全局plugin_前缀。' },
         description: { type: 'string', minLength: 1, maxLength: 4000 },
@@ -40,7 +48,7 @@ const testCaseSchema = z.object({ name: z.string().min(1).max(200).optional(), t
 function testCases(input: Record<string, unknown>): { batched: boolean; cases: Array<z.infer<typeof testCaseSchema>> } {
   if (Object.hasOwn(input, 'cases')) {
     if (Object.hasOwn(input, 'tool') || Object.hasOwn(input, 'args')) throw new Error('cases 与 tool/args 互斥，请选择一种测试方式')
-    return { batched: true, cases: z.array(testCaseSchema).min(1).max(20).parse(input.cases) }
+    return { batched: true, cases: z.array(testCaseSchema).min(1).parse(input.cases) }
   }
   return { batched: false, cases: [testCaseSchema.parse({ tool: input.tool, args: input.args })] }
 }
@@ -50,6 +58,40 @@ function authorize(ctx: AgentContext) {
 }
 function failure(error: unknown): ToolResult { const message = error instanceof Error ? error.message : String(error); return { success: false, output: message, error: message } }
 function ok(value: unknown): ToolResult { return { success: true, output: JSON.stringify(value) } }
+function scaffoldDirectory(ctx: AgentContext, directory: string): string {
+  const root = path.resolve(workspaceManager.getWorkingDirectory(ctx)), target = path.resolve(root, directory), relative = path.relative(root, target)
+  if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)) throw new PluginError('PLUGIN_PATH', '脚手架只能创建在当前会话工作区内', 403)
+  return target
+}
+
+type ScaffoldCase = { name?: string; tool: string; args: Record<string, unknown>; expected?: unknown; artifacts?: unknown }
+type PluginTestSummary = { revision: number; total: number; passed: number; failed: number; cases: Array<Record<string, unknown>> }
+
+/** Run a bounded set of business cases against an immutable snapshot. The helper is
+ * shared by the one-step scaffold and the regular plugin_test path so a scaffold
+ * cannot be marked complete by merely exiting zero. */
+async function runPluginCases(snapshot: PluginSnapshot, cases: ScaffoldCase[], ctx: AgentContext): Promise<PluginTestSummary> {
+  const results: Array<Record<string, unknown>> = []
+  for (const [index, example] of cases.entries()) {
+    const name = example.name ?? `case-${index + 1}`
+    try {
+      const output = await runPlugin(snapshot, example.tool, example.args, { signal: ctx.signal, tenantId: ctx.tenantId })
+      const resultMatches = !Object.hasOwn(example, 'expected') || isDeepStrictEqual(output.result, example.expected)
+      const artifactsMatch = !Object.hasOwn(example, 'artifacts') || isDeepStrictEqual(output.artifacts, example.artifacts)
+      const passed = resultMatches && artifactsMatch
+      results.push({ name, tool: example.tool, ...output, passed, ...(passed ? {} : { error: resultMatches ? '产物内容与 artifacts 不匹配' : '业务 result 与 expected 不匹配', expected: example.expected }) })
+    } catch (error) { results.push({ name, tool: example.tool, passed: false, error: error instanceof Error ? error.message : String(error) }) }
+  }
+  const failed = results.filter(example => !example.passed).length
+  return { revision: snapshot.revision, total: results.length, passed: results.length - failed, failed, cases: results }
+}
+
+/** Execute template examples before persisting a scaffold. The temporary directory
+ * is deliberately outside plugin storage so a failed scaffold leaves no draft. */
+async function testScaffoldInput(input: CreatePluginInput, cases: ScaffoldCase[], ctx: AgentContext): Promise<PluginTestSummary> {
+  const snapshot: PluginSnapshot = { ...input, id: input.manifest.id, tenantId: ctx.tenantId, directory: '', hash: 'scaffold-preview', revision: 1 }
+  return withTemporaryPluginSnapshot(snapshot, sealed => runPluginCases(sealed, cases, ctx))
+}
 
 export function createPluginManagementTools(service = new PluginService()): Tool[] {
   const importer = new PluginImporter(service)
@@ -66,13 +108,13 @@ export function createPluginManagementTools(service = new PluginService()): Tool
       fileMode: { type: 'string', enum: ['replace', 'merge'], description: '省略为 replace（完整替换，必须提供manifest）；merge 仅编辑显式列出的文件，可省略manifest。' },
       manifest: { ...manifest, description: manifest.description + ' replace 模式必填；merge 模式省略时沿用读取修订的完整清单，提供时仍必须是完整清单。' },
       files: { ...files, description: files.description + ' replace 为完整工程；merge 为新增/修改文件，每个值仍是该文件完整内容，不能传补丁片段。' },
-      deleteFiles: { type: 'array', maxItems: 100, uniqueItems: true, items: { type: 'string', minLength: 1, maxLength: 300 }, description: '仅merge可用。要删除的已有包内相对路径，使用准确大小写；不得与files中的写入路径重复。删除后完整工程仍须有效。' },
+      deleteFiles: { type: 'array', uniqueItems: true, items: { type: 'string', minLength: 1, maxLength: 300 }, description: '仅merge可用。要删除的已有包内相对路径，使用准确大小写；不得与files中的写入路径重复。删除后完整工程仍须有效。' },
     } },
     { name: 'plugin_publish', title: '发布插件', description: '发布当前草稿并启用，返回精确 selectionId、globalToolNames 与 toolNameMap。发布后用户可从插件列表打开操作页，按参数字段直接使用。发布前用 plugin_test 验收；发布不会把工具自动加入当前聊天请求范围，也不能靠 load_tools 扩权。用户通过 @ 选择返回的 selectionId 后，后续请求才可调用这些工具；当前管理会话继续用 plugin_test 测试。', required: ['id', 'expectedRevision'], properties: { id, expectedRevision } },
     { name: 'plugin_set_enabled', title: '启停插件', description: '启停已发布插件。停用立即阻止后续调用。', required: ['id', 'enabled'], properties: { id, enabled: { type: 'boolean' } } },
     { name: 'plugin_delete', title: '删除插件', description: '移除插件目录与版本；不删除用户工作区产物。', required: ['id'], properties: { id } },
-    { name: 'plugin_test', title: '测试插件', description: '在独立 Node 进程测试草稿，返回结果与产物预览，不写工作区。多用例优先 cases:[{name?,tool,args,expected?}] 一次批准后顺序运行；expected 精确比较业务result，任一失败整体失败。cases 与旧式 tool/args 互斥。不要并行触发多个确认，必须检查业务result，不得发布诊断版。进程不是操作系统沙箱。', required: ['id'], properties: { id, revision: { type: 'integer', minimum: 1 }, tool: { type: 'string' }, args: { type: 'object' },
-      cases: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'object', properties: { name: { type: 'string' }, tool: { type: 'string' }, args: { type: 'object' }, expected: {} }, required: ['tool', 'args'], additionalProperties: false } } } },
+    { name: 'plugin_test', title: '测试插件', description: '在独立 Node 进程测试草稿，返回结果与产物预览，不写工作区。多用例优先 cases:[{name?,tool,args,expected?}] 顺序运行，普通模式只需一次批准，本会话完全访问时自动执行；expected 精确比较业务result，任一失败整体失败。cases 与旧式 tool/args 互斥。必须检查业务result，不得发布诊断版。进程不是操作系统沙箱。', required: ['id'], properties: { id, revision: { type: 'integer', minimum: 1 }, tool: { type: 'string' }, args: { type: 'object' },
+      cases: { type: 'array', minItems: 1, items: { type: 'object', properties: { name: { type: 'string' }, tool: { type: 'string' }, args: { type: 'object' }, expected: {} }, required: ['tool', 'args'], additionalProperties: false } } } },
     { name: 'plugin_import_install', title: '安装插件', description: '安装已预览的不可变导入作业，返回草稿。Remark 适配依赖安装禁用生命周期脚本。随后测试和发布。', required: ['jobId'], properties: { jobId: { type: 'string' } } },
   ]
   const mutations = specs.map(spec => createApprovedMutationTool({
@@ -130,18 +172,8 @@ export function createPluginManagementTools(service = new PluginService()): Tool
           const snapshot = await service.snapshot(ctx.tenantId, String(input.id), Number(input.revision), { allowDraft: true })
           const examples = testCases(input)
           if (!examples.batched) { result = await runPlugin(snapshot, examples.cases[0].tool, examples.cases[0].args, { signal: ctx.signal, tenantId: ctx.tenantId }); break }
-          const cases: Array<Record<string, unknown>> = []
-          for (const [index, example] of examples.cases.entries()) {
-            const name = example.name ?? `case-${index + 1}`
-            try {
-              const output = await runPlugin(snapshot, example.tool, example.args, { signal: ctx.signal, tenantId: ctx.tenantId })
-              const passed = !Object.hasOwn(example, 'expected') || isDeepStrictEqual(output.result, example.expected)
-              cases.push({ name, tool: example.tool, ...output, passed, ...(passed ? {} : { error: '业务 result 与 expected 不匹配', expected: example.expected }) })
-            } catch (error) { cases.push({ name, tool: example.tool, passed: false, error: error instanceof Error ? error.message : String(error) }) }
-          }
-          const failed = cases.filter(example => !example.passed).length
-          const summary = { revision: snapshot.revision, total: cases.length, passed: cases.length - failed, failed, cases }
-          return { success: failed === 0, output: JSON.stringify(summary), ...(failed ? { error: `${failed} 个插件测试用例失败，请检查业务结果后修复再发布` } : {}) }
+          const summary = await runPluginCases(snapshot, examples.cases, ctx)
+          return { success: summary.failed === 0, output: JSON.stringify(summary), ...(summary.failed ? { error: `${summary.failed} 个插件测试用例失败，请检查业务结果后修复再发布` } : {}) }
         }
         case 'plugin_import_install': {
           const denied = extensionPolicy(ctx); if (denied) return denied
@@ -153,8 +185,64 @@ export function createPluginManagementTools(service = new PluginService()): Tool
       return { ...response, ...(resourceChange ? { metadata: { ...response.metadata, resourceChange } } : {}) }
     },
   }))
+  const scaffold = createApprovedMutationTool({
+    name: 'plugin_scaffold', displayName: '创建并验证插件',
+    description: '从内置模板生成并测试完整工程。自定义开发优先带 directory（工作区内的新目录），返回 projectPath，可直接编辑并用开发模式打开，无需安装发布或复录模板。省略 directory 则创建安装草稿。plugin_get_template → plugin_scaffold 即可了解SDK并获得脚手架；只有模板已覆盖的需求可再 plugin_publish 完成，自定义功能必须继续实现与验证。自动执行内置案例，cases 可补充业务 result 断言；失败不创建工程。',
+    parameters: { type: 'object', required: ['templateId', 'id'], additionalProperties: false, properties: {
+      templateId: { type: 'string', enum: listPluginTemplates().map(template => template.id), description: '内置模板 ID。由 plugin_get_template 返回，不能填写路径或未知值。' },
+      id: { ...id, description: '新插件 ID，与模板 ID 独立。' },
+      name: { type: 'string', minLength: 1, maxLength: 120 },
+      description: { type: 'string', minLength: 1, maxLength: 2000 },
+      directory: { type: 'string', minLength: 1, maxLength: 4096, description: '可选：在当前会话工作区内生成可直接开发的完整本地工程，目标目录必须不存在、父目录必须已存在。返回 projectPath，可由本地开发模式打开；不同时安装草稿。省略时创建已测试安装草稿。' },
+      cases: { type: 'array', minItems: 1, items: { type: 'object', additionalProperties: false, required: ['tool', 'args'], properties: { name: { type: 'string', minLength: 1, maxLength: 200 }, tool: { type: 'string', minLength: 1 }, args: { type: 'object' }, expected: {} } } },
+    } },
+    async prepare(raw, ctx) {
+      authorize(ctx)
+      const denied = extensionPolicy(ctx); if (denied) throw new Error(denied.output)
+      const parsed = z.object({ templateId: z.string().min(1).max(64), id: z.unknown(), name: z.string().trim().min(1).max(120).optional(), description: z.string().trim().min(1).max(2000).optional(), directory: z.string().min(1).max(4096).optional(), cases: z.array(testCaseSchema).min(1).optional() }).strict().parse(raw)
+      const { cases: authoredCases, directory, ...templateArgs } = parsed
+      const projectPath = directory === undefined ? undefined : scaffoldDirectory(ctx, directory)
+      if (projectPath && (fs.existsSync(projectPath) || !fs.existsSync(path.dirname(projectPath)))) throw new PluginError('PLUGIN_EXISTS', '目标目录必须不存在，且父目录必须已存在', 409)
+      const project = resolvePluginCreateInput(templateArgs)
+      const cases = [...pluginProjectCases(project), ...authoredCases ?? []]
+      for (const example of cases) {
+        const tool = project.manifest.tools.find(item => item.name === example.tool)
+        if (!tool) throw new PluginError('PLUGIN_TOOL', '插件模板工具不存在：' + example.tool)
+        validatePluginArguments(tool.inputSchema, example.args)
+      }
+      return { version: 1 as const, tenantId: ctx.tenantId,
+        input: { ...project, cases, ...(projectPath ? { projectPath } : {}) },
+        preview: { action: 'plugin_scaffold', id: project.manifest.id, name: project.manifest.name, version: project.manifest.version,
+          fileCount: Object.keys(project.files).length, totalBytes: Object.values(project.files).reduce((total, source) => total + Buffer.byteLength(source, 'utf8'), 0),
+          tests: cases.map(example => ({ name: example.name, tool: example.tool })),
+          ...(projectPath ? { projectPath } : {}), note: '批准后先在临时快照运行以上案例；全部通过才创建完整工程。' } }
+    },
+    preview: operation => operation.preview,
+    async apply(operation, ctx) {
+      authorize(ctx)
+      const denied = extensionPolicy(ctx); if (denied) return denied
+      const input = operation.input as CreatePluginInput & { cases: Array<z.infer<typeof testCaseSchema>>; projectPath?: string }
+      const project = { manifest: input.manifest, files: input.files }
+      const test = await testScaffoldInput(project, input.cases, ctx)
+      if (test.failed) return { success: false, status: 'failed', output: JSON.stringify({ test }), error: `${test.failed} 个模板案例失败，未创建草稿` }
+      const testSummary = { revision: test.revision, total: test.total, passed: test.passed, failed: test.failed }
+      if (input.projectPath) {
+        const projectPath = scaffoldDirectory(ctx, input.projectPath)
+        if (projectPath !== input.projectPath) throw new PluginError('PLUGIN_CONFLICT', '批准期间工作区已变化，请重新创建工程', 409)
+        writePluginProject(projectPath, project)
+        return { success: true, output: JSON.stringify({ id: project.manifest.id, projectPath, test: testSummary,
+          next: '在插件开发模式打开 projectPath，在源码上实现需求并刷新验证；完成后导入、测试、发布。' }), metadata: { resourceChange: { kind: 'plugin-project', action: 'scaffold', id: project.manifest.id, path: projectPath } } }
+      }
+      const created = await service.create(ctx.tenantId, project)
+      const receipt = pluginMutationResult('plugin_create', created, ctx)
+      const output = JSON.stringify({ plugin: JSON.parse(receipt.output), test: testSummary })
+      return { ...receipt, output: output.length <= getToolOutputLimit(ctx.toolProfile, ctx) ? output : receipt.output,
+        metadata: { ...receipt.metadata, test: testSummary, resourceChange: { kind: 'plugin', action: 'scaffold', id: created.id } } }
+    },
+  })
   return [
-    { name: 'plugin_get_template', displayName: '插件工程模板', description: '只读发现标准模板和真实工程协议；大结果返回紧凑目录，不截断源码。无id发现模板，传id读模板；用section:manifest读精确清单JSON，section:file+file读原始源码，section:protocol+protocol读uiBridge/uiTheme/download等单字段，section:contributions读完整能力目录。分页返回content/offset/nextOffset/totalChars/revision，连续拼接content至nextOffset=null，续读携带同一revision；不要猜未读取的协议或源码。匹配模板时用plugin_create({templateId:模板id,id:新插件id})由宿主复用完整工程，不必复录。desktop-timer不支持跨重启提醒。',
+    scaffold,
+    { name: 'plugin_get_template', displayName: '插件工程模板', description: '只读发现标准模板和真实工程协议；大结果返回紧凑目录，不截断源码。无id发现模板，传id读模板；用section:manifest读精确清单JSON，section:file+file读原始源码，section:protocol+protocol读uiBridge/uiTheme/download等单字段，section:contributions读完整能力目录。分页返回content/offset/nextOffset/totalChars/revision，连续拼接content至nextOffset=null，续读携带同一revision；不要猜未读取的协议或源码。匹配模板时用plugin_scaffold({templateId:模板id,id:新插件id})直接生成并验证完整工程，不必逐文件读取或复录。desktop-timer不支持跨重启提醒。',
       parameters: { type: 'object', properties: { id: { type: 'string', description: '模板 ID：json-tool、markdown-report、time-calculator、currency-converter、desktop-timer；省略则发现模板及读取公共协议。' }, ...pluginReadProperties }, additionalProperties: false },
       async execute(raw, ctx) { try { authorize(ctx); return readPluginTemplate(raw, ctx) } catch (error) { return pluginReadFailure(error, ctx) } } },
     { name: 'plugin_list', displayName: '插件目录', description: '列出本租户插件，包括草稿、停用插件和发布版本；返回准确 globalToolNames/toolNameMap、selectionId 与 publishedSelectionId。selectionId 只对应当前已发布修订，草稿为null。发布不会自动扩大当前请求的工具范围。', parameters: { type: 'object', properties: {}, additionalProperties: false },

@@ -87,6 +87,8 @@ export interface Pending {
   options?: unknown[]
   status: 'pending' | 'answered'
   output?: string
+  /** Public bounded source-guard wait projection; sealed pendingAction remains private. */
+  sourceChangeWait?: Record<string, unknown>
 }
 
 export interface ResumeToolCall {
@@ -333,11 +335,22 @@ export interface IToolRegistry {
 
 export type BrowserPrincipal = Pick<AuthContext, 'tenantId' | 'userId' | 'method'>
 
+/** Runtime-owned fact after an explicit continuation admission; never a model argument. */
+export interface ExecutionContinuation {
+  kind: 'root' | 'child'
+  previousAttemptId: string
+  attemptId: string
+  previousRunId?: string
+}
+
 export interface AgentContext {
   /** Descriptive UI capabilities; never used to grant execution authority. */
   clientCapabilities?: import('../client-capabilities.js').ClientCapabilityManifest
   /** Trusted server capability; never copied into model metadata or continuation. */
   executionOwner?: import('../collaboration/execution-owner.js').ExecutionOwner
+  /** Runtime-minted attempt identity for durable transcript segmentation. */
+  executionAttemptId?: string
+  executionContinuation?: Readonly<ExecutionContinuation>
   /** Private backend capability minted only after canonical production admission. */
   sqliteDelivery?: import('../collaboration/sqlite-react-boundary.js').SQLiteReActBoundary
   jsonlDelivery?: import('../collaboration/jsonl-react-boundary.js').JSONLReActBoundary
@@ -413,6 +426,8 @@ export interface AgentContext {
 export interface CreateAgentContextOptions {
   clientCapabilities?: import('../client-capabilities.js').ClientCapabilityManifest
   executionOwner?: import('../collaboration/execution-owner.js').ExecutionOwner
+  executionAttemptId?: string
+  executionContinuation?: Readonly<ExecutionContinuation>
   commitPending?: (pending: Pending) => void | Promise<void>
   browserAuthority?: import('../browser-authority.js').BrowserHostAuthority
   browserPrincipal?: Readonly<BrowserPrincipal>

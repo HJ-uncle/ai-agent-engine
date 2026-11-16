@@ -1,0 +1,18 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>工作台扩展示例</title><style>
+*{box-sizing:border-box}body{margin:0;padding:16px;font:13px system-ui;color:var(--fg);background:var(--bg-surface)}
+h1{font-size:16px;margin:0 0 8px}p{color:var(--fg-muted);line-height:1.5}button,textarea{font:inherit;border:1px solid var(--border);border-radius:8px;padding:8px;color:var(--fg);background:var(--bg-input)}
+textarea{width:100%;min-height:64px}button{cursor:pointer}button:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}button:disabled{opacity:.5;cursor:wait}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6}output{display:block;color:var(--fg-muted)}
+</style><h1>会话检查</h1><p>绑定会话后，使用平台模型分析前 50 条消息。显示分析范围，不把部分分析标记为完整会话审查。</p>
+<textarea id="notes" aria-label="分析重点" placeholder="例如：确认需求是否遗漏，以及哪些结论缺少验证"></textarea>
+<div class="actions"><button id="inspect">查看挂载上下文</button><button id="review">分析会话</button><button id="copy">复制结果</button><button id="notify">发送完成通知</button></div>
+<output id="status" role="status"></output><pre id="result"></pre><script>
+const status = document.getElementById('status'), result = document.getElementById('result');
+let text = '';
+async function run(button, operation, replaceReport = true) { button.disabled = true; status.textContent = '处理中…'; try { const value = await operation(); if (replaceReport) { text = typeof value === 'string' ? value : JSON.stringify(value, null, 2); result.textContent = text; } status.textContent = '已完成'; } catch (error) { status.textContent = error.message; } finally { button.disabled = false; } }
+document.getElementById('inspect').onclick = function () { run(this, () => $AE.context()); };
+document.getElementById('review').onclick = function () { run(this, async () => (await $AE.invoke('review_session', {notes: document.getElementById('notes').value})).result); };
+document.getElementById('copy').onclick = function () { run(this, () => $AE.ui.clipboard.write(text), false); };
+document.getElementById('notify').onclick = function () { run(this, () => $AE.ui.notify({title:'会话检查',body:'当前检查已完成，可回到插件查看结果。'}), false); };
+</script></html>

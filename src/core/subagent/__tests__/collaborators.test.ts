@@ -25,6 +25,8 @@ function dependencies(records: SubagentRun[] = [], registered: Agent[] = [profil
     runs: { getRunHeader: vi.fn(async (tenant: string, id: string, _fullRecord?: boolean) => header(records.find(item => item.tenantId === tenant && item.runId === id))),
       latestAgentHeader: vi.fn(async (tenant: string, parent: string, agentId: string, _fullRecord?: boolean) => header(records.filter(item => item.tenantId === tenant && item.parentSessionId === parent
         && item.rootSessionId === parent && (item.agentId ?? item.continuation?.agent?.id) === agentId).at(-1))),
+      latestChildHeader: vi.fn(async (tenant: string, parent: string, child: string) => header(records.filter(item => item.tenantId === tenant
+        && item.parentSessionId === parent && item.childSessionId === child).at(-1))),
       hasActiveChildInvocation: vi.fn(async (tenant: string, parent: string, child: string) => records.some(item => item.tenantId === tenant
         && item.parentSessionId === parent && item.childSessionId === child && !isTerminalRun(item.status))) },
     agents: { getById: vi.fn(async (id: string, tenant: string) => registered.find(item => item.id === id && item.tenantId === tenant) ?? null) },
@@ -32,6 +34,21 @@ function dependencies(records: SubagentRun[] = [], registered: Agent[] = [profil
 }
 
 describe('explicit collaborators pre-admission validation', () => {
+  it('keeps an explicit no-message continuation and dispatches no manufactured task with an attempt-specific identity', async () => {
+    const prepared = await prepareCollaborators('tenant', 'parent', [{ resumeRunId: 'first' }], { ...dependencies([run()]), requestMessage: null })
+    expect(prepared).toMatchObject([{ resumeRunId: 'first', continueTask: true }])
+    const parent = { conversationId: 'turn', rootRunId: 'root', executionContinuation: { kind: 'root', previousAttemptId: 'old', attemptId: 'new' } } as AgentContext
+    const dispatch = createCollaboratorDispatch(prepared, null, parent)
+    expect(dispatch.delegatedTools).toHaveLength(1)
+    expect(dispatch.delegatedTools[0].args).not.toHaveProperty('task')
+    expect(dispatch.delegatedTools[0].id).toBe('collaborator:root:new:0')
+    expect(dispatch.hasPendingDelegations()).toBe(false)
+  })
+
+  it('rejects a stale terminal child before root admission instead of forking its latest history', async () => {
+    await expect(prepareCollaborators('tenant', 'parent', [{ resumeRunId: 'first' }],
+      { ...dependencies([run(), run({ runId: 'latest' })]), requestMessage: null })).rejects.toMatchObject({ statusCode: 409 })
+  })
   it.each(['', ' \n\t', '!', '！？……', '\u200b\u200d', '👍✨'])('leaves no-task selection %j to the main conversation without child lookups', async requestMessage => {
     const deps = { ...dependencies(), requestMessage }
     expect(await prepareCollaborators('tenant', 'parent', [{ agentId: profile.id }, { resumeRunId: 'first', task: requestMessage }], deps)).toEqual([])

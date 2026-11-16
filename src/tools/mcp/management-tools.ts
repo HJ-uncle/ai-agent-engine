@@ -60,10 +60,10 @@ export function createMcpManagementTools(service = new McpManagementService()): 
       },
       preview: operation => ({ action: operation.action, id: operation.id, scope: operation.scope, configFile: operation.target,
         before: operation.before, after: operation.after, ...(operation.action === 'test' ? { notice: '将启动扩展或发送网络请求，只发现工具目录，不调用业务工具；15 秒内结束。' } : {}) }),
-      apply: async (operation, ctx) => {
+      apply: async (operation, ctx, raw) => {
         try {
           if (operation.action !== spec.action) throw new Error('MCP approval action mismatch')
-          const result = await service.apply(context(ctx), operation, ctx.resumeToolCall!.toolCall.args)
+          const result = await service.apply(context(ctx), operation, raw)
           return { success: true, status: 'succeeded', output: JSON.stringify(result), ...(result.resourceChange ? { metadata: { resourceChange: result.resourceChange } } : {}) }
         } catch (error) { throw publicMcpError(error, ctx.signal) }
       },

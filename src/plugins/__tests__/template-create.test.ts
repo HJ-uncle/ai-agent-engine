@@ -18,6 +18,8 @@ beforeEach(() => {
   root = fs.mkdtempSync(path.join(fixtures, 'case-'))
   service = new PluginService(path.join(root, 'plugins'))
   vi.stubEnv('AUTH_ENABLED', 'false')
+  vi.stubEnv('DATA_DIR', path.join(root, 'state', 'agent.db'))
+  vi.stubEnv('DEFAULT_SECURITY_MODE', 'standard')
 })
 afterEach(() => {
   vi.restoreAllMocks(); vi.unstubAllEnvs()
@@ -36,8 +38,8 @@ afterEach(() => {
   if (!fs.readdirSync(fixtures).length) fs.rmdirSync(fixtures)
 })
 
-async function prepare(tool: Tool, args: Record<string, unknown>) {
-  const context = { ...ctx, currentToolCallId: 'create-template-call' }
+async function prepare(tool: Tool, args: Record<string, unknown>, overrides: Partial<AgentContext> = {}) {
+  const context = { ...ctx, ...overrides, currentToolCallId: 'create-template-call' }
   const pending = await tool.preflight!(args, context)
   expect(pending?.needsConfirmation, pending?.output).toBe(true)
   Object.assign(context, { approvedToolCallId: context.currentToolCallId,
@@ -51,7 +53,7 @@ describe('host-created template source', () => {
     const input = resolvePluginCreateInput({ templateId: 'currency-converter', id: 'office-currency', name: ' 办公换算器 ', description: ' 自用的明确汇率换算 ' })
     expect(input.manifest).toMatchObject({ id: 'office-currency', name: '办公换算器', description: '自用的明确汇率换算', version: original.manifest.version })
     expect(input.manifest.tools).toEqual(original.manifest.tools)
-    expect(Object.keys(input.files)).toHaveLength(6)
+    expect(Object.keys(input.files).sort()).toEqual(Object.keys(original.files).sort())
     for (const file of ['main.mjs', 'examples/cases.json', 'scripts/test.mjs']) expect(input.files[file]).toBe(original.files[file])
     expect(JSON.parse(input.files['aether-plugin.json'])).toEqual(input.manifest)
     expect(JSON.parse(input.files['package.json']).name).toBe('office-currency')
@@ -103,6 +105,49 @@ describe('host-created template source', () => {
 })
 
 describe('approved template creation', () => {
+  it('materializes the tested scaffold in the current workspace without installing a draft', async () => {
+    const tool = createPluginManagementTools(service).find(tool => tool.name === 'plugin_scaffold')!
+    const args = { templateId: 'json-tool', id: 'local-json', directory: 'my-plugin' }
+    const { context } = await prepare(tool, args, { cwd: root, projectRoot: root })
+    const result = await tool.execute(args, context)
+    expect(result.success, result.output).toBe(true)
+    expect(JSON.parse(result.output)).toMatchObject({ projectPath: path.join(root, 'my-plugin'), test: { failed: 0 } })
+    expect(JSON.parse(fs.readFileSync(path.join(root, 'my-plugin', 'aether-plugin.json'), 'utf8')).id).toBe('local-json')
+    expect(await service.list('default')).toEqual([])
+    expect((await tool.preflight!({ ...args, directory: '../escape' }, context))?.success).toBe(false)
+    expect((await tool.preflight!(args, { ...ctx, cwd: root, projectRoot: root }))?.success).toBe(false)
+  })
+  it('scaffolds and verifies a complete template in one approved call', async () => {
+    const tool = createPluginManagementTools(service).find(tool => tool.name === 'plugin_scaffold')!
+    const args = { templateId: 'json-tool', id: 'scaffolded-json' }
+    const { context } = await prepare(tool, args)
+    const result = await tool.execute(args, context)
+    expect(result.success, result.output).toBe(true)
+    const output = JSON.parse(result.output)
+    expect(output.plugin).toMatchObject({ id: 'scaffolded-json', revision: 1, enabled: false })
+    expect(output.test).toMatchObject({ revision: 1, total: 3, passed: 3, failed: 0 })
+    expect(result.metadata?.resourceChange).toEqual({ kind: 'plugin', action: 'scaffold', id: 'scaffolded-json' })
+    expect((await service.list('default')).map(plugin => plugin.id)).toEqual(['scaffolded-json'])
+  })
+
+  it('does not leave a draft when a custom scaffold case fails', async () => {
+    const tool = createPluginManagementTools(service).find(tool => tool.name === 'plugin_scaffold')!
+    const args = { templateId: 'json-tool', id: 'failed-scaffold', cases: [{ name: 'wrong expectation', tool: 'normalize_text', args: { text: 'x' }, expected: { text: 'wrong', characters: 5 } }] }
+    const { context } = await prepare(tool, args)
+    const result = await tool.execute(args, context)
+    expect(result.success).toBe(false)
+    expect(JSON.parse(result.output)).toMatchObject({ test: { total: 4, failed: 1, passed: 3 } })
+    expect(await service.list('default')).toEqual([])
+  })
+
+  it('refuses scaffold execution under safe policy before asking for approval', async () => {
+    vi.stubEnv('DEFAULT_SECURITY_MODE', 'safe')
+    const tool = createPluginManagementTools(service).find(tool => tool.name === 'plugin_scaffold')!
+    const blocked = await tool.preflight!({ templateId: 'json-tool', id: 'safe-scaffold' }, ctx)
+    expect(blocked?.success).toBe(false); expect(blocked?.needsConfirmation).not.toBe(true)
+    expect(await service.list('default')).toEqual([])
+  })
+
   it('seals source before approval and never re-reads a changed template when resuming', async () => {
     const tool = createPluginManagementTools(service).find(tool => tool.name === 'plugin_create')!
     const args = { templateId: 'currency-converter', id: 'precise-currency', name: '精确换算器' }

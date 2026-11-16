@@ -10,6 +10,7 @@ import { MAX_DEFAULT_DELIVERY_ENVELOPE_BYTES } from './sqlite-delivery.js'
 import { ensureHistoryMaintenanceSchema, type HistoryMaintenanceLease } from './history-maintenance.js'
 import type { ExecutionOwner } from './execution-owner.js'
 import { assertDeliveryExecution, assertDeliveryProducer } from './delivery-execution.js'
+import { delegatedContinuationInput } from '../subagent/delegated-input.js'
 import { authenticatedJSONLHistory, canonicalJSONLMessage, jsonlHistoryEpoch,
   type JSONLHistoryOrigin, type JSONLPhysicalSnapshot, type JSONLAppendPlan } from '../../storage/conversation/jsonl-origin.js'
 
@@ -46,13 +47,16 @@ export class JSONLCollaborationDelivery {
     if (origin.db() !== this.store.db || history.tenantId !== binding.tenantId || history.sessionId !== binding.sessionId)
       fail('forbidden', 'JSONL delivery must use the admitted producer and same actual receipt Client')
     await this.store.prepare()
+    const continuation = await delegatedContinuationInput(this.store.db, binding)
+    if (continuation && (history.anchorId !== continuation.anchor.messageId || history.anchorContent !== continuation.content))
+      fail('forbidden', 'JSONL child continuation cannot replace its admitted delegated input')
     return origin.withLease(binding, async () => {
       await assertDeliveryProducer(this.store, this.store.db, producer, binding, history.executionOwner)
       await this.store.db.execute({ sql: 'INSERT OR IGNORE INTO collaboration_jsonl_epochs VALUES(?,?,0)', args: [binding.tenantId, binding.sessionId] })
       const epoch = await jsonlHistoryEpoch(this.store.db, binding, true), snapshot = await origin.inspect(binding)
       const active = await authenticatedJSONLHistory(origin, binding, snapshot, true, history.anchorId)
       const input = active.find(message => message.id === history.anchorId)
-      if (!input || (input as Message & { conversationId?: string }).conversationId !== binding.turnId
+      if (!input || (input as Message & { conversationId?: string }).conversationId !== (continuation?.anchor.turnId ?? binding.turnId)
         || history.anchorContent !== undefined && (typeof input.content === 'string' ? input.content : JSON.stringify(input.content)) !== history.anchorContent)
         fail('conflict', 'JSONL persisted input differs from its immutable admitted task')
       const peer = await this.store.db.execute({ sql: `SELECT 1 FROM collaboration_jsonl_deliveries WHERE tenant_id=? AND history_session_id=? AND history_message_id=?`,

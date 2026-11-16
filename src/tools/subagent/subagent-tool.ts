@@ -23,6 +23,7 @@ import { compactBuiltinToolDefinition } from '../model-tool-definitions.js'
 import { loadModelTools, selectRequestTools } from '../model-tool-loading.js'
 import { throwIfAborted } from '../../core/utils/abort.js'
 import { ToolRegistry } from '../../core/tool-registry/index.js'
+import { guardPluginAgentChildRegistry } from '../../plugins/agent-registry-authority.js'
 import { trustBuiltinTool } from '../../security/tool-policy.js'
 import { todoTools } from '../todo/todo-tool.js'
 import { officeInspectTool } from '../office/index.js'
@@ -35,6 +36,7 @@ import { buildOfficeExecutionPrompt } from '../../core/office-prompt.js'
 import { claimTaskKey, bindTaskKey } from '../../core/subagent/dependency-hooks.js'
 import { inheritPluginRegistryBindings, pluginRegistryBindings } from '../../plugins/identity.js'
 import { restorePluginBindings, withPluginTools } from '../../plugins/continuation.js'
+import { retainDelegatedInput } from '../../core/subagent/delegated-input.js'
 
 /**
  * Subagent 工具
@@ -143,6 +145,7 @@ export function createSubagentToolRegistry(parent: IToolRegistry, readOnly: bool
   // builtin. Never delegate its reserved identity to a parent extension.
   const internalPlan = new ToolRegistry()
   for (const tool of todoTools) if (tool.name === 'plan_update') internalPlan.register(trustBuiltinTool(tool), compactBuiltinToolDefinition(tool))
+  guardPluginAgentChildRegistry(internalPlan, parent)
   const catalog = (forModel = false) => [...(forModel ? parent.listForModel?.() ?? parent.list() : parent.list())
     .filter(tool => tool.name !== 'plan_update' && !REMOVED_TOOL_NAMES.has(tool.name)), ...(forModel ? internalPlan.listForModel() : internalPlan.list())]
   // list() contains public definitions, so implementation identity is unavailable;
@@ -229,17 +232,17 @@ export const subagentTool: Tool = {
   parameters: {
     type: 'object',
     properties: {
-      task: { type: 'string' },
+      task: { type: 'string', description: '新任务或真实补充；仅继续 resumeRunId 的原任务时省略，保留原上下文且不新增委托消息。' },
       builtinRole: { type: 'string', enum: [...BUILTIN_AGENT_ROLES], description: 'research=严格只读调研；executor=实际执行与产物制作；general=综合任务。与 agentId、旧 role 参数互斥；同模板可多次创建独立实例。' },
       agentId: { type: 'string', description: '自定义 Agent 的精确 ID；仅使用用户明确选择或当前已注册发现工具返回的 ID。agent_list/agent_get 只在部分模式提供；未获得真实 ID 时省略，不猜测。继承该 Agent 的模型、系统提示及资源绑定。' },
-      resumeRunId: { type: 'string', description: '继续已完成、失败或中断子代理的 runId；复用同一 childSession 历史并创建新一轮执行。不能并发续跑或改变原角色/权限；中断后先核对最后动作。' },
+      resumeRunId: { type: 'string', description: '继续子代理最新终态 runId；省略 task 为原任务无缝继续，提供 task 为真实追加任务。复用 childSession，不能并发、从旧执行分叉或改变权限；中断后先核对最后动作。' },
       description: { type: 'string', description: '简短任务标题' },
       systemPrompt: { type: 'string' },
       model: { type: 'string' },
       role: { type: 'string', enum: [...ROLE_VALUES] },
       access: { type: 'string', enum: ['read-only', 'inherit'], description: '调研和审查角色强制read-only；执行、通用、自定义Agent及implementer默认inherit，其余默认read-only。可主动收窄，始终受父工具权限限制。' },
     },
-    required: ['task'],
+    anyOf: [{ required: ['task'] }, { required: ['resumeRunId'] }],
   },
   execute: executeSubagent,
 }
@@ -261,8 +264,7 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
     const taskText = typeof args.task === 'string' ? args.task.trim() : ''
     const suppliedPrompt = typeof args.systemPrompt === 'string' ? args.systemPrompt : undefined
     // Preserve the existing recovery for providers that put the complete task in systemPrompt.
-    const task = taskText || suppliedPrompt?.trim() || ''
-    if (!hasSubagentTaskContent(task)) return { success: false, output: 'subagent: task 需要包含实际任务，不能只有空白或标点。请补充要完成的工作。' }
+    let task = taskText || suppliedPrompt?.trim() || ''
     if (args.builtinRole !== undefined && !isBuiltinAgentRole(args.builtinRole)) return { success: false, output: `subagent: builtinRole 必须为 ${BUILTIN_AGENT_ROLES.join(' / ')}。` }
     if (args.builtinRole !== undefined && (args.agentId !== undefined || options.agent || args.role !== undefined)) return { success: false, output: '内置角色不能与自定义 Agent 或旧 role 同时指定。' }
     if (args.builtinRole === 'research' && args.access === 'inherit') return { success: false, output: '调研角色不能继承写入权限，请使用执行或通用角色创建新的子代理。' }
@@ -274,6 +276,13 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
     const prior = resumeRunId ? await runner.store.getRunHeader(ctx.tenantId, resumeRunId, true) : null
     if (resumeRunId && (!prior || prior.parentSessionId !== ctx.sessionId || prior.rootSessionId !== (ctx.rootSessionId ?? ctx.sessionId))) return { success: false, output: '子代理不属于当前父任务，不能继续。' }
     if (prior && (!isTerminalRun(prior.status) || !prior.continuation)) return { success: false, output: !isTerminalRun(prior.status) ? '子代理仍在运行，请完成或停止后再继续。' : '旧子代理未保存续跑权限，无法安全恢复。' }
+    const continueTask = !!prior && args.task === undefined && args.systemPrompt === undefined
+    if (prior && (continueTask || ctx.executionContinuation?.kind === 'root')
+      && (prior.stopReason === 'user_cancelled' || prior.status === 'cancelled' && prior.stopReason !== 'parent_cancelled')
+      && options.userDelegated !== true) return { success: false, output: '该子代理被单独停止，原任务继续需要本次用户明确选择；旧授权或模型自行续跑不能重新启动。',
+        metadata: { code: 'SUBAGENT_EXPLICIT_CONTINUATION_REQUIRED' } }
+    if (continueTask) task = prior!.task
+    if (!hasSubagentTaskContent(task)) return { success: false, output: 'subagent: task 需要包含实际任务，不能只有空白或标点。请补充要完成的工作。' }
     const saved = prior?.continuation
     if (saved && args.builtinRole !== undefined && args.builtinRole !== saved.builtinRole) return { success: false, output: '继续子代理不能修改原内置角色；如需新角色请创建新子代理。' }
     const agentId = typeof args.agentId === 'string' ? args.agentId.trim() : undefined
@@ -295,9 +304,9 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
     // 循环只由用户取消、模型/上下文能力、明确的请求预算以及无进展保护收口。
     const maxSteps = Number.POSITIVE_INFINITY
     const requestedModel = typeof args.model === 'string' && args.model.trim() ? args.model.trim()
-      : configuredAgent ? prior?.modelId || configuredAgent.model || ctx.subagentModel || ctx.modelName
+      : continueTask ? prior!.modelId : configuredAgent ? prior?.modelId || configuredAgent.model || ctx.subagentModel || ctx.modelName
         : ctx.subagentModel || prior?.modelId || ctx.modelName
-    const description = (typeof args.description === 'string' && args.description.trim() ? args.description.trim() : task.replace(/\s+/g, ' ')).slice(0, 100)
+    const description = (typeof args.description === 'string' && args.description.trim() ? args.description.trim() : continueTask ? prior!.description : task.replace(/\s+/g, ' ')).slice(0, 100)
     const mode = resolveOSMMode(ctx.logger)
     const rolePrompt = role && OSM_MODE_CONFIG[mode].methodology ? loadRoleTemplate(role) : null
     const systemPrompt = saved?.systemPrompt ?? [
@@ -382,6 +391,11 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
         return { success: true, output: JSON.stringify(admission), metadata: { subagentAdmission: admission } }
       }
     }
+    if (continueTask) {
+      if (!ctx.executionOwner) return { success: false, output: '同任务继续需要当前主任务的执行身份。' }
+      const admitted = ctx.currentToolCallId ? await runner.store.findHeaderByParentTool(ctx.tenantId, ctx.sessionId, ctx.currentToolCallId) : null
+      if (!admitted) await retainDelegatedInput(createConversationHistory(), runner.store, prior!)
+    }
     const result = await (options.asynchronous ? runner.start.bind(runner) : runner.run.bind(runner))({
       tenantId: ctx.tenantId,
       rootSessionId: ctx.rootSessionId ?? ctx.sessionId,
@@ -390,6 +404,7 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
       parentMessageId: ctx.currentMessageId ?? '',
       parentToolCallId: ctx.currentToolCallId ?? `direct-${randomUUID()}`,
       resumeFromRunId: resumeRunId, continuation,
+      ...(prior ? { continuationMode: continueTask ? 'continue' as const : 'followup' as const } : {}),
       agentId: continuation.agent?.id, agentName: continuation.agent?.name,
       task, description, modelId: requestedModel ?? '',
     }, ctx, async ({ snapshot, signal, observer, onRequestAttempt, requestBudget, executionOwner }) => {
@@ -427,6 +442,7 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
           allowedMcpServers: safeMode || readOnly ? [] : selectedMcp,
           allowedTools: continuation.toolNames,
         })
+        guardPluginAgentChildRegistry(prepared.registry, ctx.tools)
         childTools = createSubagentToolRegistry(withPluginTools(prepared.registry, frozenPluginTools), readOnly)
         if (!userDelegated) for (const tool of childTools.list()) if (tool.name !== 'plan_update' && !ctx.tools.has(tool.name)
           && !ownedControlNames.includes(tool.name)) childTools.unregister(tool.name)
@@ -499,8 +515,11 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
         emitSubagentEvent: ctx.emitSubagentEvent,
       })
       workspace.assertCurrent()
+      child.executionAttemptId = snapshot.runId
+      if (snapshot.continuationMode === 'continue') child.executionContinuation = Object.freeze({ kind: 'child',
+        previousAttemptId: snapshot.resumeFromRunId!, attemptId: snapshot.runId, previousRunId: snapshot.resumeFromRunId })
       if (executionOwner) workspaceManager.inheritChildWorkspace(child, ctx, continuationWorkspacePaths(continuation))
-        if (child.executionOwner && (ctx.sqliteDelivery || ctx.jsonlDelivery)) installProductionCollaborationBoundary(child)
+        if (child.executionOwner && (ctx.sqliteDelivery || ctx.jsonlDelivery || snapshot.continuationMode === 'continue')) installProductionCollaborationBoundary(child)
         const projectContext = getProjectContextBlock(child.projectRoot)
         const strategy = new ReActStrategy(llm, {
           maxIterations: maxSteps,
@@ -514,7 +533,7 @@ export async function executeSubagent(rawArgs: unknown, ctx: AgentContext, optio
           systemPrompt: [systemPrompt, skillsPrompt, resourcePrompt, projectContext, officePrompt].filter(Boolean).join('\n\n'),
         })
         // run accepts one content value. Status, tools and usage travel through the observer, never text parsing.
-        for await (const _chunk of strategy.run(task, child)) { /* parent prose remains separate from child events */ }
+        for await (const _chunk of strategy.run(snapshot.continuationMode === 'continue' ? null : task, child)) { /* parent prose remains separate from child events */ }
       } finally { clearSecurityMode(ctx.tenantId, snapshot.childSessionId) }
     })
     if ('completion' in result) {

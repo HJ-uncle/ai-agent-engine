@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AnthropicAdapter } from '../anthropic.js'
 import type { LLMAdapterOptions } from '../types.js'
+import type { Message } from '../../agent-context/types.js'
 
 afterEach(() => vi.unstubAllGlobals())
 
-async function capture(stream: boolean, options: Partial<LLMAdapterOptions> = {}) {
+async function capture(stream: boolean, options: Partial<LLMAdapterOptions> = {}, messages: Message[] = [{ role: 'user', content: 'ready' }]) {
   let sent: Record<string, unknown> | undefined
   vi.stubGlobal('fetch', vi.fn(async (_url, init: RequestInit) => {
     sent = JSON.parse(String(init.body)) as Record<string, unknown>
@@ -20,7 +21,6 @@ async function capture(stream: boolean, options: Partial<LLMAdapterOptions> = {}
     return new Response(frames.map(frame => `event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } })
   }))
   const adapter = new AnthropicAdapter('qwen3.8-flash', 'fixture-key', 'http://fixture.invalid/anthropic', { 'X-Access-Token': 'fixture-token' })
-  const messages = [{ role: 'user' as const, content: 'ready' }]
   const configured = { model: adapter.model, ...options }
   if (stream) { for await (const _chunk of adapter.stream(messages, configured)) { /* drain the actual SDK stream */ } }
   else await adapter.complete(messages, configured)
@@ -28,6 +28,32 @@ async function capture(stream: boolean, options: Partial<LLMAdapterOptions> = {}
 }
 
 describe.each([false, true])('Anthropic wire parameters (stream=%s)', stream => {
+  it('keeps cancelled reasoning in storage while omitting its empty unsigned assistant wire block', async () => {
+    const messages: Message[] = [
+      { id: 'task', role: 'user', content: 'Finish the original task.' },
+      { id: 'partial', role: 'assistant', content: '', reasoningContent: 'Retained display reasoning.', metadata: { partial: true, status: 'cancelled' } },
+    ]
+    const retained = structuredClone(messages)
+    const sent = await capture(stream, { requestContext: 'Continue the same task.' }, messages)
+    expect(sent.messages).toEqual(expect.arrayContaining([expect.objectContaining({ role: 'user' })]))
+    expect((sent.messages as Array<{ role: string }>).some(message => message.role === 'assistant')).toBe(false)
+    expect(messages).toEqual(retained)
+  })
+  it('preserves partial public output and confirmed tool pairs when continuing', async () => {
+    const messages: Message[] = [
+      { role: 'user', content: 'Finish the task.' },
+      { role: 'assistant', content: 'Retained partial output.', reasoningContent: 'Display thought.', metadata: { partial: true } },
+      { role: 'assistant', content: '', toolCall: { id: 'verified', name: 'read_file', args: { path: 'result.txt' } } },
+      { role: 'tool', content: 'Confirmed file content.', toolCallId: 'verified' },
+    ]
+    const sent = await capture(stream, { requestContext: 'Continue the same task.' }, messages)
+    const wire = JSON.stringify(sent.messages)
+    expect(wire).toContain('Retained partial output.')
+    expect(wire).toContain('Confirmed file content.')
+    expect(wire).toContain('"type":"tool_use"')
+    expect(wire).toContain('"tool_use_id":"verified"')
+    expect(wire).not.toContain('Display thought.')
+  })
   it.each([0, 0.2, 0.5])('forwards explicit temperature %s including zero', async temperature => {
     expect(await capture(stream, { temperature, thinkingEnabled: false })).toMatchObject({ temperature, thinking: { type: 'disabled' } })
   })

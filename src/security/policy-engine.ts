@@ -8,7 +8,7 @@ export type PolicyAction = 'allow' | 'ask' | 'deny'
  * 三种安全模式（会话级别）：
  * - safe:        安全模式。白名单 + 策略引擎完整检查，高危命令 deny/ask。
  * - standard:    标准模式（默认）。普通命令直接执行，策略拒绝项仍需确认；硬性边界继续生效。
- * - full-access: 完全访问模式。跳过策略引擎和白名单检查，所有命令/网络直接放行。仍写审计日志。
+ * - full-access: 完全访问模式。本会话操作审批自动通过，命令/网络按完全访问策略执行；真实提问、参数校验与硬性边界保留。
  */
 export type SecurityMode = 'safe' | 'standard' | 'full-access'
 

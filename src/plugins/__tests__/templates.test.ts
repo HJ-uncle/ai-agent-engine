@@ -39,11 +39,11 @@ afterEach(() => {
 describe('standard plugin project templates', () => {
   it('returns discoverable summaries and independent complete projects with explicit product boundaries', () => {
     const summaries = listPluginTemplates()
-    expect(summaries.map(item => item.id)).toEqual(['json-tool', 'markdown-report', 'time-calculator', 'currency-converter', 'desktop-timer'])
+    expect(summaries.map(item => item.id)).toEqual(expect.arrayContaining(['json-tool', 'markdown-report', 'time-calculator', 'currency-converter', 'desktop-timer', 'session-review']))
     expect(summaries.every(item => !Object.hasOwn(item, 'files'))).toBe(true)
     for (const { id } of summaries) {
       const template = getPluginTemplate(id)
-      expect(Object.keys(template.files).sort()).toEqual(['README.md', 'aether-plugin.json', 'examples/cases.json', 'main.mjs', 'package.json', 'scripts/test.mjs', ...(id === 'desktop-timer' ? ['ui/index.html'] : [])])
+      expect(Object.keys(template.files).sort()).toEqual(['QUICKSTART.md', 'README.md', 'aether-plugin.json', 'aether-sdk.d.ts', 'examples/cases.json', 'main.mjs', 'package.json', 'scripts/test.mjs', ...(template.manifest.contributes?.pages ?? []).flatMap(page => page.kind === 'webview' ? [page.entry] : [])].sort())
       expect(JSON.parse(template.files['aether-plugin.json'])).toEqual(template.manifest)
       expect(template.protocol.ui).toContain('manifest.contributes')
       expect(template.contributions).toEqual(PLUGIN_CONTRIBUTION_CATALOGUE)
@@ -57,7 +57,7 @@ describe('standard plugin project templates', () => {
     expect(() => getPluginTemplate('../outside')).toThrow('插件模板不存在')
   })
 
-  it.each(['json-tool', 'markdown-report', 'time-calculator', 'currency-converter', 'desktop-timer'])('executes every deterministic example through the actual Node protocol: %s', async id => {
+  it.each(listPluginTemplates().map(template => template.id))('executes every deterministic example through the actual Node protocol: %s', async id => {
     const template = getPluginTemplate(id)
     const record = await service.create('default', template)
     const snapshot = await service.snapshot('default', record.id, 1, { allowDraft: true })
@@ -245,18 +245,29 @@ describe('one approved plugin test batch', () => {
     expect(summary.cases[1].error).toContain('Invalid calendar time')
   })
 
-  it('rejects mixed, empty, oversized or schema-invalid batches before requesting approval', async () => {
+  it('rejects mixed, empty or schema-invalid batches before requesting approval', async () => {
     const record = await service.create('default', getPluginTemplate('json-tool'))
     const tool = createPluginManagementTools(service).find(item => item.name === 'plugin_test')!
     const one = { tool: 'normalize_text', args: { text: 'x' } }
     for (const input of [
-      { cases: [one], tool: 'normalize_text', args: {} }, { cases: [] }, { cases: Array(21).fill(one) },
+      { cases: [one], tool: 'normalize_text', args: {} }, { cases: [] },
       { cases: [{ tool: 'missing', args: {} }] }, { cases: [{ tool: 'normalize_text', args: { text: 7 } }] },
     ]) {
       const result = await tool.preflight!({ id: record.id, ...input }, ctx)
       expect(result?.success).toBe(false)
       expect(result?.needsConfirmation).not.toBe(true)
     }
+  })
+
+  it('executes every case in a valid batch larger than twenty tests', async () => {
+    const record = await service.create('default', getPluginTemplate('json-tool'))
+    const tool = createPluginManagementTools(service).find(item => item.name === 'plugin_test')!
+    const args = { id: record.id, cases: Array.from({ length: 21 }, (_, index) => ({
+      name: `case-${index}`, tool: 'normalize_text', args: { text: ` value   ${index} ` }, expected: { text: `value ${index}`, characters: `value ${index}`.length },
+    })) }
+    const { context } = await approvedTest(tool, args), result = await tool.execute(args, context)
+    expect(result.success, result.output).toBe(true)
+    expect(JSON.parse(result.output)).toMatchObject({ total: 21, passed: 21, failed: 0 })
   })
 
   it('rejects changed revisions and changed batch arguments after approval', async () => {

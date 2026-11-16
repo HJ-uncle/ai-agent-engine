@@ -4,7 +4,7 @@ import { publicHistoryMessage } from './history-projection.js'
 
 type HistoryMessage = Message & { conversationId?: string }
 
-/** Rehydrate the preceding attempts of a waiting turn, without replaying execution. */
+/** Rehydrate the preceding attempts of a retained turn, without replaying execution. */
 export function persistedTurnProjection(history: HistoryMessage[], run: RootRun): Record<string, unknown>[] {
   const frames: Record<string, unknown>[] = []
   const usage: Record<string, number> = {}
@@ -13,10 +13,21 @@ export function persistedTurnProjection(history: HistoryMessage[], run: RootRun)
   let contextUsageEstimated: boolean | undefined
   let contextUsageProvisional: boolean | undefined
   let requestInputTokenEstimate: number | undefined
+  let projectedAttempt: string | undefined
   let confirmedContext: { used: number; contextWindow?: number; modelId?: string } | undefined
   for (const message of history.filter(item => item.conversationId === run.turnId || item.id === run.userMessageId)) {
     if (message.role === 'user') { frames.push({ userMessage: publicHistoryMessage(message) }); continue }
     if (message.role === 'assistant') {
+      const attemptId = typeof message.metadata?.attemptId === 'string' ? message.metadata.attemptId
+        : run.admissionReceipt?.attemptId ?? run.serverAdmissionReceipt?.attemptId
+          ?? run.continuationReceipt?.previousAttemptId ?? run.attemptId
+      if (attemptId && attemptId !== projectedAttempt) {
+        projectedAttempt = attemptId
+        const messageId = typeof message.metadata?.assistantSegmentId === 'string' ? message.metadata.assistantSegmentId
+          : attemptId === run.attemptId ? run.assistantMessageId : run.continuationReceipt?.assistantAnchorId ?? message.id
+        frames.push({ assistantSegment: { runId: run.runId, turnId: run.turnId, attemptId, messageId,
+          createdAt: message.createdAt ?? run.createdAt } })
+      }
       if (message.modelId) modelId = message.modelId
       if (message.reasoningContent) frames.push({ thinking: message.reasoningContent })
       if (typeof message.content === 'string' && message.content) frames.push({ content: message.content })

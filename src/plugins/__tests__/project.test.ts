@@ -3,7 +3,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { readPluginZip, PluginImporter } from '../importer.js'
 import { PluginService } from '../service.js'
-import { createPluginProject, exportPluginArchive, packPluginProject, pluginProjectFiles, readPluginProject, testPluginProject } from '../project.js'
+import { createPluginProject, exportPluginArchive, packPluginProject, pluginProjectFiles, readPluginProject, testPluginProject, writePluginProject } from '../project.js'
 import { getPluginTemplate, listPluginTemplates } from '../templates.js'
 import { runPlugin } from '../runtime.js'
 
@@ -16,6 +16,31 @@ afterEach(() => {
 })
 
 describe('portable plugin projects', () => {
+  it('round-trips a real project above 100 files, 1 MiB per file and 8 MiB total without dropping source', async () => {
+    const input = getPluginTemplate('json-tool')
+    input.files['resources/large.txt'] = '大文件资料\n'.repeat(180000)
+    for (let index = 0; index < 140; index++) input.files[`resources/chapter-${index}.txt`] = `chapter ${index}\n` + 'content\n'.repeat(10000)
+    expect(Object.keys(input.files).length).toBeGreaterThan(100)
+    expect(Buffer.byteLength(input.files['resources/large.txt'])).toBeGreaterThan(1024 * 1024)
+    expect(Object.values(input.files).reduce((sum, content) => sum + Buffer.byteLength(content), 0)).toBeGreaterThan(8 * 1024 * 1024)
+    const directory = path.join(root, 'large-project'), authored = writePluginProject(directory, input)
+    expect(readPluginProject(directory).files).toEqual(authored.files)
+    const service = new PluginService(path.join(root, 'large-storage')), importer = new PluginImporter(service)
+    const local = await importer.previewImport('large-test', { type: 'local', path: directory })
+    await importer.installImport('large-test', local.jobId)
+    await service.publish('large-test', input.manifest.id, 1)
+    const snapshot = await service.snapshot('large-test', input.manifest.id, 1)
+    const archive = exportPluginArchive(snapshot), restoredFiles = readPluginZip(Buffer.from(archive.base64, 'base64'))
+    expect(Object.keys(restoredFiles).sort()).toEqual(Object.keys(authored.files).sort())
+    for (const [name, content] of Object.entries(authored.files)) expect(Buffer.from(restoredFiles[name]).toString('utf8')).toBe(content)
+    const restoredService = new PluginService(path.join(root, 'restored-storage')), restoredImporter = new PluginImporter(restoredService)
+    const imported = await restoredImporter.previewImport('large-test', { type: 'zip', base64: archive.base64 })
+    await restoredImporter.installImport('large-test', imported.jobId)
+    await restoredService.publish('large-test', input.manifest.id, 1)
+    const restored = await restoredService.snapshot('large-test', input.manifest.id, 1)
+    expect(exportPluginArchive(restored).sha256).toBe(archive.sha256)
+    expect((await runPlugin(restored, 'normalize_text', { text: '  works   after import ' })).result).toEqual({ text: 'works after import', characters: 18 })
+  }, 20000)
   it.each(listPluginTemplates().map(template => template.id))('%s scaffolds, asserts business examples, exports, imports and runs again', async templateId => {
     const directory = path.join(root, 'project'), input = createPluginProject(directory, templateId)
     expect(readPluginProject(directory)).toEqual(input)

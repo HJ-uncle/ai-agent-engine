@@ -33,6 +33,7 @@ import { resolveOSMMode } from '../../../core/osm.js'
 import { success, fail } from '../response.js'
 import { withHistoryLock, isSessionHistoryMutating } from '../../../storage/conversation/serialization.js'
 import { rootRunStore, type RootRun, type RootPending } from '../../../storage/root-runs/index.js'
+import { readPluginRootProvenance } from '../../../storage/root-admission/plugin-owner.js'
 import { persistedTurnProjection } from '../chat-snapshot.js'
 import { continuedTurnUsage, sessionUsageAtWatermark, sessionSubagentUsage } from '../chat-usage.js'
 import { SubagentStore } from '../../../core/subagent/store.js'
@@ -50,10 +51,15 @@ import { publicSessionHistoryMessages } from '../history-projection.js'
 import { getExecutionOwners, serviceForOwner, type ExecutionOwner } from '../../../core/collaboration/execution-owner.js'
 import { installProductionCollaborationBoundary } from '../../../core/collaboration/production-boundary.js'
 import { prepareUserAdmission, type UserAdmissionSelector } from '../../../storage/root-admission/index.js'
+import { prepareRootContinuation, type RootContinuationSelector } from '../../../storage/root-admission/continuation.js'
 import { admissionProjectingHistory, projectTerminalAdmissionUsers, readAdmissionSeed } from '../../../storage/root-admission/projection.js'
 import { registerUserAdmissionRoutes } from './chat-admission.js'
 import { registerChildRecoveryPages, checkedChildEnvelope, childProjectionReferences, sendChildRecoveryFailure } from './live-child-recovery.js'
-import { requireChildRecovery } from '../../../core/subagent/child-usage-authority.js'
+import { ChildRecoveryRequiredError, requireChildRecovery } from '../../../core/subagent/child-usage-authority.js'
+import { publishRootAgentEvent } from '../root-agent-events.js'
+import { resolveSourceChangeChoice, type SourceChangePendingAction } from '../../../runtime/source-change-protocol.js'
+import { scheduleSourceChangeContinuation, cancelSourceChangeContinuations } from '../source-change-continuation.js'
+import { getSourceChangeWaitStatus } from '../../../runtime/source-change-wait.js'
 
 import { buildChatSystemPrompts } from '../../../core/chat-system-prompt.js'
 import { buildKnowledgeReadContext, knowledgeSearchQuery } from '../../../core/knowledge-context.js'
@@ -73,6 +79,7 @@ import { createMemoryUsageObserver } from '../../../middleware/memory/usage.js'
 interface ChatBody {
   clientCapabilities?: ClientCapabilityManifest
   admission?: UserAdmissionSelector
+  continuation?: RootContinuationSelector
   automationRunId?: string
   cronJobId?: string
   cronTimeoutSeconds?: number
@@ -408,6 +415,7 @@ export async function stopOwnedRoot(tenantId: string, sessionId: string, runId: 
     // Recovery must already have interrupted any prior process executors.
     updated = await rootRunStore.update(tenantId, runId, { status: 'cancelled', stopReason: reason }, captured.run.attemptId)
   }
+  if (updated) publishRootAgentEvent(tenantId, updated)
   if (updated && captured.bus) await observePublication(captured.bus, () => captured.bus!.publishRunStateOrdered(updated!))
   return true
 }
@@ -491,6 +499,7 @@ export interface ChatRouteOptions {
 
 export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOptions = {}) {
   await rootRunStore.initialize()
+  fastify.addHook('preClose', async () => { cancelSourceChangeContinuations(fastify) })
   // Reuse bounded revision caches across frequent snapshot refreshes.
   const snapshotHistory = createConversationHistory()
   await registerUserAdmissionRoutes(fastify, rootRunStore, snapshotHistory)
@@ -624,9 +633,14 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
   }, async (request, reply) => {
     const subagentProtocol = getRequestSubagentProtocol(request)
     const toolProfile = getRequestToolProfile(request)
+    const continuationAuth = (request as FastifyRequest & { authContext?: AuthContext }).authContext
+      ?? { tenantId: getTenantId(request), method: 'none' as const }
     try { normalizeToolkits(request.body.toolkits, toolProfile) }
     catch (error) { return reply.code(400).send(fail(40001, (error as Error).message)) }
     const runLifetime = getRequestRunLifetime(request)
+    const continuation = prepareRootContinuation(request.body as unknown as Record<string, unknown>, { toolProfile, runLifetime, subagentProtocol })
+    const continuationSubject = continuation ? controllerSubjectFromRequest(request) : undefined
+    if (continuation && !continuationSubject) return reply.code(403).send(fail(40300, 'A verified user controller is required to continue this task'))
     const keyedAdmission = prepareUserAdmission(request.body as unknown as Record<string, unknown>, { toolProfile, runLifetime, subagentProtocol })
     const requestId = uuidv4()
     request.body.sessionId ??= uuidv4()
@@ -659,6 +673,14 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
     earlyPreparers.add(abortController); preparingChatAborters.set(admissionKey, earlyPreparers)
     try {
     // Matching receipts replay before collaborator, memory or model resolution.
+    if (continuation) {
+      const previous = await rootRunStore.findContinuation(getTenantId(request), continuation.sessionId, continuation, continuationSubject)
+      if (previous) {
+        async function* duplicateContinuation() { yield '\x00__run__' + JSON.stringify(previous!.run) }
+        await sseStream(duplicateContinuation(), reply)
+        return
+      }
+    }
     if (keyedAdmission) {
       const previous = await rootRunStore.findUserAdmission(getTenantId(request), keyedAdmission.sessionId, keyedAdmission)
       if (previous) {
@@ -680,7 +702,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
         automationDispatchRequest, { runId: request.body.automationRunId })
     }
     let selectedCollaborators: Awaited<ReturnType<typeof prepareCollaborators>> = []
-    if (!request.body.toolResponse) {
+    if (!request.body.toolResponse && !continuation) {
       try {
         selectedCollaborators = await prepareCollaborators(getTenantId(request), request.body.sessionId, request.body.collaborators,
           { workspaceContext: { tenantId: getTenantId(request), sessionId: request.body.sessionId, workspacePaths: request.body.workspacePaths },
@@ -692,6 +714,46 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
     }
     let resumeRecord = null as Awaited<ReturnType<typeof rootRunStore.get>>
     let predecessorBootstrap: TurnBootstrap | undefined
+    if (continuation) {
+      resumeRecord = await rootRunStore.get(getTenantId(request), continuation.predecessor.runId)
+      if (!resumeRecord || resumeRecord.sessionId !== continuation.sessionId) return reply.code(404).send(fail(40400, 'Run not found'))
+      if (resumeRecord.request.toolProfile && resumeRecord.request.toolProfile !== toolProfile) return reply.code(409).send(fail(40900, 'Continue must use the original tool profile'))
+      // Join outside storage locks. A closed business result can precede the
+      // old producer's final maintenance/child cleanup and authority release.
+      const priorOwner = getExecutionOwners().find(getTenantId(request), resumeRecord.runId, continuation.predecessor.attemptId)
+      if (priorOwner) {
+        const service = serviceForOwner(priorOwner), state = service.record(priorOwner)
+        if (state.phase !== 'closed' || !state.completionRegistered) return reply.code(409).send(fail(40900, 'CONTINUATION_OWNER_NOT_DRAINED'))
+        await service.joinRoot(priorOwner)
+      }
+      await rootRunStore.validateContinuation(getTenantId(request), continuation, continuationSubject)
+      await projectTerminalAdmissionUsers(await rootRunStore.admissionDatabase(), snapshotHistory,
+        { tenantId: getTenantId(request), sessionId: continuation.sessionId }, resumeRecord.runId)
+      if (continuation.childRunId) {
+        selectedCollaborators = await prepareCollaborators(getTenantId(request), continuation.sessionId, [{ resumeRunId: continuation.childRunId }],
+          { workspaceContext: { tenantId: getTenantId(request), sessionId: continuation.sessionId, workspacePaths: resumeRecord.workspacePaths }, requestMessage: null })
+      }
+      const prior = activeStreams.get(makeAbortKey(getTenantId(request), resumeRecord.sessionId))
+      if (durableChildren) {
+        try {
+          const authority = prior && liveChildAuthorities.get(prior)
+          predecessorBootstrap = authority && prior?.currentRunId === resumeRecord.runId
+            ? await authority.captureBootstrap(prior)
+            : await new PublishedTurnBootstraps(getDb()).latestForRun({ tenantId: getTenantId(request), parentSessionId: resumeRecord.sessionId,
+              rootSessionId: resumeRecord.sessionId, parentTurnId: resumeRecord.turnId, rootRunId: resumeRecord.runId, attemptId: resumeRecord.attemptId })
+          if (predecessorBootstrap.fence.attemptId !== continuation.predecessor.attemptId) requireChildRecovery('scope_changed')
+        } catch (error) {
+          // Only an admission that never reached execution can lack a stream.
+          // Existing child evidence still requires an exact published handoff.
+          if (!(error instanceof ChildRecoveryRequiredError) || error.reason !== 'bootstrap_unavailable') return sendChildRecoveryFailure(reply, error)
+          const children = resumeRecord.startedAt === undefined
+            ? await snapshotSubagents.listRunViewsForParent(getTenantId(request), resumeRecord.sessionId) : undefined
+          if (!children || children.some(child => child.parentConversationId === resumeRecord!.turnId)) return sendChildRecoveryFailure(reply, error)
+        }
+      }
+      request.body = { ...resumeRecord.request, message: '', sessionId: resumeRecord.sessionId,
+        model: resumeRecord.modelId, workspacePaths: resumeRecord.workspacePaths, continuation } as ChatBody
+    }
     if (request.body.toolResponse) {
       const response = request.body.toolResponse
       if (!response.runId || !response.requestId || !request.body.sessionId) {
@@ -699,11 +761,13 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
       }
       resumeRecord = await rootRunStore.get(getTenantId(request), response.runId)
       if (!resumeRecord || resumeRecord.sessionId !== request.body.sessionId) return reply.code(404).send(fail(40400, 'Run not found'))
+      if (readPluginRootProvenance(resumeRecord.request) || resumeRecord.serverAdmissionReceipt?.provenance.kind === 'plugin-agent')
+        return reply.code(403).send(fail(40300, '插件 Agent 的待处理请求必须由原插件宿主继续'))
       if (resumeRecord.request.toolProfile && resumeRecord.request.toolProfile !== toolProfile) return reply.code(409).send(fail(40900, 'Resume must use the original tool profile'))
       const pending = resumeRecord.pending.find(item => item.requestId === response.requestId)
       if (!pending || pending.toolCallId !== response.toolCallId || pending.toolName !== response.name) return reply.code(404).send(fail(40400, 'Pending request not found'))
       if (pending.status === 'answered') {
-        const accepted = await rootRunStore.answer(getTenantId(request), resumeRecord.sessionId, response.runId, response.requestId, response.toolCallId, response.name, response.output)
+        const accepted = await rootRunStore.answer(getTenantId(request), resumeRecord.sessionId, response.runId, response.requestId, response.toolCallId, response.name, response.output, undefined, undefined, controllerSubjectFromRequest(request))
         async function* duplicate() { yield '\x00__run__' + JSON.stringify(accepted.run) }
         await sseStream(duplicate(), reply)
         return
@@ -1404,6 +1468,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
       // Execution state advances from its durable receipt even if the viewer
       // has already entered recovery and cannot accept the matching frame.
       rootRun = run
+      publishRootAgentEvent(tenantId, run)
       await publishObserved(() => streamBus.publish('\x00__run__' + JSON.stringify(run)))
     }
     // The request preparation ticket was reserved before its first await.
@@ -1414,23 +1479,32 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
     try {
       admission = await (async () => {
       try {
-        if (toolResponse) {
-          const accepted = await rootRunStore.answer(tenantId, sessionId, toolResponse.runId, toolResponse.requestId, toolResponse.toolCallId, toolResponse.name, toolResponse.output, abortController.signal, registerRootPreparation)
+        if (continuation) {
+          const accepted = await rootRunStore.continue(tenantId, continuation, continuationSubject, abortController.signal, registerRootPreparation)
+          rootRun = accepted.run
+          if (accepted.duplicate) return 'duplicate' as const
+          ctx.executionContinuation = { kind: 'root', previousAttemptId: accepted.receipt.previousAttemptId, attemptId: accepted.receipt.attemptId }
+        } else if (toolResponse) {
+          const accepted = await rootRunStore.answer(tenantId, sessionId, toolResponse.runId, toolResponse.requestId, toolResponse.toolCallId, toolResponse.name, toolResponse.output, abortController.signal, registerRootPreparation, controllerSubjectFromRequest(request))
           rootRun = accepted.run
           if (accepted.duplicate) return 'duplicate' as const
           resumedPending = accepted.pending
+          if (resumeRecord?.status === 'cancelled' && rootRun.attemptId) ctx.executionContinuation = {
+            kind: 'root', previousAttemptId: resumeRecord.attemptId, attemptId: rootRun.attemptId,
+          }
         } else if (keyedAdmission) {
           const accepted = await rootRunStore.createUserAdmission(tenantId, resolvedModel ?? ctx.modelName ?? '', workspacePaths ?? [],
-            { ...request.body, toolProfile, toolkits: selectedToolkits } as unknown as Record<string, unknown>, keyedAdmission, abortController.signal, registerRootPreparation)
+            { ...request.body, toolProfile, toolkits: selectedToolkits } as unknown as Record<string, unknown>, keyedAdmission, abortController.signal, registerRootPreparation, controllerSubjectFromRequest(request))
           rootRun = accepted.run
           if (accepted.duplicate) return 'duplicate' as const
         } else {
           rootRun = await rootRunStore.create(tenantId, sessionId, resolvedModel ?? ctx.modelName ?? '', workspacePaths ?? [],
             { ...request.body, toolProfile, toolkits: selectedToolkits } as unknown as Record<string, unknown>,
             request.body.automationRunId ? { runId: request.body.automationRunId, dispatchRequest: automationDispatchRequest,
-              effectiveAgentId: effectiveAgentId ?? undefined, effectiveAgentName } : undefined, abortController.signal, registerRootPreparation)
+              effectiveAgentId: effectiveAgentId ?? undefined, effectiveAgentName } : undefined, abortController.signal, registerRootPreparation, controllerSubjectFromRequest(request))
         }
         attemptId = (await rootRunStore.get(tenantId, rootRun.runId))!.attemptId
+        ctx.executionAttemptId = attemptId
         executionOwner = await getExecutionOwners().admitRoot({ tenantId, rootRunId: rootRun.runId, rootAttemptId: attemptId,
           controller: abortController, controllerSubject: controllerSubjectFromRequest(request) })
         ctx.executionOwner = executionOwner
@@ -1456,8 +1530,10 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
         if (resumedPending) {
           // Validate the original pending identity above; only execution maps old
           // names to canonical tools. Stored receipts keep their original identity.
+          const sourceChoice = resumedPending.pendingAction?.type === 'source_change'
+            ? resolveSourceChangeChoice(resumedPending.pendingAction, resumedPending.output) !== undefined : false
           ctx.resumeToolCall = { toolCall: { id: resumedPending.toolCallId, name: normalizeToolName(resumedPending.toolName), args: resumedPending.args },
-            messageId: resumedPending.messageId ?? '', decision: resumedPending.kind === 'permission' ? (resumedPending.output === 'approved' ? 'approved' : 'rejected') : 'answered', output: resumedPending.output,
+            messageId: resumedPending.messageId ?? '', decision: resumedPending.kind === 'permission' ? (resumedPending.output === 'approved' || sourceChoice ? 'approved' : 'rejected') : 'answered', output: resumedPending.output,
             pendingAction: resumedPending.pendingAction }
         }
         ctx.onPending = pending => { pendingCandidate = structuredClone(pending) }
@@ -1466,6 +1542,10 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
           const parked = await finishRoot({ status: 'waiting' }, pendingCandidate)
           await publishRun(parked)
           if (parked.status !== 'waiting') throw new Error('PENDING_EXECUTION_CANCELLED')
+          const wait = pending.pendingAction?.type === 'source_change' &&
+            pending.pendingAction.wait && typeof pending.pendingAction.wait === 'object'
+          if (wait) scheduleSourceChangeContinuation({ app: fastify, tenantId, sessionId, runId: parked.runId,
+            requestId: pending.requestId, auth: continuationAuth })
         }
         ctx.runObserver = {
           onCompaction: async compaction => {
@@ -1495,11 +1575,20 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
             }
           },
         }
-        if (toolResponse) {
+        if (toolResponse || continuation) {
           if (durableChildren) {
-            if (!predecessorBootstrap || !publicationAuthority) requireChildRecovery('bootstrap_unavailable')
-            const authority=publicationAuthority,predecessor=predecessorBootstrap
-            await publishObserved(()=>authority.resumeBootstrap(streamBus,predecessor))
+            if (continuation && resumeRecord?.startedAt === undefined && !predecessorBootstrap) {
+              // A crash between durable admission and first execution has no
+              // predecessor stream. Its immutable seed is sufficient only if
+              // this turn has never published or admitted a child.
+              const priorChildren = await snapshotSubagents.listRunViewsForParent(tenantId, sessionId)
+              if (priorChildren.some(child => child.parentConversationId === rootRun.turnId)) requireChildRecovery('bootstrap_unavailable')
+              streamBus.seedProjection(persistedTurnProjection(await ctx.history.getFullHistory(ctx), rootRun))
+            } else {
+              if (!predecessorBootstrap || !publicationAuthority) requireChildRecovery('bootstrap_unavailable')
+              const authority=publicationAuthority,predecessor=predecessorBootstrap
+              await publishObserved(()=>authority.resumeBootstrap(streamBus,predecessor))
+            }
           } else {
           const prior = activeStreams.get(makeAbortKey(tenantId, sessionId))
           const priorSnapshot = prior?.snapshot()
@@ -1527,7 +1616,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
             await publishObserved(() => streamBus.endOrdered())
             return false
           }
-          if (toolResponse) {
+          if (toolResponse || continuation) {
             precedingTurnUsage = await ctx.history.getSessionUsage(ctx, rootRun.turnId)
             const precedingSnapshot = streamBus.snapshot()
             const projection = precedingSnapshot.projection
@@ -1606,9 +1695,9 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
         // 视觉能力来自统一注册表（已在前面解析过）
         const isVisionModel = modelCaps.vision === true
 
-        let prompt: string | any[] | null = toolResponse ? null : messageText || null
+        let prompt: string | any[] | null = toolResponse || continuation ? null : messageText || null
 
-        if (!toolResponse) {
+        if (!toolResponse && !continuation) {
           const { autoProcessAttachments } = await import('./attachment-auto-processor.js')
           const result = await autoProcessAttachments(ctx, message, messageText, attachments, {
             messageText,
@@ -2125,6 +2214,40 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
       lastEventId,
       run,
     }))
+  })
+
+  // Read-only, identity-bound probe used by a reopened client to continue a
+  // durable source-change wait. It returns no sealed action, source hashes or
+  // command output; the server re-reads the pending action and performs the
+  // same blocker/stability checks as the background continuation.
+  fastify.get<{ Querystring: { sessionId: string; runId: string; requestId: string } }>('/chat/source-change-status', {
+    schema: {
+      querystring: {
+        type: 'object', required: ['sessionId', 'runId', 'requestId'],
+        properties: {
+          sessionId: { type: 'string', minLength: 1 },
+          runId: { type: 'string', minLength: 1 },
+          requestId: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const { sessionId, runId, requestId } = request.query
+    const stored = await rootRunStore.get(getTenantId(request), runId)
+    const pending = stored?.sessionId === sessionId
+      ? stored.pending.find(item => item.requestId === requestId && item.status === 'pending')
+      : undefined
+    const action = pending?.pendingAction?.type === 'source_change' ? pending.pendingAction as unknown as SourceChangePendingAction : undefined
+    if (!stored || stored.sessionId !== sessionId || stored.status !== 'waiting' || !pending || !action || typeof action.root !== 'string' || !action.after || typeof action.after !== 'object') {
+      return reply.code(404).send(fail(40400, 'Source-change wait not found'))
+    }
+    const status = await getSourceChangeWaitStatus({ tenantId: getTenantId(request), root: action.root,
+      currentSessionId: stored.sessionId, currentRunId: stored.runId, snapshot: action.after,
+      stableWindowMs: action.wait?.stableWindowMs })
+    return reply.send(success({ ready: status.ready, reason: status.reason, observedAt: status.observedAt,
+      stableSince: status.stableSince, stableWindowMs: status.stableWindowMs,
+      blockers: status.blockers.slice(0, 16).map(blocker => ({ kind: blocker.kind, id: blocker.id, sessionId: blocker.sessionId,
+        ...(blocker.status ? { status: blocker.status } : {}) })) }))
   })
 
   // ── 恢复断开的流 ──────────────────────────────────────────────────────────

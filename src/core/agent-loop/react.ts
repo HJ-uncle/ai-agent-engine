@@ -17,8 +17,8 @@ import type { CompactionState, RunOutcome } from '../subagent/types.js'
 import { FINALIZATION_PROMPT, estimateRequestInput, finalizationMessages, partialEvidence } from './finalization.js'
 import { executeRegisteredTool, executeToolBatch, normalizeToolResult, type RegisteredToolCall, type ParsedToolCall } from './tool-batch.js'
 import { assertOwnedDispatch } from '../collaboration/execution-owner.js'
-import { bindSQLiteReActBoundary, readSQLiteReActHistory, consumeSQLiteReActIteration, assertSQLiteReActDispatch, maintainSQLiteReActHistory, sealSQLiteReActInput } from '../collaboration/sqlite-react-boundary.js'
-import { bindJSONLReActBoundary, readJSONLReActHistory, consumeJSONLReActIteration, assertJSONLReActDispatch, maintainJSONLReActHistory, sealJSONLReActInput } from '../collaboration/jsonl-react-boundary.js'
+import { bindSQLiteReActBoundary, readSQLiteReActHistory, consumeSQLiteReActIteration, assertSQLiteReActDispatch, maintainSQLiteReActHistory, sealSQLiteReActInput, hasPendingSQLiteControllerInput } from '../collaboration/sqlite-react-boundary.js'
+import { bindJSONLReActBoundary, readJSONLReActHistory, consumeJSONLReActIteration, assertJSONLReActDispatch, maintainJSONLReActHistory, sealJSONLReActInput, hasPendingJSONLControllerInput } from '../collaboration/jsonl-react-boundary.js'
 import { readAuthenticatedJSONLHistory } from '../../storage/conversation/jsonl-origin.js'
 import { readAuthenticatedSQLiteHistory } from '../../storage/conversation/sqlite-origin.js'
 import { publicHistoryMessage } from '../../api/http/history-projection.js'
@@ -53,12 +53,27 @@ const TOOL_OUTPUT_RECOVERY_PROMPT = 'The previous model response reached its sin
 
 const EMPTY_OUTPUT_RECOVERY_PROMPT = 'The previous model response ended normally without a public answer or any tool call. Continue the same user task from the retained history and completed tool evidence. Provide the next necessary complete tool call or a concise public answer. Do not repeat completed work or replay tools that already executed. Task scope, permissions, model configuration and budgets remain unchanged.'
 
+const EXECUTION_CONTINUATION_PROMPT = 'The user explicitly resumed this same task after its previous execution ended. Continue from the retained conversation, partial output, task plan and confirmed tool results; do not restart the task or repeat text already emitted. This is execution control, not a new user request. Tools with confirmed successful receipts already ran: reuse their results. A tool with an interrupted or missing receipt may have performed some work; verify its actual file, command or external operation state before deciding whether to retry. Never execute an unfinished tool-argument fragment. Discover and reuse existing child sessions and completed results instead of recreating the team; resume only the children needed for the remaining work, and respect individually stopped children. Pending questions, approval decisions, workspace restrictions and current permissions remain in force. Finish and deliver the remaining work under the original requirements and any later user supplements.'
+
 /** Keep the original history object so authenticated collaboration origins remain intact. */
 function appendRunHistory(message: Message, ctx: AgentContext): ReturnType<AgentContext['history']['append']> {
   const metadata = { ...message.metadata }
   // This display identity is minted by the runtime, never by tool/provider metadata.
   delete metadata.subagentRunId
   if (ctx.runId && ctx.parentSessionId && ctx.sessionId !== ctx.parentSessionId) metadata.subagentRunId = ctx.runId
+  delete metadata.executionAttemptId
+  delete metadata.attemptId
+  delete metadata.assistantSegmentId
+  delete metadata.executionContinuation
+  const attemptId = ctx.executionContinuation?.attemptId ?? ctx.executionAttemptId
+  if (attemptId) {
+    metadata.attemptId = attemptId
+    metadata.executionAttemptId = attemptId
+    if (ctx.assistantMessageId) metadata.assistantSegmentId = ctx.assistantMessageId
+  }
+  if (ctx.executionContinuation) {
+    metadata.executionContinuation = { ...ctx.executionContinuation }
+  }
   return ctx.history.append({ ...message, metadata }, ctx)
 }
 
@@ -547,6 +562,7 @@ export class ReActStrategy implements LoopStrategy {
   }
 
   private async *runInternal(input: string | any[] | null, ctx: AgentContext): AsyncIterable<string> {
+    if (ctx.executionContinuation && input !== null) throw new Error('EXECUTION_CONTINUATION_REQUIRES_RETAINED_INPUT')
     const unboundedCode = this.options.unboundedCode === true || ctx.toolProfile === 'code'
     // 迭代上限决策顺序（与 agent-context/factory.ts 的 tokenBudget 规则对齐）：
     //   1. this.options.maxIterations 显式传入 → 原样使用（NaN = 调用方声明"不限"）
@@ -781,6 +797,7 @@ export class ReActStrategy implements LoopStrategy {
         requestCodegraphContext = effectiveTools.some(tool => tool.name === 'codegraph') ? codegraphContext : ''
         requestDelegationContext = buildDelegationRequestContext({ list: () => effectiveTools })
         injectedExtras = [requestEnvironment, this.options.requestContext, requestCodegraphContext, requestDelegationContext,
+          ctx.executionContinuation ? EXECUTION_CONTINUATION_PROMPT : undefined,
           planContext, deliveryPrompt, recoveryPrompt, workflowReviewPrompt, readonlyHistoryNotice(readonlyHistoryPairs),
           childReview.pending ? CHILD_RESULT_REVIEW_PROMPT : undefined,
           delegationCorrectionUsed && this.options.hasPendingDelegations?.()
@@ -1731,7 +1748,9 @@ export class ReActStrategy implements LoopStrategy {
         }
 
         const batch = await executeToolBatch(registered, ctx,
-          ctx.tools.listForRequest || deliveryCloseout.phase ? new Set(effectiveTools.map(tool => tool.name)) : undefined)
+          ctx.tools.listForRequest || deliveryCloseout.phase ? new Set(effectiveTools.map(tool => tool.name)) : undefined,
+          ctx.sqliteDelivery ? () => hasPendingSQLiteControllerInput(ctx.sqliteDelivery!, ctx)
+            : ctx.jsonlDelivery ? () => hasPendingJSONLControllerInput(ctx.jsonlDelivery!, ctx) : undefined)
         let failedToPersist = false
         if (batch.pending) {
           try {
@@ -1764,11 +1783,12 @@ export class ReActStrategy implements LoopStrategy {
         // results must already be durable before yielding the first terminal card.
         for (const frame of settledFrames) yield frame
         if (failedToPersist) throw new Error('One or more tool results could not be persisted; all started tools have settled')
+        if ('inputCheckError' in batch) throw batch.inputCheckError
         if (ctx.signal?.aborted) {
           await ctx.runObserver?.onOutcome?.({ status: 'cancelled', stopReason: 'cancelled', partialOutput: emittedOutput || undefined })
           return
         }
-        if (deliveryCloseout.phase === 'answer') {
+        if (deliveryCloseout.phase === 'answer' && !batch.yieldedForUserInput) {
           // The single reconciliation exchange already ran. A provider that
           // ignores the answer-only tool list must not restart a tool loop.
           await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'runtime_error', partialOutput: emittedOutput || undefined,
@@ -1808,6 +1828,10 @@ export class ReActStrategy implements LoopStrategy {
             error: { code: 'TOOL_NOT_ALLOWED', message: 'Tool execution was blocked', retryable: false } })
           return
         }
+        // Steering defers only unstarted work. A started tool's approval,
+        // child question or permission block must still park above. Otherwise
+        // keep its text/usage and paired receipts, then consume the new input.
+        if (batch.yieldedForUserInput) continue
         if (globalConsecutiveFailures >= toolFailureLimit()) {
           await ctx.runObserver?.onOutcome?.({ status: 'failed', stopReason: 'repeated_failure',
             error: { retryable: false, code: 'REPEATED_FAILURE', message: 'Tool failure or repetition limit exceeded' } })

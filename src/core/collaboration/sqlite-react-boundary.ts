@@ -9,6 +9,7 @@ import { sqliteHistoryIdentity } from '../../storage/conversation/sqlite-origin.
 import { readAdmissionSeed } from '../../storage/root-admission/projection.js'
 import { withAuthenticatedHistoryMaintenance } from './history-maintenance.js'
 import { RequestHistoryChangedError } from './history-budget.js'
+import { delegatedContinuationInput, recordBoundDelegatedInput } from '../subagent/delegated-input.js'
 
 declare const boundaryBrand: unique symbol
 export type SQLiteReActBoundary = Readonly<{ [boundaryBrand]: true }>
@@ -67,7 +68,13 @@ export async function bindSQLiteReActBoundary(capability: SQLiteReActBoundary, c
       fail('The saved root input is not its admitted human seed')
     anchorId = seed.anchor.userMessageId
     anchorContent = seed.message.content
-  } else if (!savedInputId || savedInputContent === undefined) fail('Child delivery continuation needs its exact saved delegated input')
+  } else {
+    const continuation = await delegatedContinuationInput(service.db, binding)
+    if (continuation) {
+      if (savedInputId !== undefined || savedInputContent !== undefined) fail('Child continuation must not append another delegated input')
+      anchorId = continuation.anchor.messageId; anchorContent = continuation.content
+    } else if (!savedInputId || savedInputContent === undefined) fail('Child delivery continuation needs its exact saved delegated input')
+  }
   if (!anchorId) fail('No persisted input anchor is available')
   record(capability, ctx)
   const consumer = await service.collaboration.bindSQLiteDelivery(found.producer, {
@@ -75,6 +82,7 @@ export async function bindSQLiteReActBoundary(capability: SQLiteReActBoundary, c
     db: service.db, tenantId: found.tenantId, sessionId: found.sessionId, anchorId: anchorId!,
     anchorContent: typeof anchorContent === 'string' ? anchorContent : JSON.stringify(anchorContent),
   })
+  if (binding.kind === 'child' && savedInputId) await recordBoundDelegatedInput(service.db, binding, savedInputId, savedInputContent!)
   if (found.consumer && (found.consumer !== consumer || found.anchorId !== anchorId))
     fail('This boundary cannot move to a replacement history epoch or input')
   found.consumer = consumer; found.anchorId = anchorId
@@ -93,6 +101,13 @@ export async function consumeSQLiteReActIteration(capability: SQLiteReActBoundar
   if (!found.consumer) fail('SQLite ReAct input has not been durably bound')
   // An invalidated consumer is never replaced or used to replay suppressed mail.
   return serviceForOwner(found.owner).collaboration.consumeSQLiteDelivery(found.consumer!)
+}
+export async function hasPendingSQLiteControllerInput(capability: SQLiteReActBoundary, ctx: AgentContext): Promise<boolean> {
+  const found = record(capability, ctx)
+  if (!found.consumer) fail('Steering probe requires the original admitted SQLite input binding')
+  const pending = await serviceForOwner(found.owner).collaboration.hasPendingControllerInput(found.producer)
+  record(capability, ctx)
+  return pending
 }
 export async function sealSQLiteReActInput(capability: SQLiteReActBoundary, ctx: AgentContext): Promise<boolean> {
   const found = record(capability, ctx)

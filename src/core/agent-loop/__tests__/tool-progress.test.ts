@@ -7,6 +7,18 @@ const succeeded = (output: string): ToolResult => ({ success: true, status: 'suc
 const failed = (output = 'invalid arguments'): ToolResult => ({ success: false, status: 'failed', output })
 
 describe('output-aware progress for long-running tools', () => {
+  it('does not count user steering interruptions as failures, completed work or repeated reads', () => {
+    const tracker = new ToolProgressTracker(() => 'readonly')
+    expect(tracker.observe([read], [failed()])).toBe(1)
+    const deferred: ToolResult = { success: false, status: 'interrupted', output: 'Handle the latest user input first', error: 'USER_INPUT_PENDING' }
+    for (let index = 0; index < 40; index++) {
+      expect(tracker.observe([read], [deferred])).toBe(1)
+      expect(tracker.hasCompletedProgress()).toBe(false)
+      expect(tracker.recoveryPrompt()).toBeUndefined()
+      expect(tracker.workflowReviewPrompt()).toBeUndefined()
+    }
+  })
+
   it('treats genuine pending batch waits as active work without accepting failed or completed waits', () => {
     const call = { ...read, name: 'subagent_wait', args: { runIds: ['one', 'two'] } }
     const pending = { ...succeeded('pending'), metadata: { subagentObservation: { state: 'pending', runs: [

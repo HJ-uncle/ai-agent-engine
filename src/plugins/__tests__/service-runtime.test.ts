@@ -6,6 +6,7 @@ import { runPlugin } from '../runtime.js'
 import type { PluginManifest } from '../types.js'
 
 const parent = path.resolve('.e2e-tmp', 'plugin-service-runtime')
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')!
 let root: string, service: PluginService
 const manifest: PluginManifest = { apiVersion: 1, id: 'example', name: 'Example', version: '1.0.0', description: 'Test plugin', runtime: 'node',
   tools: [{ name: 'echo', description: 'Echo JSON', inputSchema: { type: 'object', properties: { text: { type: 'string' } } }, entry: 'main.mjs' }] }
@@ -14,12 +15,138 @@ const input = (source = echo) => ({ manifest: structuredClone(manifest), files: 
 
 beforeEach(() => { fs.mkdirSync(parent, { recursive: true }); root = fs.mkdtempSync(path.join(parent, 'fixture-')); service = new PluginService(path.join(root, 'plugins')) })
 afterEach(() => {
+  vi.restoreAllMocks()
+  Object.defineProperty(process, 'platform', platformDescriptor)
   vi.unstubAllEnvs()
   if (path.dirname(root) !== parent || !path.basename(root).startsWith('fixture-')) throw new Error('Unsafe plugin fixture cleanup')
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
 })
 
 describe('plugin revision storage', () => {
+  it('does not list an installation before its record is atomically committed', async () => {
+    Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'win32' })
+    const rename = fs.renameSync.bind(fs)
+    let signalAttempt!: () => void
+    const attempted = new Promise<void>(resolve => { signalAttempt = resolve })
+    let attempts = 0
+    vi.spyOn(fs, 'renameSync').mockImplementation((source, target) => {
+      if (path.basename(String(source)).startsWith('.staging-') && ++attempts === 1) {
+        signalAttempt()
+        throw Object.assign(new Error('Windows sharing violation'), { code: 'EPERM' })
+      }
+      rename(source, target)
+    })
+    const creating = service.create('alice', input())
+    await attempted
+    expect(await service.list('alice')).toEqual([])
+    await creating
+    expect(await service.list('alice')).toMatchObject([{ id: 'example', revision: 1 }])
+  })
+
+  it.each(['EPERM', 'EBUSY', 'EACCES'])('retries transient Windows %s while preserving the sealed revision and mutation lock', async code => {
+    Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'win32' })
+    await service.create('alice', input())
+    const previous = await service.snapshot('alice', 'example', 1, { allowDraft: true })
+    const rename = fs.renameSync.bind(fs)
+    let attempts = 0
+    vi.spyOn(fs, 'renameSync').mockImplementation((source, target) => {
+      if (path.basename(String(source)).startsWith('.staging-') && path.basename(String(target)) === '2') {
+        attempts++
+        expect(fs.existsSync(target)).toBe(false)
+        expect(fs.existsSync(path.join(String(source), 'snapshot.json'))).toBe(true)
+        if (attempts <= 2) throw Object.assign(new Error('Windows sharing violation'), { code })
+      }
+      rename(source, target)
+    })
+    const first = service.update('alice', 'example', { ...input('console.log("second")'), expectedRevision: 1 })
+    // A writer queued while rename yields must not observe the old revision and
+    // overwrite the first writer after its successful retry.
+    const competing = service.update('alice', 'example', { ...input('console.log("competing")'), expectedRevision: 1 })
+    const results = await Promise.allSettled([first, competing])
+    expect(results[0]).toMatchObject({ status: 'fulfilled', value: { revision: 2 } })
+    expect(results[1]).toMatchObject({ status: 'rejected', reason: { code: 'PLUGIN_CONFLICT' } })
+    expect(attempts).toBe(3)
+    expect((await service.snapshot('alice', 'example', 1, { allowDraft: true })).hash).toBe(previous.hash)
+    expect((await service.snapshot('alice', 'example', 2, { allowDraft: true })).files['main.mjs']).toBe('console.log("second")')
+    expect(fs.readdirSync(path.dirname(path.dirname(previous.directory))).sort()).toEqual(['1', '2'])
+  })
+
+  it.each(['snapshot.json', 'record.json', 'settings.json'])('keeps %s atomic while retrying a Windows sharing violation', async filename => {
+    Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'win32' })
+    await service.create('alice', input())
+    await service.setSettings('alice', 'example', { mode: 'old' })
+    const rename = fs.renameSync.bind(fs)
+    let attempts = 0
+    vi.spyOn(fs, 'renameSync').mockImplementation((source, target) => {
+      if (path.basename(String(target)) === filename) {
+        attempts++
+        if (attempts === 1) {
+          if (filename === 'record.json') expect(JSON.parse(fs.readFileSync(target, 'utf8')).revision).toBe(1)
+          if (filename === 'settings.json') expect(JSON.parse(fs.readFileSync(target, 'utf8'))).toEqual({ mode: 'old' })
+          if (filename === 'snapshot.json') expect(fs.existsSync(target)).toBe(false)
+          throw Object.assign(new Error('Windows sharing violation'), { code: 'EPERM' })
+        }
+      }
+      rename(source, target)
+    })
+    if (filename === 'settings.json') expect(await service.setSettings('alice', 'example', { mode: 'new' })).toEqual({ mode: 'new' })
+    else expect((await service.update('alice', 'example', { ...input('console.log("second")'), expectedRevision: 1 })).revision).toBe(2)
+    expect(attempts).toBe(2)
+  })
+
+  it('bounds persistent Windows sharing failures and preserves the previous revision', async () => {
+    Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'win32' })
+    await service.create('alice', input())
+    const previous = await service.snapshot('alice', 'example', 1, { allowDraft: true })
+    const rename = fs.renameSync.bind(fs), failure = Object.assign(new Error('persistent lock'), { code: 'EPERM' })
+    let attempts = 0
+    vi.spyOn(fs, 'renameSync').mockImplementation((source, target) => {
+      if (path.basename(String(source)).startsWith('.staging-')) { attempts++; throw failure }
+      rename(source, target)
+    })
+    await expect(service.update('alice', 'example', { ...input(), expectedRevision: 1 })).rejects.toBe(failure)
+    expect(attempts).toBe(6)
+    expect((await service.get('alice', 'example')).revision).toBe(1)
+    expect((await service.snapshot('alice', 'example', 1, { allowDraft: true })).hash).toBe(previous.hash)
+    expect(fs.readdirSync(path.dirname(path.dirname(previous.directory)))).toEqual(['1'])
+  })
+
+  it.each([{ platform: 'linux', code: 'EPERM' }, { platform: 'win32', code: 'ENOSPC' }])('does not retry $platform $code failures', async ({ platform, code }) => {
+    Object.defineProperty(process, 'platform', { ...platformDescriptor, value: platform })
+    await service.create('alice', input())
+    const rename = fs.renameSync.bind(fs), failure = Object.assign(new Error('not transient'), { code })
+    let attempts = 0
+    vi.spyOn(fs, 'renameSync').mockImplementation((source, target) => {
+      if (path.basename(String(source)).startsWith('.staging-')) { attempts++; throw failure }
+      rename(source, target)
+    })
+    await expect(service.update('alice', 'example', { ...input(), expectedRevision: 1 })).rejects.toBe(failure)
+    expect(attempts).toBe(1)
+    expect((await service.get('alice', 'example')).revision).toBe(1)
+  })
+
+  it('does not replace a revision that appears while waiting to retry', async () => {
+    Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'win32' })
+    await service.create('alice', input())
+    const rename = fs.renameSync.bind(fs)
+    let attempts = 0, competingTarget = ''
+    vi.spyOn(fs, 'renameSync').mockImplementation((source, target) => {
+      if (path.basename(String(source)).startsWith('.staging-')) {
+        attempts++; competingTarget = String(target)
+        fs.mkdirSync(competingTarget)
+        fs.writeFileSync(path.join(competingTarget, 'marker'), 'preserve')
+        throw Object.assign(new Error('Windows sharing violation'), { code: 'EBUSY' })
+      }
+      rename(source, target)
+    })
+    await expect(service.update('alice', 'example', { ...input(), expectedRevision: 1 })).rejects.toMatchObject({ code: 'PLUGIN_REVISION' })
+    expect(attempts).toBe(1)
+    expect(fs.readFileSync(path.join(competingTarget, 'marker'), 'utf8')).toBe('preserve')
+    expect(fs.readdirSync(competingTarget)).toEqual(['marker'])
+    expect((await service.get('alice', 'example')).revision).toBe(1)
+    expect(fs.readdirSync(path.dirname(competingTarget)).sort()).toEqual(['1', '2'])
+  })
+
   it('checks enable/delete expected revisions inside the mutation lock', async () => {
     await service.create('alice', input())
     await service.update('alice', 'example', { ...input(), expectedRevision: 1 })
@@ -71,10 +198,10 @@ describe('plugin revision storage', () => {
     expect(() => validatePluginInput({ ...input(), files: { 'main.mjs': echo, [file]: 'bad' } })).toThrow()
   })
 
-  it('rejects binary, case-colliding and oversized source files plus invalid entry/schema/name identities', () => {
+  it('accepts large source files while rejecting binary, case collisions and invalid identities', () => {
     expect(() => validatePluginInput({ ...input(), files: { 'main.mjs': echo, 'bad.exe': 'bad' } })).toThrow()
     expect(() => validatePluginInput({ ...input(), files: { 'main.mjs': echo, 'Main.mjs': echo } })).toThrow()
-    expect(() => validatePluginInput(input('a'.repeat(1024 * 1024 + 1)))).toThrow()
+    expect(() => validatePluginInput(input('a'.repeat(1024 * 1024 + 1)))).not.toThrow()
     expect(() => validatePluginInput({ ...input(), manifest: { ...manifest, tools: [{ ...manifest.tools[0], entry: 'missing.mjs' }] } })).toThrow()
     expect(() => validatePluginInput({ ...input(), manifest: { ...manifest, tools: [{ ...manifest.tools[0], inputSchema: { type: 'string' } }] } })).toThrow()
     expect(() => validatePluginInput({ ...input(), manifest: { ...manifest, id: 'bad--id' } })).toThrow()
@@ -91,15 +218,18 @@ describe('plugin revision storage', () => {
   it('seals prepared dependency bytes and preserves their version across ordinary source edits', async () => {
     const prepared = path.join(root, 'prepared'); fs.mkdirSync(path.join(prepared, 'node_modules', 'library'), { recursive: true })
     fs.writeFileSync(path.join(prepared, 'node_modules', 'library', 'index.js'), 'module.exports="first"')
-    fs.writeFileSync(path.join(prepared, 'package-lock.json'), '{"lockfileVersion":3}')
+    const lockfile = JSON.stringify({ lockfileVersion: 3, fixtureMetadata: 'x'.repeat(4 * 1024 * 1024 + 1) })
+    fs.writeFileSync(path.join(prepared, 'package-lock.json'), lockfile)
     const authored = { ...input(), files: { ...input().files, 'package.json': '{"dependencies":{"library":"1.0.0"}}' } }
     await service.create('alice', authored, { directory: prepared }); await service.publish('alice', 'example', 1)
     fs.writeFileSync(path.join(prepared, 'node_modules', 'library', 'index.js'), 'module.exports="changed outside"')
     const first = await service.snapshot('alice', 'example', 1)
     expect(fs.readFileSync(path.join(first.directory, 'node_modules', 'library', 'index.js'), 'utf8')).toBe('module.exports="first"')
+    expect(fs.readFileSync(path.join(first.directory, 'package-lock.json'), 'utf8')).toBe(lockfile)
     await service.update('alice', 'example', { ...authored, expectedRevision: 1 })
     const second = await service.snapshot('alice', 'example', 2, { allowDraft: true })
     expect(fs.readFileSync(path.join(second.directory, 'node_modules', 'library', 'index.js'), 'utf8')).toBe('module.exports="first"')
+    expect(fs.readFileSync(path.join(second.directory, 'package-lock.json'), 'utf8')).toBe(lockfile)
     fs.writeFileSync(path.join(second.directory, 'node_modules', 'library', 'index.js'), 'changed')
     await expect(service.publish('alice', 'example', 2)).rejects.toMatchObject({ code: 'PLUGIN_TAMPERED' })
   })
@@ -184,15 +314,31 @@ describe('isolated Node plugin execution', () => {
     await expect(runPlugin(snapshot, 'echo', {}, { signal: controller.signal })).rejects.toMatchObject({ code: 'PLUGIN_CANCELLED' })
   }, 30_000)
 
-  it('limits live executions per tenant and releases slots after cancellation', async () => {
+  it('does not impose four live executions per tenant and cancels all through the caller signal', async () => {
     const snapshot = await draft('setTimeout(()=>console.log(JSON.stringify("finished")),30000)')
     const controller = new AbortController()
-    const runs = Array.from({ length: 4 }, () => runPlugin(snapshot, 'echo', {}, { signal: controller.signal }))
+    const runs = Array.from({ length: 6 }, () => runPlugin(snapshot, 'echo', {}, { signal: controller.signal }))
     const results = Promise.allSettled(runs)
-    await expect(runPlugin(snapshot, 'echo', {})).rejects.toMatchObject({ code: 'PLUGIN_BUSY' })
     controller.abort()
     expect((await results).every(item => item.status === 'rejected')).toBe(true)
     const fast = await service.update('runner', 'example', { ...input('console.log(JSON.stringify("done"))'), expectedRevision: 1 })
     expect((await runPlugin(await service.snapshot('runner', 'example', fast.revision, { allowDraft: true }), 'echo', {})).result).toBe('done')
   }, 30_000)
+  it('spools large diagnostics and returns large JSON and artifacts without default plugin ceilings', async () => {
+    const snapshot = await draft(`
+      let input='';for await(const chunk of process.stdin)input+=chunk;
+      console.log('diagnostic'.repeat(1024*1024));
+      console.error('diagnostic'.repeat(128*1024));
+      console.log(JSON.stringify({result:{text:JSON.parse(input).args.text,flags:process.execArgv},
+        artifacts:Array.from({length:17},(_,i)=>({path:'report-'+i+'.txt',content:'x'.repeat(256*1024)}))}));
+    `)
+    const text = 'large-input-result'.repeat(180000)
+    const result = await runPlugin(snapshot, 'echo', { text }, { timeoutMs: 0, maxInputBytes: 0, maxOutputBytes: 0, maxStderrBytes: 0 })
+    expect(result.result).toEqual({ text, flags: ['--disable-proto=throw', '--no-addons'] })
+    expect(result.artifacts).toHaveLength(17)
+    expect(result.artifacts.every(artifact => artifact.content.length === 256 * 1024)).toBe(true)
+    expect(result.stderrTruncated).toBe(true)
+    expect(Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(64 * 1024)
+    expect(fs.readdirSync(path.dirname(snapshot.directory)).some(name => name.startsWith('.plugin-output-'))).toBe(false)
+  }, 20_000)
 })

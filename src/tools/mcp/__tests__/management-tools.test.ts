@@ -24,6 +24,12 @@ function seed(entries: Record<string, Record<string, unknown>>, target = config)
 }
 const base = () => ({ name: 'Example', transportType: 'http', enabled: false, url: 'https://example.invalid/mcp', unknownField: { keep: true } })
 const selected = () => ({ id: 'example', scope: 'project', expectedRevision: service.get(context, 'example', 'project').revision })
+function stdioFixture() {
+  const pidPath = path.join(root, 'server.pid'), called = path.join(root, 'called.txt'), script = path.join(root, 'fixture.cjs')
+  fs.writeFileSync(script, `const fs=require('fs');fs.writeFileSync(${JSON.stringify(pidPath)},String(process.pid));const rl=require('readline').createInterface({input:process.stdin});rl.on('line',line=>{const m=JSON.parse(line);if(!m.id)return;let result={};if(m.method==='initialize')result={protocolVersion:'2025-06-18',capabilities:{},serverInfo:{name:'fixture',version:'1'}};if(m.method==='tools/list')result={tools:[{name:'inspect',description:'Test-only fixture',inputSchema:{type:'object'}}]};if(m.method==='tools/call')fs.writeFileSync(${JSON.stringify(called)},'unexpected');process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
+  seed({ example: { ...base(), transportType: 'stdio', command: process.execPath, args: [script], url: undefined } })
+  return { pidPath, called }
+}
 async function call(name: string, raw: Record<string, unknown>, manager = service) {
   const tool = createMcpManagementTools(manager).find(tool => tool.name === name)!
   const waiting = await tool.execute(raw, ctx())
@@ -46,6 +52,58 @@ afterEach(() => {
   vi.restoreAllMocks(); vi.unstubAllEnvs()
   if (path.dirname(root) !== fixtureParent || !path.basename(root).startsWith('fixture-')) throw new Error('Unsafe fixture cleanup')
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+})
+
+describe('MCP management session full access', () => {
+  it('persists create, update, enable, disable and delete with no approval-resume arguments', async () => {
+    setSecurityMode(context.tenantId, context.sessionId, 'full-access')
+    seed({ untouched: { ...base(), name: 'Untouched' } })
+    const tools = createMcpManagementTools(service), executionContext = ctx()
+    expect(executionContext.resumeToolCall).toBeUndefined()
+    const execute = async (name: string, raw: Record<string, unknown>) => {
+      const result = await tools.find(tool => tool.name === name)!.execute(raw, executionContext)
+      expect(result, result.output).toMatchObject({ success: true })
+      expect(result.needsConfirmation).not.toBe(true)
+      expect(result.pendingAction).toBeUndefined()
+      return JSON.parse(result.output)
+    }
+
+    await execute('mcp_server_create', createArgs())
+    expect(JSON.parse(fs.readFileSync(config, 'utf8')).mcpServers.example).toMatchObject({ name: 'Example', enabled: false })
+    expect(await execute('mcp_server_get', { id: 'example', scope: 'project' })).toMatchObject({ name: 'Example', enabled: false })
+    const previousRevision = selected().expectedRevision
+    await execute('mcp_server_update', { ...selected(), changes: { name: 'Edited', description: 'Saved without a resumed approval' } })
+    expect(service.get(context, 'example', 'project')).toMatchObject({ name: 'Edited', description: 'Saved without a resumed approval' })
+    expect(selected().expectedRevision).not.toBe(previousRevision)
+    for (const enabled of [true, false]) {
+      await execute('mcp_server_set_enabled', { ...selected(), enabled })
+      expect(JSON.parse(fs.readFileSync(config, 'utf8')).mcpServers.example.enabled).toBe(enabled)
+    }
+    expect(await execute('mcp_server_list', { scope: 'project' })).toMatchObject({ total: 2 })
+    await execute('mcp_server_delete', selected())
+    const saved = JSON.parse(fs.readFileSync(config, 'utf8'))
+    expect(saved.preservedRootMetadata).toBe(true)
+    expect(saved.mcpServers).toEqual({ untouched: { ...base(), name: 'Untouched' } })
+    expect(service.list(context)).toHaveLength(1)
+  })
+
+  it('discovers a real stdio server directly and closes its process without running business tools', async () => {
+    setSecurityMode(context.tenantId, context.sessionId, 'full-access')
+    const { pidPath, called } = stdioFixture()
+    const disconnect = vi.spyOn(HTTPMCPClient.prototype, 'disconnect')
+    const executionContext = ctx(), tool = createMcpManagementTools(service).find(tool => tool.name === 'mcp_server_test')!
+    expect(executionContext.resumeToolCall).toBeUndefined()
+    const result = await tool.execute(selected(), executionContext)
+    expect(result, result.output).toMatchObject({ success: true, status: 'succeeded' })
+    expect(result.needsConfirmation).not.toBe(true)
+    expect(result.pendingAction).toBeUndefined()
+    expect(JSON.parse(result.output)).toMatchObject({ toolCount: 1, tools: [{ name: 'mcp_example_inspect' }] })
+    expect(disconnect).toHaveBeenCalled()
+    expect(fs.existsSync(called)).toBe(false)
+    const pid = Number(fs.readFileSync(pidPath, 'utf8'))
+    expect(() => process.kill(pid, 0)).toThrow()
+    expect(service.get(context, 'example', 'project').enabled).toBe(false)
+  }, 15_000)
 })
 
 describe('MCP management permissions and frozen configuration', () => {
@@ -199,9 +257,7 @@ describe('MCP management permissions and frozen configuration', () => {
 
 describe('MCP management discovery', () => {
   it('discovers a real isolated stdio server only after approval and closes the process without a business call', async () => {
-    const pidPath = path.join(root, 'server.pid'), called = path.join(root, 'called.txt'), script = path.join(root, 'fixture.cjs')
-    fs.writeFileSync(script, `const fs=require('fs');fs.writeFileSync(${JSON.stringify(pidPath)},String(process.pid));const rl=require('readline').createInterface({input:process.stdin});rl.on('line',line=>{const m=JSON.parse(line);if(!m.id)return;let result={};if(m.method==='initialize')result={protocolVersion:'2025-06-18',capabilities:{},serverInfo:{name:'fixture',version:'1'}};if(m.method==='tools/list')result={tools:[{name:'inspect',description:'Test-only fixture',inputSchema:{type:'object'}}]};if(m.method==='tools/call')fs.writeFileSync(${JSON.stringify(called)},'unexpected');process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
-    seed({ example: { ...base(), transportType: 'stdio', command: process.execPath, args: [script], url: undefined } })
+    const { pidPath, called } = stdioFixture()
     const disconnect = vi.spyOn(HTTPMCPClient.prototype, 'disconnect')
     const raw = selected(), tool = createMcpManagementTools(service).find(tool => tool.name === 'mcp_server_test')!
     const waiting = await tool.execute(raw, ctx())

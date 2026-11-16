@@ -2,7 +2,10 @@ import { PluginService } from './service.js'
 import { validatePluginArguments } from './schema.js'
 import { runPlugin } from './runtime.js'
 import { getDefaultSecurityMode } from '../security/policy-engine.js'
+import { workspaceManager } from '../workspace/index.js'
+import { publishedCapabilityDispatcher, type PluginExecutionContext } from './capability-runtime.js'
 import { PluginError, type PluginManifest, type PluginRunResult, type PluginSnapshot } from './types.js'
+import type { PluginHostContext } from './host-context.js'
 
 export interface PluginApplicationExample { name: string; tool: string; args: Record<string, unknown> }
 export interface PluginApplication {
@@ -21,7 +24,7 @@ function object(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }
 
-function invocationPolicy(): { allowed: boolean; reason?: string } {
+export function pluginApplicationExecutionPolicy(): { allowed: boolean; reason?: string } {
   // Application execution has no chat session. A guessed/shared session key
   // would let an unrelated chat override the engine default used by this API.
   return getDefaultSecurityMode() === 'safe'
@@ -29,24 +32,21 @@ function invocationPolicy(): { allowed: boolean; reason?: string } {
     : { allowed: true }
 }
 
-function examples(snapshot: PluginSnapshot): PluginApplicationExample[] {
+export function pluginApplicationExamples(snapshot: Pick<PluginSnapshot, 'files' | 'manifest'>): PluginApplicationExample[] {
   const source = snapshot.files['examples/cases.json']
-  if (!source || Buffer.byteLength(source) > 256 * 1024) return []
+  if (!source) return []
   let parsed: unknown
   try { parsed = JSON.parse(source) } catch { return [] }
-  if (!object(parsed) || !Array.isArray(parsed.cases) || parsed.cases.length > 50) return []
+  if (!object(parsed) || !Array.isArray(parsed.cases)) return []
   const result: PluginApplicationExample[] = []
   const seen = new Set<string>()
-  let bytes = 0
   for (const item of parsed.cases) {
     if (!object(item) || typeof item.tool !== 'string' || !object(item.args) || seen.has(item.tool)) continue
     const tool = snapshot.manifest.tools.find(tool => tool.name === item.tool)
     if (!tool) continue
     try { validatePluginArguments(tool.inputSchema, item.args) } catch { continue }
     const example = { name: typeof item.name === 'string' ? item.name.slice(0, 200) : tool.name, tool: tool.name, args: item.args }
-    const size = Buffer.byteLength(JSON.stringify(example))
-    if (size > 64 * 1024 || bytes + size > 128 * 1024) continue
-    bytes += size; seen.add(tool.name); result.push(example)
+    seen.add(tool.name); result.push(example)
   }
   return result
 }
@@ -57,18 +57,20 @@ export async function getPluginApplication(service: PluginService, tenantId: str
   const pinned = revision ?? record.publishedRevision
   if (!pinned) throw new PluginError('PLUGIN_UNPUBLISHED', '请先发布并启用插件后再打开使用', 409)
   const snapshot = await service.snapshot(tenantId, id, pinned)
-  const documents = Object.fromEntries((snapshot.manifest.contributes?.pages ?? []).flatMap(page => page.kind === 'webview' ? [[page.id, snapshot.files[page.entry]]] : []))
+  const documents = Object.fromEntries((snapshot.manifest.contributes?.pages ?? []).flatMap(page => page.kind !== 'tool' ? [[page.id, snapshot.files[page.entry]]] : []))
   return { id, name: snapshot.manifest.name, description: snapshot.manifest.description, revision: snapshot.revision,
-    hash: snapshot.hash, manifest: snapshot.manifest, examples: examples(snapshot), execution: invocationPolicy(),
+    hash: snapshot.hash, manifest: snapshot.manifest, examples: pluginApplicationExamples(snapshot), execution: pluginApplicationExecutionPolicy(),
     ...(Object.keys(documents).length ? { uiDocuments: documents } : {}) }
 }
 
 /** User-operated execution stays pinned; it does not register tools in any agent session or write returned artifacts. */
 export async function invokePluginApplication(service: PluginService, tenantId: string, id: string, revision: number,
-  tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<PluginRunResult & { plugin: { id: string; revision: number; hash: string } }> {
-  const policy = invocationPolicy()
+  tool: string, args: Record<string, unknown>, signal?: AbortSignal, sessionId?: string, hostContext?: PluginHostContext, parentExecution?: PluginExecutionContext): Promise<PluginRunResult & { plugin: { id: string; revision: number; hash: string } }> {
+  const policy = pluginApplicationExecutionPolicy()
   if (!policy.allowed) throw new PluginError('PLUGIN_FORBIDDEN', policy.reason!, 403)
   const snapshot = await service.snapshot(tenantId, id, revision)
-  const output = await runPlugin(snapshot, tool, args, { signal, tenantId })
+  const execution = sessionId ? { ...parentExecution, workspaceContext: { tenantId, sessionId }, workspaceBinding: workspaceManager.getBindingSnapshot({ tenantId, sessionId }) } : parentExecution
+  const output = await runPlugin(snapshot, tool, args, { signal, tenantId, hostContext: { ...hostContext, sessionId, workspacePath: execution?.workspaceBinding?.root },
+    capability: publishedCapabilityDispatcher(service, tenantId, id, revision, sessionId, execution) })
   return { ...output, plugin: { id, revision: snapshot.revision, hash: snapshot.hash } }
 }

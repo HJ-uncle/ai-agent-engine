@@ -175,6 +175,9 @@ export class CollaborationRuntime {
   waitForInput(producer: CollaborationProducer, signal: AbortSignal): Promise<void> {
     return this.store.waitForInput(this.binding(producer), signal)
   }
+  hasPendingControllerInput(producer: CollaborationProducer): Promise<boolean> {
+    return this.store.hasPendingControllerInput(this.binding(producer))
+  }
   beginDrain(producer: CollaborationProducer): Promise<void> {
     const binding = this.binding(producer)
     return this.serialize(() => this.store.phase(binding, 'draining'))

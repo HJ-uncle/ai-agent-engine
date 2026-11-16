@@ -9,6 +9,30 @@ const assistant = (id: string, usage: Record<string, number>): Message => ({
 }) as Message
 
 describe('persisted context and billing snapshots', () => {
+  it('keeps legacy untagged rows on the immutable original attempt after repeated continuation', () => {
+    const continuedRun = { ...run, attemptId: 'third', assistantMessageId: 'third-segment', createdAt: 1,
+      serverAdmissionReceipt: { attemptId: 'first' },
+      continuationReceipt: { previousAttemptId: 'second', assistantAnchorId: 'original-segment' },
+    } as unknown as RootRun
+    const projection = persistedTurnProjection([{ ...assistant('original-segment', { promptTokens: 10 }), content: 'Original evidence.' }], continuedRun)
+    expect(projection[0]).toEqual({ assistantSegment: { runId: run.runId, turnId: run.turnId,
+      attemptId: 'first', messageId: 'original-segment', createdAt: 1 } })
+  })
+  it('marks each retained attempt once without splitting tool iterations or repeating usage', () => {
+    const continuedRun = { ...run, attemptId: 'attempt-3', assistantMessageId: 'segment-3', createdAt: 1 } as RootRun
+    const history = [
+      { ...assistant('tool-row', { promptTokens: 10 }), content: 'first;', metadata: { attemptId: 'attempt-1', assistantSegmentId: 'segment-1' } },
+      { ...assistant('segment-1', { promptTokens: 20 }), content: 'partial;', metadata: { attemptId: 'attempt-1', assistantSegmentId: 'segment-1' } },
+      { ...assistant('segment-2', { promptTokens: 30 }), content: 'continued;', metadata: { attemptId: 'attempt-2', assistantSegmentId: 'segment-2' } },
+    ]
+    const projection = persistedTurnProjection(history, continuedRun)
+    expect(projection.filter(frame => frame.assistantSegment).map(frame => frame.assistantSegment)).toEqual([
+      { runId: run.runId, turnId: run.turnId, attemptId: 'attempt-1', messageId: 'segment-1', createdAt: 1 },
+      { runId: run.runId, turnId: run.turnId, attemptId: 'attempt-2', messageId: 'segment-2', createdAt: 1 },
+    ])
+    expect(projection.filter(frame => frame.content).map(frame => frame.content).join('')).toBe('first;partial;continued;')
+    expect(projection.find(frame => frame.usage)?.usage).toMatchObject({ promptTokens: 60, currentPromptTokens: 30 })
+  })
   it('pairs input estimate provenance with its own invocation across recovery', () => {
     const first = { ...assistant('estimated', { promptTokens: 17 }), metadata: { contextUsageEstimated: true } }
     expect(persistedTurnProjection([first], run).find(frame => frame.usage)?.usage).toMatchObject({

@@ -21,6 +21,30 @@ function frame(name: string, payload: unknown): string {
 }
 
 describe('StreamBus resumable subscriptions', () => {
+  it('preserves attempt boundaries when the latest run replaces its original projection slot', () => {
+    const bus = new StreamBus(new AbortController())
+    const original = { runId: 'run', turnId: 'turn', userMessageId: 'user', assistantMessageId: 'assistant-1', attemptId: 'attempt-1', version: 1, status: 'running', createdAt: 1 }
+    bus.push(frame('user_message', { id: 'user', role: 'user', content: 'Original task.' }))
+    bus.push(frame('run', original))
+    bus.push('original partial; ')
+    bus.push(frame('run', { ...original, version: 2, status: 'cancelled' }))
+    const next = new StreamBus(new AbortController())
+    next.seedProjection(bus.snapshot().projection)
+    next.push(frame('run', { ...original, attemptId: 'attempt-2', assistantMessageId: 'assistant-2', version: 3 }))
+    next.push('continued result')
+    next.push(frame('run', { ...original, attemptId: 'attempt-2', assistantMessageId: 'assistant-2', version: 4, status: 'succeeded' }))
+    const projection = next.snapshot().projection
+    const semantic = projection.filter(item => item.assistantSegment || item.content)
+    expect(semantic).toEqual([
+      { assistantSegment: expect.objectContaining({ attemptId: 'attempt-1', messageId: 'assistant-1' }) },
+      { content: 'original partial; ' },
+      { assistantSegment: expect.objectContaining({ attemptId: 'attempt-2', messageId: 'assistant-2' }) },
+      { content: 'continued result' },
+    ])
+    const cold = new StreamBus(new AbortController())
+    cold.seedProjection(projection)
+    expect(cold.snapshot().projection).toEqual(projection)
+  })
   it('retains each user boundary between assistant and tool segments through snapshot recovery', () => {
     const bus = new StreamBus(new AbortController())
     const users = Array.from({ length: 6 }, (_, index) => ({ id: `user-${index}`, role: 'user', content: `requirement-${index}`, createdAt: 1_000 + index }))

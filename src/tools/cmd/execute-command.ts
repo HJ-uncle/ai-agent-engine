@@ -9,9 +9,42 @@ import { commandLooksLikeShellLine, createCommandLaunchPlan } from '../../core/c
 import { createCommandChangeObserver } from './command-change-observer.js'
 import { commandChangeSummary } from './command-change-summary.js'
 import { createCommandEnvironment } from './command-environment.js'
+import { captureBuildSource, resolveSourceChangeChoice, sourceChangePendingAction, verifySourceSnapshot, type BuildSourceSnapshot, type SourceChangeChoice, type SourceChangeWait } from '../../runtime/source-change-protocol.js'
+import { getSourceChangeWaitStatus, SOURCE_CHANGE_WAIT_DEFAULTS } from '../../runtime/source-change-wait.js'
 
 export interface CMDToolOptions { timeoutMs?: number; allowedCommands?: string[] }
 interface CommandArgs { command: string; args?: string[]; cwd?: string; timeoutMs?: number; background?: boolean }
+
+function isBuildInvocation(command: string, args: readonly string[]): boolean {
+  const name = path.basename(command).toLowerCase().replace(/\.cmd$|\.exe$/i, '')
+  if (name === 'npm' || name === 'pnpm' || name === 'yarn') return args.some(arg => /^build(?::|$)/i.test(arg)) || args.includes('run') && args.some(arg => /^build(?::|$)/i.test(arg))
+  if (name === 'node' || name === 'tsx' || name === 'ts-node' || name === 'npx') return args.some(arg => /(?:^|[\\/])(?:scripts[\\/])?build(?:\.[cm]?[jt]s)?$/i.test(arg))
+  return /(?:^|[\\/])build(?:\.[cm]?[jt]s)?$/i.test(command)
+}
+
+function tryBuildSourceSnapshot(cwd: string, command: string, args: readonly string[]): BuildSourceSnapshot | undefined {
+  if (!isBuildInvocation(command, args) || !fs.existsSync(path.join(cwd, 'package.json')) || !fs.existsSync(path.join(cwd, 'src'))) return undefined
+  try { return captureBuildSource(cwd) } catch { return undefined }
+}
+
+/**
+ * A source-change receipt can remain visible while a different live command
+ * still owns the overlapping workspace.  The receipt intentionally contains
+ * only execution identifiers and paths; command text and output stay private.
+ */
+async function sourceChangeWaitFor(ctx: AgentContext, root: string, snapshot: BuildSourceSnapshot, currentJobId: string): Promise<SourceChangeWait | undefined> {
+  const status = await getSourceChangeWaitStatus({ tenantId: ctx.tenantId, root,
+    currentSessionId: ctx.rootSessionId ?? ctx.sessionId, currentRunId: ctx.rootRunId ?? ctx.runId,
+    currentJobId,
+    snapshot, stableWindowMs: SOURCE_CHANGE_WAIT_DEFAULTS.stableWindowMs })
+  // Automatic waiting is reserved for a proven overlapping writer. A build
+  // can legitimately change generated sources by itself; that case must keep
+  // the explicit source-change choices instead of silently retrying.
+  if (!status.blockers.length) return undefined
+  const reason = status.reason === 'ready' ? 'stable-window' : status.reason
+  return { mode: 'external-writer', reason, startedAt: status.observedAt, pollMs: SOURCE_CHANGE_WAIT_DEFAULTS.pollMs,
+    stableWindowMs: status.stableWindowMs, blockers: status.blockers }
+}
 
 export function commandJobScope(ctx: AgentContext): CommandJobScope {
   return { tenantId: ctx.tenantId, sessionId: ctx.rootSessionId ?? ctx.sessionId,
@@ -81,8 +114,15 @@ export const cmdTool: Tool = {
     const cwd = fs.realpathSync(workspaceManager.resolveSafePath(ctx, cwdArg ?? workspaceManager.getWorkingDirectory(ctx)))
     workspaceManager.resolveSafePath(ctx, cwd)
     throwIfAborted(ctx.signal)
+    const sourceAction = ctx.resumeToolCall?.pendingAction?.type === 'source_change' ? ctx.resumeToolCall.pendingAction : undefined
+    const sourceChoice = sourceAction ? resolveSourceChangeChoice(sourceAction, ctx.resumeToolCall?.output) : undefined
+    if (sourceAction && sourceChoice === 'pause') return { success: false, status: 'interrupted', output: '已暂停构建：外部源码变化仍需重新检查。', error: 'SOURCE_CHANGE_PAUSED', metadata: { sourceChange: { choice: sourceChoice, risk: false } } }
+    // A recheck/rebuild choice starts this exact tool call again against a
+    // fresh source identity. Full-access approvals never bypass this guard.
+    const buildSnapshot = tryBuildSourceSnapshot(cwd, command, args)
     // An omitted deadline is unlimited in every profile. A caller can still
     // opt into an explicit positive timeout for a bounded probe.
+    if (background && buildSnapshot) return { success: false, status: 'failed', output: '构建源码保护要求前台执行，以便在结束时完成最终版本复核；请将 background 设为 false 后重试。', error: 'SOURCE_GUARD_REQUIRES_FOREGROUND', metadata: { sourceChange: { code: 'SOURCE_GUARD_REQUIRES_FOREGROUND', fileMutationApplied: false } } }
     const timeout = timeoutMs === undefined ? undefined
       : (Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.max(1, Math.floor(timeoutMs)) : undefined)
     const scope = commandJobScope(ctx)
@@ -116,12 +156,31 @@ export const cmdTool: Tool = {
     const detail = finished.error?.message ?? `Command exited with code ${finished.exitCode}`
     const failureSummary = finished.status === 'succeeded' ? '' :
       `[${finished.error?.code ?? 'COMMAND_FAILED'}] status=${finished.status}; exitCode=${finished.exitCode ?? 'null'}; signal=${finished.signal ?? 'none'}: ${detail}`
+    let sourceChange: { choice: SourceChangeChoice; risk: boolean } | undefined
+    if (buildSnapshot) {
+      try {
+        const check = verifySourceSnapshot(buildSnapshot)
+        if (check.changed) {
+          const wait = await sourceChangeWaitFor(ctx, buildSnapshot.root, check.after as BuildSourceSnapshot, finished.jobId)
+          const pending = sourceChangePendingAction(check, { phase: 'build', operation: 'execute_cmd', wait })
+          return { success: false, status: 'waiting', needsConfirmation: true,
+            output: [expired ? '[Command output expired from retained history]' : truncated ? '[Output truncated; retained tail follows]' : '', failureSummary, text,
+              wait ? `检测到其他会话仍在修改同一源码目录，已自动等待其结束；结束后将重新校验并继续。` : '',
+              sourceChoice ? `构建重试后再次检测到源码变化（上次选择 ${sourceChoice}）。请选择下一步；构建结果仍未被信任。` : '构建期间检测到外部源码变化。请选择 pause、recheck、rebuild 或 skip；构建结果未被信任。'].filter(Boolean).join('\n'),
+            error: 'SOURCE_CHANGED_DURING_BUILD', pendingAction: pending, changes: finished.changes,
+            metadata: { commandJob: finished, sourceChange: { code: 'SOURCE_CHANGED_DURING_BUILD', previousChoice: sourceChoice, choices: pending.choices, fileMutationApplied: false, ...(wait ? { wait } : {}) }, exitCode: finished.exitCode, signal: finished.signal }, durationMs: Date.now() - startedAt }
+        } else if (sourceChoice) sourceChange = { choice: sourceChoice, risk: sourceChoice === 'skip' }
+      } catch (error) {
+        return { success: false, status: 'failed', output: `SOURCE_RECHECK_FAILED: ${error instanceof Error ? error.message : String(error)}`,
+          error: 'SOURCE_RECHECK_FAILED', metadata: { commandJob: finished, sourceChange: { choice: sourceChoice, risk: sourceChoice === 'skip', finalVerification: 'failed' } }, durationMs: Date.now() - startedAt }
+      }
+    }
     return { success: finished.status === 'succeeded', output: [expired ? '[Command output expired from retained history]' : truncated ? '[Output truncated; retained tail follows]' : '',
       failureSummary, text || (finished.status === 'succeeded' ? detail : ''),
-      commandChangeSummary(finished)].filter(Boolean).join('\n'),
+      commandChangeSummary(finished), sourceChange ? `[source-change] choice=${sourceChange.choice}; risk=${sourceChange.risk}` : ''].filter(Boolean).join('\n'),
       error: finished.status === 'succeeded' ? undefined : finished.error?.code,
       changes: finished.changes,
-      metadata: { commandJob: finished, exitCode: finished.exitCode, signal: finished.signal, outputTruncated: truncated },
+      metadata: { commandJob: finished, exitCode: finished.exitCode, signal: finished.signal, outputTruncated: truncated, ...(sourceChange ? { sourceChange } : {}) },
       durationMs: Date.now() - startedAt }
   },
 }

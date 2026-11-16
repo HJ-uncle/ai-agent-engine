@@ -128,6 +128,11 @@ function messageToAnthropic(
   supportsVision = true,
 ): AnthropicMessageParam | null {
   msg = { ...msg, content: modelMessageContent(msg) }
+  // Cancelled reasoning is retained for display, but this adapter has no signed
+  // provider thinking block to replay. An empty assistant body is not a valid
+  // substitute; resume from the task and confirmed evidence instead.
+  if (msg.role === 'assistant' && msg.metadata?.partial === true && !msg.toolCall
+    && typeof msg.content === 'string' && !msg.content.trim() && msg.reasoningContent?.trim()) return null
   if (!supportsVision && Array.isArray(msg.content)) msg.content = msg.content.map(part =>
     part?.type === 'image' || part?.type === 'image_url'
       ? { type: 'text', text: 'Image pixels were not sent: vision is disabled for the selected model.' } : part)

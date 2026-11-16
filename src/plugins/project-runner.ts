@@ -10,8 +10,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, execFile } from 'node:child_process';
 import assert from 'node:assert/strict';
+import { pipeline } from 'node:stream/promises';
 
-const TEST_TIMEOUT_MS = 60_000;
+const TEST_TIMEOUT_MS = Number(process.env.AETHER_PLUGIN_TEST_TIMEOUT_MS ?? 0);
+assert.ok(Number.isSafeInteger(TEST_TIMEOUT_MS) && TEST_TIMEOUT_MS >= 0, 'AETHER_PLUGIN_TEST_TIMEOUT_MS must be a nonnegative integer');
 const CLEANUP_TIMEOUT_MS = 12_000;
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
@@ -83,12 +85,40 @@ function reportedError(value) {
   return undefined;
 }
 
+function finalLine(filename) {
+  const fd = fs.openSync(filename, 'r'), buffer = Buffer.allocUnsafe(64 * 1024);
+  try {
+    let position = fs.fstatSync(fd).size, end = -1, start = 0, found = false;
+    while (position > 0 && !found) {
+      const size = Math.min(position, buffer.length); position -= size;
+      fs.readSync(fd, buffer, 0, size, position);
+      for (let i = size - 1; i >= 0; i--) {
+        const byte = buffer[i];
+        if (end < 0) { if ([10, 13, 32, 9].includes(byte)) continue; end = position + i + 1; }
+        if (byte === 10) { start = position + i + 1; found = true; break; }
+      }
+    }
+    if (end < 0) return '';
+    const result = Buffer.allocUnsafe(end - start);
+    let read = 0;
+    while (read < result.length) { const count = fs.readSync(fd, result, read, result.length - read, start + read); if (!count) break; read += count; }
+    return result.subarray(0, read).toString('utf8').trim();
+  } finally { fs.closeSync(fd); }
+}
+function errorTail(filename) {
+  const fd = fs.openSync(filename, 'r');
+  try {
+    const size = fs.fstatSync(fd).size, length = Math.min(size, 64 * 1024), buffer = Buffer.allocUnsafe(length);
+    fs.readSync(fd, buffer, 0, length, size - length); return buffer.toString('utf8');
+  } finally { fs.closeSync(fd); }
+}
+
 const root = fileURLToPath(new URL('../', import.meta.url));
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'aether-plugin.json'), 'utf8'));
 const { cases } = JSON.parse(fs.readFileSync(path.join(root, 'examples/cases.json'), 'utf8'));
 assert.equal(manifest.apiVersion, 1);
 assert.equal(manifest.runtime, 'node');
-assert.ok(Array.isArray(cases) && cases.length > 0 && cases.length <= 50, 'Expected 1–50 example cases');
+assert.ok(Array.isArray(cases) && cases.length > 0, 'Expected example cases');
 const env = Object.fromEntries(['SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL'].flatMap(key => process.env[key] === undefined ? [] : [[key, process.env[key]]]));
 if (process.versions.electron) env.ELECTRON_RUN_AS_NODE = '1';
 for (const item of cases) {
@@ -100,42 +130,53 @@ for (const item of cases) {
   const entry = path.resolve(root, tool.entry), relative = path.relative(root, entry);
   assert.ok(relative && !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep));
   const input = JSON.stringify({ tool: tool.name, args: item.args }) + '\n';
-  assert.ok(Buffer.byteLength(input) <= 256 * 1024, 'Input exceeds 256 KiB');
-  const output = await new Promise((resolve, reject) => {
+  const tempRoot = path.join(root, '.e2e-tmp', 'plugin-tests');
+  for (const directory of [path.dirname(tempRoot), tempRoot]) { if (fs.existsSync(directory)) assert.ok(!fs.lstatSync(directory).isSymbolicLink(), 'Refusing linked test output directory'); }
+  fs.mkdirSync(tempRoot, { recursive: true });
+  const spool = fs.mkdtempSync(path.join(tempRoot, 'run-')), stdoutFile = path.join(spool, 'stdout'), stderrFile = path.join(spool, 'stderr');
+  let output;
+  try { output = await new Promise((resolve, reject) => {
     const startedAt = Date.now();
-    const child = spawn(process.execPath, ['--max-old-space-size=128', '--disable-proto=throw', '--no-addons', entry], { cwd: root, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
-    const stdout = [], stderr = [];
-    let size = 0, errorSize = 0, failure, stopping, settled = false;
-    const fail = reason => {
+    const child = spawn(process.execPath, ['--disable-proto=throw', '--no-addons', entry], { cwd: root, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
+    let failure, stopping, settled = false;
+    const outputs = Promise.all([
+      pipeline(child.stdout, fs.createWriteStream(stdoutFile, { flags: 'wx' })),
+      pipeline(child.stderr, fs.createWriteStream(stderrFile, { flags: 'wx' })),
+    ].map(operation => operation.catch(fail)));
+    const interrupted = () => fail(new Error('Plugin test cancelled'));
+    const dispose = () => { clearTimeout(timer); process.off('SIGINT', interrupted); process.off('SIGTERM', interrupted); };
+    function fail(reason) {
       if (settled || stopping) return;
       failure = reason;
-      clearTimeout(timer);
+      dispose();
       let cleanupTimer;
       stopping = Promise.race([
         stopProcessTree(child, startedAt, Date.now() + CLEANUP_TIMEOUT_MS),
         new Promise((_, rejectCleanup) => { cleanupTimer = setTimeout(() => rejectCleanup(new Error('Process cleanup deadline exceeded')), CLEANUP_TIMEOUT_MS); }),
       ]).catch(error => { failure = new Error(reason.message + '; process cleanup failed: ' + String(error)); })
-        .finally(() => {
+        .finally(async () => {
           clearTimeout(cleanupTimer);
           // A descendant may retain pipes even when cleanup fails. Never wait
           // indefinitely for close; report the cleanup failure and release I/O.
           child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy(); child.unref();
+          await outputs;
           if (!settled) { settled = true; reject(failure); }
         });
-    };
-    const timer = setTimeout(() => fail(new Error('Plugin test timed out after ' + TEST_TIMEOUT_MS + 'ms')), TEST_TIMEOUT_MS);
+    }
+    const timer = TEST_TIMEOUT_MS ? setTimeout(() => fail(new Error('Plugin test timed out after ' + TEST_TIMEOUT_MS + 'ms')), TEST_TIMEOUT_MS) : undefined;
+    process.on('SIGINT', interrupted); process.on('SIGTERM', interrupted);
     child.once('error', fail);
     child.stdin.on('error', error => { if (error.code !== 'EPIPE') fail(error); });
-    child.stdout.on('data', chunk => { size += chunk.length; if (size > 2 * 1024 * 1024) fail(new Error('Output exceeds 2 MiB')); else stdout.push(chunk); });
-    child.stderr.on('data', chunk => { errorSize += chunk.length; if (errorSize > 256 * 1024) fail(new Error('Stderr exceeds 256 KiB')); else stderr.push(chunk); });
-    child.once('close', code => {
+    child.once('close', async code => {
       if (settled || stopping) return;
-      clearTimeout(timer);
-      const errors = Buffer.concat(stderr).toString('utf8'), text = Buffer.concat(stdout).toString('utf8').trim();
+      dispose();
+      await outputs;
+      if (settled || stopping) return;
+      const errors = errorTail(stderrFile), text = finalLine(stdoutFile);
       try {
         if (code !== 0) throw new Error('Plugin exited ' + code + ': ' + (errors || text).slice(-4000));
         let parsed;
-        try { parsed = JSON.parse(text.split(/\r?\n/).at(-1)); }
+        try { parsed = JSON.parse(text); }
         catch { throw new Error('Plugin did not return JSON (exit ' + code + '): ' + errors.slice(-4000)); }
         const reported = reportedError(parsed);
         if (reported !== undefined) throw new Error(reported);
@@ -143,7 +184,13 @@ for (const item of cases) {
       } catch (error) { fail(error); }
     });
     child.stdin.end(input);
-  });
+  }); } finally {
+    assert.equal(path.dirname(spool), tempRoot); assert.ok(!fs.lstatSync(spool).isSymbolicLink());
+    for (const file of [stdoutFile, stderrFile]) if (fs.existsSync(file)) fs.unlinkSync(file);
+    if (!fs.readdirSync(spool).length) fs.rmdirSync(spool);
+    if (!fs.readdirSync(tempRoot).length) fs.rmdirSync(tempRoot);
+    if (!fs.readdirSync(path.dirname(tempRoot)).length) fs.rmdirSync(path.dirname(tempRoot));
+  }
   const envelope = output && typeof output === 'object' && Object.hasOwn(output, 'result');
   assert.deepEqual(envelope ? output.result : output, item.expected, item.name);
   if (Object.hasOwn(item, 'artifacts')) assert.deepEqual(envelope ? output.artifacts ?? [] : [], item.artifacts, item.name + ' artifacts');

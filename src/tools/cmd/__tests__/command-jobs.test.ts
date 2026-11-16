@@ -41,6 +41,67 @@ afterEach(async () => {
 })
 
 describe('D7 command tools with real policy and processes', () => {
+  it('parks a build when source changes, then resumes the same invocation only with an explicit choice', async () => {
+    fs.mkdirSync(path.join(fixture, 'src'), { recursive: true })
+    fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({ version: '1.0.0' }))
+    fs.writeFileSync(path.join(fixture, 'src', 'main.ts'), 'before')
+    const scriptFile = script('build.cjs', "require('node:fs').writeFileSync('src/main.ts','external');process.stdout.write('built')")
+    const args = { command: process.execPath, args: [scriptFile] }
+    const first = await cmdTool.execute(args, ctx)
+    expect(first).toMatchObject({ success: false, status: 'waiting', needsConfirmation: true, error: 'SOURCE_CHANGED_DURING_BUILD' })
+    expect(first.pendingAction).toMatchObject({ type: 'source_change', phase: 'build', choices: expect.arrayContaining(['pause', 'recheck', 'rebuild', 'skip']) })
+    const resumed = await cmdTool.execute(args, { ...ctx, resumeToolCall: {
+      toolCall: { id: ctx.currentToolCallId!, name: 'execute_cmd', args }, decision: 'approved', output: 'skip', pendingAction: first.pendingAction,
+    }, approvedToolCallId: ctx.currentToolCallId })
+    expect(resumed.success).toBe(true)
+    expect(resumed.metadata).toMatchObject({ sourceChange: { choice: 'skip', risk: true } })
+  })
+
+  it('records an active foreign writer so the client can wait and recheck automatically', async () => {
+    fs.mkdirSync(path.join(fixture, 'src'), { recursive: true })
+    fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({ version: '1.0.0' }))
+    fs.writeFileSync(path.join(fixture, 'src', 'main.ts'), 'before')
+    const writerFile = script('writer.cjs', "const fs=require('node:fs');const timer=setInterval(()=>fs.appendFileSync('src/main.ts','x'),1000);process.on('SIGTERM',()=>{clearInterval(timer);process.exit(0)})")
+    const writer = { ...ctx, sessionId: 'foreign-writer-session', runId: 'foreign-writer-run', currentToolCallId: 'foreign-writer-tool' }
+    const launched = await cmdTool.execute({ command: process.execPath, args: [writerFile], background: true }, writer)
+    try {
+      const scriptFile = script('build.cjs', "require('node:fs').writeFileSync('src/main.ts','external');process.stdout.write('built')")
+      const result = await cmdTool.execute({ command: process.execPath, args: [scriptFile] }, ctx)
+      expect(result).toMatchObject({ status: 'waiting', error: 'SOURCE_CHANGED_DURING_BUILD', pendingAction: { wait: { mode: 'external-writer' } } })
+      expect((result.pendingAction as { wait?: { blockers?: unknown[] } }).wait?.blockers).toEqual(expect.arrayContaining([
+        expect.objectContaining({ jobId: (launched.metadata!.commandJob as CommandJobSnapshot).jobId, sessionId: 'foreign-writer-session' }),
+      ]))
+      expect(result.output).toContain('已自动等待其结束')
+    } finally {
+      await commandJobs.cancelScope(commandJobScope(writer), 'test_cleanup_foreign_writer')
+    }
+  })
+
+  it('requires a second pending choice when a resumed build changes source again', async () => {
+    fs.mkdirSync(path.join(fixture, 'src'), { recursive: true })
+    fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({ version: '1.0.0' }))
+    fs.writeFileSync(path.join(fixture, 'src', 'main.ts'), 'before')
+    const scriptFile = script('build.cjs', "require('node:fs').writeFileSync('src/main.ts','external-' + Date.now())")
+    const args = { command: process.execPath, args: [scriptFile] }
+    const first = await cmdTool.execute(args, ctx)
+    expect(first.error).toBe('SOURCE_CHANGED_DURING_BUILD')
+    const resumed = await cmdTool.execute(args, { ...ctx, resumeToolCall: {
+      toolCall: { id: ctx.currentToolCallId!, name: 'execute_cmd', args }, decision: 'approved', output: 'skip', pendingAction: first.pendingAction,
+    }, approvedToolCallId: ctx.currentToolCallId })
+    expect(resumed).toMatchObject({ success: false, status: 'waiting', needsConfirmation: true, error: 'SOURCE_CHANGED_DURING_BUILD' })
+    expect(resumed.metadata).toMatchObject({ sourceChange: { previousChoice: 'skip' } })
+  })
+
+  it('does not allow background builds to bypass the final source-version check', async () => {
+    fs.mkdirSync(path.join(fixture, 'src'), { recursive: true })
+    fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({ version: '1.0.0' }))
+    fs.writeFileSync(path.join(fixture, 'src', 'main.ts'), 'before')
+    const scriptFile = script('build.cjs', "process.stdout.write('built')")
+    const result = await cmdTool.execute({ command: process.execPath, args: [scriptFile], background: true }, ctx)
+    expect(result).toMatchObject({ success: false, status: 'failed', error: 'SOURCE_GUARD_REQUIRES_FOREGROUND' })
+    expect(await commandJobs.list(commandJobScope(ctx))).toEqual([])
+  })
+
   it('keeps foreground output compatibility and reports real exit code, cwd and literal arguments', async () => {
     const file = script('foreground.cjs', "process.stdout.write(JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2)}));process.stderr.write('stderr evidence');process.exitCode=3")
     const args = ['two words', '中文🙂', 'quote"inside', '%literal%']

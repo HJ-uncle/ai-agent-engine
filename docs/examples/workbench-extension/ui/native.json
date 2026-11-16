@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "root": {
+    "type": "stack",
+    "children": [
+      { "type": "heading", "text": "宿主组件示例" },
+      { "type": "text", "text": "这些控件由 Aether React 组件渲染，自动适配主题与键盘操作。" },
+      { "type": "input", "bind": "notes", "label": "备注", "value": "来自原生表单", "placeholder": "输入内容" },
+      { "type": "button", "label": "提交备注", "variant": "primary", "action": { "tool": "inspect_context", "args": { "text": { "$field": "notes" } } } }
+    ]
+  }
+}

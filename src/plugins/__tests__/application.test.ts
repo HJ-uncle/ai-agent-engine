@@ -1,5 +1,4 @@
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -10,6 +9,7 @@ import type { AuthContext } from '../../auth/types.js'
 import { clearSecurityMode, getSecurityMode, setSecurityMode } from '../../security/policy-engine.js'
 
 let root: string, service: PluginService, app: FastifyInstance, principal: AuthContext | undefined
+const fixtureRoot = path.resolve('.e2e-tmp/plugin-application')
 const id = 'currency-fixture'
 const input = (multiplier = 7.2): CreatePluginInput => ({
   manifest: { apiVersion: 1, id, name: '货币换算器', version: String(multiplier), description: '使用用户指定的确定汇率换算', runtime: 'node',
@@ -22,7 +22,7 @@ const view = (query = '') => app.inject({ method: 'GET', url: `/plugins/runtime/
 const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true } catch { return false } }
 
 beforeEach(async () => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-application-'))
+  fs.mkdirSync(fixtureRoot, { recursive: true }); root = fs.mkdtempSync(path.join(fixtureRoot, 'case-'))
   vi.stubEnv('DATA_DIR', path.join(root, 'state', 'agent.db')); vi.stubEnv('AUTH_ENABLED', 'false'); vi.stubEnv('DEFAULT_SECURITY_MODE', 'standard')
   service = new PluginService(); principal = undefined
   app = Fastify()
@@ -31,11 +31,22 @@ beforeEach(async () => {
 })
 afterEach(async () => {
   await app.close(); clearSecurityMode('default', 'plugin-application'); vi.restoreAllMocks(); vi.unstubAllEnvs()
-  if (path.dirname(root) !== path.resolve(os.tmpdir()) || !path.basename(root).startsWith('plugin-application-')) throw new Error('Unsafe application fixture cleanup')
+  if (path.dirname(root) !== fixtureRoot || !path.basename(root).startsWith('case-') || fs.lstatSync(root).isSymbolicLink()) throw new Error('Unsafe application fixture cleanup')
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+  if (fs.existsSync(fixtureRoot) && !fs.readdirSync(fixtureRoot).length) fs.rmdirSync(fixtureRoot)
 })
 
 describe('published plugin applications', () => {
+  it('passes presentation context through the SDK while session authority remains separately bound', async () => {
+    const project = input(); project.files['main.mjs'] = `for await(const chunk of process.stdin){};console.log(JSON.stringify({result:await $AE.context()}))`
+    await service.create('default', project); await service.publish('default', id, 1)
+    const response = await app.inject({ method: 'POST', url: `/plugins/runtime/apps/${id}/invoke`, payload: {
+      revision: 1, tool: 'convert', args: { amount: 1 }, sessionId: 'bound', hostContext: { messageId: 'm1', messageRole: 'user', filePath: 'notes.md', selectionText: 'selection', targetId: 'editor' },
+    } })
+    expect(response.json().data.result).toMatchObject({ sessionId: 'bound', workspacePath: expect.any(String), messageId: 'm1', filePath: 'notes.md', selectionText: 'selection' })
+    const forged = await app.inject({ method: 'POST', url: `/plugins/runtime/apps/${id}/invoke`, payload: { revision: 1, tool: 'convert', args: { amount: 1 }, sessionId: 'bound', hostContext: { sessionId: 'foreign' } } })
+    expect(forged.statusCode).toBe(400)
+  })
   it('opens only a published snapshot, prefills schema-valid examples and returns no source, revisions or host directory', async () => {
     await service.create('default', input())
     expect((await view()).statusCode).toBe(409)
@@ -77,12 +88,16 @@ describe('published plugin applications', () => {
     expect((await view()).statusCode).toBe(200); expect((await invoke()).json().data.result.converted).toBe(720)
   })
 
-  it('does not execute in safe default mode or accept client-selected modes, sessions or working directories', async () => {
+  it('does not execute in safe default mode or accept client-selected modes or working directories', async () => {
     await service.create('default', input()); await service.publish('default', id, 1)
     vi.stubEnv('DEFAULT_SECURITY_MODE', 'safe')
     expect((await view()).json().data.application.execution).toMatchObject({ allowed: false, reason: expect.stringContaining('安全模式') })
     expect((await invoke()).statusCode).toBe(403)
-    for (const extra of [{ securityMode: 'full-access' }, { sessionId: 'approved-session' }, { workspace: root }]) {
+    // A host-bound session supplies SDK context, never an execution-policy override.
+    setSecurityMode('default', 'approved-session', 'full-access')
+    try { expect((await app.inject({ method: 'POST', url: `/plugins/runtime/apps/${id}/invoke`, payload: { revision: 1, tool: 'convert', args: { amount: 100 }, sessionId: 'approved-session' } })).statusCode).toBe(403) }
+    finally { clearSecurityMode('default', 'approved-session') }
+    for (const extra of [{ securityMode: 'full-access' }, { workspace: root }]) {
       expect((await app.inject({ method: 'POST', url: `/plugins/runtime/apps/${id}/invoke`, payload: { revision: 1, tool: 'convert', args: { amount: 100 }, ...extra } })).statusCode).toBe(400)
     }
   })

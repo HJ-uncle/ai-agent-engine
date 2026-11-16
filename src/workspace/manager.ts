@@ -29,6 +29,7 @@ function hasEncodedPathTraversal(value: string): boolean {
 type CtxLike = Pick<AgentContext, 'tenantId' | 'sessionId' | 'workspacePaths' | 'cwd' | 'projectRoot' | 'scratchDir'>
   & Pick<Partial<AgentContext>, 'executionOwner' | 'runId' | 'rootRunId' | 'turnId' | 'parentSessionId'>
 interface ChildWorkspaceScope {
+  kind?: 'root' | 'child'
   parent: CtxLike
   snapshot: Readonly<WorkspaceBindingSnapshot>
   roots: readonly string[]
@@ -202,6 +203,22 @@ export class WorkspaceManager {
   }
 
   /** Called by trusted child construction, never by an HTTP/model supplied context. */
+  inheritPluginRootWorkspace(root: AgentContext, bound: CtxLike, snapshot: Readonly<WorkspaceBindingSnapshot>): void {
+    if (!root.executionOwner) throw new Error('Plugin workspace delegation requires a live root owner')
+    const service = serviceForOwner(root.executionOwner)
+    service.assertDispatch(root.executionOwner)
+    const binding = service.record(root.executionOwner).binding
+    if (binding.kind !== 'root' || binding.tenantId !== root.tenantId || binding.sessionId !== root.sessionId
+      || binding.rootRunId !== root.rootRunId || binding.turnId !== root.turnId || bound.tenantId !== root.tenantId)
+      throw new Error('Plugin workspace owner mismatch')
+    const parent: CtxLike = { tenantId: bound.tenantId, sessionId: bound.sessionId, cwd: bound.cwd,
+      projectRoot: bound.projectRoot, workspacePaths: bound.workspacePaths, scratchDir: bound.scratchDir }
+    this.bindingReadGuard(parent, snapshot).assertCurrent()
+    this.childScopes.set(root.executionOwner, { kind: 'root', parent, snapshot,
+      roots: [canonicalFilePathSync(snapshot.root)], scratch: path.resolve(root.scratchDir ?? this.getPath(root)) })
+  }
+
+  /** Called by trusted child construction, never by an HTTP/model supplied context. */
   inheritChildWorkspace(child: AgentContext, parent: AgentContext, frozenRoots: readonly string[]): void {
     if (!child.executionOwner || !parent.executionOwner) throw new Error('Workspace inheritance requires live parent and child owners')
     const service = serviceForOwner(child.executionOwner)
@@ -213,7 +230,8 @@ export class WorkspaceManager {
       || b.invocationRunId !== child.runId || b.rootRunId !== p.rootRunId || b.rootAttemptId !== p.rootAttemptId
       || b.rootSessionId !== parent.sessionId || p.sessionId !== parent.sessionId || p.tenantId !== parent.tenantId
       || child.parentSessionId !== parent.sessionId) throw new Error('Workspace inheritance owner mismatch')
-    const parentContext: CtxLike = { tenantId: parent.tenantId, sessionId: parent.sessionId,
+    const delegated = this.childScope(parent)
+    const parentContext: CtxLike = delegated?.parent ?? { tenantId: parent.tenantId, sessionId: parent.sessionId,
       workspacePaths: parent.workspacePaths ? [...parent.workspacePaths] : undefined,
       projectRoot: parent.projectRoot, cwd: parent.cwd, scratchDir: parent.scratchDir }
     const snapshot = this.getBindingSnapshot(parentContext)
@@ -231,9 +249,9 @@ export class WorkspaceManager {
     const service = serviceForOwner(ctx.executionOwner)
     service.assertDispatch(ctx.executionOwner)
     const binding = service.collaboration.executionBinding(service.producerForExecution(ctx.executionOwner))
-    if (binding.kind !== 'child' || binding.tenantId !== ctx.tenantId || binding.sessionId !== ctx.sessionId
-      || binding.invocationRunId !== ctx.runId || binding.rootRunId !== ctx.rootRunId || binding.turnId !== ctx.turnId
-      || binding.rootSessionId !== ctx.parentSessionId) throw new Error('Child workspace owner mismatch')
+    if (binding.kind !== (scope.kind ?? 'child') || binding.tenantId !== ctx.tenantId || binding.sessionId !== ctx.sessionId
+      || scope.kind !== 'root' && (binding.invocationRunId !== ctx.runId || binding.rootSessionId !== ctx.parentSessionId)
+      || binding.rootRunId !== ctx.rootRunId || binding.turnId !== ctx.turnId) throw new Error('Child workspace owner mismatch')
     const current = this.getBindingSnapshot(scope.parent)
     if (current.root !== scope.snapshot.root || current.epoch !== scope.snapshot.epoch) throw new Error('Parent workspace binding changed during child execution')
     return scope

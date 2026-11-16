@@ -1,0 +1,47 @@
+{
+  "apiVersion": 1,
+  "id": "workbench-extension",
+  "name": "工作台扩展示例",
+  "version": "1.0.0",
+  "description": "演示全部挂载区域、会话分析、宿主组件与可选后台任务。",
+  "runtime": "node",
+  "permissions": { "requested": ["session.read", "models.read", "ai.run", "settings.read", "settings.write", "ui.dialogs", "ui.notifications", "ui.clipboard", "ui.editor", "ui.composer", "events.subscribe", "background.run"] },
+  "tools": [
+    { "name": "inspect_context", "description": "返回宿主传入的目标上下文，便于验证菜单挂载。", "entry": "main.mjs", "inputSchema": { "type": "object", "properties": { "text": { "type": "string" }, "_context": { "type": "object", "additionalProperties": true } }, "additionalProperties": true } },
+    { "name": "review_session", "description": "使用平台模型分析当前会话的前50条消息，并标记是否需要继续分页。", "entry": "main.mjs", "inputSchema": { "type": "object", "properties": { "modelId": { "type": "string" }, "notes": { "type": "string" } }, "additionalProperties": false } },
+    { "name": "heartbeat", "description": "更新插件自己的后台执行计数与时间。", "entry": "main.mjs", "inputSchema": { "type": "object", "properties": {}, "additionalProperties": true } }
+  ],
+  "contributes": {
+    "pages": [
+      { "id": "review", "title": "会话检查", "kind": "webview", "entry": "ui/index.html", "tools": ["review_session", "inspect_context"] },
+      { "id": "native", "title": "宿主组件", "kind": "native", "entry": "ui/native.json", "tools": ["inspect_context"] }
+    ],
+    "navigation": [{ "id": "review", "title": "工作台示例", "page": "review", "icon": "puzzle" }],
+    "workspaceTabs": [{ "id": "native", "title": "宿主组件", "page": "native", "scope": "session" }],
+    "commands": [
+      { "id": "inspect", "title": "检查当前目标", "tool": "inspect_context", "args": { "text": "已调用插件命令" }, "shortcut": "Mod+Shift+Y" },
+      { "id": "open-review", "title": "打开会话检查", "page": "review" }
+    ],
+    "menus": [
+      { "id": "message", "title": "检查消息上下文", "location": "message.actions", "command": "inspect", "scope": "session" },
+      { "id": "session", "title": "检查会话上下文", "location": "session.context", "command": "inspect" },
+      { "id": "file", "title": "检查文件上下文", "location": "file.context", "command": "inspect" },
+      { "id": "editor-menu", "title": "检查编辑器上下文", "location": "editor.context", "command": "inspect" },
+      { "id": "editor-button", "title": "检查文件", "location": "editor.toolbar", "command": "inspect" },
+      { "id": "app", "title": "打开会话检查", "location": "app.menu", "command": "open-review" },
+      { "id": "service", "title": "检查服务上下文", "location": "service.context", "command": "inspect" },
+      { "id": "composer", "title": "检查输入上下文", "location": "composer.toolbar", "command": "inspect" }
+    ],
+    "views": [
+      { "id": "message-card", "title": "消息扩展", "location": "message.inline", "page": "native", "scope": "session", "height": 180 },
+      { "id": "composer-panel", "title": "输入扩展", "location": "composer.panel", "page": "native", "height": 180 },
+      { "id": "workspace-panel", "title": "工作区扩展", "location": "workspace.panel", "page": "native", "height": 180 }
+    ],
+    "statusBar": [{ "id": "review", "title": "会话检查", "command": "open-review", "icon": "puzzle" }],
+    "settings": [{ "id": "preferences", "title": "示例插件设置", "page": "native" }],
+    "editorDecorations": [{ "id": "todo", "title": "待办检查", "pattern": "TODO", "text": "检查文件中的待办项", "tooltip": "此提示由工作台扩展示例提供。", "severity": "info" }],
+    "services": [{ "id": "inspect", "title": "示例服务", "tool": "inspect_context", "page": "review" }],
+    "hooks": [{ "id": "session-opened", "title": "会话打开事件", "event": "session.opened", "tool": "inspect_context", "scope": "session" }],
+    "background": [{ "id": "heartbeat", "title": "后台计数", "tool": "heartbeat", "intervalMs": 60000, "runOnStartup": true }]
+  }
+}

@@ -10,6 +10,7 @@ import { MAX_FILE_SIZE } from './constants.js'
 import { handlerRegistry } from './handlers/registry.js'
 import { commitWriteChangeWithReceipt, discardUnpublishedSnapshot, readOldSnapshot, type ChangeSnapshot } from './change-recorder.js'
 import { formatWriteReceipt } from './write-receipt.js'
+import { captureSourceFiles, resolveSourceChangeChoice, sourceChangePendingAction, type SourceChangeChoice, type SourceFileSnapshot } from '../../runtime/source-change-protocol.js'
 
 const failure = (code: string, output: string, details: Record<string, unknown> = {}): ToolResult => ({
   success: false, error: code, output: `${code}: ${output}`, metadata: { code, fileMutationApplied: false, ...details },
@@ -33,13 +34,49 @@ export interface CopySourceSnapshot {
  * This is not a filesystem lease against arbitrary external writers. */
 export async function writeConditionalFile(args: NormalizedWriteFileArgs, canonicalPath: string, ctx: AgentContext, copySource?: CopySourceSnapshot): Promise<ToolResult> {
   if (args.copyFrom && !copySource) return failure('WRITE_INVALID_ARGUMENTS', 'copyFrom requires the caller to lock and validate its source snapshot.')
-  const expected = args.expectedHash ?? 'missing'
+  const requestedExpected = args.expectedHash ?? 'missing'
+  let expected = requestedExpected
+  let sourceChoice: SourceChangeChoice | undefined
+  const resumeAction = ctx.resumeToolCall?.pendingAction
+  if (resumeAction?.type === 'source_change') sourceChoice = resolveSourceChangeChoice(resumeAction, ctx.resumeToolCall?.output)
   const initial = version(canonicalPath)
-  if (initial !== expected) return failure('WRITE_VERSION_CONFLICT', 'File changed or already exists. Read its current version before writing.', { expectedHash: expected, actualHash: initial })
+  if (initial !== expected) {
+    if (!sourceChoice) return failure('WRITE_VERSION_CONFLICT', 'File changed or already exists. Read its current version before writing.', { expectedHash: expected, actualHash: initial })
+    const resumedSourceAction = resumeAction?.type === 'source_change' ? resumeAction : undefined
+    const frozenAfter = resumedSourceAction?.after && typeof resumedSourceAction.after === 'object'
+      && Array.isArray((resumedSourceAction.after as { files?: unknown }).files) ? (resumedSourceAction.after as { files: Array<{ hash?: unknown }> }).files[0]?.hash : undefined
+    if (typeof frozenAfter === 'string' && frozenAfter !== initial) {
+      const after = captureSourceFiles([canonicalPath], path.dirname(canonicalPath))
+      const previous = resumedSourceAction!.after as SourceFileSnapshot
+      const check = { changed: true, before: previous, after,
+        changes: [{ path: canonicalPath, before: previous.files[0], after: after.files[0], kind: previous.files[0].hash === 'missing' ? 'created' as const : after.files[0].hash === 'missing' ? 'deleted' as const : 'modified' as const }] }
+      const pending = sourceChangePendingAction(check, { phase: 'write', operation: 'write_file' })
+      return { success: false, status: 'waiting', needsConfirmation: true, output: '恢复前源码又发生变化，请重新选择处理方式；未写入目标文件。',
+        error: 'SOURCE_CHANGED_DURING_WRITE', pendingAction: pending, metadata: { code: 'SOURCE_CHANGED_DURING_WRITE', fileMutationApplied: false } }
+    }
+    if (sourceChoice === 'pause') return { success: false, status: 'interrupted', output: '已暂停写入：外部源码变化仍需重新检查。', error: 'SOURCE_CHANGE_PAUSED', metadata: { sourceChange: { choice: sourceChoice, risk: false }, fileMutationApplied: false } }
+    if (sourceChoice === 'recheck') return failure('WRITE_VERSION_CONFLICT', '已重新检查到新版本；请使用最新文件版本再次提交写入。', { expectedHash: expected, actualHash: initial, sourceChange: { choice: sourceChoice, risk: false } })
+    // rebuild and skip are explicit choices. Both use the observed current
+    // version as their new base; skip is retained as a visible risk receipt.
+    expected = initial
+  }
+  let baseline: SourceFileSnapshot
+  try { baseline = captureSourceFiles([canonicalPath], path.dirname(canonicalPath)) }
+  catch (error) { return failure('SOURCE_SNAPSHOT_FAILED', error instanceof Error ? error.message : String(error)) }
   let snapshot: ChangeSnapshot | undefined, staging: string | undefined, published = false
   try {
     snapshot = await readOldSnapshot(canonicalPath)
-    if (snapshot.oldHash !== expected) return failure('WRITE_VERSION_CONFLICT', 'File changed while preparing its rollback snapshot.', { expectedHash: expected, actualHash: snapshot.oldHash })
+    if (snapshot.oldHash !== expected) {
+      if (sourceChoice) {
+        const after = captureSourceFiles([canonicalPath], path.dirname(canonicalPath))
+        const check = { changed: true, before: baseline, after, changes: [{ path: canonicalPath,
+          before: baseline.files[0], after: after.files[0], kind: baseline.files[0].hash === 'missing' ? 'created' as const : after.files[0].hash === 'missing' ? 'deleted' as const : 'modified' as const }] }
+        const pending = sourceChangePendingAction(check, { phase: 'write', operation: 'write_file' })
+        return { success: false, status: 'waiting', needsConfirmation: true, output: '恢复写入前源码再次变化，请重新选择处理方式；未写入目标文件。',
+          error: 'SOURCE_CHANGED_DURING_WRITE', pendingAction: pending, metadata: { code: 'SOURCE_CHANGED_DURING_WRITE', previousChoice: sourceChoice, fileMutationApplied: false } }
+      }
+      return failure('WRITE_VERSION_CONFLICT', 'File changed while preparing its rollback snapshot.', { expectedHash: expected, actualHash: snapshot.oldHash })
+    }
     const root = workspaceManager.resolveSafePath(ctx, projectDataPath(workspaceManager.getWorkingDirectory(ctx), 'tmp', 'file-writes'))
     fs.mkdirSync(root, { recursive: true })
     const safeRoot = workspaceManager.resolveSafePath(ctx, fs.realpathSync.native(root))
@@ -58,7 +95,16 @@ export async function writeConditionalFile(args: NormalizedWriteFileArgs, canoni
     const submittedPath = workspaceManager.resolveSafePath(ctx, args.path)
     if (!samePath(canonicalFilePathSync(canonicalPath), canonicalPath) || !samePath(canonicalFilePathSync(submittedPath), canonicalPath)) return failure('WRITE_PATH_CONFLICT', 'Target path changed during format generation.')
     const current = version(canonicalPath)
-    if (current !== expected) return failure('WRITE_VERSION_CONFLICT', 'File changed during format generation. Generated bytes were not published.', { expectedHash: expected, actualHash: current })
+    if (current !== expected) {
+      const after = captureSourceFiles([canonicalPath], path.dirname(canonicalPath))
+      const check = { changed: true, before: baseline, after, changes: [{ path: canonicalPath,
+        before: baseline.files[0], after: after.files[0], kind: baseline.files[0].hash === 'missing' ? 'created' as const : after.files[0].hash === 'missing' ? 'deleted' as const : 'modified' as const }] }
+      const pending = sourceChangePendingAction(check, { phase: 'write', operation: 'write_file' })
+      return { success: false, status: 'waiting', needsConfirmation: true,
+        output: sourceChoice ? '恢复写入期间源码再次变化，请重新选择处理方式；未写入目标文件。' : '写入期间检测到外部源码变化。请选择 pause、recheck、rebuild 或 skip；未写入目标文件。',
+        error: 'SOURCE_CHANGED_DURING_WRITE', pendingAction: pending,
+        metadata: { code: 'SOURCE_CHANGED_DURING_WRITE', previousChoice: sourceChoice, fileMutationApplied: false } }
+    }
     if (copySource) {
       const resolvedSource = workspaceManager.resolveSafePath(ctx, copySource.submittedPath)
       workspaceManager.resolveSafePath(ctx, copySource.path)
@@ -99,8 +145,10 @@ export async function writeConditionalFile(args: NormalizedWriteFileArgs, canoni
     const confirmation = copySource
       ? `Successfully copied to ${args.path}\nsourcePath: ${copySource.path}\nsourceExpectedHash: ${copySource.expectedHash}\ncopyVerified: true`
       : `Successfully written to ${args.path}`
-    return { success: true, output: `${confirmation}\n${formatWriteReceipt(receipt)}`, change,
+    const sourceChange = sourceChoice ? { choice: sourceChoice, risk: sourceChoice === 'skip' } : undefined
+    return { success: true, output: `${confirmation}\n${formatWriteReceipt(receipt)}` + (sourceChange ? `\n[source-change] choice=${sourceChoice}; risk=${sourceChange.risk}` : ''), change,
       metadata: { ...receipt, fileMutationApplied: true, rollbackAvailable: !change.truncated,
+        ...(sourceChange ? { sourceChange } : {}),
         ...(copySource ? { sourcePath: copySource.path, sourceExpectedHash: copySource.expectedHash, copyVerified: true } : {}),
         ...(args.usedContentAlias ? { compatibilityAlias: 'content' } : {}) } }
   } finally {

@@ -64,6 +64,27 @@ describe('public pending display versus private approval authority', () => {
     expect(display).not.toHaveProperty('pendingAction')
   })
 
+  it('publishes only bounded source-change wait status while keeping the sealed action private', () => {
+    const pending = permission({
+      pendingAction: {
+        type: 'source_change', protocolVersion: 1, phase: 'build', operation: 'execute_cmd',
+        root: 'C:/workspace', before: {}, after: {}, changes: [], choices: ['pause', 'recheck', 'rebuild', 'skip'],
+        defaultChoice: 'pause', reason: 'changed', risk: 'external-source-change',
+        wait: {
+          mode: 'external-writer', startedAt: 100, pollMs: 2_000, stableWindowMs: 1_500,
+          blockers: [{ kind: 'run', id: 'run-2', runId: 'run-2', sessionId: 'session-2', status: 'running', secret: 'omit' }],
+        },
+      },
+    })
+    const display = publicPending(pending)
+    expect(display).not.toHaveProperty('pendingAction')
+    expect(display).toMatchObject({ sourceChangeWait: {
+      mode: 'external-writer', startedAt: 100, pollMs: 2_000, stableWindowMs: 1_500,
+      blockers: [{ kind: 'run', id: 'run-2', runId: 'run-2', sessionId: 'session-2', status: 'running' }],
+    } })
+    expect(JSON.stringify(display)).not.toContain('secret')
+  })
+
   it('publishes eight real merge approvals over SSE while durable sealed sources exceed 1 MiB and resume unchanged', async () => {
     fs.mkdirSync(scratch, { recursive: true }); root = fs.mkdtempSync(path.join(scratch, 'run-'))
     vi.stubEnv('AUTH_ENABLED', 'false')

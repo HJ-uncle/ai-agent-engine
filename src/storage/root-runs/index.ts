@@ -12,6 +12,11 @@ import { bindServerAdmissionSeed, ensureServerAdmissionSchema, prepareServerAdmi
 import { canonicalAdmissionBody } from '../root-admission/index.js'
 import { ensureSessionToolkitsSchema, persistSessionToolkits } from '../session/toolkits.js'
 import { publicPending, publicPermissionText } from '../../core/stream-pipeline/public-pending.js'
+import { SOURCE_CHANGE_CHOICES, SOURCE_WRITE_CHANGE_CHOICES } from '../../runtime/source-change-protocol.js'
+import { markedPluginRootProvenance } from '../root-admission/plugin-owner.js'
+import { ensureRootContinuationSchema, bindRootAdmissionSubject, assertRootContinuationSubject, lookupRootContinuation, prepareContinuationAttempt, validateContinuationTarget,
+  type PreparedRootContinuation, type RootContinuationReceipt, type RootContinuationSelector } from '../root-admission/continuation.js'
+import type { ControllerSubject } from '../../core/collaboration/controller-origin.js'
 
 export type { CompactionState } from '../../core/subagent/types.js'
 
@@ -76,6 +81,8 @@ export interface RootRun {
   assistantMessageId: string
   seq: number
   version: number
+  /** Physical execution identity; logical run/turn identities survive explicit continuation. */
+  attemptId?: string
   status: RootRunStatus
   activity?: RootRunActivity
   modelId: string
@@ -95,6 +102,7 @@ export interface RootRun {
   pending: RootPending[]
   admissionReceipt?: UserAdmissionReceipt
   serverAdmissionReceipt?: ServerAdmissionReceipt
+  continuationReceipt?: RootContinuationReceipt
 }
 interface StoredRun extends RootRun { request: Record<string, unknown>; attemptId: string }
 const schemas = new WeakMap<Client, Promise<void>>()
@@ -111,7 +119,9 @@ export function resumableRequest(request: Record<string, unknown>): Record<strin
       !/api.?key|secret|password|authorization|token|headers|^env$/i.test(key)).map(([key, entry]) => [key, clean(entry)]))
     return value
   }
-  return Object.fromEntries(allowed.filter(key => request[key] !== undefined).map(key => [key, clean(request[key])]))
+  const owner = markedPluginRootProvenance(request)
+  return { ...Object.fromEntries(allowed.filter(key => request[key] !== undefined).map(key => [key, clean(request[key])])),
+    ...(owner ? { pluginAgentOwner: { ...owner } } : {}) }
 }
 
 export function publicRequestConfig(request: Record<string, unknown>): RootRunRequestConfig {
@@ -175,6 +185,7 @@ export class RootRunStore {
         await db.execute('CREATE INDEX IF NOT EXISTS root_runs_session ON root_runs(tenant_id, session_id, seq)')
         await ensureUserAdmissionSchema(db)
         await ensureServerAdmissionSchema(db)
+        await ensureRootContinuationSchema(db)
         await ensureSessionToolkitsSchema(db)
       })()
       schemas.set(db, promise)
@@ -184,7 +195,7 @@ export class RootRunStore {
   }
 
   public(run: StoredRun): RootRun {
-    const { request, attemptId: _attemptId, requestConfig: _storedConfig, ...result } = run
+    const { request, requestConfig: _storedConfig, ...result } = run
     if (result.status !== 'running') delete result.activity
     // Reproject the private request on every read, including old database rows.
     return { ...result, pending: result.pending.map(publicPending),
@@ -195,6 +206,19 @@ export class RootRunStore {
   async list(tenantId: string, sessionId: string): Promise<RootRun[]> {
     const db = await this.ready()
     const rows = await db.execute({ sql: 'SELECT seq,state FROM root_runs WHERE tenant_id=? AND session_id=? ORDER BY seq', args: [tenantId, sessionId] })
+    return rows.rows.map(row => this.public({ ...JSON.parse(String(row.state)), seq: Number(row.seq) }))
+  }
+
+  /**
+   * Tenant-wide view used by source protection to identify another live
+   * execution that owns an overlapping workspace. The private request body
+   * is never returned; only the public root projection is exposed. Do not
+   * truncate this set: omitting an active writer would turn source protection
+   * into a false negative.
+   */
+  async activeForTenant(tenantId: string): Promise<RootRun[]> {
+    const db = await this.ready()
+    const rows = await db.execute({ sql: "SELECT seq,state FROM root_runs WHERE tenant_id=? AND json_extract(state,'$.status')='running' ORDER BY seq DESC", args: [tenantId] })
     return rows.rows.map(row => this.public({ ...JSON.parse(String(row.state)), seq: Number(row.seq) }))
   }
 
@@ -213,7 +237,7 @@ export class RootRunStore {
     return row ? { ...JSON.parse(String(row.state)), seq: Number(row.seq) } : null
   }
 
-  async create(tenantId: string, sessionId: string, modelId: string, workspacePaths: string[], request: Record<string, unknown>, automation?: AutomationAdmission, signal?: AbortSignal, onPrepared?: (runId: string, attemptId: string) => void): Promise<RootRun> {
+  async create(tenantId: string, sessionId: string, modelId: string, workspacePaths: string[], request: Record<string, unknown>, automation?: AutomationAdmission, signal?: AbortSignal, onPrepared?: (runId: string, attemptId: string) => void, actor?: ControllerSubject): Promise<RootRun> {
     const serverInput = prepareServerAdmissionInput(request)
     while (true) {
     await waitForSessionHistoryCompression(tenantId, sessionId, signal)
@@ -238,6 +262,7 @@ export class RootRunStore {
         const result = await tx.execute({ sql: 'INSERT INTO root_runs(tenant_id,session_id,run_id,turn_id,state) VALUES(?,?,?,?,?) RETURNING seq',
           args: [tenantId, sessionId, run.runId, run.turnId, JSON.stringify(run)] })
         run.seq = Number(result.rows[0].seq)
+        await bindRootAdmissionSubject(tx, tenantId, run, actor)
         await persistSessionToolkits(tx, tenantId, sessionId, request)
         if (claim && automation) await bindAutomationRoot(tx, claim, run, automation)
         if (serverInput) {
@@ -271,7 +296,7 @@ export class RootRunStore {
       const run = row ? JSON.parse(String(row.state)) as StoredRun : null
       await tx.commit()
       return { namespace, predecessor: run ? { runId: run.runId, attemptId: run.attemptId, version: run.version } : null,
-        root: run ? { runId: run.runId, attemptId: run.attemptId, version: run.version, status: run.status,
+        root: run ? { runId: run.runId, turnId: run.turnId, attemptId: run.attemptId, version: run.version, status: run.status,
           workspacePaths: run.workspacePaths, modelId: run.modelId,
           ...(typeof run.request.agentId === 'string' ? { agentId: run.request.agentId } : {}) } : null }
     } catch (error) { if (!tx.closed) await tx.rollback(); throw error }
@@ -285,9 +310,64 @@ export class RootRunStore {
     finally { tx.close() }
   }
 
+  async findContinuation(tenantId: string, sessionId: string,
+    selector: Pick<RootContinuationSelector, 'namespace' | 'requestKey' | 'bodyDigest'>, actor: ControllerSubject | undefined) {
+    const db = await this.ready(), tx = await db.transaction('read')
+    try {
+      const result = await lookupRootContinuation(tx, tenantId, sessionId, selector, actor, run => this.public(run))
+      await tx.commit(); return result
+    } catch (error) { if (!tx.closed) await tx.rollback(); throw error }
+    finally { tx.close() }
+  }
+
+  async validateContinuation(tenantId: string, input: PreparedRootContinuation, actor: ControllerSubject | undefined): Promise<void> {
+    const db = await this.ready(), tx = await db.transaction('read')
+    try { await validateContinuationTarget(tx, tenantId, input, actor); await tx.commit() }
+    catch (error) { if (!tx.closed) await tx.rollback(); throw error }
+    finally { tx.close() }
+  }
+
+  /** Explicit user continuation is a new audited attempt of the same logical turn. */
+  async continue(tenantId: string, input: PreparedRootContinuation, actor: ControllerSubject | undefined,
+    signal?: AbortSignal, onPrepared?: (runId: string, attemptId: string) => void) {
+    const db = await this.ready()
+    const known = await this.findContinuation(tenantId, input.sessionId, input, actor)
+    if (known) return { ...known, duplicate: true }
+    while (true) {
+      await waitForSessionHistoryCompression(tenantId, input.sessionId, signal)
+      const accepted = await withHistoryLock(tenantId, async () => {
+        signal?.throwIfAborted()
+        if (isSessionHistoryCompressing(tenantId, input.sessionId)) return null
+        if (isSessionHistoryMutating(tenantId, input.sessionId)) throw Object.assign(new Error('Session history is being changed'), { statusCode: 409 })
+        let prepared: { run: StoredRun; receipt: RootContinuationReceipt } | undefined
+        try {
+          return await withCronWrite(db, async tx => {
+            const prior = await lookupRootContinuation(tx, tenantId, input.sessionId, input, actor, run => this.public(run))
+            if (prior) return { ...prior, duplicate: true }
+            prepared = await prepareContinuationAttempt(tx, tenantId, input, actor, run => this.public(run))
+            signal?.throwIfAborted()
+            onPrepared?.(prepared.run.runId, prepared.run.attemptId)
+            await tx.execute({ sql: 'UPDATE root_runs SET state=? WHERE tenant_id=? AND run_id=?', args: [JSON.stringify(prepared.run), tenantId, prepared.run.runId] })
+            signal?.throwIfAborted()
+            return { run: this.public(prepared.run), receipt: prepared.receipt, attemptId: prepared.run.attemptId, duplicate: false }
+          })
+        } catch (error) {
+          if (!prepared) throw error
+          let committed: Awaited<ReturnType<RootRunStore['findContinuation']>>
+          try { committed = await this.findContinuation(tenantId, input.sessionId, input, actor) }
+          catch (lookupError) { throw Object.assign(new AggregateError([error, lookupError], 'CONTINUATION_ACK_UNKNOWN'), { statusCode: 503 }) }
+          if (!committed) throw error
+          if (committed.attemptId !== prepared.run.attemptId) throw new Error('CONTINUATION_ACK_IDENTITY_CONFLICT')
+          return { ...committed, duplicate: false }
+        }
+      })
+      if (accepted) return accepted
+    }
+  }
+
   /** SQLite owns admission facts; transcript projection uses a retained outbox. */
   async createUserAdmission(tenantId: string, modelId: string, workspacePaths: string[], request: Record<string, unknown>,
-    admission: PreparedUserAdmission, signal?: AbortSignal, onPrepared?: (runId: string, attemptId: string) => void): Promise<{ run: RootRun; receipt: UserAdmissionReceipt; duplicate: boolean }> {
+    admission: PreparedUserAdmission, signal?: AbortSignal, onPrepared?: (runId: string, attemptId: string) => void, actor?: ControllerSubject): Promise<{ run: RootRun; receipt: UserAdmissionReceipt; duplicate: boolean }> {
     const db = await this.ready()
     // Exact replay never waits for compression or prepares a producer.
     const known = await this.findUserAdmission(tenantId, admission.sessionId, admission)
@@ -315,6 +395,7 @@ export class RootRunStore {
             onPrepared?.(run.runId, run.attemptId)
             const row = await tx.execute({ sql: 'INSERT INTO root_runs(tenant_id,session_id,run_id,turn_id,state) VALUES(?,?,?,?,?) RETURNING seq', args: [tenantId, admission.sessionId, run.runId, run.turnId, JSON.stringify(run)] })
             run.seq = Number(row.rows[0].seq)
+            await bindRootAdmissionSubject(tx, tenantId, run, actor)
             await persistSessionToolkits(tx, tenantId, admission.sessionId, request)
             const receipt = await bindUserAdmission(tx, tenantId, admission, run)
             run.admissionReceipt = receipt
@@ -488,7 +569,7 @@ export class RootRunStore {
     })
   }
 
-  async answer(tenantId: string, sessionId: string, runId: string, requestId: string, toolCallId: string, toolName: string, output: string, signal?: AbortSignal, onPrepared?: (runId: string, attemptId: string) => void): Promise<{ run: RootRun; pending: RootPending; duplicate: boolean }> {
+  async answer(tenantId: string, sessionId: string, runId: string, requestId: string, toolCallId: string, toolName: string, output: string, signal?: AbortSignal, onPrepared?: (runId: string, attemptId: string) => void, actor?: ControllerSubject): Promise<{ run: RootRun; pending: RootPending; duplicate: boolean }> {
     return withHistoryLock(tenantId, async () => {
       signal?.throwIfAborted()
       if (isSessionHistoryMutating(tenantId, sessionId)) throw Object.assign(new Error('Session history is being changed'), { statusCode: 409 })
@@ -501,18 +582,46 @@ export class RootRunStore {
         if (pending.output !== output) throw Object.assign(new Error('Request already answered differently'), { statusCode: 409 })
         return { run: this.public(stored), pending, duplicate: true }
       }
-      if (stored.status !== 'waiting') throw Object.assign(new Error('Run is no longer waiting'), { statusCode: 409 })
+      const cancelledPending = stored.status === 'cancelled'
+      if (stored.status !== 'waiting' && !cancelledPending) throw Object.assign(new Error('Run is no longer waiting'), { statusCode: 409 })
       const owner = getExecutionOwners().find(tenantId, runId, stored.attemptId)
+      if (cancelledPending && owner) throw Object.assign(new Error('CONTINUATION_OWNER_NOT_DRAINED'), { statusCode: 409 })
+      if (cancelledPending) await assertRootContinuationSubject(await this.ready(), tenantId, stored, actor)
       if (owner && serviceForOwner(owner).record(owner).cancellationRequested)
         throw Object.assign(new Error('Waiting execution has been cancelled'), { statusCode: 409 })
-      if (pending.kind === 'permission' && output !== 'approved' && output !== 'rejected') throw Object.assign(new Error('Approval answer must be approved or rejected'), { statusCode: 400 })
+      const sourcePendingAction = pending.pendingAction
+      const sourceAction = sourcePendingAction?.type === 'source_change'
+      const rawSourceChoices = sourceAction && Array.isArray(sourcePendingAction.choices) ? sourcePendingAction.choices : undefined
+      const allowedSourceChoices = sourcePendingAction?.phase === 'write' ? SOURCE_WRITE_CHANGE_CHOICES : SOURCE_CHANGE_CHOICES
+      const canonicalSourceChoices = rawSourceChoices && rawSourceChoices.length > 0 && rawSourceChoices.length <= allowedSourceChoices.length &&
+        new Set(rawSourceChoices).size === rawSourceChoices.length &&
+        rawSourceChoices.every(choice => allowedSourceChoices.includes(choice as never))
+      const sourceChoices = sourceAction && canonicalSourceChoices ? rawSourceChoices as typeof SOURCE_CHANGE_CHOICES[number][] : undefined
+      if (sourceAction && (!['build', 'write'].includes(String(sourcePendingAction.phase)) || !canonicalSourceChoices)) throw Object.assign(new Error('Invalid source-change choices'), { statusCode: 400 })
+      if (sourceAction && pending.kind !== 'permission') throw Object.assign(new Error('Source-change requests must be permission interactions'), { statusCode: 400 })
+      if (pending.kind === 'permission') {
+        const valid = sourceChoices ? sourceChoices.includes(output as typeof SOURCE_CHANGE_CHOICES[number]) : output === 'approved' || output === 'rejected'
+        if (!valid) throw Object.assign(new Error(sourceChoices ? 'Source-change answer must be one of the offered choices' : 'Approval answer must be approved or rejected'), { statusCode: 400 })
+      }
+      const previousAttemptId = stored.attemptId, previousAttempt = JSON.stringify(this.public(stored))
       pending.status = 'answered'; pending.output = output
       Object.assign(stored, { status: 'running', attemptId: randomUUID(), error: undefined, stopReason: undefined,
         updatedAt: Date.now(), version: stored.version + 1 })
       delete stored.activity
+      if (cancelledPending) { delete stored.finishedAt; delete stored.startedAt; stored.assistantMessageId = randomUUID() }
       onPrepared?.(stored.runId, stored.attemptId)
       const db = await this.ready()
       await withCronWrite(db, async tx => {
+        if (cancelledPending) {
+          const latest = (await tx.execute({ sql: 'SELECT state FROM root_runs WHERE tenant_id=? AND session_id=? ORDER BY seq DESC LIMIT 1', args: [tenantId, sessionId] })).rows[0]
+          const current = latest ? JSON.parse(String(latest.state)) as StoredRun : undefined
+          if (!current || current.runId !== runId || current.attemptId !== previousAttemptId || current.status !== 'cancelled'
+            || current.version !== stored.version - 1) throw Object.assign(new Error('CONTINUATION_PREDECESSOR_CHANGED'), { statusCode: 409 })
+          await assertRootContinuationSubject(tx, tenantId, current, actor)
+          const active = await tx.execute({ sql: "SELECT 1 FROM root_runs WHERE tenant_id=? AND session_id=? AND json_extract(state,'$.status') IN ('running','waiting') LIMIT 1", args: [tenantId, sessionId] })
+          if (active.rows.length) throw Object.assign(new Error('CONTINUATION_SESSION_BUSY'), { statusCode: 409 })
+        }
+        await tx.execute({ sql: 'INSERT OR IGNORE INTO root_attempt_history VALUES(?,?,?,?)', args: [tenantId, runId, previousAttemptId, previousAttempt] })
         await tx.execute({ sql: 'UPDATE root_runs SET state=? WHERE tenant_id=? AND run_id=?', args: [JSON.stringify(stored), tenantId, runId] })
         await projectAutomationRoot(tx, tenantId, stored)
       })

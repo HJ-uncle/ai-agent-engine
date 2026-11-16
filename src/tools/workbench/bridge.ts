@@ -2,6 +2,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { AgentContext, ToolResult } from '../../core/agent-context/index.js'
 import { browserExecutionIdentity, browserExecutionsMatch, type BrowserExecutionIdentity } from '../../core/browser-execution.js'
 import { validateXlsxPreviewMetadata } from './xlsx-preview-navigation.js'
+import { pluginWorkbenchBinding, type PluginWorkbenchContext } from '../../plugins/workbench-binding.js'
 
 export const WORKBENCH_ACTIONS = ['workspace.context', 'artifact.open', 'terminal.read', 'artifact.render'] as const
 export type WorkbenchAction = typeof WORKBENCH_ACTIONS[number]
@@ -13,6 +14,8 @@ export interface WorkbenchCommand {
   action: WorkbenchAction
   args: Record<string, unknown>
   expiresAt: number
+  /** Issued only by a live plugin root owner; execution IDs remain unchanged. */
+  hostDelegation?: { kind: 'plugin'; pluginId: string; sessionId: string }
 }
 interface Pending { command: WorkbenchCommand; delivered: boolean; settle(result: ToolResult): void }
 interface Client {
@@ -75,10 +78,11 @@ export class WorkbenchBridge {
     return { clientId: client.id, clientToken: client.token, sessionId, protocolVersion: 1, leaseMs: this.options.leaseMs }
   }
   unregister(identity: WorkbenchIdentity, id: string, token: string): void { this.remove(this.authorize(identity, id, token)) }
-  status(ctx: Pick<AgentContext, 'tenantId' | 'sessionId' | 'rootSessionId' | 'browserPrincipal'>) {
+  status(ctx: PluginWorkbenchContext) {
     this.prune()
     const identity = { tenantId: ctx.tenantId ?? 'default', userId: ctx.browserPrincipal?.userId }
-    const client = this.clients.get(this.scopes.get(key(identity, ctx.rootSessionId ?? ctx.sessionId)) ?? '')
+    const delegated = pluginWorkbenchBinding(ctx)
+    const client = this.clients.get(this.scopes.get(key(identity, delegated?.sessionId ?? ctx.rootSessionId ?? ctx.sessionId)) ?? '')
     return { connected: Boolean(client), actions: client?.actions ?? [] }
   }
   async poll(identity: WorkbenchIdentity, id: string, token: string): Promise<WorkbenchCommand[]> {
@@ -136,12 +140,15 @@ export class WorkbenchBridge {
     const execution = browserExecutionIdentity(ctx)
     if (!execution) return Promise.resolve(failure('WORKBENCH_RUN_REQUIRED', '工作台操作需要当前任务的执行身份。'))
     const identity = { tenantId: ctx.tenantId ?? 'default', userId: ctx.browserPrincipal?.userId }
-    const client = this.clients.get(this.scopes.get(key(identity, execution.rootSessionId)) ?? '')
+    const delegated = pluginWorkbenchBinding(ctx)
+    const hostSessionId = delegated?.sessionId ?? execution.rootSessionId
+    const client = this.clients.get(this.scopes.get(key(identity, hostSessionId)) ?? '')
     if (!client) return Promise.resolve(failure('WORKBENCH_UNAVAILABLE', '所属会话的 Aether 工作台未连接。文件仍可生成并提供真实链接；不要声称已经在客户端打开。'))
     if (!client.actions.includes(action)) return Promise.resolve(failure('WORKBENCH_UNSUPPORTED', '当前工作台未提供此操作，请先调用 workbench_context 查询。'))
     if (client.pending.size >= 8) return Promise.resolve(failure('WORKBENCH_BUSY', '当前工作台已有待处理操作，请等待已有操作回执。'))
     const timeout = action === 'artifact.render' ? Math.max(this.options.commandMs, 60_000) : this.options.commandMs
-    const command: WorkbenchCommand = { requestId: randomUUID(), sessionId: execution.rootSessionId, execution, action, args, expiresAt: Date.now() + timeout }
+    const command: WorkbenchCommand = { requestId: randomUUID(), sessionId: hostSessionId, execution, action, args, expiresAt: Date.now() + timeout,
+      ...(delegated ? { hostDelegation: { kind: 'plugin' as const, pluginId: delegated.pluginId, sessionId: hostSessionId } } : {}) }
     return new Promise(resolve => {
       const finish = (result: ToolResult) => {
         if (!client.pending.delete(command.requestId)) return

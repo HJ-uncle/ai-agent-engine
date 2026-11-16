@@ -13,6 +13,7 @@ import { up as migrateTools } from '../../../storage/sqlite/migrations/008_add_a
 import { RootRunStore } from '../../../storage/root-runs/index.js'
 import { agentRoutes } from '../../../api/http/routes/agents.js'
 import { createAgentTools, executePendingAgentAction } from '../agent-tool.js'
+import { clearSecurityMode, setSecurityMode } from '../../../security/policy-engine.js'
 
 const mocks = vi.hoisted(() => ({ getDb: vi.fn(), factory: vi.fn() }))
 vi.mock('../../../storage/sqlite/db.js', () => ({ getDb: mocks.getDb, getDbEpoch: () => 1 }))
@@ -25,8 +26,11 @@ const manager = new AgentManagementService()
 const tools = createAgentTools([{ id: 'client-only', name: 'Client', allowedTools: [] }])
 const byName = (name: string) => tools.find(tool => tool.name === name)!
 const ctx = () => ({ tenantId: 'test-tenant', sessionId: 'test-session', currentToolCallId: 'call-1' }) as AgentContext
+const securityScopes = [['test-tenant', 'test-session'], ['test-tenant', 'session-b'], ['test-tenant', 'child-session'], ['other', 'test-session']] as const
 
 beforeEach(async () => {
+  vi.stubEnv('DEFAULT_SECURITY_MODE', 'standard')
+  for (const [tenant, session] of securityScopes) clearSecurityMode(tenant, session)
   fs.mkdirSync(fixtureParent, { recursive: true })
   root = fs.mkdtempSync(path.join(fixtureParent, 'fixture-'))
   db = new LocalSqliteProcessClient({ url: pathToFileURL(path.join(root, 'agents.db')).href })
@@ -43,12 +47,15 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  for (const [tenant, session] of securityScopes) clearSecurityMode(tenant, session)
+  vi.unstubAllEnvs()
   await app?.close()
   db?.close()
   await db?.whenClosed()
   mocks.getDb.mockImplementation(() => { throw new Error('Agent test tried to use an unowned database') })
   if (path.dirname(root) !== fixtureParent || !path.basename(root).startsWith('fixture-')) throw new Error('Unsafe fixture cleanup')
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  if (!fs.readdirSync(fixtureParent).length) fs.rmdirSync(fixtureParent)
 })
 
 function approved(name: string, args: Record<string, unknown>, result: ToolResult, context = ctx()): AgentContext {
@@ -62,6 +69,75 @@ async function confirmed(name: string, args: Record<string, unknown>): Promise<T
   return byName(name).execute(args, approved(name, args, waiting))
 }
 const seed = (name = 'Existing', tenantId = 'test-tenant') => manager.create(tenantId, { name, allowedTools: ['read_file'] })
+
+describe('Agent management session full access', () => {
+  it('persists create, update and delete without parking an approval in the selected session', async () => {
+    setSecurityMode('test-tenant', 'test-session', 'full-access')
+    const created = await byName('agent_create').execute({ name: 'Autonomous', allowedTools: [] }, ctx())
+    expect(created, created.output).toMatchObject({ success: true, status: 'succeeded' })
+    expect(created.needsConfirmation).not.toBe(true)
+    expect(created.pendingAction).toBeUndefined()
+    const agentId = JSON.parse(created.output).agentChange.id as string
+    expect(await manager.get('test-tenant', agentId)).toMatchObject({ name: 'Autonomous', allowedTools: [] })
+
+    const updated = await byName('agent_update').execute({ id: agentId, description: 'Saved by the current session' }, ctx())
+    expect(updated, updated.output).toMatchObject({ success: true, status: 'succeeded' })
+    expect(updated.pendingAction).toBeUndefined()
+    expect(await manager.get('test-tenant', agentId)).toMatchObject({ description: 'Saved by the current session' })
+
+    const deleted = await byName('agent_delete').execute({ id: agentId }, ctx())
+    expect(deleted, deleted.output).toMatchObject({ success: true, metadata: { agentChange: { action: 'delete', id: agentId } } })
+    expect(await manager.list('test-tenant')).toEqual([])
+  })
+
+  it('does not authorize another session or the same session ID in another tenant', async () => {
+    setSecurityMode('test-tenant', 'test-session', 'full-access')
+    for (const other of [{ ...ctx(), sessionId: 'session-b' }, { ...ctx(), tenantId: 'other' }]) {
+      const waiting = await byName('agent_create').execute({ name: 'Needs separate authorization', allowedTools: [] }, other)
+      expect(waiting).toMatchObject({ success: false, status: 'waiting', needsConfirmation: true })
+      expect(await manager.list(other.tenantId)).toEqual([])
+    }
+  })
+
+  it('reads the live root-session choice and requires approval again after switching back', async () => {
+    setSecurityMode('test-tenant', 'test-session', 'full-access')
+    setSecurityMode('test-tenant', 'child-session', 'standard')
+    const child = { ...ctx(), sessionId: 'child-session', parentSessionId: 'test-session', rootSessionId: 'test-session' }
+    const created = await byName('agent_create').execute({ name: 'Root authorized', allowedTools: [] }, child)
+    expect(created.success, created.output).toBe(true)
+    const agentId = JSON.parse(created.output).agentChange.id as string
+    expect(await byName('agent_update').preflight!({ id: agentId, name: 'Must wait' }, child)).toBeUndefined()
+    setSecurityMode('test-tenant', 'test-session', 'standard')
+    setSecurityMode('test-tenant', 'child-session', 'full-access')
+    const waiting = await byName('agent_update').execute({ id: agentId, name: 'Must wait' }, child)
+    expect(waiting).toMatchObject({ status: 'waiting', needsConfirmation: true })
+    expect((await manager.get('test-tenant', agentId)).name).toBe('Root authorized')
+  })
+
+  it('keeps exact frozen approvals when full access is enabled after the preview', async () => {
+    const args = { name: 'Frozen after switching' }
+    const waiting = await byName('agent_create').execute(args, ctx())
+    expect(waiting.needsConfirmation).toBe(true)
+    setSecurityMode('test-tenant', 'test-session', 'full-access')
+    mocks.factory.mockResolvedValue({ registry: { list: () => [{ name: 'execute_cmd' }] } })
+    const result = await byName('agent_create').execute(args, approved('agent_create', args, waiting))
+    expect(result).toMatchObject({ success: true, metadata: { agentChange: { agent: { allowedTools: ['read_file', 'write_file'] } } } })
+    expect(mocks.factory).toHaveBeenCalledTimes(1)
+  })
+
+  it('retains validation and tenant ownership instead of turning failures into confirmations', async () => {
+    setSecurityMode('test-tenant', 'test-session', 'full-access')
+    const invalid = await byName('agent_create').execute({ name: 'Invalid', temperature: 3 }, ctx())
+    expect(invalid).toMatchObject({ success: false, status: 'failed', metadata: { code: 40001 } })
+    expect(invalid.needsConfirmation).not.toBe(true)
+    const foreign = await seed('Foreign', 'other')
+    const denied = await byName('agent_delete').execute({ id: foreign.id }, ctx())
+    expect(denied).toMatchObject({ success: false, status: 'failed', metadata: { code: 40400 } })
+    expect(denied.pendingAction).toBeUndefined()
+    expect(await manager.list('test-tenant')).toEqual([])
+    expect((await manager.get('other', foreign.id)).name).toBe('Foreign')
+  })
+})
 
 // Both entry points use the same production validators, manager and transactional store.
 describe('Agent management permissions and durable approval', () => {
@@ -77,8 +153,15 @@ describe('Agent management permissions and durable approval', () => {
   it('freezes the exact default permissions shown before approval across a serialized resume', async () => {
     const args = { name: 'Frozen' }
     const waiting = await byName('agent_create').execute(args, ctx())
+    expect(waiting).toMatchObject({ status: 'waiting', needsConfirmation: true })
+    const operation = waiting.pendingAction!.operation as { input: Record<string, unknown> }
+    const expectedReason = `Agent 创建确认\n\n${JSON.stringify(operation.input, null, 2)}\n\n确认后执行以上配置。`
+    expect(waiting.output).toBe(expectedReason)
+    expect(waiting.pendingAction!.reason).toBe(expectedReason)
+    const resumed = approved('agent_create', args, waiting)
+    expect(resumed.resumeToolCall!.pendingAction!.reason).toBe(expectedReason)
     mocks.factory.mockResolvedValue({ registry: { list: () => [{ name: 'execute_cmd' }] } })
-    const result = await byName('agent_create').execute(args, approved('agent_create', args, waiting))
+    const result = await byName('agent_create').execute(args, resumed)
     expect(result).toMatchObject({ success: true, metadata: { agentChange: { agent: { allowedTools: ['read_file', 'write_file'] } } } })
     expect(mocks.factory).toHaveBeenCalledTimes(1)
   })

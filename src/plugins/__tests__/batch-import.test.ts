@@ -73,15 +73,14 @@ describe('batch plugin previews', () => {
     const result = await previewPluginImportBatch(importer, 'tenant', input(bundle))
     expect(result.imports[0].error).toMatch(/Nested/); expect(result.imports[1].import?.status).toBe('prepared')
   })
-  it('checks the whole count before staging, honors remaining slots and accepts the exact limit', async () => {
+  it('honors an explicit caller count while accepting more than twenty packages by default', async () => {
     const bundle = (count: number) => zip(Object.fromEntries(Array.from({ length: count }, (_, i) => [`plugins/p${i}.zip`, plugin(`plugin-${i}`)])))
-    await expect(previewPluginImportBatch(importer, 'tenant', input(bundle(21)))).rejects.toThrow(/21.*20/)
     await expect(previewPluginImportBatch(importer, 'tenant', input(bundle(2), { maxPlugins: 1 }))).rejects.toThrow(/2.*1/)
     await expect(fs.access(importer.rootDir)).rejects.toThrow()
-    const result = await previewPluginImportBatch(importer, 'tenant', input(bundle(20)))
-    expect(result.imports).toHaveLength(20); expect(result.imports.every(item => item.import?.status === 'prepared')).toBe(true)
+    const result = await previewPluginImportBatch(importer, 'tenant', input(bundle(21)))
+    expect(result.imports).toHaveLength(21); expect(result.imports.every(item => item.import?.status === 'prepared')).toBe(true)
   })
-  it.each([0, 21, 1.5, '2', null])('rejects invalid maxPlugins %s before staging', async maxPlugins => {
+  it.each([0, -1, 1.5, '2', null])('rejects invalid maxPlugins %s before staging', async maxPlugins => {
     await expect(previewPluginImportBatch(importer, 'tenant', input(plugin(), { maxPlugins }))).rejects.toThrow(/maxPlugins/)
     await expect(fs.access(importer.rootDir)).rejects.toThrow()
   })
@@ -90,11 +89,12 @@ describe('batch plugin previews', () => {
     await expect(previewPluginImportBatch(importer, 'tenant', { type: 'zip', base64: '!!!!' })).rejects.toThrow(/base64/)
     await expect(fs.access(importer.rootDir)).rejects.toThrow()
   })
-  it('rejects cumulative nested expansion before staging or inflating the sources', async () => {
+  it('rejects children whose actual expansion differs from metadata without installing them', async () => {
     const nested = zip({ 'main.mjs': 'x' }), offset = central(nested)
     nested.writeUInt32LE(33 * 1024 * 1024, offset + 24); nested.writeUInt32LE(33 * 1024 * 1024, 22)
-    await expect(previewPluginImportBatch(importer, 'tenant', input(zip({ 'plugins/a.zip': nested, 'plugins/b.zip': nested })))).rejects.toThrow(/Combined.*64 MiB/)
-    await expect(fs.access(importer.rootDir)).rejects.toThrow()
+    const result = await previewPluginImportBatch(importer, 'tenant', input(zip({ 'plugins/a.zip': nested, 'plugins/b.zip': nested })))
+    expect(result.imports.every(item => item.error)).toBe(true)
+    expect(await service.list('tenant')).toEqual([])
   })
   it('honors cancellation before staging', async () => {
     const abort = new AbortController(); abort.abort()
@@ -129,7 +129,7 @@ describe('batch ZIP safety', () => {
   })
   it('rejects both declared ZIP bombs and a compressed stream that expands beyond its declared size', () => {
     const declared = zip({ 'x': 'small' }); declared.writeUInt32LE(65 * 1024 * 1024, central(declared) + 24)
-    expect(() => inspectPluginZip(declared)).toThrow(/limits/)
+    expect(() => inspectPluginZip(declared)).toThrow(/metadata/)
     const hidden = zip({ 'x': 'x'.repeat(2 * 1024 * 1024) }); hidden.writeUInt32LE(1, central(hidden) + 24); hidden.writeUInt32LE(1, 22)
     expect(() => readPluginZip(hidden)).toThrow(/limits/)
     const checksum = zip({ 'x': 'real content' }, 0); checksum[30 + 1] ^= 1
@@ -138,6 +138,28 @@ describe('batch ZIP safety', () => {
 })
 
 describe('batch import HTTP and tenant boundaries', () => {
+  it('guards deletion with the expected revision and preserves bodyless deletion', async () => {
+    const server = await http()
+    const prepared = await importer.previewImport('default', input(plugin()))
+    const created = await importer.installImport('default', prepared.jobId)
+    const updated = await service.update('default', created.id, { manifest: { ...created.manifest, version: '2.0.0' }, files: created.files, expectedRevision: created.revision })
+    const url = `/plugins/${created.id}`
+    const conflict = await server.inject({ method: 'DELETE', url, payload: { expectedRevision: created.revision } })
+    expect(conflict.statusCode).toBe(409)
+    expect((await service.get('default', created.id)).revision).toBe(updated.revision)
+    for (const expectedRevision of [0, -1, 1.5, '2']) {
+      expect((await server.inject({ method: 'DELETE', url, payload: { expectedRevision } })).statusCode).toBe(400)
+      expect((await service.get('default', created.id)).revision).toBe(updated.revision)
+    }
+    const removed = await server.inject({ method: 'DELETE', url, payload: { expectedRevision: updated.revision } })
+    expect(removed.statusCode).toBe(200); expect(removed.json().data.deleted).toBe(true)
+    await expect(service.get('default', created.id)).rejects.toMatchObject({ code: 'PLUGIN_NOT_FOUND' })
+    const legacyPreview = await importer.previewImport('default', input(plugin('bodyless-plugin')))
+    const legacy = await importer.installImport('default', legacyPreview.jobId)
+    const bodyless = await server.inject({ method: 'DELETE', url: `/plugins/${legacy.id}` })
+    expect(bodyless.statusCode).toBe(200); expect(bodyless.json().data.deleted).toBe(true)
+    expect(await service.list('default')).toEqual([])
+  })
   it('stages individual tenant-owned jobs and keeps install/cancel access isolated', async () => {
     const server = await http(); principal = manager('tenant-a')
     const response = await server.inject({ method: 'POST', url: '/plugins/imports/preview-batch', payload: input(zip({ 'plugins/a.zip': plugin(), 'plugins/b.zip': plugin('second-plugin') })) })

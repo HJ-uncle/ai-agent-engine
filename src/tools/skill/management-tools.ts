@@ -21,16 +21,16 @@ function failure(error: unknown): ToolResult {
 export function createSkillManagementTools(service = new SkillManagementService()): Tool[] {
   const specs: Array<{ action: 'create' | 'update' | 'set_enabled' | 'delete'; name: string; displayName: string; required: string[]; description: string; properties: Record<string, JSONSchema> }> = [
     { action: 'create' as const, name: 'skill_create', displayName: '创建技能', required: ['name', 'description', 'content'],
-      description: '创建持久技能。content 仅为 Markdown 正文，不要包含 frontmatter；name 和 description 头部由工具生成。项目路径由当前会话决定。先展示完整配置，等待用户批准。回执 skill.executionId 用于 Agent 的 skills 绑定，skill.id 仅用于管理编辑。',
+      description: '创建持久技能。content 仅为 Markdown 正文，不要包含 frontmatter；name 和 description 头部由工具生成。项目路径由当前会话决定。回执 skill.executionId 用于 Agent 的 skills 绑定，skill.id 仅用于管理编辑。',
       properties: { name: { type: 'string', pattern: '^[a-z0-9][a-z0-9_-]{0,119}$' }, description: { type: 'string', maxLength: 500 }, content: { type: 'string', maxLength: 100000, description: '仅 Markdown 正文；不包含开头的 --- frontmatter。' }, scope } },
     { action: 'update' as const, name: 'skill_update', displayName: '编辑技能', required: ['id', 'content', 'expectedHash'],
       description: '仅更新所选技能主文档，保留脚本和附件。先 skill_get，content 提交包含原 name 的完整 SKILL.md，expectedHash 使用读取回执。',
       properties: { id, content: { type: 'string', maxLength: 100000 }, expectedHash: { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' }, scope } },
     { action: 'set_enabled' as const, name: 'skill_set_enabled', displayName: '启停技能', required: ['id', 'enabled'],
-      description: '启用或停用所选层的持久技能，不执行技能脚本。展示目标后等待用户批准。',
+      description: '启用或停用所选层的持久技能，不执行技能脚本。',
       properties: { id, enabled: { type: 'boolean' }, scope } },
     { action: 'delete' as const, name: 'skill_delete', displayName: '删除技能', required: ['id'],
-      description: '删除完整 ID 对应的技能目录及当前脚本附件；冻结文件清单后等待批准，目录变化时拒绝继续。', properties: { id, scope } },
+      description: '删除完整 ID 对应的技能目录及当前脚本附件；使用冻结文件清单，目录变化时拒绝继续。', properties: { id, scope } },
   ]
   const mutations = specs.map(spec => createApprovedMutationTool({
     name: spec.name, displayName: spec.displayName, description: spec.description,

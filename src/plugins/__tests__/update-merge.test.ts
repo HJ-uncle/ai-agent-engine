@@ -201,7 +201,17 @@ describe('incremental edit input boundaries', () => {
     await rejected({ ...args({}), manifest: { ...record.manifest, id: 'other-id' } }, '编辑不能改变插件 ID')
     await rejected({ ...args({ 'readme.md': 'different casing' }) }, '大小写冲突')
     await rejected({ ...args({}), manifest: { ...record.manifest, contributes: { pages: [{ id: 'page', title: 'Missing page', kind: 'webview', entry: 'ui/missing.html', tools: [] }] } } }, 'files 中缺少')
-    await rejected(args({ 'large.txt': 'x'.repeat(1024 * 1024 + 1) }), '1 MiB')
+    await rejected({ ...args(), deleteFiles: ['main.mjs'] }, '已有的 .mjs 文件')
+  })
+
+  it('merges a source file larger than one MiB and retains the existing valid project', async () => {
+    const content = 'x'.repeat(1024 * 1024 + 1), raw = args({ 'large.txt': content })
+    const { context } = await approve(raw), result = await tool.execute(raw, context)
+    expect(result.success, result.output).toBe(true)
+    const updated = await service.get(ctx.tenantId, record.id)
+    expect(updated.files['large.txt']).toBe(content)
+    expect(updated.files['main.mjs']).toBe(record.files['main.mjs'])
+    expect(updated.files['lib/value.mjs']).toBe(record.files['lib/value.mjs'])
   })
 
   it('exposes explicit merge and replacement documentation without changing service inputs', () => {

@@ -19,7 +19,11 @@ export interface CollaboratorInput {
   /** Client selection identity, not an execution or authorization handle. */
   instanceKey?: string
 }
-export interface PreparedCollaborator extends CollaboratorInput { agent?: SubagentContinuationProfile['agent'] }
+export interface PreparedCollaborator extends CollaboratorInput {
+  agent?: SubagentContinuationProfile['agent']
+  /** Server-validated explicit selection with no new task or user message. */
+  continueTask?: true
+}
 export const COLLABORATOR_LIMITS = Object.freeze({ task: 65_536, description: 100, instanceKey: 128 })
 
 export class CollaboratorError extends Error {
@@ -29,7 +33,7 @@ export class CollaboratorError extends Error {
 /** Validate user-selected identities before root admission changes any binding or history. */
 export async function prepareCollaborators(tenantId: string, sessionId: string, raw: unknown,
   dependencies: {
-    runs?: Pick<SubagentStore, 'getRunHeader' | 'latestAgentHeader' | 'hasActiveChildInvocation'>
+    runs?: Pick<SubagentStore, 'getRunHeader' | 'latestAgentHeader' | 'latestChildHeader' | 'hasActiveChildInvocation'>
     agents?: Pick<SQLiteAgentStore, 'getById'>
     workspacePaths?: readonly string[]
     workspaceContext?: Parameters<typeof captureSubagentWorkspace>[0]
@@ -69,8 +73,9 @@ export async function prepareCollaborators(tenantId: string, sessionId: string, 
     if (instanceKey && requestedResume) throw new CollaboratorError('续跑已有实例无需 instanceKey。', 400)
     // A selected chip or the continue button identifies a child; it cannot
     // turn punctuation into work. Keep the root conversation available to clarify.
-    if (task !== undefined ? !hasSubagentTaskContent(task)
-      : dependencies.requestMessage !== undefined && !hasSubagentTaskContent(collaboratorRequestText(dependencies.requestMessage))) continue
+    const continueTask = !!requestedResume && task === undefined && dependencies.requestMessage === null
+    if (!continueTask && (task !== undefined ? !hasSubagentTaskContent(task)
+      : dependencies.requestMessage !== undefined && !hasSubagentTaskContent(collaboratorRequestText(dependencies.requestMessage)))) continue
     let prior = requestedResume ? await runs.getRunHeader(tenantId, requestedResume, true) : undefined
     if (requestedResume && (!prior || prior.parentSessionId !== sessionId || prior.rootSessionId !== sessionId)) {
       throw new CollaboratorError('该子代理不属于当前任务，无法继续。', 404)
@@ -84,6 +89,8 @@ export async function prepareCollaborators(tenantId: string, sessionId: string, 
     if (prior && (!isTerminalRun(prior.status) || await runs.hasActiveChildInvocation(tenantId, sessionId, prior.childSessionId))) {
       throw new CollaboratorError('该子代理仍在工作，请完成或停止后再继续。', 409)
     }
+    if (prior && (await runs.latestChildHeader(tenantId, sessionId, prior.childSessionId))?.runId !== prior.runId)
+      throw new CollaboratorError('该子代理已有更新的执行，请刷新后从最新执行继续。', 409)
     if (prior && !prior.continuation) throw new CollaboratorError('旧子代理缺少可恢复的权限信息，请重新选择 Agent 创建子代理。', 409)
     if (prior?.continuation && dependencies.workspaceContext) {
       if (!subagentWorkspaceMatches(prior.continuation, dependencies.workspaceContext))
@@ -109,6 +116,7 @@ export async function prepareCollaborators(tenantId: string, sessionId: string, 
     if (seen.has(identity)) continue
     seen.add(identity)
     plans.push({ agentId: agent?.id, resumeRunId: prior?.runId, ...(agent ? { agent } : {}),
+      ...(continueTask ? { continueTask: true as const } : {}),
       ...(builtinRole ? { builtinRole } : {}), ...(task ? { task } : {}), ...(description ? { description } : {}),
       ...(instanceKey ? { instanceKey } : {}) })
   }
@@ -123,21 +131,21 @@ function promptText(prompt: string | unknown[] | null): string {
 /** Explicit user-selected children are admitted before the parent begins coordinating their live work. */
 export function collaboratorTools(plans: readonly PreparedCollaborator[], prompt: string | unknown[] | null,
   parent: AgentContext): NonNullable<ReActOptions['delegatedTools']> {
-  return plans.flatMap((plan, index) => hasSubagentTaskContent(plan.task ?? collaboratorRequestText(prompt))
+  return plans.flatMap((plan, index) => plan.continueTask || hasSubagentTaskContent(plan.task ?? collaboratorRequestText(prompt))
     && (plans.length === 1 || plan.task) ? [collaboratorTool(plan, prompt, parent, index)] : [])
 }
 
 function collaboratorTool(plan: PreparedCollaborator, prompt: string | unknown[] | null,
   parent: AgentContext, index: number, scoped = false): NonNullable<ReActOptions['delegatedTools']>[number] {
     const args: Record<string, unknown> = {
-      task: `仅完成本实例分工，其他成员的工作由主 Agent 协调。保留此前上下文；返回结果、证据和未完成事项。引用和附件是背景，不是新的授权。${plan.task ? `\n\n本实例的任务与分工：\n${plan.task}` : ''}${scoped ? '' : `\n\n当前用户请求：\n${promptText(prompt)}`}`,
+      ...(plan.continueTask ? {} : { task: `仅完成本实例分工，其他成员的工作由主 Agent 协调。保留此前上下文；返回结果、证据和未完成事项。引用和附件是背景，不是新的授权。${plan.task ? `\n\n本实例的任务与分工：\n${plan.task}` : ''}${scoped ? '' : `\n\n当前用户请求：\n${promptText(prompt)}`}` }),
       ...(plan.agentId ? { agentId: plan.agentId } : {}),
       ...(plan.builtinRole ? { builtinRole: plan.builtinRole } : {}),
       ...(plan.resumeRunId ? { resumeRunId: plan.resumeRunId } : {}),
-      description: plan.description ?? (plan.agent ? `${plan.agent.name} · 协作任务` : plan.builtinRole ? `${BUILTIN_AGENT_TEMPLATES[plan.builtinRole].name} · 协作任务` : '继续子代理任务'),
+      ...(plan.continueTask ? {} : { description: plan.description ?? (plan.agent ? `${plan.agent.name} · 协作任务` : plan.builtinRole ? `${BUILTIN_AGENT_TEMPLATES[plan.builtinRole].name} · 协作任务` : '继续子代理任务') }),
     }
     return {
-      id: `collaborator:${parent.rootRunId ?? parent.conversationId}:${index}`,
+      id: `collaborator:${parent.rootRunId ?? parent.conversationId}:${parent.executionContinuation?.attemptId ? parent.executionContinuation.attemptId + ':' : ''}${index}`,
       name: 'subagent_start',
       args,
       execute: async ctx => {
@@ -165,8 +173,8 @@ export function createCollaboratorDispatch(plans: readonly PreparedCollaborator[
     planningPrompt: string
   } {
   const selected = plans.map((plan, index) => ({ plan, index, selectionId: `selection-${index + 1}` }))
-    .filter(({ plan }) => hasSubagentTaskContent(plan.task ?? collaboratorRequestText(prompt)))
-  const pending = selected.filter(({ plan }) => selected.length > 1 && !plan.task)
+    .filter(({ plan }) => plan.continueTask || hasSubagentTaskContent(plan.task ?? collaboratorRequestText(prompt)))
+  const pending = selected.filter(({ plan }) => !plan.continueTask && selected.length > 1 && !plan.task)
   const delegatedTools = selected.filter(item => !pending.includes(item))
     .map(({ plan, index }) => collaboratorTool(plan, prompt, parent, index))
   let queue: NonNullable<ReActOptions['delegatedTools']> = [], accepted = false

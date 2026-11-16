@@ -11,7 +11,12 @@ import { CronStore } from '../../../../storage/cron/index.js'
 import { CronRunStore } from '../../../../storage/cron/runs.js'
 import { createConversationHistory } from '../../../../storage/conversation/factory.js'
 import { prepareUserAdmission, userAdmissionDigest } from '../../../../storage/root-admission/index.js'
+import { rootContinuationDigest } from '../../../../storage/root-admission/continuation.js'
+import * as requestAuthentication from '../../middleware.js'
+import { controllerSubject } from '../../../../core/collaboration/controller-origin.js'
+import { getSubagentStore } from '../../../../core/subagent/store.js'
 import { readAdmissionSeed } from '../../../../storage/root-admission/projection.js'
+import { markPluginRootRequest } from '../../../../storage/root-admission/plugin-owner.js'
 import * as boundary from '../../../../core/collaboration/production-boundary.js'
 import { serviceForOwner } from '../../../../core/collaboration/execution-owner.js'
 import { getCollaborationRuntime } from '../../../../core/collaboration/runtime.js'
@@ -19,27 +24,41 @@ import * as modelResolver from '../../../../core/llm-adapter/resolve-model.js'
 import { resolveCapabilities } from '../../../../core/model-capabilities/index.js'
 import { activeStreams } from '../../../../core/stream-pipeline/stream-bus.js'
 import { chatRoutes } from '../chat.js'
+import { onAgentLifecycleEvent, type AgentLifecycleEvent } from '../../../../core/runtime-events.js'
+import { workspaceManager } from '../../../../workspace/index.js'
 
 const tenant = 'default', transport = { toolProfile: 'code', runLifetime: 'durable', subagentProtocol: 2 as const }
 const headers = { 'x-aether-tool-profile': 'code', 'x-aether-run-lifetime': 'durable', 'x-aether-subagent-protocol': '2' }
 let directory: string, app: FastifyInstance, db: LocalSqliteProcessClient, contexts: AgentContext[], calls: Message[][], sentIds: string[]
+let lifecycle: AgentLifecycleEvent[], offLifecycle: (() => void) | undefined
+let discoveryCalls: number
 beforeEach(async () => {
+  lifecycle = []; offLifecycle = onAgentLifecycleEvent(event => lifecycle.push(event))
   await database.closeDb()
   fs.mkdirSync('.e2e-tmp', { recursive: true }); directory = fs.mkdtempSync(path.resolve('.e2e-tmp/chat-production-admission-'))
   for (const [key, value] of Object.entries({ DATA_DIR: path.join(directory, 'fixture.db'), WORKSPACE_ROOT: directory,
     MEMORY_DB_PATH: path.join(directory, 'memory.db'), AETHER_GLOBAL_DIR: path.join(directory, 'global'), SKILLS_ROOT: path.join(directory, 'skills'),
-    ENABLE_LONG_TERM_MEMORY: 'false', OSM_MODE: 'off', LOG_LEVEL: 'silent', QA_LOG_ENABLED: 'false' })) vi.stubEnv(key, value)
+    ENABLE_LONG_TERM_MEMORY: 'false', OSM_MODE: 'off', LOG_LEVEL: 'silent', QA_LOG_ENABLED: 'false', AUTH_ENABLED: 'false', AETHER_DESKTOP_OWNED: '1' })) vi.stubEnv(key, value)
   fs.writeFileSync(path.join(directory, 'fixture.txt'), 'Exact child disk evidence')
   db = new LocalSqliteProcessClient({ url: 'file:' + path.join(directory, 'fixture.db').replaceAll('\\', '/') })
   vi.spyOn(database, 'getDb').mockImplementation(() => db); await database.initDb()
-  contexts = []; calls = []; sentIds = []
+  contexts = []; calls = []; sentIds = []; discoveryCalls = 0
   const install = boundary.installProductionCollaborationBoundary
   vi.spyOn(boundary, 'installProductionCollaborationBoundary').mockImplementation(ctx => { install(ctx); contexts.push(ctx) })
   vi.spyOn(modelResolver, 'resolveModelConfig').mockImplementation(async ({ model }) => ({ model: model ?? 'scripted-only', provider: 'fixture',
     capabilities: resolveCapabilities({ model: 'gpt-4o', provider: 'openai' }), thinkingEnabled: false }))
   vi.spyOn(modelResolver, 'createAdapterFromResolved').mockImplementation(config => ({ provider: 'fixture', model: config.model,
     countTokens: text => Math.ceil(text.length / 4), complete: async () => { throw new Error('UNEXPECTED_COMPLETION') },
-    async *stream(messages) {
+    async *stream(messages, options) {
+      // The fixture predates on-demand tool loading. Exercise the real loader
+      // before the four business requests rather than invoking an unoffered tool.
+      const required = calls.length === 0 ? 'subagent' : calls.length === 1 ? 'read_file' : undefined
+      if (required && !options?.tools?.some(tool => tool.name === required)) {
+        expect(options?.tools?.some(tool => tool.name === 'load_tools')).toBe(true)
+        expect(++discoveryCalls).toBeLessThanOrEqual(4)
+        yield { done: true, finishReason: 'tool_calls', toolCalls: [{ id: `discover-${discoveryCalls}`, index: 0, name: 'load_tools', args: JSON.stringify({ names: [required] }) }] }
+        return
+      }
       calls.push(messages)
       const root = contexts.find(ctx => !ctx.runId), child = contexts.find(ctx => ctx.runId)
       if (!root) throw new Error('PRODUCTION_ROOT_BOUNDARY_MISSING')
@@ -60,7 +79,7 @@ beforeEach(async () => {
         yield { done: true, finishReason: 'tool_calls', toolCalls: [{ id: 'actual-read', index: 0, name: 'read_file', args: JSON.stringify({ path: path.join(directory, 'fixture.txt') }) }] }
       } else if (calls.length === 3) {
         expect(messages.some(message => String(message.content).includes('Child canonical mailbox evidence'))).toBe(true)
-        expect(messages.some(message => message.role === 'tool' && String(message.content).includes('Exact child disk evidence'))).toBe(true)
+        expect(messages.some(message => message.role === 'tool' && String(message.content).includes('Exact child disk evidence')), JSON.stringify(messages.filter(message => message.role === 'tool'))).toBe(true)
         yield { done: true, finishReason: 'stop', content: 'Exact actual child final' }
       } else {
         expect(calls).toHaveLength(4)
@@ -73,6 +92,7 @@ beforeEach(async () => {
   app.addHook('onRequest', async (request, reply) => { Object.assign(request, { authContext: { tenantId: tenant } }); reply.raw.setTimeout = () => reply.raw })
 })
 afterEach(async () => {
+  offLifecycle?.(); offLifecycle = undefined
   for (const [key, bus] of activeStreams) { if (bus.disconnectTimeout) clearTimeout(bus.disconnectTimeout); await bus.endOrdered(); activeStreams.delete(key) }
   await app.close(); database.closeDb(); expect((await db.closeWithReceipt()).healthy).toBe(true)
   await (await import('../../../../storage/memory/db.js')).closeMemoryDb()
@@ -82,6 +102,150 @@ afterEach(async () => {
 })
 
 describe.each(['jsonl', 'sqlite'])('%s actual production creator admission', backend => {
+  it('continues an admitted unstarted task without requiring a nonexistent old stream bootstrap', async () => {
+    vi.stubEnv('HISTORY_BACKEND', backend)
+    const actor = controllerSubject({ kind: 'account', tenantId: tenant, userId: 'continuation-user' }, 'jwt')
+    vi.spyOn(requestAuthentication, 'controllerSubjectFromRequest').mockReturnValue(actor)
+    vi.mocked(modelResolver.createAdapterFromResolved).mockImplementation(config => ({ provider: 'fixture', model: config.model,
+      countTokens: () => 0, complete: async () => { throw new Error('UNEXPECTED_COMPLETION') },
+      async *stream(messages) { calls.push(messages); yield { done: true, content: 'Recovered unstarted task.' } },
+    }))
+    const sessionId = 'unstarted-continuation'
+    const before = await rootRunStore.create(tenant, sessionId, 'scripted-only', [directory], { message: 'Task accepted before engine restart',
+      toolProfile: 'code', memoryScope: 'off', skills: [], mcpServers: [], knowledgeBases: [] }, undefined, undefined, undefined, actor)
+    await app.register(chatRoutes, { liveChildRecovery: true, newStreamPublication: true, durableChildRecovery: true })
+    expect((await rootRunStore.latest(tenant, sessionId))?.status).toBe('interrupted')
+    const context = await rootRunStore.userAdmissionContext(tenant, sessionId)
+    const selector = { protocolVersion: 1 as const, namespace: context.namespace, owner: 'work' as const, predecessor: context.predecessor!, turnId: before.turnId }
+    const continuation = { ...selector, requestKey: 'unstarted-http', bodyDigest: rootContinuationDigest({ sessionId }, transport, selector) }
+    const result = await app.inject({ method: 'POST', url: '/chat', headers, payload: { sessionId, continuation } })
+    expect(result.statusCode, result.body).toBe(200); expect(result.body).toContain('Recovered unstarted task.')
+    expect(calls).toHaveLength(1)
+    expect(calls[0].some(row => row.role === 'user' && String(row.content).includes('Task accepted before engine restart'))).toBe(true)
+    expect((await createConversationHistory().getFullHistory({ tenantId: tenant, sessionId })).filter(row => row.role === 'user')).toHaveLength(1)
+    expect((await rootRunStore.latest(tenant, sessionId))?.runId).toBe(before.runId)
+  })
+
+  it('explicitly continues one selected child through the same parent turn without another child user task', async () => {
+    vi.stubEnv('HISTORY_BACKEND', backend)
+    const actor = controllerSubject({ kind: 'account', tenantId: tenant, userId: 'continuation-user' }, 'jwt')
+    vi.spyOn(requestAuthentication, 'controllerSubjectFromRequest').mockReturnValue(actor)
+    let childRequests = 0, dispatched = false, waited = false
+    vi.mocked(modelResolver.createAdapterFromResolved).mockImplementation(config => ({ provider: 'fixture', model: config.model,
+      countTokens: text => Math.ceil(text.length / 4), complete: async () => { throw new Error('UNEXPECTED_COMPLETION') },
+      async *stream(messages, options) {
+        calls.push(messages)
+        const lastUser = messages.filter(row => row.role === 'user').at(-1)
+        if (String(lastUser?.content).includes('Child continuation task')) {
+          if (++childRequests === 1) { yield { done: false, content: 'Child partial evidence.' }; throw new Error('Synthetic child interruption') }
+          yield { done: true, content: 'Child continued result.' }; return
+        }
+        const continuing = contexts.filter(ctx => !ctx.runId).at(-1)?.executionContinuation
+        const needed = continuing && !waited ? 'subagent_wait' : !dispatched ? 'subagent' : undefined
+        if (needed && !options?.tools?.some(tool => tool.name === needed)) {
+          yield { done: true, toolCalls: [{ id: 'load-' + needed, name: 'load_tools', args: JSON.stringify({ names: [needed] }), index: 0 }] }; return
+        }
+        if (!dispatched) {
+          dispatched = true
+          yield { done: true, toolCalls: [{ id: 'child-original-dispatch', name: 'subagent', args: JSON.stringify({ task: 'Child continuation task', description: 'Child task', model: 'scripted-only' }), index: 0 }] }; return
+        }
+        if (continuing && !waited) {
+          waited = true
+          const latest = (await getSubagentStore().listRunViewsForParent(tenant, 'child-continuation-parent')).at(-1)!
+          yield { done: true, toolCalls: [{ id: 'wait-continued-child', name: 'subagent_wait', args: JSON.stringify({ runIds: [latest.runId] }), index: 0 }] }; return
+        }
+        yield { done: true, content: continuing ? 'Parent continued with child result.' : 'Parent original result.' }
+      },
+    }))
+    await app.register(chatRoutes, { liveChildRecovery: true, newStreamPublication: true, durableChildRecovery: true })
+    const sessionId = 'child-continuation-parent'
+    workspaceManager.bind({ tenantId: tenant, sessionId }, directory)
+    const first = await app.inject({ method: 'POST', url: '/chat', headers, payload: { sessionId, message: 'Create one delegated investigation',
+      model: 'scripted-only', workspacePaths: [directory], memoryScope: 'off', skills: [], mcpServers: [], knowledgeBases: [] } })
+    expect(first.statusCode, first.body).toBe(200)
+    const originalChild = (await getSubagentStore().listRunViewsForParent(tenant, sessionId))[0]
+    expect(originalChild?.status).toBe('failed')
+    const before = (await rootRunStore.latest(tenant, sessionId))!, context = await rootRunStore.userAdmissionContext(tenant, sessionId)
+    expect(before.status).toBe('succeeded')
+    const selector = { protocolVersion: 1 as const, namespace: context.namespace, owner: 'work' as const,
+      predecessor: context.predecessor!, turnId: before.turnId, childRunId: originalChild.runId }
+    const continuation = { ...selector, requestKey: 'child-http', bodyDigest: rootContinuationDigest({ sessionId }, transport, selector) }
+    const result = await app.inject({ method: 'POST', url: '/chat', headers, payload: { sessionId, continuation } })
+    expect(result.statusCode, result.body).toBe(200); expect(result.body).toContain('Parent continued with child result.')
+    const childRuns = await getSubagentStore().listRunViewsForParent(tenant, sessionId)
+    expect(childRuns).toHaveLength(2); expect(new Set(childRuns.map(run => run.childSessionId)).size).toBe(1)
+    expect(childRuns.find(run => run.runId !== originalChild.runId)?.status).toBe('succeeded')
+    expect((await rootRunStore.latest(tenant, sessionId))!).toMatchObject({ runId: before.runId, turnId: before.turnId, userMessageId: before.userMessageId })
+    const childRows = await createConversationHistory().getFullHistory({ tenantId: tenant, sessionId: originalChild.childSessionId })
+    expect(childRows.filter(row => row.role === 'user')).toHaveLength(1)
+    expect(childRows.filter(row => row.role === 'assistant').map(row => row.content).join(' ')).toContain('Child partial evidence.')
+    expect(childRows.filter(row => row.role === 'assistant').map(row => row.content).join(' ')).toContain('Child continued result.')
+  })
+
+  it.each([false, true])('continues an interrupted logical turn with an exact receipt and no new user row (durable publication %s)', async durable => {
+    vi.stubEnv('HISTORY_BACKEND', backend)
+    vi.spyOn(requestAuthentication, 'controllerSubjectFromRequest').mockReturnValue(controllerSubject({ kind: 'account', tenantId: tenant, userId: 'continuation-user' }, 'jwt'))
+    vi.mocked(modelResolver.createAdapterFromResolved).mockImplementation(config => ({ provider: 'fixture', model: config.model,
+      countTokens: text => Math.ceil(text.length / 4), complete: async () => { throw new Error('UNEXPECTED_COMPLETION') },
+      async *stream(messages) {
+        calls.push(messages)
+        if (calls.length === 1) { yield { done: false, content: 'First attempt partial.', promptTokens: 10, completionTokens: 3 }; throw new Error('Synthetic provider interruption') }
+        yield { done: true, finishReason: 'stop', content: 'Continued final output.', promptTokens: 12, completionTokens: 4 }
+      },
+    }))
+    await app.register(chatRoutes, durable ? { liveChildRecovery: true, newStreamPublication: true, durableChildRecovery: true } : {})
+    const sessionId = 'actual-continuation', scope = { tenantId: tenant, sessionId }
+    await createConversationHistory().append({ id: 'older-unrelated-user', role: 'user', content: 'Unrelated earlier private task' }, scope)
+    const first = await app.inject({ method: 'POST', url: '/chat', headers, payload: { sessionId, message: 'Original user task',
+      model: 'scripted-only', workspacePaths: [directory], inheritContext: false, memoryScope: 'off', skills: [], mcpServers: [], knowledgeBases: [] } })
+    expect(first.statusCode, first.body).toBe(200)
+    const before = (await rootRunStore.latest(tenant, sessionId))!
+    expect(before.status).toBe('failed')
+    const context = await rootRunStore.userAdmissionContext(tenant, sessionId)
+    const selector = { protocolVersion: 1 as const, namespace: context.namespace, owner: 'work' as const,
+      predecessor: context.predecessor!, turnId: before.turnId }
+    const continuation = { ...selector, requestKey: 'continue-through-http', bodyDigest: rootContinuationDigest({ sessionId }, transport, selector) }
+    const second = await app.inject({ method: 'POST', url: '/chat', headers, payload: { sessionId, continuation } })
+    expect(second.statusCode, second.body).toBe(200)
+    expect(second.body).toContain('Continued final output.')
+    const after = (await rootRunStore.latest(tenant, sessionId))!
+    expect(after).toMatchObject({ runId: before.runId, turnId: before.turnId, userMessageId: before.userMessageId, status: 'succeeded' })
+    expect(after.attemptId).not.toBe(before.attemptId)
+    expect(after.assistantMessageId).not.toBe(before.assistantMessageId)
+    expect(calls).toHaveLength(2)
+    expect(calls[1].some(row => row.role === 'user' && String(row.content).includes('Original user task'))).toBe(true)
+    expect(calls[1].some(row => row.role === 'assistant' && String(row.content).includes('First attempt partial.'))).toBe(true)
+    expect(calls[1].some(row => String(row.content).includes('Unrelated earlier private task'))).toBe(false)
+    const rows = await createConversationHistory().getFullHistory(scope)
+    expect(rows.filter(row => row.role === 'user').map(row => row.id)).toEqual(['older-unrelated-user', before.userMessageId])
+    expect(rows.filter(row => row.role === 'assistant').map(row => row.content).join(' ')).toContain('First attempt partial.')
+    expect(rows.filter(row => row.role === 'assistant').map(row => row.content).join(' ')).toContain('Continued final output.')
+    expect(await rootRunStore.list(tenant, sessionId)).toHaveLength(1)
+    const receiptBody = { sessionId, namespace: context.namespace, requestKey: continuation.requestKey, bodyDigest: continuation.bodyDigest }
+    const receipt = await app.inject({ method: 'POST', url: '/chat/continuation/receipt', headers, payload: receiptBody })
+    expect(receipt.statusCode, receipt.body).toBe(200)
+    expect(receipt.json().data).toMatchObject({ status: 'accepted', receipt: { rootRunId: before.runId, previousAttemptId: before.attemptId, attemptId: after.attemptId }, run: { status: 'succeeded' } })
+    const replay = await app.inject({ method: 'POST', url: '/chat', headers, payload: { sessionId, continuation } })
+    expect(replay.statusCode, replay.body).toBe(200); expect(calls).toHaveLength(2)
+    const forged = await app.inject({ method: 'POST', url: '/chat', headers, payload: { sessionId, continuation, message: 'Override original task' } })
+    expect(forged.statusCode).toBe(400); expect(calls).toHaveLength(2)
+  })
+
+  it('rejects ordinary chat approval of plugin-owned roots before claiming or running them', async () => {
+    vi.stubEnv('HISTORY_BACKEND', backend)
+    await app.register(chatRoutes)
+    const sessionId = 'plugin-owned-session', request = markPluginRootRequest({ message: 'Plugin-only task', model: 'scripted-only', toolProfile: 'code' },
+      { pluginId: 'guarded-plugin', revision: 1, boundSessionId: 'host-session' })
+    const root = await rootRunStore.create(tenant, sessionId, 'scripted-only', [directory], request)
+    const pending = { requestId: 'plugin-request', toolCallId: 'plugin-tool', kind: 'permission' as const, toolName: 'write_file', args: { path: 'should-not-exist.txt' } }
+    await rootRunStore.pending(tenant, root.runId, pending)
+    const response = await app.inject({ method: 'POST', url: '/chat', headers, payload: { message: '', sessionId,
+      toolResponse: { runId: root.runId, requestId: pending.requestId, toolCallId: pending.toolCallId, name: pending.toolName, output: 'approved' } } })
+    expect(response.statusCode, response.body).toBe(403)
+    expect(calls).toHaveLength(0)
+    expect(await rootRunStore.get(tenant, root.runId)).toMatchObject({ status: 'waiting', pending: [{ status: 'pending' }] })
+    expect(fs.existsSync(path.join(directory, 'should-not-exist.txt'))).toBe(false)
+  })
   it('preserves an explicit empty attachment-only legacy input through actual ReAct projection', async () => {
     vi.stubEnv('HISTORY_BACKEND', backend)
     vi.mocked(modelResolver.createAdapterFromResolved).mockImplementation(config => ({ provider: 'fixture', model: config.model,
@@ -94,6 +258,7 @@ describe.each(['jsonl', 'sqlite'])('%s actual production creator admission', bac
     expect(response.statusCode, response.body).toBe(200); expect(response.body).toContain('Attachment final'); expect(calls).toHaveLength(1)
     expect(contexts).toHaveLength(1)
     const root = (await rootRunStore.list(tenant, 'attachment-only'))[0], scope = { tenantId: tenant, sessionId: 'attachment-only' }
+    expect(lifecycle.filter(event => event.payload.kind === 'main' && event.payload.runId === root.runId).map(event => event.type)).toEqual(['agent.started', 'agent.completed'])
     const seed = await readAdmissionSeed(db, scope, root.runId)
     expect(seed.message.content).toBe(''); expect(seed.projected).toBe(true); expect(seed.seedJson).not.toContain('Exact child disk evidence')
     expect(calls[0].some(message => String(message.content).includes('Exact child disk evidence'))).toBe(true)
@@ -120,9 +285,13 @@ describe.each(['jsonl', 'sqlite'])('%s actual production creator admission', bac
       const selector = { protocolVersion: 1 as const, namespace: context.namespace, owner: 'work' as const, predecessor: context.predecessor }
       body.admission = { ...selector, requestKey: 'exact-route', bodyDigest: userAdmissionDigest(body, transport, selector) }
     }
+    // A child inherits the persisted host selection, not arbitrary request workspacePaths.
+    workspaceManager.bind({ tenantId: tenant, sessionId }, directory)
     const response = await app.inject({ method: 'POST', url: '/chat', headers, payload: body })
     expect(response.statusCode, response.body).toBe(200); expect(response.body).toContain('Exact actual parent final'); expect(calls).toHaveLength(4)
     const root = (await rootRunStore.list(tenant, sessionId))[0], scope = { tenantId: tenant, sessionId }
+    expect(lifecycle.filter(event => event.payload.kind === 'main' && event.payload.runId === root.runId).map(event => event.type)).toEqual(['agent.started', 'agent.completed'])
+    expect(lifecycle.filter(event => event.payload.kind === 'subagent' && event.sessionId === sessionId).map(event => event.type)).toEqual(['agent.started', 'agent.completed'])
     expect(root.status).toBe('succeeded'); expect(contexts).toHaveLength(2)
     const seed = await readAdmissionSeed(db, scope, root.runId)
     expect(seed.message.content).toBe('Exact admitted parent input'); expect(seed.projected).toBe(true)

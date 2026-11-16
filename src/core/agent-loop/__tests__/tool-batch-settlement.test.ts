@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentContext, Message, Pending, Tool, ToolCall, ToolResult } from '../../agent-context/index.js'
 import type { LLMAdapter } from '../../llm-adapter/types.js'
 import { ReActStrategy } from '../react.js'
+import { executeToolBatch } from '../tool-batch.js'
 import { StreamBus } from '../../stream-pipeline/stream-bus.js'
 import { imageToolPayload } from '../../utils/multimodal-context.js'
 import { TOOL_FILE_EVIDENCE_KEY, CLEARED_TOOL_EVIDENCE_KEY } from '../../utils/tool-evidence.js'
@@ -42,6 +43,71 @@ function fixture(calls: ToolCall[]) {
 }
 const call = (id: string, name = 'write_file'): ToolCall => ({ id, name, args: { path: `${id}.txt` } })
 const toolResults = (frames: string[]) => frames.filter(frame => frame.startsWith('\x00__tool_result__')).map(frame => JSON.parse(frame.slice('\x00__tool_result__'.length)))
+
+describe('user steering at tool batch boundaries', () => {
+  it('finishes every launched parallel sibling and defers only the next group', async () => {
+    const calls = [call('active-one', 'read_file'), call('active-two', 'read_file'), call('unstarted')]
+    const f = fixture(calls)
+    const controller = new AbortController()
+    f.ctx.signal = controller.signal
+    f.ctx.tools.executionMode = name => name === 'read_file' ? 'readonly' : 'serial'
+    let release!: () => void, entered!: () => void, pendingInput = false
+    const hold = new Promise<void>(resolve => { release = resolve })
+    const bothStarted = new Promise<void>(resolve => { entered = resolve })
+    const started: string[] = [], completed: string[] = []
+    f.ctx.tools.execute = async (_name, _args, invocation) => {
+      started.push(invocation.currentToolCallId!)
+      if (started.length === 2) entered()
+      await hold
+      completed.push(invocation.currentToolCallId!)
+      return { success: true, output: 'done' }
+    }
+    const execution = executeToolBatch(calls.map(call => ({ call, messageId: call.id })), f.ctx, undefined, async () => pendingInput)
+    await bothStarted
+    pendingInput = true
+    release()
+    const batch = await execution
+    expect(started).toEqual(['active-one', 'active-two'])
+    expect(completed).toEqual(['active-one', 'active-two'])
+    expect(batch.results).toMatchObject([{ status: 'succeeded' }, { status: 'succeeded' }, { status: 'interrupted', error: 'USER_INPUT_PENDING' }])
+    expect(batch.yieldedForUserInput).toBe(true)
+    expect(batch.pending).toBeUndefined()
+    expect(controller.signal.aborted).toBe(false)
+  })
+
+  it('preserves a pending result from an already executed tool when steering also arrives', async () => {
+    const calls = [call('started'), call('unstarted')]
+    const f = fixture(calls)
+    let pendingInput = false
+    f.ctx.tools.execute = vi.fn(async () => {
+      pendingInput = true
+      return { success: false, needsConfirmation: true, output: 'Permission required after execution began' }
+    })
+    const batch = await executeToolBatch(calls.map(call => ({ call, messageId: call.id })), f.ctx, undefined, async () => pendingInput)
+    expect(f.ctx.tools.execute).toHaveBeenCalledTimes(1)
+    expect(batch.pending).toMatchObject({ toolCallId: 'started', status: 'pending' })
+    expect(batch.results).toMatchObject([{ status: 'waiting' }, { status: 'interrupted' }])
+    expect(batch.results[1].error).not.toBe('USER_INPUT_PENDING')
+    expect(batch.yieldedForUserInput).toBeUndefined()
+  })
+
+  it('returns a failed input check only after preserving completed results and settling every unstarted call', async () => {
+    const calls = [call('completed'), call('unstarted-one'), call('unstarted-two')]
+    const f = fixture(calls)
+    const failure = new Error('Authenticated input source changed')
+    let completed = false
+    f.ctx.tools.execute = vi.fn(async () => { completed = true; return { success: true, output: 'done' } })
+    const batch = await executeToolBatch(calls.map(call => ({ call, messageId: call.id })), f.ctx, undefined, async () => {
+      if (completed) throw failure
+      return false
+    })
+    expect(f.ctx.tools.execute).toHaveBeenCalledTimes(1)
+    expect(batch.inputCheckError).toBe(failure)
+    expect(batch.results).toMatchObject([{ status: 'succeeded' },
+      { status: 'interrupted', error: 'USER_INPUT_CHECK_FAILED' }, { status: 'interrupted', error: 'USER_INPUT_CHECK_FAILED' }])
+    expect(batch.yieldedForUserInput).toBeUndefined()
+  })
+})
 
 describe('D3 batch side effects and terminal evidence', () => {
   it.each(['readonly', 'serial'] as const)('only captures file evidence from registry-authenticated builtin reads (%s)', async mode => {

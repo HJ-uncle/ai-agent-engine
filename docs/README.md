@@ -2,6 +2,8 @@
 
 A production-ready AI agent runtime engine (Aether Engine, AE for short) built with Node.js + TypeScript ESM. Supports multi-tenant, multi-session conversational agents with a ReAct reasoning loop, tool execution, persistent memory, and a Fastify HTTP API.
 
+插件开发入口：[Aether 插件开发者文档](../../aether-code/docs/plugin-api/dist/index.html) · [完整工作台示例](examples/workbench-extension/README.md)
+
 ---
 
 ## Features

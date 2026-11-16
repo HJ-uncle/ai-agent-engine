@@ -30,11 +30,6 @@ export interface PluginImportJob {
   updatedAt: number
 }
 
-const MAX_ARCHIVE = 32 * 1024 * 1024
-const MAX_EXPANDED = 64 * 1024 * 1024
-const MAX_SOURCE = 8 * 1024 * 1024
-const MAX_FILE = 1024 * 1024
-const MAX_FILES = 100
 const activeImports = new Map<string, AbortController>()
 const committingImports = new Set<string>()
 const UTF8 = new TextDecoder('utf-8', { fatal: true })
@@ -64,23 +59,21 @@ function jsonObject(value: string, label: string): Record<string, any> {
   catch { return fail(`${label} is invalid JSON`) }
 }
 
-async function boundedFile(filename: string, max = MAX_FILE): Promise<Buffer> {
+async function boundedFile(filename: string): Promise<Buffer> {
   await rejectLinks(filename)
   const handle = await fs.open(filename, 'r')
-  try { const stat = await handle.stat(); if (!stat.isFile() || stat.size > max) return fail('Plugin file exceeds size limit'); const result = await handle.readFile(); if (result.length > max) return fail('Plugin file exceeds size limit'); return result }
+  try { const stat = await handle.stat(); if (!stat.isFile()) return fail('Plugin source must be a regular file'); return await handle.readFile() }
   finally { await handle.close() }
 }
 
 async function readDirectory(root: string, signal?: AbortSignal): Promise<Record<string, Uint8Array>> {
   if (typeof root !== 'string' || !path.isAbsolute(root)) return fail('Local plugin directory must be absolute')
   const result: Record<string, Uint8Array> = Object.create(null)
-  let total = 0, count = 0
   const visit = async (directory: string, prefix: string): Promise<void> => {
     checkAbort(signal)
     const stat = await fs.lstat(directory)
     if (stat.isSymbolicLink() || !stat.isDirectory()) return fail('Plugin directories cannot be links')
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
-      if (++count > 4096) return fail('Plugin source contains too many entries')
       const name = safeName(prefix + entry.name)
       if (excluded(name)) continue
       const filename = path.join(directory, entry.name), entryStat = await fs.lstat(filename)
@@ -88,9 +81,7 @@ async function readDirectory(root: string, signal?: AbortSignal): Promise<Record
       if (entryStat.isDirectory()) await visit(filename, name + '/')
       else {
         if (!entryStat.isFile()) return fail('Plugin source contains unsupported files')
-        const bytes = await boundedFile(filename, MAX_SOURCE)
-        total += bytes.length
-        if (total > MAX_EXPANDED) return fail('Plugin source exceeds 64 MiB')
+        const bytes = await boundedFile(filename)
         result[name] = bytes
       }
     }
@@ -98,15 +89,14 @@ async function readDirectory(root: string, signal?: AbortSignal): Promise<Record
   await visit(root, ''); return result
 }
 
-async function fetchBounded(url: string, signal: AbortSignal, max = MAX_ARCHIVE): Promise<Buffer> {
+async function fetchBounded(url: string, signal: AbortSignal): Promise<Buffer> {
   const response = await fetch(url, { signal, redirect: 'error', headers: { 'user-agent': 'Aether-Plugin-Importer', accept: 'application/vnd.github+json' } })
   if (!response.ok) throw new PluginError('import-download-failed', `Plugin download failed (${response.status})`, 502)
-  if (Number(response.headers.get('content-length')) > max) return fail('Plugin download exceeds size limit')
   const reader = response.body?.getReader()
   if (!reader) return fail('Plugin download has no body')
-  const chunks: Buffer[] = []; let size = 0
+  const chunks: Buffer[] = []
   try {
-    for (;;) { const next = await reader.read(); if (next.done) break; size += next.value.length; if (size > max) { await reader.cancel(); return fail('Plugin download exceeds size limit') }; chunks.push(Buffer.from(next.value)) }
+    for (;;) { const next = await reader.read(); if (next.done) break; chunks.push(Buffer.from(next.value)) }
   } finally { reader.releaseLock() }
   return Buffer.concat(chunks)
 }
@@ -126,10 +116,8 @@ function decodeSources(all: Record<string, Uint8Array>): Record<string, string> 
   const files: Record<string, string> = Object.create(null)
   for (const [name, bytes] of Object.entries(all)) {
     safeName(name)
-    if (bytes.length > MAX_FILE) return fail('Plugin file exceeds 1 MiB')
     try { files[name] = UTF8.decode(bytes) } catch { return fail('Plugin sources must be UTF-8 text') }
   }
-  if (Object.keys(files).length > MAX_FILES || Object.values(files).reduce((sum, value) => sum + Buffer.byteLength(value), 0) > MAX_SOURCE) return fail('Plugin sources exceed 100 files or 8 MiB')
   return files
 }
 
@@ -140,7 +128,6 @@ function prepareRemark(all: Record<string, Uint8Array>, input: ImportOptions): {
   const id = input.id ?? pkg.name
   if (!/^[a-z][a-z\d-]{0,63}$/.test(id)) return fail('Invalid imported plugin id')
   const packages: Record<string, string> = {}
-  if (Object.keys(pkg.dependencies ?? {}).length > 64) return fail('Remark plugin declares too many direct dependencies')
   for (const [name, version] of Object.entries(pkg.dependencies ?? {})) {
     // Registry-only dependency specifications. Local/git specs can smuggle preparation scripts or escape the source directory.
     if (name.length > 214 || !/^(?:@[a-z\d_.-]+\/)?[a-z\d_.-]+$/.test(name) || typeof version !== 'string' || version.length > 128 || !/^[~^<>=*\d\s.|+xX-]+$/.test(version)) return fail('Remark adapter supports registry semver dependencies only')
@@ -154,8 +141,8 @@ function prepareRemark(all: Record<string, Uint8Array>, input: ImportOptions): {
   }
   const files = decodeSources(vendor)
   files['package.json'] = JSON.stringify({ name: `aether-adapter-${id}`, version: '1.0.0', private: true, type: 'module', dependencies: packages }, null, 2) + '\n'
-  files['runner.mjs'] = `import { unified } from 'unified'\nimport remarkParse from 'remark-parse'\nimport remarkStringify from 'remark-stringify'\nimport plugin from './vendor/index.js'\nlet raw = ''\nfor await (const chunk of process.stdin) raw += chunk\nconst {args: input} = JSON.parse(raw)\nif (!input || typeof input.markdown !== 'string' || input.markdown.length > 1000000) throw new Error('markdown must be a string of at most 1000000 characters')\nconst processor = unified().use(remarkParse).use(plugin, input.options).use(remarkStringify)\nconst tree = await processor.run(processor.parse(input.markdown))\nprocess.stdout.write(JSON.stringify({result: {markdown: processor.stringify(tree), tree}}) + '\\n')\n`
-  return { manifest: { apiVersion: 1, id, name: input.name ?? pkg.name, version: typeof pkg.version === 'string' ? pkg.version : '1.0.0', description: `Markdown processing using the imported ${pkg.name} remark plugin`, runtime: 'node', tools: [{ name: 'process_markdown', description: `Process Markdown with ${pkg.name}; returns serialized Markdown and the syntax tree`, inputSchema: { type: 'object', properties: { markdown: { type: 'string', maxLength: 1000000 }, options: { type: 'object' } }, required: ['markdown'], additionalProperties: false }, entry: 'runner.mjs' }] }, files, packages }
+  files['runner.mjs'] = `import { unified } from 'unified'\nimport remarkParse from 'remark-parse'\nimport remarkStringify from 'remark-stringify'\nimport plugin from './vendor/index.js'\nlet raw = ''\nfor await (const chunk of process.stdin) raw += chunk\nconst {args: input} = JSON.parse(raw)\nif (!input || typeof input.markdown !== 'string') throw new Error('markdown must be a string')\nconst processor = unified().use(remarkParse).use(plugin, input.options).use(remarkStringify)\nconst tree = await processor.run(processor.parse(input.markdown))\nprocess.stdout.write(JSON.stringify({result: {markdown: processor.stringify(tree), tree}}) + '\\n')\n`
+  return { manifest: { apiVersion: 1, id, name: input.name ?? pkg.name, version: typeof pkg.version === 'string' ? pkg.version : '1.0.0', description: `Markdown processing using the imported ${pkg.name} remark plugin`, runtime: 'node', tools: [{ name: 'process_markdown', description: `Process Markdown with ${pkg.name}; returns serialized Markdown and the syntax tree`, inputSchema: { type: 'object', properties: { markdown: { type: 'string' }, options: { type: 'object' } }, required: ['markdown'], additionalProperties: false }, entry: 'runner.mjs' }] }, files, packages }
 }
 
 export class PluginImporter {
@@ -178,7 +165,7 @@ export class PluginImporter {
   async getImport(tenantId: string, jobId: string): Promise<PluginImportJob> {
     const directory = this.directory(tenantId, jobId)
     let job: PluginImportJob
-    try { job = JSON.parse((await boundedFile(path.join(directory, 'job.json'), 2 * MAX_SOURCE)).toString('utf8')) }
+    try { job = JSON.parse((await boundedFile(path.join(directory, 'job.json'))).toString('utf8')) }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new PluginError('import-not-found', 'Plugin import not found', 404); throw error }
     if ((job.status === 'preparing' || job.status === 'installing') && !this.active.has(directory)) { job.failureStage = job.status === 'installing' ? 'install' : 'prepare'; job.status = 'failed'; job.error = job.failureStage === 'install' ? 'Import installation was interrupted; retry installation' : 'Import preparation was interrupted; prepare a new import'; await this.save(directory, job) }
     return job
@@ -205,17 +192,17 @@ export class PluginImporter {
       else if (input.type === 'zip') {
         if (Boolean(input.path) === Boolean(input.base64)) return fail('Provide exactly one ZIP path or base64 payload')
         let bytes: Buffer
-        if (input.path) { if (typeof input.path !== 'string' || !path.isAbsolute(input.path) || (await fs.lstat(input.path)).isSymbolicLink()) return fail('ZIP path must be an absolute regular file'); bytes = await boundedFile(input.path, MAX_ARCHIVE); job.source.path = input.path }
-        else { if (typeof input.base64 !== 'string' || input.base64.length > Math.ceil(MAX_ARCHIVE / 3) * 4 || input.base64.length % 4 !== 0 || !/^[A-Za-z\d+/]*={0,2}$/.test(input.base64)) return fail('Invalid ZIP base64 payload'); bytes = Buffer.from(input.base64, 'base64') }
+        if (input.path) { if (typeof input.path !== 'string' || !path.isAbsolute(input.path) || (await fs.lstat(input.path)).isSymbolicLink()) return fail('ZIP path must be an absolute regular file'); bytes = await boundedFile(input.path); job.source.path = input.path }
+        else { if (typeof input.base64 !== 'string' || input.base64.length % 4 !== 0 || !/^[A-Za-z\d+/]*={0,2}$/.test(input.base64)) return fail('Invalid ZIP base64 payload'); bytes = Buffer.from(input.base64, 'base64') }
         all = readPluginZip(bytes); job.source.archiveSha256 = digest(bytes)
         if (!all['aether-plugin.json'] && !all['package.json']) { const roots = new Set(Object.keys(all).map(name => name.split('/')[0])); if (roots.size === 1 && Object.keys(all).every(name => name.includes('/'))) prefix = [...roots][0] + '/' }
       } else {
         const repository = githubRepository(input.repository)
         if (input.ref !== undefined && (typeof input.ref !== 'string' || !input.ref || input.ref.length > 200 || /[\u0000-\u001f]/.test(input.ref))) return fail('Invalid GitHub ref')
-        const deadline = AbortSignal.any([controller.signal, AbortSignal.timeout(60000)])
+        const deadline = controller.signal
         // A supplied full SHA is already immutable. Codeload checks its existence without consuming the public API quota.
         const resolvedCommit = input.ref && /^[\da-f]{40}$/i.test(input.ref) ? input.ref.toLowerCase()
-          : jsonObject((await fetchBounded(`https://api.github.com/repos/${repository}/commits/${encodeURIComponent(input.ref ?? 'HEAD')}`, deadline, 2 * 1024 * 1024)).toString('utf8'), 'GitHub commit response').sha
+          : jsonObject((await fetchBounded(`https://api.github.com/repos/${repository}/commits/${encodeURIComponent(input.ref ?? 'HEAD')}`, deadline)).toString('utf8'), 'GitHub commit response').sha
         if (typeof resolvedCommit !== 'string' || !/^[\da-f]{40}$/.test(resolvedCommit)) return fail('GitHub did not return an immutable commit')
         const bytes = await fetchBounded(`https://codeload.github.com/${repository}/zip/${resolvedCommit}`, deadline)
         all = readPluginZip(bytes); const first = Object.keys(all)[0]; if (!first?.includes('/')) return fail('Invalid GitHub source archive'); prefix = first.slice(0, first.indexOf('/') + 1)
@@ -265,7 +252,7 @@ export class PluginImporter {
         const dependencies = path.join(directory, 'dependencies'); await this.cleanup(dependencies); await fs.mkdir(dependencies, { recursive: true })
         await fs.writeFile(path.join(dependencies, 'package.json'), files['package.json'], { flag: 'wx' })
         await installDependencies(dependencies, controller.signal)
-        files['package-lock.json'] = (await boundedFile(path.join(dependencies, 'package-lock.json'), MAX_SOURCE)).toString('utf8')
+        files['package-lock.json'] = (await boundedFile(path.join(dependencies, 'package-lock.json'))).toString('utf8')
         preparedDependencies = { directory: dependencies }
       }
       checkAbort(controller.signal)
@@ -291,12 +278,11 @@ async function installDependencies(directory: string, signal: AbortSignal): Prom
     child.stderr.on('data', chunk => { if (stderr.length < 8192) stderr += chunk.toString().slice(0, 8192 - stderr.length) })
     const stop = (): void => {
       if (stopping || settled) return
-      stopError = new PluginError(signal.aborted ? 'import-cancelled' : 'dependency-install-timeout', signal.aborted ? 'Plugin dependency installation was cancelled' : 'Plugin dependency installation exceeded 120 seconds', 409)
+      stopError = new PluginError('import-cancelled', 'Plugin dependency installation was cancelled', 409)
       stopping = stopCommandProcessTree(child, startedAt).catch(error => { stopError = new PluginError('dependency-cleanup-failed', `Dependency process tree cleanup failed: ${String(error)}`, 500); try { child.kill('SIGKILL') } catch { /* Process may already have exited. */ } })
     }
-    const timeout = setTimeout(stop, 120000)
     signal.addEventListener('abort', stop, { once: true })
-    const finish = (error?: Error): void => { if (settled) return; settled = true; clearTimeout(timeout); signal.removeEventListener('abort', stop); error ? reject(error) : resolve() }
+    const finish = (error?: Error): void => { if (settled) return; settled = true; signal.removeEventListener('abort', stop); error ? reject(error) : resolve() }
     child.on('error', error => finish(error))
     child.on('close', code => { void (async () => { await stopping; if (stopError) finish(stopError); else if (signal.aborted) finish(new PluginError('import-cancelled', 'Plugin dependency installation was cancelled', 409)); else if (code !== 0) finish(new PluginError('dependency-install-failed', `Plugin dependency installation failed (${code}): ${stderr}`, 502)); else finish() })() })
   })

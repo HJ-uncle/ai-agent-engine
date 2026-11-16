@@ -23,6 +23,7 @@ const credentialCheck = process.argv.includes('--check-credentials')
 const turnTimeout = Number(process.env.AETHER_ACCEPTANCE_TURN_TIMEOUT_MS || 600_000)
 const secrets = []
 let fixture, app, page, expect, electron, phase = 'preflight'
+let modelWorkspace, knowledgeBaseName = ''
 const report = { modelId, startedAt: new Date().toISOString(), status: 'running', phases: [], rounds: [] }
 
 function redact(value) {
@@ -34,6 +35,19 @@ function save(name, value) { writeFileSync(join(fixture, name), redact(value), '
 function progress(value) { console.log(`[real-model] ${redact(value)}`) }
 function fail(message) { throw new Error(message) }
 function sha(value) { return createHash('sha256').update(value).digest('hex') }
+
+function findWorkspaceWithFile(root, filename, maxDepth = 3) {
+  const queue = [{ path: root, depth: 0 }]
+  while (queue.length) {
+    const current = queue.shift()
+    if (existsSync(join(current.path, filename))) return current.path
+    if (current.depth >= maxDepth) continue
+    for (const entry of readdirSync(current.path, { withFileTypes: true })) {
+      if (entry.isDirectory() && entry.name !== 'node_modules') queue.push({ path: join(current.path, entry.name), depth: current.depth + 1 })
+    }
+  }
+  return null
+}
 
 function loadModelReadOnly() {
   const db = new DatabaseSync(sourceDb, { readOnly: true })
@@ -86,6 +100,26 @@ async function launch() {
   await expect(page.locator('.status-bar')).toBeVisible()
 }
 
+async function seedWorkSession(sessionId, workspace) {
+  // Work owns task bindings in renderer storage. Seed one disposable draft so
+  // this acceptance follows the current Work task path rather than the
+  // removed Code explorer surface.
+  await page.evaluate(({ id, root, model }) => {
+    const now = Date.now()
+    localStorage.setItem('aether.work.state.v1', JSON.stringify({
+      tasks: [{ id, title: 'Acceptance Checkout', draft: '', status: 'draft', createdAt: now, updatedAt: now,
+        workspacePath: root, modelId: model, attachments: [], sources: [], mentions: [],
+        resources: { skills: [], mcpServers: [], knowledgeBases: [], toolkits: [] } }],
+      activeTaskId: id, homeDraft: '', homeWorkspacePath: null, homeAttachments: [], homeSources: [],
+      homeModelId: model, homeSessionId: null, homeAgentId: '', homeMentions: [],
+      homeResources: { skills: [], mcpServers: [], knowledgeBases: [], toolkits: [] }
+    }))
+  }, { id: sessionId, root: workspace, model: modelId })
+  await page.reload()
+  await expect(page.locator('.work-view')).toBeVisible()
+  await expect(page.locator('.work-chat__input, .chat__input').first()).toBeVisible()
+}
+
 async function seedIsolatedModel(model) {
   const key = randomBytes(32).toString('hex')
   secrets.push(key)
@@ -125,18 +159,29 @@ async function request(method, path, body, query) {
 }
 
 async function openSettings(tab) {
-  if (!await page.locator('.app-settings').isVisible()) await page.getByRole('button', { name: '设置', exact: true }).click()
+  if (!await page.locator('.app-settings').isVisible()) {
+    const workSettings = page.locator('.work-sidebar').getByRole('button', { name: '设置', exact: true })
+    if (await workSettings.count()) await workSettings.click()
+    else await page.locator('.menu-bar__action[aria-label="设置"]').click()
+  }
   await page.getByRole('tab', { name: tab, exact: true }).click()
 }
 
 async function installResources(skillPath, policy, sessionId) {
   phase = 'skill-import-ui'
   await openSettings('技能')
+  await page.getByRole('button', { name: '导入技能', exact: true }).click()
+  const importDialog = page.getByRole('dialog', { name: '导入技能', exact: true })
+  await expect(importDialog).toBeVisible()
+  await importDialog.getByLabel('技能导入层级', { exact: true }).click()
+  await page.getByRole('menu', { name: '技能导入层级', exact: true }).getByRole('menuitem', { name: '全局层', exact: true }).click()
   const chooser = page.waitForEvent('filechooser')
-  await page.getByRole('button', { name: '选择文件…', exact: true }).click()
+  await importDialog.getByRole('button', { name: '选择文件…', exact: true }).click()
   await (await chooser).setFiles(skillPath)
-  await expect(page.locator('.skills-import-status')).toHaveClass(/is-imported/, { timeout: 60_000 })
-  await expect(page.locator('.skills-card').filter({ hasText: 'Acceptance Checkout' })).toBeVisible()
+  await expect(page.locator('.skills-import-progress.is-imported')).toBeVisible({ timeout: 60_000 })
+  await expect(page.locator('.skills-row').filter({ hasText: 'Acceptance Checkout' })).toBeVisible()
+  await importDialog.getByRole('button', { name: '完成', exact: true }).click()
+  await expect(importDialog).toBeHidden()
   const skills = await request('GET', '/skills', undefined, { path: join(fixture, 'workspace'), reload: 1 })
   assert.ok(skills.list.some(item => item.name === 'Acceptance Checkout' && item.enabled !== false))
   report.phases.push({ name: phase, status: 'passed' })
@@ -148,31 +193,32 @@ async function installResources(skillPath, policy, sessionId) {
   await page.getByLabel('MCP 名称', { exact: true }).fill('Acceptance Catalog')
   await page.getByLabel('MCP 命令', { exact: true }).fill(process.execPath)
   await page.getByLabel('MCP 参数', { exact: true }).fill(JSON.stringify([join(fixture, 'catalog-mcp.cjs')]))
-  await page.locator('.mcp-form').getByRole('button', { name: '保存', exact: true }).click()
-  const server = page.locator('.mcp-server-block').filter({ hasText: 'Acceptance Catalog' })
+  await page.getByRole('dialog', { name: '新增 MCP 服务器', exact: true }).getByRole('button', { name: '保存', exact: true }).click()
+    const server = page.getByRole('article', { name: 'Acceptance Catalog', exact: true })
   await expect(server).toBeVisible()
   await server.getByRole('button', { name: '测试', exact: true }).click()
-  await expect(page.locator('.mcp-notice')).toContainText('发现 1 个工具', { timeout: 60_000 })
+    await expect(page.locator('.mcp-message[role="status"]')).toContainText('发现 1 个工具', { timeout: 60_000 })
   const config = JSON.parse(readFileSync(join(fixture, 'workspace', '.aether', 'mcp.json'), 'utf8'))
   assert.equal(config.mcpServers['acceptance-catalog'].enabled, true)
   report.phases.push({ name: phase, status: 'passed' })
 
   phase = 'knowledge-create-and-bind-ui'
   await openSettings('知识库')
+  await page.getByRole('button', { name: '新建知识库', exact: true }).click()
   await page.getByLabel('知识库名称', { exact: true }).fill('Acceptance Checkout Policy')
   await page.getByLabel('知识库描述', { exact: true }).fill('Synthetic checkout pricing rules for real-model development acceptance')
-  await page.getByRole('button', { name: '新建知识库', exact: true }).click()
-  await expect(page.locator('#knowledge-base-select')).toContainText('Acceptance Checkout Policy')
-  await page.locator('#knowledge-base-select').selectOption({ label: 'Acceptance Checkout Policy' })
+  await page.getByRole('dialog', { name: '新建知识库', exact: true }).getByRole('button', { name: '创建知识库', exact: true }).click()
+  const knowledgePicker = page.getByRole('button', { name: '当前知识库', exact: true })
+  await expect(knowledgePicker).toContainText('Acceptance Checkout Policy')
+  await page.getByRole('button', { name: '导入文档', exact: true }).click()
+  await page.getByRole('radio', { name: '文本', exact: true }).click()
   await page.getByLabel('文档文件名', { exact: true }).fill('checkout-policy.md')
   await page.getByLabel('文档内容', { exact: true }).fill(policy)
   await page.getByRole('button', { name: '上传并索引', exact: true }).click()
   await expect(page.locator('.knowledge-document').filter({ hasText: 'checkout-policy.md' })).toBeVisible()
-  const picker = page.getByRole('button', { name: '选择知识库', exact: true })
-  await picker.click()
-  await page.getByRole('menu', { name: '知识库选择', exact: true }).getByRole('menuitemcheckbox', { name: /Acceptance Checkout Policy/ }).click()
-  await expect(picker).toContainText('知识库：1 个')
-  await page.keyboard.press('Escape')
+  await page.getByRole('dialog', { name: '设置', exact: true }).getByRole('button', { name: '关闭', exact: true }).click()
+  knowledgeBaseName = 'Acceptance Checkout Policy'
+  await selectKnowledgeBase()
   const bases = await request('GET', '/knowledge/bases')
   const kb = bases.find(item => item.name === 'Acceptance Checkout Policy')
   assert.ok(kb?.id)
@@ -185,12 +231,26 @@ function allToolRows(snapshot) { return (snapshot.history || []).filter(item => 
 function toolNames(snapshot) { return allToolRows(snapshot).map(item => item.toolName).filter(Boolean) }
 async function snapshot(sessionId) { return request('GET', '/chat/snapshot', undefined, { sessionId }) }
 
+async function selectKnowledgeBase() {
+  const input = page.locator('.work-chat__input, .chat__input').first()
+  const selected = page.locator('.mention-chip--kb')
+  if (await selected.count() === 0) {
+    await input.fill('/知识库')
+    const picker = page.getByRole('listbox', { name: '选择 MCP、技能或知识库', exact: true })
+    await expect(picker).toBeVisible()
+    await picker.getByRole('option').filter({ hasText: knowledgeBaseName }).click()
+  }
+  await expect(page.locator('.mention-chip--kb')).toHaveCount(1)
+  await input.focus()
+}
+
 async function sendRound(sessionId, round, prompt) {
   phase = `round-${round}`
   const previous = await snapshot(sessionId)
   const previousRun = previous.run?.runId
   await page.keyboard.press('Escape')
-  await page.locator('.chat__input').fill(prompt)
+  await selectKnowledgeBase()
+  await page.keyboard.insertText(prompt)
   await page.getByRole('button', { name: '发送', exact: true }).click()
   const deadline = Date.now() + turnTimeout
   let next, loggedAt = 0
@@ -219,7 +279,7 @@ async function sendRound(sessionId, round, prompt) {
 }
 
 function runProjectTests(label) {
-  const workspace = join(fixture, 'workspace')
+  const workspace = modelWorkspace || join(fixture, 'workspace')
   const tests = readdirSync(join(workspace, 'test')).filter(file => file.endsWith('.test.mjs')).map(file => join('test', file))
   assert.ok(tests.length > 0, 'The model did not create any executable tests')
   let result
@@ -230,9 +290,10 @@ function runProjectTests(label) {
 }
 
 function independentOracle(discountBps, freeShippingCents, shippingCents) {
-  const file = pathToFileURL(join(fixture, 'workspace', 'src', 'quote.mjs')).href
+  const workspace = modelWorkspace || join(fixture, 'workspace')
+  const file = pathToFileURL(join(workspace, 'src', 'quote.mjs')).href
   const program = `import assert from 'node:assert/strict';import {quote} from ${JSON.stringify(file)};const d=${discountBps},t=${freeShippingCents},s=${shippingCents};for(const items of [[{unitCents:1000,qty:2}],[{unitCents:t,qty:1}],[{unitCents:t-1,qty:1}],[{unitCents:333,qty:3},{unitCents:147,qty:2}]]){const subtotalCents=items.reduce((n,i)=>n+i.unitCents*i.qty,0),discountCents=Math.round(subtotalCents*d/10000),shippingCents=subtotalCents>=t?0:s;assert.deepEqual(quote(items),{subtotalCents,discountCents,shippingCents,totalCents:subtotalCents-discountCents+shippingCents})}for(const bad of [[{unitCents:-1,qty:1}],[{unitCents:1,qty:0}],[{unitCents:1.5,qty:1}],[{unitCents:1,qty:1.5}],null])assert.throws(()=>quote(bad));console.log('INDEPENDENT_ORACLE_OK')`
-  const output = execFileSync(process.execPath, ['--input-type=module', '-e', program], { cwd: join(fixture, 'workspace'), env: cleanEnvironment(), encoding: 'utf8', windowsHide: true, timeout: 30_000 })
+  const output = execFileSync(process.execPath, ['--input-type=module', '-e', program], { cwd: workspace, env: cleanEnvironment(), encoding: 'utf8', windowsHide: true, timeout: 30_000 })
   assert.ok(output.includes('INDEPENDENT_ORACLE_OK'))
   save('independent-oracle.txt', output)
 }
@@ -255,7 +316,7 @@ async function main() {
   progress(`Isolated output: ${fixture}`)
   const workspace = join(fixture, 'workspace'), profile = join(fixture, 'profile')
   for (const dir of [workspace, profile, join(workspace, '.aether'), join(fixture, 'builtin-skills')]) mkdirSync(dir, { recursive: true })
-  const sessionId = `real-model-${randomBytes(6).toString('hex')}`
+  const sessionId = `work-real-model-${randomBytes(6).toString('hex')}`
   const skillStamp = `SKILL_${randomBytes(8).toString('hex')}`, catalogStamp = `MCP_${randomBytes(8).toString('hex')}`, policyStamp = `KB_${randomBytes(8).toString('hex')}`
   const discountBps = 725, freeShippingCents = 5300, shippingCents = 390
   const policy = `CHECKOUT_ACCEPTANCE_POLICY. All amounts are integer cents. Shipping costs ${shippingCents} cents when subtotalCents is below ${freeShippingCents}; free shipping at or above ${freeShippingCents}. Compare the original subtotal before discount. Apply MCP discountBps: discountCents=Math.round(subtotalCents*discountBps/10000). totalCents=subtotalCents-discountCents+shippingCents. Reject non-array items, negative/noninteger unitCents, nonpositive/noninteger qty. policyStamp: ${policyStamp}.`
@@ -269,11 +330,12 @@ async function main() {
   writeFileSync(join(fixture, 'catalog-mcp.cjs'), mcp)
   phase = 'launch-and-isolated-model'
   await launch()
+  await seedWorkSession(sessionId, workspace)
   await seedIsolatedModel(model)
   model.apiKey = ''
   await page.evaluate(() => window.aether.engine.start())
   await expect(page.locator('.status-bar')).toContainText('引擎：就绪', { timeout: 90_000 })
-  await expect(page.locator('.explorer__root')).toHaveAttribute('title', workspace)
+  await expect(page.locator('.work-composer-workspace__trigger')).toHaveAttribute('aria-label', `当前工作区：${workspace}`)
   const engine = await page.evaluate(() => window.aether.engine.getSnapshot())
   assert.equal(resolve(engine.dataDir), join(profile, 'engine', 'state', 'agent.db'))
   report.engine = { buildId: engine.buildId, instanceId: engine.instanceId, dataDir: engine.dataDir }
@@ -283,11 +345,14 @@ async function main() {
   assert.ok(toolNames(one).includes('get_skill'), 'Round 1 never read the imported skill')
   assert.ok(toolNames(one).some(name => name.startsWith('mcp_acceptance-catalog_')), 'Round 1 never invoked the configured MCP')
   assert.ok(toolNames(one).some(name => ['write_file', 'edit_file', 'apply_patch'].includes(name)), 'Round 1 lacks a persisted file tool result')
-  const evidence = JSON.parse(readFileSync(join(workspace, 'resource-evidence.json'), 'utf8'))
+  // Work binds the task to a project subdirectory below WORKSPACE_ROOT. Follow
+  // that durable path for all file assertions and independent test execution.
+  modelWorkspace = findWorkspaceWithFile(workspace, 'resource-evidence.json') || workspace
+  const evidence = JSON.parse(readFileSync(join(modelWorkspace, 'resource-evidence.json'), 'utf8'))
   assert.equal(evidence.skillStamp, skillStamp)
   assert.equal(evidence.catalogStamp, catalogStamp)
   assert.equal(evidence.policyStamp, policyStamp)
-  assert.ok(readFileSync(join(workspace, 'README.md'), 'utf8').trim().length > 30)
+  assert.ok(readFileSync(join(modelWorkspace, 'README.md'), 'utf8').trim().length > 30)
   assert.ok(readFileSync(join(fixture, 'mcp-calls.jsonl'), 'utf8').includes('requirements'))
   save('report.json', report)
 
@@ -297,7 +362,7 @@ async function main() {
   assert.equal(roundTwoTests.status, 0, 'Independent execution of model-generated tests failed')
   assert.ok(Number(roundTwoTests.stdout.match(/# pass (\d+)/)?.[1]) >= 6, 'Fewer than six passing model-generated tests')
   independentOracle(discountBps, freeShippingCents, shippingCents)
-  const quoteFile = join(workspace, 'src', 'quote.mjs'), good = readFileSync(quoteFile, 'utf8')
+  const quoteFile = join(modelWorkspace, 'src', 'quote.mjs'), good = readFileSync(quoteFile, 'utf8')
   writeFileSync(quoteFile, `throw new Error('ACCEPTANCE_INJECTED_REGRESSION');\n${good}`)
   assert.notEqual(runProjectTests('injected-regression').status, 0, 'Injected regression did not make the suite fail')
   report.regression = { beforeSha256: sha(good), injected: true }
@@ -310,7 +375,7 @@ async function main() {
   assert.equal(finalTests.status, 0)
   assert.ok(Number(finalTests.stdout.match(/# pass (\d+)/)?.[1]) >= 6)
   assert.ok(!readFileSync(quoteFile, 'utf8').includes('ACCEPTANCE_INJECTED_REGRESSION'))
-  const repairedEvidence = JSON.parse(readFileSync(join(workspace, 'resource-evidence.json'), 'utf8'))
+  const repairedEvidence = JSON.parse(readFileSync(join(modelWorkspace, 'resource-evidence.json'), 'utf8'))
   assert.equal(repairedEvidence.skillStamp, skillStamp)
   assert.equal(repairedEvidence.catalogStamp, catalogStamp)
   assert.equal(repairedEvidence.policyStamp, policyStamp)
@@ -330,8 +395,9 @@ async function main() {
   assert.equal((after.history || []).filter(item => item.role === 'user').length, 3)
   assert.equal(sha(readFileSync(quoteFile)), fileHash)
   assert.equal(await page.evaluate(id => Object.values(localStorage).some(value => value.includes(id)), kbId), true)
-  await expect(page.locator('.message--user')).toHaveCount(3)
-  await expect(page.getByRole('button', { name: '选择知识库', exact: true })).toContainText('知识库：1 个')
+  await expect(page.locator('article.work-message--user')).toHaveCount(3)
+  await selectKnowledgeBase()
+  await expect(page.locator('.mention-chip--kb')).toHaveCount(1)
   await page.screenshot({ path: join(fixture, 'after-restart.png') })
   save('after-restart.json', { run: after.run, history: after.history, commandJobs: after.commandJobs })
   report.phases.push({ name: phase, status: 'passed' })

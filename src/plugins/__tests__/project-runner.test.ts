@@ -1,5 +1,4 @@
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -7,7 +6,8 @@ import { createPluginProject } from '../project.js'
 import { pluginProjectRunner } from '../project-runner.js'
 
 let root: string
-beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-runner-')) })
+const fixtures = path.resolve('.e2e-tmp/plugin-project-runner')
+beforeEach(() => { fs.mkdirSync(fixtures, { recursive: true }); root = fs.mkdtempSync(path.join(fixtures, 'case-')) })
 const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true } catch { return false } }
 afterEach(() => {
   const record = path.join(root, 'project', 'processes.json')
@@ -16,8 +16,9 @@ afterEach(() => {
     // Failure-only cleanup of PIDs emitted by this just-created fixture.
     for (const pid of [owned.descendant, owned.leader]) if (alive(pid)) { try { process.kill(pid, 'SIGKILL') } catch { /* Already exited. */ } }
   }
-  if (path.dirname(root) !== path.resolve(os.tmpdir()) || !path.basename(root).startsWith('plugin-runner-')) throw new Error('Unsafe runner fixture cleanup')
+  if (path.dirname(root) !== fixtures || !path.basename(root).startsWith('case-') || fs.lstatSync(root).isSymbolicLink()) throw new Error('Unsafe runner fixture cleanup')
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+  if (!fs.readdirSync(fixtures).length) fs.rmdirSync(fixtures)
 })
 
 function fixture(source: string, expected: unknown, timeoutMs?: number): string {
@@ -25,7 +26,7 @@ function fixture(source: string, expected: unknown, timeoutMs?: number): string 
   createPluginProject(directory, 'json-tool')
   fs.writeFileSync(path.join(directory, 'main.mjs'), source)
   fs.writeFileSync(path.join(directory, 'examples/cases.json'), JSON.stringify({ cases: [{ name: 'fixture', tool: 'normalize_text', args: { text: 'x' }, expected }] }))
-  if (timeoutMs !== undefined) fs.writeFileSync(path.join(directory, 'scripts/test.mjs'), pluginProjectRunner.replace('const TEST_TIMEOUT_MS = 60_000;', `const TEST_TIMEOUT_MS = ${timeoutMs};`))
+  if (timeoutMs !== undefined) fs.writeFileSync(path.join(directory, 'scripts/test.mjs'), pluginProjectRunner.replace('const TEST_TIMEOUT_MS = Number(process.env.AETHER_PLUGIN_TEST_TIMEOUT_MS ?? 0);', `const TEST_TIMEOUT_MS = ${timeoutMs};`))
   return directory
 }
 
@@ -44,6 +45,18 @@ async function run(directory: string): Promise<{ code: number | null; stdout: st
 }
 
 describe('self-contained plugin project runner', () => {
+  it('runs large inputs, results and diagnostics without the old plugin process limits', async () => {
+    const expected = 'x'.repeat(3 * 1024 * 1024)
+    const directory = fixture(`let raw='';for await(const part of process.stdin)raw+=part;
+      if(process.execArgv.some(flag=>flag.includes('max-old-space-size')))throw new Error('Unexpected memory ceiling');
+      console.log('diagnostic'.repeat(1024*1024));console.error('diagnostic'.repeat(128*1024));
+      console.log(JSON.stringify({result:JSON.parse(raw).args.text}));`, expected)
+    fs.writeFileSync(path.join(directory, 'examples/cases.json'), JSON.stringify({ cases: [{ name: 'large', tool: 'normalize_text', args: { text: expected }, expected }] }))
+    const result = await run(directory)
+    expect(result.code, result.stderr).toBe(0)
+    expect(result.stdout).toContain('1 business cases passed')
+    expect(fs.existsSync(path.join(directory, '.e2e-tmp'))).toBe(false)
+  })
   it.each(['running', 'exited'])('cleans owned inherited-stdio descendants when the leader is %s', async mode => {
     const source = [
       "import fs from 'node:fs'", "import { spawn } from 'node:child_process'",

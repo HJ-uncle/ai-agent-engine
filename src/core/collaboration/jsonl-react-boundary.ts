@@ -8,6 +8,7 @@ import { canonicalJSONLMessage, jsonlHistoryIdentity } from '../../storage/conve
 import { readAdmissionSeed } from '../../storage/root-admission/projection.js'
 import { withAuthenticatedHistoryMaintenance } from './history-maintenance.js'
 import { RequestHistoryChangedError } from './history-budget.js'
+import { delegatedContinuationInput, recordBoundDelegatedInput } from '../subagent/delegated-input.js'
 
 declare const boundaryBrand: unique symbol
 export type JSONLReActBoundary = Readonly<{ [boundaryBrand]: true }>
@@ -43,11 +44,18 @@ export async function bindJSONLReActBoundary(capability: JSONLReActBoundary, ctx
     const seed = await readAdmissionSeed(service.db, b, b.rootRunId)
     if (savedInputId !== undefined && savedInputId !== seed.anchor.userMessageId) fail('Saved JSONL root input is not its immutable admitted seed')
     anchorId = seed.anchor.userMessageId; content = seed.message.content
-  } else if (!savedInputId || savedInputContent === undefined) fail('JSONL child needs its exact saved delegated input')
+  } else {
+    const continuation = await delegatedContinuationInput(service.db, b)
+    if (continuation) {
+      if (savedInputId !== undefined || savedInputContent !== undefined) fail('JSONL child continuation must not append another delegated input')
+      anchorId = continuation.anchor.messageId; content = continuation.content
+    } else if (!savedInputId || savedInputContent === undefined) fail('JSONL child needs its exact saved delegated input')
+  }
   if (!anchorId) fail('JSONL input anchor is absent')
   const consumer = await service.collaboration.bindJSONLDelivery(found.producer, { origin: jsonlHistoryIdentity(found.history)!,
     executionOwner: b.kind === 'child' ? found.owner : undefined,
     tenantId: found.tenantId, sessionId: found.sessionId, anchorId: anchorId!, anchorContent: typeof content === 'string' ? content : JSON.stringify(content) })
+  if (b.kind === 'child' && savedInputId) await recordBoundDelegatedInput(service.db, b, savedInputId, savedInputContent!)
   record(capability, ctx)
   if (found.consumer && (found.consumer !== consumer || found.anchorId !== anchorId)) fail('JSONL boundary cannot rebind or replay a replacement input')
   found.consumer = consumer; found.anchorId = anchorId
@@ -63,6 +71,13 @@ export async function consumeJSONLReActIteration(capability: JSONLReActBoundary,
   const found = record(capability, ctx)
   if (!found.consumer) fail('JSONL input has not been durably bound')
   return serviceForOwner(found.owner).collaboration.consumeJSONLDelivery(found.consumer!)
+}
+export async function hasPendingJSONLControllerInput(capability: JSONLReActBoundary, ctx: AgentContext): Promise<boolean> {
+  const found = record(capability, ctx)
+  if (!found.consumer) fail('Steering probe requires the original admitted JSONL input binding')
+  const pending = await serviceForOwner(found.owner).collaboration.hasPendingControllerInput(found.producer)
+  record(capability, ctx)
+  return pending
 }
 export async function sealJSONLReActInput(capability: JSONLReActBoundary, ctx: AgentContext): Promise<boolean> {
   const found = record(capability, ctx)

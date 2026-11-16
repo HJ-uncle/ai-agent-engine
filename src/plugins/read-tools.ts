@@ -5,8 +5,10 @@ import { getToolOutputLimit } from '../core/agent-loop/tool-output-limit.js'
 import { PluginService, validatePluginId } from './service.js'
 import { getPluginTemplate, listPluginTemplates, PLUGIN_TEMPLATE_PROTOCOL } from './templates.js'
 import { PLUGIN_CONTRIBUTION_CATALOGUE } from './contributions.js'
+import { PLUGIN_CAPABILITY_CATALOGUE } from './capabilities.js'
+import { PLUGIN_SDK_QUICKSTART } from './sdk-contract.js'
 
-const sections = ['overview', 'metadata', 'manifest', 'files', 'file', 'protocol', 'contributions', 'templates'] as const
+const sections = ['overview', 'metadata', 'manifest', 'files', 'file', 'protocol', 'contributions', 'capabilities', 'templates'] as const
 export const pluginReadProperties: Record<string, JSONSchema> = {
   section: { type: 'string', enum: [...sections], description: '默认返回可容纳的完整结果或紧凑目录。manifest/metadata/files/protocol/contributions/templates 返回精确 JSON 文本页；file 返回原始源码页。' },
   file: { type: 'string', minLength: 1, maxLength: 300, description: 'section:file 的包内文件名，例如 main.mjs、ui/index.html；必须来自文件目录，不能读取本机其他路径。单独传 file 时自动使用 section:file。' },
@@ -59,7 +61,7 @@ function validateInput(raw: unknown): ReadInput {
 }
 
 function readableSections(source: Source): string[] {
-  return ['overview', 'metadata', ...(source.manifest ? ['manifest', 'files', 'file'] : []), 'protocol', 'contributions', ...(source.templates ? ['templates'] : [])]
+  return ['overview', 'metadata', ...(source.manifest ? ['manifest', 'files', 'file'] : []), 'protocol', 'contributions', 'capabilities', ...(source.templates ? ['templates'] : [])]
 }
 function directory(source: Source): Array<{ file: string; totalChars: number }> {
   return Object.keys(source.files ?? {}).sort().map(file => ({ file, totalChars: source.files![file].length }))
@@ -68,6 +70,7 @@ function overview(source: Source, ctx: AgentContext): ToolResult {
   const limit = limitFor(ctx)
   const files = directory(source), templates = source.templates?.map(({ id, name }) => ({ id, name })) ?? []
   const base = { mode: 'overview', ...(source.id ? { id: source.id } : {}), revision: source.revision, sections: readableSections(source),
+    quickstart: PLUGIN_SDK_QUICKSTART,
     read: { section: source.files ? 'file' : 'protocol', ...(source.files ? { file: files[0]?.file ?? 'main.mjs' } : { protocol: 'uiBridge' }), offset: 0, revision: source.revision },
     note: '按 section 读取；连续拼接 content，沿用 revision 和 nextOffset。manifest 为精确 JSON，file 为原始源码。' }
   const value = { ...base, fileCount: files.length, fileListComplete: true, files, ...(source.templates ? { templateCount: templates.length, templateListComplete: true, templates } : {}),
@@ -123,6 +126,7 @@ function readSource(source: Source, input: ReadInput, ctx: AgentContext): ToolRe
     case 'files': value = directory(source); break
     case 'templates': value = source.templates; break
     case 'contributions': value = PLUGIN_CONTRIBUTION_CATALOGUE; break
+    case 'capabilities': value = PLUGIN_CAPABILITY_CATALOGUE; break
     case 'file':
       if (!input.file || !source.files || !Object.hasOwn(source.files, input.file)) fail('PLUGIN_READ_FILE_NOT_FOUND', '插件文件不存在；请先通过 section:files 读取包内文件清单')
       value = source.files![input.file!]; format = 'text'; break
@@ -144,7 +148,7 @@ export async function readManagedPlugin(service: PluginService, raw: unknown, ct
 }
 export function readPluginTemplate(raw: unknown, ctx: AgentContext): ToolResult {
   const input = validateInput(raw), template = input.id === undefined ? undefined : getPluginTemplate(input.id)
-  const templates = listPluginTemplates(), full = template ? { template } : { templates, protocol: PLUGIN_TEMPLATE_PROTOCOL, contributions: PLUGIN_CONTRIBUTION_CATALOGUE }
+  const templates = listPluginTemplates(), full = template ? { template } : { templates, protocol: PLUGIN_TEMPLATE_PROTOCOL, contributions: PLUGIN_CONTRIBUTION_CATALOGUE, capabilities: PLUGIN_CAPABILITY_CATALOGUE }
   const revision = 'sha256:' + createHash('sha256').update(json(full)).digest('hex')
   return readSource({ ...(template ? { id: template.id, files: template.files, manifest: template.manifest } : { templates }), revision, full,
     metadata: template ? { id: template.id, name: template.name, description: template.description, version: template.manifest.version } : { templateCount: templates.length, protocolFields: Object.keys(PLUGIN_TEMPLATE_PROTOCOL) } }, input, ctx)

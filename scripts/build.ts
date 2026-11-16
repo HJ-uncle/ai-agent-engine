@@ -3,6 +3,7 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, 
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createBuildManifest } from '../src/runtime/build-identity.js'
+import { captureBuildSource, verifySourceSnapshot } from '../src/runtime/source-change-protocol.js'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const patched = spawnSync(process.execPath, [path.join(root, 'scripts/apply-node-pty-patch.mjs'), '--root', root], {
@@ -10,6 +11,7 @@ const patched = spawnSync(process.execPath, [path.join(root, 'scripts/apply-node
 })
 if (patched.error) throw patched.error
 if (patched.status !== 0) process.exit(patched.status ?? 1)
+const sourceSnapshot = captureBuildSource(root)
 const before = createBuildManifest(root)
 const directory = path.join(root, 'dist/runtime')
 // A failed or interrupted build must not leave an old manifest certifying partially replaced output.
@@ -37,7 +39,10 @@ for(const name of ['repository-supervisor.exe','repository-supervisor.sha256','r
 // Skill Markdown and references are runtime assets, included under dist/**.
 cpSync(path.join(root, 'src/skills/builtin'), path.join(root, 'dist/skills/builtin'), { recursive: true })
 const after = createBuildManifest(root)
-if (after.buildId !== before.buildId) throw new Error('Engine sources changed during compilation; rebuild before using this artifact')
+const sourceCheck = verifySourceSnapshot(sourceSnapshot)
+if (sourceCheck.changed || after.buildId !== before.buildId) {
+  throw new Error('SOURCE_CHANGED_DURING_BUILD: engine sources changed during compilation; choose pause, recheck, rebuild, or explicit skip before using this artifact')
+}
 mkdirSync(directory, { recursive: true })
 copyFileSync(path.join(root, 'node_modules/node-pty/.aether-node-pty-patch.json'), path.join(directory, 'dependency-patches.json'))
 const temporary = path.join(directory, `build-manifest.${process.pid}.tmp`)

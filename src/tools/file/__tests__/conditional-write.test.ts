@@ -134,11 +134,34 @@ describe('whole file conditional publication', () => {
     fs.writeFileSync(file, 'external edit')
     release.resolve()
     const result = await pending
-    expect(result).toMatchObject({ error: 'WRITE_VERSION_CONFLICT', metadata: { fileMutationApplied: false, actualHash: hashFileContent('external edit') } })
+    expect(result).toMatchObject({ error: 'SOURCE_CHANGED_DURING_WRITE', status: 'waiting', needsConfirmation: true,
+      pendingAction: { type: 'source_change', phase: 'write', choices: expect.arrayContaining(['pause', 'recheck', 'skip']) }, metadata: { fileMutationApplied: false } })
     expect(fs.readFileSync(file, 'utf8')).toBe('external edit')
     expect(await store.list(ctx.tenantId, ctx.sessionId)).toHaveLength(0)
     expect(fs.readdirSync(path.join(root, 'change-snapshots'))).toEqual([])
     expect(stagingFiles()).toEqual([])
+  })
+  it('does not let a resumed source-change choice overwrite a second external edit', async () => {
+    const { file, expectedHash } = seed(Buffer.from([0, 1, 2, 3]), 'report.docx')
+    const entered = deferred(), release = deferred()
+    const handler = handlerRegistry.getHandler(file)
+    vi.spyOn(handler, 'write').mockImplementationOnce(async temporary => {
+      fs.writeFileSync(temporary, 'staged first'); entered.resolve(); await release.promise; fs.writeFileSync(temporary, 'generated first')
+    }).mockImplementationOnce(async temporary => {
+      fs.writeFileSync(temporary, 'staged second'); fs.writeFileSync(file, 'external second'); fs.writeFileSync(temporary, 'generated second')
+    })
+    const args = { path: file, expectedHash, data: 'report' }
+    const firstPending = writeFileTool.execute(args, ctx)
+    await entered.promise
+    fs.writeFileSync(file, 'external first')
+    release.resolve()
+    const first = await firstPending
+    expect(first).toMatchObject({ status: 'waiting', error: 'SOURCE_CHANGED_DURING_WRITE', pendingAction: { type: 'source_change' } })
+    const resumed = await writeFileTool.execute(args, { ...ctx, resumeToolCall: {
+      toolCall: { id: 'write-call', name: 'write_file', args }, decision: 'approved', output: 'skip', pendingAction: first.pendingAction,
+    } })
+    expect(resumed).toMatchObject({ status: 'waiting', needsConfirmation: true, error: 'SOURCE_CHANGED_DURING_WRITE' })
+    expect(fs.readFileSync(file, 'utf8')).toBe('external second')
   })
   it.each(['failure', 'abort', 'oversized'] as const)('preserves original bytes and publishes no change when stage %s occurs', async kind => {
     const { file, expectedHash } = seed(), controller = new AbortController()

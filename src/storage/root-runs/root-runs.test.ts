@@ -56,6 +56,28 @@ describe('durable root run identity and pending claims', () => {
     expect((await store.list('tenant', 'session'))[0]).not.toHaveProperty('request')
   })
 
+  it('accepts only canonical source-change choices and never treats them as ordinary approvals', async () => {
+    const action = { type: 'source_change', protocolVersion: 1, phase: 'write', operation: 'write_file', root: '/workspace',
+      before: { protocolVersion: 1, kind: 'files', root: '/workspace', files: [], capturedAt: 1 },
+      after: { protocolVersion: 1, kind: 'files', root: '/workspace', files: [], capturedAt: 2 }, changes: [],
+      choices: ['pause', 'skip'], defaultChoice: 'pause', reason: 'changed', risk: 'external-source-change' } as const
+    const acceptedRun = await store.create('tenant', 'source-accepted', 'model-A', [], {})
+    const acceptedPending = { ...pending, requestId: 'source-accepted', toolCallId: 'source-accepted', pendingAction: action }
+    await store.pending('tenant', acceptedRun.runId, acceptedPending)
+    await expect(store.answer('tenant', 'source-accepted', acceptedRun.runId, acceptedPending.requestId, acceptedPending.toolCallId, acceptedPending.toolName, 'skip')).resolves.toMatchObject({ duplicate: false })
+
+    for (const output of ['approved', 'rejected', 'rebuild']) {
+      const run = await store.create('tenant', `source-${output}`, 'model-A', [], {})
+      const item = { ...pending, requestId: `source-${output}`, toolCallId: `source-${output}`, pendingAction: action }
+      await store.pending('tenant', run.runId, item)
+      await expect(store.answer('tenant', `source-${output}`, run.runId, item.requestId, item.toolCallId, item.toolName, output)).rejects.toMatchObject({ statusCode: 400 })
+    }
+    const malformed = await store.create('tenant', 'source-malformed', 'model-A', [], {})
+    const malformedPending = { ...pending, requestId: 'source-malformed', toolCallId: 'source-malformed', pendingAction: { ...action, choices: ['skip', 'skip'] } }
+    await store.pending('tenant', malformed.runId, malformedPending)
+    await expect(store.answer('tenant', 'source-malformed', malformed.runId, malformedPending.requestId, malformedPending.toolCallId, malformedPending.toolName, 'skip')).rejects.toMatchObject({ statusCode: 400 })
+  })
+
   it('survives reopening: waiting can be answered but prior running work is interrupted without reexecution', async () => {
     const running = await store.create('tenant', 'running', 'model-A', [], {})
     const waiting = await store.create('tenant', 'waiting', 'model-A', ['workspace-A'], { model: 'model-A', memoryScope: 'session', thinkingMode: 'medium', skills: [], mcpServers: ['mcp-A'], utilityModel: '' })

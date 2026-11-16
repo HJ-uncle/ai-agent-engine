@@ -10,6 +10,7 @@ import { serializeMessageMetadata } from '../../storage/conversation/model-input
 import { ensureHistoryMaintenanceSchema, type HistoryMaintenanceLease } from './history-maintenance.js'
 import type { ExecutionOwner } from './execution-owner.js'
 import { assertDeliveryExecution, assertDeliveryProducer } from './delivery-execution.js'
+import { delegatedContinuationInput } from '../subagent/delegated-input.js'
 
 declare const consumerBrand: unique symbol
 export type SQLiteDeliveryConsumer = Readonly<{ [consumerBrand]: true }>
@@ -111,16 +112,19 @@ export class SQLiteCollaborationDelivery {
       epoch: fence!.epoch, anchorId: fence!.anchorId, anchorFingerprint: fence!.anchor, peerMessageIds, check }
   }
 
-  bind(producer: CollaborationProducer, history: { db: Client; tenantId: string; sessionId: string; anchorId: string; anchorContent?: string; executionOwner?: ExecutionOwner }): Promise<SQLiteDeliveryConsumer> {
+  async bind(producer: CollaborationProducer, history: { db: Client; tenantId: string; sessionId: string; anchorId: string; anchorContent?: string; executionOwner?: ExecutionOwner }): Promise<SQLiteDeliveryConsumer> {
     const binding = this.resolveProducer(producer)
     if (history.db !== this.store.db || history.tenantId !== binding.tenantId || history.sessionId !== binding.sessionId)
       fail('forbidden', 'Delivery must use the admitted producer and the same physical history Client')
+    const continuation = await delegatedContinuationInput(this.store.db, binding)
+    if (continuation && (history.anchorId !== continuation.anchor.messageId || history.anchorContent !== continuation.content))
+      fail('forbidden', 'Child continuation cannot replace its admitted delegated input')
     return this.write(async tx => {
       await assertDeliveryProducer(this.store, tx, producer, binding, history.executionOwner)
       const anchor = (await tx.execute({ sql: `SELECT id,message_id,role,content,conversation_id,metadata,model_id
         FROM conversations WHERE tenant_id=? AND session_id=? AND message_id=?`,
         args: [binding.tenantId, binding.sessionId, history.anchorId] })).rows
-      if (anchor.length !== 1 || anchor[0].role !== 'user' || anchor[0].conversation_id !== binding.turnId)
+      if (anchor.length !== 1 || anchor[0].role !== 'user' || anchor[0].conversation_id !== (continuation?.anchor.turnId ?? binding.turnId))
         fail('conflict', 'Delivery needs the actual current human input anchor')
       if (history.anchorContent !== undefined && anchor[0].content !== history.anchorContent)
         fail('conflict', 'Persisted input differs from its admitted human or delegated task')

@@ -18,7 +18,8 @@ import { admissionProjectingHistory, readAdmissionSeed } from '../../../storage/
 import { ensureUserAdmissionSchema, prepareUserAdmission, readDatabaseNamespace, userAdmissionDigest } from '../../../storage/root-admission/index.js'
 import { CollaborationRuntime } from '../runtime.js'
 import { CollaborationStore } from '../store.js'
-import { ExecutionOwners, type ExecutionOwner } from '../execution-owner.js'
+import { ExecutionOwners, initializeOwnedExecutionStartup, type ExecutionOwner } from '../execution-owner.js'
+import { retainDelegatedInput } from '../../subagent/delegated-input.js'
 import type { CollaborationProducer } from '../types.js'
 import { installProductionCollaborationBoundary } from '../production-boundary.js'
 import * as sqlite from '../sqlite-react-boundary.js'
@@ -106,6 +107,100 @@ afterEach(async () => {
 
 describe.each(['jsonl', 'sqlite'] as const)('%s canonical child continuation during finish', selected => {
   beforeAll(() => { backend = selected })
+  it.each(['never-bound', 'cleared'] as const)('does not manufacture missing original child input after %s history', async missing => {
+    const input = childInput('missing-input'), admitted = await runtime.admitChild(producer, input)
+    const header = admitted.mutation.header, history = createConversationHistory()
+    const childScope = { tenantId: scope.tenantId, sessionId: header.childSessionId }
+    if (missing === 'cleared') {
+      await history.append({ id: 'removed-input', role: 'user', content: input.task,
+        metadata: { subagentRunId: header.runId }, ...{ conversationId: turnId } }, childScope)
+      await retainDelegatedInput(history, agents, header)
+      await history.clear(childScope)
+    }
+    await agents.recoverInterrupted()
+    await expect(retainDelegatedInput(history, agents, (await agents.getRunHeader(scope.tenantId, header.runId, true))!))
+      .rejects.toThrow('cannot replay or invent a replacement')
+    expect(await history.getFullHistory(childScope)).toHaveLength(0)
+    expect((await agents.latestChildHeader(scope.tenantId, scope.sessionId, header.childSessionId))?.runId).toBe(header.runId)
+  })
+  it.each(['same-root', 'new-root', 'reopened-root'] as const)('continues an explicitly stopped child in %s without a new input or replaying completed tools', async ownerMode => {
+    let runner = new SubagentRunner(agents), requests = 0, effects = 0
+    const originalInput = childInput('retained-task'), originalTurn = turnId
+    await ctx.history.append({ id: originalInput.parentMessageId, role: 'assistant', content: '',
+      toolCall: { id: originalInput.parentToolCallId, name: 'subagent', args: {} }, ...{ conversationId: turnId } }, scope)
+    let previousContext!: AgentContext
+    const first = await runner.run(originalInput, ctx, async execution => {
+      const target = context(createConversationHistory(), execution.executionOwner!, execution.snapshot.childSessionId)
+      previousContext = target
+      delete target.userMessageId; target.runId = execution.snapshot.runId; target.inheritContext = true
+      target.runObserver = execution.observer; target.signal = execution.signal
+      target.tools.execute = async () => { effects++; return { success: true, output: 'Existing file was written exactly once.' } }
+      installProductionCollaborationBoundary(target)
+      const model: LLMAdapter = { model: 'scripted-only', provider: 'fixture', countTokens: () => 0, complete: vi.fn(),
+        stream: vi.fn(async function* (): AsyncGenerator<LLMStreamChunk> {
+          if (++requests === 1) yield { done: true, toolCalls: [{ id: 'retained-write', name: 'write_file', args: '{}', index: 0 }] }
+          else {
+            yield { done: false, content: 'Saved partial child output.' }
+            await runner.cancel(scope.tenantId, target.runId!, 'user_cancelled')
+            throw new DOMException('Explicitly stopped', 'AbortError')
+          }
+        }) }
+      for await (const _frame of new ReActStrategy(model).run(originalInput.task, target)) { /* real loop */ }
+    })
+    expect(first.status).toBe('cancelled'); expect(effects).toBe(1)
+    const historyScope = { tenantId: scope.tenantId, sessionId: first.childSessionId }
+    const before = await createConversationHistory().getFullHistory(historyScope)
+    expect(before.filter(message => message.role === 'user')).toHaveLength(1)
+    expect(before.some(message => message.role === 'tool' && message.toolCallId === 'retained-write')).toBe(true)
+    if (ownerMode !== 'same-root') {
+      if (ownerMode === 'new-root') {
+        await roots.finishOwned(owner, { status: 'cancelled', stopReason: 'user_cancelled' }); owners.releaseRoot(owner)
+      } else {
+        await closeDb(); await db.whenClosed(); observer.close(); await observer.whenClosed()
+        db = getDb() as LocalSqliteProcessClient; await initDb(); await initializeOwnedExecutionStartup()
+        observer = new LocalSqliteProcessClient({ url: 'file:' + path.join(directory, 'fixture.db').replaceAll('\\', '/') })
+        roots = new RootRunStore(() => db); agents = new SubagentStore(db); runner = new SubagentRunner(agents)
+        runtime = new CollaborationRuntime(new CollaborationStore(db), agents); owners = new ExecutionOwners(db, runtime)
+      }
+      const root = await roots.create(scope.tenantId, scope.sessionId, 'scripted-only', [], {})
+      rootRunId = root.runId; turnId = root.turnId; userId = root.userMessageId
+      owner = await owners.admitRoot({ tenantId: scope.tenantId, rootRunId, rootAttemptId: (await roots.get(scope.tenantId, rootRunId))!.attemptId, controller: new AbortController() })
+      producer = owners.producer(owner); ctx = context(createConversationHistory())
+    }
+    // Neither discovery nor a replacement parent owner starts cancelled work.
+    expect((await agents.latestChildHeader(scope.tenantId, scope.sessionId, first.childSessionId))?.runId).toBe(first.runId)
+    expect(effects).toBe(1)
+    const retained = await agents.getRunHeader(scope.tenantId, first.runId, true)
+    await retainDelegatedInput(createConversationHistory(), agents, retained!)
+    const next = { ...childInput('explicit-continue'), task: originalInput.task, resumeFromRunId: first.runId, continuationMode: 'continue' as const }
+    await ctx.history.append({ id: next.parentMessageId, role: 'assistant', content: '',
+      toolCall: { id: next.parentToolCallId, name: 'subagent', args: { resumeRunId: first.runId } }, ...{ conversationId: turnId } }, scope)
+    const second = await runner.run(next, ctx, async execution => {
+      const target = context(createConversationHistory(), execution.executionOwner!, execution.snapshot.childSessionId)
+      delete target.userMessageId; target.runId = execution.snapshot.runId; target.inheritContext = true
+      target.runObserver = execution.observer; target.signal = execution.signal
+      target.executionContinuation = { kind: 'child', previousAttemptId: first.runId, previousRunId: first.runId, attemptId: target.runId! }
+      target.tools.execute = async () => { effects++; throw new Error('A confirmed tool must not be replayed') }
+      installProductionCollaborationBoundary(target)
+      const model: LLMAdapter = { model: 'scripted-only', provider: 'fixture', countTokens: () => 0, complete: vi.fn(),
+        stream: vi.fn(async function* (messages: Message[]): AsyncGenerator<LLMStreamChunk> {
+          expect(messages.filter(message => message.role === 'user')).toHaveLength(1)
+          expect(JSON.stringify(messages)).toContain('Existing file was written exactly once.')
+          expect(JSON.stringify(messages)).toContain('Saved partial child output.')
+          yield { done: true, content: 'Continued and verified the remaining work.' }
+        }) }
+      for await (const _frame of new ReActStrategy(model).run(null, target)) { /* real loop */ }
+      await expect(snapshot(previousContext)).rejects.toThrow()
+    })
+    expect(second).toMatchObject({ status: 'succeeded', childSessionId: first.childSessionId, resumeFromRunId: first.runId,
+      continuationMode: 'continue', taskTurnId: originalTurn, parentConversationId: turnId })
+    expect(second.runId).not.toBe(first.runId); expect(effects).toBe(1)
+    const after = await createConversationHistory().getFullHistory(historyScope)
+    expect(after.slice(0, before.length)).toEqual(before)
+    expect(after.filter(message => message.role === 'user')).toHaveLength(1)
+    expect(after.at(-1)?.metadata).toMatchObject({ subagentRunId: second.runId, executionAttemptId: second.runId })
+    expect((await agents.getRunHeader(scope.tenantId, first.runId))?.status).toBe('cancelled')
+  })
   it('stamps exact child invocation identity across two resumes in one parent turn without replacing the authenticated history', async () => {
     const runner = new SubagentRunner(agents)
     let childSessionId = '', previousRunId: string | undefined, firstRows: Message[] = []

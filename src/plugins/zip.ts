@@ -13,7 +13,7 @@ function safeName(name: string): void {
 }
 
 /** Validate every directory entry before any decompression. Ignored entries stay compressed. */
-export function inspectPluginZip(input: Uint8Array, maxArchive = 32 * 1024 * 1024, maxExpanded = 64 * 1024 * 1024): PluginZipDirectory {
+export function inspectPluginZip(input: Uint8Array, maxArchive = Infinity, maxExpanded = Infinity): PluginZipDirectory {
   if (input.length < 22 || input.length > maxArchive) return fail(`Plugin ZIP is invalid or exceeds ${maxArchive / 1024 / 1024} MiB`)
   const bytes = Buffer.from(input.buffer, input.byteOffset, input.byteLength)
   let end = -1
@@ -22,7 +22,7 @@ export function inspectPluginZip(input: Uint8Array, maxArchive = 32 * 1024 * 102
   }
   if (end < 0) return fail('Invalid plugin ZIP directory')
   const count = bytes.readUInt16LE(end + 10), directory = bytes.readUInt32LE(end + 16), directorySize = bytes.readUInt32LE(end + 12)
-  if (!count || count > 4096 || bytes.readUInt16LE(end + 4) || bytes.readUInt16LE(end + 6) || bytes.readUInt16LE(end + 8) !== count || directory + directorySize !== end) return fail('Unsupported plugin ZIP directory')
+  if (!count || count === 0xffff || bytes.readUInt16LE(end + 4) || bytes.readUInt16LE(end + 6) || bytes.readUInt16LE(end + 8) !== count || directory + directorySize !== end) return fail('Unsupported plugin ZIP directory')
   const entries: PluginZipEntry[] = [], names = new Map<string, boolean>(), ranges: { start: number; end: number }[] = []
   let cursor = directory, expandedBytes = 0
   for (let index = 0; index < count; index++) {

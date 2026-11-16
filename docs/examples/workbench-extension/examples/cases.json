@@ -1,0 +1,6 @@
+{
+  "cases": [
+    { "name": "缺省文本", "tool": "inspect_context", "args": {}, "expected": { "text": "Aether", "context": null } },
+    { "name": "Unicode与宿主上下文", "tool": "inspect_context", "args": { "text": "需求 🍎", "_context": { "messageId": "m1" } }, "expected": { "text": "需求 🍎", "context": { "messageId": "m1" } } }
+  ]
+}

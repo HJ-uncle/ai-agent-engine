@@ -453,6 +453,29 @@ export class CommandJobManager {
     }).filter(stored => scopeMatches(stored, scope)).map(stored => clone(stored.job)).sort((a, b) => a.createdAt - b.createdAt || a.jobId.localeCompare(b.jobId))
   }
 
+  /**
+   * Return active jobs for a tenant without widening the public session-scoped
+   * command output API.  Source-change protection uses this narrow projection
+   * to identify another execution that may still be writing the same
+   * workspace; command arguments and output are deliberately omitted by the
+   * caller before persisting a wait receipt.
+   */
+  async listActiveForTenant(tenantId: string): Promise<CommandJobSnapshot[]> {
+    await this.initialize()
+    const result = await this.db.execute({
+      // Source protection must see every active writer. Truncating this list
+      // could omit an overlapping command and create a false negative.
+      sql: "SELECT tenant_id,session_id,job_id,snapshot FROM command_jobs WHERE tenant_id=? AND status IN ('running','cancelling') ORDER BY json_extract(snapshot,'$.createdAt') DESC,job_id DESC",
+      args: [tenantId],
+    })
+    return result.rows.map(row => {
+      const parsed = JSON.parse(String(row.snapshot)) as CommandJobSnapshot
+      const live = this.active.get(parsed.jobId)
+      return live ? clone(live.job) : parsed
+    }).filter(job => job.status === 'running' || job.status === 'cancelling')
+      .sort((a, b) => a.createdAt - b.createdAt || a.jobId.localeCompare(b.jobId))
+  }
+
   async output(scope: CommandJobScope, jobId: string, options: { cursor?: number; maxBytes?: number } = {}): Promise<CommandJobOutput | null> {
     let stored = await this.lookup(scope, jobId)
     if (!stored) return null
