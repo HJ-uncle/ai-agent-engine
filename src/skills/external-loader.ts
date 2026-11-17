@@ -59,6 +59,16 @@ interface PluginManifest {
   enabled?: boolean
 }
 
+/** Request-scoped catalogues must not follow skill metadata outside their authorized root. */
+export function isSkillPathWithin(root: string, candidate: string): boolean {
+  const inside = (base: string, target: string): boolean => {
+    const relative = path.relative(base, target)
+    return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep))
+  }
+  try { return inside(path.resolve(root), path.resolve(candidate)) && inside(fs.realpathSync(root), fs.realpathSync(candidate)) }
+  catch { return false }
+}
+
 // 解析 SKILL.md frontmatter (--- key: value ---)
 function parseFrontmatter(raw: string): {
   meta: Record<string, string>
@@ -81,7 +91,7 @@ function parseFrontmatter(raw: string): {
 /**
  * 扫描并加载所有外部技能（只读元数据，不读全文）
  */
-export function loadExternalSkills(skillsRoot?: string, options: { includeDisabled?: boolean } = {}): ExternalSkill[] {
+export function loadExternalSkills(skillsRoot?: string, options: { includeDisabled?: boolean; containmentRoot?: string } = {}): ExternalSkill[] {
   const rawRoot = skillsRoot ?? process.env.SKILLS_ROOT
   if (!rawRoot) {
     logger.debug('SKILLS_ROOT not set, skipping external skill loading')
@@ -91,6 +101,8 @@ export function loadExternalSkills(skillsRoot?: string, options: { includeDisabl
   // 支持相对路径（相对于 cwd）
   const root = path.resolve(process.cwd(), rawRoot)
 
+  if (options.containmentRoot && !isSkillPathWithin(options.containmentRoot, root)) return []
+
   if (!fs.existsSync(root)) {
     logger.warn({ root }, 'SKILLS_ROOT directory does not exist')
     return []
@@ -99,7 +111,7 @@ export function loadExternalSkills(skillsRoot?: string, options: { includeDisabl
   // 读取 skills.config.json（如果存在）
   const configPath = path.join(root, 'skills.config.json')
   let config: SkillsConfig = {}
-  if (fs.existsSync(configPath)) {
+  if (fs.existsSync(configPath) && (!options.containmentRoot || isSkillPathWithin(root, configPath))) {
     try {
       config = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as SkillsConfig
     } catch {
@@ -123,12 +135,14 @@ export function loadExternalSkills(skillsRoot?: string, options: { includeDisabl
 
   for (const dirName of dirs) {
     const skillDir = path.join(root, dirName)
+    if (options.containmentRoot && !isSkillPathWithin(root, skillDir)) continue
     const pluginJsonPath = path.join(skillDir, 'plugin.json')
     const defaultSkillMdPath = path.join(skillDir, 'SKILL.md')
 
     let hasPluginJson = false
     let manifest: PluginManifest = {}
     if (fs.existsSync(pluginJsonPath)) {
+      if (options.containmentRoot && !isSkillPathWithin(skillDir, pluginJsonPath)) continue
       try {
         manifest = JSON.parse(fs.readFileSync(pluginJsonPath, 'utf-8')) as PluginManifest
         hasPluginJson = true
@@ -138,6 +152,7 @@ export function loadExternalSkills(skillsRoot?: string, options: { includeDisabl
     }
 
     const skillMdPath = manifest.main ? path.resolve(skillDir, manifest.main) : defaultSkillMdPath
+    if (options.containmentRoot && !isSkillPathWithin(skillDir, skillMdPath)) continue
 
     if (!fs.existsSync(skillMdPath)) {
       if (!hasPluginJson) continue // ignore if neither SKILL.md nor plugin.json exists

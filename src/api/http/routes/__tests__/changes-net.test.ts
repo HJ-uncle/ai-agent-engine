@@ -1,5 +1,4 @@
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
@@ -19,7 +18,8 @@ const tenant = 'net-tenant'
 const session = 'net-session'
 
 beforeEach(async () => {
-  fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-changes-net-'))
+  fs.mkdirSync('.e2e-tmp', { recursive: true })
+  fixture = fs.mkdtempSync(path.resolve('.e2e-tmp/changes-net-'))
   db = createClient({ url: 'file::memory:' })
   vi.spyOn(database, 'getDb').mockImplementation(() => db)
   store = new ChangeStore()
@@ -33,11 +33,12 @@ afterEach(async () => {
   await app.close()
   db.close()
   vi.restoreAllMocks()
-  if (path.dirname(fixture) !== os.tmpdir() || !path.basename(fixture).startsWith('aether-changes-net-')) throw new Error('Unsafe fixture cleanup')
+  if (path.dirname(fixture) !== path.resolve('.e2e-tmp') || !path.basename(fixture).startsWith('changes-net-')) throw new Error('Unsafe fixture cleanup')
   fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 })
 
-async function mutate(file: string, content: string | null, sessionId = session, tenantId = tenant, producer?: { producerChildSessionId: string; producerRunId: string }): Promise<FileChange> {
+async function mutate(file: string, content: string | null, sessionId = session, tenantId = tenant,
+  producer?: Partial<Pick<FileChange, 'producerChildSessionId' | 'producerRunId' | 'turnId' | 'runId'>>): Promise<FileChange> {
   return withFileLocks([file], async ([canonical]) => {
     const before = readFileVersionSync(canonical)
     if (content === null) fs.unlinkSync(canonical)
@@ -60,6 +61,25 @@ async function keep(ids: string[], sessionId: string | undefined = session) {
 }
 
 describe('pending changes represent final byte differences', () => {
+  it('does not assign a multi-turn net change to only its last turn or root run', async () => {
+    const file = path.join(fixture, 'shared.txt')
+    const first = await mutate(file, 'first turn\n', session, tenant, { turnId: 'turn-1', runId: 'run-1' })
+    const second = await mutate(file, 'second turn\n', session, tenant, { turnId: 'turn-2', runId: 'run-2' })
+    const [combined] = await net()
+    expect(combined).toMatchObject({ oldContent: null, newContent: 'second turn\n', changeIds: [first.id, second.id] })
+    expect(combined).not.toHaveProperty('turnId')
+    expect(combined).not.toHaveProperty('runId')
+    expect(await store.getById(first.id, tenant)).toMatchObject({ turnId: 'turn-1', runId: 'run-1' })
+    expect(await store.getById(second.id, tenant)).toMatchObject({ turnId: 'turn-2', runId: 'run-2' })
+  })
+
+  it('retains the exact turn and root for a net change wholly within one turn', async () => {
+    const file = path.join(fixture, 'one-turn.txt'), owner = { turnId: 'turn-1', runId: 'run-1' }
+    await mutate(file, 'first edit\n', session, tenant, owner)
+    await mutate(file, 'second edit\n', session, tenant, owner)
+    expect(await net()).toEqual([expect.objectContaining({ ...owner, oldContent: null, newContent: 'second edit\n' })])
+  })
+
   it('persists child/run provenance, retaining one writer only when the combined diff has one source', async () => {
     const file = path.join(fixture, 'team-source.txt')
     const producer = { producerChildSessionId: 'child-a', producerRunId: 'child-run-a' }

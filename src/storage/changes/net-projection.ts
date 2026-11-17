@@ -46,8 +46,14 @@ export function projectSegment(segment: ChangeSegment, issue?: ProjectionIssue):
   const last = segment.changes.at(-1)!
   const truncated = segment.changes.some(change => change.truncated)
   const sameProducer = segment.changes.every(change => change.producerChildSessionId === last.producerChildSessionId && change.producerRunId === last.producerRunId)
+  const sameTurn = segment.changes.every(change => change.turnId === last.turnId)
+  const sameRun = segment.changes.every(change => change.runId === last.runId)
   return {
     ...last,
+    // Session-wide net changes may span several turns. Their complete bytes
+    // cannot be presented as an artifact of only the final turn or root run.
+    turnId: sameTurn ? last.turnId : undefined,
+    runId: sameRun ? last.runId : undefined,
     // A combined diff can include several writers; do not attribute all bytes to its last writer.
     producerChildSessionId: sameProducer ? last.producerChildSessionId : undefined,
     producerRunId: sameProducer ? last.producerRunId : undefined,

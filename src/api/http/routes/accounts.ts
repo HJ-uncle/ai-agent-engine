@@ -4,7 +4,7 @@ import { success, fail } from '../response.js'
 import {
   AccountAuthError, checkAccountRateLimit, registerAccount, loginAccount, refreshAccountSession,
   getAccountUser, requireAccountAuth, updateAccountProfile, listAccountSessions,
-  revokeAccountSession, rotateAccountRecovery, unlinkAccountIdentity,
+  revokeAccountSession, rotateAccountRecovery, unlinkAccountIdentity, reauthenticateAccount,
 } from '../../../auth/accounts.js'
 
 export function isPublicAccountRoute(method: string, pathname: string): boolean {
@@ -49,6 +49,11 @@ export async function accountRoutes(app: FastifyInstance): Promise<void> {
   }))
   app.get('/auth/account/me', (request, reply) => run(reply, () => {
     const auth = context(request); return getAccountUser(auth.userId!, auth.sessionId)
+  }))
+  app.post('/auth/account/reauth', options, (request, reply) => run(reply, async () => {
+    const auth = context(request)
+    await checkAccountRateLimit(request.ip, 'reauth')
+    return reauthenticateAccount(auth, requiredString(request, 'recoveryKey'))
   }))
   app.patch('/auth/account/profile', options, (request, reply) => run(reply, () => updateAccountProfile(context(request), body(request))))
   app.get('/auth/account/sessions', (request, reply) => run(reply, () => listAccountSessions(context(request))))

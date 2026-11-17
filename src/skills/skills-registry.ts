@@ -194,6 +194,12 @@ export class SkillsRegistry {
     return workspaceRoot ? this.loadWorkspaceSkills(workspaceRoot, false) : this.skills
   }
 
+  /** Without a selected workspace, expose shared skills only, never the server cwd's project. */
+  getPickerSkills(workspaceRoot?: string): ExternalSkill[] {
+    this.ensureGlobalLayer()
+    return this.loadWorkspaceSkills(workspaceRoot, false, true)
+  }
+
   /** Management must retain disabled entries so they can be re-enabled. */
   getAllSkills(workspaceRoot?: string): ExternalSkill[] {
     this.ensureGlobalLayer()
@@ -232,9 +238,9 @@ export class SkillsRegistry {
    * inspect the IDE's active workspace without leaking one project's skills
    * into another project's prompt.
    */
-  private loadWorkspaceSkills(workspaceRoot: string, includeDisabled: boolean): ExternalSkill[] {
-    const requested = path.resolve(workspaceRoot)
-    const projectRoots = projectSkillRoots(requested)
+  private loadWorkspaceSkills(workspaceRoot: string | undefined, includeDisabled: boolean, confined = false): ExternalSkill[] {
+    const requested = workspaceRoot ? path.resolve(workspaceRoot) : undefined
+    const projectRoots = requested ? projectSkillRoots(requested) : []
     const roots: Array<[string | null, 'global' | 'project']> = []
     // A request-scoped workspace always gets its own project layer. An
     // explicitly configured SKILLS_ROOT remains available as a built-in layer
@@ -250,9 +256,9 @@ export class SkillsRegistry {
       // Load disabled entries while merging so a disabled project skill still
       // shadows a same-named global skill. Filter only after precedence is
       // resolved; otherwise the global copy incorrectly reappears.
-      for (const skill of loadExternalSkills(root, { includeDisabled: true })) merged.set(skill.name.toLowerCase(), { ...skill, scope })
+      for (const skill of loadExternalSkills(root, { includeDisabled: true, ...(confined ? { containmentRoot: root } : {}) })) merged.set(skill.name.toLowerCase(), { ...skill, scope })
     }
-    for (const skill of loadProjectSkills(requested)) merged.set(skill.name.toLowerCase(), skill)
+    if (requested) for (const skill of loadProjectSkills(requested, confined)) merged.set(skill.name.toLowerCase(), skill)
     const values = [...merged.values()]
     return includeDisabled ? values : values.filter((skill) => skill.enabled)
   }

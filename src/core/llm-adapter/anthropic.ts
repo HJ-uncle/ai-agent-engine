@@ -1,4 +1,4 @@
-import { applyThinkingPreference } from './thinking.js'
+import { applyThinkingPreference, isThinkingDisabled } from './thinking.js'
 import { requestContextMessages } from './request-context.js'
 import { observeRequest, observeStreamRequest, anthropicUsage, anthropicUsageSnapshot, anthropicUsageFromSnapshot, prepareRequestContext,
   type AnthropicUsageSnapshot } from './request-attempt.js'
@@ -107,6 +107,37 @@ function normalizeGatewayThinking(options: LLMAdapterOptions | undefined, model:
     thinkingConfig,
     reasoningEffort: undefined,
   }
+}
+
+/** Anthropic and compatible endpoints accept effort inside output_config, not
+ * OpenAI's top-level reasoning_effort. Keep native output settings intact. */
+function normalizeAnthropicThinking(options: LLMAdapterOptions | undefined, model: string): LLMAdapterOptions | undefined {
+  const disabled = isThinkingDisabled(options)
+  const normalized = normalizeGatewayThinking(applyThinkingPreference(
+    disabled ? { ...options, model, thinkingEnabled: false } : options, 'anthropic', model), model)
+  if (!normalized) return normalized
+  const thinkingConfig = { ...(normalized.thinkingConfig ?? {}) }
+  // Applying an explicit Off replaces provider thinking switches. Output format
+  // is independent of that preference and must survive the replacement.
+  const rawOutputConfig = thinkingConfig.output_config ?? (disabled ? options?.thinkingConfig?.output_config : undefined)
+  const outputConfig = rawOutputConfig && typeof rawOutputConfig === 'object' && !Array.isArray(rawOutputConfig)
+    ? { ...rawOutputConfig as Record<string, unknown> } : undefined
+  // A semantic default alone does not prove an older native Claude/Qwen model
+  // supports effort. DeepSeek's contract is known; other models must explicitly
+  // provide native output_config or the legacy effort configuration to convert.
+  const effort = disabled ? undefined : outputConfig?.effort ?? thinkingConfig.reasoning_effort
+    ?? (/deepseek/i.test(model) ? normalized.reasoningEffort : undefined)
+  delete thinkingConfig.reasoning_effort
+  if (outputConfig) {
+    if (disabled) delete outputConfig.effort
+    else if (effort !== undefined) outputConfig.effort = effort
+    if (Object.keys(outputConfig).length) thinkingConfig.output_config = outputConfig
+    else delete thinkingConfig.output_config
+  } else if (effort !== undefined) {
+    thinkingConfig.output_config = { effort }
+  }
+  return { ...normalized, thinkingConfig: normalized.thinkingConfig != null || Object.keys(thinkingConfig).length
+    ? thinkingConfig : normalized.thinkingConfig }
 }
 
 function normalizeOutputTokenLimit(value: number | undefined, fallback: number, model?: string): number {
@@ -324,10 +355,7 @@ export class AnthropicAdapter implements LLMAdapter {
 
   async complete(messages: Message[], options?: LLMAdapterOptions): Promise<LLMResponse> {
     const requestedModel = options?.model ?? this.model
-    options = normalizeGatewayThinking(
-      applyThinkingPreference(options, this.provider, requestedModel),
-      requestedModel,
-    )
+    options = normalizeAnthropicThinking(options, requestedModel)
     // Two-pass orphan filtering:
     // Pass 1 — collect all valid tool_use ids from assistant messages
     // and collect all valid tool_result ids from tool messages
@@ -467,10 +495,7 @@ export class AnthropicAdapter implements LLMAdapter {
 
   async *stream(messages: Message[], options?: LLMAdapterOptions): AsyncIterable<LLMStreamChunk> {
     const requestedModel = options?.model ?? this.model
-    options = normalizeGatewayThinking(
-      applyThinkingPreference(options, this.provider, requestedModel),
-      requestedModel,
-    )
+    options = normalizeAnthropicThinking(options, requestedModel)
     // Two-pass orphan filtering (same as complete())
     const validToolUseIds = new Set<string>()
     const validToolResultIds = new Set<string>()

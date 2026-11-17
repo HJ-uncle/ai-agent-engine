@@ -421,7 +421,7 @@ export class ChangeStore {
     }]) }
   }
 
-  async revertBatch(tenantId: string, input: RevertBatchInput): Promise<RevertBatchResult> {
+  async revertBatch(tenantId: string, input: RevertBatchInput, options: { completeScope?: boolean } = {}): Promise<RevertBatchResult> {
     const { ids, selected } = await this.selectRevertScope(tenantId, input)
     const reviewedCommands = new Set(input.reviewedCommandChangeIds ?? [])
     const results: RevertResult[] = []
@@ -431,7 +431,7 @@ export class ChangeStore {
     selected.forEach((change, index) => {
       if (!change || change.sessionId !== input.sessionId) {
         results.push({ id: ids![index], path: '', status: 'unavailable', message: '改动不存在或不属于当前会话' })
-      } else if (change.requiresExplicitRevert && ids === undefined && !reviewedCommands.has(change.id) && change.status !== 'reverted') {
+      } else if (change.requiresExplicitRevert && (ids === undefined || options.completeScope) && !reviewedCommands.has(change.id) && change.status !== 'reverted') {
         results.push({ id: change.id, path: change.path, status: 'unavailable',
           ...('entryType' in change ? { entryType: change.entryType } : {}),
           message: '这是命令运行期间观察到的文件变化，可能包含并发编辑；请在改动面板审阅并明确选择后撤回' })
@@ -589,7 +589,7 @@ export class ChangeStore {
     try { removedDirectories.push(...removeCreatedEmptyDirectories(directories)) } catch (error) {
       results.push({ id: '', path: '', status: 'failed', message: `空目录清理失败：${error instanceof Error ? error.message : String(error)}` })
     }
-    if (ids === undefined) {
+    if (ids === undefined || options.completeScope) {
       // A whole-turn rollback must not silently call itself complete while
       // directories created by its files remain. Explicit file-ID requests,
       // by contrast, need not remove a parent shared by unselected files.

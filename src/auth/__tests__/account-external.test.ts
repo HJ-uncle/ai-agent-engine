@@ -1,16 +1,16 @@
 // Real Fastify routes, SQLite flows, account sessions and HTTP OAuth/credential service.
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { createServer, type Server } from 'node:http'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { externalAccountRoutes } from '../../api/http/routes/account-external.js'
 import { authMiddlewareHook, configureRequestAuthentication } from '../../api/http/middleware.js'
-import { registerAccount, type AccountLoginResult } from '../accounts.js'
+import { registerAccount, getAccountUser, type AccountLoginResult } from '../accounts.js'
 import { initDb, getDb, closeDb } from '../../storage/sqlite/db.js'
 
 let upstream: Server, issuer = '', app: FastifyInstance, fixture = ''
+const fixtureParent = path.resolve('.e2e-tmp', 'account-simplify')
 const gate = { 'X-Aether-Instance-Token': 'external-test-instance-token' }
 const providerConfig = () => JSON.stringify([
   { id: 'oauth', name: 'Company', type: 'oauth2', issuer, authorizationUrl: `${issuer}/authorize`, tokenUrl: `${issuer}/token`, userInfoUrl: `${issuer}/userinfo`, clientId: 'desktop', mapping: { subject: 'id', userData: 'data' } },
@@ -39,7 +39,8 @@ beforeAll(async () => {
   await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve))
   const address = upstream.address(); if (!address || typeof address === 'string') throw new Error('Missing port')
   issuer = `http://127.0.0.1:${address.port}`
-  fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-external-auth-'))
+  fs.mkdirSync(fixtureParent, { recursive: true })
+  fixture = fs.mkdtempSync(path.join(fixtureParent, 'external-auth-'))
   vi.stubEnv('DATA_DIR', path.join(fixture, 'account.db'))
   vi.stubEnv('AUTH_ENABLED', 'true'); vi.stubEnv('AETHER_INSTANCE_TOKEN', gate['X-Aether-Instance-Token'])
   vi.stubEnv('ENCRYPTION_KEY', '9'.repeat(64)); vi.stubEnv('AETHER_ACCOUNT_PUBLIC_URL', issuer)
@@ -48,16 +49,16 @@ beforeAll(async () => {
 })
 beforeEach(async () => { await getDb().execute('DELETE FROM account_external_limits'); await getDb().execute('DELETE FROM account_external_flows') })
 afterAll(async () => {
-  await app?.close(); closeDb()
+  await app?.close(); await closeDb()
   if (upstream) await new Promise<void>((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()))
   vi.unstubAllEnvs()
-  if (fixture && path.dirname(fixture) === path.resolve(os.tmpdir()) && path.basename(fixture).startsWith('aether-external-auth-')) {
+  if (fixture && path.dirname(fixture) === fixtureParent && path.basename(fixture).startsWith('external-auth-')) {
     try { fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 2, retryDelay: 20 }) }
     catch (error) { if (process.platform !== 'win32' || !error || typeof error !== 'object' || !('code' in error) || error.code !== 'EPERM') throw error }
   }
 })
 type Flow = { authorizationUrl: string; flowId: string; pollToken: string }
-async function begin(mode: 'login' | 'link' = 'login', account?: AccountLoginResult): Promise<Flow> {
+async function begin(mode: 'login' | 'link' | 'reauth' = 'login', account?: AccountLoginResult): Promise<Flow> {
   const response = await app.inject({ method: 'POST', url: '/auth/account/external/start', headers: { ...gate, ...(account ? { Authorization: `Bearer ${account.accessToken}` } : {}) }, payload: { providerId: 'oauth', mode } })
   expect(response.statusCode, response.body).toBe(200)
   return response.json().data as Flow
@@ -66,8 +67,8 @@ async function callback(flow: Flow) {
   const state = new URL(flow.authorizationUrl).searchParams.get('state')
   return app.inject({ method: 'GET', url: `/auth/account/external/callback?state=${state}&code=valid-code` })
 }
-async function poll(flow: Flow, token = flow.pollToken) {
-  return app.inject({ method: 'POST', url: '/auth/account/external/poll', headers: gate, payload: { flowId: flow.flowId, pollToken: token } })
+async function poll(flow: Flow, token = flow.pollToken, account?: AccountLoginResult) {
+  return app.inject({ method: 'POST', url: '/auth/account/external/poll', headers: { ...gate, ...(account ? { Authorization: `Bearer ${account.accessToken}` } : {}) }, payload: { flowId: flow.flowId, pollToken: token } })
 }
 
 describe('persistent browser and credential login flows', () => {
@@ -157,5 +158,67 @@ describe('persistent browser and credential login flows', () => {
     expect((await app.inject({ method: 'POST', url: '/auth/account/external/credential', headers: gate, payload: { providerId: 'credential', credential: 'forged' } })).statusCode).toBe(429)
     await app.close(); app = await makeApp()
     expect((await app.inject({ method: 'POST', url: '/auth/account/external/credential', headers: gate, payload: { providerId: 'credential', credential: 'forged' } })).statusCode).toBe(429)
+  })
+
+  it('reauthenticates a browser identity in place and requires the original session when polling', async () => {
+    const loginFlow = await begin(); await callback(loginFlow)
+    const account = (await poll(loginFlow)).json().data.result as AccountLoginResult
+    const old = Date.now() - 11 * 60_000
+    await getDb().execute({ sql: 'UPDATE account_sessions SET authenticated_at=? WHERE id=?', args: [old, account.user.sessionId!] })
+    const flow = await begin('reauth', account)
+    expect((await poll(flow)).statusCode).toBe(401)
+    const competitor = await registerAccount()
+    expect((await poll(flow, flow.pollToken, competitor)).statusCode).toBe(403)
+    const secondLogin = await begin(); await callback(secondLogin)
+    const otherSession = (await poll(secondLogin)).json().data.result as AccountLoginResult
+    expect(otherSession.user.id).toBe(account.user.id)
+    const before = (await getDb().execute({ sql: 'SELECT COUNT(*) AS total FROM account_sessions WHERE user_id=?', args: [account.user.id] })).rows[0].total
+    expect((await poll(flow, flow.pollToken, otherSession)).statusCode).toBe(403)
+    expect((await poll(flow, flow.pollToken, account)).json().data.status).toBe('pending')
+    expect((await callback(flow)).statusCode).toBe(200)
+    const response = await poll(flow, flow.pollToken, account)
+    expect(response.statusCode).toBe(200)
+    const user = response.json().data.result
+    expect(user).toMatchObject({ id: account.user.id, tenantId: account.user.tenantId, sessionId: account.user.sessionId, roles: ['tenant-admin'] })
+    expect(Date.parse(user.authenticatedAt)).toBeGreaterThan(old)
+    expect(user.accessToken).toBeUndefined()
+    expect((await getDb().execute({ sql: 'SELECT COUNT(*) AS total FROM account_sessions WHERE user_id=?', args: [account.user.id] })).rows[0].total).toBe(before)
+  })
+
+  it('does not bind or create an account when reauthentication uses an unrelated browser identity', async () => {
+    const account = await registerAccount(), flow = await begin('reauth', account)
+    const before = (await getDb().execute('SELECT COUNT(*) AS total FROM users')).rows[0].total
+    expect((await callback(flow)).statusCode).toBe(200)
+    expect((await poll(flow, flow.pollToken, account)).statusCode).toBe(403)
+    expect((await getAccountUser(account.user.id, account.user.sessionId)).identities).toHaveLength(0)
+    expect((await getDb().execute('SELECT COUNT(*) AS total FROM users')).rows[0].total).toBe(before)
+  })
+
+  it.each(['pending', 'callback', 'complete'] as const)('rejects reauthentication when the original session is revoked at %s', async stage => {
+    const account = await registerAccount(), flow = await begin('reauth', account)
+    if (stage === 'complete') expect((await callback(flow)).statusCode).toBe(200)
+    await getDb().execute({ sql: 'UPDATE account_sessions SET revoked_at=? WHERE id=?', args: [Date.now(), account.user.sessionId!] })
+    if (stage === 'callback') expect((await callback(flow)).statusCode).toBe(400)
+    else expect((await poll(flow, flow.pollToken, account)).statusCode).toBe(401)
+    expect((await getAccountUser(account.user.id, account.user.sessionId)).authenticatedAt).toBe(account.user.authenticatedAt)
+  })
+
+  it('reauthenticates credential identities only when already bound to the same account', async () => {
+    const login = await app.inject({ method: 'POST', url: '/auth/account/external/credential', headers: gate,
+      payload: { providerId: 'credential', credential: 'verified-erp-secret', mode: 'login' } })
+    const account = login.json().data as AccountLoginResult, old = Date.now() - 11 * 60_000
+    await getDb().execute({ sql: 'UPDATE account_sessions SET authenticated_at=? WHERE id=?', args: [old, account.user.sessionId!] })
+    const request = { method: 'POST' as const, url: '/auth/account/external/credential', payload: { providerId: 'credential', credential: 'verified-erp-secret', mode: 'reauth' } }
+    expect((await app.inject({ ...request, headers: gate })).statusCode).toBe(401)
+    const other = await registerAccount()
+    expect((await app.inject({ ...request, headers: { ...gate, Authorization: `Bearer ${other.accessToken}` } })).statusCode).toBe(403)
+    expect((await getAccountUser(other.user.id)).identities).toHaveLength(0)
+    const response = await app.inject({ ...request, headers: { ...gate, Authorization: `Bearer ${account.accessToken}` } })
+    expect(response.statusCode).toBe(200)
+    expect(response.json().data).toMatchObject({ id: account.user.id, sessionId: account.user.sessionId })
+    expect(Date.parse(response.json().data.authenticatedAt)).toBeGreaterThan(old)
+    expect(response.json().data.accessToken).toBeUndefined()
+    await getDb().execute({ sql: 'UPDATE account_sessions SET revoked_at=? WHERE id=?', args: [Date.now(), account.user.sessionId!] })
+    expect((await app.inject({ ...request, headers: { ...gate, Authorization: `Bearer ${account.accessToken}` } })).statusCode).toBe(401)
   })
 })

@@ -66,9 +66,9 @@ afterEach(async () => {
 
 describe('chat thinking family on an Aliyun Anthropic endpoint', () => {
   it.each([
-    { model: 'deepseek-v4.1-flash-1017', provider: 'deepseek', thinkingMode: 'low' as const, expected: { reasoning_effort: 'low' } },
-    { model: 'deepseek-v4.1-flash-1017', provider: 'anthropic', thinkingMode: 'low' as const, expected: { reasoning_effort: 'low' } },
-    { model: 'private-deployment', provider: 'deepseek', thinkingMode: 'low' as const, expected: { reasoning_effort: 'low' } },
+    { model: 'deepseek-v4.1-flash-1017', provider: 'deepseek', thinkingMode: 'low' as const, expected: { output_config: { effort: 'low' } } },
+    { model: 'deepseek-v4.1-flash-1017', provider: 'anthropic', thinkingMode: 'low' as const, expected: { output_config: { effort: 'low' } } },
+    { model: 'private-deployment', provider: 'deepseek', thinkingMode: 'low' as const, expected: { output_config: { effort: 'low' } } },
     { model: 'qwen3.8-flash', provider: 'qwen', thinkingMode: 'low' as const, expected: { enable_thinking: true } },
     { model: 'private-deployment', provider: 'custom', thinkingMode: 'low' as const, expected: { enable_thinking: true } },
     { model: 'deepseek-v4.1-flash-1017', provider: 'deepseek', thinkingMode: false as const, expected: { thinking: { type: 'disabled' } } },
@@ -83,7 +83,7 @@ describe('chat thinking family on an Aliyun Anthropic endpoint', () => {
     expect(response.body).toContain('Hello.')
     const rootRequest = requests.find(request => request.stream === true && request.model === model)
     expect(rootRequest).toBeDefined()
-    const thinking = Object.fromEntries(Object.entries(rootRequest!).filter(([key]) => ['thinking', 'enable_thinking', 'reasoning_effort'].includes(key)))
+    const thinking = Object.fromEntries(Object.entries(rootRequest!).filter(([key]) => ['thinking', 'enable_thinking', 'reasoning_effort', 'output_config'].includes(key)))
     expect(thinking).toEqual(expected)
   })
 })

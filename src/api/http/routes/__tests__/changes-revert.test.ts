@@ -1,5 +1,4 @@
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -22,7 +21,8 @@ const tenant = 'd2-tenant'
 const session = 'd2-session'
 
 beforeEach(async () => {
-  fixture = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'aether-d2-revert-'))
+  fs.mkdirSync('.e2e-tmp', { recursive: true })
+  fixture = fs.mkdtempSync(path.resolve('.e2e-tmp/changes-revert-'))
   vi.stubEnv('DATA_DIR', path.join(fixture, 'changes.db'))
   // Exercise the production transaction/connection lifecycle. libsql's raw
   // :memory: client opens a new empty database after an interactive transaction.
@@ -43,7 +43,7 @@ afterEach(async () => {
   expect(closed.healthy, closed.errors.join('; ')).toBe(true)
   vi.restoreAllMocks()
   vi.unstubAllEnvs()
-  if (path.dirname(fixture) !== fs.realpathSync.native(os.tmpdir()) || !path.basename(fixture).startsWith('aether-d2-revert-')) throw new Error('Unsafe fixture cleanup')
+  if (path.dirname(fixture) !== path.resolve('.e2e-tmp') || !path.basename(fixture).startsWith('changes-revert-')) throw new Error('Unsafe fixture cleanup')
   fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
 })
 

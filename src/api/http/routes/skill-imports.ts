@@ -25,7 +25,7 @@ import { projectSkillRoots, withProjectSkillDeletion } from '../../../skills/pro
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { success, fail } from '../response.js'
-import { requireRoles, SKILL_IMPORT_ROLES } from '../../../auth/index.js'
+import { requireRoles, hasRoleAccess, SKILL_IMPORT_ROLES, type AuthContext } from '../../../auth/index.js'
 import { skillImportStore } from '../../../storage/skill-import/index.js'
 import {
   runSkillImport,
@@ -39,6 +39,7 @@ import { getSkillContent } from '../../../skills/external-loader.js'
 import { logger } from '../../../observability/index.js'
 import { hashFileContent } from '../../../shared/file-version.js'
 import { SkillManagementService, skillContentSchema, skillHashSchema, skillManagementFailure, skillManagementId } from '../../../skills/management-service.js'
+import { workspaceManager } from '../../../workspace/index.js'
 
 const CHUNK_SIZE = 2 * 1024 * 1024 // 分片目标大小（前端切分参考，后端不强制）
 
@@ -243,31 +244,39 @@ export async function skillImportRoutes(fastify: FastifyInstance) {
   const managementContext = (request: FastifyRequest, projectRoot?: string) => ({
     tenantId: getAuth(request).tenantId, projectRoot, principal: (request as any).authContext,
   })
-  // 全部路由要求 admin / skill-manager 角色（AUTH_ENABLED=false 时守卫自动放行）
-  fastify.addHook('preHandler', requireRoles(...SKILL_IMPORT_ROLES))
+  const requireManagement = requireRoles(...SKILL_IMPORT_ROLES)
+  fastify.addHook('preHandler', async (request, reply) => {
+    // Runtime discovery is not a management operation; no other route/query bypasses this guard.
+    if (request.method === 'GET' && request.routeOptions.url === `${fastify.prefix}/skills`
+      && (request.query as { available?: unknown }).available === '1') return
+    return requireManagement(request, reply)
+  })
 
   // ── 技能列表 ────────────────────────────────────────────────────────────────
   fastify.get<{ Querystring: { reload?: string; path?: string; scope?: SkillScope; all?: string; available?: string } }>('/skills', async (request, reply) => {
+    const availableOnly = request.query.available === '1'
+    let projectRoot: string | undefined
+    let scope: SkillRouteScope
+    try { projectRoot = workspaceQuery(request); scope = skillScopeQuery(request) } catch (error) { return reply.code(200).send(fail(40001, (error as Error).message)) }
+    if (availableOnly && projectRoot) {
+      try { projectRoot = workspaceManager.resolveProjectDirectory(getAuth(request).tenantId, projectRoot) }
+      catch { return reply.code(403).send(fail(40300, '无权读取此工作区的技能目录')) }
+    }
     // 全局层目录可能在启动后才创建（首次全局导入）：动态探测采纳
     skillsRegistry.ensureGlobalLayer()
     // ?reload=1：强制重扫磁盘（NFS 等共享卷上 fs.watch 可能不触发时的兜底）
     if (request.query.reload === '1') skillsRegistry.reload()
-    let projectRoot: string | undefined
-    let scope: SkillRouteScope
-    try { projectRoot = workspaceQuery(request); scope = skillScopeQuery(request) } catch (error) { return reply.code(200).send(fail(40001, (error as Error).message)) }
     // Pickers use the runtime's effective catalog; management keeps hidden and disabled entries.
-    const availableOnly = request.query.available === '1'
     const mode = resolveOSMMode()
     const list = availableOnly
-      ? skillsRegistry.getSkills(projectRoot).filter((skill) => (!scope || skill.scope === scope) && isOsmSkillVisible(skill.name, mode))
+      ? skillsRegistry.getPickerSkills(projectRoot).filter((skill) => (!scope || skill.scope === scope) && isOsmSkillVisible(skill.name, mode))
       : request.query.all === '1'
       ? [...skillsRegistry.getAllSkillsByScope(projectRoot, 'global'), ...skillsRegistry.getAllSkillsByScope(projectRoot, 'project')]
         .filter((skill, index, all) => all.findIndex((candidate) => managementSkillId(candidate) === managementSkillId(skill)) === index)
       : managementSkills(projectRoot, scope)
     return reply.code(200).send(success({
-      root: workspaceSkillsRoot(projectRoot, 'project'),
-      // 如实上报：registry 实际启用的全局层路径（未启用为 null）
-      globalRoot: skillsRegistry.globalRootPath,
+      ...(availableOnly ? {} : { root: workspaceSkillsRoot(projectRoot, 'project'), globalRoot: skillsRegistry.globalRootPath }),
+      permissions: { canManage: hasRoleAccess((request as FastifyRequest & { authContext?: AuthContext }).authContext, ...SKILL_IMPORT_ROLES) },
       list: list.map((s) => ({
         // Composer selections are sent as allowedSkills, which matches runtime IDs/names.
         id: availableOnly ? s.id ?? s.name : managementSkillId(s),

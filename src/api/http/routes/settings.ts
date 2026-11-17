@@ -2,7 +2,8 @@ import { FastifyInstance, FastifyRequest } from 'fastify'
 import { success, fail } from '../response.js'
 import { loadSecurityConfig, saveSecurityConfig, WebFetchConfig } from '../../../tools/web-fetch/security-config.js'
 import { systemConfigStore, SECRET_KEYS, BOOT_PATH_KEYS, TRUSTED_STARTUP_KEYS } from '../../../storage/sqlite/system-config.js'
-import { requireRoles } from '../../../auth/guards.js'
+import { requireRoles, hasRoleAccess } from '../../../auth/guards.js'
+import type { AuthContext } from '../../../auth/types.js'
 import { setGlobalToolPoolLimit } from '../../../core/utils/concurrency-pool.js'
 import { resolveOSMMode, isValidMode, OSM_MODES, getOSMCompressRatio } from '../../../core/osm.js'
 import { logger as engineLogger } from '../../../observability/index.js'
@@ -59,6 +60,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
     }
 
     const settings = {
+      permissions: { canManage: hasRoleAccess((request as FastifyRequest & { authContext?: AuthContext }).authContext, 'admin') },
       // ── LLM ──────────────────────────────────────────────────────────────
       LLM_PROVIDER:      getStr('LLM_PROVIDER',      'openai'),
       LLM_PRIMARY_MODEL: getStr('LLM_PRIMARY_MODEL',  'deepseek-chat'),
@@ -242,7 +244,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
 
     // 其余所有字段写入数据库
     for (const [k, v] of Object.entries(updates)) {
-      if (k === 'runtimeLimits' || k === 'managedKeys' || k === 'subagentConcurrency') continue
+      if (k === 'runtimeLimits' || k === 'managedKeys' || k === 'subagentConcurrency' || k === 'permissions') continue
       if (MANAGED_KEYS.has(k)) {
         engineLogger.warn({ key: k }, 'Attempted to modify a managed setting, ignoring.')
         continue

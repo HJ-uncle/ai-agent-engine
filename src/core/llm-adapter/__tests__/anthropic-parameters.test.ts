@@ -28,6 +28,65 @@ async function capture(stream: boolean, options: Partial<LLMAdapterOptions> = {}
 }
 
 describe.each([false, true])('Anthropic wire parameters (stream=%s)', stream => {
+  it.each(['low', 'medium', 'high'] as const)('maps semantic %s effort to Anthropic without changing the output limit', async effort => {
+    const params = await capture(stream, { model: 'deepseek-v4.1-flash-1017', maxTokens: 65536,
+      thinkingEnabled: true, reasoningEffort: effort })
+    expect(params).toMatchObject({ output_config: { effort }, max_tokens: 65536 })
+    expect(params).not.toHaveProperty('reasoning_effort')
+    expect(params).not.toHaveProperty('thinking')
+  })
+  it.each(['low', 'medium', 'high'])('converts legacy %s effort while preserving native output configuration', async effort => {
+    const thinkingConfig = { reasoning_effort: effort, output_config: { format: {
+      type: 'json_schema', schema: { type: 'object', properties: { result: { type: 'string' } } },
+    } } }
+    const retained = structuredClone(thinkingConfig)
+    const params = await capture(stream, { model: 'deepseek-v4.1-flash-1017', thinkingConfig })
+    expect(params.output_config).toEqual({ ...thinkingConfig.output_config, effort })
+    expect(params).not.toHaveProperty('reasoning_effort')
+    expect(thinkingConfig).toEqual(retained)
+  })
+  it('retains explicit native effort ahead of legacy and semantic defaults', async () => {
+    const params = await capture(stream, { reasoningEffort: 'medium', thinkingConfig: {
+      reasoning_effort: 'high', output_config: { effort: 'low', format: { type: 'json_schema' } },
+    } })
+    expect(params.output_config).toEqual({ effort: 'low', format: { type: 'json_schema' } })
+    expect(params).not.toHaveProperty('reasoning_effort')
+  })
+  it('preserves an older native Claude thinking budget without inventing effort support', async () => {
+    const params = await capture(stream, { model: 'claude-3-7-sonnet-20250219', reasoningEffort: 'low',
+      thinkingEnabled: true, thinkingConfig: { thinking: { type: 'enabled', budget_tokens: 2048 } } })
+    expect(params).toMatchObject({ thinking: { type: 'enabled', budget_tokens: 2048 } })
+    expect(params).not.toHaveProperty('output_config')
+    expect(params).not.toHaveProperty('reasoning_effort')
+  })
+  it.each(['qwen3', 'qwen3.8-flash', 'private-deployment'])('does not infer effort support for %s from a semantic default', async model => {
+    const params = await capture(stream, { model, reasoningEffort: 'low', thinkingConfig: { enable_thinking: true } })
+    expect(params).toMatchObject({ enable_thinking: true })
+    expect(params).not.toHaveProperty('output_config')
+    expect(params).not.toHaveProperty('reasoning_effort')
+  })
+  it.each([false, undefined])('removes stale effort on explicit Off (%s), retaining the output format', async thinkingEnabled => {
+    const thinkingConfig = { thinking: { type: 'disabled' }, reasoning_effort: 'high',
+      output_config: { effort: 'high', format: { type: 'json_schema' } } }
+    const retained = structuredClone(thinkingConfig)
+    const params = await capture(stream, { model: 'deepseek-v4.1-flash-1017', thinkingEnabled,
+      reasoningEffort: 'high', thinkingConfig })
+    expect(params).toMatchObject({ thinking: { type: 'disabled' }, output_config: { format: { type: 'json_schema' } } })
+    expect(params.output_config).not.toHaveProperty('effort')
+    expect(params).not.toHaveProperty('reasoning_effort')
+    expect(thinkingConfig).toEqual(retained)
+  })
+  it('keeps absent effort absent instead of enabling a provider default explicitly', async () => {
+    expect(await capture(stream)).not.toHaveProperty('output_config')
+    expect(await capture(stream, { thinkingEnabled: false, reasoningEffort: 'high',
+      thinkingConfig: { reasoning_effort: 'high', output_config: { effort: 'high' } } })).not.toHaveProperty('output_config')
+  })
+  it('translates a legacy none effort into the native Off switch', async () => {
+    const params = await capture(stream, { model: 'deepseek-v4.1-flash-1017', thinkingConfig: { reasoning_effort: 'none' } })
+    expect(params).toMatchObject({ thinking: { type: 'disabled' } })
+    expect(params).not.toHaveProperty('reasoning_effort')
+    expect(params).not.toHaveProperty('output_config')
+  })
   it('keeps cancelled reasoning in storage while omitting its empty unsigned assistant wire block', async () => {
     const messages: Message[] = [
       { id: 'task', role: 'user', content: 'Finish the original task.' },
@@ -67,10 +126,12 @@ describe.each([false, true])('Anthropic wire parameters (stream=%s)', stream => 
     expect(await capture(stream, { temperature: 0.2, thinkingEnabled: true, thinkingConfig: { thinking: { type: 'enabled', budget_tokens: 1024 } } })).toMatchObject({ temperature: 1, thinking: { type: 'enabled', budget_tokens: 1024 } })
   })
   it.each(['MiniMax-M2.5', 'glm-5.3'])('uses the provider-required thinking switch for %s', async model => {
-    const params = await capture(stream, { model, thinkingEnabled: false })
+    const params = await capture(stream, { model, thinkingEnabled: false, reasoningEffort: 'high',
+      thinkingConfig: { reasoning_effort: 'high', output_config: { effort: 'high' } } })
     expect(params).toMatchObject({ enable_thinking: true })
     expect(params).not.toHaveProperty('thinking')
     expect(params).not.toHaveProperty('reasoning_effort')
+    expect(params).not.toHaveProperty('output_config')
   })
   it.each(['MiniMax-M2.5', 'glm-5.3'])('forces the provider-required switch for %s when thinking is omitted', async model => {
     const params = await capture(stream, { model })

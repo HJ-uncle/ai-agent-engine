@@ -1,7 +1,7 @@
 /** Real owned roots, private file snapshots and archived final answers; no model/network/UI. */
 import fs from 'node:fs'
 import path from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { pino } from 'pino'
 import Fastify from 'fastify'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -26,6 +26,7 @@ import { resultToolImages } from './tool-images.js'
 import { ChangeStore } from '../changes/index.js'
 import { publicSessionHistoryMessages } from '../../api/http/history-projection.js'
 import { conversationRoutes } from '../../api/http/routes/conversation.js'
+import type { FinalResult } from '../../core/final-result.js'
 
 let dir: string, workspace: string, db: LocalSqliteProcessClient, roots: RootRunStore, root: RootRun
 let service: ExecutionOwners, owner: ExecutionOwner, controller: AbortController, ctx: AgentContext, history: JSONLConversationHistory, store: FinalResultStore, manager: WorkspaceManager
@@ -144,6 +145,67 @@ it('does not revoke an earlier delivered version when a later turn restores it',
   expect(projected.map(message => message.metadata?.finalResult.items)).toEqual([[earlier], []])
   expect(Buffer.from((await store.readAsset(tenant, ctx.sessionId, previous.runId, earlier.assetId, history)).content, 'base64').toString()).toBe('first')
   await expect(store.readAsset(tenant, ctx.sessionId, root.runId, later.assetId, history)).rejects.toThrow('withdrawn')
+})
+
+it('keeps five published rounds immutable through delete/recreate, rollback 5 then 2, and storage reopen', async () => {
+  const plans = [
+    { files: { 'app.html': '<h1>version 1</h1>', 'obsolete.txt': 'original', 'stable.txt': 'unchanged' }, deliver: ['app.html', 'obsolete.txt', 'stable.txt'] },
+    { files: { 'app.html': '<h1>version 2</h1>', 'extra.txt': 'feature 2' }, deliver: ['app.html', 'extra.txt'] },
+    { files: { 'app.html': null, 'obsolete.txt': null, 'extra.txt': 'feature 3' }, deliver: ['extra.txt'] },
+    { files: { 'app.html': '<h1>version 4</h1>', 'obsolete.txt': 'recreated', 'extra.txt': 'feature 4' }, deliver: ['app.html', 'obsolete.txt', 'extra.txt'] },
+    { files: { 'app.html': '<h1>version 5</h1>', 'extra.txt': null, 'final.txt': 'only round 5' }, deliver: ['app.html', 'final.txt'] },
+  ] satisfies Array<{ files: Record<string, string | null>; deliver: string[] }>
+  const rounds: Array<{ root: RootRun; result: FinalResult; bytes: Map<string, string>; disk: Record<string, string> }> = []
+  const disk = (): Record<string, string> => Object.fromEntries(fs.readdirSync(workspace).sort().map(name => [name, fs.readFileSync(path.join(workspace, name), 'utf8')]))
+  const assertAssets = async (retained: number): Promise<void> => {
+    const archived = await history.getFullHistory(ctx)
+    const projected = await new FinalResultStore().projectHistory(tenant, archived)
+    for (const [index, round] of rounds.entries()) {
+      const message = projected.find(item => item.id === round.root.assistantMessageId)
+      expect(message?.metadata?.finalResult.items).toEqual(index < retained ? round.result.items : [])
+      for (const item of round.result.items) {
+        const read = new FinalResultStore().readAsset(tenant, ctx.sessionId, round.root.runId, item.assetId, history)
+        if (index >= retained) { await expect(read).rejects.toThrow('withdrawn'); continue }
+        const value = await read, expected = round.bytes.get(item.assetId)!
+        expect(Buffer.from(value.content, 'base64').toString()).toBe(expected)
+        expect(value.sha256).toBe(createHash('sha256').update(expected).digest('hex'))
+      }
+      // Public revocation must never rewrite the archived publication itself.
+      expect(archived.find(item => item.id === round.root.assistantMessageId)?.metadata?.finalResult).toEqual(round.result)
+    }
+  }
+  for (const [index, plan] of plans.entries()) {
+    if (index) await admit()
+    await history.append({ id: root.userMessageId, role: 'user', content: `Project modification ${index + 1}`, conversationId: root.turnId }, ctx)
+    for (const [name, content] of Object.entries(plan.files)) {
+      const file = path.join(workspace, name), oldContent = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null
+      if (content === null) fs.unlinkSync(file); else fs.writeFileSync(file, content)
+      const change = await new ChangeStore().record(tenant, { sessionId: ctx.sessionId, turnId: root.turnId, runId: root.runId,
+        path: file, kind: content === null ? 'delete' : 'write', oldContent, newContent: content })
+      // A whole-turn rollback includes previously kept edits as well as pending ones.
+      if (index === 1) await new ChangeStore().markStatus(change.id, tenant, 'kept')
+    }
+    const items = await store.stage(ctx, plan.deliver.map(name => ({ path: path.join(workspace, name) })))
+    const bytes = new Map(items.map(item => [item.assetId, fs.readFileSync(item.path, 'utf8')]))
+    rounds.push({ root, result: await complete(`Completed project modification ${index + 1}`), bytes, disk: disk() })
+    await assertAssets(rounds.length)
+  }
+  const fifth = await new ChangeStore().revertBatch(tenant, { sessionId: ctx.sessionId, fromTurnId: rounds[4].root.turnId, scope: 'all' })
+  expect(fifth).toMatchObject({ conflicts: 0, unavailable: 0, failed: 0, reverted: 3 })
+  expect(disk()).toEqual(rounds[3].disk)
+  await assertAssets(4)
+  const second = await new ChangeStore().revertBatch(tenant, { sessionId: ctx.sessionId, fromTurnId: rounds[1].root.turnId, scope: 'all' })
+  expect(second).toMatchObject({ conflicts: 0, unavailable: 0, failed: 0, reverted: 8 })
+  expect(disk()).toEqual(rounds[0].disk)
+  await assertAssets(1)
+  const repeated = await new ChangeStore().revertBatch(tenant, { sessionId: ctx.sessionId, fromTurnId: rounds[1].root.turnId, scope: 'all' })
+  expect(repeated).toMatchObject({ reverted: 0, conflicts: 0, unavailable: 0, failed: 0 })
+  expect(repeated.results.every(item => item.status === 'already_reverted')).toBe(true)
+  expect(disk()).toEqual(rounds[0].disk)
+  expect((await db.closeWithReceipt()).healthy).toBe(true)
+  db = new LocalSqliteProcessClient({ url: 'file:' + path.join(dir, 'agent.db').replaceAll('\\', '/') })
+  history = new JSONLConversationHistory()
+  await assertAssets(1)
 })
 
 it.each([false, true])('withdraws a later no-edit re-delivery of the same producing version (legacy=%s)', async legacy => {

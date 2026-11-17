@@ -20,6 +20,8 @@ import type { CreateAdapterOptions } from '../../../core/llm-adapter/factory.js'
 import { compressionSplitIndex } from '../../../storage/conversation/compression.js'
 import { DisplayHistoryAnchorNotFoundError } from '../../../storage/conversation/display-history.js'
 import { finalResults } from '../../../storage/results/index.js'
+import { ChangeStore, type RevertBatchResult } from '../../../storage/changes/index.js'
+import { RollbackJournal } from '../../../storage/changes/rollback-journal.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTenantId = (req: FastifyRequest) => (req as any).authContext?.tenantId ?? 'default'
@@ -380,6 +382,70 @@ export async function conversationRoutes(fastify: FastifyInstance) {
       })
     if (removed === null) return reply.code(404).send(fail(40400, 'Message not found in this session'))
     return reply.code(200).send(success({ success: true }))
+  })
+
+  // File rollback and history removal share one admission lease. A saved exact
+  // scope also survives a lost HTTP response or a crash during history cleanup.
+  fastify.post<{ Body: { sessionId: string; messageId: string; requestKey: string; reviewedCommandChangeIds?: string[] } }>('/conversation/rollback', {
+    schema: { body: { type: 'object', additionalProperties: false, required: ['sessionId', 'messageId', 'requestKey'], properties: {
+      sessionId: { type: 'string', minLength: 1 }, messageId: { type: 'string', minLength: 1 },
+      requestKey: { type: 'string', minLength: 1, maxLength: 200 },
+      reviewedCommandChangeIds: { type: 'array', items: { type: 'string', minLength: 1 } },
+    } } },
+  }, async (request, reply) => {
+    const { sessionId, messageId, requestKey, reviewedCommandChangeIds } = request.body
+    const tenantId = getTenantId(request), journal = new RollbackJournal(), changes = new ChangeStore()
+    const result = await withSessionHistoryMutation(tenantId, sessionId, async () => {
+      let saved = await journal.get(tenantId, sessionId, messageId, requestKey)
+      const complete = (report: RevertBatchResult) => ({ ...report, historyTruncated: true, removedFrom: messageId })
+      // In particular, never cancel a new branch just to repeat an old receipt.
+      if (saved?.state === 'succeeded') return complete(saved.report!)
+      const initialRuns = await rootRunStore.list(tenantId, sessionId)
+      if (saved && saved.roots.some(root => initialRuns.some(run => run.runId === root.runId && run.attemptId !== root.attemptId)))
+        throw Object.assign(new Error('该轮已开始新的继续执行；请重新预览并确认新的回退请求'), { statusCode: 409 })
+      const anchor = initialRuns.find(run => run.userMessageId === messageId)
+      if (!saved && !anchor) throw Object.assign(new Error('只能从当前会话的原始用户轮次回退，不能按时间猜测范围'), { statusCode: 400 })
+      if (saved && initialRuns.some(run => !saved!.turnIds.includes(run.turnId) && ['running', 'waiting'].includes(run.status))) {
+        throw Object.assign(new Error('新分支仍在运行；原回退记录保留，不能中断新分支重放旧请求'), { statusCode: 409 })
+      }
+      const reason = 'Conversation rolled back by user'
+      await withHistoryLock(tenantId, () => interruptSession(tenantId, sessionId, reason))
+      await stopOwnedSession(tenantId, sessionId, reason)
+      await getSubagentRunner().cancelRunsForParent(tenantId, sessionId)
+      await commandJobs.cancelScope({ tenantId, sessionId }, reason)
+      return withHistoryLock(tenantId, async () => {
+        await interruptSession(tenantId, sessionId, reason)
+        if (!saved) {
+          const runs = await rootRunStore.list(tenantId, sessionId)
+          const current = runs.find(run => run.runId === anchor!.runId)
+          if (!current) throw Object.assign(new Error('目标轮次已变化，未开始回退'), { statusCode: 409 })
+          const preview = await changes.previewRevert(tenantId, { sessionId, fromTurnId: current.turnId, scope: 'all' })
+          const selectedRuns = runs.filter(run => run.seq >= current.seq)
+          saved = { state: 'pending', turnIds: selectedRuns.map(run => run.turnId),
+            roots: selectedRuns.map(run => ({ runId: run.runId, turnId: run.turnId, attemptId: run.attemptId })),
+            changeIds: preview.changes.map(change => change.id) }
+          await journal.save(tenantId, sessionId, messageId, requestKey, saved)
+        }
+        if (saved.state === 'pending') {
+          const report = saved.changeIds.length
+            ? await changes.revertBatch(tenantId, { sessionId, ids: saved.changeIds, scope: 'all', reviewedCommandChangeIds }, { completeScope: true })
+            : { results: [], total: 0, reverted: 0, conflicts: 0, unavailable: 0, failed: 0 }
+          const finished = report.results.every(item => item.status === 'reverted' || item.status === 'already_reverted')
+          saved = { ...saved, report, state: finished ? 'files_reverted' : 'pending' }
+          await journal.save(tenantId, sessionId, messageId, requestKey, saved)
+          if (!finished) return { ...report, historyTruncated: false }
+        }
+        // Exact turn tombstones include compacted archive rows and cannot erase
+        // a branch appended after an interrupted previous cleanup attempt.
+        await removeChildRuns(tenantId, sessionId, new Set(), new Set(saved.turnIds))
+        for (const turnId of saved.turnIds) await history.deleteByConversationId(turnId, tenantId, sessionId)
+        await rootRunStore.deleteTurns(tenantId, sessionId, saved.turnIds)
+        saved = { ...saved, state: 'succeeded' }
+        await journal.save(tenantId, sessionId, messageId, requestKey, saved)
+        return complete(saved.report!)
+      })
+    })
+    return reply.send(success(result))
   })
 
   // POST /conversation/truncate — 截断历史：删除指定消息及其之后的所有消息

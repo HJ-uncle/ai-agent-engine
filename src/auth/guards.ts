@@ -14,6 +14,12 @@ import type { AuthContext } from './types.js'
 
 export const ERROR_FORBIDDEN = 41015
 
+/** The same trusted-role decision backs mutation guards and read-only capability hints. */
+export function hasRoleAccess(auth: AuthContext | undefined, ...roles: string[]): boolean {
+  if (process.env.AUTH_ENABLED === 'false' && (!auth || auth.method === 'none')) return true
+  return !!auth && auth.method !== 'none' && roles.some(role => auth.roles?.includes(role))
+}
+
 /**
  * 创建要求任一角色通过的 Fastify preHandler。
  * @param roles 允许通过的角色列表（任一匹配即可）
@@ -25,18 +31,14 @@ export function requireRoles(...roles: string[]) {
     // Local mode may have no context at all.  Never let a previously
     // authenticated non-admin context become admin merely because a mutable
     // environment value changed while the server was running.
-    if (process.env.AUTH_ENABLED === 'false' && (!authContext || authContext.method === 'none')) return
+    if (hasRoleAccess(authContext, ...roles)) return
     if (!authContext || authContext.method === 'none') {
       return reply.code(200).send(fail(ERROR_FORBIDDEN, '该操作需要登录后执行'))
     }
 
-    const userRoles = authContext.roles ?? []
-    const allowed = roles.some((r) => userRoles.includes(r))
-    if (!allowed) {
-      return reply.code(200).send(
-        fail(ERROR_FORBIDDEN, `权限不足：需要以下角色之一 [${roles.join(', ')}]`),
-      )
-    }
+    return reply.code(200).send(
+      fail(ERROR_FORBIDDEN, `权限不足：需要以下角色之一 [${roles.join(', ')}]`),
+    )
   }
 }
 

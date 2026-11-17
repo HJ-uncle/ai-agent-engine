@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { projectDataPath, projectDataReadPaths } from '../core/project-storage.js'
-import { loadExternalSkills, type ExternalSkill } from './external-loader.js'
+import { isSkillPathWithin, loadExternalSkills, type ExternalSkill } from './external-loader.js'
 import { logger } from '../observability/index.js'
 
 /** Highest priority first; old skill roots are read in place, never relocated. */
@@ -50,17 +50,17 @@ export function withProjectSkillDeletion(projectRoot: string, skillName: string,
   }
 }
 
-export function loadProjectSkills(projectRoot: string): ExternalSkill[] {
+export function loadProjectSkills(projectRoot: string, confined = false): ExternalSkill[] {
   const modernRoot = projectDataPath(projectRoot, 'skills')
   const configPath = path.join(modernRoot, 'skills.config.json')
   let config: Record<string, unknown> = {}
-  try { config = readConfig(configPath) }
+  try { if (!confined || isSkillPathWithin(projectRoot, configPath)) config = readConfig(configPath) }
   catch (error) { logger.warn({ configPath, error }, 'Failed to read project skill overrides') }
   const deleted = deletedLegacySkills(config)
   const merged = new Map<string, ExternalSkill>()
   for (const root of projectSkillRoots(projectRoot).reverse()) {
     if (!fs.existsSync(root)) continue
-    for (const skill of loadExternalSkills(root, { includeDisabled: true })) {
+    for (const skill of loadExternalSkills(root, { includeDisabled: true, ...(confined ? { containmentRoot: projectRoot } : {}) })) {
       // A newly imported canonical copy is an explicit restoration. The
       // marker only suppresses retained legacy copies, never current files.
       if (root !== modernRoot && deleted.has(skill.name.toLowerCase())) continue

@@ -6,13 +6,30 @@
 
 - `POST /register {}` 一键生成随机名称、内部 userId、独立 tenantId、恢复凭证与账号会话。`AETHER_ACCOUNT_REGISTRATION=false` 关闭公开注册（包括第三方首次自动注册）。可选个人信息通过登录后的 profile 保存；不要求填写密码或邮箱。
 - `POST /login {recoveryKey}` 使用恢复凭证重登；也接受已存在有效 API Key，保留旧用户 ID、租户及所有租户数据。不会把匿名 default 数据自动归给新账号。
-- `GET /me` 读取个人资料、已绑定身份及当前会话 ID。
+- `GET /me` 读取个人资料、已绑定身份、当前会话 ID、可信存储中的 `roles` 及本会话最近真实验证时间 `authenticatedAt`（ISO 8601）。后两者不从用户填写的 `userData` 读取。
 - `PATCH /profile {name?,email?,avatarUrl?,bio?,userData?}` 更新资料；省略 name 保持原名称，显式空值或空白名称生成随机名称。userData 限 16 KB JSON 对象，不能修改角色、内部 ID 或租户。邮箱为用户自填资料，不代表邮箱验证。
 - `POST /refresh {refreshToken,requestId?}` 更新短期访问凭证。
+- `POST /reauth {recoveryKey}` 在当前有效账号会话内重新验证。恢复码或旧 API Key 必须属于当前用户，错误凭证返回 403，不注销当前账号；成功返回 `AccountUser`，只更新当前会话的 `authenticatedAt`，不更换用户/租户/令牌、不新建会话、不延长 30 天总有效期，也不更新其他会话的验证时间。每个来源地址每分钟最多 10 次。未登录或原会话已失效返回 401。
 - `GET /sessions`、`DELETE /sessions/:id` 查看或撤销自己的登录会话。
 - `POST /logout {all?:boolean}` 注销当前会话或全部会话。
 - `POST /recovery {}` 轮换恢复凭证，并撤销其他会话及旧 API Key；须在本次登录认证后 10 分钟内执行。新的恢复凭证只返回一次。
 - `DELETE /identities/:providerId` 解绑第三方，须在本次认证后 10 分钟内执行，且不能删除最后的可用登录方式。
+
+恢复文件仅携带访问已有账号所需的恢复凭证，不是会话、工作区文件或引擎数据库备份。恢复只会查询当前所连接引擎的数据；独立新引擎没有原账号记录时不能凭恢复文件重建账号数据。首次注册也不会把匿名 `default` 租户的数据自动迁移到新账号。
+
+## 当前会话重新验证
+
+重置恢复码、绑定或解绑第三方前，可以使用 `POST /reauth` 完成验证后重试原操作，无需先退出账号。`refresh` 只维护短期令牌，不刷新 `authenticatedAt`，不会绕过敏感操作的 10 分钟认证要求。
+
+第三方 `/external/start` 与 `/external/credential` 支持 `mode: 'login' | 'link' | 'reauth'`。`reauth` 必须从有效账号会话发起，仅接受已绑定当前用户的精确 `(providerId,issuer,subject)`，不能借机新建账号、绑定新身份或切换用户。浏览器回调与结果领取都重新检查原会话未撤销且未到期；`/external/poll` 还必须携带发起时同一账号会话的 Bearer。返回 `{status:'complete',result:AccountUser}`，不是新的令牌对。credential 模式直接返回 `AccountUser`。`link` 仍要求近期认证，且保持原来的绑定语义。
+
+## 使用技能与管理技能
+
+`GET /api/v1/skills?available=1` 是输入菜单使用的运行时可用技能目录，普通已登录账号也可读取；它仍遵守启用状态和 OSM 过滤。显式 `path` 必须通过现有工作区权限校验：鉴权部署中限制为允许的工作区且不得属于其他租户。本地单机继续允许选择本机工作区。目录读取不跟随越过授权项目的技能目录联接点或 manifest 路径；不传 `path` 时只返回共享/部署/内置技能，不暴露服务器 cwd 的项目技能，也不返回管理路径。
+
+默认技能管理列表、详情、导入与写操作仍要求 `admin` 或 `skill-manager`，`available=1` 不会放开这些接口。账号会话的角色来自后端可信配置，前端显示角色不能授予权限。
+
+技能目录响应和 `GET /api/v1/settings` 在原有字段外增加 `permissions: {canManage:boolean}`。该值与对应写接口共用角色判断：技能管理要求 `admin`/`skill-manager`，设置写入要求 `admin`，本地匿名保持原有放行语义。前端应据此展示管理操作或只读状态，不能因为未获取 AccountUser（如使用 API Key/JWT）就推断为无权限；服务端仍独立检查每次写入。
 
 ## 会话边界
 
@@ -24,7 +41,7 @@ AUTH_ENABLED=false 只允许缺少凭证的本地匿名请求继续使用 defaul
 
 第三方唯一身份为 `(providerId, issuer, subject)`。登录已有绑定会复用同一内部用户；登录新身份会创建新账号。绑定仅限已登录且最近认证的账号，保留原 userId 与 tenantId，不按邮箱自动合并。第三方身份的 name、email、avatarUrl 单独保存并随已验证登录更新，自定义 userData 保持独立；绑定不覆盖用户的本地个人资料。已绑定其他用户时返回冲突，避免隐式数据归属转移。
 
-新账号只有 `tenant-admin`：可管理属于自己租户的模型及 safe/standard 会话安全模式；full-access 仍需实例管理员。实例级设置、安全策略、全局 Skills 等仍要求管理员。自定义资料和第三方 userData 不参与权限判断。
+新账号只有 `tenant-admin`：可管理属于自己租户的模型及 safe/standard 会话安全模式；远程 full-access 仍需实例管理员。由桌面持有实例令牌的本机 loopback 引擎允许自己的账号使用会话 full-access，这不授予实例管理角色。实例级设置、安全策略、全局 Skills 等仍要求管理员。自定义资料和第三方 userData 不参与权限判断。
 
 本地 SQLite 写事务使用认证模块共享队列，避免并发首次登录/刷新/回调互相争锁；数据库唯一约束与事务仍是最终数据一致性保障。登录端点按来源地址限速，计数持久化；应用默认不信任代理转发的来源地址。部署在反向代理后，需要由运维明确配置可信代理与入口限速。
 

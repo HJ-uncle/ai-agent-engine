@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { AuthContext } from '../types.js'
 import type { AccountLoginResult, AccountUser } from '../accounts.js'
 
-const fixture = path.resolve('.e2e-tmp', `accounts-${randomUUID()}`)
+const fixture = path.resolve('.e2e-tmp', 'account-simplify', `accounts-${randomUUID()}`)
 let app: FastifyInstance
 let accounts: typeof import('../accounts.js')
 let database: typeof import('../../storage/sqlite/db.js')
@@ -163,6 +163,60 @@ describe('account lifecycle with enabled authentication and owned-instance gate'
       expect((await app.inject({ method: 'GET', url: '/protected', headers: { ...instanceHeaders, authorization: 'Bearer aether_session_invalid' } })).statusCode).toBe(401)
       expect((await app.inject({ method: 'GET', url: '/auth/account/me', headers: instanceHeaders })).statusCode).toBe(401)
     } finally { vi.stubEnv('AUTH_ENABLED', 'true'); middleware.configureRequestAuthentication() }
+  })
+})
+
+describe('reauthenticating the current account session', () => {
+  it('refreshes only the same session authentication time without replacing credentials or extending its lifetime', async () => {
+    const account = await register(), otherSession = await accounts.loginAccount(account.recoveryKey!)
+    const otherUser = await register(), old = Date.now() - 11 * 60_000
+    const db = database.getDb()
+    await db.execute({ sql: 'UPDATE account_sessions SET authenticated_at=? WHERE user_id=?', args: [old, account.user.id] })
+    const before = (await db.execute({ sql: 'SELECT * FROM account_sessions WHERE id=?', args: [account.user.sessionId!] })).rows[0]
+    const wrong = await app.inject({ method: 'POST', url: '/auth/account/reauth', headers: headers(account), payload: { recoveryKey: otherUser.recoveryKey } })
+    expect(wrong.statusCode).toBe(403)
+    expect((await accounts.getAccountUser(account.user.id, account.user.sessionId)).authenticatedAt).toBe(new Date(old).toISOString())
+    const response = await app.inject({ method: 'POST', url: '/auth/account/reauth', headers: headers(account), payload: { recoveryKey: account.recoveryKey } })
+    expect(response.statusCode).toBe(200)
+    expect(response.json().data).toMatchObject({ id: account.user.id, tenantId: account.user.tenantId, sessionId: account.user.sessionId, roles: ['tenant-admin'] })
+    expect(response.json().data.accessToken).toBeUndefined()
+    const after = (await db.execute({ sql: 'SELECT * FROM account_sessions WHERE id=?', args: [account.user.sessionId!] })).rows[0]
+    expect(Number(after.authenticated_at)).toBeGreaterThan(old)
+    expect(response.json().data.authenticatedAt).toBe(new Date(Number(after.authenticated_at)).toISOString())
+    expect({ ...after, authenticated_at: old, last_seen_at: before.last_seen_at }).toEqual({ ...before, authenticated_at: old })
+    expect((await accounts.getAccountUser(account.user.id, otherSession.user.sessionId)).authenticatedAt).toBe(new Date(old).toISOString())
+    expect((await accounts.authenticateAccountSession(account.accessToken)).userId).toBe(account.user.id)
+    expect((await db.execute({ sql: 'SELECT id FROM account_sessions WHERE user_id=?', args: [account.user.id] })).rows).toHaveLength(2)
+    expect((await app.inject({ method: 'POST', url: '/auth/account/recovery', headers: headers(account), payload: {} })).statusCode).toBe(200)
+  })
+
+  it('requires a live account session and never reactivates a revoked session', async () => {
+    const account = await register(), auth = await accounts.authenticateAccountSession(account.accessToken)
+    const request = { method: 'POST' as const, url: '/auth/account/reauth', payload: { recoveryKey: account.recoveryKey } }
+    expect((await app.inject({ ...request, headers: instanceHeaders })).statusCode).toBe(401)
+    await accounts.revokeAccountSession(auth, auth.sessionId)
+    expect((await app.inject({ ...request, headers: headers(account) })).statusCode).toBe(401)
+    await expect(accounts.reauthenticateAccount(auth, account.recoveryKey!)).rejects.toThrow('登录已失效')
+  })
+
+  it('returns trusted stored roles and refuses profile privilege writes', async () => {
+    const account = await register()
+    const response = await app.inject({ method: 'PATCH', url: '/auth/account/profile', headers: headers(account), payload: { roles: ['admin'] } })
+    expect(response.statusCode).toBe(400)
+    const updated = await app.inject({ method: 'PATCH', url: '/auth/account/profile', headers: headers(account), payload: { userData: { roles: ['admin'], authenticatedAt: '2099-01-01' } } })
+    expect(updated.json().data.roles).toEqual(['tenant-admin'])
+    expect(updated.json().data.authenticatedAt).toBe(account.user.authenticatedAt)
+    const withoutSession = await accounts.getAccountUser(account.user.id)
+    expect(withoutSession.authenticatedAt).toBeUndefined()
+    expect(withoutSession.roles).toEqual(['tenant-admin'])
+  })
+
+  it('rate-limits current-session verification attempts', async () => {
+    const account = await register()
+    const request = { method: 'POST' as const, url: '/auth/account/reauth', headers: headers(account), remoteAddress: '192.0.2.231', payload: { recoveryKey: 'wrong' } }
+    for (let index = 0; index < 10; index++) expect((await app.inject(request)).statusCode).toBe(403)
+    expect((await app.inject(request)).statusCode).toBe(429)
+    expect((await accounts.authenticateAccountSession(account.accessToken)).userId).toBe(account.user.id)
   })
 })
 
