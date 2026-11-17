@@ -1,7 +1,6 @@
 // Real execute_cmd children must retain Windows directory discovery without
 // inheriting service secrets or allowing Python Manager to install implicitly.
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { createClient, type Client } from '@libsql/client'
 import { pino } from 'pino'
@@ -19,9 +18,12 @@ const directories = ['LOCALAPPDATA', 'APPDATA', 'USERPROFILE', 'HOMEDRIVE', 'HOM
 let db: Client
 let fixture: string
 let ctx: AgentContext
+const fixtureRoot = path.resolve('.e2e-tmp/command-receipts/environment')
+const logOf = (result: { output: string }): string => JSON.parse(result.output).entries.map((entry: { text: string }) => entry.text).join('')
 
 beforeEach(async () => {
-  fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-command-env-'))
+  fs.mkdirSync(fixtureRoot, { recursive: true })
+  fixture = fs.mkdtempSync(path.join(fixtureRoot, 'aether-command-env-'))
   db = createClient({ url: 'file::memory:' })
   vi.spyOn(database, 'getDb').mockReturnValue(db)
   vi.spyOn(auditLogStore, 'append').mockResolvedValue(undefined)
@@ -73,7 +75,7 @@ afterEach(async () => {
   db.close()
   vi.restoreAllMocks()
   vi.unstubAllEnvs()
-  if (path.dirname(fixture) !== path.resolve(os.tmpdir()) || !path.basename(fixture).startsWith('aether-command-env-')) throw new Error('Unsafe cleanup path')
+  if (path.dirname(fixture) !== fixtureRoot || !path.basename(fixture).startsWith('aether-command-env-')) throw new Error('Unsafe cleanup path')
   fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 })
 })
 
@@ -87,7 +89,7 @@ describe.skipIf(process.platform !== 'win32')('Windows command child environment
     const source = `const names=${JSON.stringify(directories)};process.stdout.write(JSON.stringify({directories:Object.fromEntries(names.filter(n=>process.env[n]!==undefined).map(n=>[n,process.env[n]])),home:process.env.HOME,automaticInstall:process.env.PYTHON_MANAGER_AUTOMATIC_INSTALL,privatePresent:'AETHER_COMMAND_PRIVATE_FIXTURE' in process.env}));`
     const result = await cmdTool.execute({ command: process.execPath, args: ['-e', source], timeoutMs: 10_000 }, ctx)
     expect(result.success).toBe(true)
-    expect(JSON.parse(result.output)).toEqual({ directories: expected, home: fs.realpathSync(fixture), automaticInstall: 'false', privatePresent: false })
+    expect(JSON.parse(logOf(result))).toEqual({ directories: expected, home: fs.realpathSync(fixture), automaticInstall: 'false', privatePresent: false })
     expect(process.env.PYTHON_MANAGER_AUTOMATIC_INSTALL).toBe('true')
   })
 
@@ -97,7 +99,7 @@ describe.skipIf(process.platform !== 'win32')('Windows command child environment
     vi.stubEnv('PYTHON_MANAGER_AUTOMATIC_INSTALL', 'true')
     const result = await cmdTool.execute({ command: process.execPath, args: ['-e', "process.stdout.write(JSON.stringify({automaticInstall:process.env.PYTHON_MANAGER_AUTOMATIC_INSTALL,privatePresent:'AETHER_COMMAND_PRIVATE_FIXTURE' in process.env}));"], timeoutMs: 10_000 }, ctx)
     expect(result.success).toBe(true)
-    expect(JSON.parse(result.output)).toEqual({ automaticInstall: 'false', privatePresent: true })
+    expect(JSON.parse(logOf(result))).toEqual({ automaticInstall: 'false', privatePresent: true })
     expect(process.env.PYTHON_MANAGER_AUTOMATIC_INSTALL).toBe('true')
   })
 })

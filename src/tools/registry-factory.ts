@@ -30,7 +30,7 @@ import {
 } from './file/index.js'
 import { officeDocumentTool, officeInspectTool } from './office/index.js'
 import { officeEnvironmentTool } from './office/environment.js'
-import { cmdTool, commandJobTools } from './cmd/index.js'
+import { cmdTool, commandJobTools, commandWaitTools } from './cmd/index.js'
 import { askUserTool } from './ask-user/index.js'
 import { createMemoryTools } from './memory/index.js'
 import { registerMCPTools } from './mcp/loader.js'
@@ -217,7 +217,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   /** Helper: register a tool into the registry and track it as builtin */
   const registerBuiltin = (tool: Tool) => {
     const readOnly = [readFileTool, listFilesTool, globTool, grepTool, searchHistoryTool, officeEnvironmentTool, officeInspectTool, loadToolsTool,
-      ...commandJobTools.filter(candidate => candidate.name === 'command_output')].includes(tool)
+      ...commandJobTools.filter(candidate => candidate.name === 'command_output'), ...commandWaitTools].includes(tool)
     const browserReadOnly = browserTools.includes(tool) && BROWSER_READONLY_TOOLS.has(tool.name)
     const workbenchReadOnly = workbenchTools.includes(tool) && tool.name === 'workbench_context'
     const mode = tool.name === 'subagent' && subagentTools.includes(tool) ? 'subagent'
@@ -307,6 +307,7 @@ export async function createToolRegistry(opts: RegistryFactoryOptions = {}): Pro
   // 3. 命令行工具
   if (shouldRegister(cmdTool.name)) registerBuiltin(cmdTool)
   commandJobTools.forEach(tool => { if (shouldRegister(tool.name)) registerBuiltin(tool) })
+  commandWaitTools.forEach(tool => { if (shouldRegister(tool.name)) registerBuiltin(tool) })
 
   // 4. Explicit capability selection also applies to interactive tools in unattended runs.
   if (shouldRegister(askUserTool.name)) registerBuiltin(askUserTool)

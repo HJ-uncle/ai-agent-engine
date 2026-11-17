@@ -42,7 +42,7 @@ Node 子进程隔离故障和生命周期，**不是操作系统沙箱**，以�
 
 环境仅保留平台必要变量，Electron 显式设置 `ELECTRON_RUN_AS_NODE=1`，不继承 API key、NODE_OPTIONS 或代理秘密。原生包不自动安装 npm 依赖，也没有插件专用秘密配置、任意常驻 activate/dispose 入口或市场自动升级。
 
-插件 Agent 由 `agent-capability.ts`、`agent-execution-root.ts`、`agent-tool-registry.ts` 等模块组成，复用平台执行根、持久交互和子代理上下文，但只开放明确登记的六组、33 个基础工具。Office、浏览器控制、成果、工作台和管理工具不因主 Agent 可用而自动开放。自定义工具、MCP、Skills 按实时权限装配，子代理不能扩张父任务权力。公开范围见 [Agent API](../../aether-code/docs/plugin-api/content/platform.html#agents-tools)。
+插件 Agent 由 `agent-capability.ts`、`agent-execution-root.ts`、`agent-tool-registry.ts` 等模块组成，复用平台执行根、持久交互和子代理上下文，但只开放明确登记的六组、35 个基础工具。Office、浏览器控制、成果、工作台和管理工具不因主 Agent 可用而自动开放。自定义工具、MCP、Skills 按实时权限装配，子代理不能扩张父任务权力。公开范围见 [Agent API](../../aether-code/docs/plugin-api/content/platform.html#agents-tools)。
 
 `lifecycle-runtime.ts` 负责近期事件与 hooks；`background-runtime.ts` 负责落盘周期调度。调度归引擎进程所有：桌面内置引擎随应用退出停止，远端引擎生命周期独立。服务 UI 截止时间与持久后台调度是不同机制。
 

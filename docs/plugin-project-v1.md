@@ -55,7 +55,7 @@ AI 管理入口是 `management-tools.ts`，只读发现入口在 `read-tools.ts`
 | capability-runtime.ts、node-sdk.ts | 当前修订、授权、会话与工作区边界、SDK 派发 |
 | agent-capability.ts、agent-configuration.ts | 任务、模型、工具配置、继续和取消 |
 | agent-execution-root.ts、agent-registry-authority.ts | 执行归属、持久确认和父子实时权威 |
-| agent-tool-registry.ts | 六组、33 个基础工具精确允许列表 |
+| agent-tool-registry.ts | 六组、35 个基础工具精确允许列表 |
 | workbench-binding.ts、host-context.ts | 宿主目标和委派绑定，拒绝业务 JSON 伪造权威 |
 
 公开签名和例子见 [平台 API](../../aether-code/docs/plugin-api/content/platform.html)、[页面 API](../../aether-code/docs/plugin-api/content/page.html)、[权限](../../aether-code/docs/plugin-api/content/permissions.html)。执行框架内部具备某能力，不代表插件 Agent 已装配对应工具。

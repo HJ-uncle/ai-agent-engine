@@ -5,7 +5,7 @@ type Definition = ReturnType<IToolRegistry['list']>[number]
 /** Exposure only, never execution permission. All other trusted builtins remain discoverable. */
 export const CORE_MODEL_TOOLS: ReadonlySet<string> = new Set([
   'read_file', 'write_file', 'edit_file', 'list_files', 'glob', 'grep',
-  'execute_cmd', 'command_output', 'cancel_command', 'plan_update',
+  'execute_cmd', 'command_output', 'wait_command', 'wait_commands', 'cancel_command', 'plan_update',
   'list_skills', 'get_skill', 'ask_user', 'load_tools',
   // Keep one creation affordance visible to the parent from its first request.
   // Scope filters still remove it from children and restricted agents; followup
@@ -16,7 +16,7 @@ export const CORE_MODEL_TOOLS: ReadonlySet<string> = new Set([
 const groups: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['Files', ['read_file', 'write_file', 'edit_file', 'list_files', 'glob', 'grep', 'delete_file', 'create_dir']],
   ['Office', ['office_document', 'office_inspect', 'office_environment']],
-  ['Commands', ['execute_cmd', 'command_output', 'cancel_command']],
+  ['Commands', ['execute_cmd', 'command_output', 'wait_command', 'wait_commands', 'cancel_command']],
   ['Planning/questions', ['plan_update', 'ask_user', 'todo_list', 'todo_create', 'todo_update', 'todo_delete']],
   ['Skills', ['list_skills', 'get_skill', 'run_skill_script']],
   ['Memory', ['remember', 'recall', 'list_memories', 'forget', 'link_memories', 'search_memory']],

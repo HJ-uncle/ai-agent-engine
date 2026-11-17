@@ -29,6 +29,7 @@ import { projectReadonlyHistory, readonlyHistoryNotice, type ReadonlyHistoryProj
 import { estimateModelHistoryTokens, estimateModelMessageTokens, modelMessageContent } from '../utils/model-context.js'
 import { createHash } from 'node:crypto'
 import { browserOutputFramePayload, browserOutputPresentation } from '../utils/browser-output.js'
+import { commandOutputPresentation } from '../utils/command-output.js'
 import { DEFAULT_PUBLICATION_MAX_BYTES } from '../stream-pipeline/publication-queue.js'
 import { pendingWireFrames, publicPending } from '../stream-pipeline/public-pending.js'
 import { imageDimensions, imageDocumentPage, imageFileVersion, imageToolFramePayload, imageToolPayload, MAX_NATIVE_IMAGE_BASE64_CHARS } from '../utils/multimodal-context.js'
@@ -418,8 +419,9 @@ export class ReActStrategy implements LoopStrategy {
     // before the loop has a chance to compact the history.
     const outputLimit = ctx.toolProfile === 'code' ? getCodeToolOutputMaxChars() : getToolOutputMaxChars()
     const vision = resolveCapabilities({ model: ctx.modelName, overrides: ctx.modelCaps ?? ctx.resolvedModel?.capabilities }).vision === true
-    const presentation = browserOutputPresentation(stripSubagentMeta(output), outputLimit, vision)
-    const truncated = presentation?.displayOutput ?? truncateToolOutput(stripSubagentMeta(output), outputLimit)
+    const commandPresentation = commandOutputPresentation(call.name, output, outputLimit)
+    const presentation = commandPresentation === undefined ? browserOutputPresentation(stripSubagentMeta(output), outputLimit, vision) : undefined
+    const truncated = commandPresentation ?? presentation?.displayOutput ?? truncateToolOutput(stripSubagentMeta(output), outputLimit)
     const modelInputContent = (vision ? presentation?.modelVisionContent : undefined) ?? presentation?.modelInputContent
     const outputWasTruncated = truncated.length < output.length
     if (outputWasTruncated) (metadata as Record<string, unknown>).outputTruncated = true

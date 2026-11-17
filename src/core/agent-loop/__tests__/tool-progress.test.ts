@@ -71,6 +71,23 @@ describe('output-aware progress for long-running tools', () => {
     expect(tracker.observe([command], [{ ...result, metadata: { commandJob: { status: 'succeeded' } } }])).toBe(1)
   })
 
+  it.each(['wait_command', 'wait_commands'])('treats %s as active observation only while a command is running or cancelling', name => {
+    const tracker = new ToolProgressTracker(() => 'readonly')
+    const call = { ...read, name }
+    const metadata = (status: string) => name === 'wait_command' ? { commandJob: { status } }
+      : { commandJobs: [{ status: 'succeeded' }, { status }] }
+    for (const status of ['running', 'cancelling']) {
+      const result = { ...succeeded('no new output'), metadata: metadata(status) }
+      for (let index = 0; index < 4; index++) expect(tracker.observe([call], [result])).toBe(0)
+      expect(tracker.recoveryPrompt()).toBeUndefined()
+    }
+    const completed = { ...succeeded('complete'), metadata: metadata('succeeded') }
+    expect(waitingOnActiveWork(call, completed)).toBe(false)
+    expect(tracker.observe([call], [completed])).toBe(0)
+    expect(tracker.observe([call], [completed])).toBe(1)
+    expect(waitingOnActiveWork(call, succeeded('no metadata'))).toBe(false)
+  })
+
   it('does not count temporary network failures even beside an unchanged successful read', () => {
     const tracker = new ToolProgressTracker()
     tracker.observe([read], [succeeded('same')])

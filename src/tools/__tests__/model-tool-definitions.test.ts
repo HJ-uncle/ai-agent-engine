@@ -18,7 +18,7 @@ function withoutDescriptions(value: unknown): unknown {
 const wire = (definitions: ReturnType<ToolRegistry['list']>) => definitions.map(({ name, description, parameters }) => ({
   type: 'function', function: { name, description, parameters },
 }))
-const defaultNames = 'read_file write_file edit_file list_files delete_file create_dir office_document office_inspect office_environment execute_cmd command_output cancel_command ask_user remember recall list_memories forget link_memories list_skills get_skill run_skill_script glob grep plan_update cron_list cron_preview cron_create cron_update cron_delete subagent subagent_start subagent_send subagent_wait subagent_cancel subagent_participants subagent_inbox subagent_read_result subagent_directory subagent_followup subagent_request_input web_fetch http_request search_history code_diagnose codegraph browser_tabs browser_open browser_navigate browser_snapshot browser_screenshot browser_click browser_fill browser_scroll browser_press_key browser_wait browser_console browser_network browser_network_request browser_set_viewport browser_close browser_save_screenshot workbench_render workbench_context workbench_open deliver_files report_artifacts'.split(' ')
+const defaultNames = 'read_file write_file edit_file list_files delete_file create_dir office_document office_inspect office_environment execute_cmd command_output cancel_command wait_command wait_commands ask_user remember recall list_memories forget link_memories list_skills get_skill run_skill_script glob grep plan_update cron_list cron_preview cron_create cron_update cron_delete subagent subagent_start subagent_send subagent_wait subagent_cancel subagent_participants subagent_inbox subagent_read_result subagent_directory subagent_followup subagent_request_input web_fetch http_request search_history code_diagnose codegraph browser_tabs browser_open browser_navigate browser_snapshot browser_screenshot browser_click browser_fill browser_scroll browser_press_key browser_wait browser_console browser_network browser_network_request browser_set_viewport browser_close browser_save_screenshot workbench_render workbench_context workbench_open deliver_files report_artifacts'.split(' ')
 
 vi.mock('../../storage/mcp/mcp-config.js', () => ({ listServers: () => [] }))
 
@@ -209,12 +209,17 @@ describe('compact builtin model definitions', () => {
     "never reruns/adopts",
     "no quotes/arguments",
     "no extra shell quotes",
-    "cmd.exe"
+    "cmd.exe",
+    "nextCursor/nextOffset",
+    "before launch",
+    "never repeat executed work"
   ],
   "command_output": [
     "this session jobId",
     "cursor=0",
     "nextCursor",
+    "cursor/cursorOffset",
+    "UTF-8 byte offset",
     "hasMore",
     "Output is not exit",
     "do not restart"
@@ -223,6 +228,21 @@ describe('compact builtin model definitions', () => {
     "this session jobId",
     "descendants",
     "verify terminal state"
+  ],
+  "wait_command": [
+    "this session jobId",
+    "10000ms",
+    "60000ms",
+    "never cancels or restarts",
+    "nextCursor/nextOffset",
+    "own run jobs"
+  ],
+  "wait_commands": [
+    "1-8 unique",
+    "one shared deadline",
+    "one total budget",
+    "Inspect every result",
+    "nextCursor/nextOffset"
   ],
   "ask_user": [
     "critical user choice",

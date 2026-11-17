@@ -2,18 +2,19 @@
 import { createClient, type Client } from '@libsql/client'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CommandJobManager } from '../manager.js'
+import { getCommandOutputFiles } from '../output-files.js'
 import { ExecutionParkError } from '../../utils/abort.js'
-import type { CommandJobLaunch, CommandJobOutput, CommandJobScope, CommandJobSnapshot } from '../types.js'
+import type { CommandJobLaunch, CommandJobOutput, CommandJobScope, CommandJobSnapshot, CommandOutputOptions } from '../types.js'
 
 let fixture: string
 let db: Client
 let manager: CommandJobManager
 const managers: CommandJobManager[] = []
 const fixturePids = new Set<number>()
+const fixtureRoot = path.resolve('.e2e-tmp/command-receipts/manager')
 const scope: CommandJobScope = { tenantId: 'tenant-a', sessionId: 'root-session' }
 const exactScope: CommandJobScope = { ...scope, runId: 'root-run', ownerSessionId: 'child-session', ownerRunId: 'child-run' }
 
@@ -45,7 +46,7 @@ async function capturePid(name: string): Promise<number> {
   return pid
 }
 
-async function output(jobId: string, options: { cursor?: number; maxBytes?: number } = {}): Promise<CommandJobOutput> {
+async function output(jobId: string, options: CommandOutputOptions = {}): Promise<CommandJobOutput> {
   const result = await manager.output(scope, jobId, options)
   expect(result).not.toBeNull()
   return result!
@@ -63,7 +64,8 @@ async function expectInvisible(request: Promise<unknown>): Promise<void> {
 }
 
 beforeEach(async () => {
-  fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-d7-command-jobs-'))
+  fs.mkdirSync(fixtureRoot, { recursive: true })
+  fixture = fs.mkdtempSync(path.join(fixtureRoot, 'job-'))
   db = createClient({ url: `file:${path.join(fixture, 'jobs.db').replace(/\\/g, '/')}` })
   manager = makeManager()
   await manager.initialize()
@@ -80,11 +82,15 @@ afterEach(async () => {
   fixturePids.clear()
   db.close()
   const resolved = path.resolve(fixture)
-  if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !path.basename(resolved).startsWith('aether-d7-command-jobs-')) throw new Error('Unsafe fixture cleanup path')
+  if (path.dirname(resolved) !== fixtureRoot || !path.basename(resolved).startsWith('job-')) throw new Error('Unsafe fixture cleanup path')
   try { fs.rmSync(resolved, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }) }
   catch (error) { if (process.platform !== 'win32' || (error as NodeJS.ErrnoException).code !== 'EPERM') throw error }
   const failedShutdown = shutdowns.find(result => result.status === 'rejected')
   if (failedShutdown?.status === 'rejected') throw failedShutdown.reason
+})
+
+afterAll(() => {
+  if (fs.existsSync(fixtureRoot) && !fs.lstatSync(fixtureRoot).isSymbolicLink() && fs.readdirSync(fixtureRoot).length === 0) fs.rmdirSync(fixtureRoot)
 })
 
 describe('D7 durable command job lifecycle', () => {
@@ -184,6 +190,68 @@ describe('D7 durable command job lifecycle', () => {
     expect(empty.nextCursor).toBe(page.nextCursor)
     expect(empty.hasMore).toBe(false)
     await expect(manager.output(scope, job.jobId, { cursor: page.nextCursor + 1 })).rejects.toThrow()
+  })
+
+  it('pages inside entries without losing NUL, escaped controls or Unicode and bounds SQL projection', async () => {
+    const expected = 'start\0中🙂\n"\\\u0001end'.repeat(40)
+    const job = await manager.start(launch(`process.stdout.write(${JSON.stringify(expected)})`))
+    await manager.wait(scope, job.jobId)
+    const execute = vi.spyOn(db, 'execute')
+    const files = await getCommandOutputFiles(db)
+    const open = files.openReader.bind(files), reads: number[] = []
+    const openSpy = vi.spyOn(files, 'openReader').mockImplementation(async identity => {
+      const reader = await open(identity)
+      return { close: () => reader.close(), read: (offset, length) => { reads.push(length); return reader.read(offset, length) } }
+    })
+    let cursor = 0, cursorOffset = 0, text = '', pages = 0
+    do {
+      const page = await output(job.jobId, { cursor, cursorOffset, maxChars: 7 })
+      expect(outputText(page).length).toBeLessThanOrEqual(7)
+      expect(outputText(page)).not.toContain('\uFFFD')
+      expect(page.nextCursor > cursor || (page.nextCursor === cursor && (page.nextOffset ?? 0) > cursorOffset)).toBe(true)
+      text += outputText(page)
+      cursor = page.nextCursor; cursorOffset = page.nextOffset ?? 0
+      expect(++pages).toBeLessThan(300)
+      if (!page.hasMore) break
+    } while (true)
+    expect(text).toBe(expected)
+    expect(cursorOffset).toBe(0)
+    const statements = execute.mock.calls as unknown as Array<[string | { sql: string; args: unknown[] }]>
+    expect(reads.length).toBeGreaterThan(1)
+    expect(reads.every(length => length <= 28)).toBe(true)
+    expect(statements.some(([statement]) => typeof statement !== 'string' && /SELECT seq,stream,text/.test(statement.sql))).toBe(false)
+    openSpy.mockRestore()
+    execute.mockRestore()
+  })
+
+  it('rejects offsets beyond an entry or inside a UTF-8 character without moving any cursor', async () => {
+    const job = await manager.start(launch("process.stdout.write('🙂ok')"))
+    await manager.wait(scope, job.jobId)
+    for (const cursorOffset of [-1, 1, 2, 3, 6, 1000]) {
+      await expect(output(job.jobId, { cursorOffset, maxChars: 20 })).rejects.toThrow(/cursorOffset/)
+    }
+    const page = await output(job.jobId, { cursorOffset: 4, maxChars: 20 })
+    expect(outputText(page)).toBe('ok')
+    expect(page).toMatchObject({ nextCursor: 1, nextOffset: 0, hasMore: false })
+    await expect(output(job.jobId, { cursor: 1, cursorOffset: 1 })).rejects.toThrow(/cursorOffset/)
+  })
+
+  it('removes aborted completion subscribers while leaving the command running', async () => {
+    const job = await manager.start(launch('setInterval(()=>{},1000)'))
+    const controller = new AbortController()
+    const remove = vi.spyOn(controller.signal, 'removeEventListener')
+    const add = vi.spyOn(controller.signal, 'addEventListener')
+    const pending = manager.waitForCompletion(scope, job.jobId, controller.signal)
+    await expect.poll(() => add.mock.calls.length).toBe(1)
+    const reason = new Error('wait deadline')
+    controller.abort(reason)
+    await expect(pending).rejects.toBe(reason)
+    expect(remove).toHaveBeenCalledWith('abort', expect.any(Function))
+    expect((await manager.get(scope, job.jobId))?.status).toBe('running')
+    const completed = manager.waitForCompletion(scope, job.jobId)
+    await manager.cancel(scope, job.jobId)
+    expect(await completed).toMatchObject({ status: 'cancelled' })
+    expect(await manager.waitForCompletion({ ...scope, sessionId: 'other' }, job.jobId)).toBeNull()
   })
 
   it.each([

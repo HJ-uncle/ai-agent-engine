@@ -74,6 +74,14 @@ snapshot 中的显示投影与正在执行的状态可以分别返回；不能�
 
 ## 文件、撤回与管理
 
+### 命令历史与输出
+
+`GET /api/v1/command-jobs/:jobId/output?sessionId=...` 读取已存在命令，不启动进程。默认从 `cursor=0` 读取；日志面板首次只需近期内容时用 `tail=true&maxBytes=65536` 获取有界尾页。`tail` 只接受 `true`/`false`，`tail=true` 不可与 `cursor` 或 `cursorOffset` 同传，显式 0 也不能混用。尾页响应增加 `tail: true`，旧日志仍可从 0 读取，不因选择尾页而标为已丢失。后续增量请求把 `nextCursor`、`nextOffset` 原样传为 `cursor`、`cursorOffset`；偏移按 UTF-8 字节计数并保持字符边界。`maxBytes` 范围为 4–65536，默认 65536；所有请求仍校验租户和会话归属。
+
+`POST /api/v1/command-jobs/:jobId/restart` 只接受已结束的后台任务作为原命令来源，请求体只使用 `sessionId`。手动重启是一次新启动，重新经过当前命令策略、工作区限制、环境投影与文件变化观察，并复用 `execute_cmd` 已支持的源码保护；原任务命令和参数、旧批准都不是新授权。请求体额外提供的 command/args/env/approval 字段不会改变执行内容或批准状态。允许启动时返回新的 jobId，不继承旧 run/turn/toolCall 身份；真实启动失败仍可返回失败任务快照，须检查状态和退出码。
+
+策略或工作区拒绝返回 HTTP 403 / code 40300；需要重新确认、后台构建保护或当前任务不可重启返回 HTTP 409 / code 40900，`metadata.code` 区分具体原因。界面应显示服务端 message，不能自动确认或重新提交绕过。需要批准的命令请回到当前会话重新执行并完成正常确认；运行中任务不能通过重启端点再次启动。刷新列表、读取日志和引擎启动恢复都不会重跑历史命令。
+
 工作区 API 的路径由服务端授权；文件上传使用 multipart，下载按响应 MIME 处理。工作区绑定改变后，刷新会话/工作区相关状态，不复用旧目录结果。历史回退、单个文件回退、撤回整轮成果是不同操作，不能在前端只删除消息或缓存来模拟成功；以服务端持久操作结果和后续快照为准。
 
 权限模式不选择命令运行时。远程鉴权实例的 restricted-files/docker/host 边界见[安全架构](../security-architecture.md)。插件开发走[公开 HTML SDK](../../../aether-code/docs/plugin-api/dist/index.html)，不要把这里的内部宿主端点当插件稳定 API。

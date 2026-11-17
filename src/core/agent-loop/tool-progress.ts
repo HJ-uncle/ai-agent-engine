@@ -53,9 +53,13 @@ export function waitingOnActiveWork(call: Pick<ToolCall, 'name'>, result: ToolRe
     const observation = result.metadata?.subagentObservation as { state?: string } | undefined
     return observation?.state === 'pending'
   }
-  if (call.name === 'command_output') {
+  if (call.name === 'command_output' || call.name === 'wait_command') {
     const job = result.metadata?.commandJob as { status?: string } | undefined
-    return ['pending', 'queued', 'starting', 'running'].includes(job?.status ?? '')
+    return ['pending', 'queued', 'starting', 'running', 'cancelling'].includes(job?.status ?? '')
+  }
+  if (call.name === 'wait_commands') {
+    const jobs = result.metadata?.commandJobs as Array<{ status?: string }> | undefined
+    return Array.isArray(jobs) && jobs.some(job => ['running', 'cancelling'].includes(job?.status ?? ''))
   }
   if (call.name === 'task_status') {
     try {
@@ -177,7 +181,7 @@ export class ToolProgressTracker {
       const result = results[index]
       // Plans and job queries form control flow, not evidence of a write/exec
       // cycle. They clear the episode without changing the original counters.
-      if (isTaskPlanControl(call.name) || ['command_output', 'task_list', 'task_status'].includes(call.name)
+      if (isTaskPlanControl(call.name) || ['command_output', 'wait_command', 'wait_commands', 'task_list', 'task_status'].includes(call.name)
         || !result || result.status !== 'succeeded' || waitingOnActiveWork(call, result)) {
         resetAdvice = true
         continue

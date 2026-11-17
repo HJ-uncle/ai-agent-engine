@@ -110,6 +110,31 @@ describe('user steering at tool batch boundaries', () => {
 })
 
 describe('D3 batch side effects and terminal evidence', () => {
+  it('preserves command envelopes and opaque log markers in display and model history', async () => {
+    const f = fixture([call('command', 'execute_cmd')])
+    const output = JSON.stringify({ type: 'command_result', version: 1, jobId: 'test-job', status: 'succeeded', exitCode: 0,
+      signal: null, entries: [{ seq: 1, stream: 'stdout', text: 'prefix __SUBAGENT_META__ {"dataUrl":"plain program output"} 中文🙂\n' }],
+      nextCursor: 1, nextOffset: 0, earliestCursor: 0, truncated: false, hasMore: false })
+    f.ctx.tools.execute = vi.fn(async () => ({ success: true, output }))
+    const frames = await f.run()
+    expect(f.history.find(message => message.role === 'tool')?.content).toBe(output)
+    expect(toolResults(frames)[0].output).toBe(output)
+  })
+
+  it('does not publish misleading cursors if a command receipt violates its serialized budget', async () => {
+    vi.stubEnv('OSM_MODE', 'off')
+    vi.stubEnv('TOOL_OUTPUT_MAX_CHARS', '800')
+    const f = fixture([call('command', 'command_output')])
+    const output = JSON.stringify({ type: 'command_result', version: 1, jobId: 'test-job', status: 'succeeded', exitCode: 0,
+      entries: [{ seq: 1, stream: 'stdout', text: 'x'.repeat(10000) }], nextCursor: 1, nextOffset: 0, hasMore: false })
+    f.ctx.tools.execute = vi.fn(async () => ({ success: true, output }))
+    await f.run()
+    const saved = f.history.find(message => message.role === 'tool')!
+    expect(String(saved.content).length).toBeLessThanOrEqual(800)
+    expect(JSON.parse(String(saved.content))).toMatchObject({ error: 'COMMAND_OUTPUT_BUDGET_TOO_SMALL' })
+    expect(String(saved.content)).not.toContain('nextCursor')
+  })
+
   it.each(['readonly', 'serial'] as const)('only captures file evidence from registry-authenticated builtin reads (%s)', async mode => {
     const f = fixture([call('file-version', 'read_file')])
     const version = { path: 'D:/workspace/report.png', expectedHash: 'sha256:' + 'f'.repeat(64), encoding: 'binary-or-non-utf8', lineEnding: 'none', utf8Bom: false }

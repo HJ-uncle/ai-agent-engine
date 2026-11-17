@@ -2,9 +2,9 @@ import type { CommandJobSnapshot } from '../../core/command-jobs/types.js'
 
 /** UI receipts retain their full attribution/limits. The model only needs
  * actionable file versions and honest coverage, not repeated transport IDs. */
-export function commandChangeSummary(job: Pick<CommandJobSnapshot, 'changes' | 'changeTracking'>): string {
+export function commandChangeDetails(job: Pick<CommandJobSnapshot, 'changes' | 'changeTracking'>) {
   const tracking = job.changeTracking, changes = job.changes ?? []
-  if (!changes.length && !tracking?.recordedDirectoryCount && tracking?.status !== 'partial' && tracking?.status !== 'unavailable') return ''
+  if (!changes.length && !tracking?.recordedDirectoryCount && tracking?.status !== 'partial' && tracking?.status !== 'unavailable') return undefined
   const fields = ['id', 'path', 'kind', 'oldHash', 'newHash', 'status'] as const
   const compact = changes.map(change => ({
     ...Object.fromEntries(fields.filter(key => change[key] !== undefined).map(key => [key, change[key]])),
@@ -23,5 +23,10 @@ export function commandChangeSummary(job: Pick<CommandJobSnapshot, 'changes' | '
     ...(tracking?.concurrentChangesExcluded ? { concurrentChangesExcluded: tracking.concurrentChangesExcluded } : {}),
     ...(tracking?.status === 'unavailable' ? { error: tracking.note } : !tracking ? { error: '文件观察覆盖状态未报告' } : {}),
   }
-  return `\n[文件变化观察] ${JSON.stringify({ changes: compact, changeTracking: coverage })}`
+  return { changes: compact, changeTracking: coverage }
+}
+
+export function commandChangeSummary(job: Pick<CommandJobSnapshot, 'changes' | 'changeTracking'>): string {
+  const details = commandChangeDetails(job)
+  return details ? `\n[文件变化观察] ${JSON.stringify(details)}` : ''
 }

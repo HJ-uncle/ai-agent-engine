@@ -38,7 +38,7 @@ MCP、用户工具、同名扩展、输出 schema、执行函数、preflight、�
 | office_inspect | 只读；warnings/expectedHash/documentComplete；预览分页不等于全文/视觉验证；Excel 2000 格/格 600 字、错误总数全表而位置有界、公式为缓存不重算；Word 仅正文；PPTX 正文/备注位置可编辑身份；分页不混版本。 |
 | office_environment | 可信运行环境探测、2 分钟缓存；不启动 Office/安装/导出/读取其它任务或私有依赖；存在或注册不证明成功转换；PDF 库不等价原样渲染。 |
 | execute_cmd | command 仅程序/路径；args 逐项原文、不额外 shell 引号；源码跟 -e/-c，管道/重定向须明确 shell；默认前台，watch 后台；jobId 不是成功；timeout/cwd 默认和策略；changes 有界且可能含并发编辑，不代表所有副作用可撤回；重启不接管/重跑。 |
-| command_output | 本会话 jobId；cursor=0 后按 nextCursor/hasMore 读取持久完整输出；输出不代表退出；运行中不重复启动。 |
+| command_output | 本会话 jobId；cursor=0 后将 nextCursor/nextOffset 原样作为 cursor/cursorOffset 续读；UTF-8 字节偏移不按 JS 字符数换算；序列化回执受调用总预算约束；输出不代表退出，运行中不重复启动。 |
 | cancel_command | 本会话 jobId、可追踪子进程；等待核实终态，已结束任务不重跑。 |
 | ask_user | 复杂任务的必要关键选择；至少两个具体可执行选项；不能只给其他/继续；普通/开放问题用正常正文。 |
 | remember | 当前记忆范围；完整简洁内容、原类型枚举、3–5 tags、情感效价 -1..1 与触发情境。 |

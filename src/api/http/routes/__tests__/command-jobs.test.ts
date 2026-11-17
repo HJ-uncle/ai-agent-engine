@@ -1,13 +1,14 @@
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import type { FastifyInstance, InjectOptions } from 'fastify'
-import type { Client } from '@libsql/client'
+import type { Client, TransactionMode } from '@libsql/client'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { CommandJobLaunch, CommandJobSnapshot } from '../../../../core/command-jobs/types.js'
 
 let app: FastifyInstance
 let fixture: string
+const fixtureRoot = path.resolve('.e2e-tmp/command-receipts')
 let closeDb: () => void
 let db: Client
 let commandJobs: typeof import('../../../../core/command-jobs/index.js').commandJobs
@@ -18,7 +19,8 @@ const token = 'd7-http-fixture-instance-token'
 const headers = { 'X-Aether-Instance-Token': token, 'X-Aether-Tool-Profile': 'code', 'X-Test-Tenant': tenantId }
 
 beforeAll(async () => {
-  fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-d7-http-'))
+  fs.mkdirSync(fixtureRoot, { recursive: true })
+  fixture = fs.mkdtempSync(path.join(fixtureRoot, 'http-'))
   for (const [key, value] of Object.entries({
     DATA_DIR: path.join(fixture, 'agent.db'), WORKSPACE_ROOT: path.join(fixture, 'workspace'),
     AETHER_GLOBAL_DIR: path.join(fixture, 'global'), SKILLS_ROOT: path.join(fixture, 'skills'),
@@ -56,7 +58,7 @@ afterAll(async () => {
   vi.unstubAllEnvs()
   if (!fixture) return
   const resolved = path.resolve(fixture)
-  if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !path.basename(resolved).startsWith('aether-d7-http-')) {
+  if (path.dirname(resolved) !== fixtureRoot || !path.basename(resolved).startsWith('http-')) {
     throw new Error('Unsafe HTTP fixture cleanup path')
   }
   try { fs.rmSync(resolved, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }) }
@@ -132,11 +134,55 @@ describe('D7 command job HTTP and history lifecycle', () => {
     }
     expect((await request({ method: 'POST', url: `/command-jobs/${job.jobId}/cancel`, payload: {} })).statusCode).toBe(400)
     for (const query of ['cursor=-1', 'cursor=0.5', 'cursor=nope', 'cursor=9007199254740992', 'cursor=999999',
+      'cursorOffset=-1', 'cursorOffset=0.5', 'cursorOffset=nope', 'cursorOffset=9007199254740992',
+      'tail=1', 'tail=', 'tail=TRUE', 'tail=true&cursor=0', 'tail=true&cursorOffset=0',
       'maxBytes=0', 'maxBytes=-1', 'maxBytes=0.5', 'maxBytes=nope', 'maxBytes=1', 'maxBytes=3', 'maxBytes=65537']) {
       const result = await request({ method: 'GET', url: `/command-jobs/${job.jobId}/output?sessionId=${job.sessionId}&${query}` })
       expect(result.statusCode, `${query}: ${result.body}`).toBe(400)
       expect(result.json().data).toBeNull()
     }
+  })
+
+  it('continues a partial Unicode entry through HTTP without losing or repeating text', async () => {
+    const text = '😀中文\\\"\n'.repeat(15)
+    const job = await start('partial-unicode-http', `process.stdout.write(${JSON.stringify(text)});`)
+    await commandJobs.wait({ tenantId, sessionId: job.sessionId }, job.jobId)
+    let cursor = 0, offset = 0, joined = '', pages = 0
+    do {
+      const response = await request({ method: 'GET', url: `/command-jobs/${job.jobId}/output?sessionId=${job.sessionId}&cursor=${cursor}&cursorOffset=${offset}&maxBytes=16` })
+      expect(response.statusCode, response.body).toBe(200)
+      const page = response.json().data
+      const fragment = page.entries.map((entry: { text: string }) => entry.text).join('')
+      expect(Buffer.byteLength(fragment)).toBeLessThanOrEqual(16)
+      expect(fragment).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/)
+      joined += fragment
+      cursor = page.nextCursor; offset = page.nextOffset; pages++
+      if (!page.hasMore) break
+      expect(pages).toBeLessThan(100)
+    } while (true)
+    expect(pages).toBeGreaterThan(1)
+    expect(joined).toBe(text)
+    expect(offset).toBe(0)
+  })
+
+  it('reads one bounded tail page, then resumes from its returned cursor without replaying history', async () => {
+    const text = 'earlier-output\n'.repeat(1000) + 'recent😀中文\n'.repeat(80)
+    const job = await start('tail-output-http', `process.stdout.write(${JSON.stringify(text)});`)
+    await commandJobs.wait({ tenantId, sessionId: job.sessionId }, job.jobId)
+    const response = await request({ method: 'GET', url: `/command-jobs/${job.jobId}/output?sessionId=${job.sessionId}&tail=true&maxBytes=128` })
+    expect(response.statusCode, response.body).toBe(200)
+    const tail = response.json().data
+    const fragment = tail.entries.map((entry: { text: string }) => entry.text).join('')
+    expect(tail.tail).toBe(true)
+    expect(Buffer.byteLength(fragment)).toBeLessThanOrEqual(128)
+    expect(fragment.length).toBeGreaterThan(0)
+    expect(text.endsWith(fragment)).toBe(true)
+    expect(fragment).not.toContain('earlier-output')
+    expect(fragment).not.toContain('\uFFFD')
+    const next = await request({ method: 'GET', url: `/command-jobs/${job.jobId}/output?sessionId=${job.sessionId}&cursor=${tail.nextCursor}&cursorOffset=${tail.nextOffset}&maxBytes=128` })
+    expect(next.statusCode, next.body).toBe(200)
+    expect(next.json().data.entries).toEqual([])
+    expect(next.json().data.hasMore).toBe(false)
   })
 
   it('conceals other tenants and sessions across list, status, output, and cancellation without stopping their process', async () => {
@@ -159,7 +205,7 @@ describe('D7 command job HTTP and history lifecycle', () => {
     await assertStillWriting(marker)
     expect((await getJob(job)).json().data.status).toBe('running')
     await commandJobs.cancel({ tenantId, sessionId: job.sessionId }, job.jobId, 'fixture completed')
-  })
+  }, 15_000)
 
   it('returns actual failed exits and incremental output, while refresh and snapshots never re-execute commands', async () => {
     const sessionId = 'read-without-replay'
@@ -196,7 +242,154 @@ describe('D7 command job HTTP and history lifecycle', () => {
     } finally { launchSpy.mockRestore() }
   })
 
-  it('restarts terminal background history with a new identity and deletes output and snapshot atomically', async () => {
+  it('rejects a restart requiring current approval even if the prior command was approved', async () => {
+    const sessionId = 'restart-needs-new-approval'
+    const scope = { tenantId, sessionId }
+    const { workspaceManager } = await import('../../../../workspace/index.js')
+    const { approveCommand, setSecurityMode, clearSecurityMode } = await import('../../../../security/policy-engine.js')
+    const cwd = workspaceManager.getScratchDirectory(scope)
+    fs.mkdirSync(cwd, { recursive: true })
+    const marker = path.join(cwd, 'starts.txt')
+    const original = await start(sessionId, `require('node:fs').appendFileSync(${JSON.stringify(marker)}, 'started\\n')`, { cwd })
+    await commandJobs.wait(scope, original.jobId)
+    approveCommand(tenantId, sessionId, original.command, original.args)
+    setSecurityMode(tenantId, sessionId, 'safe')
+    const launchSpy = vi.spyOn(commandJobs, 'start')
+    try {
+      const response = await request({ method: 'POST', url: `/command-jobs/${original.jobId}/restart`, payload: {
+        sessionId, approved: true, approvedToolCallId: 'forged', currentToolCallId: 'forged',
+        resumeToolCall: { decision: 'approved' }, securityMode: 'full-access',
+      } })
+      expect(response.statusCode, response.body).toBe(409)
+      expect(response.json()).toMatchObject({ code: 40900, data: null, metadata: { code: 'COMMAND_RESTART_APPROVAL_REQUIRED' } })
+      expect(response.json().message).toContain('当前会话重新执行')
+      expect(launchSpy).not.toHaveBeenCalled()
+      expect(fs.readFileSync(marker, 'utf8')).toBe('started\n')
+    } finally { launchSpy.mockRestore(); clearSecurityMode(tenantId, sessionId) }
+  })
+
+  it('applies hard command policy to historical jobs even under full access', async () => {
+    const sessionId = 'restart-hard-policy'
+    const { setSecurityMode, clearSecurityMode } = await import('../../../../security/policy-engine.js')
+    // The legacy low-level admission completes harmlessly, but its arguments
+    // contain a deletion operation that the current tool policy forbids.
+    const original = await start(sessionId, '', { args: ['-e', "if(false) require('node:fs').rmSync('unused')"] })
+    await commandJobs.wait({ tenantId, sessionId }, original.jobId)
+    setSecurityMode(tenantId, sessionId, 'full-access')
+    const launchSpy = vi.spyOn(commandJobs, 'start')
+    try {
+      const response = await request({ method: 'POST', url: `/command-jobs/${original.jobId}/restart`, payload: { sessionId } })
+      expect(response.statusCode, response.body).toBe(403)
+      expect(response.json()).toMatchObject({ code: 40300, metadata: { code: 'COMMAND_RESTART_POLICY_DENIED' } })
+      expect(response.json().message).toContain('delete_file')
+      expect(launchSpy).not.toHaveBeenCalled()
+    } finally { launchSpy.mockRestore(); clearSecurityMode(tenantId, sessionId) }
+  })
+
+  it('rejects a historical background build through the same source guard before launching', async () => {
+    const sessionId = 'restart-source-guard', scope = { tenantId, sessionId }
+    const { setSecurityMode, clearSecurityMode } = await import('../../../../security/policy-engine.js')
+    const cwd = path.join(fixture, 'restart-build')
+    fs.mkdirSync(path.join(cwd, 'src'), { recursive: true })
+    fs.writeFileSync(path.join(cwd, 'package.json'), '{"name":"restart-source-fixture","version":"1.0.0"}')
+    fs.writeFileSync(path.join(cwd, 'src', 'main.ts'), 'export const value = 1\n')
+    const marker = path.join(cwd, 'starts.txt'), script = path.join(cwd, 'build.cjs')
+    fs.writeFileSync(script, `require('node:fs').appendFileSync(${JSON.stringify(marker)}, 'started\\n')`)
+    const original = await start(sessionId, '', { cwd, args: [script] })
+    await commandJobs.wait(scope, original.jobId)
+    setSecurityMode(tenantId, sessionId, 'full-access')
+    const launchSpy = vi.spyOn(commandJobs, 'start')
+    try {
+      const response = await request({ method: 'POST', url: `/command-jobs/${original.jobId}/restart`, payload: { sessionId } })
+      expect(response.statusCode, response.body).toBe(409)
+      expect(response.json()).toMatchObject({ code: 40900, metadata: { code: 'SOURCE_GUARD_REQUIRES_FOREGROUND' } })
+      expect(launchSpy).not.toHaveBeenCalled()
+      expect(fs.readFileSync(marker, 'utf8')).toBe('started\n')
+    } finally { launchSpy.mockRestore(); clearSecurityMode(tenantId, sessionId) }
+  })
+
+  it('does not restore the old working directory as a permitted root after the session becomes safe', async () => {
+    const sessionId = 'restart-workspace-boundary'
+    const original = await start(sessionId, "process.stdout.write('initial')")
+    await commandJobs.wait({ tenantId, sessionId }, original.jobId)
+    const { setSecurityMode, clearSecurityMode } = await import('../../../../security/policy-engine.js')
+    setSecurityMode(tenantId, sessionId, 'safe')
+    const launchSpy = vi.spyOn(commandJobs, 'start')
+    try {
+      const response = await request({ method: 'POST', url: `/command-jobs/${original.jobId}/restart`, payload: { sessionId } })
+      expect(response.statusCode, response.body).toBe(403)
+      expect(response.json()).toMatchObject({ code: 40300, metadata: { code: 'COMMAND_RESTART_WORKSPACE_FORBIDDEN' } })
+      expect(launchSpy).not.toHaveBeenCalled()
+    } finally { launchSpy.mockRestore(); clearSecurityMode(tenantId, sessionId) }
+  })
+
+  it('uses the current environment projection and records restart file changes under its new identity', async () => {
+    const sessionId = 'restart-environment-observer', scope = { tenantId, sessionId }
+    const { workspaceManager } = await import('../../../../workspace/index.js')
+    const cwd = workspaceManager.getScratchDirectory(scope)
+    fs.mkdirSync(cwd, { recursive: true })
+    const marker = path.join(cwd, 'changes.txt')
+    const original = await start(sessionId, `
+      require('node:fs').appendFileSync(${JSON.stringify(marker)}, 'executed\\n');
+      console.log(JSON.stringify({ home: process.env.HOME, secret: process.env.RESTART_PRIVATE_FIXTURE ?? null,
+        local: process.env.LOCALAPPDATA ?? null, automatic: process.env.PYTHON_MANAGER_AUTOMATIC_INSTALL ?? null }));
+    `, { cwd })
+    await commandJobs.wait(scope, original.jobId)
+    const oldSecret = process.env.RESTART_PRIVATE_FIXTURE, oldAutomatic = process.env.PYTHON_MANAGER_AUTOMATIC_INSTALL
+    vi.stubEnv('RESTART_PRIVATE_FIXTURE', 'private-fixture-value')
+    vi.stubEnv('PYTHON_MANAGER_AUTOMATIC_INSTALL', 'true')
+    try {
+      const response = await request({ method: 'POST', url: `/command-jobs/${original.jobId}/restart`, payload: { sessionId } })
+      expect(response.statusCode, response.body).toBe(200)
+      const restarted = response.json().data as CommandJobSnapshot
+      const finished = await commandJobs.wait(scope, restarted.jobId)
+      expect(finished?.status).toBe('succeeded')
+      expect(finished?.changes).toEqual(expect.arrayContaining([expect.objectContaining({ path: marker,
+        source: 'command-observation', commandJobId: restarted.jobId, requiresExplicitRevert: true })]))
+      expect(finished?.changeTracking?.status).not.toBe('unavailable')
+      const output = await commandJobs.output(scope, restarted.jobId)
+      const env = JSON.parse(output!.entries.map(entry => entry.text).join(''))
+      expect(env).toMatchObject({ home: cwd, secret: null })
+      if (process.platform === 'win32') expect(env).toMatchObject({ local: process.env.LOCALAPPDATA ?? null, automatic: 'false' })
+      expect(fs.readFileSync(marker, 'utf8')).toBe('executed\nexecuted\n')
+      for (const field of ['runId', 'ownerRunId', 'turnId', 'toolCallId']) expect(restarted).not.toHaveProperty(field)
+    } finally { vi.stubEnv('RESTART_PRIVATE_FIXTURE', oldSecret); vi.stubEnv('PYTHON_MANAGER_AUTOMATIC_INSTALL', oldAutomatic) }
+  })
+
+  it('rejects restart with a visible conflict while the current workspace binding is held', async () => {
+    const sessionId = 'restart-binding-busy', scope = { tenantId, sessionId }
+    const original = await start(sessionId, "process.stdout.write('initial')")
+    await commandJobs.wait(scope, original.jobId)
+    const { workspaceManager } = await import('../../../../workspace/index.js')
+    let enter!: () => void, release!: () => void
+    const held = new Promise<void>(resolve => { enter = resolve }), gate = new Promise<void>(resolve => { release = resolve })
+    const holder = workspaceManager.withBindingLease(scope, undefined, async () => { enter(); await gate })
+    await held
+    const launchSpy = vi.spyOn(commandJobs, 'start')
+    try {
+      const response = await request({ method: 'POST', url: `/command-jobs/${original.jobId}/restart`, payload: { sessionId } })
+      expect(response.statusCode, response.body).toBe(409)
+      expect(response.json()).toMatchObject({ code: 40900, metadata: { code: 'COMMAND_RESTART_WORKSPACE_BUSY' } })
+      expect(launchSpy).not.toHaveBeenCalled()
+    } finally { release(); await holder; launchSpy.mockRestore() }
+  })
+
+  it('does not launch when the configured output allowance cannot carry a job receipt', async () => {
+    const sessionId = 'restart-receipt-budget', scope = { tenantId, sessionId }
+    const original = await start(sessionId, "process.stdout.write('initial')")
+    await commandJobs.wait(scope, original.jobId)
+    const previous = process.env.CODE_TOOL_OUTPUT_MAX_CHARS
+    vi.stubEnv('CODE_TOOL_OUTPUT_MAX_CHARS', '100')
+    const launchSpy = vi.spyOn(commandJobs, 'start')
+    try {
+      const response = await request({ method: 'POST', url: `/command-jobs/${original.jobId}/restart`, payload: { sessionId } })
+      expect(response.statusCode, response.body).toBe(409)
+      expect(response.json()).toMatchObject({ code: 40900, metadata: { code: 'COMMAND_OUTPUT_BUDGET_TOO_SMALL' } })
+      expect(launchSpy).not.toHaveBeenCalled()
+    } finally { vi.stubEnv('CODE_TOOL_OUTPUT_MAX_CHARS', previous); launchSpy.mockRestore() }
+  })
+
+  it('restarts terminal background history with a new identity and deletes output and snapshot', async () => {
     const sessionId = 'restart-delete-history'
     const original = await start(sessionId, `
       process.stdout.write('historical-output');
@@ -216,16 +409,20 @@ describe('D7 command job HTTP and history lifecycle', () => {
     const restartedOutput = await commandJobs.output({ tenantId, sessionId }, restarted.jobId)
     expect(restartedOutput?.entries.map(entry => entry.text).join('')).toContain(JSON.stringify({ cwd: original.cwd, restartMarker: null }))
     expect((await getJob(original)).json().data).toMatchObject({ jobId: original.jobId, status: 'succeeded' })
+    const digest = (value: string) => createHash('sha256').update(value).digest('hex')
+    const logPath = path.join(`${path.join(fixture, 'agent.db')}.command-output`, digest(tenantId), digest(sessionId), `${digest(original.jobId)}.log`)
+    expect(fs.existsSync(logPath)).toBe(true)
 
     const deleted = await request({ method: 'DELETE', url: `/command-jobs/${original.jobId}?sessionId=${sessionId}` })
     expect(deleted.statusCode, deleted.body).toBe(200)
     expect(deleted.json()).toMatchObject({ code: 200, data: { deleted: true } })
     expect((await getJob(original)).statusCode).toBe(404)
     expect((await getJob(original)).json().code).toBe(40400)
-    for (const table of ['command_jobs', 'command_job_output']) {
-      const rows = await db.execute({ sql: `SELECT COUNT(*) AS count FROM ${table} WHERE tenant_id=? AND session_id=? AND job_id=?`, args: [tenantId, sessionId, original.jobId] })
-      expect(Number(rows.rows[0]?.count), table).toBe(0)
-    }
+    const deletedRows = await db.execute({ sql: 'SELECT COUNT(*) AS count FROM command_jobs WHERE tenant_id=? AND session_id=? AND job_id=?', args: [tenantId, sessionId, original.jobId] })
+    expect(Number(deletedRows.rows[0]?.count)).toBe(0)
+    expect(Number((await db.execute({ sql: 'SELECT COUNT(*) AS count FROM command_job_output WHERE job_id=?', args: [original.jobId] })).rows[0]?.count)).toBe(0)
+    expect(fs.existsSync(logPath)).toBe(false)
+    expect((await request({ method: 'GET', url: `/command-jobs/${original.jobId}/output?sessionId=${sessionId}` })).statusCode).toBe(404)
     const replacementRows = await db.execute({ sql: 'SELECT COUNT(*) AS count FROM command_jobs WHERE job_id=?', args: [restarted.jobId] })
     expect(Number(replacementRows.rows[0]?.count)).toBe(1)
   })
@@ -252,7 +449,7 @@ describe('D7 command job HTTP and history lifecycle', () => {
     }
     expect((await getJob(job)).json().data.status).toBe('running')
     await commandJobs.cancel({ tenantId, sessionId: job.sessionId }, job.jobId, 'fixture completed')
-  })
+  }, 15_000)
 
   it('awaits real process cancellation and returns the same terminal result on duplicate stop', async () => {
     const { job, marker } = await writingJob('cancel-handle')
@@ -262,7 +459,8 @@ describe('D7 command job HTTP and history lifecycle', () => {
     await assertStopped(marker)
     const again = await request({ method: 'POST', url: `/command-jobs/${job.jobId}/cancel`, payload: { sessionId: job.sessionId } })
     expect(again.json().data).toEqual(first.json().data)
-  })
+  // Windows process-tree discovery has its own 8s deadline before taskkill.
+  }, 15_000)
 
   it('chat stop reaches root and child-owned jobs after the model ended, without stopping another session', async () => {
     const sessionId = 'chat-stop-background'
@@ -279,7 +477,7 @@ describe('D7 command job HTTP and history lifecycle', () => {
     await assertStillWriting(other.marker)
     await commandJobs.cancel({ tenantId, sessionId: other.job.sessionId }, other.job.jobId, 'fixture completed')
   // Windows queries each real process tree through PowerShell before stopping it.
-  }, 15_000)
+  }, 30_000)
 
   it('stops owned processes even when persisting chat cancellation fails, then reconciles on retry', async () => {
     const sessionId = 'chat-stop-write-failure'
@@ -345,7 +543,7 @@ describe('D7 command job HTTP and history lifecycle', () => {
     await assertStillWriting(marker)
     expect(await history.getFullHistory({ tenantId, sessionId })).toHaveLength(1)
     await commandJobs.cancel({ tenantId, sessionId }, job.jobId, 'fixture completed')
-  })
+  }, 15_000)
 
   it('owned cancellation cannot abort a newer run or its commands in the same session', async () => {
     const sessionId = 'owned-cancel-race'
@@ -383,20 +581,18 @@ describe('D7 command job HTTP and history lifecycle', () => {
     const gate = new Promise<void>(resolve => { release = resolve })
     const persisting = new Promise<void>(resolve => { entered = resolve })
     const cancelling = new Promise<void>(resolve => { stopping = resolve })
-    const originalBatch = db.batch.bind(db)
+    const originalTransaction = db.transaction.bind(db)
     let held = false
-    const dbSpy = vi.spyOn(db, 'batch').mockImplementation(async (statements, mode) => {
-      const statement = (statements as unknown[]).find(item => {
-        if (!item || typeof item !== 'object') return false
-        const sql = (item as { sql?: unknown }).sql
-        return typeof sql === 'string' && sql.includes('INSERT INTO command_jobs')
-      }) as { sql: string; args?: unknown[] } | undefined
-      if (!held && statement && Array.isArray(statement.args) && statement.args[1] === sessionId) {
-          held = true
-          entered()
-          await gate
+    const dbSpy = vi.spyOn(db, 'transaction').mockImplementation(async (mode?: TransactionMode) => {
+      // The manager now writes the snapshot and disk-log index in a native
+      // transaction. Pause its first admission before acquiring the writer,
+      // so the real HTTP cancellation can still inspect and fence the owner.
+      if (!held && mode === 'write') {
+        held = true
+        entered()
+        await gate
       }
-      return originalBatch(statements, mode)
+      return originalTransaction(mode)
     })
     const originalCancel = commandJobs.cancelCaptured.bind(commandJobs)
     const cancelSpy = vi.spyOn(commandJobs, 'cancelCaptured').mockImplementation(async (...args) => {

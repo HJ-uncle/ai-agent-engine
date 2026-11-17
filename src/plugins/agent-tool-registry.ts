@@ -10,7 +10,7 @@ import { bindPluginAgentRegistryAuthority } from './agent-registry-authority.js'
 /** Plugin Agents have a focused builtin surface, independent of the main chat profile. */
 export const PLUGIN_AGENT_BUILTIN_GROUPS = {
   files: ['read_file', 'write_file', 'edit_file', 'list_files', 'delete_file', 'create_dir'],
-  commands: ['execute_cmd', 'command_output', 'cancel_command'],
+  commands: ['execute_cmd', 'command_output', 'wait_command', 'wait_commands', 'cancel_command'],
   interaction: ['ask_user', 'plan_update', 'load_tools'],
   search: ['glob', 'grep', 'web_fetch', 'http_request', 'search_history', 'code_diagnose', 'codegraph'],
   subagents: ['subagent', 'subagent_start', 'subagent_send', 'subagent_wait', 'subagent_cancel',

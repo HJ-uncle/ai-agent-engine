@@ -1,5 +1,4 @@
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { createClient, type Client } from '@libsql/client'
 import { pino } from 'pino'
@@ -9,6 +8,7 @@ import { commandJobs, type CommandJobSnapshot } from '../../../core/command-jobs
 import * as database from '../../../storage/sqlite/db.js'
 import { up } from '../../../storage/sqlite/migrations/011_add_security_and_perf.js'
 import { clearSecurityMode, policyEngine, setSecurityMode } from '../../../security/policy-engine.js'
+import { auditLogStore } from '../../../security/audit-log.js'
 import { cmdTool, commandJobScope } from '../cmd-tool.js'
 import { commandOutputTool, cancelCommandTool } from '../job-tools.js'
 
@@ -17,11 +17,15 @@ let fixture: string
 let ctx: AgentContext
 const script = (name: string, content: string) => { const file = path.join(fixture, name); fs.writeFileSync(file, content); return file }
 const jobOf = (result: { metadata?: Record<string, unknown> }) => result.metadata!.commandJob as CommandJobSnapshot
+const logOf = (result: { output: string }): string => JSON.parse(result.output).entries.map((entry: { text: string }) => entry.text).join('')
+const fixtureRoot = path.resolve('.e2e-tmp/command-receipts/foreground')
 
 beforeEach(async () => {
-  fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-command-tools-'))
+  fs.mkdirSync(fixtureRoot, { recursive: true })
+  fixture = fs.mkdtempSync(path.join(fixtureRoot, 'aether-command-tools-'))
   db = createClient({ url: 'file::memory:' })
   vi.spyOn(database, 'getDb').mockReturnValue(db)
+  vi.spyOn(auditLogStore, 'append').mockResolvedValue(undefined)
   await up(db)
   await policyEngine.resetDefaults()
   ctx = { tenantId: 'command-tools', sessionId: path.basename(fixture), rootRunId: 'root-run', turnId: 'turn',
@@ -36,11 +40,81 @@ afterEach(async () => {
   db.close()
   vi.restoreAllMocks()
   vi.unstubAllEnvs()
-  if (path.dirname(fixture) !== path.resolve(os.tmpdir()) || !path.basename(fixture).startsWith('aether-command-tools-')) throw new Error('Unsafe cleanup path')
+  if (path.dirname(fixture) !== fixtureRoot || !path.basename(fixture).startsWith('aether-command-tools-')) throw new Error('Unsafe cleanup path')
   fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 })
 })
 
 describe('D7 command tools with real policy and processes', () => {
+  it('rejects an insufficient execution receipt budget before starting a command', async () => {
+    vi.stubEnv('CODE_TOOL_OUTPUT_MAX_CHARS', '512')
+    const start = vi.spyOn(commandJobs, 'start')
+    const result = await cmdTool.execute({ command: process.execPath, args: ['-e', "require('node:fs').writeFileSync('unexpected','ran')"] }, ctx)
+    expect(result).toMatchObject({ success: false, error: 'COMMAND_OUTPUT_BUDGET_TOO_SMALL' })
+    expect(result.output).toContain('Command not started')
+    expect(start).not.toHaveBeenCalled()
+    expect(fs.existsSync(path.join(fixture, 'unexpected'))).toBe(false)
+  })
+
+  it('retains real process success and mutation evidence when log delivery fails', async () => {
+    vi.spyOn(commandJobs, 'output').mockRejectedValue(new Error('isolated output read failure'))
+    const file = script('output-failure.cjs', "require('node:fs').writeFileSync('created.txt','once');process.stdout.write('complete')")
+    const result = await cmdTool.execute({ command: process.execPath, args: [file] }, ctx)
+    expect(result.success).toBe(true)
+    expect(JSON.parse(result.output)).toMatchObject({ jobId: jobOf(result).jobId, status: 'succeeded', exitCode: 0, nextCursor: 0, hasMore: true,
+      notice: expect.stringContaining('请勿重复运行') })
+    expect(result.metadata).toMatchObject({ commandOutputError: 'COMMAND_OUTPUT_FAILED' })
+    expect(result.changes).toHaveLength(1)
+    expect(fs.readFileSync(path.join(fixture, 'created.txt'), 'utf8')).toBe('once')
+  })
+
+  it('keeps source-change approval and build logs retryable when reading logs fails', async () => {
+    vi.spyOn(commandJobs, 'output').mockRejectedValue(new Error('isolated output read failure'))
+    fs.mkdirSync(path.join(fixture, 'src'))
+    fs.writeFileSync(path.join(fixture, 'package.json'), '{"version":"1.0.0"}')
+    fs.writeFileSync(path.join(fixture, 'src', 'main.ts'), 'before')
+    const file = script('build.cjs', "require('node:fs').writeFileSync('src/main.ts','changed');process.stdout.write('built')")
+    const result = await cmdTool.execute({ command: process.execPath, args: [file] }, ctx)
+    expect(result).toMatchObject({ success: false, status: 'waiting', error: 'SOURCE_CHANGED_DURING_BUILD', needsConfirmation: true,
+      pendingAction: { type: 'source_change', choices: expect.arrayContaining(['pause', 'recheck', 'rebuild', 'skip']) } })
+    expect(JSON.parse(result.output)).toMatchObject({ jobId: jobOf(result).jobId, status: 'succeeded', exitCode: 0,
+      notice: expect.stringContaining('构建结果未被信任') })
+    expect(result.metadata).toMatchObject({ commandOutputError: 'COMMAND_OUTPUT_FAILED' })
+    expect(result.changes).toHaveLength(1)
+  })
+
+  it('returns one bounded foreground page and continues without losing escaped text or Unicode', async () => {
+    vi.stubEnv('CODE_TOOL_OUTPUT_MAX_CHARS', '1200')
+    const expected = 'first\n' + '中文🙂"\\\n'.repeat(1500) + 'last\n'
+    const file = script('large.cjs', `process.stdout.write(${JSON.stringify(expected)})`)
+    const read = vi.spyOn(commandJobs, 'output')
+    const result = await cmdTool.execute({ command: process.execPath, args: [file] }, ctx)
+    expect(result.success).toBe(true)
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(result.output.length).toBeLessThanOrEqual(1200)
+    let receipt = JSON.parse(result.output)
+    expect(receipt.hasMore).toBe(true)
+    let actual = logOf(result)
+    let pages = 0
+    while (receipt.hasMore) {
+      expect(pages++).toBeLessThan(300)
+      const next = await commandOutputTool.execute({ jobId: receipt.jobId, cursor: receipt.nextCursor, cursorOffset: receipt.nextOffset }, ctx)
+      expect(next.success).toBe(true)
+      expect(next.output.length).toBeLessThanOrEqual(1200)
+      receipt = JSON.parse(next.output)
+      actual += logOf(next)
+    }
+    expect(actual).toBe(expected)
+    expect(receipt.nextOffset).toBe(0)
+    expect(receipt.nextCursor).toBe(jobOf(result).cursor)
+  })
+
+  it('preserves stdout and stderr reception order including whitespace', async () => {
+    const file = script('ordered.cjs', "process.stdout.write(' first\\n');setTimeout(()=>{process.stderr.write(' middle\\n');setTimeout(()=>process.stdout.write(' last\\n'),100)},100)")
+    const result = await cmdTool.execute({ command: process.execPath, args: [file] }, ctx)
+    expect(logOf(result)).toBe(' first\n middle\n last\n')
+    expect(JSON.parse(result.output).entries.map((entry: { stream: string }) => entry.stream)).toEqual(['stdout', 'stderr', 'stdout'])
+  })
+
   it('parks a build when source changes, then resumes the same invocation only with an explicit choice', async () => {
     fs.mkdirSync(path.join(fixture, 'src'), { recursive: true })
     fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({ version: '1.0.0' }))
@@ -75,7 +149,7 @@ describe('D7 command tools with real policy and processes', () => {
     } finally {
       await commandJobs.cancelScope(commandJobScope(writer), 'test_cleanup_foreign_writer')
     }
-  })
+  }, 15_000)
 
   it('requires a second pending choice when a resumed build changes source again', async () => {
     fs.mkdirSync(path.join(fixture, 'src'), { recursive: true })
@@ -102,14 +176,14 @@ describe('D7 command tools with real policy and processes', () => {
     expect(await commandJobs.list(commandJobScope(ctx))).toEqual([])
   })
 
-  it('keeps foreground output compatibility and reports real exit code, cwd and literal arguments', async () => {
+  it('returns foreground logs with real exit code, cwd and literal arguments', async () => {
     const file = script('foreground.cjs', "process.stdout.write(JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2)}));process.stderr.write('stderr evidence');process.exitCode=3")
     const args = ['two words', '中文🙂', 'quote"inside', '%literal%']
     const result = await cmdTool.execute({ command: process.execPath, args: [file, ...args] }, ctx)
     expect(result.success).toBe(false)
-    expect(result.output).toContain(JSON.stringify({ cwd: fs.realpathSync(fixture), args }))
-    expect(result.output).toContain('stderr evidence')
-    expect(result.output).toContain('[COMMAND_EXIT_FAILED] status=failed; exitCode=3; signal=none')
+    expect(logOf(result)).toContain(JSON.stringify({ cwd: fs.realpathSync(fixture), args }))
+    expect(logOf(result)).toContain('stderr evidence')
+    expect(JSON.parse(result.output)).toMatchObject({ type: 'command_result', version: 1, status: 'failed', exitCode: 3, signal: null, error: { code: 'COMMAND_EXIT_FAILED' } })
     expect(result.metadata).toMatchObject({ exitCode: 3, commandJob: { status: 'failed', background: false, exitCode: 3 } })
   })
 
@@ -166,7 +240,7 @@ describe('D7 command tools with real policy and processes', () => {
     const approved = { ...ctx, approvedToolCallId: ctx.currentToolCallId }
     const result = await cmdTool.execute({ command: process.execPath, args: [file] }, approved)
     expect(result.success).toBe(true)
-    expect(JSON.parse(result.output)).toEqual({ pathext: '.EXE;.CMD', privateValue: null })
+    expect(JSON.parse(logOf(result))).toEqual({ pathext: '.EXE;.CMD', privateValue: null })
     expect(start.mock.calls.at(-1)?.[0].env).toMatchObject({ PATH: process.env.PATH, PATHEXT: '.EXE;.CMD' })
     expect(start.mock.calls.at(-1)?.[0].env).not.toHaveProperty('AETHER_COMMAND_PRIVATE_FIXTURE')
   })
@@ -237,7 +311,7 @@ describe('D7 command tools with real policy and processes', () => {
       expect(stopped.success).toBe(true)
       expect(jobOf(stopped).status).toBe('cancelled')
     } finally { clearSecurityMode(childCtx.tenantId, childCtx.sessionId) }
-  })
+  }, 15_000)
 
   it('reports timeout as failed foreground work while retaining partial output', async () => {
     const file = script('timeout.cjs', "process.stdout.write('partial evidence');setInterval(()=>{},1000)")

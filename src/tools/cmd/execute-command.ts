@@ -7,7 +7,8 @@ import { policyEngine, getSecurityMode } from '../../security/policy-engine.js'
 import { workspaceManager } from '../../workspace/index.js'
 import { commandLooksLikeShellLine, createCommandLaunchPlan } from '../../core/command-jobs/launch-plan.js'
 import { createCommandChangeObserver } from './command-change-observer.js'
-import { commandChangeSummary } from './command-change-summary.js'
+import { formatCommandReceipt, readCommandReceipt, type CommandReceiptResult } from './command-receipt.js'
+import { getToolOutputLimit } from '../../core/agent-loop/tool-output-limit.js'
 import { createCommandEnvironment } from './command-environment.js'
 import { captureBuildSource, resolveSourceChangeChoice, sourceChangePendingAction, verifySourceSnapshot, type BuildSourceSnapshot, type SourceChangeChoice, type SourceChangeWait } from '../../runtime/source-change-protocol.js'
 import { getSourceChangeWaitStatus, SOURCE_CHANGE_WAIT_DEFAULTS } from '../../runtime/source-change-wait.js'
@@ -106,6 +107,11 @@ export const cmdTool: Tool = {
   async execute(rawArgs: unknown, ctx: AgentContext): Promise<ToolResult> {
     const startedAt = Date.now()
     throwIfAborted(ctx.signal)
+    const maxChars = getToolOutputLimit(ctx.toolProfile, ctx)
+    // A newly launched job must return its identity plus an honest receipt even
+    // if reading logs fails. Reject before side effects when that cannot fit.
+    if (maxChars < 1024) return { success: false, error: 'COMMAND_OUTPUT_BUDGET_TOO_SMALL',
+      output: 'Command not started. Retry execute_cmd alone with an output allowance of at least 1024 characters.'.slice(0, maxChars) }
     const blocked = await preflightCommand(rawArgs, ctx)
     if (blocked) return blocked
     const { command, args = [], cwd: cwdArg, timeoutMs, background = false } = rawArgs as CommandArgs
@@ -132,30 +138,39 @@ export const cmdTool: Tool = {
       observeChanges: job => createCommandChangeObserver(ctx, cwd, job),
       env: createCommandEnvironment(mode, cwd),
     })
-    if (background) return { success: launched.status === 'running' || launched.status === 'succeeded',
-      output: JSON.stringify({ jobId: launched.jobId, status: launched.status, message: launched.status === 'running' ? 'Command started; read command_output for progress and exit status.' : launched.error?.message }),
-      error: launched.status === 'failed' ? launched.error?.code : undefined,
-      changes: launched.changes, metadata: { commandJob: launched }, durationMs: Date.now() - startedAt }
+    if (background) {
+      const receipt = formatCommandReceipt(launched, { maxChars })
+      return { success: !receipt.error && (launched.status === 'running' || launched.status === 'succeeded'),
+        output: receipt.output, error: receipt.error ?? (launched.status === 'failed' ? launched.error?.code : undefined),
+        changes: launched.changes, metadata: { commandJob: launched }, durationMs: Date.now() - startedAt }
+    }
     const finished = (await commandJobs.wait(scope, launched.jobId))!
     // Preserve the foreground abort contract; the durable job retains all available output.
     throwIfAborted(ctx.signal)
-    let cursor = 0
-    let truncated = false
-    let expired = false
-    const stdout: string[] = []
-    const stderr: string[] = []
-    for (;;) {
-      const page = await commandJobs.output(scope, launched.jobId, { cursor })
-      if (!page) { expired = true; truncated = true; break }
-      for (const entry of page.entries) (entry.stream === 'stdout' ? stdout : stderr).push(entry.text)
-      truncated ||= page.truncated
-      cursor = page.nextCursor
-      if (!page.hasMore) break
+    // Read one budgeted page in reception order. Full output remains durable;
+    // the receipt cursor only advances past text actually returned to the model.
+    let outputError: string | undefined
+    const readResult = async (notice?: string): Promise<CommandReceiptResult> => {
+      const noticeCost = notice ? JSON.stringify({ notice }).length - 1 : 0
+      let receipt: CommandReceiptResult | null = null
+      try { receipt = await readCommandReceipt(scope, launched.jobId, { maxChars: Math.max(1, maxChars - noticeCost) }) }
+      catch { outputError = 'COMMAND_OUTPUT_FAILED' }
+      if (!receipt?.receipt) {
+        outputError ??= receipt?.error ?? 'COMMAND_OUTPUT_EXPIRED'
+        // Log delivery failure is separate from process execution. Preserve the
+        // new jobId/exit status, changes metadata and any source-change approval;
+        // never tell the model to repeat an already executed command.
+        const fallbackNotice = [notice, `${outputError}: 命令已执行，请勿重复运行。使用 command_output 和本回执 jobId 从 cursor=0 读取日志；完整文件变化与覆盖限制请在界面审阅。`].filter(Boolean).join('\n')
+        const overhead = JSON.stringify({ notice: fallbackNotice }).length - 1
+        const fallback = formatCommandReceipt({ ...finished, changes: undefined, changeTracking: undefined }, { maxChars: maxChars - overhead })
+        if (!fallback.receipt) throw new Error('Minimum command execution receipt budget violated')
+        const annotated = { ...fallback.receipt, notice: fallbackNotice }
+        return { job: finished, receipt: annotated, output: JSON.stringify(annotated) }
+      }
+      if (!notice) return receipt
+      const annotated = { ...receipt.receipt, notice }
+      return { ...receipt, receipt: annotated, output: JSON.stringify(annotated) }
     }
-    const text = [stdout.join(''), stderr.join('')].filter(Boolean).join('\n').trim()
-    const detail = finished.error?.message ?? `Command exited with code ${finished.exitCode}`
-    const failureSummary = finished.status === 'succeeded' ? '' :
-      `[${finished.error?.code ?? 'COMMAND_FAILED'}] status=${finished.status}; exitCode=${finished.exitCode ?? 'null'}; signal=${finished.signal ?? 'none'}: ${detail}`
     let sourceChange: { choice: SourceChangeChoice; risk: boolean } | undefined
     if (buildSnapshot) {
       try {
@@ -163,24 +178,26 @@ export const cmdTool: Tool = {
         if (check.changed) {
           const wait = await sourceChangeWaitFor(ctx, buildSnapshot.root, check.after as BuildSourceSnapshot, finished.jobId)
           const pending = sourceChangePendingAction(check, { phase: 'build', operation: 'execute_cmd', wait })
+          const notice = [wait ? '检测到其他会话仍在修改同一源码目录，已自动等待其结束；结束后将重新校验并继续。' : '',
+            sourceChoice ? `构建重试后再次检测到源码变化（上次选择 ${sourceChoice}）。请选择下一步；构建结果仍未被信任。` : '构建期间检测到外部源码变化。请选择 pause、recheck、rebuild 或 skip；构建结果未被信任。'].filter(Boolean).join('\n')
+          const receipt = await readResult(notice)
           return { success: false, status: 'waiting', needsConfirmation: true,
-            output: [expired ? '[Command output expired from retained history]' : truncated ? '[Output truncated; retained tail follows]' : '', failureSummary, text,
-              wait ? `检测到其他会话仍在修改同一源码目录，已自动等待其结束；结束后将重新校验并继续。` : '',
-              sourceChoice ? `构建重试后再次检测到源码变化（上次选择 ${sourceChoice}）。请选择下一步；构建结果仍未被信任。` : '构建期间检测到外部源码变化。请选择 pause、recheck、rebuild 或 skip；构建结果未被信任。'].filter(Boolean).join('\n'),
+            output: receipt.output,
             error: 'SOURCE_CHANGED_DURING_BUILD', pendingAction: pending, changes: finished.changes,
-            metadata: { commandJob: finished, sourceChange: { code: 'SOURCE_CHANGED_DURING_BUILD', previousChoice: sourceChoice, choices: pending.choices, fileMutationApplied: false, ...(wait ? { wait } : {}) }, exitCode: finished.exitCode, signal: finished.signal }, durationMs: Date.now() - startedAt }
+            metadata: { commandJob: finished, sourceChange: { code: 'SOURCE_CHANGED_DURING_BUILD', previousChoice: sourceChoice, choices: pending.choices, fileMutationApplied: false, ...(wait ? { wait } : {}) }, exitCode: finished.exitCode, signal: finished.signal,
+              ...(outputError ? { commandOutputError: outputError } : {}) }, durationMs: Date.now() - startedAt }
         } else if (sourceChoice) sourceChange = { choice: sourceChoice, risk: sourceChoice === 'skip' }
       } catch (error) {
         return { success: false, status: 'failed', output: `SOURCE_RECHECK_FAILED: ${error instanceof Error ? error.message : String(error)}`,
           error: 'SOURCE_RECHECK_FAILED', metadata: { commandJob: finished, sourceChange: { choice: sourceChoice, risk: sourceChoice === 'skip', finalVerification: 'failed' } }, durationMs: Date.now() - startedAt }
       }
     }
-    return { success: finished.status === 'succeeded', output: [expired ? '[Command output expired from retained history]' : truncated ? '[Output truncated; retained tail follows]' : '',
-      failureSummary, text || (finished.status === 'succeeded' ? detail : ''),
-      commandChangeSummary(finished), sourceChange ? `[source-change] choice=${sourceChange.choice}; risk=${sourceChange.risk}` : ''].filter(Boolean).join('\n'),
-      error: finished.status === 'succeeded' ? undefined : finished.error?.code,
+    const receipt = await readResult(sourceChange ? `[source-change] choice=${sourceChange.choice}; risk=${sourceChange.risk}` : undefined)
+    return { success: !receipt.error && finished.status === 'succeeded', output: receipt.output,
+      error: receipt.error ?? (finished.status === 'succeeded' ? undefined : finished.error?.code),
       changes: finished.changes,
-      metadata: { commandJob: finished, exitCode: finished.exitCode, signal: finished.signal, outputTruncated: truncated, ...(sourceChange ? { sourceChange } : {}) },
+      metadata: { commandJob: finished, exitCode: finished.exitCode, signal: finished.signal,
+        outputTruncated: receipt.receipt?.truncated ?? true, ...(outputError ? { commandOutputError: outputError } : {}), ...(sourceChange ? { sourceChange } : {}) },
       durationMs: Date.now() - startedAt }
   },
 }

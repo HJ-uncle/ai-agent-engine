@@ -14,7 +14,7 @@
 | 源码生成目录 | 2 |
 | 插件 HTML 公开参考/维护 | 11 |
 | 专项诊断流程（结果按原日期） | 10 |
-| 历史报告/提案（非当前承诺） | 220 |
+| 历史报告/提案（非当前承诺） | 218 |
 | 运行指令/协作约定（不作为产品手册改写） | 30 |
 | 运行页面/示例资产（非说明文档） | 4 |
 
@@ -211,8 +211,6 @@
 | [docs/browser-session-and-subagent-limits-2026-10-12.md](<../../aether-code/docs/browser-session-and-subagent-limits-2026-10-12.md>) | 历史报告/提案（非当前承诺） | [现行指南](../../aether-code/docs/user-guide.md) |
 | [docs/browser-workflow-reliability.md](<../../aether-code/docs/browser-workflow-reliability.md>) | 现行指南 | 本文件；相关专题见文档首页 |
 | [docs/chat-artifact-link-verification-2026-10-08.md](<../../aether-code/docs/chat-artifact-link-verification-2026-10-08.md>) | 历史报告/提案（非当前承诺） | [现行指南](../../aether-code/docs/user-guide.md) |
-| [docs/code-performance-optimization-2026-10-12.md](<../../aether-code/docs/code-performance-optimization-2026-10-12.md>) | 历史报告/提案（非当前承诺） | [现行指南](../../aether-code/docs/user-guide.md) |
-| [docs/code-work-mode-parity-2026-11-04.md](<../../aether-code/docs/code-work-mode-parity-2026-11-04.md>) | 历史报告/提案（非当前承诺） | [现行指南](../../aether-code/docs/user-guide.md) |
 | [docs/codex-aether-deep-comparison-2026-10-15.md](<../../aether-code/docs/codex-aether-deep-comparison-2026-10-15.md>) | 历史报告/提案（非当前承诺） | [现行指南](../../aether-code/docs/user-guide.md) |
 | [docs/codex-capability-integration-2026-10-14.md](<../../aether-code/docs/codex-capability-integration-2026-10-14.md>) | 历史报告/提案（非当前承诺） | [现行指南](../../aether-code/docs/user-guide.md) |
 | [docs/codex-reference-analysis-and-evolution-2026-10-13.md](<../../aether-code/docs/codex-reference-analysis-and-evolution-2026-10-13.md>) | 历史报告/提案（非当前承诺） | [现行指南](../../aether-code/docs/user-guide.md) |

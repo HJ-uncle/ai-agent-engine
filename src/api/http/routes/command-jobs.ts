@@ -1,8 +1,7 @@
-import fs from 'node:fs'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { commandJobs } from '../../../core/command-jobs/index.js'
-import { getSecurityMode } from '../../../security/policy-engine.js'
-import { workspaceManager } from '../../../workspace/index.js'
+import { CommandRestartError, restartStoredCommand } from '../../../tools/cmd/restart-command.js'
+import { logger } from '../../../observability/index.js'
 import { success, fail } from '../response.js'
 
 const scopeFor = (request: FastifyRequest, sessionId: string) => ({
@@ -24,20 +23,24 @@ export async function commandJobRoutes(fastify: FastifyInstance) {
     return job ? reply.send(success(job)) : reply.code(404).send(fail(40400, 'Command job not found'))
   })
 
-  fastify.get<{ Params: { jobId: string }; Querystring: { sessionId: string; cursor?: string; maxBytes?: string } }>('/command-jobs/:jobId/output', async (request, reply) => {
-    const { sessionId, cursor: rawCursor, maxBytes: rawMaxBytes } = request.query
+  fastify.get<{ Params: { jobId: string }; Querystring: { sessionId: string; cursor?: string; cursorOffset?: string; maxBytes?: string; tail?: string } }>('/command-jobs/:jobId/output', async (request, reply) => {
+    const { sessionId, cursor: rawCursor, cursorOffset: rawOffset, maxBytes: rawMaxBytes, tail: rawTail } = request.query
     if (!validSession(sessionId)) return reply.code(400).send(fail(40001, 'sessionId is required'))
+    if (rawTail !== undefined && rawTail !== 'true' && rawTail !== 'false' || rawTail === 'true' && (rawCursor !== undefined || rawOffset !== undefined)) {
+      return reply.code(400).send(fail(40001, 'tail must be true or false; tail=true cannot include cursor or cursorOffset'))
+    }
     const cursor = rawCursor === undefined ? 0 : Number(rawCursor)
     const maxBytes = rawMaxBytes === undefined ? undefined : Number(rawMaxBytes)
-    if (!Number.isSafeInteger(cursor) || cursor < 0 || (maxBytes !== undefined && (!Number.isSafeInteger(maxBytes) || maxBytes <= 0))) {
-      return reply.code(400).send(fail(40001, 'cursor and maxBytes must be valid nonnegative/positive integers'))
+    const cursorOffset = rawOffset === undefined ? undefined : Number(rawOffset)
+    if (!Number.isSafeInteger(cursor) || cursor < 0 || (cursorOffset !== undefined && (!Number.isSafeInteger(cursorOffset) || cursorOffset < 0)) || (maxBytes !== undefined && (!Number.isSafeInteger(maxBytes) || maxBytes <= 0))) {
+      return reply.code(400).send(fail(40001, 'cursor, cursorOffset and maxBytes must be valid nonnegative/positive integers'))
     }
     const scope = scopeFor(request, sessionId)
     const job = await commandJobs.get(scope, request.params.jobId)
     if (!job) return reply.code(404).send(fail(40400, 'Command job not found'))
     if (cursor > job.cursor) return reply.code(400).send(fail(40001, 'cursor exceeds latest output'))
     try {
-      const output = await commandJobs.output(scope, request.params.jobId, { cursor, maxBytes })
+      const output = await commandJobs.output(scope, request.params.jobId, { ...(rawTail === 'true' ? { tail: true } : { cursor, cursorOffset }), maxBytes })
       return output ? reply.send(success(output)) : reply.code(404).send(fail(40400, 'Command job not found'))
     } catch (error) {
       if (error instanceof Error && 'statusCode' in error && error.statusCode === 400) {
@@ -50,28 +53,13 @@ export async function commandJobRoutes(fastify: FastifyInstance) {
   fastify.post<{ Params: { jobId: string }; Body: { sessionId: string } }>('/command-jobs/:jobId/restart', async (request, reply) => {
     if (!validSession(request.body?.sessionId)) return reply.code(400).send(fail(40001, 'sessionId is required'))
     const scope = scopeFor(request, request.body.sessionId)
-    const original = await commandJobs.get(scope, request.params.jobId)
-    if (!original) return reply.code(404).send(fail(40400, 'Command job not found'))
-    if (!original.background || original.status === 'running' || original.status === 'cancelling') {
-      return reply.code(409).send(fail(40900, 'Only a terminal background command job can be restarted'))
-    }
-    let cwd: string
     try {
-      cwd = fs.realpathSync(workspaceManager.resolveSafePath(scope, original.cwd))
-      workspaceManager.resolveSafePath(scope, cwd)
-    } catch (error) {
-      return reply.code(400).send(fail(40001, error instanceof Error ? error.message : 'Invalid command working directory'))
-    }
-    const mode = getSecurityMode(scope.tenantId, scope.sessionId)
-    try {
-      const job = await commandJobs.restart(scope, request.params.jobId, { cwd,
-        env: mode === 'full-access' ? { ...process.env } : {
-          PATH: process.env.PATH, PATHEXT: process.env.PATHEXT, HOME: cwd, SystemRoot: process.env.SystemRoot, COMSPEC: process.env.COMSPEC,
-        } })
+      const job = await restartStoredCommand({ ...scope, logger: logger.child({ requestId: request.id }) }, request.params.jobId)
       return job ? reply.send(success(job)) : reply.code(404).send(fail(40400, 'Command job not found'))
     } catch (error) {
-      if (error instanceof Error && 'statusCode' in error && error.statusCode === 409) {
-        return reply.code(409).send(fail(40900, error.message))
+      if (error instanceof CommandRestartError) {
+        return reply.code(error.statusCode).send({ ...fail(error.statusCode === 403 ? 40300 : 40900, error.message),
+          metadata: { code: error.code } })
       }
       throw error
     }

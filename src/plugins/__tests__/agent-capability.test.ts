@@ -38,7 +38,7 @@ vi.mock('../../core/llm-adapter/resolve-model.js', () => ({
 const fixtures = path.resolve('.e2e-tmp/plugin-agent-capability')
 const expectedBuiltins = [
   'read_file', 'write_file', 'edit_file', 'list_files', 'delete_file', 'create_dir',
-  'execute_cmd', 'command_output', 'cancel_command', 'ask_user', 'plan_update', 'load_tools',
+  'execute_cmd', 'command_output', 'wait_command', 'wait_commands', 'cancel_command', 'ask_user', 'plan_update', 'load_tools',
   'glob', 'grep', 'web_fetch', 'http_request', 'search_history', 'code_diagnose', 'codegraph',
   'subagent', 'subagent_start', 'subagent_send', 'subagent_wait', 'subagent_cancel', 'subagent_participants',
   'subagent_inbox', 'subagent_read_result', 'subagent_directory', 'subagent_followup', 'subagent_request_input',
@@ -728,7 +728,7 @@ describe('plugin Agents use the production execution loop', () => {
     expect((await getSubagentRunner().store.getRun('tenant', String(run.runId)))?.toolCalls.map(tool => [tool.name, tool.status]))
       .toEqual([['read_file', 'succeeded'], ['write_file', 'succeeded']])
   })
-  it('starts with sixteen core definitions and loads an admitted tool without advertising removed capabilities or Office guidance', async () => {
+  it('starts with eighteen core definitions and loads an admitted tool without advertising removed capabilities or Office guidance', async () => {
     grants.push('engine.tools'); access.manifest.permissions!.requested.push('engine.tools')
     const workspace = workspaceManager.getBindingSnapshot({ tenantId: 'tenant', sessionId: 'bound-session' }).root
     let step = 0
@@ -740,7 +740,7 @@ describe('plugin Agents use the production execution loop', () => {
       expect(options.systemPrompt).not.toContain('aether-office')
       if (step++ === 0) {
         expect(names).toEqual(['read_file', 'write_file', 'edit_file', 'list_files', 'glob', 'grep', 'execute_cmd', 'command_output',
-          'cancel_command', 'plan_update', 'list_skills', 'get_skill', 'ask_user', 'load_tools', 'subagent_directory', 'subagent_start'].sort())
+          'wait_command', 'wait_commands', 'cancel_command', 'plan_update', 'list_skills', 'get_skill', 'ask_user', 'load_tools', 'subagent_directory', 'subagent_start'].sort())
         yield { done: true, finishReason: 'tool_calls', toolCalls: [{ id: 'load-create-dir', name: 'load_tools', args: JSON.stringify({ names: ['create_dir'] }), index: 0 }] }
       } else if (step === 2) {
         expect(names).toContain('create_dir')

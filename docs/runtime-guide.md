@@ -31,12 +31,12 @@ flowchart TD
 
 | 项目 | 当前默认/边界 | 源码 |
 | --- | --- | --- |
-| 工具模式 | `general/code` 是服务端能力 profile，历史称 Work/Code；不代表当前客户端提供两个独立主界面，也不是安全级别 | [tool-profile.ts](../src/tools/tool-profile.ts) |
+| 工具配置 | `general/code` 是服务端能力 profile，历史称 Work/Code；不代表当前客户端提供两个独立主界面，也不是安全级别 | [tool-profile.ts](../src/tools/tool-profile.ts) |
 | OSM | 默认 `balanced`；`off/balanced/methodology/max`；只有后两者注入方法论 | [osm.ts](../src/core/osm.ts)、[osm-bootstrap.ts](../src/core/osm-bootstrap.ts) |
 | 总迭代、累计请求 Token | 普通 chat 不设默认硬上限；`MAX_ITERATIONS/TOKEN_BUDGET` 为保留配置，不再约束产品请求；内部调用仍可显式传有限上限 | [react.ts](../src/core/agent-loop/react.ts)、[settings.ts](../src/api/http/routes/settings.ts) |
 | 单请求上下文 | 默认 `CONTEXT_WINDOW_BUDGET=268000`；取它、已知模型窗口、Work 显式上下文预算的最小值 | [context-budget.ts](../src/core/context-budget.ts) |
 | 压缩触发比 | 默认 `0.92`，有效正值最高 `0.95`；OSM max 使用 `0.7`，即更早触发 | [react.ts](../src/core/agent-loop/react.ts) |
-| 工具输出投影 | Work 基数 4000 字符，OSM off×1、balanced/methodology×2、max×4；Code 默认 65536 字符；部分工具另有分页/文件大小限制 | [tool-output-limit.ts](../src/core/agent-loop/tool-output-limit.ts) |
+| 工具输出投影 | `general` 基数 4000 字符，OSM off×1、balanced/methodology×2、max×4；`code` 默认 65536 字符；部分工具另有分页/文件大小限制 | [tool-output-limit.ts](../src/core/agent-loop/tool-output-limit.ts) |
 | 子代理并发 | 每个父会话默认 5，最大 16；设置可热更新，降低不杀死正在运行的任务 | [concurrency.ts](../src/core/subagent/concurrency.ts)、[pool.ts](../src/core/subagent/pool.ts) |
 | 安全模式 | 未配置为 `standard`；非法默认配置降为 `safe` | [policy-engine.ts](../src/security/policy-engine.ts) |
 
@@ -51,6 +51,7 @@ OSM 表仍保留旧倍率 helper；不能由此推导“所有任务预算自动
 | 主会话、子会话历史 | 主库同级 `sessions/<tenant>/<session>.jsonl`；追加消息、摘要、更新和删除标记。`HISTORY_BACKEND=sqlite` 可选另一实现 |
 | 大历史正文 | 主库同级 `blobs/<tenantHash>/<hash前2>/<hash>.gz`；可外置字段从 16 KiB 起进行内容寻址，引用仍在历史行中 |
 | 子代理任务、输出、工具详情正文 | `<主库文件>.subagent-payloads/` 下按租户哈希和内容哈希分片 gzip；单 payload 最大 128 MiB，范围读取最大 4 MiB |
+| 命令 stdout/stderr 正文 | `<主库文件>.command-output/<tenantHash>/<sessionHash>/<jobHash>.log`；按接收顺序追加 UTF-8，SQLite 只存任务元数据、流类型与字节范围索引 |
 | 运行索引/事件摘要/协调回执 | 主 SQLite 中 root runs、subagent 表及 collaboration 表；维持恢复身份、顺序、幂等和授权，不因正文外置而消失 |
 | 已登记交付附件 | 主库同级 `result-assets/` 内容寻址副本，加 SQLite 成果记录；不是任意工作区文件列表 |
 | 文件变更 | 主库 `file_changes` 的版本、归属和快照引用；大文件快照由变更存储管理，不能只备份成果副本代替 |
@@ -61,7 +62,26 @@ OSM 表仍保留旧倍率 helper；不能由此推导“所有任务预算自动
 
 源码：[历史工厂](../src/storage/conversation/factory.ts)、[JSONL](../src/storage/conversation/jsonl-history.ts)、[blob](../src/storage/conversation/history-blobs.ts)、[子代理文件](../src/core/subagent/payload-files.ts)、[成果](../src/storage/results/index.ts)、[记忆](../src/storage/memory/db.ts)、[知识库](../src/storage/knowledge/db.ts)。JSONL 活跃缓存有 64 会话和 64 MiB 双上限；这不是进程总内存上限，单次文件/模型请求仍会分配内存。
 
-SQLite 文件大小包含有效页、空闲页及 WAL 影响；删除逻辑行不保证文件立即变小。安全备份应停写并同时保留数据库、WAL 状态对应的数据、JSONL、blob、子代理 payload、成果资产、文件快照及外部工作区。单独复制 `agent.db` 或 JSONL 不是完整备份。归档、GC 与离线 VACUUM 见[存储维护](operations/session-storage-maintenance.md)。
+命令日志先写盘并同步，再提交 SQLite 索引；失败重试按已提交的字节边界与序号恢复，避免重复追加。启动不全量搬迁旧日志；访问旧任务时每批最多搬迁 64 条、256 KiB，单条过大的旧正文继续从 SQLite 有界读取。删除/过期清理先持久登记文件回收任务，删除失败可重试。默认保留终态命令最多 7 天、每会话 100 项、全局 500 项；正文落盘不表示无限保留。实现见[任务管理](../src/core/command-jobs/manager.ts)与[日志文件](../src/core/command-jobs/output-files.ts)。
+
+客户端日志视图首次取末尾 64 KiB，后续按 UTF-8 游标增量读一页；隐藏或关闭后停止读取并释放正文缓存。每任务最多缓存 256 KiB、最多 4 个任务，总正文最多 1 MiB；这是正文缓存预算，不是整个应用内存上限。日志更新只通知对应任务，状态列表使用短期请求合并。存储监控把侧车目录计入“命令日志（磁盘）”，仍在进入时采样并由用户手动刷新。
+
+SQLite 文件大小包含有效页、空闲页及 WAL 影响；删除逻辑行不保证文件立即变小。安全备份应停写并同时保留数据库、WAL 状态对应的数据、JSONL、blob、子代理 payload、命令日志目录、成果资产、文件快照及外部工作区。单独复制 `agent.db` 或 JSONL 不是完整备份。归档、GC 与离线 VACUUM 见[存储维护](operations/session-storage-maintenance.md)。
+
+隔离性能验证入口：`npx tsx scripts/diagnostics/command-storage-benchmark.ts`。可用 `--baseline <旧版manager.ts>` 对比旧实现、`--mib 32` 调整每个命令的输出量；固定 3 个并发真实 Node 命令和独立 SQLite 子进程，验证完整回读 SHA-256、SQLite 正文清空及静默读取零写入。数据库、日志和报告统一写到 `.e2e-tmp/command-storage/`，不读取生产数据。报告中的 IPC 参数字节不是物理磁盘写入量，宿主 RSS/heap 不含 SQLite 与命令子进程。
+
+2026-11-17 Windows 隔离样本（3 × 32 MiB，含中文、emoji、NUL；同一脚本依次测旧实现与文件实现）：
+
+| 指标 | 旧 SQLite 正文 | 日志文件实现 |
+| --- | ---: | ---: |
+| checkpoint 后 SQLite | 113.89 MiB | 6.18 MiB |
+| 日志侧车文件 | 0 | 96.01 MiB |
+| SQLite 写入调用参数 | 221.64 MiB | 10.80 MiB |
+| 命令输出与持久化完成 | 22.80 秒 | 17.30 秒 |
+| 静默命令读取 20 次产生的写调用 | 20 | 0 |
+| 逐页回读完整性 | 三个 SHA-256 全匹配 | 三个 SHA-256 全匹配 |
+
+该样本总文件占用约下降 10.3%，不能把主库下降 94.6% 解释为全部日志空间也下降 94.6%。耗时会随宿主负载变化；正文预算、零重复写与完整性是验证约束。详细样本见本机 `.e2e-tmp/command-storage/comparison-2026-11-17T09-44-57-952Z.json`。
 
 ## 会话恢复、回退与成果
 
@@ -145,7 +165,7 @@ SQLite 文件大小包含有效页、空闲页及 WAL 影响；删除逻辑行�
 
 模型解析以 [resolve-model.ts](../src/core/llm-adapter/resolve-model.ts) 为准；传输由显式 apiFormat、服务端协议与模型家族共同决议。支持 OpenAI compatible、Anthropic、Ollama 以及 DeepSeek/Qwen 家族适配。重试默认是初次加最多 3 次重试；408/429/5xx 和可重试连接错误可重试，流已发出进度后不自动重播。用量按实际物理尝试记账，未知用量不能当作免费。见[思考配置](thinking-mode-config.md)与[多模态输入](multimodal-design.md)。
 
-工具存在于目录、允许执行、向模型公开定义是三层不同状态。`load_tools` 仅补充已有授权定义，不能恢复权限；当前 canonical 名称为 `read_file/execute_cmd/glob/grep`，旧名称只在配置归一化中处理。Work 管理能力由[会话工具包](session-toolkits.md)显式选择；Code 不启用管理包。会话计划 `plan_update` 是可信内置能力，不等于后台队列；后台命令用 `command_output/cancel_command`，子代理用各自控制工具。当前清单见[系统工具](docs/system-tools.md)。
+工具存在于目录、允许执行、向模型公开定义是三层不同状态。`load_tools` 仅补充已有授权定义，不能恢复权限；当前 canonical 名称为 `read_file/execute_cmd/glob/grep`，旧名称只在配置归一化中处理。默认 `general` 会话的管理能力由[会话工具包](session-toolkits.md)显式选择；服务端 `code` profile 不启用管理包。会话计划 `plan_update` 是可信内置能力，不等于后台队列；后台命令用 `command_output/wait_command/wait_commands/cancel_command`，子代理用各自控制工具。当前清单见[系统工具](docs/system-tools.md)。
 
 技能从部署、全局、项目及内置层合并，项目同名项覆盖，禁用项目项不会让全局同名项复活。生成配置使用 `.ae`，旧 `.aether` 层按读取规则保留。`os-*` 只在 methodology/max 可见；内置 `aether-office` 是另一类能力，不能说 Work 不使用任何 skill。`GET /skills?available=1` 给普通账号运行目录，管理列表/详情/修改仍受 admin/skill-manager 限制；无工作区时只列共享/部署/内置技能。路径不得越过授权工作区或跟随逃逸链接。源码：[skills-registry.ts](../src/skills/skills-registry.ts)、[project-skills.ts](../src/skills/project-skills.ts)、[skill-imports.ts](../src/api/http/routes/skill-imports.ts)。
 

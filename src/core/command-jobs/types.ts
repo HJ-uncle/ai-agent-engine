@@ -57,9 +57,27 @@ export interface CommandJobOutput {
   job: CommandJobSnapshot
   entries: CommandOutputEntry[]
   nextCursor: number
+  /** UTF-8 bytes consumed in the first entry after nextCursor. Present for partial-entry reads. */
+  nextOffset?: number
   earliestCursor: number
   truncated: boolean
   hasMore: boolean
+  /** An explicitly requested recent-output window; older durable output still exists. */
+  tail?: true
+}
+
+export interface CommandOutputOptions {
+  /** Read one recent window; mutually exclusive with cursor/cursorOffset. */
+  tail?: boolean
+  /** Last completely consumed entry. Existing callers retain whole-entry pagination. */
+  cursor?: number
+  /** UTF-8 bytes already consumed in the first entry after cursor, at a character boundary. */
+  cursorOffset?: number
+  maxBytes?: number
+  /** Enables partial-entry pagination, bounded by UTF-16 output characters. */
+  maxChars?: number
+  /** Internal model receipt bound, in addition to the text budget. */
+  maxEntries?: number
 }
 
 /** Every lookup requires tenant and root session; optional selectors can only narrow access. */

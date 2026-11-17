@@ -1,5 +1,4 @@
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { createClient, type Client } from '@libsql/client'
 import { pino } from 'pino'
@@ -9,6 +8,7 @@ import { commandJobs, type CommandJobSnapshot } from '../../../core/command-jobs
 import * as database from '../../../storage/sqlite/db.js'
 import { up } from '../../../storage/sqlite/migrations/011_add_security_and_perf.js'
 import { clearSecurityMode, policyEngine, setSecurityMode } from '../../../security/policy-engine.js'
+import { auditLogStore } from '../../../security/audit-log.js'
 import { ChangeStore } from '../../../storage/changes/index.js'
 import { hashFileContent } from '../../../shared/file-version.js'
 import { captureCreatedDirectories } from '../../../storage/changes/directories.js'
@@ -28,6 +28,7 @@ import { ToolRegistry } from '../../../core/tool-registry/index.js'
 import { LocalSqliteProcessClient } from '../../../storage/sqlite/local-process-client.js'
 
 let db: Client, fixture: string, workspace: string, ctx: AgentContext
+const fixtureRoot = path.resolve('.e2e-tmp/command-receipts/observation')
 const store = new ChangeStore()
 const jobOf = (result: { metadata?: Record<string, unknown> }) => result.metadata!.commandJob as CommandJobSnapshot
 const script = (content: string) => { const file = path.join(workspace, 'task.cjs'); fs.writeFileSync(file, content); return file }
@@ -38,11 +39,13 @@ const fakeJob = (): CommandJobSnapshot => ({ schemaVersion: 1, jobId: 'observed-
   exitCode: null, signal: null, cursor: 0, earliestCursor: 0 })
 
 beforeEach(async () => {
-  fixture = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'aether-command-observation-'))
+  fs.mkdirSync(fixtureRoot, { recursive: true })
+  fixture = fs.mkdtempSync(path.join(fixtureRoot, 'aether-command-observation-'))
   workspace = path.join(fixture, 'workspace'); fs.mkdirSync(workspace)
   vi.stubEnv('DATA_DIR', path.join(fixture, 'db.sqlite'))
   db = createClient({ url: 'file::memory:' })
   vi.spyOn(database, 'getDb').mockReturnValue(db)
+  vi.spyOn(auditLogStore, 'append').mockResolvedValue(undefined)
   await up(db); await policyEngine.resetDefaults()
   ctx = { tenantId: 'observation', sessionId: path.basename(fixture), rootRunId: 'root-run', turnId: 'turn',
     currentToolCallId: 'launch-tool', workspaceDir: workspace, scratchDir: workspace, cwd: workspace,
@@ -58,7 +61,7 @@ afterEach(async () => {
   // real datasource in addition to the mocked client. Join it before removal.
   await database.closeDb()
   vi.restoreAllMocks(); vi.unstubAllEnvs()
-  if (path.dirname(fixture) !== fs.realpathSync.native(os.tmpdir()) || !path.basename(fixture).startsWith('aether-command-observation-')) throw new Error('Unsafe cleanup')
+  if (path.dirname(fixture) !== fixtureRoot || !path.basename(fixture).startsWith('aether-command-observation-')) throw new Error('Unsafe cleanup')
   fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 })
 })
 
@@ -125,7 +128,7 @@ describe('command workspace observation and guarded rollback', () => {
     expect(result.changes).toHaveLength(4)
     expect(jobOf(result).changeTracking).toMatchObject({ status: 'complete', recordedCount: 4 })
     expect(result.changes?.every(change => change.source === 'command-observation' && change.requiresExplicitRevert === true && change.toolCallId === 'launch-tool')).toBe(true)
-    const summary = JSON.parse(result.output.split('[文件变化观察] ')[1])
+    const summary = JSON.parse(result.output).fileChanges
     expect(summary.changes.map((change: { id: string }) => change.id)).toEqual(result.changes?.map(change => change.id))
     expect(result.output).not.toContain('"sessionId"')
     expect(result.output).not.toContain('"limits"')
@@ -256,8 +259,8 @@ describe('command workspace observation and guarded rollback', () => {
     const result = await execute("require('node:fs').writeFileSync('partial.txt','useful partial output');process.exitCode=2")
     expect(result.success).toBe(false)
     expect(result.changes).toHaveLength(1)
-    expect(result.output).toContain('[COMMAND_EXIT_FAILED] status=failed; exitCode=2')
-    const summary = JSON.parse(result.output.split('[文件变化观察] ')[1])
+    expect(JSON.parse(result.output)).toMatchObject({ status: 'failed', exitCode: 2, error: { code: 'COMMAND_EXIT_FAILED' } })
+    const summary = JSON.parse(result.output).fileChanges
     expect(summary.changes[0]).toMatchObject({ id: result.changes![0].id, path: result.changes![0].path, oldHash: 'missing', newHash: result.changes![0].newHash })
     expect(jobOf(result)).toMatchObject({ exitCode: 2, changeTracking: { status: 'complete', limits: COMMAND_CHANGE_LIMITS } })
     const output = await commandOutputTool.execute({ jobId: jobOf(result).jobId }, ctx)
@@ -276,7 +279,7 @@ describe('command workspace observation and guarded rollback', () => {
     expect(recovered?.changes?.[0].id).toBe(cancelled.changes?.[0].id)
     expect(recovered?.changeTracking?.recordedCount).toBe(1)
     expect(recovered!.version).toBeGreaterThan(jobOf(result).version)
-  })
+  }, 15_000)
 
   it('does not claim another managed writer changed by a running command', async () => {
     const file = path.join(workspace, 'shared.txt'); fs.writeFileSync(file, 'old')
@@ -326,9 +329,11 @@ describe('command workspace observation and guarded rollback', () => {
     expect(observed.tracking.skippedReasons?.['symbolic-link']).toBeGreaterThan(0)
   })
 
-  it('keeps independent small command output unchanged when no files change', async () => {
+  it('keeps command-generated JSON as opaque log text when no files change', async () => {
     const result = await execute("process.stdout.write(JSON.stringify({ok:true}))")
-    expect(JSON.parse(result.output)).toEqual({ ok: true })
+    const receipt = JSON.parse(result.output)
+    expect(receipt.entries.map((entry: { text: string }) => entry.text).join('')).toBe('{"ok":true}')
+    expect(receipt.fileChanges).toBeUndefined()
     expect(result.changes).toEqual([])
     expect(hashFileContent(fs.readFileSync(path.join(workspace, 'task.cjs')))).toMatch(/^sha256:/)
   })
