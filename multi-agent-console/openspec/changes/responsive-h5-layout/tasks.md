@@ -1,5 +1,9 @@
 ## 1. 基础设施：断点系统与 CSS 变量
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../../docs/README.md)；文档状态见[全量清单](../../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 - [x] 1.1 新增 `src/hooks/useBreakpoint.ts`，导出 `useBreakpoint()` 与常量 `BP = { mobile: 767, desktop: 1024 }`，使用 `window.matchMedia` 监听
 - [x] 1.2 在 `src/index.css` 的 `:root` 中加入 CSS 变量：`--app-bar-h: 44px`、`--bottom-tab-h: 56px`、`--safe-top: env(safe-area-inset-top, 0px)`、`--safe-bottom: env(safe-area-inset-bottom, 0px)`、`--touch-min: 44px`
 - [x] 1.3 修改 `src/index.css`：移动端媒体查询下隐藏 `::-webkit-scrollbar`；input/textarea 在移动端 `font-size: 16px` 防止 iOS 自动缩放

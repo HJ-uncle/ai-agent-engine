@@ -1,5 +1,9 @@
 ## 1. 后端：价格配置持久化
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../docs/README.md)；文档状态见[全量清单](../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 - [x] 1.1 创建 `src/core/deepseek/pricing.ts` —— `getPriceForModel(model, now)` 纯函数 + 默认价格快照
 - [x] 1.2 实现价格配置文件读写（`~/.agent-engine/deepseek-prices.json`），启动时若不存在则写入默认值
 - [x] 1.3 在 `deepseek.ts` 路由中新增 `GET /api/deepseek/prices` 和 `PUT /api/deepseek/prices`

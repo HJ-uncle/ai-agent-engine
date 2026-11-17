@@ -1,5 +1,9 @@
 ## 1. 数据库 Schema 修复
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../docs/README.md)；文档状态见[全量清单](../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 - [x] 1.1 在 `src/storage/sqlite/migrations/001_initial.ts` 的 `up()` 中为 `conversations` 表添加 `tool_call_name TEXT` 列定义
 - [x] 1.2 在 `src/storage/sqlite/db.ts`（或启动初始化逻辑）中添加幂等的运行时 `ALTER TABLE conversations ADD COLUMN tool_call_name TEXT` 语句，用 `try/catch` 静默跳过已存在的情况
 

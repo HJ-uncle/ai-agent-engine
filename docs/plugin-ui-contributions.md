@@ -1,92 +1,54 @@
-# 插件前端贡献协议
+# 插件界面内部维护地图
 
-完整开发入口、所有挂载区域及 SDK 签名见 [插件开发者文档](../../aether-code/docs/plugin-api/dist/index.html)。本文保留 Webview、服务与生命周期的细节；新增扩展以开发者文档和 `contributions.ts` 严格 Schema 为准。
-
-`manifest.contributes` 将已发布工具连接到 Aether 的页面、侧栏、工作区与服务托盘。引擎验证并封存清单和 HTML；桌面宿主只加载当前引擎连接中已发布且启用的修订。AI 作者通过 `plugin_get_template`、HTTP 客户端通过 `GET /plugins/project/templates` 获取相同能力目录与贡献 JSON Schema。`desktop-timer` 是包含真实工具、页面和确定性测试的完整示例。
+本文描述引擎与桌面宿主的实现分工。开发者公开契约唯一来源为 [HTML 挂载参考](../../aether-code/docs/plugin-api/content/contributions.html)、[页面 API](../../aether-code/docs/plugin-api/content/page.html)、[原生组件](../../aether-code/docs/plugin-api/content/native.html) 和 [事件与后台](../../aether-code/docs/plugin-api/content/events.html)。这里不维护第二份字段、签名或完整清单。
 
 ## 贡献类型
 
-页面、导航、标签、服务、状态按钮、设置、后台各最多 16 条，命令/内嵌界面/装饰/hooks 各 32 条，菜单 64 条。`id` 使用小写字母开头的字母、数字、连字符（最多 48 字符）；`title` 为 1–120 字符。`scope` 为 `global`（默认）或 `session`；`when` 可按 `session`、`workspace`、`engineReady` 的布尔条件显示。`order` 为 -1000 至 1000 的整数。
+`src/plugins/contributions.ts` 定义 12 类贡献、8 个菜单位置、3 个内嵌位置和 15 个事件名称；`service.ts` 校验目标引用与包内文档。当前不附加旧的贡献数量、页面体积和服务参数容量上限，仍保留 ID、字段类型、引用与作用域校验。
 
-| 字段 | 必填字段 | 行为 |
-|---|---|---|
-| `pages`，`kind: "tool"` | `id`, `title`, `kind` | 原生参数操作页；可用 `tool` 指定默认工具 |
-| `pages`，`kind: "webview"` | `id`, `title`, `kind`, `entry`, `tools` | 包内自包含 HTML；`tools` 是页面可调用的本地工具白名单 |
-| `navigation` | `id`, `title`, `page` | 左侧导航入口；`page` 引用同插件页面 |
-| `workspaceTabs` | `id`, `title`, `page` | 工作区“更多工作区”菜单入口；通常设置 `scope: "session"` |
-| `services` | `id`, `title`, `tool` | 底部固定活动入口中的服务状态；可选 `stopTool`, `statusTool`, `page`, `args` |
-| `pages`，`kind: "native"` | `id`, `title`, `kind`, `entry` | JSON 声明的宿主 React 组件树，可选工具白名单 `tools` 默认空 |
-| `commands` | `id`, `title`, `tool` 或 `page` | 命令面板与窗口快捷键 |
-| `menus` | `id`, `title`, `location`, `command` | 消息、会话、文件、编辑器、顶栏、服务及输入框操作 |
-| `views` | `id`, `title`, `location`, `page` | 消息内嵌、输入扩展、工作区面板 |
-| `statusBar` | `id`, `title`, `command` | 状态区按钮 |
-| `settings` | `id`, `title`, `page` | 全局插件设置分区 |
-| `editorDecorations` | `id`, `title`, `text` | 内容字面子串匹配与编辑器装饰 |
-| `hooks` | `id`, `title`, `event`, `tool` | 已授权的事件触发工具 |
-| `background` | `id`, `title`, `tool`, `intervalMs` | 引擎持久周期调度 |
+前端统一目录 `src/renderer/src/features/extensions/` 负责装配，不存在需要插件分别适配的 Work / Code 两套界面。
 
-工具名必须已在 `manifest.tools` 声明。Webview 的 `entry` 必须是已有包内 `.html` 文件，native 页面使用 `.json`；不可越界，页面文档最大 512 KiB。`services.args` 最大 64 KiB。每种贡献各自不允许重复 ID。宿主内部 ID 为 `plugin:<插件ID>:<贡献ID>`，作者清单和 bridge 只填本地 ID。
+| 前端实现 | 职责与边界 |
+|---|---|
+| extensions/host.ts、registry.ts | 当前引擎发布目录、修订与注册生命周期；逐插件失败隔离 |
+| extensions/slots.tsx | 同时过滤贡献和目标页面条件；内嵌默认收起，展开才挂载 |
+| extensions/interactions.ts | 命令、快捷键、目标注册、事件与系统交互 |
+| conversation/MessageContent.tsx | 普通消息与补充内容的菜单和内嵌区域 |
+| sessions/SidebarTask.tsx | 会话菜单目标 |
+| composer/Composer.tsx | 输入工具栏、扩展区域与草稿目标 |
+| workspace/WorkspacePanel.tsx、WorkspaceView.tsx | 文件菜单与工作区扩展区 |
+| workspace/CodePreview.tsx | 代码预览菜单、工具栏、标记和选择目标；当前只读 |
+| services/ServiceTray.tsx | 服务菜单与实例上下文 |
+| app/MenuBar.tsx | 应用菜单 |
 
-```json
-{
-  "contributes": {
-    "pages": [{ "id": "timer", "title": "计时器", "kind": "webview", "entry": "ui/index.html", "tools": [] }],
-    "navigation": [{ "id": "timer", "title": "计时器", "page": "timer", "icon": "clock" }],
-    "workspaceTabs": [{ "id": "timer", "title": "计时器", "page": "timer", "scope": "session", "when": { "workspace": true } }],
-    "services": [{ "id": "countdown", "title": "倒计时", "tool": "start_timer", "stopTool": "stop_timer", "page": "timer", "scope": "session" }]
-  }
-}
-```
+导航、工作区页签、插件设置和底部状态入口使用同一注册目录。不要把代码预览能力泛化到所有预览器：Office、PDF、图片和普通成果文本不是 ui.editor 目标。编辑器或输入框动作须匹配唯一有效目标，歧义应报错，不能落到另一个会话。
 
 ## HTML bridge
 
-新插件统一使用 `$AE`；原有 `aetherPlugin` 页面方法保持兼容。两者都能操作页面工具、下载和服务；`$AE` 另提供平台模型、AI、Agent、会话、Skills、MCP、知识库、工作区与插件设置。平台方法须先在清单声明并由用户授权，具体签名随脚手架 `aether-sdk.d.ts` 提供，见[平台 SDK 与权限](plugin-project-v1.md#平台-sdk-与权限)。
+`ExtensionPage.tsx` 中的 ExtensionWebview 和 `webview-document.ts` 建立不透明源 iframe、随机通道、来源校验及生命周期绑定。文档加载并经过两帧绘制后开放交互，不重放点击或依赖固定延时。流式事件顺序等待页面回调确认，按消费速度形成背压；销毁页面取消所拥有的流和待处理请求。
 
-页面运行在 `sandbox="allow-scripts allow-forms"` 的不透明源 iframe，拿不到 Electron preload、宿主 React、文件系统或任意 IPC。表单支持浏览器原生必填校验与 `submit` 事件，处理函数应调用 `event.preventDefault()` 再通过 bridge 执行工具。CSP 的 `form-action 'none'` 仍禁止实际提交与导航；网络、嵌套页面、worker 与外部脚本同样被阻止。样式与脚本应内联，图片可使用 data URL。此限制仅针对 HTML，Node 工具依然沿用现有插件执行与安全模式，不是操作系统沙箱。
+页面没有 Electron preload、宿主 React、任意 IPC 或直接文件访问。CSP 限制网络、导航和表单提交；主题按有限令牌同步，不重载页面。`NativeExtensionPage.tsx` 只渲染 JSON 组件树，不执行任意 JSX/JS，也没有异步数据源或结果到属性的自动绑定。
 
-宿主会等待文档加载完成和首帧绘制后再开放页面交互。加载期间 iframe 持续绘制，轻量覆盖层阻止过早点击落在尚未接入输入路由的 iframe 外壳上；不重放用户事件，也不使用固定等待时间。
+主进程 `src/main/plugin-ui-documents.ts` 按窗口持有随机 URL 到文档的映射，精确查询，不把 URL 映射为磁盘路径。窗口导航、退出和文档释放应撤销访问。当前没有旧的单文档 1 MiB、窗口 8 MiB、全局 16 MiB 插件专项容量限制。
 
-桌面主进程将封装后的文档暂存于有界内存，以随机令牌 `aether-plugin-ui://document/<token>` 提供只读响应。该协议从不把 URL 映射为磁盘路径；单文档最多 1 MiB，每窗口最多 32 份/8 MiB，全局最多 16 MiB。仅受信任工作台主窗口可寄存/释放自己的文档，页面卸载、主窗口导航、renderer 退出时撤销。响应使用独立 CSP，宿主页面的 `script-src` 保持收紧。
-
-页面加载和宿主外观/强调色变更时，宿主通过同一实例 channel 发送 `theme` 事件。bridge 更新 `documentElement.style.colorScheme` 和有限颜色变量白名单（`--bg-*`、`--fg*`、`--accent*`、`--border*` 中的 16 个界面令牌）；默认页面背景/文字使用 `--bg-surface`、`--fg`。作者可使用这些变量或随 `color-scheme` 变化的 `Canvas`/`CanvasText`。同步仅修改样式，不重载页面，也不清除输入。
-
-```js
-const context = await aetherPlugin.context()
-// {sessionId, workspacePath, engineReady, pluginId, revision}
-const output = await aetherPlugin.invoke('local_tool', { value: 1 })
-// output = {result,artifacts,stderr,durationMs,plugin:{id,revision,hash}}
-renderResult(output.result) // 业务数据在 result 中，不能直接将 output 当作业务对象。
-await aetherPlugin.navigate('another-local-page')
-const saved = await aetherPlugin.download({ fileName: 'report.json', content: JSON.stringify(output.result, null, 2), encoding: 'utf8' })
-// {saved:boolean,bytes?:number}; 用户在原生保存对话框中选位置或取消。
-
-const snapshots = await aetherPlugin.services.get()
-await aetherPlugin.services.start('countdown', { seconds: 60 })
-await aetherPlugin.services.stop('countdown')
-await aetherPlugin.services.refresh('countdown') // 需要 statusTool
-const unsubscribe = aetherPlugin.services.subscribe(renderSnapshots)
-```
-
-`invoke` 只能调用此页面 `tools` 白名单中的本地工具。服务操作只接受同插件声明的服务 ID，并检查当前会话/工作区条件。每页最多 8 个并发请求，普通请求参数最多 256 KiB；请求按窗口来源、随机 channel 和当前插件实例验证。停用、修订替换或切换引擎后，旧页面与延迟回执失效。服务快照仅包含当前插件和当前会话可见数据；初始化使用 `get()`，后续用 `subscribe()`。
-
-`download` 为用户点击导出提供原生保存入口，支持 UTF-8 文本与标准 Base64 二进制，解码后上限 16 MiB。`fileName` 只能是单文件名，禁止路径、控制字符、Windows 设备名和备用数据流；实际路径由用户在保存对话框选择，不返回给插件。每窗口只允许一个保存流程，保存前再次验证文档未关闭或被替换。取消返回 `{saved:false}`，不会写盘。图片可在 iframe 内用 Canvas 缩放、裁剪后直接导出，避免将大图塞进工具调用参数。此能力需要包含 download bridge 的新版 Aether 宿主；不要用被沙箱阻止的 `<a download>` 代替。
+`plugin-ui.ts` 和 `plugin-download.ts` 处理原生保存；`plugin-host.ts` 处理消息框、系统通知和文本剪贴板。真实参数边界以公开页面 API 为准。保存和消息框各自每窗口只能有一个流程；保存前重新验证文档。系统能力检查当前引擎、修订和授权，不能吞掉失败伪装成功；平台不支持系统通知时仍可展示应用内通知。
 
 ## 本地开发与浏览器承载
 
-插件管理中的开发模式可以直接打开含 `aether-plugin.json` 的本地工程。界面预览、工具测试与权限面板共用此工程，修改后用刷新按钮重新读取。执行时校验源码版本并生成临时快照，无需反复安装卸载；退出开发工程会停止其 Node 调用与 Agent。涉及会话和工作区的功能先选择绑定会话。
+开发模式读取所选工程，执行前验证源码哈希；权限绑定工程和插件身份，刷新保留仍声明的授权。会话和工作区来自显式绑定，不能由业务参数伪造。
 
-页面工具栏的浏览器入口创建受信插件标签，复用同一沙箱页面和 `$AE` 桥。它不是普通网址：手工输入 `aether-plugin-ui://` 不能获得插件身份。普通 HTTP/HTTPS 页面不注入 `$AE`；从插件标签打开外部地址会创建独立网页标签。停用、发布替换或切换引擎会使旧插件标签失效。开发预览的浏览器标签有独立开发会话，关闭标签释放该会话；刷新重新读取本地工程，权限仍按声明与授权校验。
+`features/browser/PluginBrowserSurface.tsx` 复用插件 Webview；普通网页没有 SDK。插件标签不是输入自定义 URL 即可获取的身份。开发标签有独立开发会话，关闭释放；正式标签在停用、修订替换和引擎切换后失效。这里提供页面承载，没有公开浏览器自动化或 Office 编辑器 SDK。
 
 ## 服务结果与生命周期
 
-服务启动工具返回标准 `{result}`，其中 `result` 可为：
+服务状态属于前端宿主。关闭页面不等于停止服务；会话服务按实例、修订和会话隔离，全局服务可跨会话显示。可选截止时间由前端计时，无截止时间时不自动轮询。当前会话活跃服务、已完成历史和全局通知是不同视图，范围见 [服务参考](../../aether-code/docs/plugin-api/content/page.html#services)。
 
-```json
-{ "status": "running", "detail": "60 秒倒计时", "completesAt": 1790000060000 }
-```
+`host.ts` 独立于插件管理页存在，按目录变化协调注册。停用、卸载、修订替换和引擎切换会清理贡献、服务及计时器；短暂传输失败保留健康注册。代际检查使旧回执不能重新激活已移除实例。
 
-支持状态：`idle`、`running`、`waiting`、`completed`、`stopped`、`error`。可选 `detail` 最多显示 2000 字符；`completesAt` 为有限 Unix 毫秒数。已过期截止时间立即完成，未来最多 7 天的截止时间由宿主计时并产生完成状态。没有截止时间的服务由后续工具返回状态，宿主不轮询。
+引擎 `lifecycle-runtime.ts` 维护有限近期事件和 hooks：高频事件可合并，同一 hook/会话忙碌或冷却期间跳过，不排队补发；引擎事件不能由页面冒充。停止只留有限收尾时间，不能依赖退出 hook 保存唯一业务数据。
 
-页面关闭不会清除服务状态和截止时间。会话服务按插件实例、修订和会话隔离；全局服务在会话间共享。切换会话释放旧的未运行条目，非当前会话的非活动记录最多保留 64 条，运行中的服务继续存在。停用、卸载、发布修订替换或引擎连接变化清理贡献、服务与计时器，旧回执不会恢复已卸载实例。
+`background-runtime.ts` 将计划写入租户调度文件，仅执行已发布、启用并授权的当前修订；任务无会话上下文，同一任务不重叠，错过周期合并一次。重启将未完成执行恢复为到期工作，业务需容忍重试；不是任意常驻 Node 生命周期。
 
-每次工具调用仍是独立 Node 子进程，输出后退出。`services` 的内存截止时间不会跨重启保留。需要持久后台任务时另声明 `background` 并授权 `background.run`：调度由引擎持久化、重启恢复，错过周期最多补一次。有有效后台任务时关闭桌面窗口进入托盘；真正退出或关机停止运行，下一次引擎启动恢复。它不是系统唤醒闹钟或自动安装的 OS 服务。
+桌面 `src/main/plugin-background.ts` 仅在检测到有效后台任务时进入托盘。`src/main/engine/host.ts` 退出时回收桌面拥有的引擎进程，远端引擎生命周期独立。不要把关闭桌面写成必然停止全部后台任务，也不要把前端内存计时写成持久调度。
+
+人工审阅须核对目标、签名、权限、错误、取消、旧修订、主题、返回与完整示例，自动检查不替代真实交互。流程见 [站点维护说明](../../aether-code/docs/plugin-api/maintenance.html)，实例见 [工作台扩展示例](examples/workbench-extension/README.md)。

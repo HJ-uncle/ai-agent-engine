@@ -1,5 +1,9 @@
 ## 1. 依赖安装与版本确认
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../docs/README.md)；文档状态见[全量清单](../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 - [ ] 1.1 检查 `@ant-design/x-markdown` 当前版本并安装：`cd desktop && npm install @ant-design/x-markdown`
 - [ ] 1.2 检查并安装 `@ant-design/x-sdk`：`npm install @ant-design/x-sdk`
 - [ ] 1.3 检查并安装 `@ant-design/x-card`（若已发布稳定版）：`npm install @ant-design/x-card`

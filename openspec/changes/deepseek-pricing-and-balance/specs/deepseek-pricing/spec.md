@@ -1,5 +1,9 @@
 ## ADDED Requirements
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../../../docs/README.md)；文档状态见[全量清单](../../../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 ### Requirement: 价格配置可手动编辑并支持折扣截止时间
 
 系统 SHALL 为每个 DeepSeek 模型提供可编辑的价格配置，包含：原价（input/output/cacheHit，单位元/百万 token）、折扣价（相同三字段）和折扣截止时间（ISO8601）。系统 SHALL 在运行时根据当前时间自动判断使用原价或折扣价，无需重启。

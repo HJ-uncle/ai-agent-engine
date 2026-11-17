@@ -1,5 +1,9 @@
 ## Context
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../docs/README.md)；文档状态见[全量清单](../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 当前 `ExplorerPanel.tsx` 使用 Ant Design `Tree` 组件 + `vscode-icons-js` 图标，仅提供基础文件列表、搜索过滤与工作区重命名。缺少：
 - 代码编辑能力（EditorArea 与文件树完全解耦）
 - Git 状态感知

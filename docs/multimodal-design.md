@@ -1,106 +1,43 @@
-# 多模态输入设计文档
+# 附件与多模态输入
 
-## 概述
+本文按 2026-11-17 源码核对，说明文件上传、展示正文、模型输入和持久历史之间的关系。
 
-Agent Engine 支持图片和文件附件的多模态输入。为避免将大体积 base64 数据存储进对话历史（导致 Token 预算爆炸），采用「上传 → 引用 → 工具调用 → 视觉注入」的流水线架构。
+## 输入链路
 
----
-
-## 架构流程
-
-```
-用户上传文件
-    │
-    ▼
-POST /api/v1/workspace/file   (multipart, max 100MB)
-    │  → 文件保存到 workspace/{tenant}/{session}/filename
-    │
-    ▼
-POST /api/v1/chat
-    {
-      "message": "分析这张图",
-      "attachments": [{ "name": "screenshot.png", "content": "", "type": "image/png" }]
-    }
-    │
-    ▼  chat.ts 处理
-    │  图片附件 → 提示文本: "[用户上传了以下图片...请使用 read_image 工具读取后回答]"
-    │  文件附件 → 提示文本: "[用户上传了以下文件...请使用 read_file 工具读取后回答]"
-    │  displayContent → 存入 DB (含 workspace_image / workspace_file 类型，供 UI 渲染卡片)
-    │
-    ▼  ReAct 循环
-    AI 调用 read_image("screenshot.png")
-    │
-    ▼  read_image 工具
-    │  读取文件 → 返回 JSON { success, filename, mimeType, size, dataUrl: "data:image/png;base64,..." }
-    │
-    ▼  openai.ts LLM adapter
-    │  检测到 tool result 含 dataUrl
-    │  → 添加 { role: "tool", content: 'Image "screenshot.png" loaded...' }
-    │  → 注入  { role: "user", content: [{ type: "image_url", image_url: { url: dataUrl } }] }
-    │
-    ▼
-    AI 看到真实图片像素，进行 OCR / 内容分析
+```mermaid
+flowchart TD
+  A[选择附件或工作区引用] --> B[POST /api/v1/workspace/upload]
+  B --> C[工作区内文件与附件引用]
+  C --> D[POST /api/v1/chat]
+  D --> E[展示正文与模型输入分别构建]
+  E --> F[附件自动处理与去重]
+  F --> G{主模型支持视觉}
+  G -->|是：图片| H[构造 image_url 内容]
+  G -->|否：图片| I[视觉代理或 OCR 读取]
+  F -->|其他文件| J[read_file 自动识别]
+  H --> K[适配器转换后请求模型]
+  I --> K
+  J --> K
 ```
 
----
+上传路由位于 [workspace.ts](../src/api/http/routes/workspace.ts)，不是 `/workspace/file` 的 multipart 接口。[server.ts](../src/api/http/server.ts) 注册 multipart 的 100 MiB 限额；二进制读取、文本预览和知识库上传另有各自上限，不能把它视作所有文件操作的统一大小限制。
 
-## 消息存储策略
+## 自动处理与工具读取
 
-### 用户消息（存入 DB 的 displayContent）
+[attachment-auto-processor.ts](../src/api/http/routes/attachment-auto-processor.ts) 合并附件和工作区引用并去重。主模型支持视觉时将图片作为模型图片内容；否则先尝试已配置视觉代理，再通过 `read_file` 的 OCR 路径读取。其他文件通过统一读文件能力处理。是否已真实视觉内联由处理结果决定，不能仅凭文件扩展名声称“模型已经看过”。
 
-```json
-[
-  { "type": "text", "text": "分析这张图" },
-  { "type": "workspace_image", "name": "screenshot.png", "sessionId": "xxx" }
-]
-```
+当前公开工具名是 `read_file`。旧文档要求先调用独立 `read_image` 或 `smart_read` 的说明已不适用。文件工具与办公检查工具负责文本、Office、PDF 和 OCR 等具体解析；支持范围、分页和返回长度以当前工具 schema 为准。
 
-- `workspace_image` / `workspace_file` 只存文件名和 sessionId，**不存 base64**
-- UI 读取后渲染为文件卡片（名称 + 大小 + 日期）
-- 刷新页面后卡片正常显示，不会变成 JSON 乱码
+[chat.ts](../src/api/http/routes/chat.ts) 区分 displayContent 和 modelInputContent，展示层不必显示注入给模型的所有辅助文字。[OpenAI 适配器](../src/core/llm-adapter/openai.ts) 可把合法图片工具结果转换为工具文本加用户图片消息；无效、被剥离或视觉关闭的 payload 不应被当作可用图片。
 
-### LLM 接收的消息（由 openai.ts 转换）
+## 保存与恢复
 
-`contentToMultimodal()` 函数负责将 `workspace_image` / `workspace_file` 转换为 AI 指令文本：
+附件源文件属于工作区；显示消息、模型历史、外置大正文与最终成果是不同数据。默认 JSONL 历史可保存模型输入表示，超阈值内容可进入外部压缩 blob。因此不能保证“base64 永不落盘”或“图片只存在本轮，下轮自动消失”。
 
-```
-[用户上传了以下图片到工作区，请调用 read_image 工具读取后再回答，文件名如下：]
-- screenshot.png
-```
+压缩后的模型历史可能不再包含完整图片输入，但物理记录和源附件不会因此自动删除。备份与恢复应包含主库、sessions、被引用的 blobs 和所需工作区文件；结果发布还可能依赖 result-assets。详见 [运行与数据指南](runtime-guide.md)。
 
-这确保 AI 每次都能从当前消息中看到明确的文件名，不会混淆历史对话中的文件。
+## 限制与验证
 
----
+视觉代理、OCR、Office 解析器和模型能力受部署依赖及配置约束；上传成功不代表解析成功。引擎记录实际处理结果和失败原因，不应伪造图片理解。客户端也不能用显示标签代替服务端资源授权。
 
-## Tool Result 处理（openai.ts）
-
-```typescript
-// 检测 read_image tool result
-if (parsed?.dataUrl && typeof parsed.dataUrl === 'string') {
-  result.push({ role: 'tool', content: 'Image "filename" loaded successfully.' })
-  result.push({
-    role: 'user',
-    content: [{ type: 'image_url', image_url: { url: parsed.dataUrl } }]
-  })
-}
-```
-
-**原因**：OpenAI API 的 `tool` 角色消息不支持 `image_url` 类型，必须通过额外注入一条 `user` 消息才能让视觉模型看到图片。
-
----
-
-## Token 预算保护
-
-- `applyTokenWindow`（`history.ts`）只做**滑动窗口**（丢弃最旧消息），不截断单条消息内容
-- `rowToMessage` 读取历史时，`tool` 角色消息**保持字符串格式**，不自动 JSON.parse（防止 JSON 文件内容变成 `[object Object]`）
-- 图片 base64 只在 `read_image` 工具调用时注入，不常驻历史，每轮对话结束后自动消失于下一轮的上下文窗口外
-
----
-
-## 文件类型区分
-
-| 前端 part 类型 | 说明 | AI 使用的工具 |
-|---|---|---|
-| `workspace_image` | 图片附件（.png/.jpg/.gif/.webp 等）| `read_image` |
-| `workspace_file` | 文档附件（.json/.txt/.md/.pdf 等）| `read_file` |
-| `file`（旧格式）| 含完整内容，已废弃 | 跳过，不传给 LLM |
+实现入口为附件自动处理器、文件工具和模型适配器；本次文档更新未执行真实图片、商业视觉模型或操作系统 OCR 的端到端测试。

@@ -1,5 +1,9 @@
 ## ADDED Requirements
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../../../docs/README.md)；文档状态见[全量清单](../../../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 ### Requirement: Git 状态图标
 文件树节点右侧 SHALL 实时显示 git 工作区状态徽章：未跟踪（U，绿色）、已修改（M，黄色）、已暂存（A，蓝色）、冲突（C，红色）。状态 SHALL 在文件树刷新时重新获取，刷新间隔 ≤ 5 秒。
 

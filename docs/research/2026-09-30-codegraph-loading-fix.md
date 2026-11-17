@@ -1,5 +1,9 @@
 # CodeGraph 加载失败修复
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../README.md)；文档状态见[全量清单](../documentation-inventory.md)。状态标注：2026-11-17。
+
+
 用户截图报错：`codegraph 模块加载异常：CodeGraph.openSync 不可用`，调用为 `action=status`、项目路径 `D:\dev\aether-code`。这是代码图组件加载缺陷；截图中列目录和读文件继续成功，不能把它解释为整轮任务、远端连接或 Code OSS 编辑器失败。
 
 ## 根因与之前漏检原因

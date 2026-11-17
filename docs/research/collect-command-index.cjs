@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const path = require('node:path');
 const ts = require('typescript');
 const source = fs.readFileSync(process.argv[2]).toString('latin1');
 const anchor = source.indexOf('name:"voice"');
@@ -24,5 +25,7 @@ function walk(node) {
   ts.forEachChild(node,walk);
 }
 walk(ast);
-fs.writeFileSync('docs/research/claude-2.1.266-evidence/embedded-command-index.json',JSON.stringify({chunkStart:start,chunkSize:chunk.length,commands},null,2));
+const output = path.resolve(process.argv[3] || path.join(__dirname, '../../.e2e-tmp/claude-evidence/embedded-command-index.json'));
+fs.mkdirSync(path.dirname(output), { recursive: true });
+fs.writeFileSync(output,JSON.stringify({chunkStart:start,chunkSize:chunk.length,commands},null,2));
 console.log(JSON.stringify({chunkStart:start,chunkSize:chunk.length,definitions:commands.length,uniqueNames:[...new Set(commands.map(x=>x.name))].sort()},null,2));

@@ -1,5 +1,9 @@
 ## 1. 依赖安装与项目初始化
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../docs/README.md)；文档状态见[全量清单](../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 - [x] 1.1 在 `multi-agent-console/package.json` 中添加 `@monaco-editor/react`、`monaco-editor`、`monaco-editor-webpack-plugin`、`react-window`、`@types/react-window`
 - [x] 1.2 添加后端依赖：`simple-git`、`trash`（主进程/server 侧）
 - [x] 1.3 添加测试依赖：`@playwright/test`、`electron` playwright driver

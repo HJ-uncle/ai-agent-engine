@@ -1,5 +1,9 @@
 ## ADDED Requirements
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../../../docs/README.md)；文档状态见[全量清单](../../../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 ### Requirement: 层级树结构与渲染
 文件树 SHALL 以无限级嵌套树形式呈现工作区文件系统，每个节点对应一个文件或目录，节点高度固定 22 px，使用 `rc-tree` 内置 `virtual={true}` 虚拟滚动，单目录 ≥ 5 万文件时首次展开耗时 SHALL < 200 ms，内存增长 SHALL < 50 MB。
 

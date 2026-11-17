@@ -1,67 +1,57 @@
-# tool-registry Specification
+# Tool Registry Specification
 
 ## Purpose
-TBD - created by archiving change ai-agent-engine. Update Purpose after archive.
+
+Describe registration, model-facing definitions, capability filtering and execution preflight. Source audit: 2026-11-17.
+
 ## Requirements
-### Requirement: Tool Registration
 
-The ToolRegistry SHALL provide a `register(tool: Tool)` method that stores a tool by its unique name.
+### Requirement: Unique registration and capability filter
 
-#### Scenario: Successful tool registration
-- **WHEN** `register(tool)` is called with a tool whose `name` does not already exist in the registry
-- **THEN** the registry SHALL store the tool and make it available for subsequent `execute` and `list` calls
+ToolRegistry SHALL store tools by name. A constructor-supplied canRegister predicate MAY reject a tool before insertion. Duplicate accepted names SHALL throw DuplicateToolError.
 
-#### Scenario: Duplicate tool registration
-- **WHEN** `register(tool)` is called with a tool whose `name` already exists in the registry
-- **THEN** the registry SHALL throw a `DuplicateToolError` containing the conflicting tool name and SHALL NOT overwrite the existing registration
+#### Scenario: Rejected capability
 
-#### Scenario: Tool name validation
-- **WHEN** `register(tool)` is called with a tool whose `name` is empty or contains invalid characters
-- **THEN** the registry SHALL throw an `InvalidToolNameError` before storing the tool
+- **WHEN** canRegister returns false
+- **THEN** register SHALL leave the tool absent
+- **AND** dynamic registration SHALL NOT bypass the capability ceiling.
 
----
+The registry itself does not validate a universal tool-name syntax. Specific plugin/MCP factories may impose or normalize names separately.
 
-### Requirement: Tool Execution
+### Requirement: Safe removal and lookup
 
-The ToolRegistry SHALL provide an `execute(name, args, ctx)` method that invokes a registered tool by name.
+unregister SHALL remove the tool, custom model definition and loaded-model state. Removing a missing tool SHALL be harmless.
 
-#### Scenario: Successful tool execution
-- **WHEN** `execute(name, args, ctx)` is called and the named tool exists
-- **THEN** the registry SHALL invoke the tool's handler with `args` and `ctx` and return the result
+#### Scenario: Missing execution target
 
-#### Scenario: Tool not found
-- **WHEN** `execute(name, args, ctx)` is called with a name that is not registered
-- **THEN** the registry SHALL return a `ToolNotFoundError` with the requested tool name and SHALL NOT throw an unhandled exception
+- **WHEN** execute is called for an absent tool
+- **THEN** it SHALL throw ToolNotFoundError.
+- **WHEN** a handler throws
+- **THEN** the registry SHALL propagate that error rather than promise a generic ToolExecutionError wrapper.
 
-#### Scenario: Tool execution error propagation
-- **WHEN** the tool handler throws an error during execution
-- **THEN** the registry SHALL wrap the error in a `ToolExecutionError` and return it to the caller with the original error attached as `cause`
+### Requirement: Model exposure is distinct from registration
 
----
+The registry SHALL preserve full executable schemas and optional compact model definitions. listForRequest MAY expose core tools plus loaded/history-required tools rather than every registered definition.
 
-### Requirement: Tool Listing
+#### Scenario: On-demand loading
 
-The ToolRegistry SHALL provide a `list()` method that returns the schema descriptions of all registered tools.
+- **WHEN** the trusted load_tools implementation selects an eligible registered tool
+- **THEN** it SHALL expand model visibility
+- **AND** SHALL NOT authorize a tool excluded from registration.
+- **WHEN** a tool is removed/replaced
+- **THEN** registration identity and invalidated history SHALL prevent stale definitions from being treated as unchanged.
 
-#### Scenario: List all registered tools
-- **WHEN** `list()` is called after registering N tools
-- **THEN** the method SHALL return an array of N objects, each containing the tool's `name`, `description`, and `inputSchema`
+### Requirement: Preflight and concurrency
 
-#### Scenario: List on empty registry
-- **WHEN** `list()` is called before any tools are registered
-- **THEN** the method SHALL return an empty array
+Execution SHALL perform security preflight before entering ordinary tool concurrency and again after obtaining a pooled slot. Trusted orchestration calls MAY bypass the ordinary pool to avoid child/tool deadlock.
 
----
+#### Scenario: Permission changed while queued
 
-### Requirement: Tool Unregistration
+- **WHEN** a queued tool no longer passes preflight when its slot becomes available
+- **THEN** it SHALL return the blocked result without invoking the handler.
 
-The ToolRegistry SHALL provide an `unregister(name)` method that removes a previously registered tool.
+Only trusted builtin implementations SHALL qualify for evidence projection, office/screenshot evidence and privileged loading behavior; extension names alone are insufficient.
 
-#### Scenario: Successful unregistration
-- **WHEN** `unregister(name)` is called with the name of a registered tool
-- **THEN** the registry SHALL remove the tool and subsequent calls to `execute(name, ...)` SHALL return `ToolNotFoundError`
+## Source map
 
-#### Scenario: Unregister non-existent tool
-- **WHEN** `unregister(name)` is called with a name that is not registered
-- **THEN** the registry SHALL throw a `ToolNotFoundError` indicating the tool does not exist
-
+[Registry](../../../src/core/tool-registry/registry.ts), [factory](../../../src/tools/registry-factory.ts), [policy](../../../src/security/tool-policy.ts), [model loading](../../../src/tools/model-tool-loading.ts), [tests](../../../src/core/tool-registry/__tests__/registry.test.ts). Canonical builtin names are indexed in [system tools](../../../docs/docs/system-tools.md).

@@ -1,194 +1,67 @@
-# Aether Tool Plugin v1 工程规范
+# 插件工程内部维护地图
 
-完整上手流程、全部工作台挂载区域、宿主 React 组件与平台 SDK 参考见 [插件开发者文档](../../aether-code/docs/plugin-api/dist/index.html)。本页聚焦工程封装和 Node 执行协议。
-
-适用范围：`apiVersion: 1`、`runtime: "node"` 的自包含工具插件。它不是通用插件行业标准，也不是 DeepSeek Harness/Cordis、VS Code 或 MCP 的包协议。其他宿主只有实现本协议或提供适配器后才能安装；纯 Node 可直接执行工具源码与随包用例。
+本文只记录封装、模板、导入和宿主装配的维护入口。开发者清单、协议、SDK 和完整示例统一维护在前端 [HTML 插件参考](../../aether-code/docs/plugin-api/content/manifest.html)，这里不复制公开字段和接口表。
 
 ## 工程结构与唯一清单
 
-```text
-my-plugin/
-├── aether-plugin.json       # 工具声明、参数 Schema、入口
-├── main.mjs                 # Node ESM 入口，可拆分多个 tools/*.mjs
-├── README.md                # 用途、输入输出、限制、运行方式
-├── QUICKSTART.md            # SDK 摘要、开发与验证流程
-├── aether-sdk.d.ts          # 宿主 SDK 类型，区分 Node 与页面能力
-├── package.json             # private 项目、Node 版本与 npm test
-├── scripts/test.mjs         # 独立测试驱动，仅依赖 Node 内置模块
-└── examples/cases.json      # 确定性业务用例和预期结果
-```
+`src/plugins/project.ts` 负责工程读取、检查和导出，`service.ts` 负责管理权威、路径与修订。分发工程以根目录 aether-plugin.json 为唯一清单。管理服务保存 manifest 时同步包内清单，导出时重新生成，避免管理元数据与包内文件分叉。
 
-前三者和示例/测试是官方模板的统一结构。运行时最低要求是根清单和清单指向的 `.mjs` 文件；自包含模块、样式及文档可放进相对目录。推荐把使用许可写入 `LICENSE.md`。包里不携带租户记录、会话、机器绝对路径、凭据或已安装的依赖目录。
-
-`aether-plugin.json` 是分发工程唯一的清单。管理 API 的 `manifest` 是编辑权威，保存时同步包内同名清单，导出时重新生成，避免列表显示一版、ZIP 导入另一版。前端在「工具清单」中编辑它。
-
-```json
-{
-  "apiVersion": 1,
-  "id": "text-helper",
-  "name": "文本工具",
-  "version": "1.0.0",
-  "description": "统计 Unicode 字符数",
-  "runtime": "node",
-  "tools": [{
-    "name": "count",
-    "description": "统计文本字符数",
-    "inputSchema": {
-      "type": "object",
-      "properties": {"text": {"type": "string"}},
-      "required": ["text"],
-      "additionalProperties": false
-    },
-    "entry": "main.mjs"
-  }]
-}
-```
-
-`id` 使用小写字母、数字和单连字符，首尾字母或数字，最多 48 字符；工具名以小写字母开头，后续可有数字或下划线，最多 32 字符。全局工具名 `plugin_<id>_<tool>` 将 ID 中连字符转为下划线，总长不能超过 64。`version` 是作者版本，建议使用 SemVer；平台 `revision` 是保存次数，二者不同。
-
-路径一律 `/` 分隔的相对路径，禁止目录穿越、绝对路径、链接、大小写冲突和 Windows 保留名。源码最多 100 文件、单文件 1 MiB、合计 8 MiB。参数 Schema 为有界 draft-07 子集；`$ref`、`pattern`、`format` 等限制见 [插件说明](plugins.md)，复杂校验在插件代码中做。
+静态依赖需自包含，不打包凭据、数据库、租户记录或安装后的依赖目录。源文件、路径和 Schema 规则见 [文件约束](../../aether-code/docs/plugin-api/content/manifest.html#file-constraints)。当前没有旧的 100 文件、1 MiB 单文件或 8 MiB 工程配额，仍保留类型、路径、引用完整性和参数结构校验。
 
 ## 运行协议
 
-1. 宿主以 Node 执行工具入口，**写入一个 UTF-8 JSON 请求后关闭 stdin**。
-2. 请求为 `{tool,args}`，`tool` 是本地名 `count`，不是全局名，也不会偷偷通过 argv 或环境变量再传一份。
-3. 插件读到 EOF，执行并输出最终 JSON：`{result,artifacts?}`。普通日志写 stderr。
-4. 错误写 stderr 并设置非零退出码。顶层 `{error:"说明"}` 或 `{error:{code,message}}` 也会被认定失败；不要把缺参数、诊断信息包装为成功结果。
-5. `result` 可以是任意业务 JSON；平台不会猜测嵌套 `result.ok=false` 的业务含义。作者必须用预期值断言功能，不能把「进程退出 0」当成功验收。
+工具执行与结果解析在 `runtime.ts`，工程独立测试驱动在 `project-runner.ts`，产物处理在 `artifacts.ts`。公开请求/结果见 [工具协议](../../aether-code/docs/plugin-api/content/manifest.html#tool-protocol)。
 
-```js
-try {
-  let input = ''
-  process.stdin.setEncoding('utf8')
-  for await (const chunk of process.stdin) input += chunk
-  const { tool, args } = JSON.parse(input)
-  if (tool !== 'count' || typeof args?.text !== 'string') throw new Error('Invalid count request')
-  console.log(JSON.stringify({ result: { count: [...args.text].length } }))
-} catch (error) {
-  console.error(error.message)
-  process.exitCode = 1
-}
-```
-
-读取流前设置 UTF-8 解码，可保留跨数据块的中文和 emoji；不要对每个 Buffer 单独隐式转换后拼接。
-
-用例文件：
-
-```json
-{"cases":[{"name":"Unicode 字符","tool":"count","args":{"text":"你好🍎"},"expected":{"count":3}}]}
-```
-
-`expected` 精确匹配 `result`；可选 `artifacts` 精确匹配产物数组。默认不把产物预览写入工作区。Node 子进程隔离生命周期与故障，不是操作系统权限沙箱。独立工程测试也会执行作者源码，不授予 Aether 服务或平台凭据。
+维护时验证 EOF、UTF-8 分块、顶层错误、非零退出、无效 JSON、取消进程树和输出背压。独立 npm test 验证确定性业务值及可选产物精确值，不替代宿主 Schema、路径、页面、真实模型和权限验证。独立测试未设置 AETHER_PLUGIN_TEST_TIMEOUT_MS 或值为 0 时不附加执行期限；显式正整数才限定毫秒时长。
 
 ## 官方模板和脚手架
 
-统一模板来自引擎 `src/plugins/templates.ts`，前端、AI 工具和 CLI 共用：
+模板权威在 `templates.ts`，会话分析模板在 `session-review-template.ts`，SDK 声明由 `sdk-contract.ts` 提供。前端、AI 管理工具和 `scripts/plugin-project.ts` 共用模板目录。当前模板包括 json-tool、markdown-report、time-calculator、currency-converter、desktop-timer、session-review。
 
-HTTP 目录为 `GET /plugins/project/templates`，完整工程为 `GET /plugins/project/templates/:id`。导出保存修订使用 `GET /plugins/project/exports/:id?revision=N`，返回 `data.archive`（fileName、base64、sha256、revision）。工程接口使用三段或四段路径，保留所有有效插件 ID（包括 `templates`、`imports`、`project`）在 `GET /plugins/:id` 的访问与管理，不需要改名或迁移。
+模板生成清单、入口、README、QUICKSTART、SDK 类型、独立测试驱动和样例。`create-input.ts` 保证模板创建与自定义源码互斥：宿主先构建完整工程，再封存待批准操作，避免模型重新抄写实现。改模板时同步审阅测试、表单和说明；货币示例使用用户提供汇率，不宣称实时行情。
 
-| 模板 ID | 用途 | 业务验证 |
-|---|---|---|
-| `json-tool` | 文本规范化和 JSON 返回 | 空白、Unicode、空字符串 |
-| `markdown-report` | 生成文档产物 | 报告内容、相对文件路径 |
-| `time-calculator` | 确定性 UTC 时间运算 | 跨日、负偏移、闰日 |
-| `currency-converter` | 货币换算与原生操作表单，用户提供汇率 | 指定汇率、小数进位、日元取整、零金额 |
-| `desktop-timer` | 自定义 HTML、导航、会话工作区标签、宿主服务 | 确定性截止时间、停止；桌面打开期间完成通知 |
-| `session-review` | 当前会话消息选择、平台模型分析、插件设置与报告下载 | Node 文本处理；页面与真实 AI 另做宿主验收 |
-
-在引擎仓库中：
-
-```powershell
-npx tsx scripts/plugin-project.ts templates
-npx tsx scripts/plugin-project.ts init D:/dev/my-plugin json-tool my-plugin
-npx tsx scripts/plugin-project.ts check D:/dev/my-plugin
-npx tsx scripts/plugin-project.ts test D:/dev/my-plugin
-npx tsx scripts/plugin-project.ts pack D:/dev/my-plugin D:/dev/my-plugin.zip
-```
-
-`init` 不覆盖现有目录。`check` 和 `pack` 不执行插件。`test` 逐个执行用例，结果不符合预期则以非零状态退出。ZIP 必须输出到工程目录外，且不覆盖已有文件。
-
-独立工程在 Node 22+ 环境下，不需要 Aether、API key 或下载 npm 依赖：
-
-```powershell
-cd D:/dev/my-plugin
-npm test
-```
-
-该运行证明覆盖纯 Node 业务协议，不表示能安装到任意其他产品，也不替代 Electron 嵌入式宿主验收。
-
-独立 `npm test` 只依赖 Node，验证确定性业务结果、可选产物精确值和基本协议。它不复刻宿主的 JSON Schema、产物路径与大小验证；通过后仍需引擎 `check`、`test` 或管理页测试验证宿主约束。测试超时或运行失败时，驱动会尝试清理本次拥有的进程树并有界等待；清理失败会明确报错，不会无限等待继承的输出管道。主动脱离进程树或直接写文件等副作用仍不属于沙箱保证。
+CLI 的 templates / init / check / test / pack 是维护入口。init 不覆盖已有目录；check 与 pack 不执行代码；test 执行并断言样例；ZIP 不应放回源工程。临时工程和诊断产物使用 `.e2e-tmp/`，不污染根目录。
 
 ## 桌面批量导入
 
-插件页的「ZIP 文件」支持多选和插件总包。原生总包在 `plugins/` 下放置单插件 ZIP；例如本次交付的 `aether-real-world-plugins.zip` 可直接选择，无需先逐个解压。只展开一层，不递归导入嵌套总包。说明、证据和截图不作为插件安装。
+`batch-import.ts` 编排批量，`importer.ts` 负责单项作业和安装，`zip.ts` 负责归档验证；前端处理选择、预览、错误与选中项安装。安装得到草稿，发布独立；已有 ID 不覆盖，同批冲突需反馈。单项失败不撤销已成功项，重试先核对原作业。
 
-客户端先逐个上传预览，再显示可勾选的紧凑列表；只有选中的有效作业会按顺序安装为草稿，发布仍是独立操作。已存在 ID 不覆盖，同批重复 ID 保留首个有效候选并跳过后续项。单项失败不回滚已成功项，重试沿用原作业；网络异常先核对作业状态，避免重复安装。重新选择、重做预览或退出时释放已知未安装作业的暂存源码。
-
-桌面每批最多选择 20 个文件，总大小不超过 50 MiB。
+取消、重新预览或退出时清理本次拥有的未安装暂存作业，不清理生产插件。核对取消和网络失败分支，避免丢失作业 ID 后重复安装。
 
 ### 批量导入预览
 
-`POST /plugins/imports/preview-batch` 接收一个既有 `PluginImportInput`，另可传 `maxPlugins:1..20`（默认 20），表示本次允许创建的最大插件数量。前端逐文件提交，不能把多个 Base64 ZIP 拼进同一个请求。响应为 `data.imports:[{fileName,import?,error?}]`，其中 `import` 是不含 `files` 的完整导入作业摘要；子包失败独立显示，已经成功的子包仍可继续安装。原 `/plugins/imports/preview` 的单包响应保持不变。
+preview-batch 接收一个导入来源，不是拼接多个 Base64 ZIP。原生总包只展开一层 plugins/*.zip；根清单存在时按普通插件处理。说明、证据与截图是辅助文件，不作为插件安装。未知布局、危险路径、链接、重复项、加密和损坏归档仍需拒绝。
 
-普通 Native 或显式 Remark 包返回一项。根目录没有 `aether-plugin.json` 且包含 `plugins/<文件名>.zip` 的原生交付总包只拆一层；根清单存在时始终按普通插件处理。总包可同时携带根目录 `.md`/`.txt` 说明、`manifest.json`、`evidence/**/*.json` 和 `screenshots/**/*.(png|jpg|jpeg|webp)`；这些辅助文件只检查 ZIP 目录元数据，不解压、不安装。未知文件、危险路径、链接、重复路径、损坏外包和不符合预算的总包直接拒绝。
-
-HTTP JSON 上限 32 MiB，单份二进制 ZIP 上限 20 MiB，最多 20 个插件。外层声明解压总量与所有子 ZIP 累计声明解压总量各不得超过 64 MiB，子 ZIP 累计条目数最多 4096。数量与累计预算在创建首个作业前校验；解压还有实际输出大小和 CRC 校验。请求取消后停止后续预览，并清理本次已准备作业的暂存源码。每个作业继续使用现有租户隔离的查询、取消和安装接口；批量预览本身不安装、执行或发布插件。
+当前 maxPlugins 是可选正整数，省略时不施加旧的 20 项默认配额。ZIP 源码没有旧的 20 MiB、64 MiB 或 4096 条目插件专项容量上限；实际传输仍受部署和系统资源约束。修改资源策略需分别审阅上传、归档解析和解压内存，不把“无插件专项配额”写成无成本。
 
 ## AI 创建与手动创建
 
-AI 先调用 `plugin_get_template` 发现模板和理解协议。需求匹配时优先使用 `plugin_scaffold({templateId:"currency-converter",id:"my-currency",name:"货币换算器"})`，由宿主复制完整实现、自动运行模板案例并创建已验证草稿；随后只需 `plugin_publish`。如果需要先查看模板，整体流程是 `plugin_get_template` → `plugin_scaffold` → `plugin_publish`，对模板已覆盖的需求是三次调用；自定义需求需继续实现和验证，不能把获得脚手架当作完成需求。`templateId` 是内置模板 ID，`id` 是新插件 ID，可选 `name` 和 `description` 修改元数据；算法和业务测试保持原字节。准备批准时解析成完整 manifest/files 并封存，批准后不重新读取模板，避免中途模板变化。`plugin_scaffold` 可传 `cases` 补充精确业务断言，失败不会留下半成品草稿。
+AI 管理入口是 `management-tools.ts`，只读发现入口在 `read-tools.ts`，操作回执由 `mutation-receipts.ts` 等模块支持。结构化选择插件管理工具包才授予相应工具，历史消息中的 @ 文本不构成授权。管理角色、会话安全策略和能力开关是独立检查。
 
-只有模板不适用或需要自定义实现时才提交完整 `{manifest,files}`。两种输入互斥，未知模板或混传明确拒绝，不静默回退。已有独立本地工程通过导入流程安装。测试可一次提交 `cases:[{name,tool,args,expected}]`，一组确认后顺序执行同一修订。仅在业务断言通过后发布，不把诊断探针当交付版；保留具体操作审批。
-
-自定义开发使用 `plugin_scaffold({templateId:"session-review",id:"my-review",directory:"my-review"})`：目标是当前会话工作区内尚不存在的目录，父目录须已存在。宿主封存完整模板并执行案例，全部通过后写入工程并返回 `projectPath`，不同时安装草稿。可直接编辑返回目录，用插件开发模式预览；不必逐文件读取并复制到 `plugin_create`。
-
-本地开发 API 也可在正式桌面客户端使用，不依赖 `NODE_ENV`。只有可信桌面启动、真实 loopback 连接、有效实例令牌和已登录本地管理员可访问。`POST /plugins/dev/open` 接受 `{path,watch?}`，配置 `AETHER_DEV_PLUGIN_ROOTS` 或 `AETHER_ALLOWED_WORKSPACE_ROOTS` 时目录须在指定范围内；未配置时允许该本地管理员选择任意经过工程与链接校验的本地目录；返回 `{session,examples,application}`。每次执行重新校验磁盘 hash，只运行受控临时快照；`POST /plugins/dev/:id/invoke` 必须携带 `revision`、`hash`，源码变化返回 409，刷新后再试。可选 `sessionId` 绑定宿主能力上下文。`refresh` 返回新版应用；watch 防抖更新修订。开发信任范围是已打开的工程与插件 ID：同一插件刷新保留仍声明的已有授权，新增能力默认关闭，移除声明会撤权，插件 ID 改变会清空授权；旧页面的 hash 始终失效。`PUT /plugins/dev/:id/permissions` 接受 `{grants,revision,hash}`，能力调用走 `/plugins/dev/:id/capabilities/invoke`。会话按租户隔离，关闭或服务退出时停止执行并释放监听；`DELETE /plugins/dev/:id` 与 `POST /plugins/dev/:id/close` 均可关闭。
-
-`$AE.agents.run({modelId,task,description?,resumeRunId?})` 通过平台的 ReAct 与持久子代理执行器启动真实任务，返回 `runId`、`childSessionId`、状态和绑定会话。`status({runId})`、`list({cursor?,limit?})` 和 `cancel({runId})` 只访问当前插件与绑定会话内的任务。已完成任务可带 `resumeRunId` 继续原上下文。Agent 仅获得插件当前已授予的宿主能力，每次工具和模型请求重新检查授权；不会因为获得 `agents.manage` 自动拥有工作区、MCP 或会话读取权限。
-
-大工程通过管理工具读取时不会把整份源码塞进一个回执。`plugin_get_template` 和 `plugin_get` 在结果超过当前工具输出预算时返回目录；使用 `section:"manifest"` 读取清单、`section:"files"` 读取文件表、`section:"file",file:"ui/index.html"` 读取源码、`section:"protocol",protocol:"uiBridge"` 读取单项协议。每页包含 `content`、`offset`、`nextOffset`、`totalChars`、`revision`；拼接全部 `content`，直到 `nextOffset:null`。后续页携带同一 `revision` 和返回的 `nextOffset`，版本变化时从头读取。`format:"json"` 的内容在拼接后解析；`format:"text"` 是原文。`maxChars` 是期望的原文长度，实际会按 JSON 转义后的回执大小缩小，不能突破调用预算。
-
-局部修改显式使用 `plugin_update({id,expectedRevision,fileMode:"merge",files:{"ui/index.html":"完整新源码"}})`。未列出的文件保留；可省略 `manifest` 沿用当前清单，也可提供完整新清单；`deleteFiles` 显式列出要删除的已有文件。宿主在审批前把增量合并为完整且已校验的源码快照，批准后只执行该快照；期间修订或更新时间发生变化则拒绝，不会将修改套到另一版工程。默认 `fileMode:"replace"` 仍要求完整 `manifest/files`，未提交文件会移除，不能把只读目录或截断内容当成完整工程。
-
-创建和编辑的审批展示插件名称、版本，以及真实新增、修改、删除文件的 UTF-8 字节数与 SHA-256；不在确认文字中重复整份源码。文件表超出展示预算时明确给出全部变更数量、已显示条目和省略数量。完整源码仍封存在同一待批准操作内，确认展示不改变执行内容。导入审批继续保留真实来源、固定导入作业和依赖安装要求。
-
-`plugin_create`、`plugin_update`、`plugin_import_install`、`plugin_publish`、`plugin_set_enabled` 的写入结果只返回紧凑元数据，不回显源码、输入 Schema 或整个修订历史。回执包含当前修订与 hash、启用和发布状态，以及可容纳的准确工具映射。工具映射超过本次输出预算时返回 `toolNamesComplete:false` 和 `read` 指针，通过 `plugin_get` 的 `section:"metadata"` 分页取得完整映射；源码仍通过 `section:"file"` 读取。已完成的写入不会因为回执缩小而重新执行。
-
-`examples/cases.json` 中的参数必须是可直接运行的字面 JSON，不能依赖测试脚本私有的 `$sample` 占位替换；`expected` 是完整业务 `result`，不是字段子集。预期失败的非法输入用例放在独立测试脚本中，不能冒充客户端可直接执行的成功示例。独立测试、宿主参数验证、实际客户端操作和落盘导出应分别验收。
-
-复用模板时保留已验证的核心实现和边界案例，不因改名称或增加展示字段重写计算算法。货币模板使用十进制整数运算，包含 `1.005 × 3 = 3.02`；浮点乘法后加 `Number.EPSILON` 不能替代它。同币种错误汇率、非法输入和超大结果也应实际验证，普通整数用例通过不足以证明金额精度正确。
-
-前端「新建插件」从同一个模板 API 选择基础工程。保存后可测试、发布和导出 ZIP。导出的是明确的保存修订，返回 SHA-256；包中包含完整工程文件，不携带数据库记录。原生 ZIP 可以再次预览、安装和运行。带适配器安装依赖的 Remark 插件当前应使用原 GitHub 来源重装，导出接口会明确拒绝缺依赖的原生伪包。
+前端开发模式走 `dev-session.ts` 和 `temporary-snapshot.ts`：绑定工程、可选会话和权限，刷新重读源码，执行前验证快照，退出取消其拥有的调用与 Agent。开发预览不自动登记正式导航、hooks 或持久后台任务。
 
 ## 发布后直接操作
 
-已发布并启用的工具插件在插件列表点击即可打开原生操作页，开发配置通过单独的编辑入口进入。原生操作页按发布清单的 `inputSchema` 生成字段：`title` 为字段标签，`description` 为说明，`enum` 提供选项，`required`、`minimum` 等约束输入。复杂数组/对象可以通过高级 JSON 参数填写。作者应提供中文标题、有限选项和确定性示例，避免用户手写完整协议。需要自定义页面时通过 `manifest.contributes.pages` 声明包内 `.html`，由独立沙箱 iframe 与受限 bridge 承载，详见 [插件前端贡献协议](plugin-ui-contributions.md)。
+`application.ts` 返回固定发布修订的公开元数据、示例和页面文档。直接调用固定修订，不复用允许草稿执行的开发接口，不注册会话工具，也不把返回产物写入工作区。
 
-首次打开 `GET /plugins/runtime/apps/:id?revision=N`，可省略 revision 以获取当前发布修订；返回固定 revision/hash、manifest、合法示例和执行许可，不返回源码与本机路径。提交使用 `POST /plugins/runtime/apps/:id/invoke`，必须传 `{revision,tool,args}`，每次重新验证发布、启用和快照内容；更新发布不会替换已打开页面的版本。结果和产物在操作页预览，不写入工作区。安全模式阻止未受约束的插件执行，客户端不能通过请求指定模式来绕过。
-
-手动操作页和 Agent 会话的选用范围分别处理。创建/发布响应返回精确 `toolNameMap`、`globalToolNames`、`selectionId`；全局工具名会把 ID 的连字符换成下划线。发布不会给正在执行的请求自动增加工具，管理流程用 `plugin_test` 验收；用户选择插件标签后，后续请求才能调用该版本的工具。已有本地工程可通过 `plugin_import_preview({type:"local",path})` → `plugin_import_install` 导入，无需把源码再次逐字复录进 `plugin_create`。
+正式挂载只读取已发布且启用目录。`catalogue.ts`、`catalogue-stream.ts` 及前端宿主同步目录，不能以打开插件管理页作为激活前提。UI 目标由宿主绑定，业务参数不是身份来源。
 
 ## 平台 SDK 与权限
 
-宿主启动的 Node 工具与受信插件页面都提供 `$AE`，无需插件读取平台数据库或保管模型密钥。工程自带类型与摘要；独立 `npm test` 仅验证纯 Node 业务，不注入平台 SDK。
+| 实现 | 维护责任 |
+|---|---|
+| sdk-contract.ts、capability-contract.ts | Node/页面类型与能力参数契约 |
+| capabilities.ts | 22 项权限目录 |
+| capability-runtime.ts、node-sdk.ts | 当前修订、授权、会话与工作区边界、SDK 派发 |
+| agent-capability.ts、agent-configuration.ts | 任务、模型、工具配置、继续和取消 |
+| agent-execution-root.ts、agent-registry-authority.ts | 执行归属、持久确认和父子实时权威 |
+| agent-tool-registry.ts | 六组、33 个基础工具精确允许列表 |
+| workbench-binding.ts、host-context.ts | 宿主目标和委派绑定，拒绝业务 JSON 伪造权威 |
 
-| 命名空间 | 已实现能力 | 授权 |
-|---|---|---|
-| `session` | 当前绑定会话历史分页、按消息 ID 读取、附件元数据 | `session.read` |
-| `models` / `ai` | 已启用模型目录、真实模型分析与用量 | `models.read` / `ai.run` |
-| `agents` | 启动、查询、取消任务，继续已有上下文 | `agents.read` / `agents.manage` |
-| `skills` | 本地可用技能目录与内容 | `skills.read` |
-| `workspace` | 绑定工作区目录、文本读写 | `workspace.read` / `workspace.write` |
-| `knowledge` | 知识库目录、检索、文档读取与更新 | `knowledge.read` / `knowledge.write` |
-| `mcp` | 已启用服务目录与工具调用 | `mcp.read` / `mcp.invoke` |
-| `settings` | 此插件专属的 JSON 设置，最多 64 KiB | `settings.read` / `settings.write` |
-
-`context()` 返回宿主绑定上下文，插件不能用业务参数改写当前会话。`invoke()`、`download()`、`navigate()` 和 `services` 属于页面方法，Node 工具不提供；类型文件中的 `window.$AE` 描述这些页面方法。插件自定义设置界面可以直接调用 `settings.get()/set({value})`。已安装插件设置持久保存；开发模式设置随本次开发会话保存，关闭后释放。
-
-权限须同时出现在 `manifest.permissions.requested` 与用户授权中，默认关闭。已安装插件授权绑定具体修订；开发模式授权绑定打开的工程和插件 ID，刷新保留仍声明的授权。单插件、批量和开发权限面板共用同一能力目录。权限开关约束宿主 SDK；Node 插件是本机代码，这些开关不构成操作系统沙箱。
+公开签名和例子见 [平台 API](../../aether-code/docs/plugin-api/content/platform.html)、[页面 API](../../aether-code/docs/plugin-api/content/page.html)、[权限](../../aether-code/docs/plugin-api/content/permissions.html)。执行框架内部具备某能力，不代表插件 Agent 已装配对应工具。
 
 ## 扩展与边界
 
-这一版提供宿主原生操作表单、固定版本调用、自定义沙箱 HTML、导航/工作区标签及宿主服务状态。`desktop-timer` 模板展示页面关闭后由宿主继续计时、完成通知的流程；它要求桌面应用保持打开，停用/升级/连接切换会清理计时。
+页面、浏览器、服务和后台维护入口见 [UI 内部地图](plugin-ui-contributions.md)。JSON 原生组件不能注入 React 模块，没有动态结果绑定；浏览器插件标签不等于浏览器控制 API；Office 和成果管理没有公开插件 SDK。
 
-工作台扩展已支持声明式宿主 React 组件、菜单、命令、内嵌页面、设置、事件 hooks 和 `background` 持久调度。后台任务可在窗口关闭到托盘后继续，真正退出后在下次引擎启动恢复；`services` 的内存截止时间本身不持久化。仍不提供任意宿主 React 模块注入、原始 Electron IPC、任意 `activate/dispose` 常驻 Node 代码、平台全局配置写入或密钥读取。插件自己的设置使用 `settings` API。独立 HTML 文件产物不等同于 `contributes.pages` 的应用内页面。完整实现见 [开发者文档](../../aether-code/docs/plugin-api/dist/index.html)。
+services 是前端服务状态与可选内存截止时间；background 是引擎落盘、恢复和重试的周期调度。桌面计时器模板不能证明跨重启调度正确，远端连接断开也不证明服务器任务停止。公开说明见 [服务](../../aether-code/docs/plugin-api/content/contributions.html#services) 和 [后台](../../aether-code/docs/plugin-api/content/events.html#background)。

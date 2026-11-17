@@ -1,81 +1,65 @@
-# conversation-history Specification
+# Conversation History Specification
 
 ## Purpose
-TBD - created by archiving change ai-agent-engine. Update Purpose after archive.
+
+Define logical history, physical persistence, compression, rollback and result withdrawal in the implemented session system. Source audit: 2026-11-17.
+
 ## Requirements
-### Requirement: Message Appending
 
-The ConversationHistory SHALL provide an `append(message, ctx)` method that stores a message in the conversation history scoped to the current tenant and session.
+### Requirement: Layered persistent storage
 
-#### Scenario: Successful message append
-- **WHEN** `append(message, ctx)` is called with a valid message object containing `role` and `content`
-- **THEN** the store SHALL persist the message with a monotonically increasing sequence number under `(ctx.tenantId, ctx.sessionId)`
+The default history backend SHALL be JSONL. HISTORY_BACKEND=sqlite remains an alternate implementation. DATA_DIR SHALL be interpreted as a main database file path, not as a directory.
 
-#### Scenario: Tenant and session isolation
-- **WHEN** two sessions with different `tenantId` or `sessionId` append messages with the same content
-- **THEN** each session's history SHALL be independent and `getHistory(ctx)` for one SHALL NOT include messages from the other
+#### Scenario: Default history write
 
----
+- **WHEN** a tenant/session appends history
+- **THEN** it SHALL use sessions/<tenant>/<session>.jsonl under the main database parent
+- **AND** keep SQLite runtime identity, admission/coordination records and indices separate from bulk history.
+- **WHEN** a large supported history payload exceeds the externalization threshold
+- **THEN** it MAY be stored by content hash in compressed blobs, and restoration SHALL require those referenced blobs.
 
-### Requirement: History Retrieval
+Current default physical history caching is bounded by both 64 sessions and 64 MiB. A cache is not the durable source. Child bulk payloads also use a separate gzip store adjacent to the main database; child metadata and receipts remain in SQLite.
 
-The ConversationHistory SHALL provide a `getHistory(ctx)` method that returns all messages for the current session in chronological order.
+### Requirement: Logical compression without archive deletion
 
-#### Scenario: Return messages in order
-- **WHEN** `getHistory(ctx)` is called after appending N messages
-- **THEN** the method SHALL return an array of N messages in the order they were appended
+Compression SHALL produce a current model-history view with a summary and retained recent messages. JSONL archival rows SHALL NOT be assumed deleted merely because the model sees fewer messages.
 
-#### Scenario: Empty history
-- **WHEN** `getHistory(ctx)` is called for a session with no messages
-- **THEN** the method SHALL return an empty array
+#### Scenario: Concurrent supplementation
 
----
+- **WHEN** history changes while a summary is being generated outside the history lock
+- **THEN** revision/sequence comparison SHALL reject the stale rewrite
+- **AND** newly admitted inputs SHALL NOT be overwritten by that summary.
 
-### Requirement: Sliding Window Truncation
+### Requirement: Transactional rollback scope and receipts
 
-When the total token count of the conversation history exceeds `maxTokens`, the ConversationHistory SHALL retain the most recent messages and truncate earlier ones.
+POST /conversation/rollback SHALL use a root user-message anchor and a requestKey. It SHALL freeze exact turns, attempts and file change IDs in a durable rollback journal.
 
-#### Scenario: Truncation triggered
-- **WHEN** appending a new message causes the total history token count to exceed `maxTokens`
-- **THEN** the store SHALL remove the oldest messages (excluding the system prompt) until the total token count is at or below `maxTokens`
+#### Scenario: File conflict
 
-#### Scenario: System prompt preserved
-- **WHEN** truncation is triggered and a system prompt message exists at index 0
-- **THEN** the system prompt SHALL NOT be removed regardless of the token budget
+- **WHEN** one target cannot be reverted or confirmed already reverted
+- **THEN** rollback SHALL report historyTruncated=false
+- **AND** SHALL NOT falsely present the selected history as successfully removed.
 
-#### Scenario: Single message exceeds maxTokens
-- **WHEN** a single user message exceeds `maxTokens` on its own
-- **THEN** the store SHALL retain at minimum the last user message and SHALL NOT produce an empty history
+#### Scenario: Successful rollback
 
----
+- **WHEN** owned producers stop and all selected file reversions are confirmed
+- **THEN** the journal SHALL progress pending → files_reverted → succeeded
+- **AND** remove the exact selected root/child history and revoke associated published assets.
+- **WHEN** a succeeded requestKey is retried
+- **THEN** its receipt SHALL NOT cancel a newer branch.
 
-### Requirement: Summary Compression
+File reversion checks current hashes, later changes and canonical targets. Command observations require reviewed IDs. Only owned, unchanged, empty created directories can be removed. Arbitrary external shell effects are not transactionally reversible.
 
-The ConversationHistory SHALL provide a `summarize(ctx)` method that compresses earlier messages into a LLM-generated summary, replacing them in the history.
+### Requirement: Distinguish truncation and asset access
 
-#### Scenario: Successful summarization
-- **WHEN** `summarize(ctx)` is called with N messages in history
-- **THEN** the system SHALL call the LLM to generate a summary of the earliest M messages, replace those M messages with a single summary message, and retain the most recent messages unchanged
+POST /conversation/truncate SHALL be documented as history-only. It is not a substitute for file rollback. Published result reads SHALL enforce revoked source assets even when a retained physical copy exists.
 
-#### Scenario: Summary message format
-- **WHEN** a summary is generated
-- **THEN** the summary message SHALL have `role: "system"` and `content` beginning with `"[Summary]:"` followed by the generated text
+#### Scenario: Partial source rollback
 
-#### Scenario: History too short to summarize
-- **WHEN** `summarize(ctx)` is called with fewer than 3 messages
-- **THEN** the method SHALL return without modification and SHALL NOT call the LLM
+- **WHEN** a delivered source change is withdrawn
+- **THEN** dependent attachments SHALL be revoked
+- **AND** retained answer evidence SHALL NOT imply that withdrawn files can still be opened.
 
----
+## Source map
 
-### Requirement: History Clearing
-
-The ConversationHistory SHALL provide a `clear(ctx)` method that removes all messages for the current session.
-
-#### Scenario: Successful clear
-- **WHEN** `clear(ctx)` is called
-- **THEN** all messages for the current `(tenantId, sessionId)` SHALL be deleted and subsequent `getHistory(ctx)` SHALL return an empty array
-
-#### Scenario: Clear idempotency
-- **WHEN** `clear(ctx)` is called on a session that already has no messages
-- **THEN** the method SHALL complete without error
-
+[History factory](../../../src/storage/conversation/factory.ts), [JSONL](../../../src/storage/conversation/jsonl-history.ts), [blobs](../../../src/storage/conversation/history-blobs.ts), [rollback route](../../../src/api/http/routes/conversation.ts), [changes](../../../src/storage/changes/index.ts), [results](../../../src/storage/results/index.ts), [maintenance guide](../../../docs/operations/session-storage-maintenance.md). This audit did not operate on production sessions.

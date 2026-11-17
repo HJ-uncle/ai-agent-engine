@@ -1,5 +1,9 @@
 ## ADDED Requirements
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../../../docs/README.md)；文档状态见[全量清单](../../../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 ### Requirement: 技能结果结构化输出
 后端工具/技能执行结果 SHALL 支持在输出字符串前添加 `__xcard__` 前缀，声明返回内容为 A2UI 卡片 JSON。
 

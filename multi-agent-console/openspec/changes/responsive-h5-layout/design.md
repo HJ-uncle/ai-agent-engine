@@ -1,5 +1,9 @@
 ## Context
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../../docs/README.md)；文档状态见[全量清单](../../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 `multi-agent-console` 是一个基于 React 19 + Antd 6 + CSS Modules 的 Agent 控制台，UI 完全按 VSCode 桌面三栏布局设计：
 
 - `App.module.css`：`.app { display:flex; height:100vh; width:100vw }`

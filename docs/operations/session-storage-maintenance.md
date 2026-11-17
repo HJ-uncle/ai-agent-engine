@@ -40,7 +40,7 @@ epoch 撤销时 pending 转为 invalidated 并瘦身，与 epoch/peer 状态同�
 
 默认使用原生只读 SQLite 连接，只做统计：
 
-运维 SQLite CLI 使用 `node:sqlite`，本次实际验证环境为 **Node 24.20.0**。其他提供该模块的 Node 版本须先在隔离副本验证；引擎自身的 SQLite 运行时不因这些独立脚本改变。
+运维 SQLite CLI 使用 `node:sqlite`，需要提供该模块的 Node 运行时；执行前在隔离副本验证所用版本。引擎自身的 SQLite 运行时不因这些独立脚本改变。本次文档核对没有再次执行这些维护命令。
 
 ```powershell
 npx tsx scripts/maintain-session-storage.ts --database D:/state/agent.db
@@ -131,4 +131,16 @@ apply 在整个扫描/删除期间持有 SQLite exclusive 事务。停机声明�
 
 生产 compaction 回归另外覆盖 reservation/final ACK 丢失、部分 JSONL 写入、sync ACK 丢失、独立进程重启和 prefix 被篡改。所有验证均使用临时 fixture，不操作真实库。
 
-本实现阶段的专项验证：maintenance storage 13 项、生命周期 3 项、运维 CLI 3 项、冷档 7 项、blob GC 11 项均通过；生产 compaction 24 项通过；TypeScript `tsc --noEmit` 通过。项目级整合结果以本次主任务最终构建/回归报告为准。
+当前测试源码覆盖上述场景，不代表本次文档更新重新运行后已通过。执行专项验证时使用现有测试配置和隔离数据目录，产物统一放 `.e2e-tmp/<任务名>/`，不读取生产会话或凭据。
+
+## 当前实现对应（2026-11-17）
+
+| 功能 | 源码与验证入口 |
+| --- | --- |
+| 终态瘦身、manifest/sidecar、统计 | [history-maintenance-storage.ts](../../src/core/collaboration/history-maintenance-storage.ts)、[测试](../../src/core/collaboration/__tests__/history-maintenance-storage.test.ts) |
+| 后台启动、预算与停止 | [history-maintenance-lifecycle.ts](../../src/core/collaboration/history-maintenance-lifecycle.ts)、[生命周期测试](../../src/core/collaboration/__tests__/history-maintenance-lifecycle.test.ts) |
+| 统计、apply、离线 VACUUM | [maintain-session-storage.ts](../../scripts/maintain-session-storage.ts)、[CLI 测试](../../src/core/collaboration/__tests__/history-maintenance-cli.test.ts) |
+| JSONL 冷归档与恢复 | [history-cold.ts](../../src/storage/conversation/history-cold.ts)、[CLI](../../scripts/history-cold.ts)、[测试](../../src/storage/conversation/__tests__/history-cold.test.ts) |
+| 外置 blob 离线 GC | [history-blob-gc.ts](../../src/storage/conversation/history-blob-gc.ts)、[CLI](../../scripts/history-blob-gc.ts)、[测试](../../src/storage/conversation/__tests__/history-blob-gc.test.ts) |
+
+这些工具分别处理终态协作维护正文、封存 JSONL 和历史 blob，不会自动清理所有子代理 payload、成果资产、工作区文件或记忆库。完整存储边界见 [运行与数据指南](../runtime-guide.md)。

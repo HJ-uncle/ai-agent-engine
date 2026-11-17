@@ -1,71 +1,55 @@
-# observability Specification
+# Observability Specification
 
 ## Purpose
-TBD - created by archiving change ai-agent-engine. Update Purpose after archive.
+
+Distinguish operational logs, quota aggregates, physical model attempts, tool metrics and optional QA transcripts. Source audit: 2026-11-17.
+
 ## Requirements
-### Requirement: Structured Logging
 
-The system SHALL use Pino as the logging library. Every log entry SHALL include `tenantId`, `sessionId`, and `requestId` as structured fields.
+### Requirement: Contextual structured logging
 
-#### Scenario: Log entry includes required fields
-- **WHEN** any component emits a log entry during request processing
-- **THEN** the log record SHALL contain `tenantId`, `sessionId`, and `requestId` as top-level fields alongside the message and log level
+The logger SHALL default to info level, use pretty development output and structured JSON in production. Request loggers SHALL carry available requestId/tenantId/sessionId fields.
 
-#### Scenario: Log level configuration
-- **WHEN** the environment variable `LOG_LEVEL` is set (e.g., `debug`, `info`, `warn`, `error`)
-- **THEN** Pino SHALL apply that level, suppressing log entries below the configured threshold
+#### Scenario: Non-request log
 
-#### Scenario: Structured JSON output
-- **WHEN** the application runs in production mode (`NODE_ENV=production`)
-- **THEN** all log output SHALL be emitted as newline-delimited JSON (NDJSON) suitable for log aggregation systems
+- **WHEN** a startup or background component logs without request context
+- **THEN** the record SHALL NOT be assumed to contain every request/session field.
 
----
+### Requirement: Explicit metric recording
 
-### Requirement: Token Usage Statistics
+recordTokenUsage SHALL aggregate token totals and request counts in quotas by tenant and UTC date. recordToolCall SHALL write tool_metrics with tool name, tenant/session, duration and success.
 
-The system SHALL record `promptTokens` and `completionTokens` to SQLite after every LLM call, associated with the `requestId` and `tenantId`.
+#### Scenario: Aggregate query
 
-#### Scenario: Token record written after LLM call
-- **WHEN** an LLM `complete()` or `stream()` call finishes successfully
-- **THEN** a row SHALL be inserted into the `token_usage` table with columns `requestId`, `tenantId`, `promptTokens`, `completionTokens`, and `timestamp`
+- **WHEN** getMetrics is called with a tenant
+- **THEN** totals and tool aggregates SHALL be filtered to that tenant
+- **AND** totals SHALL reflect recorded data, not a reconstruction of every physical provider request.
 
-#### Scenario: Token record on retry success
-- **WHEN** an LLM call succeeds on the second or third retry attempt
-- **THEN** only one token usage record SHALL be written, reflecting the successful attempt's token counts
+Tool instrumentation is an opt-in wrapper; ToolRegistry alone does not guarantee every tool has metrics. There is no universal token_usage table contract in this component.
 
-#### Scenario: Aggregate token query
-- **WHEN** a query is issued for total token usage by a tenant over a time range
-- **THEN** the system SHALL be able to SUM `promptTokens + completionTokens` from the `token_usage` table filtered by `tenantId` and `timestamp` range
+### Requirement: Preserve accounting uncertainty
 
----
+Model request instrumentation SHALL distinguish physical attempts and unconfirmed upstream outcomes. Local request projections, provider usage and provider cache fields SHALL not be conflated.
 
-### Requirement: Tool Call Duration Tracking
+#### Scenario: Retry or transport loss
 
-The system SHALL record the execution duration of each tool call in milliseconds and store it for observability purposes.
+- **WHEN** more than one physical request occurs or final usage is unavailable
+- **THEN** reporting SHALL NOT infer exact billed tokens solely from the final successful response
+- **AND** unknown values SHALL not become fabricated cache misses or zero cost.
 
-#### Scenario: Duration recorded after tool execution
-- **WHEN** a tool call via `ToolRegistry.execute()` completes (success or failure)
-- **THEN** the system SHALL compute `durationMs = endTime - startTime` and write a record with `toolName`, `durationMs`, `success`, `requestId`, and `tenantId`
+### Requirement: QA logging is optional sensitive storage
 
-#### Scenario: Duration recorded on tool error
-- **WHEN** a tool call results in a `ToolExecutionError`
-- **THEN** the duration SHALL still be recorded with `success: false`
+QA logging SHALL require explicit enablement. It can include system text, tools, history, reasoning and usage, and SHALL not be treated as always-on lightweight telemetry.
 
----
+#### Scenario: Default configuration
 
-### Requirement: Request Tracing
+- **WHEN** QA_LOG_ENABLED is not true
+- **THEN** the optional QA transcript writer SHALL remain disabled.
+- **WHEN** enabled
+- **THEN** its default output directory SHALL be logs/qa unless configured otherwise.
 
-Each incoming HTTP request SHALL be assigned a unique `requestId` that is propagated through the entire Agent Loop and included in all logs and observability records for that request.
+Current QA truncation is disabled in source; enabled QA files may therefore be large. Storage policy and retention require explicit operator decisions.
 
-#### Scenario: requestId assigned at entry point
-- **WHEN** an HTTP request arrives at the Fastify server
-- **THEN** the request middleware SHALL assign a UUID `requestId` (or read it from `X-Request-ID` header if provided) and attach it to the request context
+## Source map
 
-#### Scenario: requestId propagated through Agent Loop
-- **WHEN** the Agent Loop executes LLM calls and tool calls for a given request
-- **THEN** all Pino log entries, token usage records, and tool duration records emitted during that request SHALL carry the same `requestId`
-
-#### Scenario: requestId returned in response headers
-- **WHEN** an HTTP response is sent
-- **THEN** the response SHALL include an `X-Request-ID` header containing the `requestId` for client-side correlation
-
+[Logger](../../../src/observability/logger.ts), [metrics](../../../src/observability/metrics.ts), [QA logger](../../../src/observability/qa-logger.ts), [LLM retry/attempt handling](../../../src/core/llm-adapter/retry.ts), [runtime guide](../../../docs/runtime-guide.md). This audit did not generate QA transcripts or measure live cache/billing metrics.

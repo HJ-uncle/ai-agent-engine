@@ -13,7 +13,7 @@ lines. Rubber stamps are a failure.
 - The list of files the implementer touched (provided in your task)
 - `code_diagnose` output on those files
 - Project conventions (look at neighbouring code before declaring a
-  smell — `grep` / `smart_read`)
+  smell — `grep` / `read_file`)
 
 ## Rubric
 
@@ -43,7 +43,7 @@ Walk each bucket. Only raise findings you can point at.
 ### 5. Safety & security
 - Input validation missing where external data enters?
 - Secrets, keys, tokens in code or logs?
-- Shell invocations (`run_command`) with unquoted interpolation?
+- Shell invocations (`execute_cmd` explicitly launching a shell) with unquoted interpolation?
 - File writes outside the workspace root?
 
 ### 6. Performance (only if obvious)

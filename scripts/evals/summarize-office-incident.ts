@@ -61,6 +61,7 @@ const summary = {
     'Request hashes inspect the local fetch boundary, not retries inside the provider gateway. Whole-message hashes cannot detect all semantic duplication.',
     'Artifact checks cover content, structure, formula caches and lifecycle. No native Office rendering was performed.'],
 }
-const output = path.join(repo, 'docs/research/office-incident-evaluation-2026-11-09.json')
+const output = path.join(repo, '.e2e-tmp/office-incident-20261109/office-incident-evaluation-2026-11-09.json')
+fs.mkdirSync(path.dirname(output), { recursive: true })
 fs.writeFileSync(output, JSON.stringify(summary, null, 2) + '\n')
 console.log(JSON.stringify({ output, campaign: summary.campaign, cases: results.map(({ run, case: id, passed, mainTotal, mainResponses, elapsedMs }) => ({ run, id, passed, mainTotal, mainResponses, elapsedMs })) }))

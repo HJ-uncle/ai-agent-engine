@@ -37,10 +37,8 @@ the appropriate `role` so each gets a clean prompt template.
 
 ```
 subagent({
-  task: "Implement task T3 from docs/superpower/plans/<topic>.md.\n
-         Follow RED/GREEN/REFACTOR. Stop when green and full suite passes.",
-  role: "implementer",
-  maxSteps: 20
+  task: "Implement task T3 from .ae/openspec/changes/<feature-name>/tasks.md.\nFollow RED/GREEN/REFACTOR. Stop when green and full suite passes.",
+  role: "implementer"
 })
 ```
 
@@ -48,11 +46,8 @@ subagent({
 
 ```
 subagent({
-  task: "Review the changes in <files touched> against the OpenSpec at\n
-         .ae/openspec/changes/<feature-name>/proposal.md and design.md.\n
-         Report gaps, deviations, and missing acceptance criteria.",
-  role: "spec-reviewer",
-  maxSteps: 12
+  task: "Review the changes in <files touched> against the OpenSpec at .ae/openspec/changes/<feature-name>/proposal.md and design.md.\nReport gaps, deviations, and missing acceptance criteria.",
+  role: "spec-reviewer"
 })
 ```
 
@@ -60,11 +55,8 @@ subagent({
 
 ```
 subagent({
-  task: "Review the changes in <files touched> for: naming, duplication,\n
-         error handling, test coverage, obvious perf/security smells.\n
-         Do not speculate beyond the diff.",
-  role: "code-quality-reviewer",
-  maxSteps: 12
+  task: "Review the changes in <files touched> for: naming, duplication, error handling, test coverage, obvious perf/security smells.\nDo not speculate beyond the diff.",
+  role: "code-quality-reviewer"
 })
 ```
 
@@ -81,8 +73,8 @@ If any reviewer flags something:
 
 - If trivial / requested change → delegate a new `implementer` subagent
   with the reviewer's list as its task.
-- If structural → bring it back to `superpower-brainstorming` or
-  `superpower-writing-plans`.
+- If structural → bring it back to `os-brainstorming` or
+  `os-writing-plans`.
 
 ## Red flags
 
@@ -95,6 +87,9 @@ If any reviewer flags something:
 
 ## Tool reminder
 
-This skill is a methodology-mode feature. `role` only takes effect when
-`SUPERPOWER_MODE ∈ {methodology, max}` — in `off` / `balanced` the
-`subagent` tool logs a warning and falls back to default behaviour.
+This skill is a methodology-mode feature. The role prompt template is
+loaded when `OSM_MODE ∈ {methodology, max}` (`SUPERPOWER_MODE` remains a
+legacy configuration alias). In `off` / `balanced`, the role still passes
+validation and reviewer roles still enforce read-only access, but the
+methodology prompt template is not injected. `maxSteps` is not a current
+tool parameter; legacy values are ignored by the runtime.

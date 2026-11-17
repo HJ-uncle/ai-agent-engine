@@ -59,7 +59,8 @@ const summary = {
   pagination: JSON.parse(fs.readFileSync(path.join(campaign, 'text-pagination-property-check.json'), 'utf8')),
   runs,
 }
-const destination = path.resolve(repo, 'docs/research/batch-io-evaluation-2026-11-09.json')
+const destination = path.join(campaign, 'batch-io-evaluation-2026-11-09.json')
+fs.mkdirSync(path.dirname(destination), { recursive: true })
 fs.writeFileSync(destination, JSON.stringify(summary, null, 2) + '\n')
 console.log(JSON.stringify({ destination, totals: summary.totals,
   runs: runs.map(run => ({ label: run.label, cases: run.cases.map(({ batches, answer, ...item }: any) => item) })) }, null, 2))

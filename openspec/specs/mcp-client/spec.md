@@ -1,75 +1,64 @@
-# mcp-client Specification
+# MCP Client Specification
 
 ## Purpose
-TBD - created by archiving change ai-agent-engine. Update Purpose after archive.
+
+Describe implemented MCP transport, discovery, registration and configuration boundaries. Source audit: 2026-11-17.
+
 ## Requirements
-### Requirement: MCP Server Connection
 
-The MCP Client SHALL connect to external MCP (Model Context Protocol) servers based on configuration entries specifying server URL and optional authentication credentials.
+### Requirement: Scoped configuration and discovery
 
-#### Scenario: Successful connection to MCP server
-- **WHEN** the configuration contains a valid MCP server entry with `url` and the server is reachable
-- **THEN** the MCP Client SHALL establish a connection and mark the server as `connected`
+MCP SHALL support stdio, http, sse and streamableHttp transports. Configuration SHALL resolve project .ae/mcp.json, global ~/.aether/mcp.json and explicit MCP_CONFIG_PATH according to the storage resolver.
 
-#### Scenario: Connection with authentication
-- **WHEN** the MCP server entry includes an `apiKey` or bearer token credential
-- **THEN** the MCP Client SHALL include the credential in all requests to that server
+#### Scenario: Restricted server selection
 
-#### Scenario: Multiple server connections
-- **WHEN** the configuration contains N MCP server entries
-- **THEN** the MCP Client SHALL attempt to connect to all N servers independently and report the connection status for each
+- **WHEN** allowedMcpServers is an empty array
+- **THEN** no server SHALL be connected or discovered.
+- **WHEN** explicit server IDs are supplied
+- **THEN** filtering SHALL happen before constructing a client, starting a process or sending a handshake.
 
----
+#### Scenario: Inline server
 
-### Requirement: Tool Discovery
+- **WHEN** a valid request-level inline stdio or remote server is authorized
+- **THEN** it MAY be discovered without persisting configuration
+- **AND** local configuration SHALL take priority for the same ID.
 
-The MCP Client SHALL automatically fetch and cache the list of tools exposed by each connected MCP server.
+Inline stdio is supported by current code despite stale comments suggesting remote-only support.
 
-#### Scenario: Tools fetched on connection
-- **WHEN** a connection to an MCP server is successfully established
-- **THEN** the MCP Client SHALL call the server's tool listing endpoint and cache the returned tool descriptors (name, description, inputSchema)
+### Requirement: Namespaced business tools
 
-#### Scenario: Tool list refresh
-- **WHEN** `refreshTools(serverUrl)` is called or the configured `refreshIntervalMs` elapses
-- **THEN** the MCP Client SHALL re-fetch the tool list from the server and update the cache
+Discovered tools SHALL be registered under mcp_<serverId>_<toolName>, with unsupported identifier characters normalized.
 
-#### Scenario: Server returns empty tool list
-- **WHEN** an MCP server returns an empty tool list
-- **THEN** the MCP Client SHALL cache an empty list for that server and SHALL NOT raise an error
+#### Scenario: Partial discovery failure
 
----
+- **WHEN** one server cannot connect
+- **THEN** the loader SHALL skip that server and preserve other eligible tools
+- **AND** cancellation SHALL still propagate.
+- **WHEN** a tool is disabled by its server or rejected by the request filter
+- **THEN** it SHALL NOT be registered.
 
-### Requirement: Tool Wrapping and ToolRegistry Integration
+### Requirement: Demand-driven connection lifecycle
 
-The MCP Client SHALL wrap each discovered MCP tool as a `Tool` interface object and register it with the `ToolRegistry`, making it transparently available to the Agent Loop.
+Discovery SHALL occur when registries are built; the client SHALL lazily reconnect for execution as needed. The implementation SHALL NOT be described as an interval-based automatic refresh/reconnect service.
 
-#### Scenario: MCP tool wrapped and registered
-- **WHEN** an MCP server exposes a tool named `"web-search"` with a given `inputSchema`
-- **THEN** the MCP Client SHALL create a `Tool` wrapper with the same `name`, `description`, and `inputSchema`, and call `ToolRegistry.register(wrappedTool)`
+#### Scenario: Discovery connection cleanup
 
-#### Scenario: MCP tool execution routed to server
-- **WHEN** the Agent Loop calls `ToolRegistry.execute("web-search", args, ctx)`
-- **THEN** the MCP Client's wrapper SHALL serialize `args` and forward the invocation to the originating MCP server's tool execution endpoint, returning the result
+- **WHEN** stdio or SSE discovery has produced tool definitions
+- **THEN** the discovery connection SHALL disconnect
+- **AND** execution SHALL obtain its own needed connection.
 
-#### Scenario: Name collision with existing tool
-- **WHEN** an MCP tool name conflicts with an already-registered local tool name
-- **THEN** the MCP Client SHALL prefix the MCP tool name with the server identifier (e.g., `"mcp:<serverId>:web-search"`) to avoid collision and SHALL log a warning
+The current discovery default is 15000 ms unless overridden. Actual tools/call uses configured timeout or 0 (no imposed operation deadline); cancellation and transport errors still apply.
 
----
+### Requirement: Results and management separation
 
-### Requirement: Connection Error Handling
+Tool results SHALL preserve protocol content, structured output and isError semantics through result conversion. Business MCP tools SHALL be distinct from mcp_server_* configuration-management tools.
 
-The MCP Client SHALL handle MCP server unavailability gracefully, without disrupting the availability of other registered tools.
+#### Scenario: Management mutation
 
-#### Scenario: MCP server unreachable at startup
-- **WHEN** the MCP Client attempts to connect to a configured server and the server is unreachable
-- **THEN** the client SHALL log an error, mark that server as `disconnected`, and SHALL NOT register any tools from that server; other servers SHALL be unaffected
+- **WHEN** a request modifies shared server configuration
+- **THEN** trusted management authorization, version checks and mutation approval SHALL apply
+- **AND** saving a new server SHALL not imply it has been enabled or successfully connected.
 
-#### Scenario: MCP server becomes unavailable mid-operation
-- **WHEN** an MCP tool execution call fails because the server connection is lost
-- **THEN** the tool wrapper SHALL return a `MCPServerUnavailableError` to the ToolRegistry and the Agent Loop SHALL treat it as a tool execution error without crashing
+## Source map
 
-#### Scenario: Reconnection attempt
-- **WHEN** a configured MCP server was previously `disconnected` and `reconnectIntervalMs` elapses
-- **THEN** the MCP Client SHALL attempt to reconnect and, upon success, SHALL re-fetch and re-register that server's tools
-
+[Client](../../../src/tools/mcp/client.ts), [loader](../../../src/tools/mcp/loader.ts), [result conversion](../../../src/tools/mcp/result.ts), [configuration](../../../src/storage/mcp/mcp-config.ts), [management](../../../src/tools/mcp/management-tools.ts). No external MCP service was contacted for this documentation audit.

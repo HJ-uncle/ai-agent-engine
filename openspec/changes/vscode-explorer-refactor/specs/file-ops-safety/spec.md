@@ -1,5 +1,9 @@
 ## ADDED Requirements
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../../../docs/README.md)；文档状态见[全量清单](../../../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 ### Requirement: 删除文件移至回收站
 执行删除文件/文件夹操作时，系统 SHALL 使用 `trash` 将目标移至系统回收站（而非永久删除），并在操作回滚日志中记录一条条目（类型：delete，路径，时间戳）。
 

@@ -1,73 +1,60 @@
-# memory-store Specification
+# Memory Store Specification
 
 ## Purpose
-TBD - created by archiving change ai-agent-engine. Update Purpose after archive.
+
+Describe persistent semantic/graph memory and request-scoped recall policy. The current product uses SQLiteMemoryManager, not the old hypothetical key/value remember(key,value) interface. Source audit: 2026-11-17.
+
 ## Requirements
-### Requirement: Key-Value Memory Storage
 
-The MemoryStore SHALL provide a `remember(key, value, ctx)` method that persists a value under a given key, scoped to the current tenant and session.
+### Requirement: Explicit scopes and disabled defaults
 
-#### Scenario: Store a memory entry
-- **WHEN** `remember(key, value, ctx)` is called with a non-empty key
-- **THEN** the store SHALL persist the value associated with `(ctx.tenantId, ctx.sessionId, key)` and overwrite any existing value for the same composite key
+Memory SHALL separate global and session scopes within the authenticated tenant. Missing preferences SHALL default globalEnabled and sessionDefaultEnabled to false. A session override can inherit, enable or disable its session scope.
 
-#### Scenario: Tenant and session isolation
-- **WHEN** two calls to `remember(key, value, ctx)` are made with the same key but different `tenantId` or `sessionId`
-- **THEN** the store SHALL store them as independent entries and SHALL NOT allow cross-session retrieval
+#### Scenario: No memory authorization
 
----
+- **WHEN** the effective request policy contains no enabled scopes
+- **THEN** recall SHALL inject no memory and memory tools SHALL NOT gain an implicit scope.
+- **WHEN** both scopes are effective
+- **THEN** they SHALL be ordered session then global, with writes preferring the private session scope.
 
-### Requirement: Memory Retrieval
+ENABLE_LONG_TERM_MEMORY is a capability switch, not proof that every session has opted in.
 
-The MemoryStore SHALL provide a `recall(key, ctx)` method that returns the stored value for a given key within the current session context.
+### Requirement: Durable graph storage
 
-#### Scenario: Successful recall
-- **WHEN** `recall(key, ctx)` is called with a key that was previously stored in the same `tenantId+sessionId`
-- **THEN** the store SHALL return the stored value
+Nodes, edges, settings and embeddings SHALL use the dedicated memory database next to the main database under memory/memory.db. Memory is not an in-RAM-only cache.
 
-#### Scenario: Key not found
-- **WHEN** `recall(key, ctx)` is called with a key that does not exist in the current session
-- **THEN** the store SHALL return `null` and SHALL NOT throw an error
+#### Scenario: Memory connection
 
----
+- **WHEN** the memory process connection is created
+- **THEN** it SHALL use the configured separate SQLite process client with bounded cache (current 2000 KiB) and mmap disabled.
+- **AND** tenant/session scope SHALL remain part of reads and mutations.
 
-### Requirement: Memory Listing
+### Requirement: Dynamic bounded recall
 
-The MemoryStore SHALL provide a `list(ctx)` method that returns all keys stored in the current session.
+Recall SHALL evaluate the request query and authorized populated scopes. It MAY use a helper model, configured embeddings, keyword fallback and graph expansion.
 
-#### Scenario: List existing keys
-- **WHEN** `list(ctx)` is called after storing N entries under the same `tenantId+sessionId`
-- **THEN** the method SHALL return an array of exactly N key strings
+#### Scenario: Skip or failure
 
-#### Scenario: List on empty session
-- **WHEN** `list(ctx)` is called for a session with no stored entries
-- **THEN** the method SHALL return an empty array
+- **WHEN** the query is an exact recognized greeting, required credentials/data are absent, or no scope is authorized
+- **THEN** no recall block SHALL be generated.
+- **WHEN** recall processing fails
+- **THEN** it SHALL fail soft to an empty block rather than invent memory.
 
----
+Current vector retrieval takes up to 10 anchors with distance 0.65; keyword fallback examines up to 50 hits and retains up to 15 anchors; graph expansion is bounded to 40 nodes/depth 2. These are retrieval settings, not quality guarantees.
 
-### Requirement: Memory Deletion
+### Requirement: Request-tail injection and independent extraction
 
-The MemoryStore SHALL provide a `forget(key, ctx)` method that removes a specific memory entry.
+Dynamic recall SHALL be included in the bounded requestContext tail, not continually rewrite the stable memory policy in the system prompt.
 
-#### Scenario: Successful deletion
-- **WHEN** `forget(key, ctx)` is called for an existing key
-- **THEN** the store SHALL remove the entry and subsequent `recall(key, ctx)` SHALL return `null`
+#### Scenario: Combined recall and references
 
-#### Scenario: Delete non-existent key
-- **WHEN** `forget(key, ctx)` is called for a key that does not exist
-- **THEN** the store SHALL complete without error (idempotent operation)
+- **WHEN** server recall and client-provided memory references are present
+- **THEN** they SHALL share a budget of min(2000, floor(contextWindow × 0.08)) tokens
+- **AND** framing and clipped excerpts SHALL count toward the same budget
+- **AND** server recall SHALL receive priority.
 
----
+Post-completion extraction is separate from read-time recall and may invoke additional model/embedding calls. No zero-overhead, fixed-cache-hit or automatic cross-session disclosure guarantee is made.
 
-### Requirement: SQLite Persistence
+## Source map
 
-The MemoryStore SHALL persist all memory entries to SQLite so that data survives service restarts.
-
-#### Scenario: Data survives restart
-- **WHEN** `remember(key, value, ctx)` is called and the service is subsequently restarted
-- **THEN** `recall(key, ctx)` after restart SHALL return the same value that was stored before the restart
-
-#### Scenario: Concurrent write safety
-- **WHEN** multiple `remember` calls are made concurrently for the same session
-- **THEN** the SQLite store SHALL serialize writes using WAL mode and SHALL NOT produce data corruption
-
+[Settings](../../../src/storage/memory/settings.ts), [manager](../../../src/storage/memory/memory-manager.ts), [database](../../../src/storage/memory/db.ts), [policy](../../../src/middleware/memory/policy.ts), [extractor](../../../src/middleware/memory/extractor.ts), [embedding](../../../src/storage/memory/embedding.ts). Request-context implementation and regression tests are referenced in the [runtime guide](../../../docs/runtime-guide.md). No live memory/model comparison was rerun for this documentation update.

@@ -1,5 +1,9 @@
 ## Why
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../docs/README.md)；文档状态见[全量清单](../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 当前对话历史存储未能完整保留 `assistant` 消息中 `tool_call` 的 `name` 字段。当切换到 Anthropic Claude 模型时，重建历史消息需要 `tool_use.id` 和 `tool_use.name` 同时存在（Claude API 强制校验），导致 `400: messages.1.content.0.tool_use.id: Field required` 错误，多模型切换场景完全不可用。
 
 ## What Changes

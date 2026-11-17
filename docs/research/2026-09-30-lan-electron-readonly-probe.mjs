@@ -25,10 +25,10 @@ if (!process.argv.includes('--run')) {
 
 const require = createRequire(join(appRoot, 'package.json'))
 const { _electron: electron, expect } = require('@playwright/test')
-const fixtureRoot = join(engineRoot, '.e2e-tmp')
+const fixtureRoot = join(engineRoot, '.e2e-tmp', 'lan-electron-readonly')
 mkdirSync(fixtureRoot, { recursive: true })
 const userData = mkdtempSync(join(fixtureRoot, 'lan-electron-observe-'))
-const evidenceDir = join(researchRoot, '2026-09-30-lan-electron-evidence', basename(userData))
+const evidenceDir = join(fixtureRoot, 'evidence', basename(userData))
 mkdirSync(evidenceDir, { recursive: true })
 const observationSession = `lan-observe-${randomUUID()}`
 const reportFile = join(evidenceDir, 'report.json')

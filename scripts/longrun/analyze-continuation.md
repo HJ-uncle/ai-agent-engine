@@ -3,7 +3,7 @@
 `analyze-continuation.mjs` 只读原始证据，不重写旧结果、原红基线、checkpoint、归档或数据库。只有新输出文件可以写入；`--output` 使用 `wx`，拒绝覆盖已有文件。
 
 ```powershell
-node scripts/longrun/analyze-continuation.mjs "D:\dev\ai-agent-engine\test-projects\longrun-20261009\runs\NEW_RUN" --output ".tmp\NEW-qualification.json"
+node scripts/longrun/analyze-continuation.mjs "D:\dev\ai-agent-engine\test-projects\longrun-20261009\runs\NEW_RUN" --output ".e2e-tmp\longrun-analysis\NEW-qualification.json"
 ```
 
 退出码 0 表示所有严格门槛通过，2 表示证据不足或验收失败。未结束的运行不会因为已启用功能、调用次数或经过六小时而通过。

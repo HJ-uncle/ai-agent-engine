@@ -1,5 +1,9 @@
 ## ADDED Requirements
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../../../../docs/README.md)；文档状态见[全量清单](../../../../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 ### Requirement: Core 层目录与边界
 
 系统 SHALL 在 `src/core/` 下集中存放与 UI 框架解耦的领域代码，目录结构必须包含 `api/`、`store/`、`hooks/`、`domain/`、`types/`、`utils/` 六个子目录。

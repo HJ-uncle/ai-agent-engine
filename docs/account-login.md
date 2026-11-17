@@ -1,10 +1,12 @@
 # 账号登录与恢复
 
+源码核对：2026-11-17。桌面入口与新用户操作见[账号与登录](../../aether-code/docs/accounts-and-login.md)；本页说明引擎协议与身份边界。
+
 账号接口位于引擎根路径 `/auth/account`，使用标准 `{code:200,data,...}` 响应。配置实例令牌时，除浏览器第三方回调外的请求仍须携带 `X-Aether-Instance-Token`。远程生产部署必须使用 HTTPS，实例令牌不是用户身份。
 
 ## 用户入口
 
-- `POST /register {}` 一键生成随机名称、内部 userId、独立 tenantId、恢复凭证与账号会话。`AETHER_ACCOUNT_REGISTRATION=false` 关闭公开注册（包括第三方首次自动注册）。可选个人信息通过登录后的 profile 保存；不要求填写密码或邮箱。
+- `POST /register {}` 新建账号，生成随机名称、内部 userId、独立 tenantId、恢复凭证与账号会话。`AETHER_ACCOUNT_REGISTRATION=false` 关闭公开注册（包括第三方首次自动注册）。可选个人信息通过登录后的 profile 保存；不要求填写密码或邮箱。创建新账号与登录已有账号是不同操作。
 - `POST /login {recoveryKey}` 使用恢复凭证重登；也接受已存在有效 API Key，保留旧用户 ID、租户及所有租户数据。不会把匿名 default 数据自动归给新账号。
 - `GET /me` 读取个人资料、已绑定身份、当前会话 ID、可信存储中的 `roles` 及本会话最近真实验证时间 `authenticatedAt`（ISO 8601）。后两者不从用户填写的 `userData` 读取。
 - `PATCH /profile {name?,email?,avatarUrl?,bio?,userData?}` 更新资料；省略 name 保持原名称，显式空值或空白名称生成随机名称。userData 限 16 KB JSON 对象，不能修改角色、内部 ID 或租户。邮箱为用户自填资料，不代表邮箱验证。

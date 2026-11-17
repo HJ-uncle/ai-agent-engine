@@ -7,9 +7,9 @@
 ```mermaid
 flowchart TD
   A[HTTP 请求与可信身份] --> B[会话绑定、工作区、模型与能力选择]
-  B --> C[持久接纳 root run 与用户输入]
-  C --> D[构造工具注册表和请求上下文]
-  D --> E[读取模型历史并检查完整请求预算]
+  B --> D[构造工具注册表和请求上下文]
+  D --> C[持久接纳 root run 与用户输入]
+  C --> E[读取模型历史并检查完整请求预算]
   E --> F[必要时轻量清理与摘要压缩]
   F --> G[模型请求]
   G --> H{工具调用或最终输出}
@@ -27,9 +27,11 @@ flowchart TD
 
 ## 运行限制与模式
 
+本节的 Work/Code 指历史工具 profile 和协议分支；当前 Aether 桌面只有一个默认界面，默认使用 general，不要求用户切换两套 UI。
+
 | 项目 | 当前默认/边界 | 源码 |
 | --- | --- | --- |
-| 工具模式 | Work 对应 `general`，Code 对应 `code`；两者是能力选择，不是安全级别 | [tool-profile.ts](../src/tools/tool-profile.ts) |
+| 工具模式 | `general/code` 是服务端能力 profile，历史称 Work/Code；不代表当前客户端提供两个独立主界面，也不是安全级别 | [tool-profile.ts](../src/tools/tool-profile.ts) |
 | OSM | 默认 `balanced`；`off/balanced/methodology/max`；只有后两者注入方法论 | [osm.ts](../src/core/osm.ts)、[osm-bootstrap.ts](../src/core/osm-bootstrap.ts) |
 | 总迭代、累计请求 Token | 普通 chat 不设默认硬上限；`MAX_ITERATIONS/TOKEN_BUDGET` 为保留配置，不再约束产品请求；内部调用仍可显式传有限上限 | [react.ts](../src/core/agent-loop/react.ts)、[settings.ts](../src/api/http/routes/settings.ts) |
 | 单请求上下文 | 默认 `CONTEXT_WINDOW_BUDGET=268000`；取它、已知模型窗口、Work 显式上下文预算的最小值 | [context-budget.ts](../src/core/context-budget.ts) |
@@ -91,6 +93,34 @@ SQLite 文件大小包含有效页、空闲页及 WAL 影响；删除逻辑行�
 
 源码：[builtin-roles.ts](../src/core/subagent/builtin-roles.ts)、[runner.ts](../src/core/subagent/runner.ts)、[team-tools.ts](../src/tools/subagent/team-tools.ts)、[async-tools.ts](../src/tools/subagent/async-tools.ts)、[subagent-tool.ts](../src/tools/subagent/subagent-tool.ts)。
 
+## 调度、队列与流程
+
+会话计划、后台队列、定时自动化、Flow 和协作消息是不同机制，不能用相同的“任务 ID”互相控制。general/code 是服务端能力 profile，历史名称为 Work/Code；这些标识本身不代表当前桌面有两个独立主界面。
+
+| 机制 | 数据与入口 | 执行及取消边界 |
+| --- | --- | --- |
+| 会话计划/待办 | `plan_update`、`/todos`；SQLite todos、task_plans、task_plan_items | 持久步骤状态与 revision；不会因为创建一条 todo 就自动启动模型 |
+| 后台队列 | `/tasks`、SQLiteTaskQueue、jobs 与执行 claim | 只执行已注册 handler 的 type；cancel 只改 pending，不能终止运行中的命令/子代理 |
+| 定时自动化 | `/cron`、`/cron/preview`、`/cron/capabilities`、运行历史与通知接口 | 时间到后取得 occurrence claim，再走内部 `/chat` 的持久 root run |
+| Flow DAG | `POST /flows/run`、`POST /flows/:runId/stop` | 拓扑分层、层内并发 ReAct 节点；当前没有持久 Flow 恢复调度器 |
+| 消息编辑/重生成 | `/messages/:messageId` 与 regenerate、tokens 接口 | 保留的消息级操作；不是协作消息发送接口，也不是文件回退 |
+| 运行中协作消息 | chat admission/continuation 与 subagent_send/followup | 按 root/attempt、参与者和序号持久接纳；收件、读取、消费回执分开 |
+
+**计划和队列。** 会话计划使用完整步骤快照更新、稳定步骤身份及 expectedRevision 检查；依赖唤醒钩子需要可信当前执行 authority。恢复计划供模型继续理解工作，不会单凭计划持久化自动重启一个已结束/中断的进程。旧 todo CRUD 仍保留，和 plan_update 共用底层待办数据，但不能代替运行身份。
+
+`taskRoutes` 在 HTTP onReady 启动它拥有的队列、onClose 等待停止。当前路由实例未注册任何生产 handler，所以 `POST /tasks` 对未支持类型返回 501；不能将这个通用队列 API 宣称为任意任务执行器。独立使用 SQLiteTaskQueue 时需显式 registerHandler。默认每秒轮询、事务 claim 防重复执行；构造实例不把其他 running 行擅自改失败。停止会 abort 已有 handler 并最多等 3 秒确认；未确认时报告外部副作用未知。源码：[task routes](../src/api/http/routes/tasks.ts)、[queue](../src/storage/task-queue/sqlite-queue.ts)、[plan store](../src/storage/todo/index.ts)、[todo routes](../src/api/http/routes/todos.ts)，契约见 [task-queue](../openspec/specs/task-queue/spec.md)。
+
+**定时自动化。** CronScheduler 随 HTTP 服务初始化启动，对齐分钟边界检查。支持 interval、带 IANA 时区的 calendar 与兼容 legacy cron；目标可为现有 session、独立会话或已绑定 workspace，重叠与错过的运行策略为 skip，没有手动立即运行接口。能力必须先看 `/cron/capabilities`：当前需要请求认证的部署不支持自动 dispatch，仅明确暂停的计划可保存；本地执行限制 default 租户和 loopback，不能冒用其他账号。
+
+首次检查先协调既存运行：未取得 root 身份的旧 claim 标为 interrupted 且不重放；有 root 的记录按持久 root 状态投影并恢复期限检查，不因 SSE 首帧丢失再次 POST 任务。修改/删除计划不会停止已经开始的运行；取消具体 occurrence 用 `/cron/runs/:runId/cancel`，按精确 rootRunId 停止，不能误停后来手工创建的轮次。服务关闭先停止调度、取消并 join 所有拥有的 root，再结束读流；读流 abort 本身不证明任务停止。源码：[scheduler](../src/scheduler/cron-scheduler.ts)、[service/capabilities](../src/scheduler/cron-service.ts)、[dispatch/reconcile](../src/scheduler/cron-dispatch.ts)、[run store](../src/storage/cron/runs.ts)、[HTTP routes](../src/api/http/routes/cron.ts)。
+
+**Flow。** 执行器先做环检查，再按依赖层推进；同层某节点失败不阻止其他兄弟完成，本层结算后失败会阻断后续层。每节点使用独立 flow-* 会话、当前租户和记忆策略、ReAct 与工具注册表；它不是 subagent_directory/followup 所管理的可复用协作子代理。节点读取 model/prompt/systemPrompt，模板可引用 input/output/上游节点结果；顶层共享 output 的值可能受同层完成顺序影响，不应视作稳定聚合器。
+
+当前 Flow activeFlows、取消 controller 和事件总线都在进程内，SSE handler 结束时移除停止索引；断线后不能承诺仍可通过同一个停止接口找到运行，重启也没有自动恢复 DAG 的实现。DTO 虽接受 cwd、executionMode、securityMode、activeSkillIds、activeMcpServerIds、knowledgeBases、agentId 等字段，当前执行器没有完整消费这些绑定，不能仅凭字段存在宣称对应配置已经生效。源码：[flow routes](../src/api/http/routes/flows/flow-routes.ts)、[executor](../src/api/http/routes/flows/flow-executor.ts)、[types](../src/api/http/routes/flows/flow-types.ts)，边界见 [agent-loop](../openspec/specs/agent-loop/spec.md)。
+
+**消息接口与协作。** `messages.ts` 保留消息/会话 token 查询、删除、编辑用户消息再生成和重生成 assistant 的实现；写操作对 code profile 返回 409，引导使用 conversation 与 chat。该旧通路部分定位仍直接查询 SQLite conversations，不应视作默认 JSONL、持久 root admission 和文件回退的通用替代。当前用户回退应使用上一节的 conversation/rollback；运行中补充按 [chat-admission](../src/api/http/routes/chat-admission.ts)、[root admission](../src/storage/root-admission/) 和 [collaboration](../src/core/collaboration/) 接纳。持久消息不意味着重启后自动取得原生产者权限，终态/重启继续必须重新校验执行归属。旧接口源码：[messages.ts](../src/api/http/routes/messages.ts)。
+
+
 ## 压缩与缓存
 
 自动压缩比较整个请求的模型输入估计：历史、系统文本、工具定义、动态尾部和输出预留。超过阈值先 microcompact 旧工具结果，再请求 LLM 摘要，最多四次缩减保留预算；完整工具调用/结果边界保持成组。摘要生成期间历史变化则拒绝提交旧摘要；失败保留原历史，仍需通过最终准入检查才可请求模型。
@@ -131,6 +161,6 @@ Pino 默认 info，生产 JSON，开发 pretty；请求 logger 注入身份字�
 
 ## 核对范围与未承诺事项
 
-本指南每节链接当前实现；[OpenSpec 当前契约](../openspec/specs/)同步更新对应域。账号、插件、部署与 HTTP 总表由各自维护文档负责。源码中的旧注释、历史 research/test-reports 的成功数量和测量值不能当作本次验收。
+本指南每节链接当前实现；[OpenSpec 当前契约](../openspec/specs/)同步更新对应域。账号、插件、部署与 HTTP 总表由各自维护文档负责。源码中的旧注释、历史 research/test-reports 的成功数量和测量值不能当作本次验收。当前可见的注释漂移包括 osm.ts 的旧默认 off 描述、osm-bootstrap.ts 的缺失技能返回空描述、MCP loader 的内联仅远端描述；本文按实际执行分支记录，未在文档任务中修改产品源码。
 
 未作承诺：跨机器完整恢复原进程、无人工授权恢复已停止任务、所有 shell 副作用可回滚、所有模型支持同一思考开关、知识库向量检索、OS 级强隔离、远端提供商缓存命中率或新鲜真实模型验证。需要这些能力时必须分别核对实现和运行证据。

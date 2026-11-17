@@ -1,5 +1,9 @@
 ## Why
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../../docs/README.md)；文档状态见[全量清单](../../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 `responsive-h5-layout` 采用「单入口 + media query 响应式」方案，在桌面端零回归的目标下不得不把所有 PC 形态的 antd 组件、`onMouseDown` 拖拽监听、`Tooltip`、`Modal`、`Select` 直接套上 mobile 样式。实测下来：
 
 - 底部 `BottomTabBar` 被 `100vh` 内容遮挡，无法正常滚动到底部

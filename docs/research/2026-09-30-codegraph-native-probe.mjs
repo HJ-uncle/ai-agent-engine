@@ -1,7 +1,6 @@
 // Run with native Node or ELECTRON_RUN_AS_NODE; no Vitest/Vite interop or model calls.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -11,7 +10,9 @@ const engineRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 const runtimeRoot = path.resolve(process.argv[2] || engineRoot);
 const label = process.argv[3] || 'native-node';
 assert.match(label, /^[a-z0-9-]+$/);
-const parent = fs.realpathSync(os.tmpdir());
+const diagnosticRoot = path.join(engineRoot, '.e2e-tmp', 'codegraph-native');
+fs.mkdirSync(diagnosticRoot, { recursive: true });
+const parent = fs.realpathSync(diagnosticRoot);
 const fixture = fs.mkdtempSync(path.join(parent, 'aether-codegraph-native-'));
 const project = path.join(fixture, 'project');
 fs.mkdirSync(project);
@@ -107,7 +108,7 @@ try {
   }
   if (!runner?.isIndexRunning()) { fs.rmSync(resolved, { recursive: true, force: true }); report.fixtureRemoved = true; }
   else { report.fixtureRemoved = false; report.status = 'failed'; process.exitCode = 1; }
-  const output = path.join(engineRoot, 'docs/research', `2026-09-30-codegraph-${label}-result.json`);
+  const output = path.join(parent, `codegraph-${label}-result.json`);
   fs.writeFileSync(output, JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify({ status: report.status, checks: report.checks.length, node: report.node, fixtureRemoved: report.fixtureRemoved, output, error: report.error }));
 }

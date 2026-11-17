@@ -1,5 +1,9 @@
 # Nginx 移动端 UA 自动分流配置
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../docs/README.md)；文档状态见[全量清单](../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 ## 原理
 
 根据 `User-Agent` 判断访客是否来自移动设备，自动内部跳转到 `/m.html`，桌面访客继续使用 `/index.html`。

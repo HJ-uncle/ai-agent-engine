@@ -1,5 +1,9 @@
 # 项目调研中的代码图失败、子代理结果截断与 Token 用量审计
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../README.md)；文档状态见[全量清单](../documentation-inventory.md)。状态标注：2026-11-17。
+
+
 日期：2026-11-09。引擎基线：`9d8fee2`。前端：`D:\dev\aether-code`；被调研项目：`D:\web\wuzu-client`。
 
 后续修复已实施，见 [修复与验证记录](codegraph-subagent-repair-2026-11-10.md)。以下保留审计时的现场事实与问题分析。

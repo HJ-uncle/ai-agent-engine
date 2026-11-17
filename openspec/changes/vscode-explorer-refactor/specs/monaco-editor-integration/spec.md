@@ -1,5 +1,9 @@
 ## ADDED Requirements
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../../../docs/README.md)；文档状态见[全量清单](../../../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 ### Requirement: Monaco Editor 多标签宿主
 系统 SHALL 提供多标签编辑器区域，每个打开的文件对应一个标签页；标签页 SHALL 显示文件名，未保存时在文件名左侧显示"●"；标签页支持关闭（中键或×按钮）、拖拽重排序。
 

@@ -92,7 +92,7 @@ try {
   const listResponse = await app.inject({ method: 'GET', url: '/api/v1/changes?sessionId=pagination&status=pending' })
   assert.equal(listResponse.json().data.length, 200)
   evidence.changeListLimit = { stored: 201, returned: listResponse.json().data.length }
-  fs.writeFileSync(path.join(root, 'docs/research/aether-code-data-contract-probe.json'), JSON.stringify(evidence, null, 2))
+  fs.writeFileSync(path.join(fixture, 'aether-code-data-contract-probe.json'), JSON.stringify(evidence, null, 2))
   console.log(JSON.stringify(evidence, null, 2))
 } finally {
   await app.close()

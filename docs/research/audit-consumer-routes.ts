@@ -7,7 +7,8 @@ import ts from 'typescript'
 
 const engineRoot = process.cwd()
 const consumerRoot = path.resolve(engineRoot, '..', 'aether-code')
-const evidenceDir = path.join(engineRoot, 'docs', 'research')
+const evidenceDir = path.join(engineRoot, '.e2e-tmp', 'consumer-route-audit')
+fs.mkdirSync(evidenceDir, { recursive: true })
 const fixtureBase = path.join(engineRoot, '.e2e-tmp')
 fs.mkdirSync(fixtureBase, { recursive: true })
 const fixture = fs.mkdtempSync(path.join(fixtureBase, 'consumer-route-audit-'))

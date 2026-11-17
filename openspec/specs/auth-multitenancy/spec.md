@@ -1,67 +1,85 @@
-# auth-multitenancy Specification
+# Authentication and tenant boundaries
+
+Implementation review: 2026-11-17. This specification describes the current trust boundaries, not a claim that every deployment is a complete operating-system sandbox.
 
 ## Purpose
-TBD - created by archiving change ai-agent-engine. Update Purpose after archive.
+
+Derive user and tenant identity from validated credentials, keep instance access separate from account identity, and apply resource/role checks to each operation. See [account guide](../../../docs/account-login.md), [external providers](../../../docs/account-external-login.md), and [security architecture](../../../docs/security-architecture.md).
+
 ## Requirements
-### Requirement: API Key Authentication
 
-The system SHALL support API Key authentication via the `X-API-Key` request header. The server SHALL validate the key and reject invalid or missing keys.
+### Requirement: Instance admission and user authentication are separate
 
-#### Scenario: Valid API key accepted
-- **WHEN** an HTTP request includes a valid `X-API-Key` header matching a stored key
-- **THEN** the authentication middleware SHALL allow the request and populate `ctx.tenantId` from the key's associated tenant record
+A configured AETHER_INSTANCE_TOKEN SHALL be enforced by the HTTP middleware using X-Aether-Instance-Token. Explicit probe and browser callback exceptions SHALL not make unrelated metrics, account or administration routes public.
 
-#### Scenario: Missing API key rejected
-- **WHEN** an HTTP request does not include the `X-API-Key` header and API Key authentication is enabled
-- **THEN** the middleware SHALL return HTTP 401 with error code `MISSING_API_KEY`
+#### Scenario: Public account entry
+- WHEN a caller registers or starts an external login without an existing account
+- THEN the route MAY omit user authentication, but SHALL still satisfy the configured instance gate.
 
-#### Scenario: Invalid API key rejected
-- **WHEN** an HTTP request includes an `X-API-Key` header with a value that does not match any stored key
-- **THEN** the middleware SHALL return HTTP 401 with error code `INVALID_API_KEY`
+### Requirement: Credential priority and validation
 
----
+The middleware SHALL validate X-API-Key first when supplied. Otherwise Bearer tokens beginning with aether_session_ SHALL use account-session authentication; other Bearer tokens SHALL use JWT verification. Missing credentials on an authenticated business route SHALL fail with HTTP 401; the current common middleware uses numeric business code 40100, not the historical MISSING_API_KEY/TOKEN_EXPIRED strings.
 
-### Requirement: JWT Authentication
+#### Scenario: Invalid explicit credential in local anonymous mode
+- WHEN AUTH_ENABLED=false and the caller submits a nonempty invalid X-API-Key or a token with the exact supported Bearer prefix
+- THEN authentication SHALL reject it rather than downgrade it to anonymous default access.
 
-The system SHALL support JWT Bearer token authentication. The server SHALL validate the token signature and expiry before granting access.
+#### Scenario: Anonymous local request
+- WHEN AUTH_ENABLED=false and no supported credential is recognized
+- THEN the identity SHALL have tenantId default and method none.
+- AND account-only, instance, workspace and tool-specific checks SHALL retain their own behavior.
 
-#### Scenario: Valid JWT accepted
-- **WHEN** an HTTP request includes `Authorization: Bearer <token>` with a token whose signature is valid and `exp` claim is in the future
-- **THEN** the middleware SHALL allow the request and extract `tenantId` from the JWT claims
+The current parser recognizes the exact Bearer prefix. Unsupported authorization schemes can enter anonymous mode when authentication is disabled; that mode is not an access-control boundary for remote deployment.
 
-#### Scenario: Expired JWT rejected
-- **WHEN** an HTTP request includes a JWT whose `exp` claim is in the past
-- **THEN** the middleware SHALL return HTTP 401 with error code `TOKEN_EXPIRED`
+### Requirement: Trusted tenant and roles
 
-#### Scenario: Invalid JWT signature rejected
-- **WHEN** an HTTP request includes a JWT with an invalid or tampered signature
-- **THEN** the middleware SHALL return HTTP 401 with error code `INVALID_TOKEN`
+API-key identity SHALL come from the stored user record. Current legacy API keys carry admin role. JWT identity SHALL be derived from verified payload; account-session roles SHALL come from trusted account records. X-Tenant-ID, profile userData and external identity display fields SHALL not grant tenant or administrator authority.
 
----
+#### Scenario: Caller supplies another tenant
+- WHEN an otherwise valid caller supplies a different tenant ID in headers or data
+- THEN handlers SHALL authorize resources against the authenticated tenant, rather than treating caller data as authority.
 
-### Requirement: Data Isolation by Tenant
+### Requirement: Durable, revocable account sessions
 
-All storage operations (MemoryStore, ConversationHistory, KnowledgeBase, etc.) SHALL automatically scope queries and writes to the authenticated `tenantId`.
+Registration SHALL create a separate account/tenant without silently migrating anonymous default data. Recovery credentials or valid legacy API keys SHALL be exchanged through account login. Access tokens SHALL last 15 minutes within a fixed 30-day session, with atomic refresh rotation, bounded idempotent retries and replay revocation.
 
-#### Scenario: Tenant scoped write
-- **WHEN** an authenticated request with `tenantId = "A"` writes data to any store
-- **THEN** the data SHALL be stored with `tenantId = "A"` and SHALL NOT be visible to queries from `tenantId = "B"`
+#### Scenario: Sensitive operation after recent-auth window
+- WHEN a valid account session is older than the ten-minute real-authentication window
+- THEN recovery rotation and identity binding/unbinding SHALL require reauthentication.
+- AND token refresh SHALL not reset authenticatedAt.
 
-#### Scenario: Cross-tenant access prevented at middleware level
-- **WHEN** a request attempts to supply a different `tenantId` in the request body than the one derived from the authenticated credential
-- **THEN** the middleware SHALL override the request-supplied `tenantId` with the credential-derived value and log the discrepancy
+#### Scenario: Reauthenticate current account
+- WHEN the current account proves its own recovery credential or already-bound external identity
+- THEN only this session's authenticatedAt SHALL update.
+- AND its user, tenant, token pair and total session lifetime SHALL not be replaced.
 
----
+### Requirement: External identity verification
 
-### Requirement: P0 Compatibility Mode
+OIDC, OAuth2 and platform-credential adapters SHALL validate against administrator-configured endpoints. Identity SHALL use the exact providerId/issuer/subject tuple. Client-supplied subject or email SHALL not establish account ownership.
 
-In P0 (initial phase), the system SHALL provide a default `tenantId = "default"` and SHALL allow authentication middleware to be disabled via configuration, enabling zero-auth local development.
+#### Scenario: Link an identity
+- WHEN a recently authenticated account links a verified external identity
+- THEN the original internal user and tenant SHALL remain.
+- AND an identity owned by another account SHALL be rejected instead of merged by email.
 
-#### Scenario: Auth middleware disabled
-- **WHEN** the configuration sets `auth.enabled: false`
-- **THEN** the middleware SHALL skip all authentication checks and populate `ctx.tenantId = "default"` for every request
+#### Scenario: Browser reauthentication receipt
+- WHEN a reauth flow is polled
+- THEN the initiating account session SHALL still be valid and SHALL be the session claiming the result.
+- AND the result SHALL be AccountUser, not a new login token pair.
 
-#### Scenario: Default tenant in P0
-- **WHEN** `auth.enabled: false` and a request arrives without any credential headers
-- **THEN** the request SHALL be processed as if `tenantId = "default"` with full access, and no 401 SHALL be returned
+### Requirement: Resource and execution boundaries
 
+Storage operations SHALL apply tenant scoping; resource handlers SHALL verify workspace ownership and path identity. Tool approval mode SHALL not override cross-tenant authorization. Host execution SHALL not be described as isolation; the optional Docker backend requires separate real-environment acceptance.
+
+#### Scenario: Shared host path
+- WHEN a user requests a path outside their authorized workspace
+- THEN knowing the path or choosing full-access SHALL not grant access.
+
+## Implementation evidence
+
+- [HTTP gate](../../../src/api/http/middleware.ts)
+- [Authentication priority](../../../src/auth/middleware.ts)
+- [Account lifecycle](../../../src/auth/accounts.ts)
+- [Account HTTP](../../../src/api/http/routes/accounts.ts)
+- [External flow and polling](../../../src/api/http/routes/account-external.ts)
+- [Workspace manager](../../../src/workspace/manager.ts)

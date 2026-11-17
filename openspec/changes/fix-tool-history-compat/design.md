@@ -1,5 +1,9 @@
 ## Context
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../docs/README.md)；文档状态见[全量清单](../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 AI Agent Engine 支持多个 LLM 后端（OpenAI/Qwen 兼容、Anthropic Claude、本地模型）。对话历史通过 SQLite 的 `conversations` 表持久化，但 `assistant` 消息中 `toolCall.name` 字段未被存储。
 
 当切换模型（如从 Qwen 切换到 Claude）时，历史回放器尝试重建 Anthropic 格式的 `tool_use` 消息块，因 `name` 字段缺失导致 Claude API 返回 400 错误。

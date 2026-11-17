@@ -1,73 +1,54 @@
-# stream-pipeline Specification
+# Stream Pipeline Specification
 
 ## Purpose
-TBD - created by archiving change ai-agent-engine. Update Purpose after archive.
+
+Separate middleware text transformation from durable event publication, replay and HTTP SSE delivery. Source audit: 2026-11-17.
+
 ## Requirements
-### Requirement: Pipeline Creation
 
-The StreamPipeline SHALL provide a `createPipeline(middlewares[])` factory that assembles an ordered chain of stream middlewares and returns a pipeline instance.
+### Requirement: Mutable sequential transformation
 
-#### Scenario: Pipeline created with middlewares
-- **WHEN** `createPipeline([mw1, mw2, mw3])` is called
-- **THEN** the returned pipeline instance SHALL apply middlewares in the order `mw1 → mw2 → mw3` when processing each chunk
+StreamPipeline SHALL accept an AsyncIterable<string>. For each input it SHALL create a mutable StreamChunk and invoke middleware sequentially with transform(chunk, async next()).
 
-#### Scenario: Pipeline created with empty middleware list
-- **WHEN** `createPipeline([])` is called
-- **THEN** the returned pipeline SHALL operate in pass-through mode, emitting each input chunk unchanged
+#### Scenario: Transform or suppress
 
----
+- **WHEN** middleware changes chunk.content and calls next()
+- **THEN** later middleware SHALL observe the modified chunk.
+- **WHEN** middleware does not call next()
+- **THEN** that input chunk SHALL be suppressed.
+- **WHEN** final content is empty
+- **THEN** the pipeline SHALL emit no output for that chunk.
 
-### Requirement: Middleware Interface
+Calling next() more than once is not a multiple-emission API. Middleware receives an object, not a replacement string argument.
 
-Each stream middleware SHALL conform to the `StreamMiddleware` interface: `transform(chunk: string, next: (chunk: string) => void) => void`.
+### Requirement: Bounded replay and subscribers
 
-#### Scenario: Middleware calls next
-- **WHEN** a middleware's `transform` function calls `next(modifiedChunk)`
-- **THEN** the pipeline SHALL pass `modifiedChunk` to the subsequent middleware (or to the output if no more middlewares remain)
+The runtime StreamBus SHALL bound replay and subscriber buffering. Current defaults for each are 2048 events and 8 MiB, configurable through bus options.
 
-#### Scenario: Middleware suppresses chunk
-- **WHEN** a middleware's `transform` function does NOT call `next`
-- **THEN** the chunk SHALL be dropped and SHALL NOT propagate further down the pipeline
+#### Scenario: Lagging subscriber
 
-#### Scenario: Middleware emits multiple chunks
-- **WHEN** a middleware calls `next` more than once within a single `transform` invocation
-- **THEN** each call to `next` SHALL independently propagate a chunk through the remaining pipeline
+- **WHEN** a subscriber can no longer recover within bounded buffers
+- **THEN** the system SHALL require snapshot recovery rather than retain unbounded process memory.
 
----
+Durable state projection/publication barriers SHALL preserve event ordering and prevent UI observation from outrunning required persistence.
 
-### Requirement: SSE Output
+### Requirement: SSE connection lifecycle
 
-The StreamPipeline SHALL support piping its output to a Fastify reply, sending each transformed chunk as a Server-Sent Events (SSE) frame.
+The HTTP sink SHALL emit valid event-stream frames, apply socket backpressure and send heartbeat comments every 15 seconds while connected.
 
-#### Scenario: Chunk emitted as SSE frame
-- **WHEN** a chunk passes through the full middleware chain
-- **THEN** the pipeline SHALL write it to the Fastify reply as `data: <chunk>\n\n` in SSE format
+#### Scenario: Subscriber disconnect
 
-#### Scenario: Stream end signaled
-- **WHEN** the upstream LLM stream signals completion
-- **THEN** the pipeline SHALL send `data: [DONE]\n\n` and call `reply.raw.end()` to close the SSE connection
+- **WHEN** the client socket closes
+- **THEN** the sink SHALL detach its source subscription and clear heartbeat/listeners
+- **AND** SHALL NOT infer that the underlying owned producer should be cancelled.
 
-#### Scenario: SSE headers set automatically
-- **WHEN** the pipeline begins streaming to a Fastify reply
-- **THEN** it SHALL set `Content-Type: text/event-stream` and `Cache-Control: no-cache` headers before writing any data
+#### Scenario: Normal finish or error
 
----
+- **WHEN** the source ends while the socket is connected
+- **THEN** the sink SHALL send the done frame.
+- **WHEN** the source fails
+- **THEN** it SHALL attempt an error payload and done frame before closing.
 
-### Requirement: P0 Pass-Through Mode
+## Source map
 
-In P0, when no middlewares are configured, chunks SHALL flow directly from the LLM adapter to the SSE output without transformation.
-
-#### Scenario: Direct pass-through
-- **WHEN** `createPipeline([])` is used and a stream chunk arrives
-- **THEN** the chunk SHALL be written to the SSE output unchanged with no additional processing overhead
-
----
-
-### Requirement: Middleware Chain Execution Order
-
-Middlewares SHALL be invoked strictly in the order they were provided to `createPipeline`.
-
-#### Scenario: Ordered execution verification
-- **WHEN** three middlewares each append a marker to the chunk (e.g., `[A]`, `[B]`, `[C]`) and `createPipeline([mwA, mwB, mwC])` is used
-- **THEN** the output chunk SHALL be `original[A][B][C]`, confirming sequential execution in registration order
-
+[Pipeline](../../../src/core/stream-pipeline/pipeline.ts), [types](../../../src/core/stream-pipeline/types.ts), [bus](../../../src/core/stream-pipeline/stream-bus.ts), [publication queue](../../../src/core/stream-pipeline/publication-queue.ts), [SSE sink](../../../src/core/stream-pipeline/sse-sink.ts), [tests](../../../src/core/stream-pipeline/__tests__/). Middleware behavior is not a guarantee of provider token boundaries.

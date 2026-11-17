@@ -1,5 +1,9 @@
 ## ADDED Requirements
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../../../docs/README.md)；文档状态见[全量清单](../../../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 ### Requirement: 虚拟滚动大目录性能
 文件树 SHALL 在单目录包含 ≥ 5 万个文件时，首次展开节点耗时 < 200 ms（从点击到 DOM 渲染完成），内存占用增量 < 50 MB；通过 `rc-tree` 的 `virtual={true}` + 固定行高 22 px 实现。
 

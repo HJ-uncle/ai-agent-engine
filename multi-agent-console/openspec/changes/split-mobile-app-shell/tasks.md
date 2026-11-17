@@ -1,5 +1,9 @@
 ## 1. 准备：依赖与目录骨架
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../../docs/README.md)；文档状态见[全量清单](../../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 - [x] 1.1 安装依赖：`npm i antd-mobile@^5 react-router-dom@^6`（react-router 若已存在可跳过版本对齐）
 - [x] 1.2 在 `tsconfig.json` 添加 path alias：`@core/*`、`@web/*`、`@mobile/*`
 - [x] 1.3 在 `craco.config.js` 同步 webpack `resolve.alias`，确保运行时解析与 ts 一致

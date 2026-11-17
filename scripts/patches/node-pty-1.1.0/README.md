@@ -45,7 +45,11 @@ Independent tests (already excluded from Vitest discovery):
 node --test scripts/longrun/node-pty-patch.test.mjs
 ```
 
-During formal R2 this patch exists only as repository script assets and `.tmp`
-clones. Product package/build/runtime entry points must be integrated after the
-freeze is released, then new engine/SDK/client artifacts and a new TGZ must be
-built, hash-checked and exercised through real terminal creation and closing.
+Current integration review (2026-11-17): the engine package runs the applicator
+from postinstall and ships the patch assets. Inspect scripts/build.ts, the SDK
+copy scripts and the paired desktop runtime preparation when changing release
+packaging; installing a patch is not a substitute for validating the exact
+shipped native dependency and terminal lifecycle. The earlier R2 freeze and
+temporary clones were historical acceptance conditions, not the present release
+workflow. Rebuild and hash-check new artifacts, then exercise actual terminal
+creation and closing before claiming a new runtime accepted.

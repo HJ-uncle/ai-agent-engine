@@ -1,5 +1,9 @@
 # DeepSeek Harness 可交互插件闭环：Schedule
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../README.md)；文档状态见[全量清单](../documentation-inventory.md)。状态标注：2026-11-17。
+
+
 调研日期：2026-11-12。参考仓库：`D:\dev\deepseek-harness`，HEAD `fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159`。本轮以只读源码调研为主，另运行末节所列 SlotCore 源码探针；未启动 Harness 应用、未安装依赖、未运行其单测套件或浏览器 E2E，未改 Aether 产品代码。以下“已证实”指源码路径闭合；测试文件存在只作为设计证据，不等于本轮执行通过。
 
 ## 结论

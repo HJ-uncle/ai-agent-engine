@@ -1,5 +1,9 @@
 ## Context
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../../docs/README.md)；文档状态见[全量清单](../../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 `multi-agent-console` 当前是 CRA + craco 的单 React SPA，桌面 VSCode 形态。`responsive-h5-layout` 尝试用响应式做 H5 适配，结果证明：媒体查询无法解决「触摸事件」「弹层模型」「滚动容器」「viewport 抖动」等本质性差异。
 
 业务路线已确定：H5 阶段在浏览器内独立可用 → 后续用 RN WebView 套壳 → 远期 RN 原生。需要提前为 RN 留出干净的层边界。

@@ -1,5 +1,9 @@
 # DeepSeek Harness 客户端插件融合机制：源码追踪
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../README.md)；文档状态见[全量清单](../documentation-inventory.md)。状态标注：2026-11-17。
+
+
 日期：2026-11-12。研究对象：`D:\dev\deepseek-harness`，commit `fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159`。
 
 本笔记聚焦“安装一个带交互界面的插件后，它怎样真正成为宿主 UI 的一部分”。采用持久安装的 `ui-plugin-manager` 页面和独立的 `ui-plugin-market` 页签作为主例，区分旧动态 Cordis runner。本文除注明的团队 probe 外均为源码分析，没有启动完整 Harness、安装插件或进行完整页面/HMR 端到端验证。该 checkout 中两个主例的 `lib/client.js` 均不存在；构建路径由配置与源码确认，不能称作实际构建产物验收。

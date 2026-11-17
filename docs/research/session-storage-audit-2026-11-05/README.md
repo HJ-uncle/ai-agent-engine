@@ -1,8 +1,10 @@
 # Aether Engine 会话存储机制深度调研
 
-实施阶段已完成增量优化，见 [实施与验收报告](D:/dev/ai-agent-engine/docs/research/session-storage-audit-2026-11-05/implementation-report.md)。下文“未修改实现”等描述限定于最初调研阶段，当前行为以实施报告为准。
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../README.md)；文档状态见[全量清单](../../documentation-inventory.md)。状态标注：2026-11-17。
 
-后续实测补充：[实际数据库与JSONL容量审计、存储优化方案](D:/dev/ai-agent-engine/docs/research/session-storage-audit-2026-11-05/capacity-report.md)。该补充检查了用户指定的实际数据目录；本文主体仍是原先的源码与隔离测试调研。
+
+本文保留最初调研的隔离测试、故障证据和未完成事项，“未修改实现”等描述仅适用于当时。后续已完成的实施/容量快照不再单独维护；当前数据分层、备份与清理流程见[存储维护指南](../../operations/session-storage-maintenance.md)和[运行指南](../../runtime-guide.md)。
 
 日期：2026-11-05，Asia/Shanghai。范围：`D:/dev/ai-agent-engine` 当前工作树，HEAD 为 `d25d93a68ce44b5bc5498584434b40c9ac9b7441`，**包含调研开始前已存在的未提交修改**。本次只新增调研材料与合成数据探针，没有修改引擎实现，也没有读取实际用户会话、实际数据库、`.env` 或凭据。
 

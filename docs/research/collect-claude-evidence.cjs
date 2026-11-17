@@ -5,7 +5,8 @@ const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const ts = require('typescript');
 const base = process.argv[2];
-const out = path.join(__dirname, 'claude-2.1.266-evidence');
+const out = path.resolve(process.argv[3] || path.join(__dirname, '../../.e2e-tmp/claude-evidence'));
+const declarationPath = path.join(__dirname, 'claude-2.1.266-evidence/sdk-tools.d.ts');
 fs.mkdirSync(out, { recursive: true });
 const exe = path.join(base, 'bin', 'claude.exe');
 const bytes = fs.readFileSync(exe);
@@ -35,7 +36,7 @@ for (const command of commands) {
   commandResults.push({ command: args, status: run.status, error: run.error?.message });
 }
 fs.writeFileSync(path.join(out, 'help-status.json'), JSON.stringify(commandResults, null, 2));
-const declaration = fs.readFileSync(path.join(out, 'sdk-tools.d.ts'), 'utf8');
+const declaration = fs.readFileSync(declarationPath, 'utf8');
 const ast = ts.createSourceFile('sdk-tools.d.ts', declaration, ts.ScriptTarget.Latest, true);
 const interfaces = ast.statements.filter(x => ts.isInterfaceDeclaration(x) && x.name.text.endsWith('Input'));
 const schemaInventory = interfaces.map(x => ({ name: x.name.text,

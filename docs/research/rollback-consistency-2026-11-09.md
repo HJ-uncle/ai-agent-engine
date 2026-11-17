@@ -1,5 +1,9 @@
 # 回退一致性修复（2026-11-09）
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../README.md)；文档状态见[全量清单](../documentation-inventory.md)。状态标注：2026-11-17。
+
+
 ## 现场证据
 
 对当前 Aether 的 `Aether Code/engine/state/agent.db` 做只读核对，截图中的一轮共有 12 条文件改动：

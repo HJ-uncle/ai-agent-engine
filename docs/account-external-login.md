@@ -1,5 +1,7 @@
 # 第三方登录接入
 
+源码核对：2026-11-17。桌面用户操作见[账号与登录](../../aether-code/docs/accounts-and-login.md)，本页面向部署管理员和接入开发者。
+
 引擎支持 OIDC Authorization Code、OAuth2 Authorization Code 和已有平台凭证校验接口。三种方式均由引擎访问管理员配置的第三方服务，客户端不能提交可信用户 ID、租户或第三方用户数据。
 
 ## 服务端配置
@@ -78,12 +80,16 @@ OAuth2 必须显式指定稳定、不会随昵称/邮箱变化的 `mapping.subje
 ## 客户端协议
 
 * `GET /auth/account/providers` → `{providers:[{id,name,type}],registrationEnabled:boolean}`，不包含密钥或服务端认证配置。
-* `POST /auth/account/external/start {providerId,mode:"login"|"link"}` → `{authorizationUrl,flowId,pollToken}`。
+* `POST /auth/account/external/start {providerId,mode:"login"|"link"|"reauth"}` → `{authorizationUrl,flowId,pollToken}`。
 * 在系统浏览器打开 authorizationUrl。回调只写入待领取身份，返回固定文本，不返回平台凭证、不依赖浏览器访问桌面 loopback。
 * `POST /auth/account/external/poll {flowId,pollToken}` → `{status:"pending"}` 或 `{status:"complete",result:...}`。建议每两秒轮询。五分钟过期；结果仅领取一次。
 * 凭证类型直接 `POST /auth/account/external/credential {providerId,credential,mode}`。
 
 `mode:"link"` 必须携带本系统有效且最近十分钟认证的账号 session。服务端在启动、回调和领取时检查该 session 未撤销。绑定保留原用户和租户；不会根据相同邮箱自动合并。已绑定其他用户的外部身份应拒绝，由人工确认后通过安全迁移处理。
+
+`mode:"reauth"` 用于当前账号的敏感操作验证。start/credential 必须携带有效账号 session，只接受已经绑定当前用户的精确 `(providerId,issuer,subject)`；不能创建账号、绑定新身份或切换账号。浏览器回调和领取时会重新检查原 session，poll 还必须携带发起时同一账号 session 的 Bearer。成功返回 `AccountUser`（poll 包在 complete.result 内），只更新该会话的 authenticatedAt，不返回新令牌对，也不延长总会话有效期。link 同样返回用户资料；只有 login 返回账号登录结果。刷新访问令牌不能代替重新验证。
+
+桌面未登录时显示服务器已配置的提供方；已有账号应先登录原账号，再在账号设置中绑定第三方。否则首次用一个尚未绑定的第三方身份登录，会创建独立账号，原账号的会话不会自动合并。敏感操作超出近期验证窗口时，桌面可引导使用恢复凭证或已绑定的第三方重新验证后继续原操作。服务端未配置提供方时不会凭空出现可用第三方入口。
 
 新第三方身份直接登录会由账户模块自动创建本系统账号，再签发本系统 session；第三方凭证不会成为本系统长期访问密钥。外部身份以提供方 ID + issuer + 稳定 subject 唯一定位。不要随意修改已上线提供方的 ID/issuer；更改会被视为新的身份命名空间。
 

@@ -10,11 +10,11 @@ You are **NOT** the implementer. Do not write code.
 
 ## Inputs (read fully before reviewing)
 
-- `docs/superpower/specs/<topic>.md` — the spec
-- `docs/superpower/plans/<topic>.md` — the task plan
+- `.ae/openspec/changes/<feature-name>/proposal.md`, `design.md`, and `specs/<sub-module>/spec.md` — the spec documents
+- `.ae/openspec/changes/<feature-name>/tasks.md` — the task plan
 - The list of files the implementer touched (provided in your task)
 
-Use `smart_read` or `read_file`. Use `grep` / `glob` to locate any
+Use `read_file`. Use `grep` / `glob` to locate any
 supporting code you need to understand context. Do not speculate
 beyond the diff.
 

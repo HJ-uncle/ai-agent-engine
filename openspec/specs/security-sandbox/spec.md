@@ -1,85 +1,61 @@
-# security-sandbox Specification
+# Security Policy Specification
 
 ## Purpose
-TBD - created by archiving change ai-agent-engine. Update Purpose after archive.
+
+Describe implemented identity, capability, command, network and approval boundaries without claiming an operating-system sandbox for arbitrary host programs. Source audit: 2026-11-17.
+
 ## Requirements
-### Requirement: CMD Whitelist Enforcement
 
-The SecuritySandbox SHALL maintain a whitelist of permitted commands and SHALL reject any execution request for commands not on the whitelist.
+### Requirement: Trusted identity and capability ceilings
 
-#### Scenario: Whitelisted command allowed
-- **WHEN** `execute(cmd, args, ctx)` is called with a command that appears in the configured `allowedCommands` list
-- **THEN** the sandbox SHALL proceed with execution
+Authenticated identity, tenant, workspace and tool capability SHALL be resolved by trusted server paths. Chat text SHALL NOT grant roles or management capabilities.
 
-#### Scenario: Non-whitelisted command rejected
-- **WHEN** `execute(cmd, args, ctx)` is called with a command that does NOT appear in `allowedCommands`
-- **THEN** the sandbox SHALL return a `CommandNotAllowedError` containing the attempted command name and SHALL NOT spawn any process
+#### Scenario: Child execution
 
-#### Scenario: Empty whitelist blocks all commands
-- **WHEN** `allowedCommands` is configured as an empty array
-- **THEN** every `execute` call SHALL be rejected with `CommandNotAllowedError`
+- **WHEN** a subagent is admitted
+- **THEN** it SHALL inherit constrained trusted parent identity/resources
+- **AND** SHALL NOT obtain root-only management packages through load_tools.
 
----
+### Requirement: Explicit security-mode semantics
 
-### Requirement: Execution Timeout
+The default mode SHALL be standard. An invalid DEFAULT_SECURITY_MODE SHALL fall back to safe. Runtime session overrides and command approvals currently reside in memory.
 
-Command execution SHALL be subject to a configurable timeout. Processes exceeding the timeout MUST be forcefully terminated.
+#### Scenario: Ordinary policy decision
 
-#### Scenario: Command completes within timeout
-- **WHEN** a whitelisted command completes within `timeoutMs` milliseconds
-- **THEN** the sandbox SHALL return the command's stdout and exit code normally
+- **WHEN** an ordinary rule says ask
+- **THEN** safe SHALL ask, while standard/full-access SHALL allow.
+- **WHEN** an ordinary rule says deny
+- **THEN** safe SHALL deny, standard SHALL ask and full-access SHALL bypass that ordinary rule.
 
-#### Scenario: Command exceeds timeout
-- **WHEN** a command's execution time exceeds `timeoutMs` milliseconds
-- **THEN** the sandbox SHALL send SIGKILL to the child process, wait for it to terminate, and return an `ExecutionTimeoutError` with the configured timeout value
+#### Scenario: Hard deletion boundary
 
-#### Scenario: Default timeout applied
-- **WHEN** no `timeoutMs` is specified per-call
-- **THEN** the sandbox SHALL apply the globally configured `defaultTimeoutMs` value
+- **WHEN** a command matches a hard deletion or detected inline deletion pattern
+- **THEN** all three modes SHALL reject it and direct execution to the recorded delete_file path
+- **AND** previous command approval SHALL NOT bypass the check.
 
----
+Static command scanning does not identify every possible script side effect. A working directory is not an OS-level filesystem/network sandbox.
 
-### Requirement: Shell Mode Prohibition
+### Requirement: Guarded HTTP
 
-The SecuritySandbox MUST NOT spawn processes using `shell: true` to prevent shell injection attacks.
+Guarded HTTP SHALL check URL targets and redirect hops, bound response size and pin validated DNS destinations.
 
-#### Scenario: Direct process spawn
-- **WHEN** the sandbox spawns any child process
-- **THEN** it SHALL use `child_process.spawn(cmd, args, { shell: false })` or equivalent, ensuring arguments are passed as an array and never interpolated into a shell string
+#### Scenario: Default guarded request
 
-#### Scenario: Shell metacharacters in arguments
-- **WHEN** a command argument contains shell metacharacters (e.g., `;`, `|`, `&&`, `` ` ``)
-- **THEN** the sandbox SHALL pass these characters as literal argument strings to the spawned process without shell interpretation
+- **WHEN** default network policy applies
+- **THEN** only HTTP/HTTPS SHALL be accepted, private addresses and metadata endpoints SHALL be restricted
+- **AND** current defaults SHALL be 5 MiB response, 30-second timeout, 300-second DNS cache and at most 5 redirects.
 
----
+These checks are not a claim that every SDK, browser, MCP server or shell process uses guarded HTTP. Full-access has its own policy behavior.
 
-### Requirement: File Path Isolation
+### Requirement: Frozen approval and honest rollback
 
-All file path arguments passed to sandboxed commands SHALL be validated to ensure they resolve within the session's `workspaceDir`.
+Pending approval SHALL bind the original operation and identity. Approval SHALL NOT grant unrelated later changes. File rollback SHALL check recorded ownership and current state.
 
-#### Scenario: Path within workspace allowed
-- **WHEN** a file path argument resolves to a location inside `workspaceDir`
-- **THEN** the sandbox SHALL allow the path to be used
+#### Scenario: Conflicting current file
 
-#### Scenario: Path outside workspace rejected
-- **WHEN** a file path argument resolves to a location outside `workspaceDir` (including via `..` traversal or absolute paths)
-- **THEN** the sandbox SHALL reject the execution with a `PathTraversalError` and SHALL NOT spawn any process
+- **WHEN** a file differs from the recorded revertable state or has later changes
+- **THEN** rollback SHALL surface a conflict rather than overwrite it blindly.
 
----
+## Source map
 
-### Requirement: Quota Check
-
-Before executing any command, the SecuritySandbox SHALL verify that the requesting tenant has sufficient remaining quota.
-
-#### Scenario: Sufficient quota
-- **WHEN** `execute(cmd, args, ctx)` is called and `ctx.tenantId` has remaining quota greater than zero
-- **THEN** the sandbox SHALL decrement the quota by one and proceed with execution
-
-#### Scenario: Quota exhausted
-- **WHEN** `execute(cmd, args, ctx)` is called and `ctx.tenantId` has zero remaining quota
-- **THEN** the sandbox SHALL return a `QuotaExceededError` and SHALL NOT spawn any process
-
-#### Scenario: Quota check before whitelist
-- **WHEN** both quota is exhausted and the command is not whitelisted
-- **THEN** the sandbox SHALL return `QuotaExceededError` (quota check takes precedence and is evaluated first)
-
+[Policy engine](../../../src/security/policy-engine.ts), [network policy](../../../src/security/network-policy.ts), [guarded HTTP](../../../src/security/guarded-http.ts), [tool policy](../../../src/security/tool-policy.ts), [security routes](../../../src/api/http/routes/security.ts), [architecture guide](../../../docs/security-architecture.md). This audit is not a penetration-test certification.

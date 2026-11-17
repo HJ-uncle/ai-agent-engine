@@ -1,5 +1,9 @@
 # DeepSeek Harness：Host 插件生命周期与 Client 连接的源码追踪
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../README.md)；文档状态见[全量清单](../documentation-inventory.md)。状态标注：2026-11-17。
+
+
 研究时间：2026-11-12。源码：`D:\dev\deepseek-harness`，提交 `fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159`。本文件只记录源码研究，没有执行第三方插件、修改产品实现或用户数据。
 
 ## 1. 结论与边界

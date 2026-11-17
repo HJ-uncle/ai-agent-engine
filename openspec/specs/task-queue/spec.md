@@ -1,89 +1,67 @@
-# task-queue Specification
+# Task Queue Specification
 
 ## Purpose
-TBD - created by archiving change ai-agent-engine. Update Purpose after archive.
+
+Describe the legacy persistent background queue, distinct from root chat runs, command jobs and subagent runs. Source audit: 2026-11-17.
+
 ## Requirements
-### Requirement: Task Enqueueing
 
-The TaskQueue SHALL provide an `enqueue(job)` method that adds a job to the queue and returns a unique `jobId`.
+### Requirement: Registered handlers and tenant access
 
-#### Scenario: Successful enqueue
-- **WHEN** `enqueue(job)` is called with a valid job payload
-- **THEN** the queue SHALL persist the job with status `pending`, assign a unique `jobId` (UUID), and return that `jobId` to the caller
+enqueue SHALL accept only job types with a registered handler and generate a UUID for the inserted pending record. getStatus(jobId, tenantId) SHALL return the complete matching record or null.
 
-#### Scenario: Enqueue multiple jobs
-- **WHEN** `enqueue(job)` is called N times sequentially or concurrently
-- **THEN** each call SHALL return a distinct `jobId` and all jobs SHALL appear in the queue with status `pending`
+#### Scenario: Unsupported type
 
----
+- **WHEN** no handler is registered for a requested type
+- **THEN** enqueue SHALL reject without admitting a runnable job.
+- **WHEN** a tenant queries another tenant's job
+- **THEN** it SHALL receive no matching record.
 
-### Requirement: Task Status Query
+### Requirement: Durable single-owner claim
 
-The TaskQueue SHALL provide a `getStatus(jobId)` method that returns the current status of a queued job.
+The queue SHALL poll supported pending work and acquire a persisted pending→running claim before invoking the handler. Only the matching execution claim SHALL commit completion.
 
-#### Scenario: Query pending job
-- **WHEN** `getStatus(jobId)` is called immediately after enqueueing a job that has not yet been picked up
-- **THEN** the method SHALL return `pending`
+#### Scenario: Competing workers
 
-#### Scenario: Query running job
-- **WHEN** a worker has started processing a job and `getStatus(jobId)` is called
-- **THEN** the method SHALL return `running`
+- **WHEN** workers observe the same pending row
+- **THEN** only the transaction that wins the pending-state update SHALL perform handler effects.
+- **WHEN** a completion acknowledgement is lost
+- **THEN** the worker SHALL NOT infer handler failure and replay external effects.
 
-#### Scenario: Query completed job
-- **WHEN** a job has finished successfully and `getStatus(jobId)` is called
-- **THEN** the method SHALL return `done`
+Polling defaults to 1000 ms. One queue instance serializes its own active processing; the persisted claim guards ownership across instances.
 
-#### Scenario: Query failed job
-- **WHEN** a job has terminated with an error and `getStatus(jobId)` is called
-- **THEN** the method SHALL return `failed`
+### Requirement: Pending-only cancellation
 
-#### Scenario: Query unknown jobId
-- **WHEN** `getStatus(jobId)` is called with a `jobId` that does not exist
-- **THEN** the method SHALL return `null` and SHALL NOT throw an error
+cancel(jobId, tenantId) SHALL change only pending jobs to cancelled and return a boolean indicating a changed row.
 
----
+#### Scenario: Running job
 
-### Requirement: Task Cancellation
+- **WHEN** cancel is called on a running/done/failed/cancelled or missing record
+- **THEN** it SHALL return false
+- **AND** SHALL NOT promise termination of a live producer.
 
-The TaskQueue SHALL provide a `cancel(jobId)` method that attempts to cancel a job before or during execution.
+### Requirement: Honest startup and shutdown
 
-#### Scenario: Cancel pending job
-- **WHEN** `cancel(jobId)` is called for a job with status `pending`
-- **THEN** the job status SHALL transition to `cancelled` and the job SHALL NOT be executed by any worker
+Constructing a queue SHALL NOT rewrite existing running jobs as failed. Recovery requires authoritative ownership evidence beyond construction.
 
-#### Scenario: Cancel running job
-- **WHEN** `cancel(jobId)` is called for a job with status `running`
-- **THEN** the queue SHALL signal the worker to abort and transition the status to `cancelled`
+#### Scenario: Shutdown
 
-#### Scenario: Cancel already completed job
-- **WHEN** `cancel(jobId)` is called for a job with status `done` or `failed`
-- **THEN** the method SHALL return without error and SHALL NOT change the job status
+- **WHEN** stop is invoked
+- **THEN** polling SHALL stop, the active handler's signal SHALL abort, and processing SHALL be awaited
+- **AND** failure to acknowledge within 3000 ms SHALL report that external effects remain unknown.
+- **WHEN** an earlier execution is still draining
+- **THEN** start SHALL reject rather than overlap a new generation.
 
----
+### Requirement: HTTP service lifecycle and supported executors
 
-### Requirement: Task Persistence
+The HTTP instance SHALL own its queue lifecycle: start onReady and await stop onClose. The current tasks route does not register production handlers and SHALL reject unsupported submissions with HTTP 501 rather than claim they will execute.
 
-All task state SHALL be stored in SQLite so that job status and payloads survive service restarts.
+#### Scenario: Default task submission
 
-#### Scenario: Jobs survive restart
-- **WHEN** jobs are enqueued and the service is restarted before they are processed
-- **THEN** jobs with status `pending` SHALL remain in the queue after restart and SHALL be eligible for processing
+- **WHEN** POST /tasks names a type absent from the route-owned queue's supportedTypes
+- **THEN** the response SHALL indicate no registered executor
+- **AND** no runnable job SHALL be admitted.
 
-#### Scenario: Running jobs on restart
-- **WHEN** a job has status `running` at the time of a service restart
-- **THEN** the job SHALL be transitioned to `failed` on startup (orphan detection) and the failure reason SHALL note abnormal termination
+## Source map
 
----
-
-### Requirement: TaskQueue Interface Abstraction
-
-The system SHALL define a `TaskQueue` interface and provide `SQLiteTaskQueue` as the default implementation, allowing alternative implementations to be substituted.
-
-#### Scenario: Interface compliance
-- **WHEN** a custom implementation of `TaskQueue` is registered in the dependency injection container
-- **THEN** the Agent engine SHALL use the custom implementation for all queue operations without modification to engine code
-
-#### Scenario: Default SQLiteTaskQueue
-- **WHEN** no custom `TaskQueue` is configured
-- **THEN** the system SHALL use `SQLiteTaskQueue` as the default implementation
-
+[Queue](../../../src/storage/task-queue/sqlite-queue.ts), [types](../../../src/storage/task-queue/types.ts), [claim schema](../../../src/storage/task-queue/claim-schema.ts), [tests](../../../src/storage/task-queue/__tests__/). This component is not a process-restart replay service and is not guaranteed to be dependency-injected automatically.

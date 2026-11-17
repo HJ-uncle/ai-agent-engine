@@ -1,5 +1,9 @@
 # 定时器创建问题复盘与验收边界
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../README.md)；文档状态见[全量清单](../documentation-inventory.md)。状态标注：2026-11-17。
+
+
 用户记录：2026-11-11 23:30 导出的「@插件管理 请帮我创建一个自定义插件：定时器」。首轮超时 60 秒，之后出现退出 1、空 stdin、重复诊断、8 次源码修订；第 6 修订已发布，第 8 修订只剩诊断工具。用户继续要求可点击开始的页面后，Agent 生成了独立 HTML，反复尝试浏览器文件访问，再运行静态服务。这不能算应用内插件页面交付。
 
 ## 1. 直接根因：测试路径与实际启动路径不同
@@ -70,7 +74,7 @@ Aether `src/main/engine/runtime.ts` 的开发/环境路径以 `process.execPath`
 
 所有真实桌面测试顺序执行，使用独立数据目录与端口；没有删除或覆盖生产插件。本机实测平台为 Windows，不能把本次结果宣称为 macOS/Linux 实测。
 
-前端独立报告为 `D:/dev/aether-code/docs/plugin-manager-frontend-verification-2026-11-12.md`。最终内嵌测试另落盘 `D:/dev/aether-code/.e2e-tmp/plugins-embedded-host/results/plugins-embedded-host-ui-E-63730-真实启动链路向插件传入完整stdin，且不泄漏引擎环境/embedded-host-receipt.json`，记录上述 build ID、完整 72 字节输入、`runAsNode: "1"`、`secretLeaked: false` 和 77ms 插件执行时间。测试后对应端口与实例进程均已退出。
+最终内嵌测试证据落盘 `D:/dev/aether-code/.e2e-tmp/plugins-embedded-host/results/plugins-embedded-host-ui-E-63730-真实启动链路向插件传入完整stdin，且不泄漏引擎环境/embedded-host-receipt.json`，记录上述 build ID、完整 72 字节输入、`runAsNode: "1"`、`secretLeaked: false` 和 77ms 插件执行时间。测试后对应端口与实例进程均已退出。
 
 ### 普通需求的真实 AI 创建
 

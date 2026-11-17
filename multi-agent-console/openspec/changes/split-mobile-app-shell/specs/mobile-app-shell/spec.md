@@ -1,5 +1,9 @@
 ## ADDED Requirements
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../../../../docs/README.md)；文档状态见[全量清单](../../../../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 ### Requirement: 移动端独立入口
 
 系统 MUST 提供独立的移动端 React 入口文件 `src/mobile/index.tsx`，对应独立的 HTML 模板 `public/m.html`，构建产物为 `build/m.html`。该入口与桌面入口 (`src/web/index.tsx` / `index.html`) 在运行时完全互不加载。

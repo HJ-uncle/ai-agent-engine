@@ -210,9 +210,6 @@
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
         "x-aether-source": "src/api/http/routes/browser.ts:70",
         "x-aether-schema-status": "static-fastify-schema",
-        "x-aether-unresolved-expressions": [
-          "enum: [...BROWSER_ACTIONS]"
-        ],
         "parameters": [
           {
             "name": "clientId",
@@ -662,8 +659,7 @@
         "x-aether-source": "src/api/http/routes/browser-hosts.ts:66",
         "x-aether-schema-status": "static-fastify-schema",
         "x-aether-unresolved-expressions": [
-          "preValidation: async (request, reply) => {\n        if (!request.body || typeof request.body.demandToken !== 'string' || !exactExecution(request.body.execution) ||\n          action === 'reject' && !rejectionCodes.includes(request.body.code as typeof rejectionCodes[number])) {\n          return reply.code(400).send(fail(400, 'Invalid native handshake types or rejection code'))\n        }\n      }",
-          "enum: [...rejectionCodes]"
+          "preValidation: async (request, reply) => {\n        if (!request.body || typeof request.body.demandToken !== 'string' || !exactExecution(request.body.execution) ||\n          action === 'reject' && !rejectionCodes.includes(request.body.code as typeof rejectionCodes[number])) {\n          return reply.code(400).send(fail(400, 'Invalid native handshake types or rejection code'))\n        }\n      }"
         ],
         "parameters": [
           {
@@ -741,7 +737,13 @@
                     }
                   },
                   "code": {
-                    "type": "string"
+                    "type": "string",
+                    "enum": [
+                      "BROWSER_HOST_SLOT_CAPACITY",
+                      "BROWSER_HOST_WINDOW_CLOSED",
+                      "BROWSER_HOST_AI_DISABLED",
+                      "BROWSER_HOST_CONNECTION_FAILED"
+                    ]
                   }
                 }
               }
@@ -1148,11 +1150,6 @@
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
         "x-aether-source": "src/api/http/routes/chat.ts:576",
         "x-aether-schema-status": "static-fastify-schema",
-        "x-aether-unresolved-expressions": [
-          "maxLength: COLLABORATOR_LIMITS.instanceKey",
-          "maxLength: COLLABORATOR_LIMITS.task",
-          "maxLength: COLLABORATOR_LIMITS.description"
-        ],
         "responses": {
           "default": {
             "description": "由对应处理器定义，详情见源码。"
@@ -1201,15 +1198,18 @@
                         },
                         "instanceKey": {
                           "type": "string",
-                          "minLength": 1
+                          "minLength": 1,
+                          "maxLength": 128
                         },
                         "task": {
                           "type": "string",
-                          "minLength": 1
+                          "minLength": 1,
+                          "maxLength": 65536
                         },
                         "description": {
                           "type": "string",
-                          "minLength": 1
+                          "minLength": 1,
+                          "maxLength": 100
                         }
                       },
                       "additionalProperties": false

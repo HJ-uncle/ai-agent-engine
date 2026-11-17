@@ -1,5 +1,9 @@
 ## ADDED Requirements
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../../../../docs/README.md)；文档状态见[全量清单](../../../../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 ### Requirement: 多入口构建产物
 
 `npm run build` 的产物 MUST 同时包含 `build/index.html`（桌面）与 `build/m.html`（移动），且二者注入的 `<script>` 不交叉：

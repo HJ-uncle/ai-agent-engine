@@ -1,5 +1,9 @@
 # 插件 SDK 与本地开发模式验收
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../README.md)；文档状态见[全量清单](../documentation-inventory.md)。状态标注：2026-11-17。
+
+
 日期：2026-11-12。涉及 `D:/dev/ai-agent-engine` 与 `D:/dev/aether-code`。
 
 ## 问题与实现

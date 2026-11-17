@@ -1,9 +1,12 @@
 # Isolated workspace runtime
 
-This runtime is an optional Linux-container backend. It has not been executed on
-this Windows development host: Docker, Podman, and an installed WSL distribution
-are absent. Unit tests check command construction and fail-closed behavior only;
-they are not evidence of kernel isolation or successful container deployment.
+Source review: 2026-11-17, against
+[workspace-runtime.ts](../../src/runtime/workspace-runtime.ts) and the adjacent
+Dockerfile. This is an optional Linux-container backend. This documentation review
+did not build an image or execute Docker/Podman/WSL. Earlier Windows acceptance
+was limited by unavailable container tooling; those historical conditions do not
+describe every current host. Unit tests of command construction and fail-closed
+behavior are not evidence of kernel isolation or successful container deployment.
 
 ## Modes
 

@@ -1,5 +1,9 @@
 # 代码图大索引与子代理结果完整性修复
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../README.md)；文档状态见[全量清单](../documentation-inventory.md)。状态标注：2026-11-17。
+
+
 完成日期：2026-11-10。前置调查见 [审计记录](codegraph-subagent-research-audit-2026-11-09.md)。引擎和 `D:\dev\aether-code` 均已修改并构建；未重启用户当前 Aether 窗口，未修改生产历史数据库或现场代码图库。
 
 ## 修复后的行为

@@ -1,9 +1,10 @@
 // Read-only source inventory. Parses TypeScript AST; never executes Harness code.
 const fs = require('node:fs');
 const path = require('node:path');
-const ts = require('D:/dev/ai-agent-engine/node_modules/typescript/lib/typescript.js');
+const ts = require('typescript');
 const repo = 'D:/dev/deepseek-harness';
-const output = 'D:/dev/ai-agent-engine/docs/research';
+const output = path.resolve(__dirname, '../../.e2e-tmp/harness-slot-inventory');
+fs.mkdirSync(output, { recursive: true });
 const catalogPath = 'packages/extensions/cordis-client-runner/src/client/slot-catalog.ts';
 
 function source(file) {
@@ -85,7 +86,7 @@ for (const row of rows.values()) {
   const consumed = row.consumers.map(p => '`' + p + '`').join('<br>') || '委托或动态调用，需结合 owner';
   table.push(`| \`${row.key}\` | ${row.kind} / ${row.scope} | ${decl} | ${consumed} | ${escape(row.occupants.join('; ') || '无内置贡献')} |`);
 }
-fs.writeFileSync(path.join(output, 'harness-frontend-slot-matrix.md'), '# Harness 前端 Slot 源码矩阵\n\n由 `harness-frontend-slot-inventory.cjs` 静态生成，完整 owner 契约、生命周期与分类见 `harness-frontend-extension-map.md`；原始数据见同目录 JSON。\n\n' + table.join('\n') + '\n');
+fs.writeFileSync(path.join(output, 'harness-frontend-slot-matrix.md'), '# Harness 前端 Slot 源码矩阵\n\n由仓库 `docs/research/harness-frontend-slot-inventory.cjs` 静态生成，完整 owner 契约、生命周期与分类见 [研究说明](../../docs/research/harness-frontend-extension-map.md)；原始数据见同目录 JSON。\n\n' + table.join('\n') + '\n');
 console.log(JSON.stringify({ slots: rows.size, factories: factories.length,
   missingRuntimeDeclarations: [...rows.values()].filter(x => !x.runtimeDeclarations.length).map(x => x.key),
   missingDirectConsumers: [...rows.values()].filter(x => !x.consumers.length).map(x => x.key) }, null, 2));

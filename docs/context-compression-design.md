@@ -1,62 +1,35 @@
-# 上下文消息智能压缩系统设计文档 (Context Compression System Design)
+# 上下文压缩与请求预算
 
-## 1. 系统架构概述 (System Architecture)
+本文描述 2026-11-17 源码中的运行行为，不是待实现的算法提案。入口为 [ReAct 循环](../src/core/agent-loop/react.ts)、[预算计算](../src/core/context-budget.ts)、[历史压缩边界](../src/storage/conversation/compression.ts) 和 [JSONL 历史](../src/storage/conversation/jsonl-history.ts)。
 
-上下文消息智能压缩系统是一个流水线 (Pipeline) 架构，旨在将冗长的对话历史（Tokens）进行高保真度的压缩，在保证核心语义（准确率 >= 80%）的前提下，最大化降低大语言模型 (LLM) 的上下文输入成本。
+## 何时压缩
 
-系统包含以下四个核心模块：
-1. **输入与预处理模块 (Preprocessor):** 负责清洗、分词、去除停用词。
-2. **消息重要性评估引擎 (Importance Evaluator):** 使用 TF-IDF 或 TextRank 算法对每个句子/词汇进行权重打分。
-3. **动态压缩引擎 (Dynamic Compression Engine):** 提供多种策略（提取式摘要、关键词提取、生成式摘要）和动态压缩比例 (Compression Ratio) 调节器。
-4. **准确率验证机制 (Accuracy Verifier):** 基于 N-gram Jaccard 相似度或余弦相似度计算压缩前后的语义保留度。
+每次模型调用前，计算完整请求的 system、工具定义、历史、动态 requestContext 与输出预留，而不只统计聊天正文。默认上下文策略为 268000 tokens；有效窗口取配置、已知模型能力和调用方显式预算的较小值。普通产品 chat 的累计请求预算不设默认上限，这与单请求上下文窗口不同。
 
-## 2. 核心功能模块设计
+默认触发比例为 0.92，合法正数配置最高限制为 0.95；OSM max 使用 0.7，意味着更早压缩。输出预留默认是窗口 5%，至少 256、至多 8192 tokens；这是预算预留，不等于所有适配器的生成长度上限。
 
-### 2.1 消息重要性评估算法 (Importance Evaluation)
-- **词频-逆文档频率 (TF-IDF):** 计算上下文中每个词的重要性，对于频繁在全局出现但局部稀有的词赋予高权重。
-- **句子打分:** 句子的重要性分数为其包含词汇的 TF-IDF 分数总和除以句子长度（进行长度惩罚，防止长句天然得分高）。
+## 当前压缩流程
 
-### 2.2 多种压缩策略 (Compression Strategies)
-1. **关键词提取 (Keyword Extraction):** 仅保留 TF-IDF 权重最高的前 N 个词汇。适合极度压缩（如压缩率 0.1）。
-2. **提取式压缩 (Extractive Compression):** 按照句子重要性得分进行排序，保留得分最高的前 N 个句子，然后按原文顺序重组。适合中度压缩（如压缩率 0.3-0.7）。
-3. **生成式摘要 (Abstractive Summarization - 可选):** 将历史消息发送给轻量级本地或云端 LLM 进行语义总结。
+1. 读取当前可供模型使用的历史及修订状态，估算完整请求。
+2. 达到阈值时，先对旧工具输出进行轻量压缩，保留最近 10 条消息；截断大小使用当前工具模式的输出限制。
+3. 仍然超出预算时，调用摘要模型生成历史摘要。优先解析 `LLM_SUMMARIZE_MODEL`，无法使用时回退当前模型；不是 TF-IDF 或 TextRank 提取。
+4. 每次保留近期上下文，并保持 tool call/result 的合法边界。ReAct 最多进行 4 次摘要尝试，后续尝试减少保留量。
+5. 摘要完成后重新读取历史，检查运行中补充输入与完整请求预算。不能以压缩前的快照覆盖后来接纳的输入。
 
-### 2.3 压缩比例动态调节器 (Dynamic Ratio Adjuster)
-- 闭环反馈机制：初始设置目标压缩率为 `R_init`。
-- 压缩后，立即送入“准确率验证机制”。
-- 若相似度 `S < 0.8` (阈值)，则增大压缩率（例如 `R = R + 0.1`，保留更多内容），并重新进行压缩，直至满足准确率要求或达到最大重试次数。
+历史存储层会在锁内准备快照，在锁外生成摘要，然后在锁内比较 revision/nextSeq。发生并发变化时拒绝提交过期摘要。摘要以“【历史上下文摘要】”系统消息进入模型历史。
 
-### 2.4 准确率验证机制 (Verification Mechanism)
-在没有昂贵的 Embedding 模型时，采用 **N-gram Jaccard 相似度** 评估语义保留度。
-- **Unigram/Bigram 集合:** 将原文 $T_{orig}$ 和压缩文 $T_{comp}$ 分别转换为 N-gram 集合 $S_{orig}$ 和 $S_{comp}$。
-- **Jaccard 相似度:** $J(S_{orig}, S_{comp}) = \frac{|S_{orig} \cap S_{comp}|}{|S_{orig} \cup S_{comp}|}$
-- 为消除文本长度对分母的过度影响，可采用**覆盖率 (Coverage)**: $C = \frac{|S_{orig} \cap S_{comp}|}{|S_{orig}|}$。本项目采用加权覆盖率作为准确率指标。
+## 模型历史与物理存储
 
-## 3. 参数配置接口 (Configuration Interface)
+压缩改变后续模型可见的历史视图。JSONL 采用追加式存储，旧物理记录仍可用于归档、显示投影和追溯；不能据此推断磁盘立刻变小。可选 SQLite 历史后端与默认 JSONL 的物理维护方式也不同。
 
-系统暴露 `CompressionConfig` 接口，支持灵活配置：
-```typescript
-interface CompressionConfig {
-  targetAccuracy: number;       // 目标准确率阈值，默认 0.8 (80%)
-  minCompressionRatio: number;  // 最小压缩比，默认 0.1
-  maxCompressionRatio: number;  // 最大压缩比，默认 0.9
-  strategy: 'extractive' | 'keyword'; // 默认采用提取式
-  maxRetries: number;           // 动态调节最大重试次数，默认 3
-}
-```
+大正文的外置压缩 blob、JSONL 冷归档、终态协作维护记录瘦身是存储功能，不是模型上下文压缩。它们的维护入口见 [存储维护](operations/session-storage-maintenance.md)。
 
-## 4. 准确率评估方法与调优指南 (Tuning Guide)
+## 质量与成本边界
 
-### 准确率评估方法
-1. **测试集准备:** 准备 10-20 段真实的 LLM 历史对话数据。
-2. **指标计算:** 运行测试脚本，统计平均压缩比 (Average Compression Ratio) 和平均准确率 (Average Accuracy)。
-3. **人工抽样:** 抽取相似度在 75%-85% 之间的样本进行人工阅读，验证核心意图是否丢失。
+摘要会消耗模型调用，并可能丢失细节。目前没有运行时 TF-IDF/TextRank 重要性评分、Jaccard 语义准确率检测或“至少 80% 保真”的保证。生成摘要与保留近期合法消息是实际策略；需要原文时应使用可授权的历史查询，而不把摘要视为完整归档。
 
-### 调优指南 (Tuning)
-- **如果准确率过低 (< 80%):**
-  1. 提高 `minCompressionRatio`，强制保留更多原始句子。
-  2. 调整打分函数，减少对长句的过度惩罚。
-  3. 增加停用词表，去除无意义虚词对 Jaccard 分母的干扰。
-- **如果压缩效果不明显 (压缩率 > 0.8):**
-  1. 降低 `targetAccuracy` 至 0.7，允许损失部分边缘细节。
-  2. 切换策略为 `keyword` 提取。
+主代理与执行子代理共用 ReAct 的预算和压缩逻辑。子代理复用合适上下文可减少重新发现成本，但不会绕过窗口限制或免除再次摘要。
+
+## 对应验证
+
+相关测试位于 [历史测试](../src/storage/conversation/__tests__/)、[循环测试](../src/core/agent-loop/__tests__/) 和 [上下文工具测试](../src/core/utils/__tests__/model-context.test.ts)。本次为源码与文档核对，未重新执行模型调用或宣称语义质量指标。

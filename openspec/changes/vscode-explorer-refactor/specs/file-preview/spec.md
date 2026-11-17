@@ -1,5 +1,9 @@
 ## ADDED Requirements
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../../../docs/README.md)；文档状态见[全量清单](../../../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 ### Requirement: 图片预览器
 系统 SHALL 对扩展名为 jpg、jpeg、png、gif、webp、svg、bmp、ico 的文件在编辑器区域以图片预览模式打开，提供缩放（鼠标滚轮/±按钮）、旋转（90°顺时针/逆时针）、还原（1:1 和适应窗口）操作。
 

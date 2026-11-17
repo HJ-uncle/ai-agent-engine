@@ -58,11 +58,11 @@ scripts/start-server.sh --project-dir /path/to/project
 **Claude Code (Windows):**
 ```bash
 # Windows auto-detects and uses foreground mode, which blocks the tool call.
-# Use run_in_background: true on the run_command tool call so the server
+# Use run_in_background: true on the Bash tool call so the server
 # survives across conversation turns.
 scripts/start-server.sh --project-dir /path/to/project
 ```
-When calling this via the `run_command` tool, set `run_in_background: true`. Then read `$STATE_DIR/server-info` on the next turn to get the URL and port.
+On agent-engine, the equivalent is `execute_cmd({command: "bash", args: ["scripts/start-server.sh", "--project-dir", "/path/to/project"], background: true})` from the skill directory, when Bash is available and authorized. `command` is the program only; `background` is the engine parameter. Then read the returned session's `server-info` file to get the URL and port.
 
 **Codex:**
 ```bash

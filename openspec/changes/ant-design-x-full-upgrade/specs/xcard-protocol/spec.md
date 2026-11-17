@@ -1,5 +1,9 @@
 ## ADDED Requirements
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../../../docs/README.md)；文档状态见[全量清单](../../../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 ### Requirement: 后端 A2UI 卡片帧生成
 后端 SSE sink SHALL 处理 `\x00__card__` 前缀的 chunk，将其解析为 A2UI JSON 并以 `{"card": {...}}` 格式推送给前端。
 

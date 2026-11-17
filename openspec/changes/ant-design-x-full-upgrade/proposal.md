@@ -1,5 +1,9 @@
 ## Why
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../docs/README.md)；文档状态见[全量清单](../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 当前桌面客户端使用 `react-markdown` 进行内容渲染，手写 SSE 解析钩子管理对话流，没有结构化卡片协议，技能(Skill)返回格式也不规范。Ant Design X 生态（`@ant-design/x`、`@ant-design/x-markdown`、`@ant-design/x-card`、`@ant-design/x-sdk`、`@ant-design/x-skill`）已提供完整的 AI 应用工具链，全面升级可显著减少样板代码、获得更好的流式渲染性能，并让 Agent 具备返回可交互动态卡片的能力。
 
 ## What Changes

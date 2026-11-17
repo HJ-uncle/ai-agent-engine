@@ -25,7 +25,7 @@ If CLAUDE.md, GEMINI.md, or AGENTS.md says "don't use TDD" and a skill says "alw
 
 ## How to Access Skills
 
-**On agent-engine (this host):** Use the `get_skill` tool (powered by `skillsRegistry`). When you invoke a skill, its content is loaded and presented to you — follow it directly. Never use `read_file` / `smart_read` on skill files; they are meant to be discovered through `list_skills` first and then fetched via `get_skill` by name.
+**On agent-engine (this host):** Use the `get_skill` tool (powered by `skillsRegistry`). When you invoke a skill, its content is loaded and presented to you — follow it directly. Never use `read_file` on skill files; they are meant to be discovered through `list_skills` first and then fetched via `get_skill` by name.
 
 ## Interaction Rule — EXTREMELY IMPORTANT
 
@@ -38,7 +38,7 @@ If CLAUDE.md, GEMINI.md, or AGENTS.md says "don't use TDD" and a skill says "alw
 
 ## Platform Adaptation
 
-The bundled reference table in `references/agent-engine-tools.md` maps every Claude Code tool alias you might still see in skill files to its agent-engine equivalent (e.g. `run_command`, `read_file`, `write_file`, `subagent`, `grep`, `glob`, `edit_file`, `todo_create` / `todo_update`, `web_fetch`, `web_search`, `get_skill`). If a skill mentions a name that doesn't match any registered tool, translate through that table before acting.
+The bundled reference table in [references/agent-engine-tools.md](references/agent-engine-tools.md) maps Claude Code tool aliases to their available agent-engine equivalents (e.g. `execute_cmd`, `read_file`, `write_file`, `subagent`, `grep`, `glob`, `edit_file`, `plan_update`, `web_fetch`, `get_skill`) and identifies aliases without a universal built-in equivalent. If a skill mentions a name that doesn't match any registered tool, translate through that table before acting.
 
 # Using Skills
 
@@ -56,7 +56,7 @@ digraph skill_flow {
     "Invoke get_skill tool" [shape=box];
     "Announce: 'Using [skill] to [purpose]'" [shape=box];
     "Has checklist?" [shape=diamond];
-    "Create todo_create entry per item" [shape=box];
+    "Update checklist with plan_update" [shape=box];
     "Follow skill exactly" [shape=box];
     "Respond (including clarifications)" [shape=doublecircle];
 
@@ -70,9 +70,9 @@ digraph skill_flow {
     "Might any skill apply?" -> "Respond (including clarifications)" [label="definitely not"];
     "Invoke get_skill tool" -> "Announce: 'Using [skill] to [purpose]'";
     "Announce: 'Using [skill] to [purpose]'" -> "Has checklist?";
-    "Has checklist?" -> "Create todo_create entry per item" [label="yes"];
+    "Has checklist?" -> "Update checklist with plan_update" [label="yes"];
     "Has checklist?" -> "Follow skill exactly" [label="no"];
-    "Create todo_create entry per item" -> "Follow skill exactly";
+    "Update checklist with plan_update" -> "Follow skill exactly";
 }
 ```
 

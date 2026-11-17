@@ -1,5 +1,9 @@
 ## Why
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../../docs/README.md)；文档状态见[全量清单](../../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 `multi-agent-console` 当前采用 VSCode 桌面布局（48px Activity Bar + 可拖拽 Sidebar + 多窗分屏 + Monaco 编辑器 + xterm 终端），在移动端浏览器（H5）上完全无法正常使用：横向三栏挤成一团、字号/点击区过小、所有面板基于鼠标拖拽交互。后续计划用 Capacitor / RN WebView 套壳打包到移动端原生 App，因此需要一套同代码、同构建的响应式 H5 适配方案，让同一份代码在桌面 ≥1024px 维持现有 VSCode 形态，在移动端 <768px 切换为单面板 + 底部 Tab + 抽屉的移动形态。
 
 ## What Changes

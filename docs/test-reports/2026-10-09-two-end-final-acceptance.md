@@ -1,5 +1,9 @@
 # 两端同步与五会话开发的最终验收记录
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../README.md)；文档状态见[全量清单](../documentation-inventory.md)。状态标注：2026-11-17。
+
+
 ## 当前状态（2026-10-09）
 
 引擎、SDK、客户端内置引擎已编译和同步，引擎分页修复版全量回归通过。正式 R3、R4 都 **未通过**：各 49/50 阶段合格。R4 终态客户端历史恢复通过，两个项目在正式轮结束后的独立修复源码上通过浏览器 / HTTP 验收。修复后的结果不能倒算为原 Agent 轮次成功。
@@ -111,7 +115,7 @@ copied replay `replay-20261009T133202395Z-TAwmA9` 在第二个会话发现归档
 
 已修为先归一化正整数再计算全部边界，非法 / 溢出参数返回明确业务失败；数值调用和无分页读取兼容。真实 Fastify HTTP query 六页完整恢复 1158 行，无漏行 / 重复，边界与非法参数三专项通过。新源码全量 131 文件、1348 passed、1 已有 Windows 平台 skip、0 fail；证据 `.tmp/final-engine-pagination-fixed-20261009.json`。旧冻结复现 `.tmp/pagination-original-frozen-20261009.json`，旧 TGZ 保留 `release/archive/agent-engine-2.0.0-win32-x64-8b7556358c69.tgz`。等待当前客户端旧冻结全量结束才重编 dist / TGZ / stage，保证每轮只用一代产物。
 
-AUTH_ENABLED=true 多租户 Cron 内部派发仍有明确设计缺口。需可信 dispatcher 绑定 job.tenantId 及同租户 session / agent / model / workspace，完成跨租户负向验收。单机 token 修复没有绕过账户认证。详见 `2026-10-09-two-end-runtime-sync.md`。
+AUTH_ENABLED=true 多租户 Cron 内部派发仍有明确设计缺口。需可信 dispatcher 绑定 job.tenantId 及同租户 session / agent / model / workspace，完成跨租户负向验收。单机 token 修复没有绕过账户认证。当前调度与鉴权边界见[运行指南](../runtime-guide.md)。
 
 ### 新冻结包、真实历史恢复与 R4 启动
 

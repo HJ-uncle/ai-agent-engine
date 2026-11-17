@@ -1,5 +1,9 @@
 ## Context
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../docs/README.md)；文档状态见[全量清单](../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 DeepSeek 已集成到 agent-engine 的 `DeepSeekAdapter` 中，KV Cache / Reasoning Token 等专有指标已在后端解析并透传到前端展示。但目前存在三个主要缺口：
 1. ChatArea.tsx 中成本估算硬编码了 `¥0.4/M` 的差价，在折扣期结束后无法自动更正
 2. 没有余额查询能力，Agent 多轮调用过程中可能因余额不足（402）导致中途中断，UI 无有意义的错误提示

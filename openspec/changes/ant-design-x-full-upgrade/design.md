@@ -1,5 +1,9 @@
 ## Context
 
+<!-- documentation-status: historical -->
+> 历史资料：保留原有调研、设计或验收条件，不代表当前版本全部行为或本轮测试结果。现行操作与源码入口见[文档首页](../../../docs/README.md)；文档状态见[全量清单](../../../docs/documentation-inventory.md)。状态标注：2026-11-17。
+
+
 项目是 Electron + Vite + React + TypeScript 桌面客户端，后端是 Node.js + Fastify + libSQL。当前前端手写 SSE Reader 解析对话流（`App.tsx` 约 600 行），使用 `react-markdown` 渲染，无动态卡片能力。Ant Design X 2.5 已发布完整生态，本次升级目标是将其全部集成。
 
 ## Goals / Non-Goals

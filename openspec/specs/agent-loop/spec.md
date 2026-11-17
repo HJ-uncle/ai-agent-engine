@@ -1,83 +1,82 @@
-# agent-loop Specification
+# Agent Loop Specification
 
 ## Purpose
-TBD - created by archiving change ai-agent-engine. Update Purpose after archive.
+
+Describe the implemented ReAct runtime, request budgeting, collaboration and finalization. Audited against current source on 2026-11-17; this specification does not promise a separate JSON-plan/reflection executor.
+
 ## Requirements
-### Requirement: ReAct Loop Execution
 
-The Agent engine SHALL implement the ReAct (Reasoning + Acting) loop pattern, cycling through Think → Act → Observe phases until a terminal condition is reached.
+### Requirement: ReAct execution and admission
 
-#### Scenario: Successful ReAct iteration within max iterations
-- **WHEN** an Agent is invoked with a user message and `maxIterations` is set to N
-- **THEN** the engine SHALL execute up to N Think→Act→Observe cycles before returning a final answer
+The engine SHALL admit a request with trusted tenant/session/workspace identity and execute model/tool iterations through ReAct. A tool result SHALL be recorded before the next model observation. Execution SHALL respect cancellation, pending input/approval and terminal state.
 
-#### Scenario: Max iterations exceeded
-- **WHEN** the Agent has completed N iterations without reaching a final answer and `maxIterations` equals N
-- **THEN** the engine SHALL stop the loop and return an error response with code `MAX_ITERATIONS_EXCEEDED` and include the last observation in the error payload
+#### Scenario: Ordinary product request
 
-#### Scenario: Terminal condition reached before max iterations
-- **WHEN** the LLM produces a final answer token (no tool call) during the Think phase
-- **THEN** the engine SHALL exit the loop immediately and return the final answer without executing further iterations
+- **WHEN** POST /chat starts a normal root run
+- **THEN** it SHALL use an unbounded cumulative RequestBudget and no default iteration cap
+- **AND** explicit limits passed to lower-level/internal callers SHALL still be honored
+- **AND** legacy MAX_ITERATIONS/TOKEN_BUDGET settings SHALL NOT be described as effective product limits.
 
-#### Scenario: Act phase tool invocation
-- **WHEN** the Think phase produces a tool call
-- **THEN** the engine SHALL invoke the named tool via ToolRegistry and record the result as the next Observe input
+### Requirement: Complete request budget
 
----
+The loop SHALL budget system instructions, tools, history, dynamic request context and output reservation against the effective model window.
 
-### Requirement: Plan Mode Support
+#### Scenario: Compaction threshold reached
 
-The Agent engine SHALL support a Plan Mode in which it first generates a multi-step plan as a JSON structure and then executes each step sequentially.
+- **WHEN** the complete estimated request reaches its threshold
+- **THEN** the loop SHALL first attempt old tool-output microcompaction, then bounded summary passes if necessary
+- **AND** preserve valid tool call/result boundaries and re-read newly admitted messages before sending
+- **AND** reject a stale summary commit when the underlying history revision changed.
 
-#### Scenario: Plan generation
-- **WHEN** Plan Mode is enabled and the Agent receives a complex task
-- **THEN** the engine SHALL call the LLM once to generate a JSON plan containing an ordered array of steps, each with `stepId`, `description`, and `toolName`
+The default context policy is 268000 tokens, limited by known model capacity and explicit request policy. The default trigger ratio is 0.92 (positive override capped at 0.95); OSM max uses 0.7. Output reservation is not a universal generation-token cap.
 
-#### Scenario: Sequential plan execution
-- **WHEN** a plan has been generated with M steps
-- **THEN** the engine SHALL execute steps in order from index 0 to M-1, passing the output of step N as context input to step N+1
+### Requirement: Reusable child execution
 
-#### Scenario: Dynamic plan adjustment
-- **WHEN** a step execution returns an unexpected result that invalidates subsequent steps
-- **THEN** the engine SHALL re-invoke the LLM to regenerate the remaining plan steps and continue execution with the revised plan
+Built-in research/executor/general roles SHALL share the runtime loop while narrowing capabilities for their assigned purpose. Research SHALL prohibit commands/scripts, mutations and index creation.
 
-#### Scenario: Plan serialization
-- **WHEN** Plan Mode generates a plan
-- **THEN** the plan JSON MUST be stored in the session context and retrievable via `getSessionPlan(ctx)`
+#### Scenario: Follow-up to a reusable child
 
----
+- **WHEN** the directory reports a resumable completed/interrupted child and a valid follow-up is admitted
+- **THEN** continuation SHALL use its stored context and current authoritative execution identity
+- **AND** a currently active child SHALL receive durable messages instead of a duplicate run.
+- **WHEN** the process restarts
+- **THEN** stored child runs SHALL NOT automatically replay external effects or be joined as currently owned live producers.
 
-### Requirement: Agent Reflection Mechanism
+Default parent-session concurrency is 5, capped at 16 by configuration. No implicit 10-minute child deadline is guaranteed. A queued message is not proof of consumption; terminal completion is not proof of success.
 
-After completing plan execution the Agent SHALL evaluate the overall result and, if the goal is not met, SHALL trigger re-planning.
+### Requirement: Evidence-based final results
 
-#### Scenario: Successful reflection — goal achieved
-- **WHEN** all plan steps have been executed and the reflection LLM call determines the goal is achieved
-- **THEN** the engine SHALL return the final result without re-planning
+The loop SHALL distinguish provisional text, tool outcomes, child reports and published final attachments. Final artifact admission SHALL validate source identity and limits.
 
-#### Scenario: Reflection triggers re-planning
-- **WHEN** all plan steps have been executed and the reflection LLM call determines the goal is NOT fully achieved
-- **THEN** the engine SHALL generate a new plan for the remaining sub-goal and execute it, up to a configurable `maxReflectionRounds` limit
+#### Scenario: Artifact delivery
 
-#### Scenario: Max reflection rounds exceeded
-- **WHEN** `maxReflectionRounds` re-planning cycles have been completed and the goal is still not achieved
-- **THEN** the engine SHALL return a partial result with a `REFLECTION_LIMIT_REACHED` warning flag
+- **WHEN** deliver_files publishes root results
+- **THEN** at most 16 files, 32 MiB each and 128 MiB total SHALL be admitted by current final-result limits
+- **AND** child report_artifacts SHALL remain subordinate evidence for root review.
 
----
+### Requirement: Auxiliary orchestration boundaries
 
-### Requirement: Token Budget Enforcement
+Cron and Flow SHALL be distinguished from reusable collaboration subagents and the generic task queue. Their source-specific lifecycle and capability limits SHALL not be replaced by an assumption of universal durable execution.
 
-The Agent loop SHALL monitor cumulative token usage and stop execution when the configured `tokenBudget` is exhausted.
+#### Scenario: Authenticated cron deployment
 
-#### Scenario: Token budget not exhausted
-- **WHEN** cumulative `promptTokens + completionTokens` remains below `tokenBudget` after each LLM call
-- **THEN** the engine SHALL continue the loop normally
+- **WHEN** request authentication is required
+- **THEN** cron capabilities SHALL report authenticated dispatch unsupported
+- **AND** only explicitly paused configurations can be saved without granting execution.
+- **WHEN** startup finds an unadmitted prior cron claim
+- **THEN** it SHALL mark the occurrence interrupted rather than replay it.
 
-#### Scenario: Token budget exhausted mid-loop
-- **WHEN** cumulative token usage meets or exceeds `tokenBudget` after an LLM call
-- **THEN** the engine SHALL immediately stop the loop, return all output produced so far, and include a `truncated: true` flag in the response metadata
+#### Scenario: Flow DAG execution
 
-#### Scenario: Token budget configured at zero or unlimited
-- **WHEN** `tokenBudget` is set to `0` or not provided
-- **THEN** the engine SHALL apply no token limit and run until a terminal condition or `maxIterations` is reached
+- **WHEN** a valid DAG is submitted
+- **THEN** nodes SHALL execute by topological level, with siblings settling before a failed level blocks later levels.
+- **WHEN** a Flow stop request finds an active entry in the current tenant
+- **THEN** it SHALL signal cancellation; the response is not proof that every side effect has stopped.
 
+Current Flow state/stop lookup is in process memory and removed when the SSE handler finishes. There is no durable DAG resume service. Node model/prompt/systemPrompt are consumed, but accepted resource bindings and top-level cwd/security/execution fields are not fully wired by the executor. This limitation must remain visible to callers.
+
+[Runtime scheduling details](../../../docs/runtime-guide.md#调度队列与流程), [cron scheduler](../../../src/scheduler/cron-scheduler.ts), [cron capabilities](../../../src/scheduler/cron-service.ts), [Flow executor](../../../src/api/http/routes/flows/flow-executor.ts), [Flow route](../../../src/api/http/routes/flows/flow-routes.ts).
+
+## Source map
+
+[ReAct](../../../src/core/agent-loop/react.ts), [chat admission](../../../src/api/http/routes/chat.ts), [budget](../../../src/core/context-budget.ts), [child runner](../../../src/core/subagent/runner.ts), [team tools](../../../src/tools/subagent/team-tools.ts), [final result](../../../src/core/final-result.ts). Corresponding tests live beside these modules. This documentation update did not run live model sessions.

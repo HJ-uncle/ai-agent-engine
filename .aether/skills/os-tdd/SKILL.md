@@ -22,7 +22,7 @@ write a test first, the change is either (a) not a behaviour change
 ## Chinese 预读
 
 先写失败的测试（RED），再写最小实现让它通过（GREEN），最后重构
-（REFACTOR）。每个循环一次提交粒度的变更。用 `run_command` 跑测试，
+（REFACTOR）。每个循环一次提交粒度的变更。用 `execute_cmd` 跑测试，
 用 `code_diagnose` 做静态检查。
 
 ## The Cycle (one task from the plan = one or more cycles)
@@ -32,7 +32,7 @@ write a test first, the change is either (a) not a behaviour change
 1. Open (or `write_file`) the test file next to the production file.
 2. Describe one specific behaviour. One assertion is ideal; two is OK;
    more is usually wrong.
-3. `run_command` the test — it **MUST** fail with a useful message.
+3. `execute_cmd` the test — it **MUST** fail with a useful message.
    "Cannot find module" is **not** a valid RED; the test must actually
    run and assert something.
 4. If it passes immediately, your test is wrong or the behaviour
@@ -43,7 +43,7 @@ write a test first, the change is either (a) not a behaviour change
 1. Write the minimum code to make the test pass. Literally the minimum
    — hardcode return values if that's what passes one test. More tests
    will force the logic.
-2. `run_command` the test — it must pass.
+2. `execute_cmd` the test — it must pass.
 3. Run the **full** test suite — nothing else may have broken.
 
 ### REFACTOR — clean under green
@@ -54,11 +54,11 @@ write a test first, the change is either (a) not a behaviour change
 
 ## Tool recipes
 
-- **Run one test file**: `run_command("npm test -- path/to/file.test.ts")`
+- **Run one test file**: `execute_cmd({command: "npm", args: ["test", "--", "path/to/file.test.ts"]})`
   (adapt to the repo's actual runner; `grep` package.json first).
-- **Run all tests**: `run_command("npm test")` or equivalent.
-- **Static diagnostics**: `code_diagnose({ files: ["src/foo.ts"] })`.
-- **Inspect failure**: `smart_read` the test output if large; do not
+- **Run all tests**: `execute_cmd({command: "npm", args: ["test"]})` or equivalent.
+- **Static diagnostics**: `code_diagnose({filePath: "src/foo.ts"})` for each supported file.
+- **Inspect failure**: page command output with `command_output`, or use `read_file` for a saved log; do not
   guess from truncated tails.
 
 ## Red flags — stop and re-think
@@ -76,7 +76,7 @@ write a test first, the change is either (a) not a behaviour change
 When the task (all RED/GREEN/REFACTOR cycles for that task in the
 plan) is done:
 
-- Update the todo to `done`.
+- Update the plan step to `completed` with `plan_update` (legacy `todo_update` uses `done`).
 - Move to the next task in the plan.
 - If the entire plan is complete, switch to
-  `superpower-verification-before-completion`.
+  `os-verification-before-completion`.

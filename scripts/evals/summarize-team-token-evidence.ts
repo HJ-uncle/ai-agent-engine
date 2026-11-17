@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const campaign = path.resolve(process.argv[2] || '.e2e-tmp/team-token-20261109/results')
-const output = path.resolve(process.argv[3] || 'docs/research/team-token-optimization-measurements-2026-11-09.json')
+const output = path.resolve(process.argv[3] || '.e2e-tmp/team-token-20261109/team-token-optimization-measurements-2026-11-09.json')
 const sum = (values: number[]) => values.reduce((total, value) => total + value, 0)
 const cases: Record<string, unknown>[] = []
 const startupFailures: Record<string, unknown>[] = []
