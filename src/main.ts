@@ -32,7 +32,7 @@ if (typeof (Promise as any).withResolvers === 'undefined') {
 // -------------------------------------------
 
 import { buildServer } from './api/http/index.js'
-import { logger } from './observability/index.js'
+import { logger, observeShutdownStage } from './observability/index.js'
 import { skillsRegistry } from './skills/index.js'
 import { initDb, closeDb, getDb } from './storage/sqlite/db.js'
 import { initMemoryDb, closeMemoryDb, MEMORY_SCHEMA, MemoryConsolidator } from './storage/memory/index.js'
@@ -130,20 +130,24 @@ async function main() {
 
     // 优雅关闭：停止文件监听
     let shutdownPromise: Promise<void> | undefined
-    const shutdown = (signal: string): Promise<void> => shutdownPromise ??= (async () => {
-      logger.info({ signal }, 'Shutting down...')
-      consolidator.stopDaemon()
-      skillsRegistry.stop()
-      await server.close()
-      await auditMaintenance.stop()
-      await historyMaintenance.stop()
-      const receipts = await Promise.all([closeMemoryDb(), closeDb()])
+    const shutdown = (): Promise<void> => shutdownPromise ??= observeShutdownStage(logger, 'engine.shutdown', async () => {
+      await observeShutdownStage(logger, 'engine.consolidator.stop', () => consolidator.stopDaemon())
+      await observeShutdownStage(logger, 'engine.skills.stop', () => skillsRegistry.stop())
+      await observeShutdownStage(logger, 'http.server.close', () => server.close())
+      await observeShutdownStage(logger, 'maintenance.audit.stop', () => auditMaintenance.stop())
+      await observeShutdownStage(logger, 'maintenance.history.stop', () => historyMaintenance.stop())
+      const receipts = await Promise.all([
+        observeShutdownStage(logger, 'sqlite.memory.close', () => closeMemoryDb()),
+        observeShutdownStage(logger, 'sqlite.main.close', () => closeDb()),
+      ])
       const unhealthy = receipts.filter(receipt => receipt && !receipt.healthy)
       if (unhealthy.length) throw new Error('Database cleanup unknown: ' + JSON.stringify(unhealthy))
+    }).then(() => {
       process.exit(0)
-    })()
-    const requestShutdown = (signal: string) => void shutdown(signal).catch(error => {
-      logger.error({ error, signal }, 'Shutdown failed; preserving nonzero exit and unknown cleanup evidence')
+    })
+    const requestShutdown = (signal: string) => void shutdown().catch(() => {
+      // Stage outcomes identify the failed join without logging exception data.
+      logger.error({ signal }, 'Shutdown failed; preserving nonzero exit and unknown cleanup evidence')
       process.exitCode = 1
     })
     process.once('SIGINT', () => requestShutdown('SIGINT'))

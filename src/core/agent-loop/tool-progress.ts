@@ -27,8 +27,61 @@ function canonical(value: unknown): unknown {
   return value
 }
 
+function record(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+/** Only v1 command transport identities are incidental; logs and file versions remain evidence. */
+function commandEvidence(output: string): string {
+  let value: unknown
+  try { value = JSON.parse(output) } catch { return output }
+  if (!record(value) || value.type !== 'command_result' || value.version !== 1
+    || typeof value.jobId !== 'string' || !value.jobId
+    || !['succeeded', 'failed', 'cancelled', 'timed_out', 'interrupted'].includes(String(value.status))
+    || !(value.exitCode === null || Number.isSafeInteger(value.exitCode))
+    || !(value.signal === null || typeof value.signal === 'string')
+    || typeof value.truncated !== 'boolean' || typeof value.hasMore !== 'boolean'
+    || !['nextCursor', 'nextOffset', 'earliestCursor'].every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0)
+    || !Array.isArray(value.entries) || !value.entries.every(entry => record(entry)
+      && Number.isSafeInteger(entry.seq) && Number(entry.seq) >= 0
+      && ['stdout', 'stderr'].includes(String(entry.stream)) && typeof entry.text === 'string')) return output
+  const normalized = { ...value }
+  delete normalized.jobId
+  // A complete foreground receipt starts at entry one. Pipe chunk boundaries
+  // vary between identical executions; coalesce adjacent chunks while retaining
+  // stdout/stderr order. Partial/tail/unknown entries retain their exact cursors.
+  if (!value.truncated && !value.hasMore && value.nextOffset === 0 && value.earliestCursor === 0
+    && value.tail === undefined && value.nextCursor === value.entries.length
+    && value.entries.every((entry, index) => entry.seq === index + 1
+      && Object.keys(entry).every(key => ['seq', 'stream', 'text'].includes(key)))) {
+    const entries: Array<{ stream: string; text: string }> = []
+    for (const entry of value.entries) {
+      const previous = entries.at(-1)
+      if (previous && previous.stream === entry.stream) previous.text += entry.text
+      else entries.push({ stream: entry.stream, text: entry.text })
+    }
+    normalized.entries = entries
+    delete normalized.nextCursor
+  }
+  if (value.fileChanges !== undefined) {
+    const changes = value.fileChanges
+    if (!record(changes) || !Array.isArray(changes.changes) || !changes.changes.every(change => record(change)
+      && typeof change.path === 'string' && typeof change.kind === 'string'
+      && (change.id === undefined || typeof change.id === 'string'))) return output
+    normalized.fileChanges = { ...changes, changes: changes.changes.map(change => {
+      const evidence = { ...change }
+      delete evidence.id
+      return evidence
+    }) }
+  }
+  // Never recursively drop fields: programs may print jobId/timing business data,
+  // and unknown receipt fields may carry new evidence. The durable receipt is untouched.
+  return JSON.stringify(canonical(normalized))
+}
+
 /** Builtin read instrumentation is not new file evidence. Keep the model-visible result untouched. */
 function evidenceOutput(call: Pick<ToolCall, 'name'>, result: ToolResult): string {
+  if (call.name === 'execute_cmd') return commandEvidence(result.output)
   if (call.name !== 'read_file' || result.status !== 'succeeded') return result.output
   const monitor = /^(\[读取监控\] 耗时: )(\d+(?:\.\d+)?)(ms \| 原始大小: \d+B \| 压缩后: \d+B \| 压缩率: -?\d+(?:\.\d+)?%)\r?\n\[文件版本\] ([^\r\n]+)\r?\n/.exec(result.output)
   if (!monitor) return result.output

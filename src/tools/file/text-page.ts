@@ -1,4 +1,5 @@
 import type { ToolResult } from '../../core/agent-context/index.js'
+import { FULL_READ_RANGE_CONFLICT, FULL_READ_RANGE_MESSAGE, hasFullReadRangeConflict } from './read-mode.js'
 
 interface TextPageOptions {
   text: string
@@ -26,6 +27,8 @@ export function readTextPage(options: TextPageOptions): ToolResult {
     return { success: false, error: code, output: full.length <= maxChars ? full : short.length <= maxChars ? short : maxChars >= 2 ? '{}' : '0',
       metadata: { ...version, code, fileMutationApplied: false } }
   }
+  if (hasFullReadRangeConflict(mode, options.startLine, options.endLine, options.startColumn))
+    return fail(FULL_READ_RANGE_CONFLICT, FULL_READ_RANGE_MESSAGE)
   if ([options.startLine, options.endLine, options.startColumn].some(value => value !== undefined && (!Number.isSafeInteger(value) || value < 1))) {
     return fail('INVALID_READ_RANGE', 'start_line, end_line and start_column must be positive safe integers.')
   }

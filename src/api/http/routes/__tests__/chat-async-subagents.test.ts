@@ -16,6 +16,7 @@ import { chatRoutes } from '../chat.js'
 import { COLLABORATOR_LIMITS } from '../../../../core/subagent/collaborators.js'
 import { WorkspaceManager, workspaceManager } from '../../../../workspace/index.js'
 import * as toolFactory from '../../../../tools/registry-factory.js'
+import { userAdmissionDigest } from '../../../../storage/root-admission/index.js'
 
 const headers = { 'x-aether-tool-profile': 'code', 'x-aether-run-lifetime': 'durable', 'x-aether-subagent-protocol': '2' }
 const barrier = () => { let release!: () => void; const promise = new Promise<void>(yes => { release = yes }); return { promise, release } }
@@ -74,7 +75,7 @@ afterEach(async () => {
 })
 
 describe('actual chat collaborator schema', () => {
-  it('initializes project context and real relative writes from the persisted binding after paths are omitted', async () => {
+  it.each(['omitted', 'empty', 'stale', 'keyed'] as const)('initializes project context, root projection and relative writes from the persisted binding with %s paths', async pathMode => {
     const selected = path.join(directory, 'selected-project')
     fs.mkdirSync(selected)
     fs.writeFileSync(path.join(selected, 'AE.md'), 'BOUND_PROJECT_CONTEXT_MARKER: read only the selected project.\n')
@@ -87,6 +88,7 @@ describe('actual chat collaborator schema', () => {
     vi.spyOn(workspaceManager, 'getPaths').mockImplementation(ctx => manager.getPaths(ctx))
     vi.spyOn(workspaceManager, 'getWorkingDirectory').mockImplementation(ctx => manager.getWorkingDirectory(ctx))
     vi.spyOn(workspaceManager, 'getBindingSnapshot').mockImplementation(ctx => manager.getBindingSnapshot(ctx))
+    vi.spyOn(workspaceManager, 'getBoundDirectory').mockImplementation(ctx => manager.getBoundDirectory(ctx))
     vi.spyOn(workspaceManager, 'bindingReadGuard').mockImplementation((ctx, expected) => manager.bindingReadGuard(ctx, expected))
     vi.spyOn(workspaceManager, 'resolveSafePath').mockImplementation((ctx, value) => manager.resolveSafePath(ctx, value))
     const preparedRoots: Array<string | undefined> = []
@@ -103,8 +105,16 @@ describe('actual chat collaborator schema', () => {
         } else yield { done: true, content: '草稿已保存。' }
       } })
     await app.register(chatRoutes)
+    const payload: Record<string, unknown> = { sessionId: 'bound-workspace-chat', message: '在当前项目写入草稿',
+      ...(pathMode === 'omitted' ? {} : { workspacePaths: pathMode === 'stale' ? [path.join(directory, 'stale-hint')] : [] }) }
+    if (pathMode === 'keyed') {
+      const { namespace } = await rootRunStore.userAdmissionContext('default', 'bound-workspace-chat')
+      const selector = { protocolVersion: 1 as const, namespace, owner: 'code' as const, predecessor: null }
+      payload.admission = { ...selector, requestKey: 'bound-workspace-admission',
+        bodyDigest: userAdmissionDigest(payload, { toolProfile: 'code', runLifetime: 'durable', subagentProtocol: 2 }, selector) }
+    }
     const response = await app.inject({ method: 'POST', url: '/chat', headers,
-      payload: { sessionId: 'bound-workspace-chat', message: '在当前项目写入草稿', workspacePaths: [] } })
+      payload })
     expect(response.statusCode, response.body).toBe(200)
     expect(preparedRoots).toEqual([selected])
     expect(contexts[0]).toMatchObject({ projectRoot: selected, cwd: selected })
@@ -114,6 +124,41 @@ describe('actual chat collaborator schema', () => {
     expect(requestContexts[0]).toContain('"relativePathRoot":' + JSON.stringify(selected))
     expect(fs.readFileSync(path.join(selected, 'draft.md'), 'utf8')).toBe('BOUND_SHARED_DRAFT')
     expect(fs.existsSync(path.join(contexts[0].scratchDir!, 'draft.md'))).toBe(false)
+    const run = (await rootRunStore.latest('default', 'bound-workspace-chat'))!
+    expect(run.workspacePaths).toEqual([selected])
+    expect((await rootRunStore.get('default', run.runId))!.request.workspacePaths).toEqual([selected])
+    if (pathMode === 'keyed') {
+      expect(run.admissionReceipt?.bodyDigest).toBe((payload.admission as { bodyDigest: string }).bodyDigest)
+      const replay = await app.inject({ method: 'POST', url: '/chat', headers, payload })
+      expect(replay.statusCode, replay.body).toBe(200)
+      expect((await rootRunStore.list('default', 'bound-workspace-chat'))).toHaveLength(1)
+      expect(preparedRoots).toHaveLength(1)
+    }
+  })
+
+  it.each(['authenticated-hint', 'authenticated-scratch', 'local-scratch', 'local-project'] as const)('does not project implicit scratch or unauthorized hints as a project for %s', async mode => {
+    const sessionId = 'unbound-workspace-chat', selected = path.join(directory, 'requested-project')
+    fs.mkdirSync(selected)
+    vi.stubEnv('AUTH_ENABLED', mode.startsWith('local') ? 'false' : 'true')
+    vi.stubEnv('WORKSPACE_ROOT', path.join(directory, 'scratch'))
+    vi.stubEnv('AETHER_WORKSPACE_BINDINGS_FILE', path.join(directory, 'bindings.json'))
+    const manager = new WorkspaceManager(path.join(directory, 'scratch'))
+    vi.spyOn(workspaceManager, 'getPaths').mockImplementation(ctx => manager.getPaths(ctx))
+    vi.spyOn(workspaceManager, 'getWorkingDirectory').mockImplementation(ctx => manager.getWorkingDirectory(ctx))
+    vi.spyOn(workspaceManager, 'getBindingSnapshot').mockImplementation(ctx => manager.getBindingSnapshot(ctx))
+    vi.spyOn(workspaceManager, 'getBoundDirectory').mockImplementation(ctx => manager.getBoundDirectory(ctx))
+    vi.spyOn(workspaceManager, 'bindingReadGuard').mockImplementation((ctx, expected) => manager.bindingReadGuard(ctx, expected))
+    vi.spyOn(modelResolver, 'createAdapterFromResolved').mockReturnValue({ provider: 'fixture', model: 'root-scripted', countTokens: () => 0,
+      complete: vi.fn(), async *stream() { yield { done: true, content: '已完成。' } } })
+    await app.register(chatRoutes)
+    const response = await app.inject({ method: 'POST', url: '/chat', headers, payload: { sessionId, message: '确认当前工作区',
+      workspacePaths: mode.endsWith('hint') || mode.endsWith('project') ? [selected] : [] } })
+    expect(response.statusCode, response.body).toBe(200)
+    const run = (await rootRunStore.latest('default', sessionId))!
+    const expected = mode === 'local-project' ? [selected] : []
+    expect(run.workspacePaths).toEqual(expected)
+    expect((await rootRunStore.get('default', run.runId))!.request.workspacePaths).toEqual(expected)
+    expect(contexts[0].projectRoot).toBe(mode === 'local-project' ? selected : manager.getScratchDirectory({ tenantId: 'default', sessionId }))
   })
 
   it('preserves builtin role, independent instance key, task and description before dispatch', async () => {

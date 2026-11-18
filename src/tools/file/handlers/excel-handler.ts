@@ -9,11 +9,13 @@ import type { AgentContext } from '../../../core/agent-context/index.js'
 import type { FileHandler, ReadOptions, ReadResult } from './interface.js'
 import { cellValueToString } from '../utils.js'
 import { TextHandler } from './text-handler.js'
+import { assertFullReadRange } from '../read-mode.js'
 
 export class ExcelHandler implements FileHandler {
   extensions = ['.xlsx', '.xls', '.csv']
 
   async read(filePath: string, _ctx: AgentContext, options?: ReadOptions): Promise<ReadResult> {
+    assertFullReadRange(options?.mode, options?.startLine, options?.endLine)
     const mode = options?.mode || 'auto'
     const ext = path.extname(filePath).toLowerCase()
     // Delimited files are source text. Spreadsheet parsing changes quoting,

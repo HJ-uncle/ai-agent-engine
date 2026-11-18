@@ -1,14 +1,16 @@
 import fs from 'node:fs'
 import type { AgentContext } from '../../../core/agent-context/index.js'
 import type { FileHandler, ReadOptions, ReadResult } from './interface.js'
+import { assertFullReadRange } from '../read-mode.js'
 
 export class JsonHandler implements FileHandler {
   extensions = ['.json']
 
   async read(filePath: string, _ctx: AgentContext, options?: ReadOptions): Promise<ReadResult> {
+    assertFullReadRange(options?.mode, options?.startLine, options?.endLine)
     const raw = fs.readFileSync(filePath, 'utf-8')
     const mode = options?.mode || 'auto'
-    // Like TextHandler, full requests the whole document regardless of a range.
+    // Ranges describe the source; full without a range retains formatted JSON.
     if (mode !== 'full' && (options?.startLine !== undefined || options?.endLine !== undefined)) {
       if ([options.startLine, options.endLine].some(value => value !== undefined && (!Number.isSafeInteger(value) || value < 1)))
         throw new Error('start_line and end_line must be positive safe integers.')

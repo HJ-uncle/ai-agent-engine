@@ -1002,6 +1002,14 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
     // AE.md and context construction; scratch remains a separate output location.
     const { workspaceManager } = await import('../../../workspace/index.js')
     const preparingWorkspace = workspaceManager.bindingReadGuard({ tenantId, sessionId, workspacePaths })
+    // Project ownership follows the operator binding, not reconnect hints or
+    // the implicit scratch directory. Legacy no-auth callers may still select
+    // their project explicitly through workspacePaths.
+    const boundWorkspace = workspaceManager.getBoundDirectory({ tenantId, sessionId })
+    const admittedWorkspacePaths = boundWorkspace ? [preparingWorkspace.snapshot.root]
+      : process.env.AUTH_ENABLED === 'false' && workspacePaths?.length
+        ? [preparingWorkspace.snapshot.root, ...workspacePaths.slice(1)] : []
+    preparingWorkspace.assertCurrent()
     // Build tool registry（统一工厂，含所有内置工具 + MCP + Skills）
     // 把客户端透传的 inline 资源（桌面端本地 skill / mcp）一并注入，
     // 让 list_skills / get_skill / MCP 工具都能即时看到 + 调用。
@@ -1479,6 +1487,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
     try {
       admission = await (async () => {
       try {
+        preparingWorkspace.assertCurrent()
         if (continuation) {
           const accepted = await rootRunStore.continue(tenantId, continuation, continuationSubject, abortController.signal, registerRootPreparation)
           rootRun = accepted.run
@@ -1493,13 +1502,13 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
             kind: 'root', previousAttemptId: resumeRecord.attemptId, attemptId: rootRun.attemptId,
           }
         } else if (keyedAdmission) {
-          const accepted = await rootRunStore.createUserAdmission(tenantId, resolvedModel ?? ctx.modelName ?? '', workspacePaths ?? [],
-            { ...request.body, toolProfile, toolkits: selectedToolkits } as unknown as Record<string, unknown>, keyedAdmission, abortController.signal, registerRootPreparation, controllerSubjectFromRequest(request))
+          const accepted = await rootRunStore.createUserAdmission(tenantId, resolvedModel ?? ctx.modelName ?? '', admittedWorkspacePaths,
+            { ...request.body, workspacePaths: admittedWorkspacePaths, toolProfile, toolkits: selectedToolkits } as unknown as Record<string, unknown>, keyedAdmission, abortController.signal, registerRootPreparation, controllerSubjectFromRequest(request))
           rootRun = accepted.run
           if (accepted.duplicate) return 'duplicate' as const
         } else {
-          rootRun = await rootRunStore.create(tenantId, sessionId, resolvedModel ?? ctx.modelName ?? '', workspacePaths ?? [],
-            { ...request.body, toolProfile, toolkits: selectedToolkits } as unknown as Record<string, unknown>,
+          rootRun = await rootRunStore.create(tenantId, sessionId, resolvedModel ?? ctx.modelName ?? '', admittedWorkspacePaths,
+            { ...request.body, workspacePaths: admittedWorkspacePaths, toolProfile, toolkits: selectedToolkits } as unknown as Record<string, unknown>,
             request.body.automationRunId ? { runId: request.body.automationRunId, dispatchRequest: automationDispatchRequest,
               effectiveAgentId: effectiveAgentId ?? undefined, effectiveAgentName } : undefined, abortController.signal, registerRootPreparation, controllerSubjectFromRequest(request))
         }

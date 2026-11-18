@@ -1,10 +1,125 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ToolCall, ToolResult } from '../../agent-context/types.js'
-import { ToolProgressTracker, toolFailureLimit, waitingOnActiveWork } from '../tool-progress.js'
+import { MUTATION_REPETITION_PROMPT, ToolProgressTracker, toolFailureLimit, waitingOnActiveWork } from '../tool-progress.js'
 
 const read: ToolCall = { id: 'read', name: 'read_file', args: { path: 'shared.ts' } }
 const succeeded = (output: string): ToolResult => ({ success: true, status: 'succeeded', output })
 const failed = (output = 'invalid arguments'): ToolResult => ({ success: false, status: 'failed', output })
+
+describe('builtin command receipt evidence', () => {
+  const call: ToolCall = { id: 'command', name: 'execute_cmd', args: { command: 'node', args: ['--version'] } }
+  const receipt = (jobId: string, changes: Record<string, unknown> = {}) => ({
+    type: 'command_result', version: 1, jobId, status: 'succeeded', exitCode: 0, signal: null,
+    entries: [{ seq: 1, stream: 'stdout', text: 'v24.22.3\n' }],
+    nextCursor: 1, nextOffset: 0, earliestCursor: 0, truncated: false, hasMore: false, ...changes,
+  })
+  const observe = (tracker: ToolProgressTracker, jobId: string, changes: Record<string, unknown> = {}) =>
+    tracker.observe([call], [succeeded(JSON.stringify(receipt(jobId, changes)))])
+
+  it('recognizes unchanged command evidence with distinct job IDs without rewriting receipts or stopping execution', () => {
+    const tracker = new ToolProgressTracker(() => 'serial')
+    const results = ['one', 'two', 'three'].map(id => Object.freeze(succeeded(JSON.stringify(receipt(id)))))
+    expect(results.map(result => tracker.observe([call], [result]))).toEqual([0, 1, 2])
+    expect(tracker.hasCompletedProgress()).toBe(false)
+    expect(tracker.recoveryPrompt()).toContain(MUTATION_REPETITION_PROMPT)
+    expect(results.map(result => JSON.parse(result.output).jobId)).toEqual(['one', 'two', 'three'])
+    expect(toolFailureLimit('')).toBe(Infinity)
+  })
+
+  it('recognizes complete identical output despite pipe chunk boundaries without changing receipts', () => {
+    const tracker = new ToolProgressTracker(() => 'serial')
+    const chunks = [['v24.22.3\n'], ['v24.', '22.3\n'], ['v24', '.22.', '3\n']]
+    const results = chunks.map((parts, index) => Object.freeze(succeeded(JSON.stringify(receipt(String(index), {
+      entries: parts.map((text, offset) => ({ seq: offset + 1, stream: 'stdout', text })), nextCursor: parts.length,
+    })))))
+    expect(results.map(result => tracker.observe([call], [result]))).toEqual([0, 1, 2])
+    expect(tracker.recoveryPrompt()).toContain(MUTATION_REPETITION_PROMPT)
+    expect(results.map(result => JSON.parse(result.output).entries.length)).toEqual([1, 2, 3])
+  })
+
+  it.each([
+    ['partial page', { hasMore: true }], ['truncated page', { truncated: true }],
+    ['byte offset', { nextOffset: 1 }], ['missing prefix', { earliestCursor: 1 }],
+    ['tail', { tail: true }],
+  ])('preserves chunk and cursor evidence for a %s', (_name, changes) => {
+    const tracker = new ToolProgressTracker(() => 'serial')
+    expect(observe(tracker, 'one', changes)).toBe(0)
+    expect(observe(tracker, 'two', { ...changes, nextCursor: 2,
+      entries: [{ seq: 1, stream: 'stdout', text: 'v24.' }, { seq: 2, stream: 'stdout', text: '22.3\n' }],
+    })).toBe(0)
+  })
+
+  it('retains stream order, unknown entry fields and invalid sequence changes', () => {
+    for (const changed of [
+      [{ seq: 1, stream: 'stderr', text: 'b' }, { seq: 2, stream: 'stdout', text: 'a' }],
+      [{ seq: 1, stream: 'stdout', text: 'a', timing: 5 }, { seq: 2, stream: 'stderr', text: 'b' }],
+      [{ seq: 0, stream: 'stdout', text: 'a' }, { seq: 2, stream: 'stderr', text: 'b' }],
+    ]) {
+      const tracker = new ToolProgressTracker(() => 'serial')
+      expect(observe(tracker, 'one', { nextCursor: 2,
+        entries: [{ seq: 1, stream: 'stdout', text: 'a' }, { seq: 2, stream: 'stderr', text: 'b' }] })).toBe(0)
+      expect(observe(tracker, 'two', { nextCursor: 2, entries: changed })).toBe(0)
+    }
+  })
+
+  it.each([
+    ['stdout', { entries: [{ seq: 1, stream: 'stdout', text: 'v24.22.4\n' }] }],
+    ['stderr', { entries: [{ seq: 1, stream: 'stderr', text: 'v24.22.3\n' }] }],
+    ['exit code', { exitCode: 1 }], ['signal', { signal: 'SIGTERM' }], ['status', { status: 'failed' }],
+    ['error', { error: { code: 'PROGRAM_ERROR', message: 'real error' } }],
+    ['pagination', { nextOffset: 1 }], ['truncation', { truncated: true }], ['remaining output', { hasMore: true }],
+    ['unknown data', { createdAt: 2, business: { jobId: 'real business identity' } }],
+  ])('retains changed %s as new evidence and clears the advisory', (_name, changes) => {
+    const tracker = new ToolProgressTracker(() => 'serial')
+    for (const id of ['one', 'two', 'three']) observe(tracker, id)
+    expect(tracker.recoveryPrompt()).toBeDefined()
+    expect(observe(tracker, 'four', changes)).toBe(0)
+    expect(tracker.hasCompletedProgress()).toBe(true)
+    expect(tracker.recoveryPrompt()).toBeUndefined()
+  })
+
+  it('ignores only compact change receipt IDs while retaining file paths, hashes and coverage', () => {
+    const tracker = new ToolProgressTracker(() => 'serial')
+    const fileChanges = (id: string, newHash = 'sha256:' + 'b'.repeat(64), path = 'output.txt', recordedCount = 1) => ({
+      count: 1, omittedCount: 0, changes: [{ id, path, kind: 'edit', oldHash: 'sha256:' + 'a'.repeat(64), newHash, status: 'applied' }],
+      coverage: { status: 'complete', recordedCount }, details: 'Review changes before rollback',
+    })
+    expect(observe(tracker, 'one', { fileChanges: fileChanges('change-one') })).toBe(0)
+    expect(observe(tracker, 'two', { fileChanges: fileChanges('change-two') })).toBe(1)
+    expect(observe(tracker, 'three', { fileChanges: fileChanges('change-three') })).toBe(2)
+    expect(tracker.recoveryPrompt()).toBeDefined()
+    expect(observe(tracker, 'four', { fileChanges: fileChanges('change-four', 'sha256:' + 'c'.repeat(64)) })).toBe(0)
+    expect(observe(tracker, 'five', { fileChanges: fileChanges('change-five', 'sha256:' + 'c'.repeat(64), 'other.txt') })).toBe(0)
+    expect(observe(tracker, 'six', { fileChanges: fileChanges('change-six', 'sha256:' + 'c'.repeat(64), 'other.txt', 2) })).toBe(0)
+    expect(tracker.recoveryPrompt()).toBeUndefined()
+  })
+
+  it('retains jobId-looking business output and unknown nested fields', () => {
+    const tracker = new ToolProgressTracker(() => 'serial')
+    for (const id of ['one', 'two']) {
+      expect(observe(tracker, id, { entries: [{ seq: 1, stream: 'stdout', text: JSON.stringify({ jobId: id, elapsedMs: 1 }) }] })).toBe(0)
+      expect(observe(tracker, id, { business: { jobId: id } })).toBe(0)
+    }
+    expect(tracker.recoveryPrompt()).toBeUndefined()
+  })
+
+  it.each([
+    ['future version', { version: 2 }], ['malformed entries', { entries: 'v24.22.3' }],
+    ['missing exit state', { exitCode: undefined }], ['active command', { status: 'running', exitCode: null }],
+  ])('keeps the exact output of a %s instead of normalizing unknown or unfinished receipts', (_name, changes) => {
+    const tracker = new ToolProgressTracker(() => 'serial')
+    for (const id of ['one', 'two', 'three']) expect(observe(tracker, id, changes)).toBe(0)
+    expect(tracker.recoveryPrompt()).toBeUndefined()
+  })
+
+  it('does not normalize another tool merely because it returns command-shaped JSON', () => {
+    const tracker = new ToolProgressTracker(() => 'serial')
+    for (const id of ['one', 'two', 'three']) {
+      expect(tracker.observe([{ ...call, name: 'write_file' }], [succeeded(JSON.stringify(receipt(id)))])).toBe(0)
+    }
+    expect(tracker.recoveryPrompt()).toBeUndefined()
+  })
+})
 
 describe('output-aware progress for long-running tools', () => {
   it('does not count user steering interruptions as failures, completed work or repeated reads', () => {

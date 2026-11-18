@@ -106,6 +106,33 @@ describe('compact builtin model definitions', () => {
     }
   })
 
+  it.each(['general', 'code'] as const)('keeps read_file range and paging contracts in actual model/request definitions (%s)', async toolProfile => {
+    const { registry } = await createToolRegistry({ toolProfile, allowedMcpServers: [] })
+    const canonical = registry.list().find(tool => tool.name === 'read_file')!
+    for (const definitions of [registry.listForModel(), registry.listForRequest()]) {
+      const projected = definitions.find(tool => tool.name === 'read_file')!
+      expect(projected).toBeDefined()
+      expect(withoutDescriptions(projected)).toEqual(withoutDescriptions(canonical))
+      for (const phrase of ['full starts at beginning', 'bounded by output budget',
+        'cannot combine with start_line/end_line/start_column', 'even start_line=1',
+        'FULL_READ_RANGE_CONFLICT', 'before any file is read', 'entire batch rejected',
+        'mode=auto', 'preserve the original end_line']) {
+        expect(projected.description, `read_file model/request contract: ${phrase}`).toContain(phrase)
+      }
+      const properties = projected.parameters.properties!
+      for (const shape of [properties, properties.files.items!.properties!]) {
+        for (const phrase of ['full starts at beginning', 'cannot combine with start_line/end_line/start_column',
+          'output budget', 'resume with auto', 'exact raw UTF-8 JSON']) {
+          expect(shape.mode.description, `single/batch mode contract: ${phrase}`).toContain(phrase)
+        }
+        for (const phrase of ['mode=auto', 'preserve the original end_line', 'hasMore/nextStartLine/nextStartColumn',
+          'full excludes all range parameters', 'exact keeps its raw-source contract']) {
+          expect(shape.end_line.description, `single/batch end_line contract: ${phrase}`).toContain(phrase)
+        }
+      }
+    }
+  })
+
   it('keeps bound skill script restrictions and every selected profile/allowlist', async () => {
     const { registry } = await createToolRegistry({ toolProfile: 'code', allowedTools: ['read_file', 'run_skill_script'],
       allowedMcpServers: [], strictSkillBindings: true, allowedSkills: [] })

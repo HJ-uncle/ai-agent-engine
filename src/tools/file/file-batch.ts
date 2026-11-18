@@ -10,6 +10,7 @@ import { IMAGE_MIME_TYPES } from './constants.js'
 import { handlerRegistry } from './handlers/registry.js'
 import { TextHandler } from './handlers/text-handler.js'
 import { decodeEditableText } from './change-recorder.js'
+import { fullReadRangeFailure } from './read-mode.js'
 
 const MAX_BATCH_FILES = 16
 const readScopes = new WeakSet<AgentContext>()
@@ -89,6 +90,10 @@ export async function preflightFileReadBatch(raw: unknown, ctx: AgentContext): P
   const parsed = batchItems(raw, ctx)
   if (!('files' in parsed)) return parsed
   if (parsed.files.some(invalidRead)) return batchFailure(ctx, 'FILE_BATCH_INVALID_ARGUMENTS', 'Each read needs valid single-file arguments. No files were read.')
+  for (const [index, item] of parsed.files.entries()) {
+    const conflict = fullReadRangeFailure(item, ctx, index)
+    if (conflict) return conflict
+  }
   for (const item of parsed.files) {
     if (ctx.signal?.aborted) return batchFailure(ctx, 'FILE_BATCH_CANCELLED', 'Cancelled before reading any file.')
     const decision = await ctx.tools?.preflight?.('read_file', item, ctx)
@@ -102,6 +107,10 @@ export async function readFileBatch(raw: unknown, ctx: AgentContext, single: Too
   if (!('files' in parsed)) return parsed
   const { files } = parsed
   if (files.some(invalidRead)) return batchFailure(ctx, 'FILE_BATCH_INVALID_ARGUMENTS', 'Each read needs a nonempty path, a supported mode, and positive integer ranges. No files were read.')
+  for (const [index, item] of files.entries()) {
+    const conflict = fullReadRangeFailure(item, ctx, index)
+    if (conflict) return conflict
+  }
   const limit = getToolOutputLimit(ctx.toolProfile, ctx)
   // Account for each path and wrapper separately; parsed inner JSON is embedded
   // directly, avoiding unbounded double escaping of backslashes and source text.

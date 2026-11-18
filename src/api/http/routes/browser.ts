@@ -44,7 +44,8 @@ export async function browserRoutes(fastify: FastifyInstance, options: { bridge?
   const bridge = options.bridge ?? browserBridge
   // Proxies must not cache commands or client credentials on remote engines.
   fastify.addHook('onRequest', async (_request, reply) => { reply.header('Cache-Control', 'no-store') })
-  fastify.addHook('onClose', async () => bridge.dispose())
+  // HTTP close waits for active polls to finish; release them before socket drain.
+  fastify.addHook('preClose', async () => bridge.dispose())
   fastify.setErrorHandler((error, _request, reply) => {
     if (error instanceof BrowserBridgeError) return reply.code(error.statusCode).send(fail(error.statusCode, error.message))
     const err = error as Error & { statusCode?: number }

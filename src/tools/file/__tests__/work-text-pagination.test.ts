@@ -1,5 +1,4 @@
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentContext } from '../../../core/agent-context/index.js'
@@ -11,9 +10,11 @@ import { listFilesTool } from '../basic.js'
 import { readFileTool } from '../super-file-tool.js'
 import { readTextPage } from '../text-page.js'
 
+const scratch = path.resolve('.e2e-tmp', 'work-text-pagination')
 let root: string, ctx: AgentContext
 beforeEach(() => {
-  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'aether-work-page-')))
+  fs.mkdirSync(scratch, { recursive: true })
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(scratch, 'aether-work-page-')))
   vi.stubEnv('AUTH_ENABLED', 'false')
   vi.stubEnv('TOOL_OUTPUT_MAX_CHARS', '1200')
   ctx = { tenantId: 'work-page', sessionId: path.basename(root), workspacePaths: [root], projectRoot: root, cwd: root, toolProfile: 'general',
@@ -23,7 +24,7 @@ beforeEach(() => {
 afterEach(() => {
   clearSecurityMode(ctx.tenantId, ctx.sessionId)
   vi.restoreAllMocks(); vi.unstubAllEnvs()
-  if (path.dirname(root) !== fs.realpathSync.native(os.tmpdir()) || !path.basename(root).startsWith('aether-work-page-')) throw new Error('Unsafe fixture cleanup')
+  if (path.dirname(root) !== fs.realpathSync.native(scratch) || !path.basename(root).startsWith('aether-work-page-')) throw new Error('Unsafe fixture cleanup')
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 })
 })
 
@@ -113,7 +114,9 @@ describe('Work text pages keep every source line inside the runtime output cap',
 
   it('keeps full as a request from the beginning and resumes subsequent pages with auto', async () => {
     const file = seed(Array.from({ length: 60 }, (_, i) => `${i}: ${'x'.repeat(150)}`).join('\n'))
-    const full = await readPage(file, { mode: 'full', start_line: 20, end_line: 20 })
+    expect(await readFileTool.execute({ path: file, mode: 'full', start_line: 20, end_line: 20 }, ctx))
+      .toMatchObject({ success: false, error: 'FULL_READ_RANGE_CONFLICT' })
+    const full = await readPage(file, { mode: 'full' })
     expect(full).toMatchObject({ startLine: 1, requestedEndLine: 60, hasMore: true })
     const next = await readPage(file, { start_line: full.nextStartLine, start_column: full.nextStartColumn })
     expect(next.startLine).toBe(full.endLine + 1)
@@ -141,7 +144,9 @@ describe('Work text pages keep every source line inside the runtime output cap',
     expect(JSON.parse(exact.output)).toMatchObject({ content: raw, contentIsComplete: true, expectedHash: hashFileContent(raw) })
     const code = { ...ctx, toolProfile: 'code' } as AgentContext
     expect((await readFileTool.execute({ path: file, mode: 'full' }, code)).output).toContain('   2 | b\r')
-    for (const mode of ['exact', 'full', 'summary']) {
+    expect(await readFileTool.execute({ path: file, mode: 'full', start_column: 1 }, ctx))
+      .toMatchObject({ success: false, error: 'FULL_READ_RANGE_CONFLICT' })
+    for (const mode of ['exact', 'summary']) {
       expect(await readFileTool.execute({ path: file, mode, start_column: 1 }, ctx)).toMatchObject({ success: false, error: 'COLUMN_PAGING_UNSUPPORTED' })
     }
     expect(await readFileTool.execute({ path: file, start_column: 1 }, code)).toMatchObject({ success: false, error: 'COLUMN_PAGING_UNSUPPORTED' })

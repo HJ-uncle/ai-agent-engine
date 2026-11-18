@@ -112,9 +112,9 @@ describe('JSON explicit pagination uses original source lines', () => {
 })
 
 describe('unpaged JSON compatibility and outer file identity', () => {
-  it.each([{ startLine: 2, endLine: 2 }, { startLine: -1, endLine: Number.NaN }])('keeps full mode authoritative over range %j', async range => {
+  it.each([{ startLine: 2, endLine: 2 }, { startLine: -1, endLine: Number.NaN }])('rejects full instead of silently ignoring range %j', async range => {
     const value = { role: 'sales', revision: 'v002' }; seed(JSON.stringify(value, null, 4))
-    expect(await handler.read(file, ctx, { mode: 'full', ...range })).toEqual({ type: 'json', data: value, content: JSON.stringify(value, null, 2) })
+    await expect(handler.read(file, ctx, { mode: 'full', ...range })).rejects.toThrow('mode="auto"')
   })
 
   it('keeps unpaged auto/summary minified and full pretty-printed', async () => {

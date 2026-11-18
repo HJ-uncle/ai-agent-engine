@@ -53,6 +53,42 @@ function fixture(calls: ToolCall[], profile: 'code' | 'general' = 'code') {
 }
 
 describe('request-local repeated mutation advice', () => {
+  it('dispatches command cycle advice despite fresh job IDs and retains every original result in history', async () => {
+    const f = fixture([execute(), execute(), execute(), execute()])
+    let commands = 0
+    f.ctx.tools.execute = vi.fn(async () => ({ success: true, output: JSON.stringify({
+      type: 'command_result', version: 1, jobId: `job-${++commands}`, status: 'succeeded', exitCode: 0, signal: null,
+      entries: [{ seq: 1, stream: 'stdout', text: commands < 4 ? 'v24.22.3\n' : 'new evidence\n' }],
+      nextCursor: 1, nextOffset: 0, earliestCursor: 0, truncated: false, hasMore: false,
+    }) }))
+    await f.run()
+    expect(f.requests.map(hasNotice)).toEqual([false, false, false, true, false])
+    const receipts = f.history.filter(message => message.role === 'tool').map(message => JSON.parse(String(message.content)))
+    expect(receipts.map(receipt => receipt.jobId)).toEqual(['job-1', 'job-2', 'job-3', 'job-4'])
+    expect(f.requests[3].messages.filter(message => message.role === 'tool')).toHaveLength(3)
+    expect(f.ctx.tools.execute).toHaveBeenCalledTimes(4)
+    expect(f.outcomes.at(-1)).toMatchObject({ status: 'succeeded', stopReason: 'completed' })
+  })
+
+  it('keeps advice through pipe rechunking and intervening unchanged reads without rewriting history', async () => {
+    const f = fixture([execute(), read(), execute(), read(), execute(), read(), execute()])
+    let commands = 0
+    f.ctx.tools.execute = vi.fn(async name => {
+      if (name === 'read_file') return { success: true, output: 'same file' }
+      const chunks = [['same output'], ['same ', 'output'], ['same', ' ', 'output'], ['changed output']][commands++]
+      return { success: true, output: JSON.stringify({
+        type: 'command_result', version: 1, jobId: `job-${commands}`, status: 'succeeded', exitCode: 0, signal: null,
+        entries: chunks.map((text, index) => ({ seq: index + 1, stream: 'stdout', text })),
+        nextCursor: chunks.length, nextOffset: 0, earliestCursor: 0, truncated: false, hasMore: false,
+      }) }
+    })
+    await f.run()
+    expect(f.requests.map(hasNotice)).toEqual([false, false, false, false, false, true, true, false])
+    expect(f.history.filter(message => message.role === 'tool' && String(message.content).startsWith('{'))
+      .map(message => JSON.parse(String(message.content)).entries.length)).toEqual([1, 2, 3, 1])
+    expect(f.outcomes.at(-1)).toMatchObject({ status: 'succeeded' })
+  })
+
   it.each(['code', 'general'] as const)('is dispatched through the next %s ReAct request and disappears after changed evidence', async profile => {
     const f = fixture([mutation(), mutation(), mutation(), { ...mutation(), args: { path: 'module.ts', content: 'changed' } }], profile)
     await f.run()

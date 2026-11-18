@@ -16,6 +16,7 @@ import { TextHandler } from './handlers/text-handler.js'
 import { JsonHandler } from './handlers/json-handler.js'
 import { ExcelHandler } from './handlers/excel-handler.js'
 import { readTextPage } from './text-page.js'
+import { fullReadRangeFailure } from './read-mode.js'
 import { fileBatchSchema, hasFileBatch, isFileBatchReadContext, readFileBatch, preflightFileReadBatch, preflightFileWriteBatch, writeFileBatch } from './file-batch.js'
 
 const singleReadFileTool: Tool = {
@@ -27,9 +28,9 @@ const singleReadFileTool: Tool = {
     properties: {
       path: { type: 'string', description: '确切文件路径；相对路径基于当前工作区解析，不按文件名猜测其他目录。' },
       start_line: { type: 'number', description: '起始行号（从 1 开始），默认 1' },
-      end_line: { type: 'number', description: '结束源行号。Work文本、批量文本/JSON/CSV按预算分页，参考hasMore/nextStartLine/nextStartColumn。单读JSON/CSV显式范围也按源文分页；未指定范围保留格式化展示。full从头、exact按原文合同。' },
+      end_line: { type: 'number', description: '结束源行号。Work文本、批量文本/JSON/CSV按预算分页，参考hasMore/nextStartLine/nextStartColumn；续页用mode=auto并保留原end_line。单读JSON/CSV显式范围按源文分页；未指定范围保留格式化展示。full与所有范围参数互斥；exact按原文合同。' },
       start_column: { type: 'integer', minimum: 1, description: 'auto源文分页的1起UTF-16列偏移，不拆代理对；支持Work文本、批量文本/JSON/CSV及JSON/CSV单读续页。使用回执nextStartLine/nextStartColumn，片段不保证是完整JSON。' },
-      mode: { type: 'string', enum: ['auto', 'full', 'summary', 'vision', 'ocr', 'exact'], description: 'auto(默认), full(全文), summary(支持代码签名；普通文档保留原文并按预算分页，续页用auto及返回游标), vision(图片预览), ocr(文本提取), exact(原始UTF-8 JSON，含完整expectedHash，可按行分页)' },
+      mode: { type: 'string', enum: ['auto', 'full', 'summary', 'vision', 'ocr', 'exact'], description: 'auto(默认，显式范围及续页用此模式), full(从头读取，不接受start_line/end_line/start_column，仍受输出预算限制；续页切换auto及返回游标), summary(支持代码签名；普通文档保留原文并按预算分页，续页用auto及返回游标), vision(图片预览), ocr(文本提取), exact(原始UTF-8 JSON，含完整expectedHash，可按行分页)' },
     },
     required: ['path'],
   },
@@ -38,6 +39,8 @@ const singleReadFileTool: Tool = {
     const startTime = performance.now()
     
     try {
+      const conflict = fullReadRangeFailure(rawArgs, ctx)
+      if (conflict) return conflict
       // A missing revision must not resolve to another task's newest namesake.
       // Keep path discovery explicit, avoiding cross-task evidence substitution
       // and an unbounded directory walk on every failed read.
@@ -296,7 +299,7 @@ export const readFileTool: Tool = {
   ...singleReadFileTool,
   parameters: fileBatchSchema(singleReadFileTool.parameters),
   description: singleReadFileTool.description + ' 已知且互不依赖的多个文件可用 files:[{path,...}] 一次读取并返回合并回执；每项单独分页和版本，总输出受同一预算约束。图片/vision/OCR必须单独调用。',
-  preflight: preflightFileReadBatch,
+  preflight: async (args, ctx) => hasFileBatch(args) ? preflightFileReadBatch(args, ctx) : fullReadRangeFailure(args, ctx),
   execute: (args, ctx) => hasFileBatch(args) ? readFileBatch(args, ctx, singleReadFileTool) : singleReadFileTool.execute(args, ctx),
 }
 

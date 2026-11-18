@@ -3,11 +3,13 @@ import path from 'node:path'
 import type { AgentContext } from '../../../core/agent-context/index.js'
 import type { FileHandler, ReadOptions, ReadResult } from './interface.js'
 import { extractCodeSummary } from '../utils.js'
+import { assertFullReadRange } from '../read-mode.js'
 
 export class TextHandler implements FileHandler {
   extensions = ['.txt', '.tsv', '.md', '.ts', '.js', '.tsx', '.jsx', '.py', '.go', '.java', '.c', '.cpp', '.h', '.hpp', '.rs', '.css', '.html', '.sh', '.yaml', '.yml', '.toml', '.lock']
 
   async read(filePath: string, _ctx: AgentContext, options?: ReadOptions): Promise<ReadResult> {
+    assertFullReadRange(options?.mode, options?.startLine, options?.endLine)
     const fullContent = fs.readFileSync(filePath, 'utf-8')
     const ext = path.extname(filePath).toLowerCase()
     const mode = options?.mode || 'auto'

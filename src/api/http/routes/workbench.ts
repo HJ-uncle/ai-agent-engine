@@ -19,7 +19,8 @@ const identity = (request: FastifyRequest) => {
 export async function workbenchRoutes(app: FastifyInstance, options: { bridge?: WorkbenchBridge } = {}) {
   const bridge = options.bridge ?? workbenchBridge
   app.addHook('onRequest', async (_req, reply) => { reply.header('Cache-Control', 'no-store') })
-  app.addHook('onClose', async () => bridge.dispose())
+  // HTTP close waits for active polls to finish; release them before socket drain.
+  app.addHook('preClose', async () => bridge.dispose())
   app.setErrorHandler((error, _request, reply) => {
     const status = error instanceof WorkbenchBridgeError ? error.statusCode : error instanceof z.ZodError ? 400 : 500
     return reply.code(status).send(fail(status, status === 500 ? '工作台请求失败。' : error instanceof Error ? error.message : '无效的工作台请求。'))

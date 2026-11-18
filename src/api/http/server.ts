@@ -1,6 +1,6 @@
 import Fastify from 'fastify'
 import { v4 as uuidv4 } from 'uuid'
-import { logger } from '../../observability/index.js'
+import { logger, observeShutdownStage } from '../../observability/index.js'
 import { createAuthMiddleware } from '../../auth/index.js'
 import { chatRoutes, stopAllOwnedExecutions } from './routes/chat.js'
 import { collaborationRoutes } from './routes/collaboration.js'
@@ -79,17 +79,24 @@ export async function buildServer(startup: RequestAuthenticationStartup = {}) {
   // SSE replies cannot finish until their producers stop. Fastify's onClose
   // runs only after those sockets drain, so revoke and join owners in preClose.
   fastify.addHook('preClose', async () => {
-    ownedShutdown ??= (async () => {
-      const results = await Promise.allSettled([cronScheduler.stop(), stopAllOwnedExecutions(), terminalManager.killAll(), commandJobs.shutdown('Engine shutdown')])
+    ownedShutdown ??= observeShutdownStage(logger, 'http.owned.stop', async () => {
+      const results = await Promise.allSettled([
+        observeShutdownStage(logger, 'http.cron.stop', () => cronScheduler.stop()),
+        observeShutdownStage(logger, 'http.executions.stop', () => stopAllOwnedExecutions()),
+        observeShutdownStage(logger, 'http.terminals.stop', () => terminalManager.killAll()),
+        observeShutdownStage(logger, 'http.commands.stop', () => commandJobs.shutdown('Engine shutdown')),
+      ])
       const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
       if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Engine owned resources failed to shut down')
-    })()
+    })
     await ownedShutdown
   })
   fastify.addHook('onClose', async () => {
-    await ownedShutdown
-    const knowledge = await closeKnowledgeDb()
-    if (knowledge && !knowledge.healthy) throw new Error('Knowledge database cleanup unknown: ' + JSON.stringify(knowledge))
+    await observeShutdownStage(logger, 'http.onClose', async () => {
+      await ownedShutdown
+      const knowledge = await observeShutdownStage(logger, 'sqlite.knowledge.close', () => closeKnowledgeDb())
+      if (knowledge && !knowledge.healthy) throw new Error('Knowledge database cleanup unknown: ' + JSON.stringify(knowledge))
+    })
   })
 
   // Global error handler
