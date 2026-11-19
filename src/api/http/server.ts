@@ -1,7 +1,8 @@
 import Fastify from 'fastify'
 import { v4 as uuidv4 } from 'uuid'
 import { logger, observeShutdownStage } from '../../observability/index.js'
-import { createAuthMiddleware } from '../../auth/index.js'
+import { adminRoutes } from './routes/admin.js'
+import { isAdminPath } from './admin/surface.js'
 import { chatRoutes, stopAllOwnedExecutions } from './routes/chat.js'
 import { collaborationRoutes } from './routes/collaboration.js'
 import { initializeOwnedExecutionStartup } from '../../core/collaboration/execution-owner.js'
@@ -43,7 +44,7 @@ import { workbenchRoutes } from './routes/workbench.js'
 import { commandJobs } from '../../core/command-jobs/index.js'
 import { closeKnowledgeDb } from '../../storage/knowledge/db.js'
 import { cronScheduler } from '../../scheduler/cron-scheduler.js'
-import { configureRequestAuthentication, globalRequestMiddleware, loggingMiddleware, authMiddlewareHook, WHITELIST_PATHS, type RequestAuthenticationStartup } from './middleware.js'
+import { configureRequestAuthentication, globalRequestMiddleware, loggingMiddleware, authMiddlewareHook, type RequestAuthenticationStartup } from './middleware.js'
 import fastifyWebsocket from '@fastify/websocket'
 import fastifyMultipart from '@fastify/multipart'
 import fastifyStatic from '@fastify/static'
@@ -157,6 +158,7 @@ export async function buildServer(startup: RequestAuthenticationStartup = {}) {
   }, { prefix: '/api/v1' })
 
   // Health and metrics at root level
+  await fastify.register(adminRoutes)
   await fastify.register(metricsRoutes)
   await fastify.register(modelsRoutes)
   // Auth routes at root level (no /api/v1 prefix, whitelisted)
@@ -173,11 +175,13 @@ export async function buildServer(startup: RequestAuthenticationStartup = {}) {
     await fastify.register(fastifyStatic, {
       root: publicDir,
       wildcard: false,
+      // The built-in console owns this namespace even if an older public directory is supplied.
+      globIgnore: ['admin', 'admin/**'],
       prefix: '/',
     })
     // SPA 回退：所有非 /api/ 路径根据 UA 或路径前缀返回对应的 HTML
     fastify.setNotFoundHandler((request, reply) => {
-      if (request.url.startsWith('/api/') || request.url.startsWith('/ws')) {
+      if (isAdminPath(request.url.split('?', 1)[0]) || request.url.startsWith('/api/') || request.url.startsWith('/ws')) {
         return reply.code(404).send({ code: 40400, message: 'Not found' })
       }
       

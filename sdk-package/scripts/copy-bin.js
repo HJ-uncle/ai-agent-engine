@@ -136,6 +136,7 @@ console.log(`[copy-bin] node_modules 完成：${copied} 个包已复制，${skip
 checkPatch(path.join(binNodeModules, 'node-pty'))
 fs.mkdirSync(path.join(binDir, 'scripts'), { recursive: true })
 fs.copyFileSync(path.join(agentEngineRoot, 'scripts/apply-node-pty-patch.mjs'), path.join(binDir, 'scripts/apply-node-pty-patch.mjs'))
+fs.copyFileSync(path.join(agentEngineRoot, 'scripts/provision-default-admin.mjs'), path.join(binDir, 'scripts/provision-default-admin.mjs'))
 fs.cpSync(path.join(agentEngineRoot, 'scripts/patches'), path.join(binDir, 'scripts/patches'), { recursive: true })
 
 // ==================== 复制技能目录 ====================

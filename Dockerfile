@@ -3,8 +3,12 @@ WORKDIR /app
 RUN --mount=type=cache,target=/var/cache/apk \
     apk add --no-cache python3 make g++ libc6-compat
 
-FROM build-base AS base
+FROM build-base AS engine-deps
 COPY package*.json ./
+COPY scripts/apply-node-pty-patch.mjs ./scripts/
+COPY scripts/patches/ ./scripts/patches/
+
+FROM engine-deps AS base
 # 修复：解决私有仓库 npm.nie.netease.com 无法访问的问题，将其替换为公共镜像源
 # 注意：由于修改了 package-lock.json，npm ci 可能会由于校验失败而跳过某些可选依赖
 # 改用 npm install 并根据当前架构动态安装必要的平台原生模块
@@ -19,8 +23,7 @@ RUN --mount=type=cache,target=/root/.npm \
       npm install @libsql/linux-arm64-musl --legacy-peer-deps; \
     fi
 
-FROM build-base AS builder
-COPY package*.json ./
+FROM engine-deps AS builder
 RUN sed -i 's|https://npm.nie.netease.com|https://registry.npmmirror.com|g' package-lock.json && \
     npm config set registry https://registry.npmmirror.com
 RUN --mount=type=cache,target=/root/.npm \
@@ -39,7 +42,8 @@ RUN --mount=type=cache,target=/root/.npm \
     npm install esbuild --legacy-peer-deps && \
     npm install --legacy-peer-deps
 COPY multi-agent-console/ .
-RUN NODE_OPTIONS="--max-old-space-size=4096" VITE_API_URL="http://124.221.121.60:12323" npm run build
+# The legacy client and the API share the container's origin, just like /admin/.
+RUN NODE_OPTIONS="--max-old-space-size=4096" VITE_API_URL="" npm run build
 
 FROM node:20-alpine AS production
 WORKDIR /app
@@ -48,6 +52,7 @@ RUN --mount=type=cache,target=/var/cache/apk \
 COPY --from=base /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package.json .
+COPY --from=builder /app/scripts/provision-default-admin.mjs ./scripts/
 COPY --from=builder /app/src ./src
 COPY --from=frontend-builder /app/dist ./public
 RUN npm install -g tsx

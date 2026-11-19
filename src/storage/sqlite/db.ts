@@ -47,6 +47,11 @@ export function getDbEpoch(db: Client): number | undefined {
   return getLocalSqliteEpoch(db)
 }
 
+/** Observe an already-open main database without creating a file or starting a child process. */
+export function peekOpenDb(): Client | null {
+  return client && !client.closed ? client : null
+}
+
 export function getDb(): Client {
   if (client && !client.closed) return client
   if (client?.closed) {

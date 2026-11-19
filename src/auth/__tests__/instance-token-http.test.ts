@@ -1,5 +1,5 @@
 import fs from 'node:fs'
-import os from 'node:os'
+import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -9,17 +9,21 @@ import { hasValidInstanceToken } from '../instance-token.js'
 let app: FastifyInstance
 let baseUrl: string
 let fixture: string
-let closeDb: () => void
+const fixtureParent = path.resolve(fileURLToPath(new URL('../../../.e2e-tmp/admin-enterprise/instance-guard/fixtures/', import.meta.url)))
+let closeDb: () => Promise<unknown>
 const token = 'd0-test-instance-token-not-a-production-secret'
 const authenticated = { 'X-Aether-Instance-Token': token, 'X-Aether-Tool-Profile': 'code' }
 const modelRequests: LLMAdapterOptions[] = []
 
 beforeAll(async () => {
-  fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-instance-http-'))
+  fs.mkdirSync(fixtureParent, { recursive: true })
+  fixture = fs.mkdtempSync(path.join(fixtureParent, 'aether-instance-http-'))
   for (const [key, value] of Object.entries({
     DATA_DIR: path.join(fixture, 'agent.db'), WORKSPACE_ROOT: path.join(fixture, 'workspace'),
     AETHER_GLOBAL_DIR: path.join(fixture, 'global'), SKILLS_ROOT: path.join(fixture, 'skills'),
-    PUBLIC_DIR: path.join(fixture, 'absent-public'), LOG_LEVEL: 'silent', QA_LOG_ENABLED: 'false',
+    PROGRAMDATA: path.join(fixture, 'managed'), MEMORY_DB_PATH: path.join(fixture, 'memory.db'),
+    MCP_CONFIG_PATH: path.join(fixture, 'mcp.json'), CODEGRAPH_DATA_DIR: path.join(fixture, 'codegraph'),
+    QA_LOG_DIR: path.join(fixture, 'qa'), PUBLIC_DIR: path.join(fixture, 'absent-public'), LOG_LEVEL: 'silent', QA_LOG_ENABLED: 'false',
     AUTH_ENABLED: 'false', AETHER_INSTANCE_TOKEN: token, ENABLE_LONG_TERM_MEMORY: 'false',
     ENCRYPTION_KEY: '1'.repeat(64), LLM_MODEL: 'd0-fixture', LLM_PRIMARY_MODEL: 'd0-fixture',
   })) vi.stubEnv(key, value)
@@ -52,11 +56,12 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app?.close()
-  closeDb?.()
+  await closeDb?.()
+  await (await import('../../storage/memory/db.js')).closeMemoryDb()
   vi.restoreAllMocks()
   vi.unstubAllEnvs()
   if (fixture) {
-    if (path.dirname(fixture) !== path.resolve(os.tmpdir()) || !path.basename(fixture).startsWith('aether-instance-http-')) throw new Error('Unsafe fixture path')
+    if (path.dirname(fixture) !== fixtureParent || !path.basename(fixture).startsWith('aether-instance-http-') || fs.lstatSync(fixture).isSymbolicLink()) throw new Error('Unsafe fixture path')
     try { fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 2, retryDelay: 20 }) }
     catch (error) {
       // libsql can retain Windows native handles until the worker exits.
@@ -65,8 +70,16 @@ afterAll(async () => {
   }
 })
 
+// Session stop fences preparations immediately, but its HTTP acknowledgement waits for them to settle.
+// Observe that real abort signal before releasing a deliberately paused storage call: awaiting the HTTP
+// response first would make the fixture and server wait forever for each other.
+function observedCancellation(signal: AbortSignal | undefined): Promise<void> {
+  if (!signal) throw new Error('Admission did not receive a cancellation signal')
+  return signal.aborted ? Promise.resolve() : new Promise(resolve => signal.addEventListener('abort', () => resolve(), { once: true }))
+}
+
 describe('D0 owned instance handshake and route gate', () => {
-  it('keeps only health/meta public and returns cwd-independent identity without secrets', async () => {
+  it('exposes the health and metadata handshake without leaking secrets or depending on cwd', async () => {
     const first = await app.inject({ method: 'GET', url: '/meta' })
     expect(first.statusCode).toBe(200)
     const identity = first.json().data
@@ -122,8 +135,10 @@ describe('D0 owned instance handshake and route gate', () => {
     expect(body).toContain('event: done')
     expect(body).toContain('Authenticated code')
     expect(modelRequests).toHaveLength(1)
+    // The discovery endpoint includes legacy implementations; the first model call exposes the modern core subset.
     const names = modelRequests[0].tools?.map(tool => tool.name)
-    expect(names).toEqual(expect.arrayContaining(['read_file', 'execute_cmd', 'subagent']))
+    expect(names).toEqual(expect.arrayContaining(['read_file', 'execute_cmd', 'subagent_start', 'subagent_directory']))
+    expect(names).not.toContain('subagent')
     expect(names).not.toContain('remember')
     expect(names).not.toContain('agent_list')
     expect(modelRequests[0].systemPrompt).toContain('## Aether Code 模式执行协议')
@@ -152,6 +167,7 @@ describe('D0 owned instance handshake and route gate', () => {
     })
     await rootRunStore.pending('default', run.runId, { requestId: 'command-approval', toolCallId: 'command-approval',
       toolName: 'execute_cmd', kind: 'permission', args: { command: process.execPath, args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'unexpected')`] } })
+    let cancelled!: Promise<void>
     let accepted!: () => void
     let release!: () => void
     const claimed = new Promise<void>(resolve => { accepted = resolve })
@@ -159,7 +175,7 @@ describe('D0 owned instance handshake and route gate', () => {
     const originalAnswer = rootRunStore.answer.bind(rootRunStore)
     const spy = vi.spyOn(rootRunStore, 'answer').mockImplementation(async (...args) => {
       const answer = await originalAnswer(...args)
-      accepted(); await gate
+      cancelled = observedCancellation(args[7]); accepted(); await gate
       return answer
     })
     const requestCount = modelRequests.length
@@ -169,31 +185,37 @@ describe('D0 owned instance handshake and route gate', () => {
         body: JSON.stringify({ sessionId, message: '', toolResponse: { runId: run.runId, requestId: 'command-approval',
           toolCallId: 'command-approval', name: 'execute_cmd', output: 'approved' } }), signal: AbortSignal.timeout(15_000) })
       await claimed
-      const cancel = await app.inject({ method: 'POST', url: '/api/v1/chat/cancel', headers: authenticated, payload: { sessionId } })
-      expect(cancel.json().data.cancelled).toBe(true)
+      const stopping = app.inject({ method: 'POST', url: '/api/v1/chat/cancel', headers: authenticated, payload: { sessionId } }).then(r => r)
+      await cancelled
       release()
+      const cancel = await stopping
+      expect(cancel.statusCode).toBe(200)
+      expect(cancel.json().data).toMatchObject({ cancelled: true, settled: true })
       const response = await answerResponse
       const body = await response.text()
-      expect(body).toContain('"status":"cancelled"')
       expect(body).not.toContain('toolResult')
       expect((await rootRunStore.get('default', run.runId))?.status).toBe('cancelled')
       expect(modelRequests).toHaveLength(requestCount)
       expect(fs.existsSync(marker)).toBe(false)
       const { createConversationHistory } = await import('../../storage/conversation/factory.js')
       expect(await createConversationHistory().getFullHistory({ tenantId: 'default', sessionId })).toEqual([])
+      expect(response.status, body).toBe(200)
+      expect(response.headers.get('content-type'), body).toContain('text/event-stream')
+      expect(body).toContain('"status":"cancelled"')
     } finally { release(); spy.mockRestore() }
   })
 
-  it('honors stop while a chat is preparing before its run or controller exists', async () => {
+  it('acknowledges cancellation before storage claims a root and leaves no turn or model work', async () => {
     const { rootRunStore } = await import('../../storage/root-runs/index.js')
     const sessionId = 'd3-cancel-preparing'
+    let cancelled!: Promise<void>
     let entered!: () => void
     let release!: () => void
     const preparing = new Promise<void>(resolve => { entered = resolve })
     const gate = new Promise<void>(resolve => { release = resolve })
     const originalCreate = rootRunStore.create.bind(rootRunStore)
     const spy = vi.spyOn(rootRunStore, 'create').mockImplementation(async (...args) => {
-      entered(); await gate
+      cancelled = observedCancellation(args[6]); entered(); await gate
       return originalCreate(...args)
     })
     const requestCount = modelRequests.length
@@ -203,11 +225,22 @@ describe('D0 owned instance handshake and route gate', () => {
         body: JSON.stringify({ sessionId, message: 'Must not start after stop', model: 'd0-fixture', modelProvider: 'openai' }),
         signal: AbortSignal.timeout(15_000) })
       await preparing
-      await app.inject({ method: 'POST', url: '/api/v1/chat/cancel', headers: authenticated, payload: { sessionId } })
+      const stopping = app.inject({ method: 'POST', url: '/api/v1/chat/cancel', headers: authenticated, payload: { sessionId } }).then(r => r)
+      await cancelled
       release()
-      expect(await (await response).text()).toContain('"status":"cancelled"')
+      const cancel = await stopping
+      expect(cancel.statusCode).toBe(200)
+      expect(cancel.json().data).toMatchObject({ cancelled: true, settled: true })
+      const chat = await response
+      const body = await chat.json()
       expect(modelRequests).toHaveLength(requestCount)
-      expect((await rootRunStore.list('default', sessionId))[0].status).toBe('cancelled')
+      expect(await rootRunStore.list('default', sessionId)).toEqual([])
+      const { createConversationHistory } = await import('../../storage/conversation/factory.js')
+      expect(await createConversationHistory().getFullHistory({ tenantId: 'default', sessionId })).toEqual([])
+      // Before any run exists there is no SSE run identity to publish. Use the same
+      // explicit HTTP cancellation receipt as the earlier tool discovery boundary.
+      expect(chat.status, JSON.stringify(body)).toBe(499)
+      expect(body).toMatchObject({ code: 49900, data: null })
     } finally { release(); spy.mockRestore() }
   })
 
@@ -226,6 +259,7 @@ describe('D0 owned instance handshake and route gate', () => {
 
     let entered!: () => void
     let release!: () => void
+    let cancelled!: Promise<void>
     let createdRunId!: string
     const claimed = new Promise<void>(resolve => { entered = resolve })
     const gate = new Promise<void>(resolve => { release = resolve })
@@ -233,6 +267,7 @@ describe('D0 owned instance handshake and route gate', () => {
     const spy = vi.spyOn(rootRunStore, 'create').mockImplementation(async (...args) => {
       const run = await originalCreate(...args)
       createdRunId = run.runId
+      cancelled = observedCancellation(args[6])
       entered()
       await gate
       return run
@@ -260,17 +295,18 @@ describe('D0 owned instance handshake and route gate', () => {
 
       // Cancellation must pass while the snapshot awaits admission; holding a history
       // lock during this wait would deadlock until the explicit gate below is released.
-      const cancel = await fetch(`${baseUrl}/api/v1/chat/cancel`, { method: 'POST',
+      const stopping = fetch(`${baseUrl}/api/v1/chat/cancel`, { method: 'POST',
         headers: { ...authenticated, 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId }),
         signal: AbortSignal.timeout(3_000) })
-      expect(cancel.status).toBe(200)
-      expect(await cancel.json()).toMatchObject({ data: { cancelled: true } })
+      await cancelled
       expect(snapshotSettled).toBe(false)
-      expect((await rootRunStore.get('default', createdRunId))?.status).toBe('cancelled')
-
       release()
+      const cancel = await stopping
+      expect(cancel.status).toBe(200)
+      expect(await cancel.json()).toMatchObject({ data: { cancelled: true, settled: true } })
+      expect((await rootRunStore.get('default', createdRunId))?.status).toBe('cancelled')
       const stream = await chatResponse
-      expect(await stream.text()).toContain('"status":"cancelled"')
+      const body = await stream.text()
       const snapshot = await snapshotResponse
       expect(snapshot.status).toBe(200)
       const state = (await snapshot.json()).data
@@ -279,6 +315,9 @@ describe('D0 owned instance handshake and route gate', () => {
       expect(state.runs).toHaveLength(2)
       expect(state.projection.some((payload: { content?: string }) => payload.content?.includes('Previous finished answer'))).toBe(false)
       expect(modelRequests).toHaveLength(requestCount)
+      expect(stream.status, body).toBe(200)
+      expect(stream.headers.get('content-type'), body).toContain('text/event-stream')
+      expect(body).toContain('"status":"cancelled"')
     } finally {
       release()
       spy.mockRestore()

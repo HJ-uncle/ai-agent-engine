@@ -66,14 +66,17 @@ async function command(sessionId: string, marker: string, runId?: string) {
   return { job: launched, pid: Number(fs.readFileSync(path.join(root, marker), 'utf8')) }
 }
 function holdCommandTerminalAck(jobId: string) {
-  const entered = hold(), receipt = hold(), db = getDb(), batch = db.batch.bind(db)
-  vi.spyOn(db, 'batch').mockImplementation(async (statements, mode) => {
-    const result = await batch(statements, mode)
-    if (statements.some(statement => typeof statement !== 'string' && !Array.isArray(statement) && Array.isArray(statement.args)
-      && statement.args[2] === jobId && typeof statement.args[5] === 'string' && JSON.parse(statement.args[5]).status === 'cancelled')) {
+  const entered = hold(), receipt = hold(), db = getDb(), cancel = commandJobs.cancelCaptured.bind(commandJobs)
+  vi.spyOn(commandJobs, 'cancelCaptured').mockImplementation(async (scope, reason) => {
+    const settled = await cancel(scope, reason)
+    if (settled.some(job => job.jobId === jobId && job.status === 'cancelled')) {
+      // The real process and write transaction have finished. Hold just the acknowledgement
+      // to the stop route so later commands can use their own storage transactions.
+      const row = (await db.execute({ sql: 'SELECT status FROM command_jobs WHERE job_id=?', args: [jobId] })).rows[0]
+      expect(row?.status).toBe('cancelled')
       entered.release(); await receipt.promise
     }
-    return result
+    return settled
   })
   return { entered, receipt }
 }

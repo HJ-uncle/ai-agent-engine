@@ -1,3 +1,4 @@
+import { ADMIN_HEADER, adminKeyInWorkloadHeaders } from './admin-key-format.js'
 import { authenticateAccountSession } from './accounts.js'
 import { getDb } from '../storage/sqlite/db.js'
 import type { AuthContext, AuthMiddleware } from './types.js'
@@ -16,6 +17,7 @@ export class DefaultAuthMiddleware implements AuthMiddleware {
   }
 
   async authenticate(request: { headers: Record<string, string | string[] | undefined> }): Promise<AuthContext> {
+    if (request.headers[ADMIN_HEADER] !== undefined || adminKeyInWorkloadHeaders(request.headers)) throw new Error('Management credentials cannot be used for workload authentication')
     // Try API Key first — 有就验证，验证失败抛错
     const apiKey = request.headers['x-api-key']
     if (apiKey && typeof apiKey === 'string') {
@@ -72,6 +74,8 @@ export class DefaultAuthMiddleware implements AuthMiddleware {
         tenantId,
         userId: payload.sub,
         method: 'jwt',
+        // Business requests keep the historical sub/default fallback. Deployment administration needs an explicit claim.
+        ...(payload.tenantId === 'default' ? { jwtDeclaresDefaultTenant: true as const } : {}),
         // JWT 未声明角色时按普通用户处理；管理员权限必须由签发方明确授予。
         roles: Array.isArray(payload.roles) && payload.roles.length > 0
           ? (payload.roles as string[])

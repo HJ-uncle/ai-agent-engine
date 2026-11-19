@@ -3,6 +3,9 @@ import { isPublicAccountRoute } from './routes/accounts.js'
 import { isPublicExternalAccountRoute, isExternalAccountCallback } from './routes/account-external.js'
 import type { FastifyRequest, FastifyReply } from 'fastify'
 import { fail } from './response.js'
+import { ADMIN_HEADER, adminKeyInWorkloadHeaders } from '../../auth/admin-key-format.js'
+import { auditAdminGateDenial, requireAdminPermission } from './admin/rbac-access.js'
+import { adminHeaders, isAdminPath, isPublicAdminShell } from './admin/surface.js'
 import { logger } from '../../observability/index.js'
 import type { AuthMiddleware } from '../../auth/types.js'
 import { createAuthMiddleware } from '../../auth/index.js'
@@ -40,12 +43,15 @@ function isLoopbackAddress(address: string | undefined): boolean {
   return family !== 0 && loopbackAddresses.check(address, family === 6 ? 'ipv6' : 'ipv4')
 }
 
+/** Only the loopback desktop launcher can bootstrap through HTTP; standalone hosts provision offline. */
+export function isOwnedDesktopRequest(request: FastifyRequest): boolean {
+  return desktopOwnedLoopback && isLoopbackAddress(request.raw.socket.remoteAddress) && hasOwnedInstanceToken(request.headers)
+}
+
 /** A local session capability, not an instance-admin role or a replacement tenant. */
 export function canUseDesktopSessionFullAccess(request: FastifyRequest): boolean {
   const auth = (request as FastifyRequest & { authContext?: AuthContext }).authContext
-  return desktopOwnedLoopback && !!auth && auth.method !== 'none' &&
-    auth.roles?.includes('tenant-admin') === true &&
-    isLoopbackAddress(request.raw.socket.remoteAddress) && hasOwnedInstanceToken(request.headers)
+  return !!auth && auth.method !== 'none' && auth.roles?.includes('tenant-admin') === true && isOwnedDesktopRequest(request)
 }
 
 /** Read the same frozen boundary used by the request gate; settings cannot enable dispatch. */
@@ -90,6 +96,15 @@ export async function globalRequestMiddleware(request: FastifyRequest, reply: Fa
   ;(request as any).clientVersion = clientVersion
 }
 
+/** Match registered templates and encoded management namespaces, including unmatched administrative URLs. */
+export function isManagementRequest(request: FastifyRequest, pathname = request.url.split('?', 1)[0]): boolean {
+  if (isAdminPath(pathname) || isAdminPath(request.routeOptions?.url ?? '')) return true
+  if (!pathname.startsWith('/') || !pathname.slice(0, 20).includes('%')) return false
+  // Stop at the first slash (literal or encoded); a malformed arbitrary ID must not unmask the namespace in logs.
+  const segment = pathname.slice(1).split(/\/|%2f/i, 1)[0]
+  if (segment.length > 15) return false
+  try { return decodeURIComponent(segment) === 'admin' } catch { return false }
+}
 /**
  * 请求日志记录中间件
  */
@@ -97,7 +112,9 @@ export async function loggingMiddleware(request: FastifyRequest, reply: FastifyR
   if (WHITELIST_PATHS.includes(request.url)) return
 
   const reqLogger = logger.child({ requestId: request.id })
-  reqLogger.info({ method: request.method, url: request.url.split('?', 1)[0] }, 'Incoming request')
+  const pathname = request.url.split('?', 1)[0], template = request.routeOptions?.url
+  const url = isManagementRequest(request, pathname) ? (template && isAdminPath(template) ? template : '/admin/*') : pathname
+  reqLogger.info({ method: request.method, url }, 'Incoming request')
 }
 
 /**
@@ -105,11 +122,21 @@ export async function loggingMiddleware(request: FastifyRequest, reply: FastifyR
  */
 export async function authMiddlewareHook(request: FastifyRequest, reply: FastifyReply) {
   const pathname = request.url.split('?', 1)[0]
+  const admin = isManagementRequest(request, pathname)
+  if (admin) {
+    // Include failures from this hook in the same no-store policy as successful responses.
+    reply.headers(adminHeaders)
+    if (isPublicAdminShell(request.method, pathname)) return
+  }
+  if ((!admin && request.headers[ADMIN_HEADER] !== undefined) || adminKeyInWorkloadHeaders(request.headers)) {
+    if (admin) await auditAdminGateDenial(request,'invalid_credential_scope')
+    return reply.code(401).send(fail(40100, '后台凭据只可用于管理后台。'))
+  }
   // Engine-owned source-change continuations reuse the authenticated principal
   // captured when the original request was admitted. The capability is
   // process-local and short-lived; it does not bypass the route's tenant/run
   // identity checks.
-  const continuation = resolveInternalContinuation(request.headers[INTERNAL_CONTINUATION_HEADER])
+  const continuation = admin ? undefined : resolveInternalContinuation(request.headers[INTERNAL_CONTINUATION_HEADER])
   if (continuation) {
     ;(request as any).authContext = continuation
     return
@@ -119,7 +146,12 @@ export async function authMiddlewareHook(request: FastifyRequest, reply: Fastify
   if (isExternalAccountCallback(request.method, pathname)) return
   // Check before the legacy whitelist and AUTH_ENABLED switch: neither can bypass an owned instance's token.
   if (!isPublicInstanceProbe(request.method, request.url) && !hasValidInstanceToken(request.headers)) {
+    if (admin) await auditAdminGateDenial(request,'instance_token_required')
     return reply.code(401).send(fail(40100, 'Invalid or missing instance token'))
+  }
+  if (admin && request.headers[ADMIN_HEADER] !== undefined) {
+    // A bad/disabled dedicated key never falls through to a privileged business credential.
+    await requireAdminPermission(request, reply); return
   }
   if (isPublicInstanceProbe(request.method, request.url)) return
   if (isPublicAccountRoute(request.method, pathname)) return
@@ -136,7 +168,8 @@ export async function authMiddlewareHook(request: FastifyRequest, reply: Fastify
   } catch (err) {
     const presentedCredential = Boolean(request.headers.authorization || request.headers['x-api-key'])
     if (authenticationRequired || presentedCredential) {
-      return reply.code(401).send(fail(40100, err instanceof Error ? err.message : 'Unauthorized'))
+      if (admin) await auditAdminGateDenial(request,'authentication_required')
+      return reply.code(401).send(fail(40100, !admin && err instanceof Error ? err.message : 'Unauthorized'))
     }
   }
 }

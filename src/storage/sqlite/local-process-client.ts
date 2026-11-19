@@ -37,6 +37,8 @@ function resultSet(value: WireResult): ResultSet {
 
 export interface LocalSqliteOptions {
   cacheKb?: number; mmapBytes?: number; busyTimeoutMs?: number; closeTimeoutMs?: number
+  /** Metadata inspection: use SQLite query-only mode without changing the existing journal settings. */
+  inspectOnly?: boolean
   /** A replacement must not open its native connection before the old handle closes. */
   readyAfter?: Promise<void>
 }
@@ -125,7 +127,7 @@ export class LocalSqliteProcessClient implements Client {
     // fetch only configures HTTP clients and cannot cross process IPC.
     delete this.config.fetch
     this.closeTimeoutMs = Math.max(1, nonnegative(options.closeTimeoutMs, 10_000))
-    this.pragmas = [
+    this.pragmas = options.inspectOnly ? ['PRAGMA query_only=ON'] : [
       'PRAGMA journal_mode=WAL', 'PRAGMA synchronous=NORMAL',
       `PRAGMA cache_size=-${nonnegative(options.cacheKb, 20000)}`, 'PRAGMA temp_store=MEMORY',
       `PRAGMA mmap_size=${nonnegative(options.mmapBytes, 268435456)}`,

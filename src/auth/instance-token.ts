@@ -11,6 +11,15 @@ export function configureInstanceToken(expected = process.env.AETHER_INSTANCE_TO
   startupConfigured = true
 }
 
+export function instanceTokenState(value: string | undefined): 'not-set' | 'empty' | 'configured' {
+  return value === undefined ? 'not-set' : value === '' ? 'empty' : 'configured'
+}
+
+/** Describe the value captured by the live gate, without exposing it or re-reading mutable settings. */
+export function getStartupInstanceTokenState() {
+  return instanceTokenState(startupInstanceToken)
+}
+
 /** This process-local gate is independent of optional tenant authentication and never returns the secret. */
 export function hasValidInstanceToken(
   headers: Record<string, string | string[] | undefined>,

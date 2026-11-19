@@ -11,7 +11,7 @@
 | 第一次使用、配置模型与工作区 | [桌面用户指南](../../aether-code/docs/user-guide.md) |
 | 查找全部界面功能 | [桌面功能源码地图](../../aether-code/docs/feature-map.md) |
 | 登录、绑定第三方与找回原账号 | [桌面账号说明](../../aether-code/docs/accounts-and-login.md) |
-| 独立启动引擎 | [快速开始](docs/getting-started.md) |
+| 进入引擎后台、管理成员与角色、查看服务器指标和实例令牌 | [快速开始](docs/getting-started.md)、[管理员指南](operations/engine-admin.md) |
 | 理解模块分工 | [系统架构](docs/overview.md) |
 | 查找保留资料与文档状态 | [全量文档清单](documentation-inventory.md) |
 

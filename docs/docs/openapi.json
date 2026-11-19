@@ -12,6 +12,594 @@
     }
   ],
   "paths": {
+    "/admin": {
+      "get": {
+        "summary": "GET /admin",
+        "tags": [
+          "admin"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/routes/admin.ts:16",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      }
+    },
+    "/admin/": {
+      "get": {
+        "summary": "GET /admin/",
+        "tags": [
+          "admin"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/routes/admin.ts:17",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      }
+    },
+    "/admin/app.css": {
+      "get": {
+        "summary": "GET /admin/app.css",
+        "tags": [
+          "admin"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/routes/admin.ts:19",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      }
+    },
+    "/admin/app.js": {
+      "get": {
+        "summary": "GET /admin/app.js",
+        "tags": [
+          "admin"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/routes/admin.ts:18",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      }
+    },
+    "/admin/audit": {
+      "get": {
+        "summary": "GET /admin/audit",
+        "tags": [
+          "admin-rbac"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/routes/admin-rbac.ts:31",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      }
+    },
+    "/admin/me": {
+      "get": {
+        "summary": "GET /admin/me",
+        "tags": [
+          "admin-rbac"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/routes/admin-rbac.ts:13",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      }
+    },
+    "/admin/members": {
+      "get": {
+        "summary": "GET /admin/members",
+        "tags": [
+          "admin-rbac"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/routes/admin-rbac.ts:18",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      },
+      "post": {
+        "summary": "POST /admin/members",
+        "tags": [
+          "admin-rbac"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/routes/admin-rbac.ts:20",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      }
+    },
+    "/admin/members/{id}": {
+      "delete": {
+        "summary": "DELETE /admin/members/:id",
+        "tags": [
+          "admin-rbac"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/routes/admin-rbac.ts:22",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      },
+      "get": {
+        "summary": "GET /admin/members/:id",
+        "tags": [
+          "admin-rbac"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/routes/admin-rbac.ts:19",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      },
+      "patch": {
+        "summary": "PATCH /admin/members/:id",
+        "tags": [
+          "admin-rbac"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/routes/admin-rbac.ts:21",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      }
+    },
+    "/admin/members/{id}/credentials": {
+      "get": {
+        "summary": "GET /admin/members/:id/credentials",
+        "tags": [
+          "admin-rbac"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/routes/admin-rbac.ts:23",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      },
+      "post": {
+        "summary": "POST /admin/members/:id/credentials",
+        "tags": [
+          "admin-rbac"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/routes/admin-rbac.ts:24",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      }
+    },
+    "/admin/members/{id}/credentials/{keyId}": {
+      "delete": {
+        "summary": "DELETE /admin/members/:id/credentials/:keyId",
+        "tags": [
+          "admin-rbac"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/routes/admin-rbac.ts:25",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "keyId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      }
+    },
+    "/admin/monitor": {
+      "get": {
+        "summary": "GET /admin/monitor",
+        "tags": [
+          "admin"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/routes/admin.ts:24",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      }
+    },
+    "/admin/permissions": {
+      "get": {
+        "summary": "GET /admin/permissions",
+        "tags": [
+          "admin-rbac"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/routes/admin-rbac.ts:14",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      }
+    },
+    "/admin/roles": {
+      "get": {
+        "summary": "GET /admin/roles",
+        "tags": [
+          "admin-rbac"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/routes/admin-rbac.ts:26",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      },
+      "post": {
+        "summary": "POST /admin/roles",
+        "tags": [
+          "admin-rbac"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/routes/admin-rbac.ts:28",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      }
+    },
+    "/admin/roles/{id}": {
+      "delete": {
+        "summary": "DELETE /admin/roles/:id",
+        "tags": [
+          "admin-rbac"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/routes/admin-rbac.ts:30",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      },
+      "get": {
+        "summary": "GET /admin/roles/:id",
+        "tags": [
+          "admin-rbac"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/routes/admin-rbac.ts:27",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      },
+      "patch": {
+        "summary": "PATCH /admin/roles/:id",
+        "tags": [
+          "admin-rbac"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/routes/admin-rbac.ts:29",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      }
+    },
+    "/admin/rules": {
+      "get": {
+        "summary": "GET /admin/rules",
+        "tags": [
+          "rules-routes"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/admin/rules-routes.ts:9",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      },
+      "post": {
+        "summary": "POST /admin/rules",
+        "tags": [
+          "rules-routes"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/admin/rules-routes.ts:11",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      }
+    },
+    "/admin/rules/{id}": {
+      "delete": {
+        "summary": "DELETE /admin/rules/:id",
+        "tags": [
+          "rules-routes"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/admin/rules-routes.ts:15",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      },
+      "get": {
+        "summary": "GET /admin/rules/:id",
+        "tags": [
+          "rules-routes"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/admin/rules-routes.ts:10",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      },
+      "patch": {
+        "summary": "PATCH /admin/rules/:id",
+        "tags": [
+          "rules-routes"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/admin/rules-routes.ts:14",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      }
+    },
+    "/admin/rules/archive": {
+      "get": {
+        "summary": "GET /admin/rules/archive",
+        "tags": [
+          "rules-routes"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/admin/rules-routes.ts:16",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      }
+    },
+    "/admin/rules/evaluation": {
+      "get": {
+        "summary": "GET /admin/rules/evaluation",
+        "tags": [
+          "rules-routes"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/admin/rules-routes.ts:18",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      }
+    },
+    "/admin/rules/restore": {
+      "post": {
+        "summary": "POST /admin/rules/restore",
+        "tags": [
+          "rules-routes"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/admin/rules-routes.ts:17",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      }
+    },
+    "/admin/status": {
+      "get": {
+        "summary": "GET /admin/status",
+        "tags": [
+          "admin"
+        ],
+        "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
+        "x-aether-source": "src/api/http/routes/admin.ts:28",
+        "x-aether-schema-status": "handler-validated-see-source",
+        "responses": {
+          "default": {
+            "description": "由对应处理器定义，详情见源码。"
+          }
+        }
+      }
+    },
     "/api/v1/agents": {
       "get": {
         "summary": "GET /api/v1/agents",
@@ -123,7 +711,7 @@
           "browser"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/browser.ts:54",
+        "x-aether-source": "src/api/http/routes/browser.ts:55",
         "x-aether-schema-status": "static-fastify-schema",
         "x-aether-unresolved-expressions": [
           "preValidation: async (request, reply) => {\n      if (request.body?.protocolVersion !== undefined && request.body.protocolVersion !== 1 && request.body.protocolVersion !== 2) {\n        return reply.code(400).send(fail(400, 'Unsupported browser client protocol'))\n      }\n    }"
@@ -182,7 +770,7 @@
           "browser"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/browser.ts:137",
+        "x-aether-source": "src/api/http/routes/browser.ts:138",
         "x-aether-schema-status": "handler-validated-see-source",
         "parameters": [
           {
@@ -208,7 +796,7 @@
           "browser"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/browser.ts:70",
+        "x-aether-source": "src/api/http/routes/browser.ts:71",
         "x-aether-schema-status": "static-fastify-schema",
         "parameters": [
           {
@@ -234,7 +822,7 @@
           "browser"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/browser.ts:95",
+        "x-aether-source": "src/api/http/routes/browser.ts:96",
         "x-aether-schema-status": "static-fastify-schema",
         "parameters": [
           {
@@ -316,7 +904,7 @@
           "browser"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/browser.ts:116",
+        "x-aether-source": "src/api/http/routes/browser.ts:117",
         "x-aether-schema-status": "static-fastify-schema",
         "x-aether-unresolved-expressions": [
           "preValidation: async (request, reply) => {\n      if (!exactNativeResult(request.body)) return reply.code(400).send(fail(400, 'Invalid native browser result types'))\n    }"
@@ -1148,7 +1736,7 @@
           "chat"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/chat.ts:576",
+        "x-aether-source": "src/api/http/routes/chat.ts:584",
         "x-aether-schema-status": "static-fastify-schema",
         "responses": {
           "default": {
@@ -1461,7 +2049,7 @@
           "chat"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/chat.ts:522",
+        "x-aether-source": "src/api/http/routes/chat.ts:530",
         "x-aether-schema-status": "static-fastify-schema",
         "responses": {
           "default": {
@@ -1567,7 +2155,7 @@
           "chat"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/chat.ts:2186",
+        "x-aether-source": "src/api/http/routes/chat.ts:2221",
         "x-aether-schema-status": "handler-validated-see-source",
         "responses": {
           "default": {
@@ -1583,7 +2171,7 @@
           "chat"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/chat.ts:2000",
+        "x-aether-source": "src/api/http/routes/chat.ts:2035",
         "x-aether-schema-status": "handler-validated-see-source",
         "responses": {
           "default": {
@@ -1673,7 +2261,7 @@
           "chat"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/chat.ts:2223",
+        "x-aether-source": "src/api/http/routes/chat.ts:2258",
         "x-aether-schema-status": "static-fastify-schema",
         "parameters": [
           {
@@ -1718,7 +2306,7 @@
           "chat"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/chat.ts:2192",
+        "x-aether-source": "src/api/http/routes/chat.ts:2227",
         "x-aether-schema-status": "static-fastify-schema",
         "parameters": [
           {
@@ -1745,7 +2333,7 @@
           "chat"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/chat.ts:2254",
+        "x-aether-source": "src/api/http/routes/chat.ts:2289",
         "x-aether-schema-status": "static-fastify-schema",
         "parameters": [
           {
@@ -2008,7 +2596,7 @@
           "command-jobs"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/command-jobs.ts:16",
+        "x-aether-source": "src/api/http/routes/command-jobs.ts:15",
         "x-aether-schema-status": "handler-validated-see-source",
         "responses": {
           "default": {
@@ -2024,7 +2612,7 @@
           "command-jobs"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/command-jobs.ts:80",
+        "x-aether-source": "src/api/http/routes/command-jobs.ts:68",
         "x-aether-schema-status": "handler-validated-see-source",
         "parameters": [
           {
@@ -2048,7 +2636,7 @@
           "command-jobs"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/command-jobs.ts:21",
+        "x-aether-source": "src/api/http/routes/command-jobs.ts:20",
         "x-aether-schema-status": "handler-validated-see-source",
         "parameters": [
           {
@@ -2074,7 +2662,7 @@
           "command-jobs"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/command-jobs.ts:93",
+        "x-aether-source": "src/api/http/routes/command-jobs.ts:81",
         "x-aether-schema-status": "handler-validated-see-source",
         "parameters": [
           {
@@ -2100,7 +2688,7 @@
           "command-jobs"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/command-jobs.ts:27",
+        "x-aether-source": "src/api/http/routes/command-jobs.ts:26",
         "x-aether-schema-status": "handler-validated-see-source",
         "parameters": [
           {
@@ -2126,7 +2714,7 @@
           "command-jobs"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/command-jobs.ts:50",
+        "x-aether-source": "src/api/http/routes/command-jobs.ts:53",
         "x-aether-schema-status": "handler-validated-see-source",
         "parameters": [
           {
@@ -5760,7 +6348,7 @@
           "chat"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/chat.ts:553",
+        "x-aether-source": "src/api/http/routes/chat.ts:561",
         "x-aether-schema-status": "static-fastify-schema",
         "responses": {
           "default": {
@@ -6406,7 +6994,7 @@
           "workbench"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/workbench.ts:27",
+        "x-aether-source": "src/api/http/routes/workbench.ts:28",
         "x-aether-schema-status": "handler-validated-see-source",
         "responses": {
           "default": {
@@ -6422,7 +7010,7 @@
           "workbench"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/workbench.ts:44",
+        "x-aether-source": "src/api/http/routes/workbench.ts:45",
         "x-aether-schema-status": "handler-validated-see-source",
         "parameters": [
           {
@@ -6448,7 +7036,7 @@
           "workbench"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/workbench.ts:31",
+        "x-aether-source": "src/api/http/routes/workbench.ts:32",
         "x-aether-schema-status": "handler-validated-see-source",
         "parameters": [
           {
@@ -6474,7 +7062,7 @@
           "workbench"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/workbench.ts:39",
+        "x-aether-source": "src/api/http/routes/workbench.ts:40",
         "x-aether-schema-status": "handler-validated-see-source",
         "parameters": [
           {
@@ -6500,7 +7088,7 @@
           "workbench"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/workbench.ts:35",
+        "x-aether-source": "src/api/http/routes/workbench.ts:36",
         "x-aether-schema-status": "handler-validated-see-source",
         "parameters": [
           {
@@ -7259,7 +7847,7 @@
           "auth"
         ],
         "description": "参数、权限与响应以链接源码为准。JSON 接口需同时检查 HTTP 状态与业务 code；SSE、WebSocket、下载响应不是统一 JSON。",
-        "x-aether-source": "src/api/http/routes/auth.ts:33",
+        "x-aether-source": "src/api/http/routes/auth.ts:37",
         "x-aether-schema-status": "static-fastify-schema",
         "responses": {
           "default": {
@@ -7277,8 +7865,7 @@
                 ],
                 "properties": {
                   "token": {
-                    "type": "string",
-                    "minLength": 1
+                    "type": "string"
                   },
                   "userId": {
                     "type": "string",

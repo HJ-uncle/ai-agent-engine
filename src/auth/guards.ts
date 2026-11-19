@@ -14,6 +14,12 @@ import type { AuthContext } from './types.js'
 
 export const ERROR_FORBIDDEN = 41015
 
+/** Administrator of this tenant; a fallback JWT identity does not confer default-tenant administration. */
+export function canAdministerTenant(auth: AuthContext | undefined, tenantId: string): boolean {
+  if (!auth || auth.method === 'none' || auth.tenantId !== tenantId || !auth.roles?.includes('admin')) return false
+  return tenantId !== 'default' || auth.method !== 'jwt' || auth.jwtDeclaresDefaultTenant === true
+}
+
 /** The same trusted-role decision backs mutation guards and read-only capability hints. */
 export function hasRoleAccess(auth: AuthContext | undefined, ...roles: string[]): boolean {
   if (process.env.AUTH_ENABLED === 'false' && (!auth || auth.method === 'none')) return true

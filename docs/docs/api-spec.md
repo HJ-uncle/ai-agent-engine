@@ -6,6 +6,7 @@
 
 | 入口 | 前缀与用途 |
 |---|---|
+| /admin/、/admin/status | 管理网页及其实例状态接口；独立于业务 API 前缀。见[后台使用](../operations/engine-admin.md) |
 | /health、/meta、/metrics、/openapi.json | 根路径；健康、运行版本、指标、路由目录 |
 | /api/v1/models | 模型配置、测试和能力管理；路由声明已经包含完整前缀 |
 | /auth/user、/auth/account | 根路径；旧用户管理和当前账号接口 |
@@ -16,14 +17,14 @@
 
 ## 身份与请求头
 
-1. 部署设置 AETHER_INSTANCE_TOKEN 后，请求先通过 X-Aether-Instance-Token 实例门禁。健康/元信息探针和浏览器第三方回调有明确例外；公开账号入口只免用户登录，不代表免实例令牌。
+1. 部署设置 AETHER_INSTANCE_TOKEN 后，请求先通过 X-Aether-Instance-Token 实例门禁。健康/元信息探针、浏览器第三方回调和管理页固定的只读静态资源有明确例外；公开账号入口只免用户登录，不代表免实例令牌。
 2. 业务身份优先验证 X-API-Key，其次验证 Authorization: Bearer。aether_session_ 前缀走可撤销账号 session，其他 Bearer 走 JWT。
 3. tenantId 来自认证结果。X-Tenant-ID、请求体内的 userId/roles 不赋予身份或权限。设置、模型、技能管理等接口还有角色要求。
 4. AUTH_ENABLED=false 允许未识别到支持凭据的请求成为 default 本地匿名身份。已识别的非空 X-API-Key 或精确 Bearer 前缀凭据验证失败仍拒绝；未知认证方案不会因此变成访问控制。账号管理、工作区授权和实例门禁仍各自生效，远端部署不要关闭用户认证。
 
 X-Request-ID 与 X-Client-Version 可以提供，缺省时服务端补默认值，不是必须请求头。使用 JSON 请求体时才设置 Content-Type: application/json；空 GET/DELETE 不要附带一个虚假的空 JSON body。
 
-账号入口、刷新单飞与第三方流程见[账号机制](../account-login.md)、[第三方登录](../account-external-login.md)。/auth/user 需要同租户管理员，或本地匿名 bootstrap 条件，不是公开注册接口。
+账号入口、刷新单飞与第三方流程见[账号机制](../account-login.md)、[第三方登录](../account-external-login.md)。独立服务 `POST /auth/user` 需要已验证的同租户管理员；只有桌面自管回环实例可在带有效实例令牌时首次登记空的默认租户。管理入口 `/admin/` 及其静态资源允许匿名 GET/HEAD；`/admin/me`、`/admin/status`、`/admin/monitor` 和其他管理数据即使在 `AUTH_ENABLED=false` 时也要求独立后台身份（`X-Aether-Admin-Key`）或恢复管理员身份，以及已配置的实例令牌。成员列表、角色、密钥、审计和监控规则按后台角色的权限逐项检查；普通用户角色不代表后台权限。详见[管理员指南](../operations/engine-admin.md)。使用默认租户的 JWT 管理时，签名载荷须明确包含 `tenantId: "default"` 和 `admin` 角色；普通业务请求保留原有身份解析规则。
 
 ## 响应和错误
 
@@ -67,6 +68,17 @@ inlineSkills 只提供上下文能力说明，不等于安装可执行工具；�
 ## 运行、恢复与幂等
 
 durable 模式关闭页面或断开观察连接不等于停止运行；用户停止应调用 POST /api/v1/chat/cancel。重连用 GET /api/v1/chat/stream?sessionId=...&lastEventId=...，先恢复快照再回放。游标过期或没有可回放流返回 HTTP 409 / 40902 snapshot_required，应读取 GET /api/v1/chat/snapshot，而不是重新 POST 用户输入。
+
+用户主动停止时，`POST /api/v1/chat/cancel` 与原来的 `POST /api/v1/chat` 是两个请求。取消请求带 `sessionId`，已知目标时可再传 `runId` 只停止那一次运行。取消接口返回 `200` 时仍要看 `data.cancelled` 和 `data.settled`：没有匹配的活动任务时两者都是 `false`。
+
+如果用户在模型或工具开始执行前点停止，**原对话请求**可能有两种回执：
+
+| 接纳进度 | 原对话请求返回 | 客户端如何处理 |
+|---|---|---|
+| 尚未创建本次运行记录 | HTTP `499`，JSON `code: 49900`、`data: null` | 结束该请求的等待状态。没有本次 `runId` 可展示，不要附会上一次运行或自动重发。 |
+| 本次运行已落库，用户停止且该次尝试的取消状态已确认 | HTTP `200`、`text/event-stream`；`run.status: "cancelled"` 的状态帧，随后是 `[DONE]` | 以 `sessionId`、`runId` 和 `attemptId` 匹配当前尝试；本次没有启动模型或执行获批工具，不生成助手答复，也不回放上一轮输出。 |
+
+持久化出错或回执无法确认时，不应推断为用户主动取消；保留错误，必要时查询接纳收据和运行快照。已经开始执行的运行沿用正常流式停止流程，停止也不会撤销先前已经完成的操作。
 
 当前接纳协议提供 /chat/admission/context、/chat/admission/receipt 与 /chat/continuation/receipt。requestKey、规范化 bodyDigest、namespace/generation 及前驱 run/attempt/version 共同约束重复提交和续跑。不要自行将普通 JSON.stringify 的哈希当成协议 digest；复用 [root-admission](../../src/storage/root-admission/) 中的 canonicalAdmissionBody 和 continuation 契约。
 

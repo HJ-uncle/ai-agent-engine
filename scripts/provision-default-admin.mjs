@@ -9,7 +9,7 @@
  *   node scripts/provision-default-admin.mjs --out <0600-file> [--data <db>]
  */
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, unlinkSync, writeFileSync, chmodSync } from 'node:fs'
+import { existsSync, mkdirSync, unlinkSync, writeFileSync, openSync, closeSync, fchmodSync } from 'node:fs'
 import path from 'node:path'
 import { createClient } from '@libsql/client'
 
@@ -31,6 +31,11 @@ if (existsSync(output)) {
   process.exit(2)
 }
 
+if (!existsSync(path.resolve(databasePath))) {
+  console.error('Initialize the engine first and pass its SQLite file with --data. No key was created.')
+  process.exit(2)
+}
+
 const db = createClient({ url: `file:${path.resolve(databasePath)}` })
 let keyFileWritten = false
 try {
@@ -46,9 +51,12 @@ try {
     const hash = createHash('sha256').update(apiKey).digest('hex')
     mkdirSync(path.dirname(output), { recursive: true })
     // Write first so a successful DB insert always has a recoverable key.
-    writeFileSync(output, `${apiKey}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
-    chmodSync(output, 0o600)
+    const fd = openSync(output, 'wx', 0o600)
     keyFileWritten = true
+    try {
+      fchmodSync(fd, 0o600)
+      writeFileSync(fd, `${apiKey}\n`, 'utf8')
+    } finally { closeSync(fd) }
     const id = randomBytes(16).toString('hex')
     await db.execute({
       sql: `INSERT INTO users (id, tenant_id, api_key_hash, external_id, created_at)

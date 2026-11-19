@@ -137,8 +137,24 @@ const visitMounts = node => {
 }
 visitMounts(serverSource.ast)
 if (!directMounts.size) throw new Error('No direct HTTP route registrations found')
+// Management pages split HTTP registration from their static assets and storage. Inherit the
+// actual mount of the parent route, including helper functions called with its Fastify instance.
+const panelRoot = path.join(root, 'src/api/http/routes/admin.ts')
+if (directMounts.has(panelRoot)) {
+  const parent = source(panelRoot)
+  const scan = node => {
+    if (ts.isCallExpression(node)) {
+      const delegated = ts.isIdentifier(node.expression) && node.arguments[0]?.getText() === 'fastify' ? node.expression :
+        isRegister(node) && node.arguments[0] && ts.isIdentifier(node.arguments[0]) ? node.arguments[0] : null
+      const target = delegated && parent.imports.get(delegated.text)?.[0]
+      if (target && (path.dirname(target) === path.join(root, 'src/api/http/admin') || (path.dirname(target) === path.dirname(panelRoot) && path.basename(target).startsWith('admin-')))) directMounts.set(target,directMounts.get(panelRoot))
+    }
+    ts.forEachChild(node,scan)
+  }
+  scan(parent.ast)
+}
 const routes = [], unresolvedRoutes = []
-const routeFiles = tracked(root).filter(file => (file.startsWith('src/api/http/routes/') || file === 'src/workspace/search/routes.ts') && file.endsWith('.ts') && !file.includes('/__tests__/'))
+const routeFiles = tracked(root).filter(file => (file.startsWith('src/api/http/routes/') || (file.startsWith('src/api/http/admin/') && directMounts.has(path.join(root,file))) || file === 'src/workspace/search/routes.ts') && file.endsWith('.ts') && !file.includes('/__tests__/'))
 for (const relative of routeFiles) {
   const file = path.join(root, relative), { ast } = source(file)
   const visit = node => {

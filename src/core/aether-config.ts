@@ -79,8 +79,9 @@ function readAetherJson(dir: string, filename = 'aether.json'): Partial<AetherCo
   if (!fs.existsSync(file)) return null
   try {
     return JSON.parse(fs.readFileSync(file, 'utf-8')) as Partial<AetherConfig>
-  } catch (err) {
-    logger.warn({ err: (err as Error)?.message, file }, `aether-config: failed to parse ${filename}, ignored`)
+  } catch {
+    // A JSON parser error can quote a fragment of the file, including credentials.
+    logger.warn({ file }, `aether-config: failed to parse ${filename}, ignored`)
     return null
   }
 }

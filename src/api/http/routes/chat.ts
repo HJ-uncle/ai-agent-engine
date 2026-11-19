@@ -287,7 +287,7 @@ function makeAbortKey(tenantId: string, sessionId: string): string {
 // Also cancel requests still preparing their model/registry before a controller exists.
 const cancellationEpochs = new Map<string, number>()
 const pendingAdmissions = new Map<string, Set<Promise<void>>>()
-const ownedRootPreparations = new Map<string, { controller: AbortController; done: Promise<void>; attemptId: string }>()
+const ownedRootPreparations = new Map<string, { sessionId: string; controller: AbortController; done: Promise<void>; attemptId: string }>()
 const requestPreparationRoots = new WeakMap<Promise<void>, Map<string, string>>()
 const preparationRootKey = (tenantId: string, runId: string) => JSON.stringify([tenantId, runId])
 
@@ -344,28 +344,35 @@ export function unregisterActiveChat(tenantId: string, sessionId: string, contro
   }
 }
 
-export function abortActiveChat(tenantId: string, sessionId: string, reason = 'User cancelled'): boolean {
+// Only the user stop endpoint creates this reason; shutdown, disconnect and storage errors
+// must remain distinguishable even when they race with a cancellation request.
+class UserChatStop extends Error {}
+function stopError(stop: string | Error): Error { return typeof stop === 'string' ? new Error(stop) : stop }
+function throwIfUserStopped(signal: AbortSignal): void { if (signal.reason instanceof UserChatStop) throw signal.reason }
+
+export function abortActiveChat(tenantId: string, sessionId: string, stop: string | Error = 'User cancelled'): boolean {
   const key = makeAbortKey(tenantId, sessionId)
   let cancelled = false
   for (const controller of preparingChatAborters.get(key) ?? []) {
-    if (!controller.signal.aborted) { controller.abort(new Error(reason)); cancelled = true }
+    if (!controller.signal.aborted) { controller.abort(stopError(stop)); cancelled = true }
   }
   const controller = activeChatAborters.get(key)
   if (!controller || controller.signal.aborted) return cancelled
-  try { controller.abort(new Error(reason)) } catch { /* noop */ }
+  try { controller.abort(stopError(stop)) } catch { /* noop */ }
   activeChatAborters.delete(key)
   return true
 }
 
 /** Exact owned stop joins the producer; viewer disconnect is never this API. */
-export async function stopOwnedRoot(tenantId: string, sessionId: string, runId: string, reason = 'Owned run cancelled', expectedAttemptId?: string,
+export async function stopOwnedRoot(tenantId: string, sessionId: string, runId: string, stop: string | Error = 'Owned run cancelled', expectedAttemptId?: string,
   commandsAtBoundary?: CommandScopeCapture | null): Promise<boolean> {
+  const cause = stopError(stop), reason = cause.message
   // The precise preparation identity is registered before its root write. Do
   // not wait for a held history/commit lease before revoking that dispatch.
   const currentPreparation = ownedRootPreparations.get(preparationRootKey(tenantId, runId))
-  const preparationAtBoundary = !expectedAttemptId || currentPreparation?.attemptId === expectedAttemptId ? currentPreparation : undefined
+  const preparationAtBoundary = currentPreparation?.sessionId === sessionId && (!expectedAttemptId || currentPreparation.attemptId === expectedAttemptId) ? currentPreparation : undefined
   const commands = commandsAtBoundary === undefined ? commandJobs.captureScope({ tenantId, sessionId, runId }) : commandsAtBoundary
-  preparationAtBoundary?.controller.abort(new Error(reason))
+  preparationAtBoundary?.controller.abort(cause)
   for (const cap of getExecutionOwners().ownedRoots()) {
     const binding = serviceForOwner(cap).record(cap).binding
     if (binding.tenantId === tenantId && binding.rootSessionId === sessionId && binding.rootRunId === runId
@@ -380,10 +387,10 @@ export async function stopOwnedRoot(tenantId: string, sessionId: string, runId: 
     const record = owner ? service!.record(owner) : undefined
     if (owner) service!.fence(owner, 'cancel', reason)
     const preparation = preparationAtBoundary
-    if (preparation && !preparation.controller.signal.aborted) preparation.controller.abort(new Error(reason))
+    if (preparation && !preparation.controller.signal.aborted) preparation.controller.abort(cause)
     const bus = activeStreams.get(makeAbortKey(tenantId, sessionId))
     const busRun = bus?.snapshot().projection.find(frame => frame.run)?.run as RootRun | undefined
-    if (busRun?.runId === runId && !bus?.abortController.signal.aborted) bus?.abortController.abort(new Error(reason))
+    if (busRun?.runId === runId && !bus?.abortController.signal.aborted) bus?.abortController.abort(cause)
     return { run, owner, service, record, preparation, completion: record?.completion, bus: busRun?.runId === runId ? bus : undefined }
   })
   if (!captured) return false
@@ -391,7 +398,7 @@ export async function stopOwnedRoot(tenantId: string, sessionId: string, runId: 
     await captured.preparation.done
     const current = await rootRunStore.get(tenantId, runId)
     if (!current || !['running','waiting'].includes(current.status)) return true
-    return stopOwnedRoot(tenantId, sessionId, runId, reason, captured.run.attemptId, commands)
+    return stopOwnedRoot(tenantId, sessionId, runId, cause, captured.run.attemptId, commands)
   }
   // Tools may be waiting on independent command job completion. Cancel that
   // exact scope before awaiting the child executor, without a history lease.
@@ -420,7 +427,8 @@ export async function stopOwnedRoot(tenantId: string, sessionId: string, runId: 
   return true
 }
 
-export async function stopOwnedSession(tenantId: string, sessionId: string, reason: string, onStoppedRoot?: (runId: string) => void): Promise<boolean> {
+export async function stopOwnedSession(tenantId: string, sessionId: string, stop: string | Error, onStoppedRoot?: (runId: string) => void): Promise<boolean> {
+  const cause = stopError(stop), reason = cause.message
   const sessionKey = makeAbortKey(tenantId, sessionId)
   // Freeze in-memory identities before waiting for a held history lease. A
   // manual turn registered after this boundary belongs to a different stop.
@@ -437,7 +445,7 @@ export async function stopOwnedSession(tenantId: string, sessionId: string, reas
     return [binding.rootRunId, binding.rootAttemptId] as const
   }))
   cancellationEpochs.set(sessionKey, (cancellationEpochs.get(sessionKey) ?? 0) + 1)
-  const preparationCancelled = abortActiveChat(tenantId, sessionId, reason)
+  const preparationCancelled = abortActiveChat(tenantId, sessionId, cause)
   for (const cap of owners) serviceForOwner(cap).fence(cap, 'cancel', reason)
   // create/answer enqueue their writes on this same queue. Enqueue the DB-only
   // recovered/parked snapshot now, before the first await: later manual writes
@@ -456,7 +464,7 @@ export async function stopOwnedSession(tenantId: string, sessionId: string, reas
     if (!identities.has(id)) identities.set(id, attemptId)
   }
   const outcomes = await Promise.allSettled([commandCompletion, ...[...identities].map(async ([runId, attemptId]) => {
-    if (await stopOwnedRoot(tenantId, sessionId, runId, reason, attemptId, null)) onStoppedRoot?.(runId)
+    if (await stopOwnedRoot(tenantId, sessionId, runId, cause, attemptId, null)) onStoppedRoot?.(runId)
   })])
   const failures = [...preparationResults, ...outcomes].filter((result): result is PromiseRejectedResult => result.status === 'rejected')
   if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'SESSION_CLEANUP_UNKNOWN')
@@ -536,10 +544,10 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
     const browserAuthority = browserAuthorityFromRequest(request)
     let cancelled = false
     if (runId) {
-      cancelled = await stopOwnedRoot(tenantId, sessionId, runId)
+      cancelled = await stopOwnedRoot(tenantId, sessionId, runId, new UserChatStop('Owned run cancelled'))
       if (cancelled && browserAuthority) browserBridge.hostDemands.releaseRoot(browserAuthority, sessionId, runId)
     } else {
-      cancelled = await stopOwnedSession(tenantId, sessionId, 'Cancelled by user via /chat/cancel', run => {
+      cancelled = await stopOwnedSession(tenantId, sessionId, new UserChatStop('Cancelled by user via /chat/cancel'), run => {
         if (browserAuthority) browserBridge.hostDemands.releaseRoot(browserAuthority, sessionId, run)
       })
     }
@@ -643,8 +651,8 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
     if (continuation && !continuationSubject) return reply.code(403).send(fail(40300, 'A verified user controller is required to continue this task'))
     const keyedAdmission = prepareUserAdmission(request.body as unknown as Record<string, unknown>, { toolProfile, runLifetime, subagentProtocol })
     const requestId = uuidv4()
-    request.body.sessionId ??= uuidv4()
-    const admissionKey = makeAbortKey(getTenantId(request), request.body.sessionId)
+    const admissionSessionId = request.body.sessionId ??= uuidv4()
+    const admissionKey = makeAbortKey(getTenantId(request), admissionSessionId)
     const admissionEpoch = cancellationEpochs.get(admissionKey) ?? 0
     const abortController = new AbortController()
     const executionService = getExecutionOwners()
@@ -658,7 +666,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
     let preparationFinished = false
     const registerRootPreparation = (runId: string, attemptId: string) => {
       preparedRootIds.set(runId, attemptId)
-      ownedRootPreparations.set(preparationRootKey(getTenantId(request), runId), { controller: abortController, done: pendingAdmission, attemptId })
+      ownedRootPreparations.set(preparationRootKey(getTenantId(request), runId), { sessionId: admissionSessionId, controller: abortController, done: pendingAdmission, attemptId })
     }
     const finishPreparation = () => {
       if (preparationFinished) return
@@ -1483,7 +1491,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
     // A queued same-session admission is cancellable before it owns a bus.
     const waitingControllers = preparingChatAborters.get(admissionKey) ?? new Set<AbortController>()
     waitingControllers.add(abortController); preparingChatAborters.set(admissionKey, waitingControllers)
-    let admission: 'duplicate' | 'stopped' | 'started'
+    let admission: 'receipt' | 'stopped' | 'started'
     try {
       admission = await (async () => {
       try {
@@ -1491,12 +1499,12 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
         if (continuation) {
           const accepted = await rootRunStore.continue(tenantId, continuation, continuationSubject, abortController.signal, registerRootPreparation)
           rootRun = accepted.run
-          if (accepted.duplicate) return 'duplicate' as const
+          if (accepted.duplicate) return 'receipt' as const
           ctx.executionContinuation = { kind: 'root', previousAttemptId: accepted.receipt.previousAttemptId, attemptId: accepted.receipt.attemptId }
         } else if (toolResponse) {
           const accepted = await rootRunStore.answer(tenantId, sessionId, toolResponse.runId, toolResponse.requestId, toolResponse.toolCallId, toolResponse.name, toolResponse.output, abortController.signal, registerRootPreparation, controllerSubjectFromRequest(request))
           rootRun = accepted.run
-          if (accepted.duplicate) return 'duplicate' as const
+          if (accepted.duplicate) return 'receipt' as const
           resumedPending = accepted.pending
           if (resumeRecord?.status === 'cancelled' && rootRun.attemptId) ctx.executionContinuation = {
             kind: 'root', previousAttemptId: resumeRecord.attemptId, attemptId: rootRun.attemptId,
@@ -1505,17 +1513,19 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
           const accepted = await rootRunStore.createUserAdmission(tenantId, resolvedModel ?? ctx.modelName ?? '', admittedWorkspacePaths,
             { ...request.body, workspacePaths: admittedWorkspacePaths, toolProfile, toolkits: selectedToolkits } as unknown as Record<string, unknown>, keyedAdmission, abortController.signal, registerRootPreparation, controllerSubjectFromRequest(request))
           rootRun = accepted.run
-          if (accepted.duplicate) return 'duplicate' as const
+          if (accepted.duplicate) return 'receipt' as const
         } else {
           rootRun = await rootRunStore.create(tenantId, sessionId, resolvedModel ?? ctx.modelName ?? '', admittedWorkspacePaths,
             { ...request.body, workspacePaths: admittedWorkspacePaths, toolProfile, toolkits: selectedToolkits } as unknown as Record<string, unknown>,
             request.body.automationRunId ? { runId: request.body.automationRunId, dispatchRequest: automationDispatchRequest,
               effectiveAgentId: effectiveAgentId ?? undefined, effectiveAgentName } : undefined, abortController.signal, registerRootPreparation, controllerSubjectFromRequest(request))
         }
-        attemptId = (await rootRunStore.get(tenantId, rootRun.runId))!.attemptId
+        attemptId = rootRun.attemptId ?? (await rootRunStore.get(tenantId, rootRun.runId))!.attemptId
+        throwIfUserStopped(abortController.signal)
         ctx.executionAttemptId = attemptId
         executionOwner = await getExecutionOwners().admitRoot({ tenantId, rootRunId: rootRun.runId, rootAttemptId: attemptId,
           controller: abortController, controllerSubject: controllerSubjectFromRequest(request) })
+        throwIfUserStopped(abortController.signal)
         ctx.executionOwner = executionOwner
         if (newStreamEvidence) publicationAuthority = new ParentPublicationAuthority(getDb(), {
           tenantId, parentSessionId: sessionId, rootSessionId: sessionId,
@@ -1618,6 +1628,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
         }
         const started = await withHistoryLock(tenantId, async () => {
           const current = await rootRunStore.get(tenantId, rootRun.runId)
+          throwIfUserStopped(abortController.signal)
           const cancelledBeforeStart = (cancellationEpochs.get(admissionKey) ?? 0) !== admissionEpoch
           if (!current || current.status !== 'running' || current.attemptId !== attemptId || isSessionHistoryMutating(tenantId, sessionId) || cancelledBeforeStart) {
             abortController.abort(new Error('Run stopped before execution'))
@@ -1672,18 +1683,33 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
       // after a restart or a database error). Do not leave request listeners or
       // a disconnect timer retaining the request and stream bus indefinitely.
       cleanupRequestListeners()
-      if (rootRun) {
-        if (executionOwner) {
-          serviceForOwner(executionOwner).registerCompletion(executionOwner, Promise.resolve())
-          await publishRun(await finishRoot({ status: abortController.signal.aborted ? 'cancelled' : 'failed', stopReason: 'Root admission failed',
-            error: { code: 'ROOT_ADMISSION_FAILED', message: error instanceof Error ? error.message : String(error), retryable: false } }))
-        } else await publishRun(await rootRunStore.update(tenantId, rootRun.runId, { status: abortController.signal.aborted ? 'cancelled' : 'failed', stopReason: 'Unstarted root admission failed' }, attemptId || undefined))
+      const userStop = error instanceof UserChatStop && error === abortController.signal.reason
+      if (!rootRun) {
+        if (userStop) return reply.code(499).send(fail(49900, 'Chat preparation cancelled'))
+        throw error
       }
-      throw error
+      const expectedAttempt = attemptId || rootRun.attemptId
+      if (userStop && !expectedAttempt) throw new Error('ROOT_CANCEL_RECEIPT_UNKNOWN')
+      const status = abortController.signal.aborted ? 'cancelled' : 'failed'
+      let settled: RootRun | null
+      if (executionOwner) {
+        serviceForOwner(executionOwner).registerCompletion(executionOwner, Promise.resolve())
+        settled = await finishRoot(userStop ? { status: 'cancelled', stopReason: error.message } : { status, stopReason: 'Root admission failed',
+          error: { code: 'ROOT_ADMISSION_FAILED', message: error instanceof Error ? error.message : String(error), retryable: false } })
+      } else settled = await rootRunStore.update(tenantId, rootRun.runId,
+        { status, stopReason: userStop ? error.message : 'Unstarted root admission failed' }, expectedAttempt)
+      if (userStop && (!settled || settled.status !== 'cancelled' || settled.runId !== rootRun.runId || settled.sessionId !== sessionId || settled.attemptId !== expectedAttempt))
+        throw new Error('ROOT_CANCEL_RECEIPT_UNKNOWN')
+      await publishRun(settled)
+      if (!userStop) throw error
+      // No producer will run its finally block; release this exact settled capability here.
+      if (executionOwner) serviceForOwner(executionOwner).releaseRoot(executionOwner)
+      // Return only this durable receipt, never a previous bus or its answer.
+      admission = 'receipt'
     }
-    if (admission === 'duplicate') {
-      async function* duplicate() { yield '\x00__run__' + JSON.stringify(rootRun) }
-      try { await sseStream(duplicate(), reply) } finally { cleanupRequestListeners() }
+    if (admission === 'receipt') {
+      async function* receipt() { yield '\x00__run__' + JSON.stringify(rootRun) }
+      try { await sseStream(receipt(), reply) } finally { cleanupRequestListeners() }
       return
     }
     if (admission === 'stopped') {

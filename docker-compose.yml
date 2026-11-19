@@ -3,7 +3,8 @@ services:
   agent-engine:
     build: .
     ports:
-      - "${PORT:-12323}:12323"
+      # Optional host IP and port (e.g. 127.0.0.1:12323); preserve existing PORT deployments.
+      - "${AETHER_PUBLISHED_PORT:-${PORT:-12323}}:12323"
     environment:
       - NODE_ENV=production
       - LLM_PROVIDER=${LLM_PROVIDER:-openai}
@@ -13,7 +14,10 @@ services:
       - WORKSPACE_ROOT=/app/workspace
       - DATA_DIR=/app/data/agent.db
       - AUTH_ENABLED=${AUTH_ENABLED:-false}
-      - JWT_SECRET=${JWT_SECRET:-change-me}
+      # Pass unset through as absent: an explicitly empty instance token closes the gate.
+      - AETHER_INSTANCE_TOKEN
+      - JWT_SECRET
+      - ENCRYPTION_KEY
       - PORT=12323
     volumes:
       - agent_workspace:/app/workspace

@@ -6,6 +6,8 @@
     "dist/**",
     "package.json",
     "scripts/apply-node-pty-patch.mjs",
+    "scripts/provision-default-admin.mjs",
+    "docs/operations/engine-admin.md",
     "scripts/patches/**",
     "README.md"
   ],

@@ -17,6 +17,15 @@ The engine SHALL admit a request with trusted tenant/session/workspace identity 
 - **AND** explicit limits passed to lower-level/internal callers SHALL still be honored
 - **AND** legacy MAX_ITERATIONS/TOKEN_BUDGET settings SHALL NOT be described as effective product limits.
 
+#### Scenario: User stops the chat before execution begins
+
+- **WHEN** a user explicitly stops a preparing chat before its root run has been created
+- **THEN** the original chat request SHALL return HTTP 499 with application code 49900 and no run; no model or approved tool SHALL execute for that request.
+- **WHEN** the root run has been admitted but the producer has not started, and cancellation of that exact session, run and attempt is confirmed in storage
+- **THEN** the original chat stream SHALL return only its cancelled run receipt and the normal end frame; it SHALL NOT replay another turn or start a model or tool.
+- **WHEN** a storage failure prevents confirmation of the terminal receipt
+- **THEN** it SHALL remain an error rather than a successful cancellation acknowledgement.
+
 ### Requirement: Complete request budget
 
 The loop SHALL budget system instructions, tools, history, dynamic request context and output reservation against the effective model window.

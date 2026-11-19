@@ -10,11 +10,11 @@
 |---|---|
 | 现行指南 | 37 |
 | 实现契约 | 17 |
-| 部署/维护流程 | 3 |
+| 部署/维护流程 | 4 |
 | 源码生成目录 | 2 |
 | 插件 HTML 公开参考/维护 | 11 |
 | 专项诊断流程（结果按原日期） | 10 |
-| 历史报告/提案（非当前承诺） | 218 |
+| 历史报告/提案（非当前承诺） | 219 |
 | 运行指令/协作约定（不作为产品手册改写） | 30 |
 | 运行页面/示例资产（非说明文档） | 4 |
 
@@ -66,6 +66,7 @@
 | [docs/examples/workbench-extension/README.md](<examples/workbench-extension/README.md>) | 现行指南 | 本文件；相关专题见文档首页 |
 | [docs/examples/workbench-extension/ui/index.html](<examples/workbench-extension/ui/index.html>) | 运行页面/示例资产（非说明文档） | 本文件；相关专题见文档首页 |
 | [docs/multimodal-design.md](<multimodal-design.md>) | 现行指南 | 本文件；相关专题见文档首页 |
+| [docs/operations/engine-admin.md](<operations/engine-admin.md>) | 部署/维护流程 | 本文件；相关专题见文档首页 |
 | [docs/operations/session-storage-maintenance.md](<operations/session-storage-maintenance.md>) | 部署/维护流程 | 本文件；相关专题见文档首页 |
 | [docs/plugin-project-v1.md](<plugin-project-v1.md>) | 现行指南 | 本文件；相关专题见文档首页 |
 | [docs/plugin-ui-contributions.md](<plugin-ui-contributions.md>) | 现行指南 | 本文件；相关专题见文档首页 |
@@ -229,6 +230,7 @@
 | [docs/editor-code-oss.md](<../../aether-code/docs/editor-code-oss.md>) | 现行指南 | 本文件；相关专题见文档首页 |
 | [docs/empty-model-response-investigation.md](<../../aether-code/docs/empty-model-response-investigation.md>) | 历史报告/提案（非当前承诺） | [现行指南](../../aether-code/docs/user-guide.md) |
 | [docs/engine-client-interaction-2026-11-03.md](<../../aether-code/docs/engine-client-interaction-2026-11-03.md>) | 历史报告/提案（非当前承诺） | [现行指南](../../aether-code/docs/user-guide.md) |
+| [docs/engine-management-audit-2026-11-18.md](<../../aether-code/docs/engine-management-audit-2026-11-18.md>) | 历史报告/提案（非当前承诺） | [现行指南](../../aether-code/docs/user-guide.md) |
 | [docs/engine-monitor-design-2026-10-15.md](<../../aether-code/docs/engine-monitor-design-2026-10-15.md>) | 历史报告/提案（非当前承诺） | [现行指南](../../aether-code/docs/user-guide.md) |
 | [docs/engine-oom-investigation-2026-10-14.md](<../../aether-code/docs/engine-oom-investigation-2026-10-14.md>) | 历史报告/提案（非当前承诺） | [现行指南](../../aether-code/docs/user-guide.md) |
 | [docs/feature-map.md](<../../aether-code/docs/feature-map.md>) | 现行指南 | 本文件；相关专题见文档首页 |

@@ -3,6 +3,10 @@ import { createHash } from 'node:crypto'
 import { v4 as uuidv4 } from 'uuid'
 import { getDb } from '../../../storage/sqlite/db.js'
 import { success, fail } from '../response.js'
+import { isOwnedDesktopRequest } from '../middleware.js'
+import { ADMIN_KEY_PREFIX } from '../../../auth/admin-key-format.js'
+import { canAdministerTenant } from '../../../auth/guards.js'
+import type { AuthContext } from '../../../auth/types.js'
 
 /**
  * POST /auth/user
@@ -36,7 +40,7 @@ export async function authRoutes(fastify: FastifyInstance) {
         type: 'object',
         required: ['token', 'userId'],
         properties: {
-          token: { type: 'string', minLength: 1 },
+          token: { type: 'string' },
           userId: { type: 'string', minLength: 1 },
           name: { type: 'string' },
           email: { type: 'string' },
@@ -51,18 +55,22 @@ export async function authRoutes(fastify: FastifyInstance) {
       email?: string
     }
 
-    const db = getDb()
-    const authContext = (request as any).authContext as { tenantId?: string; method?: string; roles?: string[] } | undefined
+    const authContext = (request as typeof request & { authContext?: AuthContext }).authContext
     const tenantId = userId.trim()
-    const localBootstrap = process.env.AUTH_ENABLED === 'false' && authContext?.method === 'none' && tenantId === 'default'
-    const authenticatedAdmin = Boolean(authContext && authContext.method !== 'none' && authContext.roles?.includes('admin'))
+    const localBootstrap = authContext?.method === 'none' && tenantId === 'default' && isOwnedDesktopRequest(request)
+    const authenticatedAdmin = canAdministerTenant(authContext, tenantId)
     if (!localBootstrap && !authenticatedAdmin) {
-      return reply.code(403).send(fail(40300, '仅当前租户管理员可管理认证用户'))
+      const crossTenant = authContext?.roles?.includes('admin') && authContext.tenantId !== tenantId
+      return reply.code(403).send(fail(40300, crossTenant ? '禁止跨租户管理认证用户' : '仅当前租户管理员可管理认证用户'))
     }
-    if (authenticatedAdmin && authContext?.tenantId !== tenantId) {
-      return reply.code(403).send(fail(40300, '禁止跨租户管理认证用户'))
+    // Register only keys that the desktop and admin page can send unchanged as X-API-Key.
+    // This limit also permits using an existing key in the account recovery flow.
+    if (!token || token.length > 4096 || /[^\x21-\x7e]/.test(token)) {
+      return reply.code(400).send(fail(40000, 'API Key 须为 1 至 4096 个可见 ASCII 字符，不能包含空白。'))
     }
-    const tokenHash = createHash('sha256').update(token.trim()).digest('hex')
+    if (token.startsWith(ADMIN_KEY_PREFIX)) return reply.code(400).send(fail(40000, '后台密钥前缀不能用于业务 API Key。'))
+    const db = getDb()
+    const tokenHash = createHash('sha256').update(token).digest('hex')
     const now = Math.floor(Date.now() / 1000)
 
     // 查询是否已存在
@@ -73,6 +81,7 @@ export async function authRoutes(fastify: FastifyInstance) {
 
     let id: string
     if (existing.rows.length > 0) {
+      if (!authenticatedAdmin) return reply.code(403).send(fail(40300, '更新密钥需要已验证的管理员身份'))
       // UPDATE — 刷新 token hash，可选更新 name / email
       id = existing.rows[0]['id'] as string
       await db.execute({
