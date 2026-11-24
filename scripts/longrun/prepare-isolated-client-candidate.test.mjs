@@ -1,5 +1,5 @@
 import fs from 'node:fs'
-import os from 'node:os'
+import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import test from 'node:test'
@@ -8,6 +8,10 @@ import { assertDestination, parseArguments, prepareCandidate, productionDistPath
 
 const buildId = 'sha256:' + 'a'.repeat(64)
 const oldBuildId = 'sha256:' + 'b'.repeat(64)
+const repo = fs.realpathSync(fileURLToPath(new URL('../../', import.meta.url)))
+const fixtures = path.join(repo, '.e2e-tmp', 'isolated-client-candidate')
+const iconPath = 'api/http/admin/icon.png'
+const brandIcon = fs.readFileSync(path.join(repo, 'src', iconPath))
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex')
 function put(file, text) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text) }
 function allFiles(root, prefix = '') {
@@ -17,10 +21,15 @@ function allFiles(root, prefix = '') {
   })
 }
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'candidate-client-guard-'))
+  for (const directory of [path.dirname(fixtures), fixtures]) {
+    if (!fs.existsSync(directory)) fs.mkdirSync(directory)
+    assert.equal(fs.realpathSync(directory), directory, 'fixture directory must stay inside the repository')
+  }
+  const root = fs.mkdtempSync(path.join(fixtures, 'candidate-client-guard-'))
   t.after(() => {
     const resolved = fs.realpathSync(root)
-    assert.equal(path.dirname(resolved).toLowerCase(), fs.realpathSync(os.tmpdir()).toLowerCase())
+    assert.equal(path.dirname(resolved), fixtures)
+    assert.equal(fs.lstatSync(root).isSymbolicLink(), false)
     assert.match(path.basename(resolved), /^candidate-client-guard-/)
     fs.rmSync(resolved, { recursive: true, force: true })
   })
@@ -39,12 +48,14 @@ function fixture(t) {
   put(path.join(candidateDist, 'runtime/build-identity.js'), `export function createBuildManifest() {return {buildId:${JSON.stringify(buildId)}}}`)
   put(path.join(candidateDist, 'storage/sqlite/local-process-runtime.js'), 'candidate sqlite')
   put(path.join(candidateDist, 'terminal/workspace-shell.mjs'), 'candidate shell')
+  put(path.join(candidateDist, iconPath), brandIcon)
   put(path.join(candidateDist, '__tests__/not-production.test.js'), 'must not stage')
   put(path.join(candidateDist, 'main.js.map'), 'must not stage')
   const stage = path.join(clientRoot, 'resources/engine/win32-x64')
   put(path.join(stage, 'package.json'), pkg)
   put(path.join(stage, 'dist/main.js'), 'live old main')
   put(path.join(stage, 'dist/stale.js'), 'live-only obsolete candidate asset')
+  put(path.join(stage, 'dist', iconPath), 'obsolete admin icon')
   put(path.join(stage, 'runtime/node.exe'), 'fake native runtime')
   put(path.join(stage, 'node_modules/test-dependency/index.js'), 'bundled dependency')
   put(path.join(stage, 'verify-runtime.mjs'), 'old verifier')
@@ -81,6 +92,9 @@ test('prepares independent sibling artifacts and stage without changing live fil
   assert.deepEqual(allFiles(f.stage), before)
   assert.equal(fs.readFileSync(path.join(result.candidateEngineRoot, 'dist/main.js'), 'utf8'), 'candidate main')
   assert.equal(fs.readFileSync(path.join(result.runtimeStage, 'dist/main.js'), 'utf8'), 'candidate main')
+  for (const target of [result.candidateEngineRoot, result.runtimeStage]) {
+    assert.deepEqual(fs.readFileSync(path.join(target, 'dist', iconPath)), brandIcon)
+  }
   assert.equal(fs.existsSync(path.join(result.runtimeStage, 'dist/stale.js')), false)
   assert.equal(fs.existsSync(path.join(result.runtimeStage, 'dist/__tests__')), false)
   assert.equal(fs.existsSync(path.join(result.runtimeStage, 'dist/main.js.map')), false)

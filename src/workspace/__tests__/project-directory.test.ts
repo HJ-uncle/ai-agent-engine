@@ -90,6 +90,17 @@ describe('read-only project directory authorization', () => {
     expect(fs.existsSync(bindingsFile)).toBe(false)
   })
 
+  it('allows a desktop-owned primary account to read its selected project while keeping child accounts restricted', () => {
+    vi.stubEnv('AUTH_ENABLED', 'false')
+    vi.stubEnv('AETHER_DESKTOP_OWNED', '1')
+    const primaryTenant = 'account_00000000-0000-4000-8000-000000000001'
+    const childTenant = 'account_child_00000000-0000-4000-8000-000000000002'
+    const manager = new WorkspaceManager(privateRoot)
+    expect(manager.resolveProjectDirectory(primaryTenant, outside)).toBe(fs.realpathSync(outside))
+    expect(() => manager.resolveProjectDirectory(childTenant, outside)).toThrow(/outside the engine allowed workspace roots/)
+    expect(fs.existsSync(bindingsFile)).toBe(false)
+  })
+
   it.each(['relative/project', 'bad\0path', ''])('rejects malformed project path %s', input => {
     expect(() => new WorkspaceManager(privateRoot).resolveProjectDirectory('tenant', input)).toThrow(/valid server path|absolute server path/)
   })

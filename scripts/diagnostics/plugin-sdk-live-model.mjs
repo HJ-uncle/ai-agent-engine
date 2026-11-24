@@ -2,6 +2,7 @@
  * credential, copied through the existing private OS bridge into a disposable engine.
  * node scripts/diagnostics/plugin-sdk-live-model.mjs --run --source-profile <dev-profile> [--ui-plugin-archive <zip>]
  * No source profile writes, production sessions, or credential values in evidence. */
+import { issueIsolatedActivation } from './issue-fixture-activation.mjs'
 import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
 import { spawn } from 'node:child_process'
@@ -177,7 +178,7 @@ async function uiAcceptance() {
   }
   const manifest = JSON.parse(readFileSync(join(directory, 'aether-plugin.json'), 'utf8')); assert.equal(manifest.id, 'ai-authored-session-review')
   const origin = base.replace(/\/api\/v1$/, '')
-  const registration = await fetch(origin + '/auth/account/register', { method: 'POST', headers: headers(), body: '{}' })
+  const registration = await fetch(origin + '/auth/account/register', { method: 'POST', headers: headers(), body: JSON.stringify({activationCode: await issueIsolatedActivation(database)}) })
   const registered = await registration.json(), account = registered.data
   assert(registration.ok && account?.accessToken && account?.user?.tenantId, 'Isolated UI account registration failed')
   secrets.push(account.accessToken, account.refreshToken, account.recoveryKey)

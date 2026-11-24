@@ -1,3 +1,4 @@
+import { isManagedChildTenant, isPersonalAccountTenant } from '../auth/account-scope.js'
 import path from 'node:path'
 import fs from 'node:fs'
 import { randomUUID, createHash } from 'node:crypto'
@@ -141,32 +142,43 @@ export class WorkspaceManager {
     // the same exception when accepting the selection; applying it here keeps
     // persisted bindings valid after restart instead of rejecting the exact
     // project that was just selected.
-    const allowDesktopSelection = process.env.AETHER_DESKTOP_OWNED === '1' && !this.isAuthenticated()
+    const allowDesktopSelection = process.env.AETHER_DESKTOP_OWNED === '1' && !this.isAuthenticated(ctx.tenantId)
     if (!allowDesktopSelection && !this.allowedRoots.some(base => this.isContained(canonicalFilePathSync(base), actual))) {
       throw new Error('Bound workspace is outside the engine allowed workspace roots')
     }
-    if (this.isAuthenticated()) {
-      const privateRoot = this.canonicalPrivateRoot()
-      const tenant = this.isContained(privateRoot, actual)
-        ? path.relative(privateRoot, actual).split(path.sep).filter(Boolean)[0]
-        : undefined
-      if (tenant && tenant !== ctx.tenantId) throw new Error('Bound workspace belongs to another tenant')
-      if (this.isContained(privateRoot, actual) && !tenant) throw new Error('The private workspace root cannot be bound')
-    }
-    if (this.isAuthenticated()) {
-      for (const [key, owned] of bindings) {
-        if (key.split('\u0000')[0] === ctx.tenantId) continue
-        if (!fs.existsSync(owned) || !fs.statSync(owned).isDirectory()) continue
-        const other = canonicalFilePathSync(owned)
-        if (this.isContained(other, actual) || this.isContained(actual, other)) {
-          throw new Error('Bound workspace overlaps a binding belonging to another tenant')
-        }
-      }
+    if (this.shouldEnforceTenantDirectory(ctx.tenantId, actual)) {
+      this.assertTenantDirectory(ctx.tenantId,actual,bindings)
     }
     return canonical
   }
 
-  private isAuthenticated(): boolean { return process.env.AUTH_ENABLED !== 'false' }
+  private isAuthenticated(tenantId: string): boolean { return process.env.AUTH_ENABLED !== 'false' || isManagedChildTenant(tenantId) }
+
+  /**
+   * Desktop-owned no-auth engines use the OS directory picker as the operator
+   * grant. Account tenants still need the private-root partition, however, so
+   * a primary account cannot select a child account's private workspace.
+   */
+  private shouldEnforceTenantDirectory(tenantId: string, actual: string): boolean {
+    if (this.isAuthenticated(tenantId)) return true
+    if (process.env.AETHER_DESKTOP_OWNED !== '1') return isPersonalAccountTenant(tenantId)
+    const privateRoot = this.canonicalPrivateRoot()
+    return this.isContained(privateRoot, actual) || this.isContained(actual, privateRoot)
+  }
+
+  /** A containing directory also conveys access to every nested private space. Paths here are canonical. */
+  private assertTenantDirectory(tenantId: string, actual: string, bindings: Map<string,string>): void {
+    const privateRoot = this.canonicalPrivateRoot()
+    if (this.isContained(actual,privateRoot)) throw new Error('The private workspace root or its parent cannot be selected')
+    if (this.isContained(privateRoot,actual) && path.relative(privateRoot,actual).split(path.sep)[0] !== tenantId) {
+      throw new Error('workspaceRoot belongs to another tenant')
+    }
+    for (const [key,owned] of bindings) {
+      if (key.split('\u0000')[0] === tenantId || !fs.existsSync(owned) || !fs.statSync(owned).isDirectory()) continue
+      const other=canonicalFilePathSync(owned)
+      if (this.isContained(other,actual) || this.isContained(actual,other)) throw new Error('workspaceRoot overlaps a directory already bound to another tenant')
+    }
+  }
 
   private canonicalPrivateRoot(): string {
     return canonicalFilePathSync(this.root)
@@ -199,7 +211,7 @@ export class WorkspaceManager {
     this.assertContext(ctx)
     const child = this.childScope(ctx)
     if (child) return child.scratch
-    return path.resolve(ctx.scratchDir ?? this.getPath(ctx))
+    return isManagedChildTenant(ctx.tenantId) ? this.getPath(ctx) : path.resolve(ctx.scratchDir ?? this.getPath(ctx))
   }
 
   /** Called by trusted child construction, never by an HTTP/model supplied context. */
@@ -270,11 +282,14 @@ export class WorkspaceManager {
     if (bound) return Object.freeze({ root: this.validateBoundDirectory(ctx, bound, bindings), epoch: bindings.epochs.get(this.bindingKey(ctx))! })
     // Authenticated requests must bind through the operator-checked endpoint;
     // request context paths are not an authorization mechanism.
-    if (this.isAuthenticated()) {
+    if (this.isAuthenticated(ctx.tenantId)) {
       const root = this.getScratchDirectory(ctx)
       return Object.freeze({ root, epoch: `scratch:${createHash('sha256').update(this.bindingKey(ctx) + '\0' + root).digest('hex')}` })
     }
     const root = path.resolve(ctx.cwd ?? ctx.projectRoot ?? ctx.workspacePaths?.[0] ?? this.getScratchDirectory(ctx))
+    if ((ctx.cwd || ctx.projectRoot || ctx.workspacePaths?.length) && this.shouldEnforceTenantDirectory(ctx.tenantId, canonicalFilePathSync(root))) {
+      this.assertTenantDirectory(ctx.tenantId,canonicalFilePathSync(root),bindings)
+    }
     return Object.freeze({ root, epoch: `unbound:${createHash('sha256').update(this.bindingKey(ctx) + '\0' + root).digest('hex')}` })
   }
 
@@ -308,10 +323,19 @@ export class WorkspaceManager {
     const resolved = path.resolve(snapshot.root, userPath)
     const child = this.childScope(ctx)
     if (child && (snapshot.root !== child.snapshot.root || snapshot.epoch !== child.snapshot.epoch)) throw new Error('Child workspace snapshot mismatch')
-    if (!child && getSecurityMode(ctx.tenantId, ctx.sessionId) !== 'safe') return resolved
+    if (!child && getSecurityMode(ctx.tenantId, ctx.sessionId) !== 'safe') {
+      if (isPersonalAccountTenant(ctx.tenantId)) {
+        const target=canonicalFilePathSync(resolved)
+        // Ordinary in-workspace reads need no second pass over all bindings.
+        if (!this.isContained(canonicalFilePathSync(snapshot.root),target) && !this.isContained(canonicalFilePathSync(scratch),target)) {
+          this.assertTenantDirectory(ctx.tenantId,target,this.readBindings())
+        }
+      }
+      return resolved
+    }
     const actual = canonicalFilePathSync(resolved)
     const allowed = child ? [...child.roots, scratch] : [snapshot.root, scratch]
-    if (!child && !this.isAuthenticated()) {
+    if (!child && !this.isAuthenticated(ctx.tenantId)) {
       if (ctx.projectRoot) allowed.push(path.resolve(ctx.projectRoot))
       allowed.push(...(ctx.workspacePaths ?? []).map(value => path.resolve(value)))
     }
@@ -406,7 +430,7 @@ export class WorkspaceManager {
     // first output/scratch directory mentioned in that permission list.
     if (child) return [...new Set([child.snapshot.root, ...child.roots, child.scratch])]
     const paths = [this.getWorkingDirectory(ctx), this.getScratchDirectory(ctx)]
-    if (!this.isAuthenticated()) {
+    if (!this.isAuthenticated(ctx.tenantId)) {
       paths.push(...(ctx.projectRoot ? [path.resolve(ctx.projectRoot)] : []))
       paths.push(...(ctx.workspacePaths ?? []).map(p => path.resolve(p)))
     }
@@ -433,7 +457,7 @@ export class WorkspaceManager {
       const state = acquireResourceLease(`${this.bindingsFile()}.write.lock`, 'workspace binding state')
       try {
         const bindings = this.readBindings()
-        const allowDesktopSelection = process.env.AETHER_DESKTOP_OWNED === '1' && !this.isAuthenticated()
+        const allowDesktopSelection = process.env.AETHER_DESKTOP_OWNED === '1' && !this.isAuthenticated(ctx.tenantId)
         const canonical = this.validateSelectedDirectory(
           ctx.tenantId,
           workspaceRoot,
@@ -460,7 +484,7 @@ export class WorkspaceManager {
   async bindSnapshotAsync(ctx: CtxLike, workspaceRoot: string, waitMs = 30_000): Promise<Readonly<WorkspaceBindingSnapshot>> {
     this.assertContext(ctx)
     if (fs.existsSync(this.sessionLeaseFile(ctx)) || fs.existsSync(this.sessionLeaseFile(ctx) + '.recovery.lock')) {
-      const allowDesktopSelection = process.env.AETHER_DESKTOP_OWNED === '1' && !this.isAuthenticated()
+      const allowDesktopSelection = process.env.AETHER_DESKTOP_OWNED === '1' && !this.isAuthenticated(ctx.tenantId)
       const selected = this.validateSelectedDirectory(ctx.tenantId, workspaceRoot, this.readBindings(), !allowDesktopSelection)
       await recoverGitBindingLease(this.sessionLeaseFile(ctx), selected, { tenantId: ctx.tenantId!, sessionId: ctx.sessionId! })
     }
@@ -474,7 +498,7 @@ export class WorkspaceManager {
       const state = await acquireResourceLeaseAsync(`${this.bindingsFile()}.write.lock`, 'workspace binding state', undefined, waitMs)
       try {
         const bindings = this.readBindings()
-        const allowDesktopSelection = process.env.AETHER_DESKTOP_OWNED === '1' && !this.isAuthenticated()
+        const allowDesktopSelection = process.env.AETHER_DESKTOP_OWNED === '1' && !this.isAuthenticated(ctx.tenantId)
         const canonical = this.validateSelectedDirectory(
           ctx.tenantId,
           workspaceRoot,
@@ -495,8 +519,8 @@ export class WorkspaceManager {
    * explicit local projects; authenticated engines require the operator roots. */
   resolveProjectDirectory(tenantId: string, workspaceRoot: string): string {
     this.validateId(tenantId, 'tenantId')
-    const authenticated = this.isAuthenticated()
-    return this.validateSelectedDirectory(tenantId, workspaceRoot, authenticated ? this.readBindings() : new Map(), authenticated)
+    const authenticated = this.isAuthenticated(tenantId)
+    return this.validateSelectedDirectory(tenantId, workspaceRoot, authenticated || isPersonalAccountTenant(tenantId) ? this.readBindings() : new Map(), authenticated)
   }
 
   private validateSelectedDirectory(tenantId: string, workspaceRoot: string, bindings: Map<string, string>, restrictToAllowedRoots = true): string {
@@ -514,24 +538,12 @@ export class WorkspaceManager {
     // In authenticated deployments do not let one tenant bind another tenant's
     // project (including a nested directory). Desktop/no-auth mode retains the
     // existing single-user ability to select any operator-allowed project.
-    if (this.isAuthenticated()) {
-      // The engine's private root is partitioned as root/tenant/session. A
-      // tenant must never bind another tenant's private scratch directory,
-      // even before that directory has been explicitly bound.
-      const privateRoot = this.canonicalPrivateRoot()
-      const isPrivate = this.isContained(privateRoot, actual)
-      const privateParts = isPrivate ? path.relative(privateRoot, actual).split(path.sep).filter(Boolean) : []
-      // Only apply the tenant/session partition rule to paths inside the
-      // engine's private root. Operator-allowed project roots may legitimately
-      // live beside that private root and are protected by persisted ownership below.
-      if (isPrivate && privateParts.length === 0) throw new Error('The private workspace root cannot be bound')
-      if (isPrivate && privateParts.length > 0 && privateParts[0] !== tenantId) {
-        throw new Error('workspaceRoot belongs to another tenant')
-      }
-      const owner = [...bindings.entries()].find(([key, owned]) =>
-        key.split('\u0000')[0] !== tenantId && fs.existsSync(owned) && fs.statSync(owned).isDirectory() &&
-        (this.isContained(canonicalFilePathSync(owned), actual) || this.isContained(actual, canonicalFilePathSync(owned))))
-      if (owner) throw new Error('workspaceRoot is already bound to another tenant')
+    // A desktop-owned, no-auth process is the single local operator: its directory
+    // picker is the authorization boundary, so an account tenant may select the
+    // same local projects as the anonymous desktop tenant. Managed child tenants
+    // remain authenticated and continue through the tenant boundary below.
+    if (this.shouldEnforceTenantDirectory(tenantId, actual)) {
+      this.assertTenantDirectory(tenantId,actual,bindings)
     }
     return canonical
   }

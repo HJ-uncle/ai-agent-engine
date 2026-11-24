@@ -111,7 +111,7 @@ async function main() {
     //    否则 registry 的双层状态（项目层/全局层）会与导入管线的目录解析分裂
     skillsRegistry.start()
 
-    const server = await buildServer({ listenHost: HOST, desktopOwned: DESKTOP_OWNED })
+    const server = await buildServer({ listenHost: HOST, desktopOwned: DESKTOP_OWNED }, DESKTOP_OWNED ? process : undefined)
     const endpoint = new URL(await server.listen({ port: PORT, host: HOST }))
     const bound = server.server.address()
     const wildcard = !!bound && typeof bound === 'object' && (bound.address === '0.0.0.0' || bound.address === '::')

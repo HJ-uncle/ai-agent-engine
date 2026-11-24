@@ -22,6 +22,10 @@ describe('office prompt capability evidence', () => {
   })
   it('requires an internal draft only when file writing is available and closes delivery only when admitted', () => {
     const prompt = buildOfficeExecutionPrompt('general', registry('office_document', 'write_file', 'deliver_files'), [])
+    expect(prompt).toContain('用户未明确指定 Word/DOCX')
+    expect(prompt).toContain('默认用 UTF-8 Markdown 文件（`.md`）')
+    expect(prompt).toContain('表格默认使用 Markdown 表格')
+    expect(prompt).toContain('不要把“文档/报告/方案/说明”这些词单独当成 Office 格式要求')
     expect(prompt).toContain('draft.md')
     expect(prompt).toContain('草稿→生成→必要校验/修正→登记交付→收敛计划→最终答复')
     expect(prompt).toContain('不重复列同文件下载链接')
@@ -32,5 +36,11 @@ describe('office prompt capability evidence', () => {
     expect(limited).not.toContain('draft.md')
     expect(limited).not.toContain('deliver_files')
     expect(limited).toContain('已有共享草稿就直接复用')
+  })
+
+  it('keeps ordinary document requests on the Markdown path instead of silently entering Office', () => {
+    const prompt = buildOfficeExecutionPrompt('general', registry('office_document', 'write_file'), [])
+    expect(prompt).toContain('普通项目文档、调研、报告和说明未指定办公格式时直接以 Markdown 正文或 `.md` 文件完成')
+    expect(prompt).toContain('只有明确指定办公格式时，才按对应参考处理')
   })
 })

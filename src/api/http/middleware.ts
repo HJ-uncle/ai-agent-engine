@@ -1,4 +1,6 @@
-import { BlockList, isIP } from 'node:net'
+import { revalidateAccountAuth } from '../../auth/accounts.js'
+import { configureDesktopOwnership, isOwnedDesktopRequest } from './desktop-ownership.js'
+export { isOwnedDesktopRequest } from './desktop-ownership.js'
 import { isPublicAccountRoute } from './routes/accounts.js'
 import { isPublicExternalAccountRoute, isExternalAccountCallback } from './routes/account-external.js'
 import type { FastifyRequest, FastifyReply } from 'fastify'
@@ -25,27 +27,12 @@ export const WHITELIST_PATHS = ['/health', '/meta']
 // been applied.  Keeping a fallback makes isolated route tests deterministic.
 let authMiddleware: AuthMiddleware = createAuthMiddleware()
 let authenticationRequired = process.env.AUTH_ENABLED !== 'false'
-let desktopOwnedLoopback = false
 
 export interface RequestAuthenticationStartup {
   /** Actual host passed to listen(), captured before project settings are loaded. */
   listenHost?: string
   /** Process-launcher decision; never derive this from a request or business settings. */
   desktopOwned?: boolean
-}
-
-const loopbackAddresses = new BlockList()
-loopbackAddresses.addSubnet('127.0.0.0', 8, 'ipv4')
-loopbackAddresses.addAddress('::1', 'ipv6')
-function isLoopbackAddress(address: string | undefined): boolean {
-  if (!address) return false
-  const family = isIP(address)
-  return family !== 0 && loopbackAddresses.check(address, family === 6 ? 'ipv6' : 'ipv4')
-}
-
-/** Only the loopback desktop launcher can bootstrap through HTTP; standalone hosts provision offline. */
-export function isOwnedDesktopRequest(request: FastifyRequest): boolean {
-  return desktopOwnedLoopback && isLoopbackAddress(request.raw.socket.remoteAddress) && hasOwnedInstanceToken(request.headers)
 }
 
 /** A local session capability, not an instance-admin role or a replacement tenant. */
@@ -74,7 +61,7 @@ export function controllerSubjectFromRequest(request: FastifyRequest): Controlle
 export function configureRequestAuthentication(startup: RequestAuthenticationStartup = {}): void {
   authMiddleware = createAuthMiddleware()
   authenticationRequired = process.env.AUTH_ENABLED !== 'false'
-  desktopOwnedLoopback = startup.desktopOwned === true && !authenticationRequired && isLoopbackAddress(startup.listenHost)
+  configureDesktopOwnership(startup.desktopOwned === true, startup.listenHost, authenticationRequired)
   configureInstanceToken()
 }
 
@@ -138,6 +125,9 @@ export async function authMiddlewareHook(request: FastifyRequest, reply: Fastify
   // identity checks.
   const continuation = admin ? undefined : resolveInternalContinuation(request.headers[INTERNAL_CONTINUATION_HEADER])
   if (continuation) {
+    if (continuation.method === 'session') {
+      try { await revalidateAccountAuth(continuation) } catch { return reply.code(401).send(fail(40100, '登录已失效，请重新登录。')) }
+    }
     ;(request as any).authContext = continuation
     return
   }

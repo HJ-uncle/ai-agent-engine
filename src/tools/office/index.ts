@@ -156,7 +156,7 @@ function inspect(format: OfficeInspection['format'], bytes: Buffer): Promise<Ins
 
 export const officeDocumentTool: Tool = {
   name: 'office_document', displayName: '办公文档',
-  description: '原生创建/检查DOCX/XLSX/PPTX/PDF，无需WPS/COM/Python/shell/pip；先读aether-office技能。create：Word/PDF用markdown，PPTX用presentation.slides，Excel用workbook。edit必须用edits数组：Word/PPTX每项唯一oldText/newText，Excel每项sheet/cell/value。DOCX仅替换现有段落文字，不能用换行插段落或表行；结构新增用create新修订文件，保留原稿。PPTX可按inspect位置缩小匹配范围。PDF改版须新建，独立排版不等于Word/PPT转换。append_sheets保留旧表部件。recalculate仅XLSX，计算支持的常用公式/跨表引用并更新缓存；不支持、循环或外链拒绝且保留原文件，非全Excel兼容。公式例{formula:"SUM(B2:B4)"}。inspect返回文字/表格预览、warnings、expectedHash；Excel限2000格/格600字符，Word仅正文；分页非全文或视觉验收。写入前版本检查、原子发布并记录撤回快照；结构检查不证明业务正确。',
+  description: '原生创建/检查DOCX/XLSX/PPTX/PDF，无需WPS/COM/Python/shell/pip；仅在用户明确指定对应办公格式、给出模板，或明确要求打印版/演示文稿/可编辑办公文件时调用，未指定格式的文档/报告/说明默认使用Markdown，不要把“表格”单独升级为Excel。先读aether-office技能。create：Word/PDF用markdown，PPTX用presentation.slides，Excel用workbook。edit必须用edits数组：Word/PPTX每项唯一oldText/newText，Excel每项sheet/cell/value。DOCX仅替换现有段落文字，不能用换行插段落或表行；结构新增用create新修订文件，保留原稿。PPTX可按inspect位置缩小匹配范围。PDF改版须新建，独立排版不等于Word/PPT转换。append_sheets保留旧表部件。recalculate仅XLSX，计算支持的常用公式/跨表引用并更新缓存；不支持、循环或外链拒绝且保留原文件，非全Excel兼容。公式例{formula:"SUM(B2:B4)"}。inspect返回文字/表格预览、warnings、expectedHash；Excel限2000格/格600字符，Word仅正文；分页非全文或视觉验收。写入前版本检查、原子发布并记录撤回快照；结构检查不证明业务正确。',
   parameters: {
     type: 'object', additionalProperties: false,
     properties: {

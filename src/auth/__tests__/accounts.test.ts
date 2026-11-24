@@ -1,4 +1,5 @@
 /** Real HTTP authentication, SQLite persistence, rotation/replay, tenant isolation and identity binding. */
+import { issuedFixtureActivation, fixtureActivationProof } from './activation-fixture.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
@@ -55,7 +56,7 @@ afterAll(async () => {
 
 async function register(): Promise<AccountLoginResult> {
   // Use distinct legitimate source addresses to avoid coupling lifecycle tests to the rate-limit test.
-  const response = await app.inject({ method: 'POST', url: '/auth/account/register', headers: instanceHeaders, remoteAddress: `192.0.2.${++counter}`, payload: {} })
+  const response = await app.inject({ method: 'POST', url: '/auth/account/register', headers: instanceHeaders, remoteAddress: `192.0.2.${++counter}`, payload: { activationCode: await issuedFixtureActivation() } })
   expect(response.statusCode).toBe(200)
   return response.json().data as AccountLoginResult
 }
@@ -66,6 +67,61 @@ describe('account lifecycle with enabled authentication and owned-instance gate'
     expect((await app.inject({ method: 'POST', url: '/auth/account/register', payload: {} })).statusCode).toBe(401)
     expect((await app.inject({ method: 'GET', url: '/auth/account/me', headers: instanceHeaders })).statusCode).toBe(401)
     expect((await app.inject({ method: 'POST', url: '/auth/account/register/extra', headers: instanceHeaders, payload: {} })).statusCode).toBe(401)
+  })
+  it('requires one live single-use activation across direct and external enrollment; never partially creates an account', async () => {
+    const { issueActivationCode, revokeActivationCode, listActivationCodes } = await import('../account-activation.js')
+    const { beginAccountTransaction } = await import('../account-database.js')
+    const count=async () => Number((await database.getDb().execute('SELECT count(*) AS n FROM users')).rows[0].n)
+    const initial=await count(), opts={method:'POST' as const,url:'/auth/account/register',headers:instanceHeaders,remoteAddress:'192.0.2.204'}
+    expect((await app.inject({...opts,payload:{}})).statusCode).toBe(403)
+    const identity={providerId:'registration-proof',subject:randomUUID()}
+    await expect(accounts.completeExternalIdentity(identity)).rejects.toThrow('开通码')
+    const code=await issuedFixtureActivation()
+    const attempts=await Promise.all([app.inject({...opts,payload:{activationCode:code}}), app.inject({...opts,payload:{activationCode:code}})])
+    expect(attempts.map(r=>r.statusCode).sort()).toEqual([200,403]); expect(await count()).toBe(initial+1)
+    const tx=await beginAccountTransaction()
+    let revoked='',expired=''
+    try {
+      const one=await issueActivationCode(tx,'test-admin'), two=await issueActivationCode(tx,'test-admin'); revoked=one.code; expired=two.code
+      await revokeActivationCode(tx,one.id)
+      await tx.execute({sql:'UPDATE account_activation_codes SET created_at=?,expires_at=? WHERE id=?',args:[Date.now()-2000,Date.now()-1000,two.id]})
+      const listing=await listActivationCodes(tx,{limit:100}); expect(JSON.stringify(listing)).not.toContain('aether_activate_')
+      expect(listing.items.find(i=>i.id===one.id)?.status).toBe('revoked'); expect(listing.items.find(i=>i.id===two.id)?.status).toBe('expired')
+      expect(listing.items.some(i=>i.status==='used')).toBe(true)
+      await tx.commit()
+    } finally { tx.close() }
+    for(const input of [revoked,expired]) expect((await app.inject({...opts,payload:{activationCode:input}})).statusCode).toBe(403)
+    expect(await count()).toBe(initial+1)
+  })
+  it('keeps a pre-activation personal space intact and grants family access only after recent, one-time enrollment', async () => {
+    const db = database.getDb(), id = randomUUID(), tenant = `account_${randomUUID()}`, recovery = randomUUID()
+    await db.batch([
+      { sql: 'INSERT INTO users(id,tenant_id,name) VALUES(?,?,?)', args: [id, tenant, '保留原资料'] },
+      { sql: 'INSERT INTO account_profiles(user_id,recovery_hash,updated_at) VALUES(?,?,?)', args: [id, digest(recovery), Date.now()] },
+      { sql: 'INSERT INTO memories(tenant_id,session_id,key,value) VALUES(?,?,?,?)', args: [tenant, 'previous', 'sentinel', 'preserved'] },
+    ], 'write')
+    const old = await accounts.loginAccount(recovery), auth = headers(old)
+    expect(old.user.mainAccountActivated).toBe(false)
+    const children = () => app.inject({ method: 'GET', url: '/auth/account/children', headers: auth })
+    expect((await children()).statusCode).toBe(403)
+    const redeem = (activationCode: string) => app.inject({ method: 'POST', url: '/auth/account/activation', headers: auth, payload: { activationCode } })
+    const first = await issuedFixtureActivation(), spare = await issuedFixtureActivation()
+    // A logged-in account cannot use public registration to turn its current session into another principal.
+    expect((await app.inject({ method: 'POST', url: '/auth/account/register', headers: auth, payload: { activationCode: first } })).statusCode).toBe(403)
+    expect((await app.inject({ method: 'POST', url: '/auth/account/register', headers: instanceHeaders, payload: { activationCode: first, parentId: id } })).statusCode).toBe(400)
+    await db.execute({ sql: 'UPDATE account_sessions SET authenticated_at=? WHERE id=?', args: [Date.now() - 11 * 60_000, old.user.sessionId!] })
+    expect((await redeem(first)).statusCode).toBe(403)
+    expect((await app.inject({ method: 'POST', url: '/auth/account/reauth', headers: auth, payload: { recoveryKey: recovery } })).statusCode).toBe(200)
+    const registration = process.env.AETHER_ACCOUNT_REGISTRATION
+    vi.stubEnv('AETHER_ACCOUNT_REGISTRATION', 'false')
+    try { expect((await redeem(first)).statusCode).toBe(403) } finally { vi.stubEnv('AETHER_ACCOUNT_REGISTRATION', registration) }
+    const accepted = await redeem(first)
+    expect(accepted.statusCode).toBe(200)
+    expect(accepted.json().data).toMatchObject({ id, tenantId: tenant, sessionId: old.user.sessionId, name: '保留原资料', mainAccountActivated: true })
+    expect((await children()).json().data).toMatchObject({ limit: 3, used: 0, children: [] })
+    expect((await redeem(spare)).statusCode).toBe(409)
+    expect((await db.execute({ sql: 'SELECT used_at FROM account_activation_codes WHERE code_hash=?', args: [digest(spare)] })).rows[0].used_at).toBeNull()
+    expect((await db.execute({ sql: 'SELECT value FROM memories WHERE tenant_id=? AND key=?', args: [tenant, 'sentinel'] })).rows[0].value).toBe('preserved')
   })
   it('creates isolated random users and hashes every persistent credential', async () => {
     const a = await register(), b = await register()
@@ -223,13 +279,13 @@ describe('reauthenticating the current account session', () => {
 describe('verified third-party identity mapping', () => {
   it('automatically creates once, keeps metadata, and never merges by email', async () => {
     const identity = { providerId: 'enterprise', issuer: 'https://issuer.example', subject: randomUUID(), email: 'same@example.com', name: 'Third Party', userData: { department: 'R&D', employeeCode: '123' } }
-    const a = await accounts.completeExternalIdentity(identity) as AccountLoginResult
+    const a = await accounts.completeExternalIdentity(identity, undefined, await fixtureActivationProof()) as AccountLoginResult
     const b = await accounts.completeExternalIdentity(identity) as AccountLoginResult
     expect(a.user.id).toBe(b.user.id)
     expect(b.user.identities[0].userData).toEqual(identity.userData)
-    const c = await accounts.completeExternalIdentity({ ...identity, subject: randomUUID() }) as AccountLoginResult
+    const c = await accounts.completeExternalIdentity({ ...identity, subject: randomUUID() }, undefined, await fixtureActivationProof()) as AccountLoginResult
     expect(c.user.id).not.toBe(a.user.id)
-    const d = await accounts.completeExternalIdentity({ ...identity, issuer: 'https://different.example' }) as AccountLoginResult
+    const d = await accounts.completeExternalIdentity({ ...identity, issuer: 'https://different.example' }, undefined, await fixtureActivationProof()) as AccountLoginResult
     expect(d.user.id).not.toBe(a.user.id)
   })
   it('binds to the current account without changing user/tenant and rejects takeover', async () => {
@@ -247,14 +303,15 @@ describe('verified third-party identity mapping', () => {
   })
   it('serializes concurrent first login into exactly one internal user', async () => {
     const identity = { providerId: 'concurrent', subject: randomUUID() }
-    const results = await Promise.all(Array.from({ length: 8 }, () => accounts.completeExternalIdentity(identity) as Promise<AccountLoginResult>))
+    const grant = await fixtureActivationProof()
+    const results = await Promise.all(Array.from({ length: 8 }, () => accounts.completeExternalIdentity(identity, undefined, grant) as Promise<AccountLoginResult>))
     expect(new Set(results.map(result => result.user.id)).size).toBe(1)
     const rows = await database.getDb().execute({ sql: 'SELECT user_id FROM account_identities WHERE provider_id=? AND subject=?', args: [identity.providerId, identity.subject] })
     expect(rows.rows).toHaveLength(1)
   })
   it('prevents unlinking the last usable login route without recovery', async () => {
     const identity = { providerId: 'unlink', subject: randomUUID() }
-    const result = await accounts.completeExternalIdentity(identity) as AccountLoginResult
+    const result = await accounts.completeExternalIdentity(identity, undefined, await fixtureActivationProof()) as AccountLoginResult
     const auth = await accounts.authenticateAccountSession(result.accessToken)
     await database.getDb().execute({ sql: 'UPDATE account_profiles SET recovery_hash=NULL WHERE user_id=?', args: [auth.userId!] })
     await expect(accounts.unlinkAccountIdentity(auth, identity.providerId)).rejects.toThrow('先配置恢复凭证')
@@ -434,7 +491,7 @@ describe('optional profile names and separate provider metadata', () => {
   })
   it('validates provider profile fields for an existing binding before updating any saved identity', async () => {
     const identity = { providerId: 'validate-profile-fields', subject: randomUUID(), name: 'Original' }
-    const account = await accounts.completeExternalIdentity(identity) as AccountLoginResult
+    const account = await accounts.completeExternalIdentity(identity, undefined, await fixtureActivationProof()) as AccountLoginResult
     for (const bad of [{ name: 'x'.repeat(101) }, { email: 'x'.repeat(321) }, { avatarUrl: 'javascript:alert(1)' }]) {
       await expect(accounts.completeExternalIdentity({ ...identity, ...bad })).rejects.toThrow()
     }

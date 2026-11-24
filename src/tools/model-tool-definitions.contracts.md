@@ -28,12 +28,12 @@ MCP、用户工具、同名扩展、输出 schema、执行函数、preflight、�
 |---|---|
 | load_tools | 按当前 ctx.tools 授权目录加载确切名字；完整 schema 下一请求提供；不执行目标、不扩大权限；原子拒绝未知名字，可批量加载；目录只能包含本代理可访问工具。 |
 | read_file | 确切路径，不替换同名版本；格式、模式和行分页；完整字节 hash；展示行号不是原文；exact JSON.content 保留 UTF-8/CRLF/BOM，新增完整性、字节数及尾换行回执；逐字复制、比较源与目标SHA，不重建/trim。 |
-| write_file | 新内容data与copyFrom互斥；copyFrom须源path+完整expectedHash，源目标双锁/版本保护、不同文件、工作区边界及大小限制，直接复制字节不经格式handler，copyVerified确认目标hash；目标未传版本默认仅新建，覆盖须最新目标版本。trailingNewline仅显式LF/CRLF/none调整普通UTF8末尾CR/LF，默认/preserve原样，copyFrom不许格式调整。实际快照回执提供大小、尾换行、完整短预览，避免无意义重读。文本/JSON与旧Office数据、missing/createOnly、共享版本保护、旧XLSX/DOCX开放payload的嵌套形状/颜色/图片/字体/缇单位保持兼容；有原生Office优先使用。 |
+| write_file | 新内容data与copyFrom互斥；copyFrom须源path+完整expectedHash，源目标双锁/版本保护、不同文件、工作区边界及大小限制，直接复制字节不经格式handler，copyVerified确认目标hash；目标未传版本默认仅新建，覆盖须最新目标版本。用户未明确指定 Word/Excel/PPT/PDF 等办公格式时，文档/报告/说明默认写 UTF-8 Markdown（`.md`），表格默认使用 Markdown 表格；用户明确给出的其他扩展名继续遵从。trailingNewline仅显式LF/CRLF/none调整普通UTF8末尾CR/LF，默认/preserve原样，copyFrom不许格式调整。实际快照回执提供大小、尾换行、完整短预览，避免无意义重读。文本/JSON与旧Office数据、missing/createOnly、共享版本保护、旧XLSX/DOCX开放payload的嵌套形状/颜色/图片/字体/缇单位保持兼容；有原生Office优先使用。 |
 | edit_file | 只改已有 UTF-8；同文件最新回执 hash，不猜片段 hash；所有 edits 匹配同一原文件；oldText 非空唯一、不重叠；版本/匹配冲突整次失败；空 newText 删除；保留换行/BOM；快照可撤回。 |
 | list_files | 默认所有绑定工作区；500 项默认、2000 参数上限；递归开关；不跟随链接，截断后缩小目录。 |
 | delete_file | 移入系统回收站，可恢复；不是永久删除。 |
 | create_dir | 创建指定目录，执行时仍受原工作区策略。 |
-| office_document | 原生四种格式；先读 aether-office；create 的格式输入互斥；edit 的文本/单元格入参；DOCX 不新增结构；PDF 仅创建/检查且不是原样格式转换；追加新表保留已有部件、单表递增；公式重算非全 Excel 兼容，不支持/循环/外链失败保留原文件；不可用常数伪造结果；版本检查、原子发布、撤回。 |
+| office_document | 仅在用户明确指定 DOCX/Word、XLSX/Excel、PPTX/PPT、PDF，提供对应模板，或要求打印版/演示文稿/可编辑办公文件时调用；未指定格式的文档/报告/说明/普通表格默认走 Markdown。原生四种格式；先读 aether-office；create 的格式输入互斥；edit 的文本/单元格入参；DOCX 不新增结构；PDF 仅创建/检查且不是原样格式转换；追加新表保留已有部件、单表递增；公式重算非全 Excel 兼容，不支持/循环/外链失败保留原文件；不可用常数伪造结果；版本检查、原子发布、撤回。 |
 | office_document 的内容参数 | missing 与最新同文件 sha256；分页沿用上页 hash/UTF-16 offset；Markdown 格式；标题避免重复；PPTX 单行、宽度、行列/要点组合限制；slide/textRun 的 1 起始显示/节点编号及 editable；target=notes 只能改已有备注；追加每次最多 4 表、建议 1 表、不重复旧表。全部数值/schema 结构原样。 |
 | office_inspect | 只读；warnings/expectedHash/documentComplete；预览分页不等于全文/视觉验证；Excel 2000 格/格 600 字、错误总数全表而位置有界、公式为缓存不重算；Word 仅正文；PPTX 正文/备注位置可编辑身份；分页不混版本。 |
 | office_environment | 可信运行环境探测、2 分钟缓存；不启动 Office/安装/导出/读取其它任务或私有依赖；存在或注册不证明成功转换；PDF 库不等价原样渲染。 |

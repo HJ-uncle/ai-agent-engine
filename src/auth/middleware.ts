@@ -1,4 +1,5 @@
 import { ADMIN_HEADER, adminKeyInWorkloadHeaders } from './admin-key-format.js'
+import { isManagedChildTenant } from './account-scope.js'
 import { authenticateAccountSession } from './accounts.js'
 import { getDb } from '../storage/sqlite/db.js'
 import type { AuthContext, AuthMiddleware } from './types.js'
@@ -44,7 +45,7 @@ export class DefaultAuthMiddleware implements AuthMiddleware {
     const keyHash = createHash('sha256').update(apiKey).digest('hex')
     
     const result = await db.execute({
-      sql: 'SELECT id, tenant_id FROM users WHERE api_key_hash = ?',
+      sql: 'SELECT u.id, u.tenant_id FROM users u WHERE u.api_key_hash = ? AND NOT EXISTS(SELECT 1 FROM account_children f WHERE f.child_id=u.id)',
       args: [keyHash],
     })
     const user = result.rows[0]
@@ -68,7 +69,8 @@ export class DefaultAuthMiddleware implements AuthMiddleware {
       const { jwtVerify } = await import('jose')
       const { payload } = await jwtVerify(token, this.jwtSecret)
       
-      const tenantId = (payload.tenantId ?? payload.sub ?? 'default') as string
+      const tenantId = payload.tenantId ?? payload.sub ?? 'default'
+      if (typeof tenantId !== 'string' || isManagedChildTenant(tenantId.trim())) throw new Error('Tenant does not accept external credentials')
       
       return {
         tenantId,

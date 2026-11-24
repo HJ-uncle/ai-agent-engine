@@ -1,19 +1,21 @@
 // Real script side effects, binding rejection and canonical path escape; no external model or service.
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentContext } from '../../../core/agent-context/types.js'
 import { createBoundSkillScriptTool } from '../bound-skill-script.js'
+import { runSkillScriptTool } from '../run-skill-script.js'
 import { clearSecurityMode, setSecurityMode } from '../../../security/policy-engine.js'
 
+const parentDir = path.resolve('.e2e-tmp', 'bound-skill-scripts')
 let fixture: string
 let skillsRoot: string
 let parent: AgentContext
 let tool: ReturnType<typeof createBoundSkillScriptTool>
 beforeEach(() => {
-  fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-bound-skill-'))
+  fs.mkdirSync(parentDir, { recursive: true })
+  fixture = fs.mkdtempSync(path.join(parentDir, 'aether-bound-skill-'))
+  vi.stubEnv('AETHER_GLOBAL_DIR', path.join(fixture, 'global'))
   skillsRoot = path.join(fixture, 'skills')
   for (const name of ['bound', 'unbound']) {
     fs.mkdirSync(path.join(skillsRoot, name, 'scripts'), { recursive: true })
@@ -28,7 +30,7 @@ beforeEach(() => {
 afterEach(() => {
   clearSecurityMode(parent.tenantId, parent.sessionId)
   vi.unstubAllEnvs()
-  if (path.dirname(fixture) !== path.resolve(os.tmpdir()) || !path.basename(fixture).startsWith('aether-bound-skill-')) throw new Error('Unsafe fixture cleanup')
+  if (path.dirname(fs.realpathSync(fixture)) !== fs.realpathSync(parentDir) || !path.basename(fixture).startsWith('aether-bound-skill-')) throw new Error('Unsafe fixture cleanup')
   fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 3 })
 })
 describe('bound custom-Agent script capabilities', () => {
@@ -56,13 +58,8 @@ describe('bound custom-Agent script capabilities', () => {
     expect(result).toMatchObject({ success: false, metadata: { code: 'SKILL_BINDING_REQUIRED' } })
     expect(fs.existsSync(output)).toBe(false)
   })
-  it('executes an actual bound script while quoting shell-like arguments literally', async context => {
-    const candidates = process.platform === 'win32'
-      ? [process.env.BASH_PATH, 'C:/Program Files/Git/bin/bash.exe', 'C:/Program Files/Git/usr/bin/bash.exe', 'bash']
-      : ['/bin/bash']
-    const bash = candidates.find(candidate => candidate && spawnSync(candidate, ['-c', 'node --version'], { windowsHide: true }).status === 0)
-    if (!bash) { context.skip(); return }
-    vi.stubEnv('BASH_PATH', bash)
+  it('executes an actual bound script while quoting shell-like arguments literally', async () => {
+    if (process.platform === 'win32') vi.stubEnv('BASH_PATH', path.join(fixture, 'no-bash.exe'))
     const output = path.join(fixture, 'bound-result.txt')
     const quoted = `quoted ; $(touch escaped) ' value`
     const result = await tool.execute({ command: `node "$SKILLS_ROOT/bound/scripts/write.cjs" "${output.replace(/\\/g, '/')}" "${quoted}"` }, parent)
@@ -70,4 +67,29 @@ describe('bound custom-Agent script capabilities', () => {
     expect(fs.readFileSync(output, 'utf8')).toBe(quoted)
     expect(fs.existsSync(path.join(skillsRoot, 'escaped'))).toBe(false)
   }, 15_000)
+
+  it.skipIf(process.platform !== 'win32')('runs a plain Node skill without Bash and preserves shell evaluation for expressions', async () => {
+    vi.stubEnv('BASH_PATH', path.join(fixture, 'no-bash.exe'))
+    const output = path.join(fixture, '普通 result.txt').replace(/\\/g, '/')
+    const command = 'node "$SKILLS_ROOT/bound/scripts/write.cjs" "' + output + '"'
+    const result = await runSkillScriptTool.execute({ command: command + ' "space & literal"' }, parent)
+    expect(result.success, result.output).toBe(true)
+    expect(fs.readFileSync(output, 'utf8')).toBe('space & literal')
+    for (const suffix of [' | cat', ' "$HOME"', ' > ignored', ' *.cjs', '\nnext_line']) {
+      const attempt = await runSkillScriptTool.execute({ command: command + suffix }, parent)
+      expect(attempt).toMatchObject({ success: false, output: expect.stringContaining('no-bash.exe') })
+    }
+  })
+
+  it.skipIf(process.platform !== 'win32' || !process.env.AETHER_TEST_PYTHON)('runs both ordinary and bound Python skills on the selected real Python without Bash', async () => {
+    const python = fs.realpathSync(process.env.AETHER_TEST_PYTHON!)
+    vi.stubEnv('PATH', [path.dirname(python), process.env.PATH].join(path.delimiter))
+    vi.stubEnv('BASH_PATH', path.join(fixture, 'no-bash.exe'))
+    fs.writeFileSync(path.join(skillsRoot, 'bound', 'scripts', 'echo.py'), 'import json, sys\nprint(json.dumps([sys.executable, *sys.argv[1:]]))')
+    for (const runner of [tool, runSkillScriptTool]) {
+      const result = await runner.execute({ command: 'python "$SKILLS_ROOT/bound/scripts/echo.py" "space & 中文"' }, parent)
+      expect(result.success, result.output).toBe(true)
+      expect(JSON.parse(result.output)).toEqual([python, 'space & 中文'])
+    }
+  })
 })

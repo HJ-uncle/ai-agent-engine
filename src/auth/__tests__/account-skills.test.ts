@@ -1,4 +1,5 @@
 /** Real account admission and read-only skill catalogue; management and filesystem boundaries remain enforced. */
+import { issuedFixtureActivation } from './activation-fixture.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
@@ -74,7 +75,7 @@ describe('account runtime skill catalogue', () => {
     const anonymous = await app.inject({ method: 'GET', url: url(project), headers: gate })
     expect(anonymous.json().code).toBe(200)
     expect(anonymous.json().data.permissions).toEqual({ canManage: true })
-    const registered = await app.inject({ method: 'POST', url: '/auth/account/register', headers: gate, payload: {} })
+    const registered = await app.inject({ method: 'POST', url: '/auth/account/register', headers: gate, payload: { activationCode: await issuedFixtureActivation() } })
     expect(registered.statusCode).toBe(200)
     account = registered.json().data
     expect(account.user.roles).toEqual(['tenant-admin'])

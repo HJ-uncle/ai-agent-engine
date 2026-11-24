@@ -1,5 +1,6 @@
 /** Production Fastify registration and real database/JWT authentication for the bundled management page. */
-import { createHash, randomBytes } from 'node:crypto'
+import { EventEmitter } from 'node:events'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
@@ -28,12 +29,22 @@ async function asRole(roles: string[]): Promise<string> {
   return new SignJWT({ tenantId: 'default', roles }).setProtectedHeader({ alg: 'HS256' })
     .setSubject('admin-web-fixture-user').setExpirationTime('5m').sign(new TextEncoder().encode(seed))
 }
-async function runServer(enabled: boolean, expectedToken: string | undefined, legacy: boolean, run: (server: FastifyInstance) => Promise<void>): Promise<void> {
+async function runServer(enabled: boolean, expectedToken: string | undefined, legacy: boolean, run: (server: FastifyInstance) => Promise<void>, parent?: TestParent): Promise<void> {
   vi.stubEnv('AUTH_ENABLED', String(enabled))
   vi.stubEnv('AETHER_INSTANCE_TOKEN', expectedToken)
   vi.stubEnv('PUBLIC_DIR', path.join(fixture, legacy ? 'legacy' : 'absent'))
-  const server = await buildServer({ listenHost: '127.0.0.1' })
+  const server = await buildServer({ listenHost: '127.0.0.1', desktopOwned: !!parent }, parent)
   try { await server.ready(); await run(server) } finally { await server.close() }
+}
+class TestParent extends EventEmitter {
+  connected = true
+  enabled = false
+  send = (msg: { enabled?: boolean }, callback: (e: Error | null) => void): boolean => { this.enabled = msg.enabled === true; callback(null); return true }
+  open() {
+    const key = 'aether_admin_' + randomBytes(32).toString('base64url'), id = randomUUID(), channel = 'aether:admin-window:1'
+    this.emit('message', { channel, action: 'open', id, digest: createHash('sha256').update(key).digest('hex') })
+    return { headers: { ...gate, 'x-aether-admin-key': key }, close: () => this.emit('message', {channel, action:'close', id}) }
+  }
 }
 interface Status { version: string; instanceToken: string; authenticationRequired: boolean; startedAt: string | number; uptimeSeconds: number }
 async function expectStatus(server: FastifyInstance, credentials: Record<string, string>, configured: 'configured' | 'not-set', auth: boolean): Promise<void> {
@@ -119,19 +130,50 @@ describe('built-in engine administration web', () => {
       for (const method of ['GET', 'HEAD'] as const) {
         const redirect = await server.inject({ method, url: '/admin' })
         expect([301, 302, 307, 308]).toContain(redirect.statusCode); expect(redirect.headers.location).toBe('/admin/')
-        for (const [url, mime] of [['/admin/', /text\/html/i], ['/admin/app.js', /(?:text|application)\/javascript/i], ['/admin/app.css', /text\/css/i]] as const) {
+        for (const [url, mime] of [['/admin/', /text\/html/i], ['/admin/app.js', /(?:text|application)\/javascript/i], ['/admin/app.css', /text\/css/i], ['/admin/icon.png', /image\/png/i]] as const) {
           const response = await server.inject({ method, url }); noSensitiveValues(response.body)
           expect(response.statusCode).toBe(200); expect(response.headers['content-type']).toMatch(mime)
           if (method === 'HEAD') expect(response.body).toBe('')
           else { expect(response.body.length).toBeGreaterThan(0); expect(response.body).not.toContain(sentinel) }
         }
       }
+      const html = await server.inject({url:'/admin/'}), icon = await server.inject({url:'/admin/icon.png'})
+      expect(html.body).toContain('rel="icon" type="image/png" href="./icon.png"');expect(html.body).toContain('<img src="./icon.png"')
+      expect(html.headers['content-security-policy']).toContain("img-src 'self'");expect(icon.rawPayload.subarray(0,8).toString('hex')).toBe('89504e470d0a1a0a')
       for (const url of ['/health', '/meta']) expect((await server.inject({ url })).statusCode).toBe(200)
       for (const url of ['/api/v1/tools', '/metrics']) expect((await server.inject({ url })).statusCode).toBe(401)
-      for (const url of ['/admin/', '/admin/app.js', '/admin/app.css', '/admin/status']) {
+      for (const url of ['/admin/', '/admin/app.js', '/admin/app.css', '/admin/icon.png', '/admin/status']) {
         const response = await server.inject({ method: 'POST', url }); expect(response.statusCode).not.toBe(200); noSensitiveValues(response.body)
       }
     })
+  })
+
+  it('binds desktop owner authority to a single live parent window, with independent instance and account checks', async () => {
+    const parent = new TestParent()
+    await runServer(false, instance, false, async server => {
+      const hint = { 'x-aether-admin-entry': 'current' }
+      expect((await server.inject({url:'/admin/',headers:hint})).body).toContain('<html lang="zh-CN" data-current-session>')
+      await denied(server, { ...hint, ...gate }, 401)
+      const first = parent.open();expect(parent.enabled).toBe(true)
+      const me = (headers: Record<string,string>, remoteAddress='127.0.0.1') => server.inject({url:'/admin/me',headers,remoteAddress})
+      expect((await me(first.headers)).json().data).toMatchObject({id:'desktop:local',name:'本机桌面管理员',roleId:'super-admin',recovery:false})
+      expect((await me({'x-aether-admin-key': first.headers['x-aether-admin-key']})).statusCode).toBe(401)
+      expect((await me(first.headers,'192.0.2.10')).statusCode).toBe(403)
+      expect((await me({...first.headers, authorization:'Bearer '+viewer})).statusCode).toBe(403)
+      expect((await server.inject({url:'/api/v1/tools',headers:first.headers})).statusCode).toBe(401)
+      const second = parent.open();expect((await me(first.headers)).statusCode).toBe(401)
+      first.close();expect((await me(second.headers)).statusCode).toBe(200)
+      second.close();expect((await me(second.headers)).statusCode).toBe(401)
+      const final = parent.open();parent.emit('disconnect');expect((await me(final.headers)).statusCode).toBe(401)
+    }, parent)
+  })
+
+  it('keeps mandatory business authentication in force even when a desktop parent requests a window', async () => {
+    const parent = new TestParent()
+    await runServer(true,instance,false,async server => {
+      const window = parent.open();expect(parent.enabled).toBe(false);await denied(server,window.headers,401)
+      await denied(server,{...gate, authorization:'Bearer '+viewer},403)
+    }, parent)
   })
 
   it('requires the live instance token and a verified administrator of the default tenant', async () => {

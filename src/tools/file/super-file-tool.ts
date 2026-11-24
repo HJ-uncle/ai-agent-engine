@@ -149,11 +149,11 @@ const singleReadFileTool: Tool = {
 const singleWriteFileTool: Tool = {
   name: 'write_file',
   displayName: '写入文件',
-  description: '将数据写入指定格式的文件。保留文本、JSON 和旧版办公写入兼容。当前会话提供 office_document 时，Word/Excel 的结构化创建、版本保护和定点编辑优先使用该工具；可用 aether-office 技能提供写作与排版指引。成功返回实际落盘文件的 expectedHash，sha256: 后 64 位就是实际 SHA-256，可直接报告，无需另运行命令。后续精确文本编辑复用版本，不自行计算或猜测 hash。UTF-8 原文不确定时先 read_file mode="exact"。原地修改必须改源文件，另存副本不能替代；修改后复制使用 copyFrom:{path,expectedHash}，源版本来自最新文件回执，无需转写全文。copyFrom与data互斥，保留所有源字节并校验目标hash；目标未指定expectedHash时只创建新文件，覆盖须传目标版本。',
+  description: '将数据写入指定格式的文件。用户未明确指定办公格式时，文档/报告/说明默认使用 UTF-8 Markdown（建议 .md）；表格默认使用 Markdown 表格。只有用户明确要求 Word/Excel/PPT/PDF 或给出对应模板时才进入 Office 写入流程。保留文本、JSON 和旧版办公写入兼容。当前会话提供 office_document 时，Word/Excel 的结构化创建、版本保护和定点编辑优先使用该工具；可用 aether-office 技能提供写作与排版指引。成功返回实际落盘文件的 expectedHash，sha256: 后 64 位就是实际 SHA-256，可直接报告，无需另运行命令。后续精确文本编辑复用版本，不自行计算或猜测 hash。UTF-8 原文不确定时先 read_file mode="exact"。原地修改必须改源文件，另存副本不能替代；修改后复制使用 copyFrom:{path,expectedHash}，源版本来自最新文件回执，无需转写全文。copyFrom与data互斥，保留所有源字节并校验目标hash；目标未指定expectedHash时只创建新文件，覆盖须传目标版本。',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: '文件路径，格式按用户要求选择。Word/Excel 创建与编辑优先使用可用的 office_document 工具。' },
+      path: { type: 'string', description: '文件路径；用户未指定办公格式时文档/报告默认使用 .md，表格默认使用 Markdown 表格。用户明确指定 Word/Excel/PPT/PDF 或其他扩展名时遵从该格式；Word/Excel 创建与编辑优先使用可用的 office_document 工具。' },
       expectedHash: { type: 'string', pattern: '^(missing|sha256:[a-f0-9]{64})$', description: '覆盖已有文件时传最近一次 read_file/write_file/edit_file 返回的完整文件版本；不匹配则拒绝覆盖。新文件可传 missing。共享项目写入必须使用版本条件。' },
       createOnly: { type: 'boolean', description: '为 true 时只创建不存在的文件，已有文件会被保留。' },
       copyFrom: { type: 'object', additionalProperties: false, properties: {

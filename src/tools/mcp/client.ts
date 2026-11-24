@@ -7,6 +7,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { validateOperationTimeout } from '../../core/utils/operation-timeout.js'
 import { stopCommandProcessTree } from '../../core/command-jobs/process-tree.js'
 import { renderMcpResult } from './result.js'
+import { stdioCommand } from './stdio-command.js'
 
 let _rpcId = 1
 
@@ -423,8 +424,9 @@ export class HTTPMCPClient implements MCPClient {
     if (this.config.transportType === 'stdio') {
       if (!this.config.command) throw new Error('MCP stdio command is not configured')
       this.processStartedAt = Date.now()
-      const child = spawn(this.config.command, this.config.args ?? [], {
-        env: { ...process.env, ...(this.config.env ?? {}) },
+      const launch = stdioCommand(this.config.command, this.config.args ?? [], this.config.env)
+      const child = spawn(launch.command, launch.args, {
+        env: launch.env,
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
         detached: process.platform !== 'win32',

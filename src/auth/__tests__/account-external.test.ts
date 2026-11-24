@@ -1,4 +1,5 @@
 // Real Fastify routes, SQLite flows, account sessions and HTTP OAuth/credential service.
+import { issuedFixtureActivation } from './activation-fixture.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createServer, type Server } from 'node:http'
@@ -10,6 +11,7 @@ import { registerAccount, getAccountUser, type AccountLoginResult } from '../acc
 import { initDb, getDb, closeDb } from '../../storage/sqlite/db.js'
 
 let upstream: Server, issuer = '', app: FastifyInstance, fixture = ''
+let sawUnexpectedCredentialField = false
 const fixtureParent = path.resolve('.e2e-tmp', 'account-simplify')
 const gate = { 'X-Aether-Instance-Token': 'external-test-instance-token' }
 const providerConfig = () => JSON.stringify([
@@ -31,8 +33,10 @@ beforeAll(async () => {
     if (request.url === '/userinfo') { response.end(JSON.stringify({ id: 'oauth-stable-user', name: 'OAuth User', email: 'same@example.test', data: { team: 'R&D' } })); return }
     if (request.url === '/verify') {
       let body = ''; for await (const chunk of request) body += String(chunk)
-      const { credential } = JSON.parse(body) as { credential: string }
-      response.end(JSON.stringify({ active: credential === 'verified-erp-secret', user: { id: 'erp-stable-user', name: 'ERP User', email: 'same@example.test', data: { company: 'Example' } } })); return
+      const fields = JSON.parse(body) as Record<string, unknown>, credential = fields.credential
+      if (Object.keys(fields).some(key => key !== 'credential')) sawUnexpectedCredentialField = true
+      const enrollment = credential === 'new-enrollment-fixture'
+      response.end(JSON.stringify({ active: enrollment || credential === 'verified-erp-secret', user: { id: enrollment ? 'new-enrollment-user' : 'erp-stable-user', name: 'ERP User', email: 'same@example.test', data: { company: 'Example' } } })); return
     }
     response.statusCode = 404; response.end('{}')
   })
@@ -59,7 +63,7 @@ afterAll(async () => {
 })
 type Flow = { authorizationUrl: string; flowId: string; pollToken: string }
 async function begin(mode: 'login' | 'link' | 'reauth' = 'login', account?: AccountLoginResult): Promise<Flow> {
-  const response = await app.inject({ method: 'POST', url: '/auth/account/external/start', headers: { ...gate, ...(account ? { Authorization: `Bearer ${account.accessToken}` } : {}) }, payload: { providerId: 'oauth', mode } })
+  const response = await app.inject({ method: 'POST', url: '/auth/account/external/start', headers: { ...gate, ...(account ? { Authorization: `Bearer ${account.accessToken}` } : {}) }, payload: { providerId: 'oauth', mode, ...(mode==='login'?{activationCode:await issuedFixtureActivation()}:{}) } })
   expect(response.statusCode, response.body).toBe(200)
   return response.json().data as Flow
 }
@@ -76,9 +80,29 @@ describe('persistent browser and credential login flows', () => {
     expect((await app.inject({ method: 'GET', url: '/auth/account/providers' })).statusCode).toBe(401)
     const capabilities = (await app.inject({ method: 'GET', url: '/auth/account/providers', headers: gate })).json().data
     expect(capabilities.providers).toHaveLength(2)
-    expect(capabilities.registrationEnabled).toBe(true)
+    expect(capabilities).toMatchObject({ registrationEnabled: true, activationCodeRequired: true })
     expect((await app.inject({ method: 'GET', url: '/auth/account/external/callback?state=bad&code=x' })).statusCode).toBe(400)
     expect((await app.inject({ method: 'POST', url: '/auth/account/external/start', payload: { providerId: 'oauth' } })).statusCode).toBe(401)
+  })
+  it('requires local enrollment only for a first provider login and never forwards the opening code', async () => {
+    const send = (activationCode?: string) => app.inject({ method: 'POST', url: '/auth/account/external/credential', headers: gate,
+      payload: { providerId: 'credential', credential: 'new-enrollment-fixture', mode: 'login', ...(activationCode ? { activationCode } : {}) } })
+    sawUnexpectedCredentialField = false
+    expect((await send()).statusCode).toBe(403)
+    const code = await issuedFixtureActivation(), enrolled = await send(code)
+    expect(enrolled.statusCode).toBe(200)
+    expect(enrolled.json().data.user).toMatchObject({ accountKind: 'primary', mainAccountActivated: true })
+    const returning = await send()
+    expect(returning.json().data.user.id).toBe(enrolled.json().data.user.id)
+    expect(enrolled.body.includes(code)).toBe(false)
+    expect(sawUnexpectedCredentialField).toBe(false)
+    const otherCode = await issuedFixtureActivation()
+    const begin = await app.inject({ method: 'POST', url: '/auth/account/external/start', headers: gate,
+      payload: { providerId: 'oauth', mode: 'login', activationCode: otherCode } })
+    expect(begin.statusCode).toBe(200)
+    expect(begin.body.includes(otherCode)).toBe(false)
+    const row = (await getDb().execute({sql:'SELECT payload FROM account_external_flows WHERE id=?', args:[begin.json().data.flowId]})).rows[0]
+    expect(String(row.payload).includes(otherCode)).toBe(false)
   })
   it('survives route/server recreation, encrypts verifier and only yields credentials once to poll secret holder', async () => {
     const flow = await begin()
@@ -126,26 +150,26 @@ describe('persistent browser and credential login flows', () => {
     expect((await app.inject({ ...request, headers: { ...gate, Authorization: 'Bearer aether_session_forged' } })).statusCode).toBe(401)
   })
   it('checks account session revocation again when the browser returns', async () => {
-    const account = await registerAccount(), flow = await begin('link', account)
+    const account = await registerAccount(await issuedFixtureActivation()), flow = await begin('link', account)
     await getDb().execute({ sql: 'UPDATE account_sessions SET revoked_at=? WHERE id=?', args: [Date.now(), account.user.sessionId ?? ''] })
     expect((await callback(flow)).statusCode).toBe(400)
     expect((await poll(flow)).statusCode).toBe(400)
   })
   it('checks revocation between callback and result consumption', async () => {
-    const account = await registerAccount(), flow = await begin('link', account)
+    const account = await registerAccount(await issuedFixtureActivation()), flow = await begin('link', account)
     expect((await callback(flow)).statusCode).toBe(200)
     await getDb().execute({ sql: 'UPDATE account_sessions SET revoked_at=? WHERE id=?', args: [Date.now(), account.user.sessionId ?? ''] })
     expect((await poll(flow)).statusCode).toBe(401)
   })
   it('binds verified existing-platform identity without changing original user or tenant', async () => {
-    const account = await registerAccount()
+    const account = await registerAccount(await issuedFixtureActivation())
     const linked = await app.inject({ method: 'POST', url: '/auth/account/external/credential', headers: { ...gate, Authorization: `Bearer ${account.accessToken}` },
       payload: { providerId: 'credential', credential: 'verified-erp-secret', mode: 'link' } })
     expect(linked.statusCode, linked.body).toBe(200)
     expect(linked.json().data).toMatchObject({ id: account.user.id, tenantId: account.user.tenantId, identities: [{ providerId: 'credential', subject: 'erp-stable-user' }] })
-    const login = await app.inject({ method: 'POST', url: '/auth/account/external/credential', headers: gate, payload: { providerId: 'credential', credential: 'verified-erp-secret', mode: 'login' } })
+    const login = await app.inject({ method: 'POST', url: '/auth/account/external/credential', headers: gate, payload: { providerId: 'credential', credential: 'verified-erp-secret', mode: 'login', activationCode: await issuedFixtureActivation() } })
     expect(login.json().data.user).toMatchObject({ id: account.user.id, tenantId: account.user.tenantId })
-    const competitor = await registerAccount()
+    const competitor = await registerAccount(await issuedFixtureActivation())
     const collision = await app.inject({ method: 'POST', url: '/auth/account/external/credential', headers: { ...gate, Authorization: `Bearer ${competitor.accessToken}` },
       payload: { providerId: 'credential', credential: 'verified-erp-secret', mode: 'link' } })
     expect(collision.statusCode).toBe(409)
@@ -167,7 +191,7 @@ describe('persistent browser and credential login flows', () => {
     await getDb().execute({ sql: 'UPDATE account_sessions SET authenticated_at=? WHERE id=?', args: [old, account.user.sessionId!] })
     const flow = await begin('reauth', account)
     expect((await poll(flow)).statusCode).toBe(401)
-    const competitor = await registerAccount()
+    const competitor = await registerAccount(await issuedFixtureActivation())
     expect((await poll(flow, flow.pollToken, competitor)).statusCode).toBe(403)
     const secondLogin = await begin(); await callback(secondLogin)
     const otherSession = (await poll(secondLogin)).json().data.result as AccountLoginResult
@@ -186,7 +210,7 @@ describe('persistent browser and credential login flows', () => {
   })
 
   it('does not bind or create an account when reauthentication uses an unrelated browser identity', async () => {
-    const account = await registerAccount(), flow = await begin('reauth', account)
+    const account = await registerAccount(await issuedFixtureActivation()), flow = await begin('reauth', account)
     const before = (await getDb().execute('SELECT COUNT(*) AS total FROM users')).rows[0].total
     expect((await callback(flow)).statusCode).toBe(200)
     expect((await poll(flow, flow.pollToken, account)).statusCode).toBe(403)
@@ -195,7 +219,7 @@ describe('persistent browser and credential login flows', () => {
   })
 
   it.each(['pending', 'callback', 'complete'] as const)('rejects reauthentication when the original session is revoked at %s', async stage => {
-    const account = await registerAccount(), flow = await begin('reauth', account)
+    const account = await registerAccount(await issuedFixtureActivation()), flow = await begin('reauth', account)
     if (stage === 'complete') expect((await callback(flow)).statusCode).toBe(200)
     await getDb().execute({ sql: 'UPDATE account_sessions SET revoked_at=? WHERE id=?', args: [Date.now(), account.user.sessionId!] })
     if (stage === 'callback') expect((await callback(flow)).statusCode).toBe(400)
@@ -205,12 +229,12 @@ describe('persistent browser and credential login flows', () => {
 
   it('reauthenticates credential identities only when already bound to the same account', async () => {
     const login = await app.inject({ method: 'POST', url: '/auth/account/external/credential', headers: gate,
-      payload: { providerId: 'credential', credential: 'verified-erp-secret', mode: 'login' } })
+      payload: { providerId: 'credential', credential: 'verified-erp-secret', mode: 'login', activationCode: await issuedFixtureActivation() } })
     const account = login.json().data as AccountLoginResult, old = Date.now() - 11 * 60_000
     await getDb().execute({ sql: 'UPDATE account_sessions SET authenticated_at=? WHERE id=?', args: [old, account.user.sessionId!] })
     const request = { method: 'POST' as const, url: '/auth/account/external/credential', payload: { providerId: 'credential', credential: 'verified-erp-secret', mode: 'reauth' } }
     expect((await app.inject({ ...request, headers: gate })).statusCode).toBe(401)
-    const other = await registerAccount()
+    const other = await registerAccount(await issuedFixtureActivation())
     expect((await app.inject({ ...request, headers: { ...gate, Authorization: `Bearer ${other.accessToken}` } })).statusCode).toBe(403)
     expect((await getAccountUser(other.user.id)).identities).toHaveLength(0)
     const response = await app.inject({ ...request, headers: { ...gate, Authorization: `Bearer ${account.accessToken}` } })

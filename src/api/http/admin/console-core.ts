@@ -3,6 +3,7 @@ export const ADMIN_CORE_JS = String.raw`
 const pages = new Map(), pageState = new Map();
 const pageInfo = {
   overview:['服务器概览','连接状态与最近一次采样。'], members:['后台成员','管理谁可以登录这个后台，以及他们使用的密钥。'],
+  accounts:['个人账号','签发主账号开通码，调整每个主账号可使用的子账号名额。'],
   roles:['角色与权限','为成员分配完成工作所需的权限。'], audit:['审计日志','查看后台操作的执行人、目标和结果。'],
   rules:['监控规则','管理监控条件，并用最近一次采样检查越限情况。'], settings:['实例设置与连接','配对客户端，并查看服务端启动设置。'],
   none:['暂无可访问的页面','此身份已经连接，但尚未获得可查看的管理权限。请联系管理员。'] };
@@ -13,7 +14,7 @@ function node(tag,text,className) { const n=document.createElement(tag);if(text!
 function button(label,handler,cls='secondary') { const b=node('button',label,cls);b.type='button';b.addEventListener('click',handler);return b; }
 function announce(message) { consoleNote.textContent=message||'';consoleNote.hidden=!message; }
 function can(what) { return !!profile && profile.permissions.includes(what); }
-function allowedPage(which) { if(which==='overview')return can('status.read')||can('metrics.read');if(which==='settings')return can('status.read');if(which==='members')return can('members.read')||can('members.write')||can('credentials.write');if(which==='roles')return can('roles.read')||can('roles.write');if(which==='rules')return can('rules.read')||can('rules.manage');return can(which+'.read'); }
+function allowedPage(which) { if(which==='accounts')return can('accounts.read')||can('accounts.activation')||can('accounts.quota'); if(which==='overview')return can('status.read')||can('metrics.read');if(which==='settings')return can('status.read');if(which==='members')return can('members.read')||can('members.write')||can('credentials.write');if(which==='roles')return can('roles.read')||can('roles.write');if(which==='rules')return can('rules.read')||can('rules.manage');return can(which+'.read'); }
 function registerAdminPage(id,render) { pages.set(id,render); }
 function currentState(id,create) { if(!pageState.has(id))pageState.set(id,create());return pageState.get(id); }
 function abortError() {return new DOMException('请求已取消','AbortError');}
@@ -37,8 +38,8 @@ async function http(credentials,path,options={},signal) {
   try {
     const headers={Accept:'application/json'};
     if(credentials.kind==='bearer')headers.Authorization='Bearer '+credentials.key;
-    else if(credentials.key.startsWith('aether_admin_'))headers['X-Aether-Admin-Key']=credentials.key;
-    else headers['X-API-Key']=credentials.key;
+    else if(credentials.kind!=='desktop'&&credentials.key.startsWith('aether_admin_'))headers['X-Aether-Admin-Key']=credentials.key;
+    else if(credentials.kind!=='desktop')headers['X-API-Key']=credentials.key;
     if(credentials.token)headers['X-Aether-Instance-Token']=credentials.token;
     if(options.body!==undefined)headers['Content-Type']='application/json';
     const response=await fetch(target,{method:options.method||'GET',headers,body:options.body===undefined?undefined:JSON.stringify(options.body),signal:ctrl.signal,mode:'same-origin',credentials:'omit',redirect:'error',cache:'no-store',referrerPolicy:'no-referrer'});
@@ -67,7 +68,7 @@ function confirmAction(options) {return modal({ ...options, confirmLabel:options
 el('dialog-cancel').addEventListener('click',()=>endModal());el('admin-dialog').addEventListener('cancel',e=>{e.preventDefault();endModal();});
 el('admin-dialog-form').addEventListener('submit',async e=>{e.preventDefault();const m=modalState;if(!m||m.saving)return;m.saving=true;el('dialog-error').hidden=true;const accept=el('dialog-accept');accept.disabled=true;el('dialog-cancel').disabled=true;try{if(m.options.commit)await m.options.commit();if(modalState===m)endModal(true,true);}catch(err){if(modalState!==m||err.name==='AbortError')return;const n=el('dialog-error');n.hidden=false;n.textContent=err.message||'操作失败，请重试。';n.setAttribute('tabindex','-1');n.focus();}finally{if(modalState===m){m.saving=false;accept.disabled=false;el('dialog-cancel').disabled=false;}}});
 function resetConsole() {if(viewController)viewController.abort();viewController=null;identityRequest=null;endModal(false,true);shell.hidden=true;document.body.classList.remove('console-open');el('disconnect').hidden=true;showMenu(false);profile=null;pageState.clear();section='overview';announce('');setupHome.append(setup);guideHome.append(guide);guide.querySelector('details').open=false;el('view-content').replaceChildren();el('page-actions').replaceChildren();discardSamples();for(const id of ['viewer-name','viewer-role','view-title','view-intro','nav-current'])el(id).textContent='';el('admin-page').hidden=true;for(const b of nav.querySelectorAll('[data-page]')){b.hidden=true;b.removeAttribute('aria-current');}}
-function expired(err) {const previousKind=session?.kind;forget();if(previousKind==='bearer'){kind.value='bearer';el('auth-options').open=true;updateKind();}notify(err.message);const element=err.instance?token:key;element.setAttribute('aria-invalid','true');element.focus();}
+function expired(err) {const previousKind=session?.kind;forget();if(desktopSession){notify('当前登录已失效。请返回桌面设置重新打开管理后台。');disconnect.hidden=false;disconnect.focus();return;}if(previousKind==='bearer'){kind.value='bearer';el('auth-options').open=true;updateKind();}notify(err.message);const element=err.instance?token:key;element.setAttribute('aria-invalid','true');element.focus();}
 async function boundApi(path,options,ctrl) {if(!session||ctrl.signal.aborted)throw abortError();try{return await http(session,path,options,ctrl.signal);}catch(e){if(!ctrl.signal.aborted&&e.status===401)expired(e);else if(!ctrl.signal.aborted&&e.status===403&&options?.method&&options.method!=='GET')void refreshIdentity(true);throw e;}}
 function panel(title,text,action) {const box=node('div',null,'panel-note');box.append(node('strong',title));if(text)box.append(node('p',text));if(action)box.append(action);return box;}
 function entry(label,control) {const wrap=node('div',null,'dialog-field'),caption=node('label',label);caption.htmlFor=control.id;wrap.append(caption,control);return wrap;}
@@ -118,7 +119,7 @@ function refreshIdentity(onlyIfChanged=false) {
 function manualRefresh() {
   if(!session)return;
   if(section==='members'||section==='roles')pageState.delete('role-catalog');
-  if(session.kind!=='bearer'&&session.key.startsWith('aether_admin_'))void refreshIdentity();else void showPage(section);
+  if(session.kind==='desktop'||(session.kind!=='bearer'&&session.key.startsWith('aether_admin_')))void refreshIdentity();else void showPage(section);
 }
 nav.addEventListener('click',e=>{const b=e.target.closest('button[data-page]');if(b&&nav.contains(b)&&!b.hidden)void showPage(b.dataset.page,{focus:true});});navToggle.addEventListener('click',()=>showMenu(navToggle.getAttribute('aria-expanded')!=='true'));el('view-refresh').addEventListener('click',manualRefresh);
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&nav.parentElement.classList.contains('expanded')){showMenu(false);navToggle.focus();}if(!session||modalState||!(e.metaKey||e.ctrlKey)||e.altKey||e.key.toLowerCase()!=='f')return;const input=el('view-content').querySelector('input[type=search]');if(input){e.preventDefault();input.focus();input.select();}});

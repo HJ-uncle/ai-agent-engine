@@ -137,19 +137,19 @@ const visitMounts = node => {
 }
 visitMounts(serverSource.ast)
 if (!directMounts.size) throw new Error('No direct HTTP route registrations found')
-// Management pages split HTTP registration from their static assets and storage. Inherit the
-// actual mount of the parent route, including helper functions called with its Fastify instance.
-const panelRoot = path.join(root, 'src/api/http/routes/admin.ts')
-if (directMounts.has(panelRoot)) {
-  const parent = source(panelRoot)
+// Root-mounted groups may call another registration function directly (e.g. account-family).
+// Carry the parent's real prefix into those modules instead of assuming /api/v1.
+for (const [parentFile, prefix] of directMounts) {
+  const parent = source(parentFile)
   const scan = node => {
-    if (ts.isCallExpression(node)) {
-      const delegated = ts.isIdentifier(node.expression) && node.arguments[0]?.getText() === 'fastify' ? node.expression :
-        isRegister(node) && node.arguments[0] && ts.isIdentifier(node.arguments[0]) ? node.arguments[0] : null
-      const target = delegated && parent.imports.get(delegated.text)?.[0]
-      if (target && (path.dirname(target) === path.join(root, 'src/api/http/admin') || (path.dirname(target) === path.dirname(panelRoot) && path.basename(target).startsWith('admin-')))) directMounts.set(target,directMounts.get(panelRoot))
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && /^(fastify|app|api)$/.test(node.arguments[0]?.getText() ?? '')) {
+      const target = parent.imports.get(node.expression.text)?.[0]
+      if (target && /^src\/api\/http\/(routes|admin)\//.test(slash(path.relative(root, target)))) {
+        if (directMounts.has(target) && directMounts.get(target) !== prefix) throw new Error('Conflicting delegated route mount: ' + target)
+        directMounts.set(target, prefix)
+      }
     }
-    ts.forEachChild(node,scan)
+    ts.forEachChild(node, scan)
   }
   scan(parent.ast)
 }

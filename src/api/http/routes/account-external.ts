@@ -2,7 +2,8 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID }
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { z } from 'zod'
 import { getDb } from '../../../storage/sqlite/db.js'
-import { AccountAuthError, completeExternalIdentity, requireAccountAuth, requireRecentAccountAuth, revalidateAccountAuth, reauthenticateExternalIdentity } from '../../../auth/accounts.js'
+import { AccountAuthError, completeExternalIdentity, requireAccountAuth, requireRecentAccountAuth, revalidateAccountAuth, requireIndependentAccount, reauthenticateExternalIdentity } from '../../../auth/accounts.js'
+import { activationProof, type ActivationProof } from '../../../auth/account-activation.js'
 import type { AuthContext } from '../../../auth/types.js'
 import { beginAccountTransaction, executeAccountWrite } from '../../../auth/account-database.js'
 import { AccountProviderRegistry, assertAccountProviderUrl, type VerifiedExternalIdentity } from '../../../auth/account-providers.js'
@@ -13,8 +14,8 @@ const FLOW_TTL = 5 * 60_000
 const hash = (value: string): string => createHash('sha256').update(value).digest('hex')
 type AccountRequest = FastifyRequest & { authContext?: AuthContext }
 type ExternalMode = 'login' | 'link' | 'reauth'
-type FlowPayload = { nonce: string; codeVerifier: string; redirectUri: string; linkAuth?: AuthContext; reauthAuth?: AuthContext }
-const startSchema = z.object({ providerId: z.string().min(1).max(64), mode: z.enum(['login', 'link', 'reauth']).default('login') }).strict()
+type FlowPayload = { nonce: string; codeVerifier: string; redirectUri: string; activation?: ActivationProof; linkAuth?: AuthContext; reauthAuth?: AuthContext }
+const startSchema = z.object({ providerId: z.string().min(1).max(64), mode: z.enum(['login', 'link', 'reauth']).default('login'), activationCode: z.string().max(80).optional() }).strict()
 const credentialSchema = startSchema.extend({ credential: z.string().min(1).max(16 * 1024) })
 const pollSchema = z.object({ flowId: z.string().uuid(), pollToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict()
 
@@ -56,11 +57,15 @@ async function rateLimit(request: FastifyRequest, lane: string, max: number): Pr
   } finally { tx.close() }
 }
 async function accountContext(request: FastifyRequest, mode: ExternalMode): Promise<AuthContext | undefined> {
-  if (mode === 'login') return undefined
+  if (mode === 'login') {
+    if ((request as AccountRequest).authContext?.method === 'session') throw new AccountAuthError(403, '请先退出当前账号，再使用第三方登录。')
+    return undefined
+  }
   const auth = (request as AccountRequest).authContext
   requireAccountAuth(auth)
   if (mode === 'link') requireRecentAccountAuth(auth)
   await revalidateAccountAuth(auth)
+  await requireIndependentAccount(getDb(), auth.userId)
   return auth
 }
 async function revalidateFlowAccount(payload: FlowPayload, request?: FastifyRequest): Promise<void> {
@@ -97,11 +102,13 @@ export async function externalAccountRoutes(app: FastifyInstance): Promise<void>
   const cleanup = setInterval(() => { void sweep().catch(() => {}) }, 60_000)
   cleanup.unref()
   app.addHook('onClose', async () => { clearInterval(cleanup) })
-  app.get(`${BASE}/providers`, async () => success({ providers: registry.listPublic(), registrationEnabled: process.env.AETHER_ACCOUNT_REGISTRATION !== 'false' }))
+  app.get(`${BASE}/providers`, async () => success({ providers: registry.listPublic(), childPasswordAvailable: true, activationCodeRequired: true, registrationEnabled: process.env.AETHER_ACCOUNT_REGISTRATION !== 'false' }))
   app.post(`${BASE}/external/start`, { bodyLimit: 4096, logLevel: 'silent' }, async (request, reply) => {
     try {
       const body = startSchema.parse(request.body)
       await rateLimit(request, 'start', 10)
+      if (body.activationCode !== undefined && body.mode !== 'login') throw new AccountAuthError(400, '开通码仅用于新主账号。')
+      const activation = activationProof(body.activationCode)
       const key = encryptionKey(), auth = await accountContext(request, body.mode)
       const redirectUri = callbackUri(), flowId = randomUUID(), pollToken = randomBytes(32).toString('base64url')
       const browser = await registry.startBrowser(body.providerId, redirectUri)
@@ -110,7 +117,7 @@ export async function externalAccountRoutes(app: FastifyInstance): Promise<void>
         await tx.execute({ sql: 'DELETE FROM account_external_flows WHERE expires_at < ?', args: [Date.now()] })
         const count = await tx.execute('SELECT COUNT(*) AS total FROM account_external_flows')
         if (Number(count.rows[0].total) >= 10_000) throw new AccountAuthError(429, '待完成登录过多，请稍后重试')
-        const payload: FlowPayload = { nonce: browser.nonce, codeVerifier: browser.codeVerifier, redirectUri,
+        const payload: FlowPayload = { nonce: browser.nonce, codeVerifier: browser.codeVerifier, redirectUri, ...(activation ? {activation} : {}),
           ...(body.mode === 'link' ? { linkAuth: auth } : body.mode === 'reauth' ? { reauthAuth: auth } : {}) }
         await tx.execute({ sql: `INSERT INTO account_external_flows(id,state_hash,poll_hash,provider_id,payload,expires_at) VALUES(?,?,?,?,?,?)`,
           args: [flowId, hash(browser.state), hash(pollToken), body.providerId, seal(payload, key), Date.now() + FLOW_TTL] })
@@ -134,7 +141,7 @@ export async function externalAccountRoutes(app: FastifyInstance): Promise<void>
       const payload = unseal<FlowPayload>(String(row.payload), key)
       await revalidateFlowAccount(payload)
       const identity = await registry.completeBrowser(String(row.provider_id), {
-        ...payload, code: query.code, state: query.state, expectedState: query.state,
+        nonce: payload.nonce, codeVerifier: payload.codeVerifier, redirectUri: payload.redirectUri, code: query.code, state: query.state, expectedState: query.state,
       })
       await revalidateFlowAccount(payload)
       await executeAccountWrite({ sql: `UPDATE account_external_flows SET status='complete', identity=? WHERE id=? AND status='processing' AND expires_at>?`,
@@ -168,7 +175,7 @@ export async function externalAccountRoutes(app: FastifyInstance): Promise<void>
       const identity = unseal<VerifiedExternalIdentity>(String(consumed.rows[0].identity), key)
       await revalidateFlowAccount(payload, request)
       const account = payload.reauthAuth ? await reauthenticateExternalIdentity(identity, payload.reauthAuth)
-        : await completeExternalIdentity(identity, payload.linkAuth)
+        : await completeExternalIdentity(identity, payload.linkAuth, payload.activation)
       return reply.header('Cache-Control', 'no-store').send(success({ status: 'complete', result: account }))
     } catch (error) { handleError(error, reply) }
   })
@@ -177,10 +184,12 @@ export async function externalAccountRoutes(app: FastifyInstance): Promise<void>
       const body = credentialSchema.parse(request.body)
       await rateLimit(request, 'credential', 10)
       const auth = await accountContext(request, body.mode)
+      if (body.activationCode !== undefined && body.mode !== 'login') throw new AccountAuthError(400, '开通码仅用于新主账号。')
+      const activation = activationProof(body.activationCode)
       const identity = await registry.exchangeCredential(body.providerId, body.credential)
       if (auth) await revalidateAccountAuth(auth)
       const result = body.mode === 'reauth' && auth ? await reauthenticateExternalIdentity(identity, auth)
-        : await completeExternalIdentity(identity, auth)
+        : await completeExternalIdentity(identity, auth, activation)
       return reply.header('Cache-Control', 'no-store').send(success(result))
     } catch (error) { handleError(error, reply) }
   })

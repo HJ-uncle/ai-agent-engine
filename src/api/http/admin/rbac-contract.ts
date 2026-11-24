@@ -3,6 +3,7 @@ export { ADMIN_HEADER, ADMIN_KEY_PREFIX } from '../../../auth/admin-key-format.j
 export const ADMIN_PERMISSIONS = {
   'status.read': '查看实例概览', 'metrics.read': '查看运行指标', 'rules.read': '查看运维规则', 'rules.manage': '管理运维规则',
   'members.read': '查看后台成员', 'members.write': '管理后台成员', 'credentials.write': '签发和撤销后台密钥',
+  'accounts.read': '查看主账号及配额', 'accounts.quota': '调整子账号配额', 'accounts.activation': '管理主账号开通码',
   'roles.read': '查看后台角色', 'roles.write': '管理自定义角色', 'audit.read': '查看管理审计',
 } as const
 export type AdminPermission = keyof typeof ADMIN_PERMISSIONS

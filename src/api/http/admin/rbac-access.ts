@@ -5,9 +5,11 @@ import { canAdministerTenant } from '../../../auth/guards.js'
 import type { AuthContext } from '../../../auth/types.js'
 import { getDb } from '../../../storage/sqlite/db.js'
 import { fail, success } from '../response.js'
+import { desktopWindowGrant } from './desktop-session.js'
+import { isOwnedDesktopRequest } from '../desktop-ownership.js'
 import { isAdminPath } from './surface.js'
 import { ADMIN_HEADER, type AdminMe, type AdminPermission } from './rbac-contract.js'
-import { AdminHttpError, AdminRbacStore, digestAdminKey, managementDatabasePath, publicActor, recoveryActor, type AdminOperation, type AdminProof, type AdminTask } from './rbac-storage.js'
+import { AdminHttpError, AdminRbacStore, digestAdminKey, managementDatabasePath, publicActor, recoveryActor, desktopActor, type AdminOperation, type AdminProof, type AdminTask } from './rbac-storage.js'
 export { AdminHttpError } from './rbac-storage.js'
 
 interface Entry { migrations: Map<string, readonly string[]>; store?: Promise<AdminRbacStore>; lifecycle: boolean }
@@ -37,9 +39,10 @@ function storeFor(app: FastifyInstance): Promise<AdminRbacStore> {
   const entry = registry(app)
   return entry.store ??= (async () => {
     // Bind authorization to the actual opened database, never a later UI/DB change to process.env.DATA_DIR.
-    const primary = (await getDb().execute('PRAGMA database_list')).rows.find(r => r.name === 'main')?.file
+    const business = getDb()
+    const primary = (await business.execute('PRAGMA database_list')).rows.find(r => r.name === 'main')?.file
     if (typeof primary !== 'string' || !primary) throw new Error('Missing primary database identity')
-    const store = new AdminRbacStore(managementDatabasePath(primary), entry.migrations)
+    const store = new AdminRbacStore(managementDatabasePath(primary), entry.migrations, business)
     try { await store.ready(); return store } catch (error) { await store.close(); throw error }
   })().catch(error => { entry.store = undefined; throw error })
 }
@@ -47,7 +50,12 @@ function proofFor(req: FastifyRequest): AdminProof {
   const dedicated = req.headers[ADMIN_HEADER]
   if (dedicated !== undefined) {
     if (!isAdminKey(dedicated)) throw new AdminHttpError(401, '后台密钥无效或已撤销。', 'invalid_credential')
-    return { kind: 'key', digest: digestAdminKey(dedicated) }
+    const digest = digestAdminKey(dedicated), active = desktopWindowGrant(req.server, digest)
+    if (active) {
+      if (!isOwnedDesktopRequest(req) || req.headers.authorization !== undefined || req.headers['x-api-key'] !== undefined) throw new AdminHttpError(403, '当前身份不能使用本机管理窗口。', 'permission_denied')
+      return { kind: 'desktop', id: 'desktop:local', active }
+    }
+    return { kind: 'key', digest }
   }
   const auth = (req as FastifyRequest & { authContext?: AuthContext }).authContext
   if (!auth || auth.method === 'none') throw new AdminHttpError(401, '需要后台管理员凭据。', 'authentication_required')
@@ -84,6 +92,7 @@ export async function requireAdminPermission(req: FastifyRequest, reply: Fastify
     const cached = requestActors.get(req)
     if (cached && (!permission || cached.permissions.includes(permission))) return cached
     const proof = await verifiedProof(req, permission ?? 'admin.authentication')
+    if (proof.kind === 'desktop') return publicActor(desktopActor(proof))
     if (proof.kind === 'recovery') return publicActor(recoveryActor(proof.id))
     const store = await storeFor(req.server)
     const actor = await store.authorize(proof, { permission, action: permission ?? 'admin.authentication', targetId: null, requestId: req.id })
@@ -97,6 +106,7 @@ export async function adminIdentity(req: FastifyRequest, reply: FastifyReply): P
 async function operation<T>(req: FastifyRequest, reply: FastifyReply, op: Omit<AdminOperation,'requestId'>, write: boolean, work: AdminTask<T>): Promise<FastifyReply> {
   try {
     const proof = await verifiedProof(req, op.action, op.targetId), store = await storeFor(req.server)
+    if (op.action==='audit.read') {await store.authorize(proof,{...op,requestId:req.id}); await store.syncAccountAudit()}
     const result = await store.run(proof, { ...op, requestId: req.id }, write, work)
     return reply.send(success(result))
   } catch (error) { return adminErrorReply(reply, error) }
@@ -107,4 +117,11 @@ export function adminRead<T>(req: FastifyRequest, reply: FastifyReply, permissio
 /** Mutations repeat credential/role checks inside the same write transaction as their audit event. */
 export function adminWrite<T>(req: FastifyRequest, reply: FastifyReply, permission: AdminPermission, action: string, targetId: string | null, work: AdminTask<T>): Promise<FastifyReply> {
   return operation(req, reply, { permission, action, targetId }, true, work)
+}
+
+export async function accountAdminOperation<T>(req: FastifyRequest, reply: FastifyReply, permission: AdminPermission, action: string, targetId: string|null, write: boolean, work: AdminTask<T>): Promise<FastifyReply> {
+  try {
+    const proof=await verifiedProof(req,action,targetId), store=await storeFor(req.server)
+    return reply.send(success(await store.runAccount(proof,{permission,action,targetId,requestId:req.id},write,work)))
+  } catch(error) {return adminErrorReply(reply,error)}
 }

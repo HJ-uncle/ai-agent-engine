@@ -1,3 +1,4 @@
+import { isManagedChildTenant } from '../../../auth/account-scope.js'
 import { attachmentDescription, attachmentHistoryMetadata, type ChatAttachmentInput } from '../../../core/attachment-input.js'
 // TODO: LLM response caching is not implemented for streaming (SSE) endpoints.
 // For non-streaming complete() calls, a cache layer could be added here keyed on
@@ -1015,7 +1016,7 @@ export async function chatRoutes(fastify: FastifyInstance, options: ChatRouteOpt
     // their project explicitly through workspacePaths.
     const boundWorkspace = workspaceManager.getBoundDirectory({ tenantId, sessionId })
     const admittedWorkspacePaths = boundWorkspace ? [preparingWorkspace.snapshot.root]
-      : process.env.AUTH_ENABLED === 'false' && workspacePaths?.length
+      : process.env.AUTH_ENABLED === 'false' && !isManagedChildTenant(tenantId) && workspacePaths?.length
         ? [preparingWorkspace.snapshot.root, ...workspacePaths.slice(1)] : []
     preparingWorkspace.assertCurrent()
     // Build tool registry（统一工厂，含所有内置工具 + MCP + Skills）

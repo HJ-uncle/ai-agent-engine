@@ -24,4 +24,4 @@
 
 探测缓存 2 分钟，多个任务共享一次探测；子进程隐藏窗口，有 3500ms 超时与 32KiB 输出上限。不要重复轮询、逐目录搜软件、借用其他任务或私有应用运行时。
 
-环境变量 `AETHER_OFFICE_PYTHON`、`AETHER_OFFICE_SOFFICE`、`AETHER_OFFICE_RUNTIME_ROOT` 只由部署管理员配置，不接受模型提供的程序路径。不得安装共享依赖、批量结束用户的办公进程或关闭用户文档。所有默认办公交付继续留在 Aether 内。
+环境变量 `AETHER_OFFICE_PYTHON`、`AETHER_OFFICE_SOFFICE`、`AETHER_OFFICE_RUNTIME_ROOT` 只由部署管理员配置，不接受模型提供的程序路径。不得安装共享依赖、批量结束用户的办公进程或关闭用户文档。用户已明确选择的办公格式交付继续留在 Aether 内；未指定格式的普通文档默认走 Markdown，不触发办公环境探测。

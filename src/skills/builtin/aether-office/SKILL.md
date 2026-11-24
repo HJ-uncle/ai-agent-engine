@@ -1,9 +1,13 @@
 ---
 name: aether-office
-description: 在Aether内创建和检查真实DOCX、XLSX、PPTX、PDF，编辑Word/Excel/演示文本，执行内置公式重算与版本保护。用于报告、方案、台账、演示和经营分析，不依赖WPS或其他办公应用。
+description: 仅在用户明确指定 DOCX/Word、XLSX/Excel、PPTX/PPT、PDF 或要求打印版/演示文稿/可编辑办公文件时，在Aether内创建和检查真实办公文件；未指定格式的报告、方案、说明和表格默认使用 Markdown。支持编辑Word/Excel/演示文本、内置公式重算与版本保护，不依赖WPS或其他办公应用。
 ---
 
 # Aether 办公文档
+
+## 格式触发规则
+
+“文档”“报告”“方案”“说明”或“表格”这些词本身不代表用户要求 Office 文件。未明确指定 Word/DOCX、Excel/XLSX、PPT/PPTX 或 PDF 时，普通内容直接用 Markdown 回复；需要落盘的文档/报告/说明默认写成 UTF-8 `.md`，表格默认使用 Markdown 表格。只有用户明确指定办公格式、给出对应模板，或明确要求打印版/演示文稿/可编辑办公文件时，才使用本技能和 `office_document`；用户明确给出的其他格式继续按用户要求处理。
 
 使用 `office_document` 原生创建和检查 `.docx` / `.xlsx` / `.pptx` / `.pdf`；Word、Excel及PPTX支持定点编辑，XLSX支持内置 `recalculate`。只读审查优先 `office_inspect`，参数仅为 `path`、可选 `expectedHash/contentOffset/contentLimit`。不传 `operation` 或写入字段；只读子代理也可使用。这些操作使用随引擎发布的库，不需要Python、shell、pip、WPS、Office COM、LibreOffice或外部办公应用。已有 `read_file` 继续读取其他支持的资料。
 
@@ -24,7 +28,7 @@ description: 在Aether内创建和检查真实DOCX、XLSX、PPTX、PDF，编辑W
 
 ## 文件合同
 
-1. 新建时先收敛 `draft.md`，明确用途、结构、来源事实和待补内容；已有共享草稿直接复用，只读自己分工及共同事实，不另写同内容草稿、不重扫项目重新证明已给事实。仅成品必需事实缺失或冲突才定点补读；没有草稿时才在本任务临时目录写一份。多个格式共用此稿，再用 `office_document operation="create"`、`expectedHash="missing"` 生成分工内的成品。草稿不默认交付，不另等“确认导出”；已有文档单点修订无需重写全稿。保留用户文件名，没有授权不覆盖其他文件。
+1. 用户明确要求办公格式时，新建先收敛 `draft.md`，明确用途、结构、来源事实和待补内容；已有共享草稿直接复用，只读自己分工及共同事实，不另写同内容草稿、不重扫项目重新证明已给事实。仅成品必需事实缺失或冲突才定点补读；没有草稿时才在本任务临时目录写一份。用户明确要求的多个格式共用此稿，再用 `office_document operation="create"`、`expectedHash="missing"` 生成分工内的成品。未指定办公格式时不要创建此草稿或 Office 成品；草稿不默认交付，不另等“确认导出”；已有文档单点修订无需重写全稿。保留用户文件名，没有授权不覆盖其他文件。
 2. 编辑已有文件先 `inspect`，确认正文/表格和 `warnings`，再用同文件最近一次工具返回的完整 `expectedHash` 调用 `edit`。Excel 分批添加新表使用 `append_sheets`，复用同一版本合同，每次只发新增的 1-4 张表（优先一张），不重发旧表。已经有可信同版本内容时不重复读取。不猜 hash，不根据文件名推断内容。
 3. 哈希不一致代表其他任务或用户已修改。重新检查并基于实际内容调整，不盲目覆盖；多人协作分配不同文件或不同明确片段，仍遵守同一版本合同。
 4. create/edit/append_sheets 成功才代表文件真实发布。工具会做内存生成、ZIP/XML/数据结构检查与原子发布，返回文件路径、大小、版本及改动回执。失败时依据 `fileMutationApplied` 如实说明；参数过长或新表不存在时改为小批 `append_sheets`，禁止为补表删除重建、循环整包重发或绕过 expectedHash。不要把聊天文本、CSV 或 Markdown 改扩展名冒充 Office。

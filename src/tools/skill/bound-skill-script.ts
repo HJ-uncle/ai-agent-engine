@@ -2,28 +2,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { Tool, ToolResult } from '../../core/agent-context/types.js'
 import type { ExternalSkill } from '../../skills/external-loader.js'
-import { runSkillScriptTool, resolveSkillRoot } from './run-skill-script.js'
+import { runSkillScript, runSkillScriptTool, resolveSkillRoot } from './run-skill-script.js'
+import { invocationTokens } from './script-invocation.js'
 
-/** Parse one invocation, never a shell program. Reconstruction quotes every argument literally. */
-function invocationTokens(command: string): string[] | undefined {
-  const tokens: string[] = []
-  let token = '', quote: '"' | "'" | undefined, started = false
-  for (const character of command) {
-    if (quote) {
-      if (character === quote) quote = undefined
-      else token += character
-    } else if (character === '"' || character === "'") { quote = character; started = true }
-    else if (/\s/.test(character)) {
-      if (started) { tokens.push(token); token = ''; started = false }
-    } else if (/[;&|<>`]/.test(character)) return undefined
-    else { token += character; started = true }
-  }
-  if (quote) return undefined
-  if (started) tokens.push(token)
-  return tokens
-}
-
-function quoteArgument(value: string): string { return `'${value.replace(/'/g, `'"'"'`)}'` }
 const interpreters = new Set(['bash', 'sh', 'node', 'python', 'python3', 'ruby', 'perl'])
 
 /** A custom-Agent binding authorizes selected scripts, not arbitrary shell commands or other installed skills. */
@@ -40,7 +21,7 @@ export function createBoundSkillScriptTool(skills: readonly ExternalSkill[]): To
       if (!tokens || tokens.length < 2 || !interpreters.has(tokens[0]) || tokens[1].startsWith('-')) {
         return blocked('请选择已绑定技能中的脚本，使用单条「解释器 脚本路径 参数」调用。通用命令应使用 execute_cmd。')
       }
-      const rawPath = tokens[1].replace(/\$SKILLS_ROOT/g, resolveSkillRoot(command, ctx.projectRoot))
+      const rawPath = tokens[1].replace(/\$SKILLS_ROOT/g, () => resolveSkillRoot(command, ctx.projectRoot))
       let scriptPath: string
       try { scriptPath = fs.realpathSync(path.resolve(rawPath)) }
       catch { return blocked('技能脚本不存在，未启动任何进程。') }
@@ -53,8 +34,7 @@ export function createBoundSkillScriptTool(skills: readonly ExternalSkill[]): To
         } catch { return false }
       })
       if (!allowed || !fs.statSync(scriptPath).isFile()) return blocked('此脚本不属于当前 Agent 已绑定的技能，未启动任何进程。')
-      return runSkillScriptTool.execute({ ...args,
-        command: [tokens[0], scriptPath.replace(/\\/g, '/'), ...tokens.slice(2)].map(quoteArgument).join(' ') }, ctx)
+      return runSkillScript(args, ctx, [tokens[0], scriptPath.replace(/\\/g, '/'), ...tokens.slice(2)])
     },
   }
 }

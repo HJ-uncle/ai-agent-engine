@@ -1,6 +1,7 @@
 const paths: Record<string,string> = {
   overview:'<rect x="3.5" y="4" width="17" height="15" rx="2.5"/><path d="M3.5 9h17M9 9v10"/>',
   members:'<circle cx="9" cy="8.5" r="3"/><path d="M3.5 19c.3-3.4 2.4-5.1 5.5-5.1s5.2 1.7 5.5 5.1M15 5.8a3 3 0 0 1 0 5.6m.8 2.7c2.4.3 4 1.9 4.3 4.6"/>',
+  accounts:'<rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="9" cy="10" r="2"/><path d="M5.8 15.7c.4-2.3 5.9-2.3 6.4 0M15 10h3m-3 4h3"/>',
   roles:'<path d="M12 3.5c2.5 1.7 5.2 2.6 8 3v5.3c0 4.3-3.4 7.4-8 9-4.6-1.6-8-4.7-8-9V6.5c2.8-.4 5.5-1.3 8-3z"/><path d="m8.7 12 2.2 2.2 4.6-4.7"/>',
   audit:'<rect x="5" y="3.8" width="14" height="16.4" rx="2.4"/><path d="M8.7 8.5h6.7m-6.7 3.6h6.7m-6.7 3.6h4.3"/>',
   rules:'<path d="M3 14h4l3-7 4.1 11 3.3-8H21"/>',
@@ -8,7 +9,7 @@ const paths: Record<string,string> = {
   refresh:'<path d="M20 7a8 8 0 1 0 .3 9M20 3v5h-5"/>', menu:'<path d="M4 7h16M4 12h16M4 17h16"/>',
 }
 export const adminIcon = (name:string) => `<svg aria-hidden="true" focusable="false" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">${paths[name]}</svg>`
-const destinations = [['overview','服务器概览'],['members','后台成员'],['roles','角色与权限'],['audit','审计日志'],['rules','监控规则'],['settings','实例设置与连接']]
+const destinations = [['overview','服务器概览'],['accounts','个人账号'],['members','后台成员'],['roles','角色与权限'],['audit','审计日志'],['rules','监控规则'],['settings','实例设置与连接']]
 export const ADMIN_NAV = `<aside class="navigation" aria-label="控制台侧栏"><button id="nav-toggle" type="button" aria-label="展开管理导航" aria-expanded="false" aria-controls="management-nav" class="mobile-nav">${adminIcon('menu')}<span id="nav-current">服务器概览</span></button><nav id="management-nav" aria-label="管理导航"><p class="nav-label">引擎管理</p>${destinations.map(([id,label]) => `<button type="button" class="nav-link" id="nav-${id}" data-page="${id}" hidden>${adminIcon(id)}<span>${label}</span></button>`).join('')}<div class="viewer"><span class="viewer-label">当前身份</span><strong id="viewer-name"></strong><span id="viewer-role"></span></div></nav></aside>`
 export const ADMIN_VIEW = `<section id="admin-page" aria-labelledby="view-title" hidden><header class="view-header"><div><h2 id="view-title" tabindex="-1"></h2><p id="view-intro"></p></div><div class="view-tools"><div id="page-actions"></div><button class="icon" id="view-refresh" type="button" aria-label="刷新当前页面" title="刷新当前页面">${adminIcon('refresh')}</button></div></header><div id="view-content"></div></section><p id="console-message" class="console-message" role="status" hidden></p>`
 export const ADMIN_DIALOG = `<dialog id="admin-dialog" aria-labelledby="dialog-title"><form id="admin-dialog-form" method="dialog" autocomplete="off"><h2 id="dialog-title"></h2><div id="dialog-body" class="dialog-body"></div><p id="dialog-error" class="message" role="alert" hidden></p><footer><button id="dialog-cancel" class="secondary" type="button">取消</button><button id="dialog-accept" class="primary" type="submit">保存</button></footer></form></dialog>`

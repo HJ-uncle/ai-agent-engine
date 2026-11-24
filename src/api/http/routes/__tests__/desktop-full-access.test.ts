@@ -1,4 +1,5 @@
 /** Real route/auth/token gates: desktop-owned session access must not become a remote admin role. */
+import { issuedFixtureActivation } from '../../../../auth/__tests__/activation-fixture.js'
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify'
 import { SignJWT } from 'jose'
 import { randomUUID } from 'node:crypto'
@@ -32,7 +33,7 @@ beforeAll(async () => {
   vi.stubEnv('ENCRYPTION_KEY', 'a'.repeat(64))
   vi.stubEnv('AETHER_ACCOUNT_REGISTRATION', 'true')
   await initDb()
-  account = await registerAccount()
+  account = await registerAccount(await issuedFixtureActivation())
   tenantBearer = await bearer(['tenant-admin'])
   adminBearer = await bearer(['admin'])
   viewerBearer = await bearer()

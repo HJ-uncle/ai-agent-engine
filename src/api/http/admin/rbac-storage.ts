@@ -1,17 +1,17 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import type { Transaction } from '@libsql/client'
+import type { Client, Transaction } from '@libsql/client'
 import { LocalSqliteProcessClient } from '../../../storage/sqlite/local-process-client.js'
 import { ADMIN_KEY_PREFIX, ADMIN_PERMISSIONS, ALL_ADMIN_PERMISSIONS, AUDITOR_ROLE, OWNER_ROLE, VIEWER_ROLE, type AdminMe, type AdminPermission } from './rbac-contract.js'
 
 export class AdminHttpError extends Error {
   constructor(readonly status: number, message: string, readonly reason: string = 'invalid_request') { super(message) }
 }
-export type AdminProof = { kind: 'recovery'; id: string } | { kind: 'key'; digest: string }
+export type AdminProof = { kind: 'desktop'; id: 'desktop:local'; active: () => boolean } | { kind: 'recovery'; id: string } | { kind: 'key'; digest: string }
 export interface AdminActor extends AdminMe { credentialId: string | null }
-export interface AuditState { roleId?: string; enabled?: boolean; permissions?: AdminPermission[] }
-export interface AuditChange { memberId?: string; fields?: string[]; before?: AuditState; after?: AuditState }
+export interface AuditState { limit?: number; roleId?: string; enabled?: boolean; permissions?: AdminPermission[] }
+export interface AuditChange { targetId?: string; memberId?: string; fields?: string[]; before?: AuditState; after?: AuditState }
 export interface AdminOperation { permission?: AdminPermission; action: string; targetId: string | null; requestId: string }
 export type AdminTask<T> = (tx: Transaction, actor: AdminActor, record: (change: AuditChange) => void) => T | Promise<T>
 export const digestAdminKey = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -24,16 +24,20 @@ export function managementDatabasePath(primaryPath: string): string {
 }
 export function publicActor({ id, name, roleId, roleName, permissions, recovery }: AdminActor): AdminMe { return { id, name, roleId, roleName, permissions, recovery } }
 export function recoveryActor(id: string): AdminActor { return { id, name: '默认租户恢复管理员', roleId: OWNER_ROLE, roleName: '主管理员', permissions: [...ALL_ADMIN_PERMISSIONS], recovery: true, credentialId: null } }
+export function desktopActor(proof: Extract<AdminProof, {kind:'desktop'}>): AdminActor {
+  if (!proof.active()) throw new AdminHttpError(401, '本机管理窗口已关闭。', 'invalid_credential')
+  return { ...recoveryActor(proof.id), name: '本机桌面管理员', recovery: false }
+}
 export function readPermissions(value: unknown): AdminPermission[] {
   const parsed: unknown = JSON.parse(String(value))
   if (!Array.isArray(parsed) || !parsed.every(k => typeof k === 'string' && Object.hasOwn(ADMIN_PERMISSIONS, k))) throw new Error('Invalid stored management role')
   return parsed as AdminPermission[]
 }
 export function memberName(value: unknown): string {
-  if (typeof value !== 'string' || !value.trim() || value.trim().length > 80 || /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value) || value.toLowerCase().includes(ADMIN_KEY_PREFIX)) throw new AdminHttpError(400, '名称须为 1 至 80 个可显示字符。')
+  if (typeof value !== 'string' || !value.trim() || value.trim().length > 80 || /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value) || /aether_(?:admin|activate)_/i.test(value)) throw new AdminHttpError(400, '名称须为 1 至 80 个可显示字符。')
   return value.trim()
 }
-export const managementId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$/.test(value) && !value.toLowerCase().includes(ADMIN_KEY_PREFIX)
+export const managementId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$/.test(value) && !/aether_(?:admin|activate)_/i.test(value)
 const coreSchema = [
   `CREATE TABLE IF NOT EXISTS admin_schema(id TEXT PRIMARY KEY)`,
   `CREATE TABLE IF NOT EXISTS admin_roles(id TEXT PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE UNIQUE, permissions TEXT NOT NULL, builtin INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
@@ -42,15 +46,20 @@ const coreSchema = [
   `CREATE TABLE IF NOT EXISTS admin_credentials(id TEXT PRIMARY KEY, member_id TEXT NOT NULL REFERENCES admin_members(id) ON DELETE CASCADE, key_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, revoked_at TEXT)`,
   `CREATE INDEX IF NOT EXISTS admin_keys_member ON admin_credentials(member_id, revoked_at, created_at)`,
   `CREATE TABLE IF NOT EXISTS admin_audit(id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, actor_id TEXT NOT NULL, actor_name TEXT NOT NULL, role_id TEXT NOT NULL, action TEXT NOT NULL,target_id TEXT,outcome TEXT NOT NULL,reason TEXT,request_id TEXT NOT NULL,changes TEXT)`,
+  `CREATE TABLE IF NOT EXISTS admin_account_pending_receipts(event_id TEXT PRIMARY KEY)`,
   `CREATE INDEX IF NOT EXISTS admin_audit_outcomes ON admin_audit(outcome,id)`,
   `CREATE TRIGGER IF NOT EXISTS admin_audit_retention AFTER INSERT ON admin_audit WHEN NEW.id % 256=0 BEGIN DELETE FROM admin_audit WHERE id <= NEW.id-100000; END`,
 ]
-async function insertAudit(tx: Transaction, actor: AdminActor | null, op: AdminOperation, outcome: 'success' | 'denied' | 'failed', reason: string | null, change?: AuditChange) {
+function auditValues(actor: AdminActor | null, op: AdminOperation, outcome: 'success' | 'denied' | 'failed', reason: string | null, change?: AuditChange) {
   // Never serialize requests, headers, key digests or arbitrary rule/member payloads. Values below are internal identifiers and allowlisted state only.
-  const state = (s?: AuditState) => s ? { ...(managementId(s.roleId) ? { roleId: s.roleId } : {}), ...(typeof s.enabled === 'boolean' ? { enabled: s.enabled } : {}), ...(Array.isArray(s.permissions) ? { permissions: ALL_ADMIN_PERMISSIONS.filter(p => s.permissions!.includes(p)) } : {}) } : undefined
-  const changes = change ? JSON.stringify({ memberId: managementId(change.memberId) ? change.memberId : undefined, fields: change.fields?.filter(f => ['name','roleId','enabled','permissions','credential'].includes(f)), before: state(change.before), after: state(change.after) }) : null
+  const state = (s?: AuditState) => s ? { ...(typeof s.limit==='number' && Number.isInteger(s.limit) && s.limit>=0 && s.limit<=100 ? {limit:s.limit} : {}), ...(managementId(s.roleId) ? { roleId: s.roleId } : {}), ...(typeof s.enabled === 'boolean' ? { enabled: s.enabled } : {}), ...(Array.isArray(s.permissions) ? { permissions: ALL_ADMIN_PERMISSIONS.filter(p => s.permissions!.includes(p)) } : {}) } : undefined
+  const changes = change ? JSON.stringify({ memberId: managementId(change.memberId) ? change.memberId : undefined, fields: change.fields?.filter(f => ['name','roleId','enabled','permissions','credential','limit'].includes(f)), before: state(change.before), after: state(change.after) }) : null
   const publicId = (v: string | null) => managementId(v) ? (/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(v) || [OWNER_ROLE,VIEWER_ROLE,AUDITOR_ROLE].includes(v) ? v : 'ref:' + digestAdminKey(v).slice(0,24)) : null
-  await tx.execute({ sql: 'INSERT INTO admin_audit(at,actor_id,actor_name,role_id,action,target_id,outcome,reason,request_id,changes) VALUES(?,?,?,?,?,?,?,?,?,?)', args: [nowIso(), actor?.id ?? 'unverified', actor?.name ?? '未验证', actor?.roleId ?? '', op.action, publicId(op.targetId), outcome, reason, /^(?:[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}|req-[0-9a-z]{1,12})$/i.test(op.requestId) ? op.requestId : '', changes] })
+  return [nowIso(), actor?.id ?? 'unverified', actor?.name ?? '未验证', actor?.roleId ?? '', op.action, publicId(change?.targetId ?? op.targetId), outcome, reason, /^(?:[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}|req-[0-9a-z]{1,12})$/i.test(op.requestId) ? op.requestId : '', changes]
+}
+const auditColumns = 'at,actor_id,actor_name,role_id,action,target_id,outcome,reason,request_id,changes'
+async function insertAudit(tx: Transaction, actor: AdminActor | null, op: AdminOperation, outcome: 'success'|'denied'|'failed', reason: string|null, change?: AuditChange) {
+  await tx.execute({sql:`INSERT INTO admin_audit(${auditColumns}) VALUES(?,?,?,?,?,?,?,?,?,?)`,args:auditValues(actor,op,outcome,reason,change)})
 }
 const activeOwner = async (tx: Transaction) => (await tx.execute({ sql: `SELECT 1 FROM admin_members m WHERE m.role_id=? AND m.enabled=1 AND EXISTS(SELECT 1 FROM admin_credentials c WHERE c.member_id=m.id AND c.revoked_at IS NULL) LIMIT 1`, args: [OWNER_ROLE] })).rows.length > 0
 export class AdminRbacStore {
@@ -59,7 +68,7 @@ export class AdminRbacStore {
   private readonly recentAnonymous = new Map<string, number>()
   private readonly recentLogins = new Map<string, number>()
   private readonly auditCooldown = new Map<string, number>()
-  constructor(readonly filename: string, private readonly migrations: ReadonlyMap<string, readonly string[]> = new Map()) {
+  constructor(readonly filename: string, private readonly migrations: ReadonlyMap<string, readonly string[]> = new Map(), private readonly primary?: Client) {
     // Do not create or follow a management-file symlink; SQLite's journal inherits its private file mode.
     try { fs.closeSync(fs.openSync(filename, 'wx', 0o600)) }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || !fs.lstatSync(filename).isFile()) throw error }
@@ -86,6 +95,7 @@ export class AdminRbacStore {
     }).catch(err => { this.initialization = undefined; throw err })
   }
   private async actor(tx: Pick<Transaction,'execute'>, proof: AdminProof): Promise<AdminActor> {
+    if (proof.kind === 'desktop') return desktopActor(proof)
     if (proof.kind === 'recovery') return recoveryActor(proof.id)
     const row = (await tx.execute({ sql: `SELECT c.id AS credential_id,m.id,m.name,m.role_id,r.name AS role_name,r.permissions FROM admin_credentials c JOIN admin_members m ON m.id=c.member_id JOIN admin_roles r ON r.id=m.role_id WHERE c.key_hash=? AND c.revoked_at IS NULL AND m.enabled=1`, args: [proof.digest] })).rows[0]
     if (!row) throw new AdminHttpError(401, '后台密钥无效或已撤销。', 'invalid_credential')
@@ -134,6 +144,75 @@ export class AdminRbacStore {
     try { return await this.run(proof,op,true,(_tx,actor) => publicActor(actor)) }
     catch(error) { if(this.recentLogins.get(key) === now) this.recentLogins.delete(key); throw error }
   }
+  /** A receipt is needed only until its business outbox row is acknowledged. Unlike the audit log,
+   * its lifetime is independent of retention, so a long disk failure cannot resurrect an old event. */
+  private async flushAccountAudit(primary: Client, through: bigint): Promise<void> {
+    const columns = auditColumns.split(',')
+    for (;;) {
+      const copied = await this.transaction('write', async tx => {
+        // All projectors (including another process) take the admin write lock before selecting work.
+        // Only receipts from a PREVIOUSLY COMMITTED admin transaction may acknowledge business rows.
+        const receipts = (await tx.execute('SELECT event_id FROM admin_account_pending_receipts LIMIT 128')).rows
+        if (receipts.length) {
+          const ids = receipts.map(row => row.event_id), marks = ids.map(() => '?').join(',')
+          await primary.execute({ sql: `DELETE FROM account_admin_audit_outbox WHERE event_id IN (${marks})`, args: ids })
+          await tx.execute({ sql: `DELETE FROM admin_account_pending_receipts WHERE event_id IN (${marks})`, args: ids })
+        }
+        const events = (await primary.execute({
+          sql: `SELECT event_id,${auditColumns} FROM account_admin_audit_outbox WHERE seq<=? ORDER BY seq LIMIT 128`,
+          args: [through.toString()],
+        })).rows
+        if (!events.length) return false
+        await tx.batch(events.flatMap(event => [
+          { sql: `INSERT INTO admin_audit(${auditColumns}) VALUES(?,?,?,?,?,?,?,?,?,?)`, args: columns.map(k => event[k]) },
+          { sql: 'INSERT INTO admin_account_pending_receipts(event_id) VALUES(?)', args: [event.event_id] },
+        ]))
+        return true
+      })
+      if (!copied) return
+    }
+  }
+  private projection?: { through: bigint; task: Promise<void> }
+  async syncAccountAudit(): Promise<void> {
+    const primary = this.primary
+    if (!primary) return
+    const last = (await primary.execute('SELECT CAST(MAX(seq) AS TEXT) AS last FROM account_admin_audit_outbox')).rows[0]?.last
+    if (last == null) return
+    // An audit reader must cover every committed event visible at entry, even when joining an older
+    // flush. New events beyond this fence cannot keep this request running indefinitely.
+    const through = BigInt(String(last))
+    while (this.projection) {
+      const pending = this.projection
+      await pending.task
+      if (pending.through >= through) return
+    }
+    const task = this.flushAccountAudit(primary, through).finally(() => { this.projection = undefined })
+    this.projection = { through, task }
+    return task
+  }
+  /** Hold the management write lock for authorization and revoke ordering; only the business file is changed.
+   * Its audit outbox and the account change commit together, even if the process crashes before projection. */
+  async runAccount<T>(proof: AdminProof, op: AdminOperation, write: boolean, work: AdminTask<T>): Promise<T> {
+    await this.ready(); const primary=this.primary
+    if(!primary||primary.closed) throw new Error('Account database unavailable')
+    let actor: AdminActor|null=null, committed=false, result!: T
+    try {
+      await this.transaction(write?'write':'read',async authTx=>{
+        const current=await this.actor(authTx,proof); actor=current; this.checkGrant(current,op.permission)
+        const tx=await primary.transaction(write?'write':'read')
+        try {
+          let change: AuditChange|undefined
+          result=await work(tx,current,value=>{change=value})
+          if(write) await tx.execute({sql:`INSERT INTO account_admin_audit_outbox(event_id,${auditColumns}) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,args:[randomUUID(),...auditValues(current,op,'success',null,change)]})
+          if(proof.kind==='desktop'&&!proof.active()) throw new AdminHttpError(401,'本机管理窗口已关闭。','invalid_credential')
+          await tx.commit(); committed=true
+        } finally {tx.close()}
+      })
+    } catch(error) {if(!committed){await this.failed(actor,op,error,write);throw error}}
+    // The business write and its audit are already durable. Never cause an accidental duplicate write by reporting a projection failure as failure of the operation.
+    if(write) await this.syncAccountAudit().catch(()=>{})
+    return result
+  }
   async run<T>(proof: AdminProof, op: AdminOperation, write: boolean, work: AdminTask<T>): Promise<T> {
     await this.ready(); let actor: AdminActor | null = null
     try {
@@ -144,6 +223,7 @@ export class AdminRbacStore {
         let change: AuditChange | undefined
         const value = await work(tx, current, value => { change = value })
         if (guardOwner && !await activeOwner(tx)) throw new AdminHttpError(409, '必须保留至少一位已启用且拥有有效后台密钥的主管理员。', 'last_owner')
+        if (proof.kind === 'desktop' && !proof.active()) throw new AdminHttpError(401, '本机管理窗口已关闭。', 'invalid_credential')
         if (write) await insertAudit(tx, current, op, 'success', null, change)
         return value
       })

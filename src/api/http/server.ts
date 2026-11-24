@@ -1,6 +1,8 @@
 import Fastify from 'fastify'
 import { v4 as uuidv4 } from 'uuid'
 import { logger, observeShutdownStage } from '../../observability/index.js'
+import { installDesktopAdminChannel, type ParentChannel } from './admin/desktop-session.js'
+import { getStartupInstanceTokenState } from '../../auth/instance-token.js'
 import { adminRoutes } from './routes/admin.js'
 import { isAdminPath } from './admin/surface.js'
 import { chatRoutes, stopAllOwnedExecutions } from './routes/chat.js'
@@ -44,7 +46,7 @@ import { workbenchRoutes } from './routes/workbench.js'
 import { commandJobs } from '../../core/command-jobs/index.js'
 import { closeKnowledgeDb } from '../../storage/knowledge/db.js'
 import { cronScheduler } from '../../scheduler/cron-scheduler.js'
-import { configureRequestAuthentication, globalRequestMiddleware, loggingMiddleware, authMiddlewareHook, type RequestAuthenticationStartup } from './middleware.js'
+import { configureRequestAuthentication, isRequestAuthenticationRequired, globalRequestMiddleware, loggingMiddleware, authMiddlewareHook, type RequestAuthenticationStartup } from './middleware.js'
 import fastifyWebsocket from '@fastify/websocket'
 import fastifyMultipart from '@fastify/multipart'
 import fastifyStatic from '@fastify/static'
@@ -52,7 +54,7 @@ import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 import { fail } from './response.js'
 
-export async function buildServer(startup: RequestAuthenticationStartup = {}) {
+export async function buildServer(startup: RequestAuthenticationStartup = {}, parent?: ParentChannel) {
   // Freeze authentication and instance-token configuration only after the
   // startup configuration chain (env, .aether, managed settings) is complete.
   // Business settings must never mutate this boundary while the server runs.
@@ -69,6 +71,8 @@ export async function buildServer(startup: RequestAuthenticationStartup = {}) {
       },
     },
   })
+
+  if (startup.desktopOwned && parent) installDesktopAdminChannel(fastify, parent, startup.listenHost === '127.0.0.1' && !isRequestAuthenticationRequired() && getStartupInstanceTokenState() === 'configured')
 
   // Apply unified request header validation, logging and auth
   fastify.addHook('onRequest', globalRequestMiddleware)

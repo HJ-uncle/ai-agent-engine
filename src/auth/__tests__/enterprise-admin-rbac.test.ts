@@ -17,7 +17,7 @@ const digest = (v: string) => createHash('sha256').update(v).digest('hex')
 const jwt = async (claims: JWTPayload): Promise<Headers> => ({ authorization:'Bearer ' + await new SignJWT(claims).setProtectedHeader({alg:'HS256'}).setExpirationTime('5m').sign(new TextEncoder().encode(secret.toString('hex'))) })
 let app: FastifyInstance | undefined, database: typeof import('../../storage/sqlite/db.js'), root: Headers, directory: string, primary: string
 const call = (method: 'GET'|'POST'|'PATCH'|'DELETE', url: string, credential: Headers = root, payload?: Record<string, unknown>, withGate = true) => app!.inject({ method,url,headers:{...(withGate ? gate : {}),...credential},...(payload === undefined ? {} : {payload}) })
-async function ok<T>(promise: ReturnType<typeof call>): Promise<T> { const response = await promise; expect(response.statusCode, response.body.replace(/aether_admin_[A-Za-z0-9_-]{43}/g,'[redacted]')).toBe(200); return response.json().data as T }
+async function ok<T>(promise: ReturnType<typeof call>): Promise<T> { const response = await promise; expect(response.statusCode, response.body.replace(/aether_(?:admin|activate)_[A-Za-z0-9_-]{43}/g,'[redacted]')).toBe(200); return response.json().data as T }
 const addMember = (name: string, roleId: string, enabled = true) => ok<AdminMember>(call('POST','/admin/members',root,{name,roleId,enabled}))
 const addRole = (name: string, permissions: string[]) => ok<AdminRole>(call('POST','/admin/roles',root,{name,permissions}))
 const issue = (id: string) => ok<Key>(call('POST',`/admin/members/${id}/credentials`,root,{}))
@@ -33,6 +33,8 @@ async function startApp() {
   const service = Fastify({ genReqId: () => randomUUID() }); service.addHook('onRequest',loggingMiddleware); service.addHook('onRequest',authMiddlewareHook)
   registerAdminSchema(service,'fixture.v1',['CREATE TABLE IF NOT EXISTS fixture_writes(n INTEGER PRIMARY KEY)'])
   await service.register(adminRbacRoutes); await service.register(authRoutes)
+  await service.register((await import('../../api/http/routes/account-family.js')).accountFamilyRoutes)
+  const { registerFamilyAdminRoutes } = await import('../../api/http/admin/account-routes.js'); registerFamilyAdminRoutes(service)
   service.get('/health',() => ({ok:true}))
   service.get('/fixture/business',(req: FastifyRequest & {authContext?: AuthContext}) => ({tenantId:req.authContext?.tenantId}))
   service.get('/admin/fixture/status',async (req,reply) => { const actor = await requireAdminPermission(req,reply,'status.read'); return actor ? { allowed:true } : reply })
@@ -203,7 +205,7 @@ describe('enterprise management authorization using real HTTP and a separate SQL
     await close(); vi.stubEnv('DATA_DIR',alternate); await database.initDb(); app=await startApp()
     expect((await members()).items).toHaveLength(0); expect((await call('GET','/admin/me',adminKey(key.key))).statusCode).toBe(401)
     expect(fs.existsSync(alternate+'.admin.sqlite')).toBe(true)
-  })
+  },15000)
 
   it('provisions a separate offline recovery identity without rotating the service key, and rolls back failed delivery',async () => {
     const {provisionOfflineAdmin}=await import('../../api/http/admin/rbac-storage.js')
@@ -219,5 +221,140 @@ describe('enterprise management authorization using real HTTP and a separate SQL
     expect((await audit('?q=offline.recovery.create')).items.map(x=>x.outcome)).toEqual(['failed','success'])
     await expect(provisionOfflineAdmin(primary+'.admin.sqlite','错误文件',()=>{throw new Error('should not deliver')})).rejects.toThrow('引擎主数据库')
     expect(fs.existsSync(primary+'.admin.sqlite.admin.sqlite')).toBe(false)
+  },15000)
+})
+
+type Activation = { id: string; code: string; createdAt: string; expiresAt: string }
+type ActivationRow = Omit<Activation, 'code'> & {status: 'available'|'used'|'revoked'|'expired'}
+type Family = { id: string; name: string; used: number; limit: number }
+const issueCode = (headers = root) => ok<Activation>(call('POST','/admin/activation-codes',headers,{}))
+const availableCodes = (query = '', headers = root) => ok<AdminPage<ActivationRow>>(call('GET','/admin/activation-codes'+query,headers))
+const quotaPath = (id: string) => `/admin/account-families/${id}/quota`
+async function operator(name: string, permissions: string[]): Promise<Headers> {
+  const role = await addRole(name,permissions), member = await addMember(name,role.id)
+  return adminKey((await issue(member.id)).key)
+}
+
+describe('personal account administration, quota ordering and durable audit delivery', () => {
+  it('separates business, directory and activation permissions, returns an activation secret only on issue, and enforces its lifecycle', async () => {
+    const reader=await operator('名额读者',['accounts.read']), issuer=await operator('开通码签发员',['accounts.activation'])
+    const viewer=adminKey((await issue((await addMember('只读管理员','viewer')).id)).key)
+    const personal=await jwt({tenantId:'account_fixture',sub:'business-user',roles:['admin']})
+    for (const h of [reader,viewer,personal]) {
+      expect((await call('POST','/admin/activation-codes',h,{})).statusCode).toBe(403)
+      expect((await call('GET','/admin/activation-codes',h)).statusCode).toBe(403)
+      expect((await call('DELETE','/admin/activation-codes/'+randomUUID(),h)).statusCode).toBe(403)
+    }
+    expect((await call('GET','/admin/account-families',reader)).statusCode).toBe(200)
+    expect((await call('GET','/admin/account-families',issuer)).statusCode).toBe(403)
+    expect((await call('POST','/admin/activation-codes',issuer,{},false)).statusCode).toBe(401)
+    const response=await call('POST','/admin/activation-codes',issuer,{})
+    expect(response.statusCode).toBe(200); expect(response.headers['cache-control']).toBe('no-store')
+    const used: Activation=response.json().data, expired=await issueCode(issuer), revoked=await issueCode(issuer), unused=await issueCode(issuer)
+    expect(Object.keys(used).sort()).toEqual(['code','createdAt','expiresAt','id'])
+    expect(/^aether_activate_[A-Za-z0-9_-]{43}$/.test(used.code)).toBe(true)
+    expect(Date.parse(used.expiresAt)-Date.parse(used.createdAt)).toBe(7*24*60*60*1000)
+    const { registerAccount } = await import('../accounts.js'); await registerAccount(used.code)
+    const time=Date.now(); await database.getDb().execute({sql:'UPDATE account_activation_codes SET created_at=?,expires_at=? WHERE id=?',args:[time-2000,time-1000,expired.id]})
+    expect(await ok(call('DELETE','/admin/activation-codes/'+revoked.id,issuer))).toEqual({revoked:true})
+    for (const code of [used,expired,revoked]) expect((await call('DELETE','/admin/activation-codes/'+code.id,issuer)).statusCode).toBe(409)
+    const first=await availableCodes('?limit=2',issuer), second=await availableCodes('?limit=2&cursor='+encodeURIComponent(first.nextCursor!),issuer)
+    const items=[...first.items,...second.items]; expect(second.nextCursor).toBeNull()
+    expect(Object.fromEntries(items.map(r=>[r.id,r.status]))).toEqual({[used.id]:'used',[expired.id]:'expired',[revoked.id]:'revoked',[unused.id]:'available'})
+    for (const item of items) expect(Object.keys(item).sort()).toEqual(['createdAt','expiresAt','id','status'])
+    const logs=(await audit()).items, printable=JSON.stringify([items,logs])
+    expect(logs).toContainEqual(expect.objectContaining({action:'activation.issue',outcome:'success',targetId:used.id}))
+    expect(logs).toContainEqual(expect.objectContaining({action:'activation.revoke',outcome:'success',targetId:revoked.id}))
+    for (const item of [used,expired,revoked,unused]) for (const secret of [item.code,digest(item.code)]) expect(printable.includes(secret)).toBe(false)
+    const stored=(await database.getDb().execute({sql:'SELECT code_hash FROM account_activation_codes WHERE id=?',args:[unused.id]})).rows[0]
+    expect(stored.code_hash===digest(unused.code)).toBe(true)
+    for (const query of ['?limit=0','?cursor=nonsense','?q=unsupported']) expect((await call('GET','/admin/activation-codes'+query,issuer)).statusCode).toBe(400)
+  },15000)
+
+  it('lists only activated parents, counts disabled children, and rejects stale or conflicting quota writes atomically', async () => {
+    const { registerAccount } = await import('../accounts.js'), {user:parent}=await registerAccount((await issueCode()).code)
+    const quota=await operator('配额调整员',['accounts.quota']), reader=await operator('只查配额',['accounts.read'])
+    const child=randomUUID(), disabled=randomUUID(), legacy=randomUUID()
+    const db=database.getDb(), now=Date.now()
+    await db.batch([...([child,disabled,legacy].flatMap(id=>[
+      {sql:'INSERT INTO users(id,tenant_id,name) VALUES(?,?,?)',args:[id,'account_'+id,'个人账号']},
+      {sql:'INSERT INTO account_profiles(user_id,updated_at) VALUES(?,?)',args:[id,now]},
+    ])), ...[child,disabled].map(id=>({sql:'INSERT INTO account_children(child_id,parent_id,created_at,disabled_at) VALUES(?,?,?,?)',args:[id,parent.id,now,id===disabled?now:null]}))], 'write')
+    const directory=await ok<AdminPage<Family>>(call('GET','/admin/account-families',reader))
+    expect(directory.items).toEqual([{id:parent.id,name:parent.name,limit:3,used:2}])
+    for (const id of [legacy,child,disabled]) expect((await call('PATCH',quotaPath(id),quota,{limit:4,expectedLimit:3})).statusCode).toBe(404)
+    for (const h of [reader,await jwt({tenantId:parent.tenantId,sub:parent.id,roles:['tenant-admin']})]) expect((await call('PATCH',quotaPath(parent.id),h,{limit:4,expectedLimit:3})).statusCode).toBe(403)
+    for (const bad of [-1,101,4.5,'4',null]) expect((await call('PATCH',quotaPath(parent.id),quota,{limit:bad,expectedLimit:3})).statusCode).toBe(400)
+    expect((await call('PATCH',quotaPath(parent.id),quota,{limit:1,expectedLimit:3})).statusCode).toBe(409)
+    const results=await Promise.all([4,7].map(limit=>call('PATCH',quotaPath(parent.id),quota,{limit,expectedLimit:3})))
+    expect(results.map(r=>r.statusCode).sort()).toEqual([200,409])
+    const current=results.find(r=>r.statusCode===200)!.json().data as Family
+    expect((await ok<AdminPage<Family>>(call('GET','/admin/account-families',reader))).items).toEqual([current])
+    const entries=(await audit('?q=account.quota.update&outcome=success')).items
+    expect(entries).toHaveLength(1); expect(entries[0]).toMatchObject({targetId:parent.id,changes:{fields:['limit'],before:{limit:3},after:{limit:current.limit}}})
+    expect(await ok<Family>(call('PATCH',quotaPath(parent.id),quota,{limit:2,expectedLimit:current.limit}))).toMatchObject({limit:2,used:2})
+  },15000)
+
+  it('orders a parent creating a child against an administrator reducing the last free slot', async () => {
+    const { registerAccount }=await import('../accounts.js'), parent=await registerAccount((await issueCode()).code)
+    const h={authorization:'Bearer '+parent.accessToken}, path=quotaPath(parent.user.id)
+    await ok(call('PATCH',path,root,{limit:1,expectedLimit:3}))
+    const [create,reduce]=await Promise.all([
+      call('POST','/auth/account/children',h,{name:'最后一个名额'}),
+      call('PATCH',path,root,{limit:0,expectedLimit:1}),
+    ])
+    expect([create.statusCode,reduce.statusCode].sort()).toEqual([200,409])
+    const personal=await ok<{used:number;limit:number}>(call('GET','/auth/account/children',h))
+    const expected=create.statusCode===200?{used:1,limit:1}:{used:0,limit:0}
+    expect(personal).toMatchObject(expected)
+    expect((await ok<AdminPage<Family>>(call('GET','/admin/account-families'))).items[0]).toMatchObject(expected)
   })
+
+  it('drains multiple pages of committed audit events for simultaneous readers without gaps or duplicates', async () => {
+    const now=new Date().toISOString(), db=database.getDb()
+    await db.execute({sql:`WITH RECURSIVE seed(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM seed WHERE n<301)
+      INSERT INTO account_admin_audit_outbox(event_id,at,actor_id,actor_name,role_id,action,target_id,outcome,reason,request_id,changes)
+      SELECT 'fixture-event-'||n,?,'fixture','Fixture','super-admin','fixture.replay','target-'||n,'success',NULL,'req-1',NULL FROM seed`,args:[now]})
+    const query='?q=fixture.replay&limit=100', [first,other]=await Promise.all([audit(query),audit(query)])
+    expect(other).toEqual(first)
+    const targets=first.items.map(row=>row.targetId); let cursor=first.nextCursor
+    while(cursor){const page=await audit(query+'&cursor='+cursor);targets.push(...page.items.map(row=>row.targetId));cursor=page.nextCursor}
+    expect(targets).toHaveLength(301); expect(new Set(targets).size).toBe(301)
+    expect((await db.execute('SELECT count(*) n FROM account_admin_audit_outbox')).rows[0].n).toBe(0)
+  },15000)
+
+  it('rolls back if a business change cannot record its audit; repairs both delivery crash windows after restart without reissuing or duplicating', async () => {
+    const countSource=async () => (await database.getDb().execute('SELECT count(*) n FROM account_admin_audit_outbox')).rows[0].n
+    await database.getDb().execute("CREATE TRIGGER fixture_reject_outbox BEFORE INSERT ON account_admin_audit_outbox BEGIN SELECT RAISE(ABORT,'fixture outbox blocked'); END")
+    const rejected=await call('POST','/admin/activation-codes',root,{})
+    expect(rejected.statusCode).toBe(503); expect(rejected.body.includes('fixture outbox blocked')).toBe(false)
+    expect((await availableCodes()).items).toHaveLength(0); expect(await countSource()).toBe(0)
+    expect((await audit('?q=activation.issue')).items.map(row=>row.outcome)).toEqual(['failed'])
+    await database.getDb().execute('DROP TRIGGER fixture_reject_outbox')
+    // Independently fault the two *test* files, keeping the HTTP route and transaction implementation real.
+    const { LocalSqliteProcessClient }=await import('../../storage/sqlite/local-process-client.js')
+    const management=new LocalSqliteProcessClient({url:'file:'+encodeURIComponent(primary+'.admin.sqlite')})
+    try {
+      await management.execute("CREATE TRIGGER fixture_reject_projection BEFORE INSERT ON admin_audit WHEN NEW.action='activation.issue' AND NEW.outcome='success' BEGIN SELECT RAISE(ABORT,'fixture projection blocked'); END")
+      const accepted=await issueCode()
+      expect((await availableCodes()).items.map(row=>row.id)).toEqual([accepted.id]); expect(await countSource()).toBe(1)
+      expect((await call('GET','/admin/audit')).statusCode).toBe(503)
+      await close(); await database.initDb(); app=await startApp()
+      expect(await countSource()).toBe(1)
+      await management.execute('DROP TRIGGER fixture_reject_projection')
+      await database.getDb().execute("CREATE TRIGGER fixture_block_ack BEFORE DELETE ON account_admin_audit_outbox BEGIN SELECT RAISE(ABORT,'fixture ack blocked'); END")
+      expect((await call('GET','/admin/audit')).statusCode).toBe(503)
+      expect((await management.execute("SELECT target_id FROM admin_audit WHERE action='activation.issue' AND outcome='success'")).rows).toEqual([{target_id:accepted.id}])
+      expect((await management.execute('SELECT count(*) n FROM admin_account_pending_receipts')).rows[0].n).toBe(1)
+      await close(); await database.initDb(); app=await startApp()
+      await database.getDb().execute('DROP TRIGGER fixture_block_ack')
+      for(let i=0;i<2;i++){
+        const logs=(await audit('?q=activation.issue&outcome=success')).items
+        expect(logs.map(row=>row.targetId)).toEqual([accepted.id]); expect(JSON.stringify(logs).includes(accepted.code)).toBe(false)
+      }
+      expect(await countSource()).toBe(0)
+      expect((await management.execute('SELECT count(*) n FROM admin_account_pending_receipts')).rows[0].n).toBe(0)
+      expect((await availableCodes()).items).toHaveLength(1)
+    } finally { expect((await management.closeWithReceipt()).healthy).toBe(true) }
+  },20000)
 })

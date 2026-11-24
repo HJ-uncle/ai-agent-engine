@@ -26,14 +26,14 @@ async function uniqueRoleName(tx: Transaction, name: string, except: string) {
   if ((await tx.execute({sql:'SELECT 1 FROM admin_roles WHERE name=? AND id<>?',args:[name,except]})).rows.length) throw new AdminHttpError(409,'角色名称已存在。','duplicate_role')
 }
 interface PageQuery { limit: number; cursor: string | null; q?: string; enabled?: boolean; builtIn?: boolean; outcome?: string }
-type Directory = 'roles' | 'members' | 'audit'
-function pageQuery(value: unknown, directory: Directory): PageQuery {
-  const extras = directory === 'members' ? ['enabled'] : directory === 'audit' ? ['outcome'] : ['builtIn']
+type Directory = 'roles' | 'members' | 'audit' | 'families'
+export function pageQuery(value: unknown, directory: Directory): PageQuery {
+  const extras = directory === 'members' ? ['enabled'] : directory === 'audit' ? ['outcome'] : directory === 'roles' ? ['builtIn'] : []
   const raw = fields(value ?? {}, ['limit', 'cursor', 'q', ...extras])
   const limit = raw.limit === undefined ? 50 : typeof raw.limit === 'string' && /^\d{1,3}$/.test(raw.limit) ? Number(raw.limit) : NaN
   const cursor = raw.cursor ?? null
   if (!Number.isInteger(limit) || limit < 1 || limit > 100 || (cursor !== null && (typeof cursor !== 'string' || (directory === 'audit' ? !/^[1-9]\d{0,15}$/.test(cursor) || !Number.isSafeInteger(Number(cursor)) : !managementId(cursor))))) throw new AdminHttpError(400, '分页参数无效。')
-  if (raw.q !== undefined && (typeof raw.q !== 'string' || raw.q.length > 80 || /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(raw.q))) throw new AdminHttpError(400, '搜索词最多 80 个可显示字符。')
+  if (raw.q !== undefined && (typeof raw.q !== 'string' || raw.q.length > 80 || /aether_(?:admin|activate)_/i.test(raw.q) || /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(raw.q))) throw new AdminHttpError(400, '搜索词最多 80 个可显示字符。')
   for (const flag of [raw.enabled,raw.builtIn]) if (flag !== undefined && flag !== 'true' && flag !== 'false') throw new AdminHttpError(400, '状态或类型筛选须为 true 或 false。')
   if (raw.outcome !== undefined && (typeof raw.outcome !== 'string' || !['success','denied','failed'].includes(raw.outcome))) throw new AdminHttpError(400, '审计结果筛选无效。')
   return {limit, cursor: cursor as string | null, q: (raw.q as string | undefined)?.trim(),
@@ -41,7 +41,7 @@ function pageQuery(value: unknown, directory: Directory): PageQuery {
 }
 const actionLabels: Record<string,string> = {
   'admin.login':'后台登录','offline.recovery.create':'离线恢复主管理员','member.create':'创建成员','member.update':'修改成员','member.delete':'删除成员',
-  'role.create':'创建角色','role.update':'修改角色','role.delete':'删除角色','credential.issue':'签发密钥','credential.revoke':'撤销密钥',
+  'activation.issue':'签发主账号开通码','activation.revoke':'撤销主账号开通码','account.quota.update':'调整子账号配额', 'role.create':'创建角色','role.update':'修改角色','role.delete':'删除角色','credential.issue':'签发密钥','credential.revoke':'撤销密钥',
   'rule.create':'创建规则','rule.update':'更新规则','rule.delete':'删除规则','rule.restore':'恢复规则',
 }
 const listings = {
@@ -49,7 +49,7 @@ const listings = {
   members: {table: 'admin_members', search: ['name','id','role_id']},
   audit: {table: 'admin_audit', search: ['action','actor_name','actor_id','role_id','target_id','request_id','reason']},
 } as const
-async function listPage<T extends {id: string | number}>(tx: Transaction, directory: Directory, value: unknown, map: (row: Row) => T): Promise<AdminPage<T>> {
+async function listPage<T extends {id: string | number}>(tx: Transaction, directory: Exclude<Directory,'families'>, value: unknown, map: (row: Row) => T): Promise<AdminPage<T>> {
   const {limit,cursor,q,enabled,builtIn,outcome} = pageQuery(value,directory)
   const filters: string[] = [], args: (string|number)[] = []
   const {table,search} = listings[directory], newest = directory === 'audit'

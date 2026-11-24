@@ -56,7 +56,7 @@ function download(relativePath: string) {
 }
 
 it('the system prompt example downloads the exact company-relative nested file with an encoded session', async () => {
-  const relativePath = 'finance/deliverables/v001/财务报告 2026.xlsx'
+  const relativePath = '资料/项目说明 初稿.md'
   artifact(relativePath, 'confirmed nested finance artifact')
   const prompt = buildWorkspaceDownloadPrompt(identity.sessionId)
   const link = prompt.match(/\]\((\/api\/v1\/workspace\/file\/download\?[^)]+)\)/)?.[1]

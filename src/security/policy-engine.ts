@@ -1,3 +1,4 @@
+import { isManagedChildTenant } from '../auth/account-scope.js'
 import { getDb } from '../storage/sqlite/db.js'
 import { auditLogStore } from './audit-log.js'
 
@@ -55,6 +56,8 @@ export function getDefaultSecurityMode(): SecurityMode {
 }
 
 export function getSecurityMode(tenantId: string, sessionId: string): SecurityMode {
+  // A managed child receives neither a parent's mode nor an operator-wide host access default.
+  if (isManagedChildTenant(tenantId)) return 'safe'
   return sessionSecurityModes.get(sessionKey(tenantId, sessionId)) ?? getDefaultSecurityMode()
 }
 

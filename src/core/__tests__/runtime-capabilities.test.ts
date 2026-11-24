@@ -46,6 +46,15 @@ describe('per-run capabilities', () => {
     expect(buildRuntimeCapabilities(ctx, ['/workspace/project']).registryVersion).not.toBe(snapshot.registryVersion)
   })
 
+  it('defaults file artifacts to Markdown only when file delivery tools are available', () => {
+    const withWriter = buildExecutionProtocol({ list: () => [tool('write_file')] }, 'general')
+    expect(withWriter).toContain('用户未明确指定 Word/DOCX')
+    expect(withWriter).toContain('默认用 UTF-8 Markdown 文件（`.md`）')
+    expect(withWriter).toContain('表格默认使用 Markdown 表格')
+    expect(buildExecutionProtocol({ list: () => [tool('read_file')] }, 'general'))
+      .not.toContain('输出格式选择')
+  })
+
   it('uses a same-identity live workbench lease instead of trusting client.connected', () => {
     const ctx = context([tool('workbench_context')])
     ctx.clientCapabilities = { version: 1, application: 'aether', mode: 'work', platform: 'win32', connected: true, actions: ['artifact.open'], previewFormats: ['pdf'] }

@@ -2,6 +2,10 @@ import { up as up029 } from './migrations/029_cron_automation.js'
 import { up as up030 } from './migrations/030_conversation_projection_receipts.js'
 import { up as up031 } from './migrations/031_security_audit_payloads.js'
 import { up as up032 } from './migrations/032_add_model_api_format.js'
+import { up as up033 } from './migrations/033_account_families.js'
+import { up as up034 } from './migrations/034_account_activation.js'
+import { up as up035 } from './migrations/035_account_admin_audit.js'
+import { up as up036 } from './migrations/036_child_passwords.js'
 import { up as up028 } from './migrations/028_task_plans.js'
 import { up as up027 } from './migrations/027_cron_timeout.js'
 import { getDb, closeDb } from './db.js'
@@ -219,6 +223,10 @@ async function migrate() {
     await up030(db)
     await up031(db)
     await up032(db)
+    await up033(db)
+    await up034(db)
+    await up035(db)
+    await up036(db)
 
     // Seed built-in prompt templates
     for (const tpl of BUILTIN_TEMPLATES) {

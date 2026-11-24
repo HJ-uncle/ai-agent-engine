@@ -1,4 +1,5 @@
 // Real WebSocket handshake/account DB/revocation; PTY side effects are observable mocks, not skipped.
+import { issuedFixtureActivation } from './activation-fixture.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID, createHash } from 'node:crypto'
@@ -57,7 +58,7 @@ afterAll(async () => {
   catch (error) { if (!error || typeof error !== 'object' || !('code' in error) || !['EPERM', 'EBUSY'].includes(String(error.code))) throw error }
 })
 async function connect(account?: AccountLoginResult, headers?: Record<string, string>) {
-  const login = account ?? await accounts.registerAccount(), id = randomUUID(), events = new EventEmitter()
+  const login = account ?? await accounts.registerAccount(await issuedFixtureActivation()), id = randomUUID(), events = new EventEmitter()
   terminals.sessions.set(id, { tenantId: login.user.tenantId, userId: login.user.id, events })
   const ws = new WebSocket(`${baseUrl.replace('http:', 'ws:')}/terminal/ws/${id}`, { headers: headers ?? socketHeaders(login.accessToken) })
   sockets.add(ws); ws.on('error', () => {})
@@ -134,7 +135,7 @@ describe('account-session terminal WebSocket revocation', () => {
     expect(terminals.calls).toEqual([])
   })
   it('preserves legacy JWT and API-key terminal contracts without applying account-session checks', async () => {
-    const account = await accounts.registerAccount()
+    const account = await accounts.registerAccount(await issuedFixtureActivation())
     const jwt = await new SignJWT({ tenantId: account.user.tenantId }).setProtectedHeader({ alg: 'HS256' }).setSubject(account.user.id)
       .setIssuedAt().setExpirationTime('5m').sign(new TextEncoder().encode('terminal-jwt-fixture-secret'))
     const apiKey = 'terminal-fixture-legacy-api-key'

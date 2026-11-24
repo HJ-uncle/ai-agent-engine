@@ -26,6 +26,7 @@ if (result.status !== 0) process.exit(result.status ?? 1)
 const shellAsset = path.join(root, 'dist/terminal/workspace-shell.mjs')
 mkdirSync(path.dirname(shellAsset), { recursive: true })
 copyFileSync(path.join(root, 'src/terminal/workspace-shell.mjs'), shellAsset)
+copyFileSync(path.join(root,'src/api/http/admin/icon.png'), path.join(root,'dist/api/http/admin/icon.png'))
 // Git jobs require the build-time packaged supervisor; tsc does not copy assets.
 const supervisorAssets=path.join(root,'dist/workspace/assets')
 mkdirSync(supervisorAssets,{recursive:true})

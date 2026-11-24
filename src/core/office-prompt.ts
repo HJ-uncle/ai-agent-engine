@@ -1,4 +1,5 @@
 import type { ExternalSkill } from '../skills/external-loader.js'
+import { DEFAULT_MARKDOWN_ARTIFACT_RULE } from './artifact-format-prompt.js'
 
 /** Describe only the admitted Office branch; invocation contracts stay in tools. */
 export function buildOfficeExecutionPrompt(profile: string, registry: { has(name: string): boolean }, skills: readonly ExternalSkill[]): string {
@@ -9,16 +10,17 @@ export function buildOfficeExecutionPrompt(profile: string, registry: { has(name
     return '\n\n## Office delivery\n' + [
         registry.has('get_skill') && skills.some(skill => skill.enabled && skill.name.toLowerCase() === 'aether-office')
             ? 'Read aether-office with get_skill first. 只协调者读总览即可；实际生成者按负责格式读取参考，独立参考同批读取。' : 'Use the actual office_document contract and receipts.',
+        DEFAULT_MARKDOWN_ARTIFACT_RULE,
         registry.has('office_environment') ? 'office_environment({}) diagnoses only; do not guess dependency paths or read other apps’ private dependencies. Installation is not successful rendering.' : '',
         'Native Office creation needs no Python/shell/external Office app. Do not launch WPS/COM/LibreOffice or require a document-preview server. Project screenshot collection may use its existing start command. read_file remains available. 用户已要求生成/修改时不再求导出确认。',
         '已有共享草稿就直接复用，只读自己的分工段落及共同事实；不得另写同内容草稿或重扫项目重新证明已给事实。仅某个成品必需事实缺失/冲突时定点补读。',
-        registry.has('write_file') ? '没有草稿的新建任务先在本任务临时目录写一份 Markdown 草稿（draft.md），明确格式、用途、结构、来源与待补数据，只写成品内容。多格式共用此稿；草稿不默认交付，也不另等用户批准；已有文档单点修订可直接精确编辑。' : '',
-        '草稿/输入就绪后，独立Word/Excel/PPT创建同轮提交多条office_document；同文件追加/重算/修订等最新hash。多个独立成品用一次office_inspect({files:[{path,expectedHash},…]})检查，按每项warnings/分页核对，不逐文件多轮；必要技能参考也同轮提交。',
+        registry.has('write_file') ? '仅在用户明确要求办公格式时，没有草稿的新建任务才在本任务临时目录写一份 Markdown 草稿（draft.md），明确格式、用途、结构、来源与待补数据，只写成品内容。用户明确要求的多个格式共用此稿；草稿不默认交付，也不另等用户批准；已有文档单点修订可直接精确编辑。' : '',
+        '仅按用户明确要求的 Office 格式逐一创建 office_document；未指定办公格式不进入此流程。同文件追加/重算/修订等最新hash。多个独立成品用一次office_inspect({files:[{path,expectedHash},…]})检查，按每项warnings/分页核对，不逐文件多轮；必要技能参考也同轮提交。',
         'PPT先读格式参考，按受众与内容设计。先把已核实事实写入共享草稿，再运行项目取真实截图；浏览器长过程可能裁剪旧工具结果，取材后从草稿续做，仅补素材路径，不从头重读来源。取到支撑页面的关键画面即结束取材，不扩成测试。保留可编辑正文、表格和图表，不把文件清单和测试脚本搬成正文。',
-        '小型多表Excel内容已定且能完整输出时，一次create提交全部表；仅内容过大或新增表时append_sheets，按输出容量每批1–4张，不把少量短表强拆为多轮。',
-        registry.has('subagent_start') ? '多格式项目文档默认按独立文件委派：共同事实只提取一次，先稳定共享草稿；执行代理只读所需参考，拥有各自成品，核验后报路径/hash/未验项。可将Word/PPT合一组、Excel一组；不让各代理各扫整个项目。若简短内容一个工具批次即可完成则直接批量生成，避免委派开销。' : '',
-        '继承已定格式与交付要求；“做某项目的”指定主题，不重新询问格式。在绑定工作区定点读现有说明；用途/篇幅未指定时做内容完整的简明概览、台账或汇报，缺项标待补，不擅自扩篇。',
-        '仅做项目文档时，没有共享材料才先读README，足够即写草稿并生成；无事实缺口不重读资料/技能，不扩成全项目审计、测试或浏览器验收，不为额外字段扫源码。既有测试注明来源与本次未重跑，缺少实测不虚构；未要求的代码行数、逐条测试清单、性能指标不添加。',
+        '用户明确要求 Excel 且小型多表内容已定、能完整输出时，一次create提交全部表；仅内容过大或新增表时append_sheets，按输出容量每批1–4张，不把少量短表强拆为多轮。',
+        registry.has('subagent_start') ? '仅在用户明确要求多个办公格式时按独立文件委派：共同事实只提取一次，先稳定共享草稿；执行代理只读所需参考，拥有各自成品，核验后报路径/hash/未验项。不为未指定格式的任务生成或委派 Office 成品；若简短内容一个工具批次即可完成则直接批量生成，避免委派开销。' : '',
+        '继承已定格式与交付要求；“做某项目的”指定主题，不重新询问格式，未定办公格式就按上面的 Markdown 默认处理。在绑定工作区定点读现有说明；用途/篇幅未指定时做内容完整的简明概览、台账或汇报，缺项标待补，不擅自扩篇。',
+        '普通项目文档、调研、报告和说明未指定办公格式时直接以 Markdown 正文或 `.md` 文件完成，不进入 Office 生成流程；只有明确指定办公格式时，才按对应参考处理。没有共享材料才先读README，足够即写草稿并生成；无事实缺口不重读资料/技能，不扩成全项目审计、测试或浏览器验收，不为额外字段扫源码。既有测试注明来源与本次未重跑，缺少实测不虚构；未要求的代码行数、逐条测试清单、性能指标不添加。',
         '项目概览聚焦用途、操作、模块、运行方式、来源与限制；不展开未要求的动画时长等实现参数。确需参数须核对生效逻辑，声明不等于使用；未确认就省略/标待核实。',
         '生成后核对实际要求：Excel重算与关键公式，Word/PPT正文、表格和页容量。有同版本可信校验回执就复用；结构检查不等于视觉验收。发现具体错误才修正，修订Excel后按最新hash重算，再复核受影响部分。通过即停止，不整包重建已通过文件或扩展无关验证。',
         registry.has('workbench_render')

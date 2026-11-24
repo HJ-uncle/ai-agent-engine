@@ -1,3 +1,7 @@
+import { AccountAuthError } from './account-error.js'
+import { childDisplayName } from './account-family-types.js'
+import { familySessionAllowed } from './account-session-policy.js'
+import { activationProof, consumeActivation, type ActivationProof } from './account-activation.js'
 import { beginAccountTransaction, executeAccountWrite } from './account-database.js'
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto'
 import type { Client, Row, Transaction } from '@libsql/client'
@@ -17,7 +21,7 @@ export interface AccountIdentity {
 export interface AccountUser {
   id: string; tenantId: string; name: string; email: string | null; avatarUrl: string | null
   bio: string | null; userData: Record<string, unknown>; createdAt: string
-  identities: AccountIdentity[]; hasRecoveryKey: boolean; sessionId?: string
+  accountKind?: 'primary' | 'child'; identities: AccountIdentity[]; mainAccountActivated: boolean; hasRecoveryKey: boolean; sessionId?: string
   roles?: string[]; authenticatedAt?: string
 }
 export interface AccountLoginResult {
@@ -27,9 +31,7 @@ export interface ExternalIdentity {
   providerId: string; issuer?: string; subject: string; name?: string; email?: string
   avatarUrl?: string; userData?: Record<string, unknown>
 }
-export class AccountAuthError extends Error {
-  constructor(public readonly statusCode: number, message: string) { super(message); this.name = 'AccountAuthError' }
-}
+export { AccountAuthError } from './account-error.js'
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const secret = (prefix: string) => prefix + randomBytes(32).toString('base64url')
 const iso = (value: number) => new Date(value).toISOString()
@@ -80,27 +82,34 @@ export function requireRecentAccountAuth(auth?: AuthContext): void {
     throw new AccountAuthError(403, '此操作需要重新验证登录，请使用恢复凭证或第三方账号重新登录')
   }
 }
-export async function revalidateAccountAuth(auth: AuthContext): Promise<void> {
+export async function revalidateAccountAuth(auth: AuthContext, db: Database = getDb()): Promise<void> {
   requireAccountAuth(auth)
   if (auth.method !== 'session' || !auth.sessionId) throw new AccountAuthError(401, '请使用账号会话登录')
-  const result = await getDb().execute({
-    sql: 'SELECT s.id FROM account_sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.user_id=? AND u.tenant_id=? AND s.revoked_at IS NULL AND s.expires_at>? AND s.access_expires_at>?',
-    args: [auth.sessionId, auth.userId, auth.tenantId, Date.now(), Date.now()],
+  const now = Date.now(), result = await db.execute({
+    sql: `SELECT s.id FROM account_sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.user_id=? AND u.tenant_id=?
+      AND s.revoked_at IS NULL AND s.expires_at>? AND s.access_expires_at>? AND ${familySessionAllowed}`,
+    args: [auth.sessionId, auth.userId, auth.tenantId, now, now, now],
   })
   if (!result.rows.length) throw new AccountAuthError(401, '登录已失效，请重新登录')
 }
+/** Managed identities cannot obtain an independent recovery credential or attach an external login. */
+export async function requireIndependentAccount(db: Database, userId: string): Promise<void> {
+  const child = await db.execute({ sql: 'SELECT 1 FROM account_children WHERE child_id=?', args: [userId] })
+  if (child.rows.length) throw new AccountAuthError(403, '子账号请使用主账号设置的登录名和密码。')
+}
 export async function getAccountUser(userId: string, sessionId?: string, db: Database = getDb()): Promise<AccountUser> {
-  const result = await db.execute({ sql: 'SELECT u.*, p.recovery_hash, p.avatar_url, p.bio, p.user_data, p.roles FROM users u LEFT JOIN account_profiles p ON p.user_id=u.id WHERE u.id=?', args: [userId] })
+  const result = await db.execute({ sql: 'SELECT u.*, EXISTS(SELECT 1 FROM account_children c WHERE c.child_id=u.id) AS managed_child, EXISTS(SELECT 1 FROM account_activation_codes a WHERE a.used_by=u.id) AS main_activated, p.recovery_hash, p.avatar_url, p.bio, p.user_data, p.roles FROM users u LEFT JOIN account_profiles p ON p.user_id=u.id WHERE u.id=?', args: [userId] })
   const row = result.rows[0]
   if (!row) throw new AccountAuthError(401, '账号不存在')
   const identities = await db.execute({ sql: 'SELECT * FROM account_identities WHERE user_id=? ORDER BY created_at', args: [userId] })
-  const roles: unknown = row.roles ? JSON.parse(String(row.roles)) : []
+  const roles: unknown = !Number(row.managed_child) && row.roles ? JSON.parse(String(row.roles)) : []
   const session = sessionId ? (await db.execute({ sql: 'SELECT authenticated_at FROM account_sessions WHERE id=? AND user_id=?', args: [sessionId, userId] })).rows[0] : undefined
   return {
     id: String(row.id), tenantId: String(row.tenant_id), name: String(row.name ?? 'Aether 用户'),
     email: row.email ? String(row.email) : null, avatarUrl: row.avatar_url ? String(row.avatar_url) : null,
     bio: row.bio ? String(row.bio) : null, userData: readObject(row.user_data),
-    createdAt: iso(Number(row.created_at) * 1000), hasRecoveryKey: Boolean(row.recovery_hash || row.api_key_hash),
+    ...(Number(row.managed_child) ? { accountKind: 'child' as const } : String(row.tenant_id).startsWith('account_') ? { accountKind: 'primary' as const } : {}),
+    createdAt: iso(Number(row.created_at) * 1000), mainAccountActivated: Boolean(row.main_activated), hasRecoveryKey: !Number(row.managed_child) && Boolean(row.recovery_hash || row.api_key_hash),
     roles: Array.isArray(roles) ? roles.filter((role): role is string => typeof role === 'string') : [],
     ...(session ? { authenticatedAt: iso(Number(session.authenticated_at)) } : {}),
     identities: identities.rows.map(identity => ({
@@ -119,28 +128,57 @@ async function createUser(db: Database, profile?: ExternalIdentity): Promise<{ i
   await audit(db, id, 'account.created')
   return { id, recoveryKey }
 }
-async function issueSession(db: Database, userId: string): Promise<AccountLoginResult> {
+export async function issueSession(db: Database, userId: string, expiresNoLaterThan = Infinity): Promise<AccountLoginResult> {
   const now = Date.now(), id = randomUUID(), accessToken = secret('aether_session_'), refreshToken = secret('aether_refresh_')
-  await db.execute({ sql: 'INSERT INTO account_sessions(id,user_id,access_hash,access_expires_at,created_at,authenticated_at,expires_at,last_seen_at) VALUES(?,?,?,?,?,?,?,?)', args: [id, userId, hash(accessToken), now + ACCESS_MS, now, now, now + SESSION_MS, now] })
+  const expires = Math.min(now + SESSION_MS, expiresNoLaterThan), accessExpiry = Math.min(now + ACCESS_MS, expires)
+  if (expires <= now) throw new AccountAuthError(401, '登录已失效，请重新登录。')
+  await db.execute({ sql: 'INSERT INTO account_sessions(id,user_id,access_hash,access_expires_at,created_at,authenticated_at,expires_at,last_seen_at) VALUES(?,?,?,?,?,?,?,?)', args: [id, userId, hash(accessToken), accessExpiry, now, now, expires, now] })
   await db.execute({ sql: 'INSERT INTO account_refresh_tokens(token_hash,session_id,created_at) VALUES(?,?,?)', args: [hash(refreshToken), id, now] })
   await audit(db, userId, 'session.created')
-  return { user: await getAccountUser(userId, id, db), accessToken, refreshToken, expiresAt: iso(now + ACCESS_MS) }
+  return { user: await getAccountUser(userId, id, db), accessToken, refreshToken, expiresAt: iso(accessExpiry) }
 }
-export async function registerAccount(): Promise<AccountLoginResult> {
+export async function registerAccount(activationCode?: string): Promise<AccountLoginResult> {
   if (process.env.AETHER_ACCOUNT_REGISTRATION === 'false') throw new AccountAuthError(403, '管理员已关闭一键创建账号，请使用已有账号或第三方登录')
   const tx = await beginAccountTransaction()
   try {
+    const proof = activationProof(activationCode)
+    if (!proof) throw new AccountAuthError(403, '创建主账号需要后台签发的开通码。')
     const created = await createUser(tx)
+    await consumeActivation(tx, proof, created.id)
     const result = await issueSession(tx, created.id)
     await tx.commit()
     return { ...result, recoveryKey: created.recoveryKey }
   } finally { tx.close() }
 }
+/** Legacy personal accounts keep their original space. Becoming a parent still requires one real invitation. */
+export async function activateExistingPrimary(auth: AuthContext, code: unknown): Promise<AccountUser> {
+  requireAccountAuth(auth); requireRecentAccountAuth(auth)
+  const proof = activationProof(code)
+  if (!proof) throw new AccountAuthError(400, '请输入管理员签发的主账号开通码。')
+  const tx = await beginAccountTransaction()
+  try {
+    const now=Date.now()
+    const result=await tx.execute({sql:`SELECT u.tenant_id, EXISTS(SELECT 1 FROM account_children WHERE child_id=u.id) AS child,
+      EXISTS(SELECT 1 FROM account_activation_codes WHERE used_by=u.id) AS activated
+      FROM account_sessions s JOIN users u ON u.id=s.user_id JOIN account_profiles p ON p.user_id=u.id
+      WHERE u.id=? AND u.tenant_id=? AND s.id=? AND s.revoked_at IS NULL AND s.expires_at>? AND s.access_expires_at>?
+      AND s.authenticated_at>?`,args:[auth.userId,auth.tenantId,auth.sessionId!,now,now,now-RECENT_MS]})
+    const row=result.rows[0]
+    if (!row) throw new AccountAuthError(401,'当前会话已变化，请重新登录。')
+    if (Number(row.child) || !String(row.tenant_id).startsWith('account_')) throw new AccountAuthError(403,'只有独立个人账号可以开通主账号。')
+    if (Number(row.activated)) throw new AccountAuthError(409,'此主账号已经开通，不需要再次兑换。')
+    if (process.env.AETHER_ACCOUNT_REGISTRATION === 'false') throw new AccountAuthError(403,'管理员已关闭主账号开通。')
+    await consumeActivation(tx,proof,auth.userId)
+    await audit(tx,auth.userId,'account.primary.activated')
+    const user=await getAccountUser(auth.userId,auth.sessionId,tx)
+    await tx.commit(); return user
+  } finally {tx.close()}
+}
 export async function loginAccount(recoveryKey: string): Promise<AccountLoginResult> {
   if (!recoveryKey || recoveryKey.length > 4096) throw new AccountAuthError(401, '恢复凭证无效')
   const tx = await beginAccountTransaction()
   try {
-    const result = await tx.execute({ sql: 'SELECT u.id, p.user_id AS profile_id FROM users u LEFT JOIN account_profiles p ON p.user_id=u.id WHERE p.recovery_hash=? OR u.api_key_hash=?', args: [hash(recoveryKey), hash(recoveryKey)] })
+    const result = await tx.execute({ sql: 'SELECT u.id, p.user_id AS profile_id FROM users u LEFT JOIN account_profiles p ON p.user_id=u.id WHERE (p.recovery_hash=? OR u.api_key_hash=?) AND NOT EXISTS(SELECT 1 FROM account_children f WHERE f.child_id=u.id)', args: [hash(recoveryKey), hash(recoveryKey)] })
     if (result.rows.length !== 1) throw new AccountAuthError(401, '恢复凭证无效')
     const user = result.rows[0], id = String(user.id)
     // Legacy API keys retain their existing authority and, crucially, their tenant and data.
@@ -153,6 +191,7 @@ export async function loginAccount(recoveryKey: string): Promise<AccountLoginRes
 /** Reauthentication changes freshness only; it must not switch identities or extend the session lifetime. */
 async function renewAccountAuthentication(db: Database, auth: AuthContext): Promise<AccountUser> {
   requireAccountAuth(auth)
+  await revalidateAccountAuth(auth, db)
   const now = Date.now()
   const changed = await db.execute({
     sql: `UPDATE account_sessions SET authenticated_at=? WHERE id=? AND user_id=? AND revoked_at IS NULL
@@ -195,10 +234,11 @@ export async function reauthenticateExternalIdentity(identity: ExternalIdentity,
 }
 export async function authenticateAccountSession(token: string): Promise<AuthContext> {
   const now = Date.now()
-  const db = getDb(), result = await db.execute({ sql: `SELECT s.*, u.tenant_id, p.roles FROM account_sessions s JOIN users u ON u.id=s.user_id JOIN account_profiles p ON p.user_id=u.id
+  const db = getDb(), result = await db.execute({ sql: `SELECT s.*, u.tenant_id,
+      CASE WHEN EXISTS(SELECT 1 FROM account_children f WHERE f.child_id=s.user_id) THEN '[]' ELSE p.roles END AS roles FROM account_sessions s JOIN users u ON u.id=s.user_id JOIN account_profiles p ON p.user_id=u.id
       WHERE s.id IN (SELECT id FROM account_sessions WHERE access_hash=? AND access_expires_at>?
         UNION ALL SELECT session_id FROM account_access_tokens WHERE token_hash=? AND expires_at>?)
-      AND s.revoked_at IS NULL AND s.expires_at>?`, args: [hash(token), now, hash(token), now, now] })
+      AND s.revoked_at IS NULL AND s.expires_at>? AND ${familySessionAllowed}`, args: [hash(token), now, hash(token), now, now, now] })
   const row = result.rows[0]
   if (!row) throw new AccountAuthError(401, '登录已失效，请刷新会话或重新登录')
   if (now - Number(row.last_seen_at) > 60_000) await executeAccountWrite({ sql: 'UPDATE account_sessions SET last_seen_at=? WHERE id=?', args: [now, String(row.id)] })
@@ -227,8 +267,9 @@ export async function refreshAccountSession(refreshToken: string, requestId?: st
   if (requestId !== undefined && !/^[a-zA-Z0-9_-]{16,128}$/.test(requestId)) throw new AccountAuthError(400, '刷新请求标识格式不正确')
   const tx = await beginAccountTransaction()
   try {
-    const found = await tx.execute({ sql: 'SELECT r.consumed_at, r.request_hash, r.retry_result, r.retry_expires_at, s.* FROM account_refresh_tokens r JOIN account_sessions s ON s.id=r.session_id WHERE r.token_hash=?', args: [hash(refreshToken)] })
-    const row = found.rows[0], now = Date.now()
+    const now = Date.now(), found = await tx.execute({ sql: `SELECT r.consumed_at, r.request_hash, r.retry_result, r.retry_expires_at, s.* FROM account_refresh_tokens r
+      JOIN account_sessions s ON s.id=r.session_id WHERE r.token_hash=? AND ${familySessionAllowed}`, args: [hash(refreshToken), now] })
+    const row = found.rows[0]
     if (!row || row.revoked_at || Number(row.expires_at) <= now) throw new AccountAuthError(401, '登录已失效，请重新登录')
     if (row.consumed_at !== null) {
       if (requestId && row.request_hash === hash(requestId) && row.retry_result && Number(row.retry_expires_at) > now) {
@@ -261,10 +302,12 @@ export async function updateAccountProfile(auth: AuthContext, input: Record<stri
   requireAccountAuth(auth)
   const allowed = ['name', 'email', 'avatarUrl', 'bio', 'userData']
   if (Object.keys(input).some(key => !allowed.includes(key))) throw new AccountAuthError(400, '包含不可修改的账号字段')
-  const current = await getAccountUser(auth.userId)
   const tx = await beginAccountTransaction()
   try {
-    await tx.execute({ sql: 'UPDATE users SET name=?,email=? WHERE id=? AND tenant_id=?', args: [input.name === undefined ? current.name : text(input.name, 100) ?? randomName(), input.email === undefined ? current.email : text(input.email, 320), auth.userId, auth.tenantId] })
+    await revalidateAccountAuth(auth, tx)
+    const current = await getAccountUser(auth.userId, auth.sessionId, tx)
+    const name = input.name === undefined ? current.name : current.accountKind === 'child' ? childDisplayName(input.name) : text(input.name, 100) ?? randomName()
+    await tx.execute({ sql: 'UPDATE users SET name=?,email=? WHERE id=? AND tenant_id=?', args: [name, input.email === undefined ? current.email : text(input.email, 320), auth.userId, auth.tenantId] })
     await tx.execute({ sql: 'UPDATE account_profiles SET avatar_url=?,bio=?,user_data=?,updated_at=? WHERE user_id=?', args: [input.avatarUrl === undefined ? current.avatarUrl : avatar(input.avatarUrl), input.bio === undefined ? current.bio : text(input.bio, 1000), JSON.stringify(input.userData === undefined ? current.userData : sanitizeData(input.userData)), Date.now(), auth.userId] })
     const result = await getAccountUser(auth.userId, auth.sessionId, tx)
     await tx.commit()
@@ -273,20 +316,25 @@ export async function updateAccountProfile(auth: AuthContext, input: Record<stri
 }
 export async function listAccountSessions(auth: AuthContext): Promise<Record<string, unknown>[]> {
   requireAccountAuth(auth)
-  const result = await getDb().execute({ sql: 'SELECT id,created_at,last_seen_at,expires_at FROM account_sessions WHERE user_id=? AND revoked_at IS NULL AND expires_at>? ORDER BY created_at DESC', args: [auth.userId, Date.now()] })
+  const now = Date.now(), result = await getDb().execute({ sql: `SELECT s.id,s.created_at,s.last_seen_at,s.expires_at FROM account_sessions s
+    WHERE s.user_id=? AND s.revoked_at IS NULL AND s.expires_at>? AND ${familySessionAllowed} ORDER BY s.created_at DESC`, args: [auth.userId, now, now] })
   return result.rows.map(row => ({ id: row.id, createdAt: iso(Number(row.created_at)), lastSeenAt: iso(Number(row.last_seen_at)), expiresAt: iso(Number(row.expires_at)), current: row.id === auth.sessionId }))
 }
 export async function revokeAccountSession(auth: AuthContext, sessionId?: string, all = false): Promise<void> {
   requireAccountAuth(auth)
   if (!all && !sessionId) throw new AccountAuthError(400, '没有可退出的账号会话')
-  await executeAccountWrite({ sql: `UPDATE account_sessions SET revoked_at=? WHERE user_id=?${all ? '' : ' AND id=?'}`, args: all ? [Date.now(), auth.userId] : [Date.now(), auth.userId, sessionId!] })
   const tx = await beginAccountTransaction()
-  try { await audit(tx, auth.userId, all ? 'session.revoked_all' : 'session.revoked'); await tx.commit() } finally { tx.close() }
+  try {
+    await revalidateAccountAuth(auth, tx)
+    await tx.execute({ sql: `UPDATE account_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL${all ? '' : ' AND id=?'}`, args: all ? [Date.now(), auth.userId] : [Date.now(), auth.userId, sessionId!] })
+    await audit(tx, auth.userId, all ? 'session.revoked_all' : 'session.revoked'); await tx.commit()
+  } finally { tx.close() }
 }
 export async function rotateAccountRecovery(auth: AuthContext): Promise<{ recoveryKey: string }> {
   requireAccountAuth(auth); requireRecentAccountAuth(auth)
   const recoveryKey = secret('aether_recovery_'), tx = await beginAccountTransaction()
   try {
+    await revalidateAccountAuth(auth, tx); await requireIndependentAccount(tx, auth.userId)
     await tx.execute({ sql: 'UPDATE account_profiles SET recovery_hash=?,updated_at=? WHERE user_id=?', args: [hash(recoveryKey), Date.now(), auth.userId] })
     // Old API keys must stop being a second unrevoked recovery path after rotation.
     await tx.execute({ sql: 'UPDATE users SET api_key_hash=NULL WHERE id=?', args: [auth.userId] })
@@ -295,22 +343,26 @@ export async function rotateAccountRecovery(auth: AuthContext): Promise<{ recove
     await tx.commit(); return { recoveryKey }
   } finally { tx.close() }
 }
-export async function completeExternalIdentity(identity: ExternalIdentity, linkAuth?: AuthContext): Promise<AccountLoginResult | AccountUser> {
+export async function completeExternalIdentity(identity: ExternalIdentity, linkAuth?: AuthContext, activation?: ActivationProof): Promise<AccountLoginResult | AccountUser> {
   if (!identity.providerId || !identity.subject || identity.subject.length > 2048) throw new AccountAuthError(400, '第三方身份信息不完整')
   if (linkAuth) { requireRecentAccountAuth(linkAuth); await revalidateAccountAuth(linkAuth) }
   const issuer = identity.issuer ?? identity.providerId
   const name = text(identity.name, 100), email = text(identity.email, 320), avatarUrl = avatar(identity.avatarUrl)
   const userData = JSON.stringify(sanitizeData(identity.userData)), now = Date.now(), tx = await beginAccountTransaction()
   try {
+    if (linkAuth) { requireAccountAuth(linkAuth); await revalidateAccountAuth(linkAuth, tx); await requireIndependentAccount(tx, linkAuth.userId) }
     const existing = await tx.execute({ sql: 'SELECT user_id FROM account_identities WHERE provider_id=? AND issuer=? AND subject=?', args: [identity.providerId, issuer, identity.subject] })
     let userId = existing.rows[0] ? String(existing.rows[0].user_id) : undefined
+    if (userId) await requireIndependentAccount(tx, userId)
     if (linkAuth && userId && userId !== linkAuth.userId) throw new AccountAuthError(409, '此第三方账号已绑定其他账号；为保护原有数据，不能自动合并')
     let recoveryKey: string | undefined
     if (!userId) {
       if (linkAuth) { requireAccountAuth(linkAuth); userId = linkAuth.userId }
       else {
         if (process.env.AETHER_ACCOUNT_REGISTRATION === 'false') throw new AccountAuthError(403, '管理员已关闭自动注册')
+        if (!activation) throw new AccountAuthError(403, '此第三方身份尚未开户。请在「创建主账号」中输入管理员签发的开通码，再选择第三方登录。')
         const created = await createUser(tx, identity); userId = created.id; recoveryKey = created.recoveryKey
+        await consumeActivation(tx, activation, userId)
       }
       await tx.execute({ sql: 'INSERT INTO account_identities(id,user_id,provider_id,issuer,subject,name,email,avatar_url,user_data,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)', args: [randomUUID(), userId, identity.providerId, issuer, identity.subject, name, email, avatarUrl, userData, now, now] })
     } else await tx.execute({ sql: `UPDATE account_identities SET name=CASE WHEN ? THEN name ELSE ? END, email=CASE WHEN ? THEN email ELSE ? END,
@@ -325,6 +377,7 @@ export async function unlinkAccountIdentity(auth: AuthContext, providerId: strin
   requireAccountAuth(auth); requireRecentAccountAuth(auth)
   const tx = await beginAccountTransaction()
   try {
+    await revalidateAccountAuth(auth, tx); await requireIndependentAccount(tx, auth.userId)
     const user = await getAccountUser(auth.userId, auth.sessionId, tx)
     if (!user.hasRecoveryKey && !user.identities.some(identity => identity.providerId !== providerId)) throw new AccountAuthError(409, '请先配置恢复凭证或绑定其他登录方式')
     await tx.execute({ sql: 'DELETE FROM account_identities WHERE user_id=? AND provider_id=?', args: [auth.userId, providerId] })
@@ -335,7 +388,7 @@ export async function unlinkAccountIdentity(auth: AuthContext, providerId: strin
 }
 /** Durable counters avoid clearing brute-force throttles simply by restarting the process. */
 export async function checkAccountRateLimit(ip: string, operation: string): Promise<void> {
-  const now = Date.now(), windowStart = now - 60_000, limit = ['register', 'reauth'].includes(operation) ? 10 : 60
+  const now = Date.now(), windowStart = now - 60_000, limit = (operation.startsWith('child-password-') || ['register', 'reauth'].includes(operation)) ? 10 : 60
   const result = await executeAccountWrite({
     sql: `INSERT INTO account_auth_attempts(bucket,window_start,attempts) VALUES(?,?,1)
       ON CONFLICT(bucket) DO UPDATE SET attempts=CASE WHEN window_start<? THEN 1 ELSE attempts+1 END,

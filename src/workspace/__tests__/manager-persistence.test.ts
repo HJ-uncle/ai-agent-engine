@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
@@ -8,6 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { WorkspaceManager } from '../manager.js'
 
 type Binding = { tenantId: string; sessionId: string; workspaceRoot: string }
+const fixtureRoot = path.resolve('.e2e-tmp', 'workspace-persistence')
 const made: Array<{ root: string; token: string }> = []
 const ctx = (tenantId = 'tenant', sessionId = 'session') => ({ tenantId, sessionId })
 
@@ -18,7 +18,7 @@ afterEach(() => {
     // Recursive cleanup is restricted to this test's original mkdtemp folder.
     const resolved = fs.realpathSync(root)
     expect(resolved.toLowerCase()).toBe(path.resolve(root).toLowerCase())
-    expect(path.dirname(resolved).toLowerCase()).toBe(fs.realpathSync(os.tmpdir()).toLowerCase())
+    expect(path.dirname(resolved).toLowerCase()).toBe(fs.realpathSync(fixtureRoot).toLowerCase())
     expect(path.basename(resolved)).toMatch(/^aether-workspace-persistence-/)
     expect(fs.readFileSync(path.join(root, '.fixture-owner'), 'utf8')).toBe(token)
     fs.rmSync(root, { recursive: true, force: true })
@@ -26,7 +26,8 @@ afterEach(() => {
 })
 
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-workspace-persistence-'))
+  fs.mkdirSync(fixtureRoot, { recursive: true })
+  const root = fs.mkdtempSync(path.join(fixtureRoot, 'aether-workspace-persistence-'))
   const token = randomUUID()
   fs.writeFileSync(path.join(root, '.fixture-owner'), token)
   made.push({ root, token })
@@ -52,7 +53,8 @@ describe('WorkspaceManager persistent selections', () => {
   it('restores the selected real directory in a genuinely new process after the binding process exits', () => {
     const f = fixture(), project = f.directory('restart-project')
     fs.writeFileSync(path.join(project, 'kept.txt'), 'retained project content')
-    const managerUrl = pathToFileURL(path.join(process.env.AETHER_GIT_TEST_COMPILED_ROOT ?? path.resolve('../owned-compiled'), 'workspace/manager.js')).href
+    const compiled = process.env.AETHER_GIT_TEST_COMPILED_ROOT
+    const managerUrl = pathToFileURL(compiled ? path.resolve(compiled,'workspace/manager.js') : path.resolve('src/workspace/manager.ts')).href
     const script = `import fs from 'node:fs';import {WorkspaceManager} from ${JSON.stringify(managerUrl)};
       const m=new WorkspaceManager(process.env.WORKSPACE_ROOT),c={tenantId:'tenant',sessionId:'session'};
       const selected=process.env.TEST_BIND_PROJECT?m.bind(c,process.env.TEST_BIND_PROJECT):m.getWorkingDirectory(c);
@@ -60,7 +62,7 @@ describe('WorkspaceManager persistent selections', () => {
     const execute = (bind: boolean) => {
       const env = { ...process.env, ...(bind ? { TEST_BIND_PROJECT: project } : {}) }
       if (!bind) delete env.TEST_BIND_PROJECT
-      const child = spawnSync(process.execPath, ['--input-type=module', '--eval', script], {
+      const child = spawnSync(process.execPath, [...(compiled ? [] : ['--import','tsx']), '--input-type=module', '--eval', script], {
         cwd: path.resolve('.'), env, encoding: 'utf8', windowsHide: true, timeout: 15000,
       })
       expect(child.error).toBeUndefined()

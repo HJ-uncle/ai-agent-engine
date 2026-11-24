@@ -24,7 +24,7 @@ describe('one-source system prompt assembly', () => {
     expect(link).toBeDefined()
     const url = new URL(link!, 'http://localhost')
     expect(url.searchParams.get('sessionId')).toBe(sessionId)
-    expect(url.searchParams.get('path')).toBe('资料/项目说明 初稿.docx')
+    expect(url.searchParams.get('path')).toBe('资料/项目说明 初稿.md')
     expect(prompt).toContain('no required folder convention')
     expect(prompt).toContain('URLSearchParams encodes each value once')
     expect(prompt).toContain('不再列同文件的Markdown下载链接')

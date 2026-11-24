@@ -24,7 +24,11 @@
 
 X-Request-ID 与 X-Client-Version 可以提供，缺省时服务端补默认值，不是必须请求头。使用 JSON 请求体时才设置 Content-Type: application/json；空 GET/DELETE 不要附带一个虚假的空 JSON body。
 
-账号入口、刷新单飞与第三方流程见[账号机制](../account-login.md)、[第三方登录](../account-external-login.md)。独立服务 `POST /auth/user` 需要已验证的同租户管理员；只有桌面自管回环实例可在带有效实例令牌时首次登记空的默认租户。管理入口 `/admin/` 及其静态资源允许匿名 GET/HEAD；`/admin/me`、`/admin/status`、`/admin/monitor` 和其他管理数据即使在 `AUTH_ENABLED=false` 时也要求独立后台身份（`X-Aether-Admin-Key`）或恢复管理员身份，以及已配置的实例令牌。成员列表、角色、密钥、审计和监控规则按后台角色的权限逐项检查；普通用户角色不代表后台权限。详见[管理员指南](../operations/engine-admin.md)。使用默认租户的 JWT 管理时，签名载荷须明确包含 `tenantId: "default"` 和 `admin` 角色；普通业务请求保留原有身份解析规则。
+个人主账号首次开通（含第三方首次开户）需要所在实例后台签发的单次开通码；子账号只能由其主账号创建。账号入口、刷新单飞与第三方流程见[账号机制](../account-login.md)、[第三方登录](../account-external-login.md)。独立服务 `POST /auth/user` 需要已验证的同租户管理员；只有桌面自管回环实例可在带有效实例令牌时首次登记空的默认租户。 子账号可以使用主账号设置的登录名和密码独立登录，或用自己保存的一次性密码恢复码找回。
+
+管理入口 `/admin/` 及其静态资源允许匿名 GET/HEAD；`/admin/me`、`/admin/status`、`/admin/monitor` 和其他管理数据即使在 `AUTH_ENABLED=false` 时也要验证管理身份及已配置的实例令牌。普通 HTTP 客户端使用后台专用密钥（`X-Aether-Admin-Key`）或恢复管理员凭据。成员列表、角色、密钥、审计和监控规则按后台角色的权限逐项检查。使用默认租户的 JWT 管理时，签名载荷须明确包含 `tenantId: "default"` 和 `admin` 角色。
+
+桌面已选身份按该身份在目标服务已有的后台权限授权。仅当桌面持有自己启动的回环引擎、未设置过个人账号且服务未强制业务认证时，独立管理窗口才可以临时使用「本机桌面管理员」；关窗、切换账号或引擎、停机后授权失效。退出或过期不会提升为本机管理员。普通 HTTP 客户端不能仅凭回环地址或实例令牌取得这份授权。详见[管理员指南](../operations/engine-admin.md)。
 
 ## 响应和错误
 
