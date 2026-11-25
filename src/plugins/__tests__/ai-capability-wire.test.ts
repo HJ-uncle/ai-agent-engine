@@ -8,7 +8,7 @@ vi.mock('../../storage/sqlite/system-config.js', () => ({ systemConfigStore: { g
 
 const model: ModelConfig = { id: 'configured-model', tenantId: 'fixture', provider: 'deepseek', modelId: 'deepseek-v4.1-flash',
   apiKey: 'synthetic-key-never-return', baseUrl: 'https://fixture.invalid/anthropic', apiFormat: 'anthropic', isEnabled: true,
-  capabilities: { thinking: true, contextWindow: 24_000 }, createdAt: 0, updatedAt: 0 }
+  capabilities: { thinking: true, vision: true, contextWindow: 24_000 }, createdAt: 0, updatedAt: 0 }
 const access: CapabilityAccess = { id: 'review', revision: 1, grants: ['ai.run'],
   manifest: { apiVersion: 1, id: 'review', name: 'Review', description: 'Review session', version: '1.0.0', runtime: 'node',
     tools: [{ name: 'review', description: 'Review', entry: 'main.mjs', inputSchema: {} }], permissions: { requested: ['ai.run'] } },
@@ -55,6 +55,44 @@ describe('plugin AI uses the configured model request path', () => {
     expect(await call({ maxTokens: 1800 })).toMatchObject({ text: 'Verified review.' })
     expect(requests[0].max_tokens).toBe(1800)
     expect(requests[0].thinking).toEqual({ type: 'disabled' })
+  })
+
+  it('applies per-call thinking and sampling parameters without changing saved model settings', async () => {
+    expect(await call({ thinking: false, temperature: 0.2 })).toMatchObject({ text: 'Verified review.' })
+    expect(requests[0].thinking).toEqual({ type: 'disabled' })
+    expect(requests[0].temperature).toBe(0.2)
+  })
+
+  it('passes bounded multimodal content through the configured provider wire', async () => {
+    await call({ prompt: undefined, messages: [{ role: 'user', content: [
+      { type: 'text', text: '检查这张图' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw==', detail: 'low' } },
+    ] }] })
+    const user = (requests[0].messages as any[]).find((message: any) => message.role === 'user')
+    expect(user.content).toEqual([
+      { type: 'text', text: '检查这张图' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw==' } },
+    ])
+  })
+
+  it('exposes safe model capabilities without credentials', async () => {
+    const result = await invokePluginCapability({ ...access, grants: ['models.read'], manifest: { ...access.manifest, permissions: { requested: ['models.read'] } } }, 'fixture', {
+      capability: 'models.read', method: 'list', expectedRevision: 1, args: {},
+    }) as { models: Array<Record<string, unknown>> }
+    expect(result.models[0]).toMatchObject({ id: model.id, modelId: model.modelId, capabilities: { thinking: true, contextWindow: 24_000 } })
+    expect(result.models[0]).not.toHaveProperty('apiKey')
+    expect(result.models[0]).not.toHaveProperty('baseUrl')
+  })
+
+  it('rejects a conflicting per-call thinking override before dispatch', async () => {
+    await expect(call({ thinking: false, reasoningEffort: 'high' })).rejects.toMatchObject({ code: 'PLUGIN_ARGUMENTS', statusCode: 400 })
+    expect(requests).toHaveLength(0)
+  })
+
+  it('enforces JSON response format even when a provider does not expose native JSON mode', async () => {
+    await expect(call({ responseFormat: 'json' })).rejects.toMatchObject({ code: 'PLUGIN_AI_FORMAT', statusCode: 502 })
+    vi.stubGlobal('fetch', vi.fn(async () => response([{ type: 'text', text: '{\"ok\":true}' }])))
+    await expect(call({ responseFormat: 'json' })).resolves.toMatchObject({ text: '{\"ok\":true}' })
   })
 
   it('inherits the saved DeepSeek adapter configuration on the OpenAI protocol', async () => {

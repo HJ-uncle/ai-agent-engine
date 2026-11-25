@@ -30,7 +30,12 @@ describe('generated plugin SDK consumer contract', () => {
     expect(diagnostics(`
       async function review() {
         const controller = new AbortController();
-        const result = await $AE.ai.stream({modelId:'configured',prompt:'检查'}, {
+        const models = await $AE.models.list();
+        const canSee = models.models[0].capabilities.vision === true;
+        const result = await $AE.ai.stream({modelId:'configured',messages:[{role:'user',content:[
+          {type:'text',text:'检查'},
+          {type:'image_url',image_url:{url:'data:image/png;base64,iVBORw==',detail:'low'}}
+        ]}], thinking:false, reasoningEffort:undefined, temperature:0.2, responseFormat:'json'}, {
           signal:controller.signal,
           async onEvent(event) {
             if(event.type==='text-delta') { const text:string=event.text; }

@@ -6,6 +6,7 @@ import { pluginCapabilityIdSchema, type PluginCapabilityId } from './capabilitie
 import { PluginService } from './service.js'
 import { ModelsStore } from '../storage/sqlite/models.js'
 import { resolveModelConfig, createAdapterFromResolved } from '../core/llm-adapter/resolve-model.js'
+import { loadDbCapabilityOverrides, resolveCapabilities } from '../core/model-capabilities/index.js'
 import type { LLMResponse, LLMStreamChunk } from '../core/llm-adapter/types.js'
 import { createConversationHistory } from '../storage/conversation/factory.js'
 import { publicSessionHistoryMessages } from '../api/http/history-projection.js'
@@ -31,6 +32,16 @@ export interface PluginExecutionContext {
   browserAuthority?: AgentContext['browserAuthority']
   browserPrincipal?: AgentContext['browserPrincipal']
   controllerSubject?: import('../core/collaboration/controller-origin.js').ControllerSubject
+}
+
+function assertPluginResponseFormat(text: string, responseFormat: 'text' | 'json' | undefined): void {
+  if (responseFormat !== 'json') return
+  try {
+    const parsed = JSON.parse(text)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('JSON object required')
+  } catch {
+    throw new PluginError('PLUGIN_AI_FORMAT', '模型未返回有效 JSON 对象，请重试或改用 responseFormat=text', 502)
+  }
 }
 
 function pluginWorkspacePath(root: string, input: string): string {
@@ -188,11 +199,20 @@ async function dispatch(access: CapabilityAccess, tenantId: string, call: Capabi
       return (await import('./agent-capability.js')).invokeAgentCapability(access, tenantId, call, signal, execution)
     case 'models.read:list': {
       capabilityMethods['models.read'].list.parse(args)
-      return { models: (await new ModelsStore().getModels(tenantId)).filter(model => model.isEnabled)
-        .map(model => ({ id: model.id, modelId: model.modelId, name: model.displayName || model.modelId, provider: model.provider })) }
+      const models = (await new ModelsStore().getModels(tenantId)).filter(model => model.isEnabled)
+      return { models: await Promise.all(models.map(async model => {
+        const capabilities = resolveCapabilities({ model: model.modelId, provider: model.provider, baseUrl: model.baseUrl,
+          apiFormat: model.apiFormat, dbOverrides: model.capabilities ?? await loadDbCapabilityOverrides(model.modelId) })
+        return { id: model.id, modelId: model.modelId, name: model.displayName || model.modelId, provider: model.provider,
+          capabilities: Object.fromEntries((['vision', 'thinking', 'toolCalling', 'jsonMode', 'streamUsage', 'contextWindow'] as const)
+            .filter(key => capabilities[key] !== undefined).map(key => [key, capabilities[key]])) }
+      })) }
     }
     case 'ai.run:run': case 'ai.run:stream': {
       const input = capabilityMethods['ai.run'].run.parse(args)
+      if (input.thinking === false && input.reasoningEffort !== undefined) {
+        throw new PluginError('PLUGIN_ARGUMENTS', 'thinking=false 时不能同时指定 reasoningEffort', 400)
+      }
       const model = (await new ModelsStore().getModels(tenantId)).find(model => model.isEnabled && (model.id === input.modelId || model.modelId === input.modelId))
       if (!model) throw new PluginError('PLUGIN_MODEL', '所选模型未配置或未启用', 404)
       const messages: Message[] = [...input.messages ?? [], ...(input.prompt ? [{ role: 'user' as const, content: input.prompt }] : [])]
@@ -203,7 +223,11 @@ async function dispatch(access: CapabilityAccess, tenantId: string, call: Capabi
         // Use the same tenant-aware configuration and request settings as the
         // Agent loop. A bare adapter loses saved thinking/capability settings;
         // the Anthropic gateway then silently defaults to a 4096-token output.
-        const resolved = await resolveModelConfig({ tenantId, model: model.id })
+        const modelOverrides = input.thinking !== undefined || input.reasoningEffort !== undefined
+          ? { ...(input.thinking !== undefined ? { thinkingEnabled: input.thinking } : {}),
+              ...(input.reasoningEffort !== undefined ? { reasoningEffort: input.reasoningEffort } : {}) }
+          : undefined
+        const resolved = await resolveModelConfig({ tenantId, model: model.id, ...(modelOverrides ? { overrides: modelOverrides } : {}) })
         const adapter = createAdapterFromResolved(resolved)
         if (method === 'stream') {
           publicStreamError = true
@@ -217,7 +241,8 @@ async function dispatch(access: CapabilityAccess, tenantId: string, call: Capabi
             chunks = adapter.stream(messages, { model: resolved.model, systemPrompt: input.systemPrompt,
               maxTokens: input.maxTokens, unboundedOutput: input.maxTokens === undefined, contextWindow: resolved.capabilities.contextWindow,
               thinkingEnabled: resolved.thinkingEnabled, reasoningEffort: resolved.reasoningEffort,
-              thinkingConfig: resolved.thinkingConfig, responseThinkingField: resolved.responseThinkingField, includeStreamUsage: true, signal })[Symbol.asyncIterator]()
+              thinkingConfig: resolved.thinkingConfig, responseThinkingField: resolved.responseThinkingField,
+              temperature: input.temperature, responseFormat: input.responseFormat, includeStreamUsage: true, signal })[Symbol.asyncIterator]()
           } catch { throw new PluginError('PLUGIN_AI_FAILED', '平台模型调用失败，请检查模型配置后重试', 502) }
           let content = '', done = false, finishReason: LLMResponse['finishReason'] | undefined
           let actualModel = resolved.model, promptTokens: number | undefined, completionTokens: number | undefined
@@ -248,12 +273,14 @@ async function dispatch(access: CapabilityAccess, tenantId: string, call: Capabi
           if (finishReason === 'length') throw new PluginError('PLUGIN_AI_OUTPUT_LIMIT', '模型输出达到上限，结果尚未完成；请提高 maxTokens 或缩小分析内容后重试', 502)
           if (!done || finishReason !== 'stop' || toolCalls) throw new PluginError('PLUGIN_AI_INCOMPLETE', '模型流未完整结束，请重试', 502)
           if (!content.trim()) throw new PluginError('PLUGIN_AI_EMPTY', '模型未返回可见正文，请调整模型配置或缩小分析内容后重试', 502)
+          assertPluginResponseFormat(content, input.responseFormat)
           return { text: content, model: actualModel, usage: { inputTokens: promptTokens, outputTokens: completionTokens } }
         }
         result = await adapter.complete(messages, { model: resolved.model, systemPrompt: input.systemPrompt,
           maxTokens: input.maxTokens, unboundedOutput: input.maxTokens === undefined, contextWindow: resolved.capabilities.contextWindow,
           thinkingEnabled: resolved.thinkingEnabled, reasoningEffort: resolved.reasoningEffort,
-          thinkingConfig: resolved.thinkingConfig, responseThinkingField: resolved.responseThinkingField, signal })
+          thinkingConfig: resolved.thinkingConfig, responseThinkingField: resolved.responseThinkingField,
+           temperature: input.temperature, responseFormat: input.responseFormat, signal })
       } catch (error) {
         if (signal.aborted) throw new PluginError('PLUGIN_CANCELLED', 'AI 调用已取消或超时', 408)
         if (publicStreamError && error instanceof PluginError) throw error
@@ -266,6 +293,7 @@ async function dispatch(access: CapabilityAccess, tenantId: string, call: Capabi
       if (result.finishReason === 'length') throw new PluginError('PLUGIN_AI_OUTPUT_LIMIT', '模型输出达到上限，结果尚未完成；请提高 maxTokens 或缩小分析内容后重试', 502)
       if (result.finishReason !== 'stop' || result.toolCalls?.length) throw new PluginError('PLUGIN_AI_INCOMPLETE', '模型未返回完整结果，请重试', 502)
       if (!result.content?.trim()) throw new PluginError('PLUGIN_AI_EMPTY', '模型未返回可见正文，请调整模型配置或缩小分析内容后重试', 502)
+      assertPluginResponseFormat(result.content, input.responseFormat)
       return { text: result.content, model: result.model || model.modelId, usage: { inputTokens: result.promptTokens, outputTokens: result.completionTokens } }
     }
     case 'session.read:messages': {

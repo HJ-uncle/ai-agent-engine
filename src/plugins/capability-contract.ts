@@ -2,6 +2,46 @@ import { z } from 'zod'
 import type { JSONSchema } from '../core/agent-context/types.js'
 
 const text = z.string().min(1).max(4096)
+const MAX_PLUGIN_IMAGE_URL_CHARS = 12 * 1024 * 1024 + 256
+const MAX_PLUGIN_IMAGE_TOTAL_CHARS = 16 * 1024 * 1024
+
+const pluginImageUrlSchema = z.string().max(MAX_PLUGIN_IMAGE_URL_CHARS).regex(
+  /^(?:https:\/\/[^\s]{1,4096}|data:image\/(?:png|jpe?g|webp|gif|avif);base64,[A-Za-z0-9+/]+={0,2})$/,
+  '只支持 HTTPS 图片地址或受大小限制的 image/* Base64 data URL',
+)
+
+const pluginAIContentPartSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('text'), text: z.string().max(1_000_000) }).strict(),
+  z.object({ type: z.literal('image_url'), image_url: z.object({
+    url: pluginImageUrlSchema,
+    detail: z.enum(['auto', 'low', 'high']).optional(),
+  }).strict() }).strict(),
+])
+export type PluginAIContentPart = z.infer<typeof pluginAIContentPartSchema>
+
+const pluginAIMessageSchema = z.object({
+  role: z.enum(['user', 'assistant']),
+  content: z.union([z.string(), z.array(pluginAIContentPartSchema).min(1).max(32)]),
+}).strict()
+export type PluginAIMessage = z.infer<typeof pluginAIMessageSchema>
+
+const pluginAIMessagesSchema = z.array(pluginAIMessageSchema).max(100).superRefine((messages, ctx) => {
+  let imageChars = 0
+  for (const [index, message] of messages.entries()) {
+    if (!Array.isArray(message.content)) continue
+    for (const [partIndex, part] of message.content.entries()) {
+      if (part.type !== 'image_url') continue
+      imageChars += part.image_url.url.length
+      if (imageChars > MAX_PLUGIN_IMAGE_TOTAL_CHARS) {
+        ctx.addIssue({ code: z.ZodIssueCode.too_big, type: 'array', maximum: MAX_PLUGIN_IMAGE_TOTAL_CHARS,
+          inclusive: true, exact: false, path: [index, 'content', partIndex, 'image_url', 'url'],
+          message: '单次 AI 请求的图片内容总量过大' })
+        return
+      }
+    }
+  }
+})
+
 export const noCapabilityArgs = z.object({}).strict()
 
 export const pluginAgentConfigurationSchema = z.object({
@@ -17,6 +57,10 @@ export const pluginAgentToolsArgsSchema = pluginAgentConfigurationSchema
 export const pluginAgentRunArgsSchema = pluginAgentConfigurationSchema.extend({
   modelId: z.string().min(1).max(256), task: z.string().trim().min(1),
   description: z.string().trim().min(1).optional(), resumeRunId: z.string().uuid().optional(),
+  thinking: z.boolean().optional().describe('仅控制本次 Agent 调用是否启用模型思考；续跑省略时继承原调用。'),
+  reasoningEffort: z.enum(['low', 'medium', 'high']).optional().describe('本次 Agent 调用的推理力度；模型不支持时按适配器兼容策略处理。'),
+  temperature: z.number().finite().min(0).max(2).optional().describe('本次 Agent 调用的采样温度，范围 0–2。'),
+  maxTokens: z.number().int().positive().max(1_000_000).optional().describe('本次 Agent 调用的最大输出 token 数；实际值仍受模型上下文与任务预算限制。'),
 }).strict()
 
 /** One argument contract for SDK dispatch and the tools shown to plugin Agents. */
@@ -28,10 +72,14 @@ export const PLUGIN_AGENT_CAPABILITY_METHODS = {
     run: z.object({
       modelId: text.describe('平台已配置模型的 id 或 modelId。'),
       prompt: z.string().optional().describe('本次用户输入；prompt 与 messages 至少提供一个非空输入。'),
-      messages: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string() }).strict()).optional(),
+      messages: pluginAIMessagesSchema.optional().describe('支持纯文本消息，或 text/image_url 内容块；图片仅支持 HTTPS 或受限 Base64 data URL。'),
       systemPrompt: z.string().optional(),
       maxTokens: z.number().int().positive().optional(),
-    }).strict().describe('单次 AI 分析，不执行工具；返回 text、model、usage。上下文与输出预算沿用所选模型。'),
+      thinking: z.boolean().optional().describe('仅控制本次调用是否启用模型思考；省略时继承模型配置。'),
+      reasoningEffort: z.enum(['low', 'medium', 'high']).optional().describe('本次调用的推理力度；模型不支持时由适配器按兼容策略处理。'),
+      temperature: z.number().finite().min(0).max(2).optional().describe('采样温度，范围 0–2；模型不支持时由适配器按兼容策略处理。'),
+      responseFormat: z.enum(['text', 'json']).optional().describe('请求模型返回普通文本或 JSON 对象；返回值仍是 text 字符串。'),
+    }).strict().describe('单次 AI 分析，不执行工具；返回 text、model、usage。thinking、推理力度和采样参数只对本次调用生效。'),
   },
   'session.read': {
     messages: z.object({
@@ -92,19 +140,27 @@ function argumentJsonSchema(schema: z.ZodTypeAny): JSONSchema {
   let result: JSONSchema
   if (schema instanceof z.ZodOptional) result = argumentJsonSchema(schema.unwrap())
   else if (schema instanceof z.ZodDefault) result = { ...argumentJsonSchema(schema.removeDefault()), default: schema._def.defaultValue() }
+  else if (schema instanceof z.ZodEffects) result = argumentJsonSchema(schema.innerType())
+  else if (schema instanceof z.ZodLiteral) result = { const: schema.value }
+  else if (schema instanceof z.ZodUnion) result = { anyOf: schema.options.map((option: z.ZodTypeAny) => argumentJsonSchema(option)) }
+  else if (schema instanceof z.ZodDiscriminatedUnion) result = { oneOf: [...schema.options.values()].map(option => argumentJsonSchema(option)) }
   else if (schema instanceof z.ZodObject) {
     const shape = schema.shape as Record<string, z.ZodTypeAny>
     result = { type: 'object', properties: Object.fromEntries(Object.entries(shape).map(([key, field]) => [key, argumentJsonSchema(field)])),
       required: Object.entries(shape).filter(([, field]) => !field.isOptional()).map(([key]) => key), additionalProperties: false }
   } else if (schema instanceof z.ZodString) {
     result = { type: 'string', ...(schema.minLength !== null ? { minLength: schema.minLength } : {}), ...(schema.maxLength !== null ? { maxLength: schema.maxLength } : {}) }
+    for (const check of schema._def.checks) {
+      if (check.kind === 'regex') Object.assign(result, { pattern: check.regex.source })
+    }
   } else if (schema instanceof z.ZodNumber) {
     result = { type: schema.isInt ? 'integer' : 'number' }
     for (const check of schema._def.checks) {
       if (check.kind === 'min') Object.assign(result, check.inclusive ? { minimum: check.value } : { exclusiveMinimum: check.value })
       if (check.kind === 'max') Object.assign(result, check.inclusive ? { maximum: check.value } : { exclusiveMaximum: check.value })
     }
-  } else if (schema instanceof z.ZodArray) {
+  } else if (schema instanceof z.ZodBoolean) result = { type: 'boolean' }
+  else if (schema instanceof z.ZodArray) {
     result = { type: 'array', items: argumentJsonSchema(schema.element),
       ...(schema._def.minLength ? { minItems: schema._def.minLength.value } : {}), ...(schema._def.maxLength ? { maxItems: schema._def.maxLength.value } : {}) }
   } else if (schema instanceof z.ZodEnum) result = { type: 'string', enum: schema.options }

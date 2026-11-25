@@ -127,4 +127,13 @@ describe('plugin AI streaming over real configured provider adapters', () => {
     expect(requests).toHaveLength(1)
     expect(requests[0].body[protocol === 'anthropic' ? 'max_tokens' : 'max_completion_tokens']).toBe(1800)
   })
+
+  it('validates JSON response format after a streaming provider completes', async () => {
+    configure('openai')
+    const stream = openaiFrame({ id: 'json-stream', model: configuredModel.modelId, choices: [{ index: 0, delta: { content: '{\"ok\":true}' }, finish_reason: null }] })
+      + openaiFrame({ id: 'json-stream', model: configuredModel.modelId, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 2, completion_tokens: 2 } })
+      + 'data: [DONE]\n\n'
+    installFetch(() => new Response(stream, { headers: { 'content-type': 'text/event-stream' } }))
+    await expect(call({ responseFormat: 'json' })).resolves.toMatchObject({ text: '{\"ok\":true}' })
+  })
 })

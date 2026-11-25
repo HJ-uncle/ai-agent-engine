@@ -34,6 +34,13 @@ export interface SubagentToolCall {
 export interface SubagentContinuationProfile {
   /** Plugin-owned identity and explicit mounts; omitted scopes preserve the original SDK capability scope. */
   pluginAgent?: import('../../plugins/capability-contract.js').PluginAgentConfiguration
+  /** Plugin-owned per-call model controls; omitted fields inherit on continuation. */
+  pluginAgentParameters?: {
+    thinking?: boolean
+    reasoningEffort?: 'low' | 'medium' | 'high'
+    temperature?: number
+    maxTokens?: number
+  }
   /** Server-created independent root; never a model-supplied execution identity. */
   pluginRootRunId?: string
   pluginRootAttemptId?: string

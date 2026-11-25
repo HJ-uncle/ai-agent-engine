@@ -5,6 +5,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentContext } from '../../../core/agent-context/types.js'
 import { grepTool } from '../grep-tool.js'
+import { workspaceManager } from '../../../workspace/index.js'
 
 vi.mock('../../../security/policy-engine.js', () => ({ getSecurityMode: () => 'safe' }))
 const rgAvailable = spawnSync('rg', ['--version'], { windowsHide: true }).status === 0
@@ -148,13 +149,27 @@ it('the fallback deadline produces a failure rather than an exhausted page', asy
   expect(result.metadata).not.toHaveProperty('hasMore')
 })
 
+it('keeps fallback traversal off synchronous filesystem APIs', async () => {
+  vi.stubEnv('PATH', '')
+  vi.spyOn(workspaceManager, 'resolveSafePath').mockReturnValue(fixtureDir)
+  const syncApis = [
+    vi.spyOn(fs, 'statSync'),
+    vi.spyOn(fs, 'readdirSync'),
+    vi.spyOn(fs, 'lstatSync'),
+    vi.spyOn(fs, 'readFileSync'),
+  ]
+  const result = await grepTool.execute({ pattern: 'marker' }, ctx)
+  expect(result.success).toBe(true)
+  expect(syncApis.every(api => api.mock.calls.length === 0)).toBe(true)
+})
+
 it('an explicitly requested fallback file read failure is reported rather than swallowed as no matches', async () => {
   vi.stubEnv('PATH', '')
-  const originalRead = fs.readFileSync.bind(fs)
-  vi.spyOn(fs, 'readFileSync').mockImplementation((...args: Parameters<typeof fs.readFileSync>) => {
+  const originalCreateReadStream = fs.createReadStream.bind(fs)
+  vi.spyOn(fs, 'createReadStream').mockImplementation(((...args: Parameters<typeof fs.createReadStream>) => {
     if (String(args[0]) === path.join(fixtureDir, 'file.txt')) throw new Error('SYNTHETIC_READ_DENIED')
-    return originalRead(...args)
-  })
+    return originalCreateReadStream(...args)
+  }) as typeof fs.createReadStream)
   const result = await grepTool.execute({ pattern: 'marker', path: 'file.txt' }, ctx)
   expect(result.success).toBe(false)
   expect(result.output).toBe('SYNTHETIC_READ_DENIED')

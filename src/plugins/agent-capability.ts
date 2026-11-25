@@ -196,6 +196,18 @@ async function invokeAgentOperation(access: CapabilityAccess, tenantId: string, 
     throw new PluginError('PLUGIN_AGENT_WORKSPACE', '原 Agent 工作区与当前绑定不同，请恢复原工作区后继续', 409)
   const configuration = resolvePluginAgentConfiguration({ identity: args.identity, systemPrompt: args.systemPrompt,
     skillIds: args.skillIds, mcpServerIds: args.mcpServerIds, disabledTools: args.disabledTools, customTools: args.customTools }, priorHeader?.continuation?.pluginAgent, Boolean(previous))
+  const priorParameters = priorHeader?.continuation?.pluginAgentParameters
+  const parameters = {
+    thinking: args.thinking ?? priorParameters?.thinking,
+    // An explicit Off also clears an inherited effort. Supplying both fields
+    // in the same call remains invalid below, matching ai.run semantics.
+    reasoningEffort: args.thinking === false ? args.reasoningEffort : args.reasoningEffort ?? priorParameters?.reasoningEffort,
+    temperature: args.temperature ?? priorParameters?.temperature,
+    maxTokens: args.maxTokens ?? priorParameters?.maxTokens,
+  }
+  if (parameters.thinking === false && parameters.reasoningEffort !== undefined)
+    throw new PluginError('PLUGIN_ARGUMENTS', 'thinking=false 时不能同时指定 reasoningEffort', 400)
+  const pluginAgentParameters = Object.fromEntries(Object.entries(parameters).filter(([, value]) => value !== undefined)) as typeof parameters
   assertMountGrants(await liveAccess(), configuration)
   const { tools, skillPrompt } = await prepareAgentTools(await liveAccess(), tenantId, sessionId, configuration, workspace.snapshot.root,
     liveAccess, { ...execution, childAgent: true, workspaceContext, workspaceBinding: workspace.snapshot }, signal)
@@ -279,10 +291,13 @@ async function invokeAgentOperation(access: CapabilityAccess, tenantId: string, 
   const completion = runner.run(authorizePluginContinuationUpdate({ runId, childSessionId, tenantId, rootSessionId: sessionId, parentSessionId: scope, parentConversationId: runId,
     parentMessageId, parentToolCallId: 'plugin-' + runId, task: args.task, description: args.description ?? args.task.slice(0, 100), modelId: model.modelId,
     agentId: access.id, agentName: configuration.identity?.name ?? access.manifest.name, resumeFromRunId: previous?.runId,
-    continuation: { pluginAgent: configuration, pluginRootRunId: rootRun.runId, pluginRootAttemptId: rootAttemptId, pluginResponseRequestId: response?.requestId, readOnly: !access.grants.some(grant => grant.endsWith('.write') || grant === 'mcp.invoke' || grant === 'engine.tools') && !configuration.customTools?.length, systemPrompt, toolNames: tools.list().map(tool => tool.name), workspacePaths: [workspace.snapshot.root], projectRoot: workspace.snapshot.root },
+    continuation: { pluginAgent: configuration, pluginAgentParameters, pluginRootRunId: rootRun.runId, pluginRootAttemptId: rootAttemptId, pluginResponseRequestId: response?.requestId, readOnly: !access.grants.some(grant => grant.endsWith('.write') || grant === 'mcp.invoke' || grant === 'engine.tools') && !configuration.customTools?.length, systemPrompt, toolNames: tools.list().map(tool => tool.name), workspacePaths: [workspace.snapshot.root], projectRoot: workspace.snapshot.root },
   }), parent, async ({ snapshot, signal: taskSignal, observer, onRequestAttempt, requestBudget }) => {
     await liveAccess()
-    const resolved = await resolveModelConfig({ tenantId, model: model.id })
+    const resolved = await resolveModelConfig({ tenantId, model: model.id, overrides: {
+      thinkingEnabled: parameters.thinking,
+      reasoningEffort: parameters.reasoningEffort,
+    } })
     await emit({ type: 'started', runId, childSessionId: snapshot.childSessionId, model: resolved.model })
     setSecurityMode(tenantId, snapshot.childSessionId, getSecurityMode(tenantId, sessionId))
     try {
@@ -300,6 +315,7 @@ async function invokeAgentOperation(access: CapabilityAccess, tenantId: string, 
         onRequestAttempt: async event => { if (event.type === 'start') assertMountGrants(await liveAccess(), configuration); await onRequestAttempt(event) },
       })
       const strategy = new ReActStrategy(createAdapterFromResolved(resolved), { systemPrompt, maxIterations: Infinity, finalizeOnLimit: true,
+        maxOutputTokens: parameters.maxTokens, temperature: parameters.temperature,
         thinkingEnabled: resolved.thinkingEnabled, reasoningEffort: resolved.reasoningEffort, thinkingConfig: resolved.thinkingConfig, responseThinkingField: resolved.responseThinkingField })
       await executePluginAgentRoot({ root: rootRun, context: child, access, boundSessionId: sessionId, workspaceContext,
         workspace: workspace.snapshot, execution, resumedPending,

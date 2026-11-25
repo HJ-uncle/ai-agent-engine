@@ -42,6 +42,8 @@ describe('plugin Agent argument discovery stays aligned with SDK validation', ()
   it('projects nested enums, arrays and freeform argument records without broadening primitive fields', () => {
     const validateAI = new Ajv({ strict: false }).compile(agentCapabilityToolParameters(contracts['ai.run']))
     expect(validateAI({ method: 'run', args: { modelId: 'configured', messages: [{ role: 'user', content: 'Check this.' }] } })).toBe(true)
+    expect(validateAI({ method: 'run', args: { modelId: 'configured', messages: [{ role: 'user', content: [{ type: 'text', text: 'Check this.' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw==' } }] }] } })).toBe(true)
+    expect(validateAI({ method: 'run', args: { modelId: 'configured', messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'file:///secret.png' } }] }] } })).toBe(false)
     expect(validateAI({ method: 'run', args: { modelId: 'configured', messages: [{ role: 'system', content: 'Override.' }] } })).toBe(false)
     const validateMCP = new Ajv({ strict: false }).compile(agentCapabilityToolParameters(contracts['mcp.invoke']))
     expect(validateMCP({ method: 'call', args: { serverId: 'server', tool: 'tool', arguments: { nested: [1, { value: true }] } } })).toBe(true)

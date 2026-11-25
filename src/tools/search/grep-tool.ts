@@ -5,12 +5,15 @@
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createInterface } from 'node:readline'
-import fs from 'node:fs'
+import fs, { promises as fsPromises } from 'node:fs'
 import path from 'node:path'
 import type { Tool, AgentContext, ToolResult } from '../../core/agent-context/index.js'
 import { workspaceManager } from '../../workspace/index.js'
 
 const execFileAsync = promisify(execFile)
+
+/** Keep the fallback search cooperative when ripgrep is unavailable. */
+const yieldToEventLoop = (): Promise<void> => new Promise(resolve => setImmediate(resolve))
 
 async function hasRipgrep(): Promise<boolean> {
   try {
@@ -91,54 +94,70 @@ function globMatches(pattern: string | undefined, relativePath: string): boolean
   return new RegExp(`${source}$`, 'i').test(target)
 }
 
-function grepInFile(filePath: string, regex: RegExp, options: FallbackSearchOptions): string[] {
-  let lines: string[]
-  try {
-    lines = fs.readFileSync(filePath, 'utf-8').split(/\r?\n/)
-  } catch (error) {
-    if (options.strictRead) throw error
-    return []
-  }
+async function grepInFile(filePath: string, regex: RegExp, options: FallbackSearchOptions): Promise<string[]> {
   const results: string[] = []
-  for (let i = 0; i < lines.length && results.length < options.maxLines; i++) {
-    if ((i & 0x3ff) === 0) assertSearchAvailable(options.signal, options.deadline)
-    if (regex.test(lines[i])) {
-      results.push(`${i + 1}:${lines[i]}`)
+  const input = fs.createReadStream(filePath, { encoding: 'utf8' })
+  const reader = createInterface({ input, crlfDelay: Infinity })
+  let lineNumber = 0
+  try {
+    // The old fallback read the whole file with readFileSync(). A large source
+    // tree could therefore monopolize the engine's event loop long enough for
+    // even /health to time out. readline keeps memory bounded and gives the
+    // engine a scheduling point while scanning a long file.
+    for await (const line of reader) {
+      if ((lineNumber & 0x3ff) === 0) {
+        assertSearchAvailable(options.signal, options.deadline)
+        await yieldToEventLoop()
+      }
+      if (regex.test(line)) results.push(`${lineNumber + 1}:${line}`)
+      lineNumber++
+      if (results.length >= options.maxLines) break
     }
+    assertSearchAvailable(options.signal, options.deadline)
+    return results
+  } catch (error) {
+    if (options.strictRead || options.signal?.aborted || (options.deadline !== undefined && Date.now() >= options.deadline)) throw error
+    return []
+  } finally {
+    reader.close()
+    input.destroy()
   }
-  return results
 }
 
-function grepDir(dir: string, regex: RegExp, options: FallbackSearchOptions): string[] {
+async function grepDir(dir: string, regex: RegExp, options: FallbackSearchOptions): Promise<string[]> {
   const results: string[] = []
-  const walk = (d: string) => {
+  const walk = async (d: string): Promise<void> => {
     assertSearchAvailable(options.signal, options.deadline)
     if (results.length >= options.maxLines) return
-    for (const name of fs.readdirSync(d).sort()) {
+    // Keep deterministic traversal for the fallback, but do the directory read
+    // asynchronously so a large workspace never blocks HTTP request handling.
+    const names = (await fsPromises.readdir(d)).sort()
+    for (const name of names) {
       assertSearchAvailable(options.signal, options.deadline)
       if (results.length >= options.maxLines) break
+      await yieldToEventLoop()
       const full = path.join(d, name)
       try {
         // Never follow directory symlinks during a recursive search; a link
         // cycle would otherwise keep a long-running agent walking forever.
-        const stat = fs.lstatSync(full)
+        const stat = await fsPromises.lstat(full)
         if (stat.isDirectory()) {
-          walk(full)
+          await walk(full)
         } else if (stat.isFile()) {
           const rel = path.relative(options.root, full)
           if (!globMatches(options.filePattern, rel)) continue
-          const matches = grepInFile(full, regex, { ...options, maxLines: options.maxLines - results.length })
-          for (const m of matches) {
-            results.push(`${rel}:${m}`)
-          }
+          const matches = await grepInFile(full, regex, { ...options, maxLines: options.maxLines - results.length })
+          for (const m of matches) results.push(`${rel}:${m}`)
         }
       } catch (error) {
         if (options.signal?.aborted || (options.deadline !== undefined && Date.now() >= options.deadline)) throw error
         /* skip unreadable entries */
       }
     }
+    assertSearchAvailable(options.signal, options.deadline)
   }
-  walk(dir)
+  await walk(dir)
+  assertSearchAvailable(options.signal, options.deadline)
   return results
 }
 
@@ -242,9 +261,9 @@ export const grepTool: Tool = {
       const deadline = timeoutMs !== undefined && timeoutMs > 0 ? Date.now() + timeoutMs : undefined
       assertSearchAvailable(ctx.signal, deadline)
       const options = { maxLines: offset + maxResults + 1, filePattern, root: basePath, signal: ctx.signal, deadline }
-      const stat = fs.statSync(basePath)
-      const results = stat.isDirectory() ? grepDir(basePath, regex, options)
-        : stat.isFile() ? grepInFile(basePath, regex, { ...options, strictRead: true })
+      const stat = await fsPromises.stat(basePath)
+      const results = stat.isDirectory() ? await grepDir(basePath, regex, options)
+        : stat.isFile() ? await grepInFile(basePath, regex, { ...options, strictRead: true })
         : (() => { throw new Error('grep: path must be a file or directory') })()
       return searchPage(results, pattern, backend, offset, maxResults)
     } catch (err) {

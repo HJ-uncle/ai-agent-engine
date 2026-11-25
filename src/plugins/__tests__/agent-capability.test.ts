@@ -32,7 +32,11 @@ import { createToolRegistry } from '../../tools/registry-factory.js'
 const mocks = vi.hoisted(() => ({ stream: vi.fn(), complete: vi.fn(), models: vi.fn() }))
 vi.mock('../../storage/sqlite/models.js', () => ({ ModelsStore: class { getModels = mocks.models } }))
 vi.mock('../../core/llm-adapter/resolve-model.js', () => ({
-  resolveModelConfig: async () => ({ model: 'fixture-model', provider: 'fixture', capabilities: { contextWindow: 32768, maxOutputTokens: 4096 } }),
+  resolveModelConfig: async ({ overrides }: { overrides?: { thinkingEnabled?: boolean; reasoningEffort?: 'low' | 'medium' | 'high' } } = {}) => ({
+    model: 'fixture-model', provider: 'fixture', capabilities: { contextWindow: 32768, maxOutputTokens: 4096 },
+    thinkingEnabled: overrides?.thinkingEnabled, reasoningEffort: overrides?.reasoningEffort,
+    thinkingConfig: overrides?.thinkingEnabled === false ? null : undefined,
+  }),
   createAdapterFromResolved: () => ({ model: 'fixture-model', provider: 'fixture', stream: mocks.stream, complete: mocks.complete, countTokens: () => 10 }),
 }))
 const fixtures = path.resolve('.e2e-tmp/plugin-agent-capability')
@@ -383,6 +387,30 @@ describe('plugin Agents use the production execution loop', () => {
     expect(JSON.stringify(events)).not.toContain('PRIVATE-REASONING')
     expect(events.filter(event => event.type.startsWith('tool-')).every(event => !('args' in event) && !('output' in event))).toBe(true)
     expect(events.at(-1)).toMatchObject({ type: 'complete', result: { status: 'succeeded' } })
+  })
+  it('forwards per-call model controls and inherits them on continuation', async () => {
+    const requests: LLMAdapterOptions[] = []
+    mocks.stream.mockImplementation(async function* (_messages: Message[], options: LLMAdapterOptions): AsyncGenerator<LLMStreamChunk> {
+      requests.push(options)
+      yield { done: true, content: '参数已应用。', finishReason: 'stop' }
+    })
+    const first = await call('agents.manage', 'run', {
+      modelId: 'fixture', task: '执行一次带参数的 Agent 调用', thinking: true,
+      reasoningEffort: 'high', temperature: 0.25, maxTokens: 321,
+    })
+    expect((await finish(String(first.runId))).status).toBe('succeeded')
+    const resumed = await call('agents.manage', 'run', { modelId: 'fixture', task: '续跑并继承参数', resumeRunId: String(first.runId) })
+    expect((await finish(String(resumed.runId))).status).toBe('succeeded')
+    const disabled = await call('agents.manage', 'run', { modelId: 'fixture', task: '续跑并关闭思考', resumeRunId: String(resumed.runId), thinking: false })
+    expect((await finish(String(disabled.runId))).status).toBe('succeeded')
+    const streamed = await streamPluginCapability(access, 'tenant', { capability: 'agents.manage', method: 'stream', sessionId: 'bound-session', expectedRevision: 1,
+      args: { modelId: 'fixture', task: '验证流式参数', thinking: false, temperature: 0.75, maxTokens: 77 } }, () => undefined) as any
+    expect(streamed.status).toBe('succeeded')
+    expect(requests).toHaveLength(4)
+    expect(requests[0]).toMatchObject({ thinkingEnabled: true, reasoningEffort: 'high', temperature: 0.25, maxTokens: 321 })
+    expect(requests[1]).toMatchObject({ thinkingEnabled: true, reasoningEffort: 'high', temperature: 0.25, maxTokens: 321 })
+    expect(requests[2]).toMatchObject({ thinkingEnabled: false, reasoningEffort: undefined, temperature: 0.25, maxTokens: 321 })
+    expect(requests[3]).toMatchObject({ thinkingEnabled: false, reasoningEffort: undefined, temperature: 0.75, maxTokens: 77 })
   })
   it('cancels and joins a streaming Agent when its consumer aborts', async () => {
     const events: PluginStreamEvent[] = [], controller = new AbortController()
